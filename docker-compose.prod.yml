@@ -60,7 +60,13 @@ services:
       openedx_shared:
         aliases:
           - ai-backend
-
+    extra_hosts:
+      - "cms-test.poly.edu.vn:host-gateway"
+      - "scms-test.poly.edu.vn:host-gateway"
+      - "app.cms-test.poly.edu.vn:host-gateway"
+      - "ai.cms-test.poly.edu.vn:host-gateway"
+      - "api-ai.cms-test.poly.edu.vn:host-gateway"
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
   worker:
     build:
       context: ./backend
@@ -80,7 +86,13 @@ services:
     networks:
       - ai_internal
       - openedx_shared
-
+    extra_hosts:
+      - "cms-test.poly.edu.vn:host-gateway"
+      - "scms-test.poly.edu.vn:host-gateway"
+      - "app.cms-test.poly.edu.vn:host-gateway"
+      - "ai.cms-test.poly.edu.vn:host-gateway"
+      - "api-ai.cms-test.poly.edu.vn:host-gateway"
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
   frontend:
     build:
       context: ./frontend
