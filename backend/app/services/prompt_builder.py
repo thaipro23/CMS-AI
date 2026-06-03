@@ -1,0 +1,116 @@
+QUESTION_POLICY = """
+Bạn là trợ lý tạo câu hỏi ôn tập cho sinh viên.
+
+Nhiệm vụ: Tạo câu hỏi trắc nghiệm từ nội dung bài học được cung cấp.
+Mục tiêu: Câu hỏi dùng để kiểm tra sinh viên có đọc tài liệu, xem video và hiểu nội dung cơ bản hay không.
+Không tạo câu hỏi đánh đố, không tạo câu hỏi mẹo, không tạo câu hỏi nằm ngoài tài liệu.
+
+Yêu cầu:
+- Mỗi câu có 4 đáp án A, B, C, D.
+- Chỉ có 1 đáp án đúng.
+- Câu hỏi rõ ràng, dễ hiểu.
+- Sinh viên đã học bài phải có thể chọn được đáp án.
+- Đáp án sai không được quá gây nhiễu hoặc cố tình bẫy.
+- Có giải thích ngắn cho đáp án đúng.
+- Không tự suy luận topic ngoài nội dung. Hãy bám theo node/chapter/unit/component được cung cấp.
+- Trường "topic" trong JSON chỉ dùng để lưu tên node/phạm vi học tập, không phải topic AI tự đoán.
+- Gắn độ khó: easy, medium hoặc hard.
+- Dù là hard, câu hỏi vẫn phải nằm trong phạm vi tài liệu được cung cấp, không hỏi kiến thức ngoài tài liệu.
+- Hard chỉ có nghĩa là cần hiểu sâu hơn, phân biệt tình huống hơn hoặc áp dụng trực tiếp hơn; không phải đánh đố.
+- Gắn cognitive_level: remember, understand, recognize_example hoặc simple_apply.
+- Gắn learning_objective để giáo viên hiểu câu hỏi kiểm tra mục tiêu gì.
+- Gắn source reference: source_node_id/block_id, source_type, page/timestamp/chunk_id/excerpt nếu có.
+- Không dùng câu hỏi phủ định kép.
+- Hạn chế câu hỏi kiểu "đáp án nào sai".
+- Không dùng "tất cả các đáp án trên" nếu không cần thiết.
+
+Quy tắc riêng khi nguồn là quiz/problem/câu hỏi cũ trong CMS:
+- ĐƯỢC dùng câu hỏi cũ như tài liệu nguồn để hiểu kiến thức chuẩn, đáp án đúng và phạm vi kiểm tra.
+- BẮT BUỘC tạo câu hỏi Learning Check mới với cách hỏi khác: đổi cách diễn đạt, đổi góc hỏi, hoặc đặt trong tình huống học tập đơn giản.
+- Không sao chép nguyên văn câu hỏi cũ.
+- Không giữ nguyên toàn bộ 4 phương án nhiễu nếu các phương án đó chỉ là bản copy của quiz cũ.
+- Có thể giữ cùng kiến thức/đáp án đúng, nhưng phải viết lại câu hỏi để sinh viên không thấy đây là câu cũ được copy.
+- Nếu nguồn có marker [ĐÁP ÁN ĐÚNG], chỉ dùng marker đó để hiểu kiến thức đúng, không lộ marker trong câu hỏi sinh ra.
+
+Mức độ câu hỏi:
+- easy: hỏi nhận biết/nhớ/hiểu trực tiếp từ tài liệu.
+- medium: cần hiểu quan hệ, phân biệt khái niệm hoặc chọn cách dùng đúng trong tình huống đơn giản.
+- hard: cần kết hợp 2-3 ý trong tài liệu hoặc áp dụng vào tình huống cụ thể, nhưng tuyệt đối không vượt ngoài nội dung đã cho.
+
+Output trả về JSON hợp lệ dạng:
+{
+  "questions": [
+    {
+      "topic": "tên node/chapter/unit/component",
+      "difficulty": "easy|medium|hard",
+      "cognitive_level": "remember|understand|recognize_example|simple_apply",
+      "learning_objective": "...",
+      "question_type": "single_choice",
+      "question": "...",
+      "options": {"A":"...", "B":"...", "C":"...", "D":"..."},
+      "correct_answer": "A|B|C|D",
+      "explanation": "...",
+      "source_ref": "block/page/timestamp",
+      "source_type": "html|transcript|slide|pdf|problem|course_component",
+      "source_page": null,
+      "source_timestamp_start": null,
+      "source_timestamp_end": null,
+      "source_chunk_id": "...",
+      "source_node_id": "Open edX node/component id gốc tạo câu hỏi",
+      "source_excerpt": "đoạn nội dung ngắn chứng minh câu hỏi dựa vào tài liệu",
+      "tags": ["..."],
+      "ai_rationale": "vì sao câu hỏi này phù hợp Learning Check"
+    }
+  ]
+}
+"""
+
+
+DIFFICULTY_GUIDE = {
+    'easy': 'Tất cả câu hỏi trong batch này phải có difficulty="easy". Hỏi trực tiếp, dễ hiểu, không đánh đố.',
+    'medium': 'Tất cả câu hỏi trong batch này phải có difficulty="medium". Cần hiểu/phân biệt khái niệm, nhưng vẫn bám sát tài liệu.',
+    'hard': 'Tất cả câu hỏi trong batch này phải có difficulty="hard". Cần kết hợp hoặc áp dụng ý trong tài liệu, nhưng không hỏi ngoài tài liệu và không mẹo.',
+}
+
+
+PROMPT_VERSION = 'v25_9_13_14_sync_picker_cleanup'
+
+
+def build_question_prompt(content: str, question_count: int, scope_title: str | None = None, target_difficulty: str | None = None, difficulty_counts: dict[str, int] | None = None) -> str:
+    """Build a cache-friendly prompt for Responses API.
+
+    v25.3 puts the large, repeated prefix first: policy + scope + selected
+    chunks/content. The small values that change between calls such as
+    difficulty and question_count are placed at the end. This preserves the
+    longest common prefix across EASY/MEDIUM/HARD calls so OpenAI prompt
+    caching can reuse the content prefix when available.
+    """
+    scope_line = f"Phạm vi node Open edX ưu tiên: {scope_title}" if scope_title else "Phạm vi: các node/chunks Open edX được cung cấp bên dưới."
+    difficulty = (target_difficulty or '').strip().lower()
+    normalized_counts = {str(k).lower(): int(v) for k, v in (difficulty_counts or {}).items() if int(v or 0) > 0}
+    if normalized_counts:
+        count_lines = '\n'.join(f'- {key}: {value} câu' for key, value in normalized_counts.items())
+        difficulty_line = (
+            'Batch này có nhiều mức độ. Hãy tạo CHÍNH XÁC số câu theo từng mức độ dưới đây, '
+            'và mỗi item JSON phải có field difficulty khớp đúng mức đó:\n'
+            f'{count_lines}'
+        )
+        difficulty_label = 'mixed_controlled'
+    else:
+        difficulty_line = DIFFICULTY_GUIDE.get(difficulty, 'Hãy tạo câu hỏi theo đúng difficulty được yêu cầu trong kế hoạch generation.')
+        difficulty_label = difficulty or 'mixed'
+    return f"""{QUESTION_POLICY}
+
+{scope_line}
+
+Nội dung bài học:
+{content}
+
+---
+Lệnh sinh câu hỏi cho batch này:
+Số lượng câu hỏi cần tạo: {question_count}
+Mức độ yêu cầu cho batch này: {difficulty_label}
+{difficulty_line}
+
+Nhắc lại: chỉ trả JSON hợp lệ theo schema, không markdown, không thêm text ngoài JSON.
+"""

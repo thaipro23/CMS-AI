@@ -1,0 +1,595 @@
+export type Role = 'admin' | 'teacher' | 'reviewer' | 'viewer'
+
+export type Permission =
+  | 'sync_course'
+  | 'estimate_cost'
+  | 'generate_questions'
+  | 'edit_questions'
+  | 'delete_questions'
+  | 'review_questions'
+  | 'publish_questions'
+  | 'export_questions'
+  | 'publish_to_openedx'
+  | 'view_dashboard'
+  | 'view_jobs'
+  | 'view_questions'
+  | 'manage_settings'
+  | 'view_user_analytics'
+
+export const ROLE_LABELS: Record<Role, string> = {
+  admin: 'Quản trị viên - toàn quyền',
+  teacher: 'Giảng viên - đồng bộ/tạo/duyệt/publish',
+  reviewer: 'Người duyệt - duyệt/sửa câu hỏi',
+  viewer: 'Người xem - chỉ xem',
+}
+
+export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
+  admin: ['sync_course', 'estimate_cost', 'generate_questions', 'edit_questions', 'delete_questions', 'review_questions', 'publish_questions', 'export_questions', 'publish_to_openedx', 'view_dashboard', 'view_jobs', 'view_questions', 'manage_settings', 'view_user_analytics'],
+  teacher: ['sync_course', 'estimate_cost', 'generate_questions', 'edit_questions', 'delete_questions', 'review_questions', 'publish_questions', 'export_questions', 'publish_to_openedx', 'view_dashboard', 'view_jobs', 'view_questions'],
+  reviewer: ['estimate_cost', 'edit_questions', 'review_questions', 'export_questions', 'view_dashboard', 'view_jobs', 'view_questions'],
+  viewer: ['view_dashboard', 'view_jobs', 'view_questions'],
+}
+
+
+export type PaginatedResponse<T> = {
+  items: T[]
+  total: number
+  total_tokens?: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export type QuestionStatus = 'pending_review' | 'approved' | 'rejected' | 'published' | 'draft_error' | string
+
+export type Question = {
+  id: string
+  course_id: string
+  lesson_id?: string | null
+  lesson_title?: string | null
+  block_id?: string | null
+  node_id?: string | null
+  node_title?: string | null
+  topic?: string | null
+  difficulty: string
+  cognitive_level: string
+  learning_objective: string
+  question_type: string
+  question_text: string
+  option_a: string
+  option_b: string
+  option_c: string
+  option_d: string
+  correct_answer: string
+  explanation: string
+  source_ref: string
+  source_type: string
+  source_page?: number | null
+  source_timestamp_start?: string | null
+  source_timestamp_end?: string | null
+  source_chunk_id?: string | null
+  source_node_id?: string | null
+  source_node_title?: string | null
+  chapter_node_id?: string | null
+  chapter_title?: string | null
+  target_library_id?: string | null
+  target_library_key?: string | null
+  source_excerpt: string
+  tags?: string[] | null
+  quality_score: number
+  quality_flags?: string[] | null
+  draft_error_reason?: string | null
+  draft_error_detail?: Record<string, any> | null
+  repair_attempt_count?: number
+  is_duplicate: boolean
+  duplicate_score?: number | null
+  duplicate_of_question_id?: string | null
+  model_provider: string
+  model_name: string
+  status: QuestionStatus
+  version: number
+  reviewed_by?: string | null
+  reviewed_at?: string | null
+  published_at?: string | null
+  openedx_block_id?: string | null
+  openedx_library_problem_id?: string | null
+  imported_library_at?: string | null
+  publish_error?: string | null
+  publish_status?: string | null
+  publish_verification_json?: Record<string, any> | null
+  published_by?: string | null
+  openedx_publish_status?: string | null
+  openedx_verification_status?: string | null
+  openedx_delete_status?: string | null
+  openedx_manual_action_required?: boolean | null
+  created_at: string
+  updated_at: string
+}
+
+export type Job = {
+  id: string
+  course_id: string
+  question_count: number
+  status: string
+  estimated_input_tokens: number
+  estimated_cached_input_tokens: number
+  estimated_uncached_input_tokens: number
+  estimated_output_tokens: number
+  estimated_raw_cost_usd: number
+  estimated_cost_usd: number
+  estimated_cost_vnd: number
+  estimate_token_source?: string | null
+  estimated_output_tokens_per_question?: number
+  output_calibration?: string | null
+  actual_input_tokens: number
+  actual_cached_input_tokens: number
+  actual_uncached_input_tokens: number
+  actual_output_tokens: number
+  actual_cost_usd: number
+  actual_cost_vnd: number
+  usage_token_source?: string | null
+  estimate_accuracy_percent: number
+  input_accuracy_percent?: number
+  output_accuracy_percent?: number
+  actual_output_tokens_per_question?: number
+  output_delta_tokens?: number
+  cost_delta_usd: number
+  completed_question_count?: number
+  openai_response_ids?: string | null
+  model_parse_error?: string | null
+  error_message?: string | null
+}
+
+export type QuestionStats = {
+  total: number
+  pending_review: number
+  approved: number
+  rejected: number
+  published: number
+  draft_error: number
+  openedx_verified?: number
+  openedx_pending?: number
+  openedx_manual_delete_required?: number
+}
+
+export type CourseChunk = {
+  id: string
+  course_id: string
+  block_id: string
+  node_id?: string | null
+  node_title?: string | null
+  content: string
+  token_count: number
+  source_type: string
+  page_number?: number | null
+  timestamp_start?: string | null
+  timestamp_end?: string | null
+  source_ref?: string | null
+  created_at: string
+}
+
+
+export type Topic = {
+  id: string
+  course_id: string
+  lesson_id?: string | null
+  title: string
+  summary: string
+  importance_score: number
+  chunk_count: number
+  token_count: number
+}
+
+export type CourseTreeNode = {
+  node_id: string
+  parent_id?: string | null
+  block_type: string
+  title: string
+  path: string
+  chunk_count: number
+  token_count: number
+  children: CourseTreeNode[]
+}
+
+
+export type CourseOption = {
+  course_id: string
+  title: string
+  node_count: number
+  chunk_count: number
+  token_count: number
+  last_synced_at?: string | null
+}
+
+export type CourseNodeOption = {
+  node_id: string
+  parent_id?: string | null
+  block_type: string
+  title: string
+  path: string
+  depth: number
+  chunk_count: number
+  token_count: number
+}
+
+export type CourseFileUploadResponse = {
+  course_id: string
+  node_id: string
+  parent_node_id?: string | null
+  filename: string
+  source_type: string
+  chunks_created: number
+  tokens_indexed: number
+  status: string
+  message?: string
+}
+
+export type CourseNodeDeleteResponse = {
+  course_id: string
+  node_id: string
+  deleted_nodes: number
+  deleted_chunks: number
+  status: string
+  message?: string
+}
+
+export type CourseCleanResyncResponse = {
+  course_id: string
+  deleted_nodes: number
+  deleted_chunks: number
+  deleted_topics?: number
+  blocks_seen: number
+  changed_blocks: number
+  status: string
+  message?: string
+}
+
+export type AnalyticsOverview = {
+  questions: {
+    total: number
+    by_status: Record<string, number>
+    by_difficulty: Record<string, number>
+    by_cognitive_level: Record<string, number>
+    top_scopes: { scope: string; count: number }[]
+    approve_rate_percent: number
+    duplicate_count: number
+    quality_average: number
+    openedx?: {
+      verified: number
+      pending: number
+      manual_action_required: number
+      delete_failed_or_manual: number
+    }
+  }
+  jobs: {
+    total: number
+    by_status: Record<string, number>
+    retry_total: number
+    failed_jobs: number
+    estimated_cost_usd: number
+    estimated_raw_cost_usd: number
+    actual_job_cost_usd: number
+    estimate_accuracy_percent: number
+    output_accuracy_percent?: number
+    estimated_output_tokens_per_question?: number
+    actual_output_tokens_per_question?: number
+    output_delta_tokens?: number
+    cost_delta_usd: number
+    estimated_input_tokens: number
+    estimated_output_tokens: number
+    actual_input_tokens: number
+    actual_cached_input_tokens: number
+    actual_output_tokens: number
+  }
+  cost: {
+    total_usage_cost_usd: number
+    total_usage_cost_vnd: number
+    monthly_budget_usd: number
+    budget_used_percent: number
+    by_feature: Record<string, number>
+    by_model: Record<string, number>
+    actual_input_tokens: number
+    actual_cached_input_tokens: number
+    actual_uncached_input_tokens: number
+    actual_output_tokens: number
+  }
+  course_sync: {
+    nodes: number
+    chunks: number
+    content_hash_rows: number
+    tokens_indexed: number
+    by_source_type: Record<string, number>
+  }
+  governance: {
+    quota_max_questions_per_course: number
+    quota_used_percent: number
+    hard_stop_enabled: boolean
+    review_log_count: number
+  }
+}
+
+export type QuestionFilters = {
+  status: string
+  difficulty: string
+  nodeId?: string
+  sourceType?: string
+  search: string
+  sortBy: string
+  sortDir: string
+}
+
+export type EditQuestionForm = {
+  topic: string
+  node_title: string
+  difficulty: string
+  cognitive_level: string
+  learning_objective: string
+  question_text: string
+  option_a: string
+  option_b: string
+  option_c: string
+  option_d: string
+  correct_answer: string
+  explanation: string
+  source_ref: string
+  source_type: string
+  source_page: string
+  source_timestamp_start: string
+  source_timestamp_end: string
+  source_chunk_id: string
+  source_excerpt: string
+  tags_text: string
+  target_status: string
+}
+
+export function toEditForm(question: Question): EditQuestionForm {
+  return {
+    topic: question.node_title || question.topic || '',
+    node_title: question.node_title || question.topic || '',
+    difficulty: question.difficulty || 'easy',
+    cognitive_level: question.cognitive_level || 'remember',
+    learning_objective: question.learning_objective || '',
+    question_text: question.question_text || '',
+    option_a: question.option_a || '',
+    option_b: question.option_b || '',
+    option_c: question.option_c || '',
+    option_d: question.option_d || '',
+    correct_answer: question.correct_answer || 'A',
+    explanation: question.explanation || '',
+    source_ref: question.source_ref || '',
+    source_type: question.source_type || 'course_component',
+    source_page: question.source_page ? String(question.source_page) : '',
+    source_timestamp_start: question.source_timestamp_start || '',
+    source_timestamp_end: question.source_timestamp_end || '',
+    source_chunk_id: question.source_chunk_id || '',
+    source_excerpt: question.source_excerpt || '',
+    tags_text: (question.tags || []).join(', '),
+    target_status: ['pending_review', 'approved', 'rejected'].includes(question.status) ? question.status : 'pending_review',
+  }
+}
+
+
+export type UserAnalyticsRow = {
+  user_id: string
+  generate_jobs: number
+  questions_requested: number
+  approved: number
+  rejected: number
+  published: number
+  edits: number
+  input_tokens: number
+  cached_input_tokens: number
+  uncached_input_tokens: number
+  output_tokens: number
+  estimated_cost_usd: number
+  actual_cost_usd: number
+  estimate_accuracy_percent: number
+  cost_usd: number
+  cost_vnd: number
+  last_activity?: string | null
+}
+
+export type UserAnalyticsResponse = {
+  course_id?: string | null
+  total_users: number
+  users: UserAnalyticsRow[]
+}
+
+
+export type RuntimeSettings = {
+  model: {
+    model_provider: string
+    openai_model: string
+    openai_api_mode: string
+    mock_llm: boolean
+    has_openai_api_key: boolean
+    openai_api_key_masked: string
+  }
+  openedx: {
+    use_mock_openedx: boolean
+    openedx_base_url: string
+    openedx_cms_base_url: string
+    openedx_lms_base_url: string
+    openedx_oauth_base_url: string
+    openedx_client_id: string
+    has_openedx_client_secret: boolean
+    openedx_client_secret_masked: string
+    has_openedx_access_token: boolean
+    openedx_access_token_masked: string
+    openedx_oauth_token_url: string
+    openedx_course_blocks_path: string
+    openedx_publish_endpoint: string
+    openedx_library_endpoint: string
+    openedx_library_import_endpoint: string
+  }
+  sso: {
+    auth_mode: string
+    allow_demo_role_header: boolean
+    has_jwt_secret: boolean
+    jwt_secret_masked: string
+  }
+  cost: {
+    cost_input_price_per_1m: number
+    cost_cached_input_price_per_1m: number
+    cost_output_price_per_1m: number
+    cost_safety_factor: number
+    usd_to_vnd: number
+  }
+  worker?: {
+    openai_parallel_enabled: boolean
+    openai_max_parallel_calls: number
+    openai_retry_max_attempts: number
+    openai_retry_base_seconds: number
+    openai_prompt_cache_warmup_enabled: boolean
+    generation_tail_batch_wait_enabled: boolean
+  }
+  runtime_config_path: string
+}
+
+export type PricingResponse = {
+  model: string
+  input_price_per_1m: number
+  cached_input_price_per_1m: number
+  output_price_per_1m: number
+  currency: string
+  unit: string
+  service_tier: string
+  context: string
+  source: string
+  fetched_at?: number | null
+  fetched_at_iso?: string | null
+  note?: string | null
+}
+
+export type RuntimeSettingsUpdate = {
+  model: {
+    model_provider: string
+    openai_model: string
+    openai_api_mode: string
+    mock_llm: boolean
+    openai_api_key?: string | null
+  }
+  openedx: {
+    use_mock_openedx: boolean
+    openedx_base_url: string
+    openedx_cms_base_url: string
+    openedx_lms_base_url: string
+    openedx_oauth_base_url: string
+    openedx_client_id?: string | null
+    openedx_client_secret?: string | null
+    openedx_access_token?: string | null
+    openedx_oauth_token_url: string
+    openedx_course_blocks_path: string
+    openedx_publish_endpoint: string
+    openedx_library_endpoint: string
+    openedx_library_import_endpoint: string
+  }
+  sso: {
+    auth_mode: string
+    allow_demo_role_header: boolean
+    jwt_secret?: string | null
+  }
+  cost: {
+    cost_input_price_per_1m: number
+    cost_cached_input_price_per_1m: number
+    cost_output_price_per_1m: number
+    cost_safety_factor: number
+    usd_to_vnd: number
+  }
+  worker?: {
+    openai_parallel_enabled: boolean
+    openai_max_parallel_calls: number
+    openai_retry_max_attempts: number
+    openai_retry_base_seconds: number
+    openai_prompt_cache_warmup_enabled: boolean
+    generation_tail_batch_wait_enabled: boolean
+  }
+}
+
+
+export type CoursePolicy = {
+  course_id: string
+  monthly_budget_usd: number
+  max_questions_per_course: number
+  max_questions_per_job: number
+  max_retry: number
+  generated_questions: number
+  remaining_questions: number
+}
+
+export type CoursePolicyUpdate = {
+  course_id: string
+  monthly_budget_usd: number
+  max_questions_per_course: number
+  max_questions_per_job: number
+  max_retry: number
+}
+
+export type AuditLogRow = {
+  id: string
+  course_id?: string | null
+  actor_id: string
+  actor_role?: string | null
+  action: string
+  target_type?: string | null
+  target_id?: string | null
+  status: string
+  error_type?: string | null
+  message: string
+  metadata?: Record<string, any>
+  created_at?: string | null
+}
+
+
+export type PublishLibrarySummary = {
+  difficulty: string
+  library_key: string
+  library_display_name?: string
+  component_count: number
+  verified_count?: number
+  pending_count?: number
+  failed_count?: number
+  status: string
+  studio_url?: string | null
+  problem_bank_hint?: string
+}
+
+export type PublishBatchSummary = {
+  id: string
+  course_id: string
+  actor_id: string
+  mode: string
+  status: string
+  total_questions: number
+  published_count: number
+  failed_count: number
+  warning_count: number
+  summary?: { libraries?: PublishLibrarySummary[] }
+  errors?: any[]
+  created_at?: string | null
+  completed_at?: string | null
+}
+
+export type PublishResult = {
+  course_id: string
+  batch_id?: string
+  mode?: string
+  published: number
+  failed: number
+  warnings?: number
+  status: string
+  errors?: any[]
+  libraries?: PublishLibrarySummary[]
+  problem_bank_guide?: string[]
+}
+
+export type SourceTrace = {
+  question_id: string
+  course_id: string
+  source_node?: { id?: string | null; title?: string | null; block_type?: string | null; sync_status?: string | null }
+  chapter_node?: { id?: string | null; title?: string | null; block_type?: string | null }
+  chunk?: { id?: string | null; block_id?: string | null; source_type?: string | null; source_ref?: string | null; page_number?: number | null; timestamp_start?: string | null; timestamp_end?: string | null; token_count?: number | null; content?: string }
+  question_source_excerpt?: string
+  publish_trace?: Record<string, any>
+  tags?: string[]
+}

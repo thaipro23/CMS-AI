@@ -1,0 +1,57 @@
+import hmac
+
+from fastapi import FastAPI, Header, HTTPException, Response, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+from app.api.router import api_router
+from app.core.config import cors_origin_list, settings, validate_security_settings
+from app.core.errors import http_exception_handler, validation_exception_handler
+from app.db.init_db import init_db
+from app.services.runtime_settings import apply_runtime_settings
+
+apply_runtime_settings()
+validate_security_settings()
+
+app = FastAPI(title=settings.app_name, version=settings.app_version, debug=settings.debug)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origin_list(),
+    allow_credentials=True,
+    allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allow_headers=['Authorization', 'Content-Type', 'X-Requested-With', 'X-User-Id', 'X-User-Role', 'X-User-Email', 'X-Course-Ids', 'X-Metrics-Token'],
+)
+
+
+@app.on_event('startup')
+def on_startup():
+    init_db()
+
+
+@app.get('/metrics', include_in_schema=False)
+def metrics(
+    authorization: str | None = Header(default=None),
+    x_metrics_token: str | None = Header(default=None),
+):
+    if not settings.metrics_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Metrics endpoint is disabled')
+
+    configured_token = settings.metrics_token or ''
+    supplied_token = x_metrics_token or ''
+    if not supplied_token and authorization and authorization.lower().startswith('bearer '):
+        supplied_token = authorization.split(' ', 1)[1].strip()
+
+    # In production validate_security_settings() already enforces a strong token.
+    # In dev, setting METRICS_TOKEN still protects the endpoint.
+    if configured_token and not hmac.compare_digest(supplied_token, configured_token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Invalid metrics token')
+    if not configured_token and settings.app_env.lower() in {'prod', 'production'}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Metrics endpoint is not configured')
+
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+app.include_router(api_router, prefix='/api')

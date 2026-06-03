@@ -1,0 +1,11 @@
+# Add these site blocks to the Tutor Caddyfile or to an external Caddy
+# that is attached to the same Docker network as ai-frontend and ai-backend.
+# The AI containers must join tutor_local_default or the network configured by OPENEDX_SHARED_NETWORK.
+
+ai.cms-test.poly.edu.vn {
+    reverse_proxy ai-frontend:3000
+}
+
+api-ai.cms-test.poly.edu.vn {
+    reverse_proxy ai-backend:8000
+}

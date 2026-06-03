@@ -1,0 +1,766 @@
+import {
+  CourseChunk,
+  Job,
+  Question,
+  QuestionFilters,
+  QuestionStats,
+  AnalyticsOverview,
+  EditQuestionForm,
+  CourseTreeNode,
+  CourseNodeOption,
+  CourseOption,
+  RuntimeSettings,
+  RuntimeSettingsUpdate,
+  PricingResponse,
+  PaginatedResponse,
+  CoursePolicy,
+  CoursePolicyUpdate,
+  AuditLogRow,
+  CourseCleanResyncResponse,
+  PublishResult,
+  PublishBatchSummary,
+  SourceTrace,
+} from "../types";
+
+const rawApiBase =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000";
+const normalizedApiBase = rawApiBase.replace(/\/+$/, "");
+export const API = normalizedApiBase.endsWith("/api")
+  ? normalizedApiBase
+  : `${normalizedApiBase}/api`;
+
+
+function withIdempotency(headers: HeadersInit, idempotencyKey?: string): HeadersInit {
+  if (!idempotencyKey) return headers;
+  const next = new Headers(headers);
+  next.set("Idempotency-Key", idempotencyKey);
+  return next;
+}
+
+async function parseResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const errorEnvelope = data?.error;
+    const message = errorEnvelope?.message || data?.detail || data?.message || response.statusText;
+    if (typeof message === "string") {
+      const detail = errorEnvelope?.code ? ` [${errorEnvelope.code}]` : "";
+      throw new Error(`${message}${detail}`);
+    }
+    if (Array.isArray(message))
+      throw new Error(
+        message
+          .map((item) => item?.msg || item?.message || "Dữ liệu không hợp lệ")
+          .join("; "),
+      );
+    throw new Error(
+      "Backend trả về lỗi không hợp lệ. Mở Docker logs/backend để xem chi tiết kỹ thuật.",
+    );
+  }
+  return data as T;
+}
+
+export async function getAnalytics(
+  courseId: string,
+  headers: HeadersInit,
+): Promise<AnalyticsOverview> {
+  return parseResponse(
+    await fetch(
+      `${API}/analytics/overview?course_id=${encodeURIComponent(courseId)}`,
+      { headers },
+    ),
+  );
+}
+
+export async function getQuestionStats(
+  courseId: string,
+  headers: HeadersInit,
+): Promise<QuestionStats> {
+  return parseResponse(
+    await fetch(
+      `${API}/question-bank/stats?course_id=${encodeURIComponent(courseId)}`,
+      { headers },
+    ),
+  );
+}
+
+export async function getJobs(
+  courseId: string,
+  headers: HeadersInit,
+): Promise<Job[]> {
+  return parseResponse(
+    await fetch(`${API}/jobs?course_id=${encodeURIComponent(courseId)}`, {
+      headers,
+    }),
+  );
+}
+
+function buildQuestionParams(courseId: string, filters: QuestionFilters) {
+  const params = new URLSearchParams();
+  params.set("course_id", courseId);
+  if (filters.status !== "all") params.set("status", filters.status);
+  if (filters.difficulty !== "all")
+    params.set("difficulty", filters.difficulty);
+  if (filters.nodeId && filters.nodeId !== "all")
+    params.set("node_id", filters.nodeId);
+  if (filters.sourceType && filters.sourceType !== "all")
+    params.set("source_type", filters.sourceType);
+  if (filters.search.trim()) params.set("search", filters.search.trim());
+  params.set("sort_by", filters.sortBy);
+  params.set("sort_dir", filters.sortDir);
+  return params;
+}
+
+export async function getQuestions(
+  courseId: string,
+  filters: QuestionFilters,
+  headers: HeadersInit,
+): Promise<Question[]> {
+  return parseResponse(
+    await fetch(
+      `${API}/question-bank?${buildQuestionParams(courseId, filters).toString()}`,
+      { headers },
+    ),
+  );
+}
+
+export async function getQuestionsPage(
+  courseId: string,
+  filters: QuestionFilters,
+  headers: HeadersInit,
+  page = 1,
+  pageSize = 20,
+): Promise<PaginatedResponse<Question>> {
+  const params = buildQuestionParams(courseId, filters);
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return parseResponse(
+    await fetch(`${API}/question-bank/page?${params.toString()}`, { headers }),
+  );
+}
+
+export async function getSyncedCourses(
+  headers: HeadersInit,
+  search = "",
+  limit = 1000,
+): Promise<CourseOption[]> {
+  const params = new URLSearchParams();
+  if (search.trim()) params.set("search", search.trim());
+  params.set("limit", String(limit));
+  return parseResponse(
+    await fetch(`${API}/courses?${params.toString()}`, { headers }),
+  );
+}
+
+export async function syncCourse(courseId: string, headers: HeadersInit) {
+  return parseResponse(
+    await fetch(`${API}/courses/sync`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ course_id: courseId, force: false }),
+    }),
+  );
+}
+
+export async function cleanResyncCourse(
+  courseId: string,
+  headers: HeadersInit,
+  confirm = "RESET_COURSE_SYNC",
+): Promise<CourseCleanResyncResponse> {
+  const params = new URLSearchParams();
+  params.set("confirm", confirm);
+  return parseResponse(
+    await fetch(
+      `${API}/courses/${encodeURIComponent(courseId)}/clean-resync?${params.toString()}`,
+      {
+        method: "POST",
+        headers,
+      },
+    ),
+  );
+}
+
+export async function uploadFileToNode(
+  courseId: string,
+  nodeId: string,
+  file: File,
+  headers: HeadersInit,
+  replaceExisting = true,
+) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("replace_existing", String(replaceExisting));
+  return parseResponse(
+    await fetch(
+      `${API}/courses/${encodeURIComponent(courseId)}/nodes/${encodeURIComponent(nodeId)}/files`,
+      {
+        method: "POST",
+        headers,
+        body: form,
+      },
+    ),
+  );
+}
+
+export async function deleteCourseNode(
+  courseId: string,
+  nodeId: string,
+  headers: HeadersInit,
+  confirm = "DELETE_NODE",
+) {
+  const params = new URLSearchParams();
+  params.set("confirm", confirm);
+  return parseResponse(
+    await fetch(
+      `${API}/courses/${encodeURIComponent(courseId)}/nodes/${encodeURIComponent(nodeId)}?${params.toString()}`,
+      {
+        method: "DELETE",
+        headers,
+      },
+    ),
+  );
+}
+
+export async function getCourseTree(
+  courseId: string,
+  headers: HeadersInit,
+): Promise<CourseTreeNode[]> {
+  return parseResponse(
+    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/tree`, {
+      headers,
+    }),
+  );
+}
+
+export async function getCourseNodes(
+  courseId: string,
+  headers: HeadersInit,
+): Promise<CourseNodeOption[]> {
+  return parseResponse(
+    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/nodes`, {
+      headers,
+    }),
+  );
+}
+
+function buildChunkParams(sourceType: string, search: string, nodeId = "all") {
+  const params = new URLSearchParams();
+  if (sourceType !== "all") params.set("source_type", sourceType);
+  if (search.trim()) params.set("search", search.trim());
+  if (nodeId !== "all") params.set("node_id", nodeId);
+  return params;
+}
+
+export async function getChunks(
+  courseId: string,
+  sourceType: string,
+  search: string,
+  headers: HeadersInit,
+  nodeId = "all",
+): Promise<CourseChunk[]> {
+  const params = buildChunkParams(sourceType, search, nodeId);
+  params.set("limit", "200");
+  return parseResponse(
+    await fetch(
+      `${API}/courses/${encodeURIComponent(courseId)}/chunks?${params.toString()}`,
+      { headers },
+    ),
+  );
+}
+
+export async function getChunksPage(
+  courseId: string,
+  sourceType: string,
+  search: string,
+  headers: HeadersInit,
+  nodeId = "all",
+  page = 1,
+  pageSize = 20,
+): Promise<PaginatedResponse<CourseChunk>> {
+  const params = buildChunkParams(sourceType, search, nodeId);
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return parseResponse(
+    await fetch(
+      `${API}/courses/${encodeURIComponent(courseId)}/chunks/page?${params.toString()}`,
+      { headers },
+    ),
+  );
+}
+
+export async function estimateCost(
+  payload: {
+    course_id: string;
+    question_count: number;
+    content_tokens?: number;
+    content?: string;
+    chunk_ids?: string[];
+    node_ids?: string[];
+    batch_size?: number;
+    use_node_coverage?: boolean;
+    refresh_pricing?: boolean;
+    difficulty_percentages?: { easy: number; medium: number; hard: number };
+  },
+  headers: HeadersInit,
+  idempotencyKey?: string,
+) {
+  return parseResponse(
+    await fetch(`${API}/cost/estimate`, {
+      method: "POST",
+      headers: withIdempotency(headers, idempotencyKey),
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function generateQuestions(
+  payload: {
+    course_id: string;
+    question_count: number;
+    batch_size: number;
+    content?: string;
+    chunk_ids?: string[];
+    node_ids?: string[];
+    use_node_coverage?: boolean;
+    difficulty_percentages?: { easy: number; medium: number; hard: number };
+  },
+  headers: HeadersInit,
+  idempotencyKey?: string,
+) {
+  return parseResponse(
+    await fetch(`${API}/questions/generate`, {
+      method: "POST",
+      headers: withIdempotency(headers, idempotencyKey),
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function updateQuestion(
+  id: string,
+  form: EditQuestionForm,
+  headers: HeadersInit,
+): Promise<Question> {
+  const body = {
+    ...form,
+    topic: form.node_title || form.topic,
+    note: "Teacher edited question",
+    source_page: form.source_page ? Number(form.source_page) : null,
+    tags: form.tags_text
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean),
+  };
+  return parseResponse(
+    await fetch(`${API}/question-bank/${id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function transitionQuestion(
+  id: string,
+  action: "approve" | "reject" | "publish" | string,
+  headers: HeadersInit,
+): Promise<Question> {
+  return parseResponse(
+    await fetch(`${API}/question-bank/${id}/${action}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ note: `Manual transition ${action}` }),
+    }),
+  );
+}
+
+export async function changeQuestionStatus(
+  id: string,
+  status: string,
+  note: string,
+  headers: HeadersInit,
+): Promise<Question> {
+  return parseResponse(
+    await fetch(`${API}/question-bank/${id}/status`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ target_status: status, note }),
+    }),
+  );
+}
+
+export async function deleteQuestion(
+  id: string,
+  headers: HeadersInit,
+): Promise<{ deleted: boolean; question_id: string }> {
+  return parseResponse(
+    await fetch(`${API}/question-bank/${id}`, {
+      method: "DELETE",
+      headers,
+    }),
+  );
+}
+
+export async function repairDraftError(
+  id: string,
+  headers: HeadersInit,
+): Promise<Question> {
+  return parseResponse(
+    await fetch(`${API}/question-bank/${id}/repair`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ note: "Repair draft_error from UI" }),
+    }),
+  );
+}
+
+export async function keepDraftErrorAnyway(
+  id: string,
+  headers: HeadersInit,
+): Promise<Question> {
+  return parseResponse(
+    await fetch(`${API}/question-bank/${id}/keep-anyway`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ note: "Teacher reviewed and kept anyway" }),
+    }),
+  );
+}
+
+export async function getQuestionDiversityReport(
+  courseId: string,
+  headers: HeadersInit,
+) {
+  return parseResponse(
+    await fetch(
+      `${API}/question-bank/diversity/report?course_id=${encodeURIComponent(courseId)}`,
+      { headers },
+    ),
+  );
+}
+
+export async function dryRunQuestionPublish(
+  questionId: string,
+  headers: HeadersInit,
+) {
+  return parseResponse(
+    await fetch(
+      `${API}/publish/questions/${encodeURIComponent(questionId)}/openedx/dry-run`,
+      {
+        method: "POST",
+        headers,
+      },
+    ),
+  );
+}
+
+export async function testOpenEdxConnection(
+  courseId: string | null,
+  headers: HeadersInit,
+) {
+  const suffix = courseId ? `?course_id=${encodeURIComponent(courseId)}` : "";
+  return parseResponse(
+    await fetch(`${API}/settings/openedx/test${suffix}`, {
+      method: "POST",
+      headers,
+    }),
+  );
+}
+
+export async function bulkApprove(
+  payload: {
+    note?: string;
+    question_ids?: string[];
+    course_id?: string;
+    approve_all_pending?: boolean;
+  },
+  headers: HeadersInit,
+) {
+  return parseResponse(
+    await fetch(`${API}/question-bank/bulk/approve`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function getQuestionOlx(id: string, headers: HeadersInit) {
+  return parseResponse<{ question_id: string; olx: string }>(
+    await fetch(`${API}/question-bank/${id}/openedx-olx`, { headers }),
+  );
+}
+
+export async function exportApprovedOlx(
+  courseId: string,
+  headers: HeadersInit,
+  status = "approved",
+) {
+  const data = await parseResponse<{
+    course_id?: string;
+    status?: string;
+    question_count: number;
+    olx?: string;
+    olx_xml?: string;
+  }>(
+    await fetch(
+      `${API}/question-bank/export/openedx-olx?course_id=${encodeURIComponent(courseId)}&status=${status}`,
+      { headers },
+    ),
+  );
+  const olx = data.olx || data.olx_xml || "";
+  return { ...data, olx };
+}
+
+export async function downloadApprovedOlx(
+  courseId: string,
+  headers: HeadersInit,
+  status = "approved",
+) {
+  const response = await fetch(
+    `${API}/question-bank/export/openedx-olx.xml?course_id=${encodeURIComponent(courseId)}&status=${status}`,
+    { headers },
+  );
+  if (!response.ok) throw new Error(response.statusText);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${courseId.replace(/[^a-zA-Z0-9_-]/g, "_")}_approved_questions.xml`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function publishApprovedToOpenEdx(
+  courseId: string,
+  headers: HeadersInit,
+  mode: "publish_new" | "replace" | "delete_reimport" = "publish_new",
+  idempotencyKey?: string,
+): Promise<PublishResult> {
+  const params = new URLSearchParams();
+  params.set("mode", mode);
+  return parseResponse(
+    await fetch(
+      `${API}/publish/courses/${encodeURIComponent(courseId)}/openedx?${params.toString()}`,
+      {
+        method: "POST",
+        headers: withIdempotency(headers, idempotencyKey),
+      },
+    ),
+  );
+}
+
+export async function publishQuestionToOpenEdx(
+  questionId: string,
+  headers: HeadersInit,
+  mode: "publish_new" | "replace" | "delete_reimport" = "publish_new",
+  idempotencyKey?: string,
+): Promise<Question> {
+  const params = new URLSearchParams();
+  params.set("mode", mode);
+  return parseResponse(
+    await fetch(
+      `${API}/publish/questions/${encodeURIComponent(questionId)}/openedx?${params.toString()}`,
+      {
+        method: "POST",
+        headers: withIdempotency(headers, idempotencyKey),
+      },
+    ),
+  );
+}
+
+export async function getPublishHistory(
+  courseId: string,
+  headers: HeadersInit,
+): Promise<{ course_id: string; batches: PublishBatchSummary[] }> {
+  return parseResponse(
+    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/openedx/history`, { headers }),
+  );
+}
+
+export async function rollbackPublishBatch(
+  batchId: string,
+  level: "ai_server" | "openedx",
+  headers: HeadersInit,
+  idempotencyKey?: string,
+) {
+  const params = new URLSearchParams();
+  params.set("level", level);
+  return parseResponse(
+    await fetch(`${API}/publish/batches/${encodeURIComponent(batchId)}/rollback?${params.toString()}`, {
+      method: "POST",
+      headers: withIdempotency(headers, idempotencyKey),
+    }),
+  );
+}
+
+export async function getQuestionSourceTrace(
+  questionId: string,
+  headers: HeadersInit,
+): Promise<SourceTrace> {
+  return parseResponse(
+    await fetch(`${API}/question-bank/${encodeURIComponent(questionId)}/source-trace`, { headers }),
+  );
+}
+
+// New v20 names kept for newer code paths.
+export const exportOlx = exportApprovedOlx;
+export const publishApproved = publishApprovedToOpenEdx;
+export const downloadOlxUrl = (courseId: string, status = "approved") =>
+  `${API}/question-bank/export/openedx-olx.xml?course_id=${encodeURIComponent(courseId)}&status=${status}`;
+
+export async function getUserAnalytics(
+  courseId: string,
+  query: { search?: string; sortBy?: string; sortDir?: string },
+  headers: HeadersInit,
+) {
+  const params = new URLSearchParams();
+  if (courseId) params.set("course_id", courseId);
+  if (query.search?.trim()) params.set("search", query.search.trim());
+  params.set("sort_by", query.sortBy || "cost_usd");
+  params.set("sort_dir", query.sortDir || "desc");
+  return parseResponse(
+    await fetch(`${API}/users/analytics?${params.toString()}`, { headers }),
+  );
+}
+
+export async function getRuntimeSettings(
+  headers: HeadersInit,
+): Promise<RuntimeSettings> {
+  return parseResponse(await fetch(`${API}/settings/runtime`, { headers }));
+}
+
+export async function updateRuntimeSettings(
+  payload: RuntimeSettingsUpdate,
+  headers: HeadersInit,
+): Promise<RuntimeSettings> {
+  return parseResponse(
+    await fetch(`${API}/settings/runtime`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function getRealtimePricing(
+  model: string,
+  headers: HeadersInit,
+  refresh = true,
+): Promise<PricingResponse> {
+  const params = new URLSearchParams();
+  if (model.trim()) params.set("model", model.trim());
+  params.set("refresh", refresh ? "true" : "false");
+  return parseResponse(
+    await fetch(`${API}/cost/pricing/realtime?${params.toString()}`, {
+      headers,
+    }),
+  );
+}
+
+export async function testModelGateway(
+  headers: HeadersInit,
+): Promise<{
+  ok: boolean;
+  provider: string;
+  model: string;
+  api_mode?: string;
+  input_tokens: number;
+  cached_input_tokens?: number;
+  output_tokens: number;
+  question_count: number;
+  first_question?: string | null;
+}> {
+  return parseResponse(
+    await fetch(`${API}/settings/runtime/test-model`, {
+      method: "POST",
+      headers,
+    }),
+  );
+}
+
+export async function getCoursePolicy(
+  courseId: string,
+  headers: HeadersInit,
+): Promise<CoursePolicy> {
+  return parseResponse(
+    await fetch(
+      `${API}/cost/policy?course_id=${encodeURIComponent(courseId)}`,
+      { headers },
+    ),
+  );
+}
+
+export async function updateCoursePolicy(
+  payload: CoursePolicyUpdate,
+  headers: HeadersInit,
+): Promise<CoursePolicy> {
+  return parseResponse(
+    await fetch(`${API}/cost/policy`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function getAuditLogs(
+  courseId: string,
+  query: {
+    status?: string;
+    errorType?: string;
+    actorId?: string;
+    page?: number;
+    pageSize?: number;
+  },
+  headers: HeadersInit,
+): Promise<PaginatedResponse<AuditLogRow>> {
+  const params = new URLSearchParams();
+  if (courseId) params.set("course_id", courseId);
+  if (query.status && query.status !== "all")
+    params.set("status", query.status);
+  if (query.errorType && query.errorType !== "all")
+    params.set("error_type", query.errorType);
+  if (query.actorId?.trim()) params.set("actor_id", query.actorId.trim());
+  params.set("page", String(query.page || 1));
+  params.set("page_size", String(query.pageSize || 20));
+  return parseResponse(
+    await fetch(`${API}/audit?${params.toString()}`, { headers }),
+  );
+}
+
+export type OpenEdxSessionExchangeResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  user_id: string;
+  email?: string | null;
+  role: "admin" | "teacher" | "reviewer" | "viewer";
+  course_ids: string[];
+  username?: string | null;
+  name?: string | null;
+};
+
+export async function exchangeOpenEdxSessionTicket(ticket: string): Promise<OpenEdxSessionExchangeResponse> {
+  return parseResponse(
+    await fetch(`${API}/auth/openedx-session/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ ticket }),
+    }),
+  );
+}
+
+export function buildCmsSessionBridgeUrl(courseId?: string) {
+  const cmsBase = (process.env.NEXT_PUBLIC_OPENEDX_CMS_BASE_URL || process.env.NEXT_PUBLIC_CMS_BASE_URL || "").replace(/\/+$/, "");
+  if (!cmsBase) throw new Error("NEXT_PUBLIC_OPENEDX_CMS_BASE_URL chưa được cấu hình cho frontend.");
+  const returnTo = `${window.location.origin}/auth/cms-callback`;
+  const params = new URLSearchParams();
+  params.set("return_to", returnTo);
+  if (courseId) params.set("course_id", courseId);
+  params.set("state", Math.random().toString(36).slice(2));
+  return `${cmsBase}/api/ai-connector/v1/session/bridge?${params.toString()}`;
+}

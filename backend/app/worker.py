@@ -1,0 +1,731 @@
+import asyncio
+import json
+from datetime import datetime
+from collections import defaultdict
+from celery import Celery
+from app.core.config import settings
+from app.db.session import SessionLocal
+from app.models.job import GenerationJob
+from app.models.generation_batch import GenerationBatch
+from app.models.course import ContentChunk
+from app.services.model_gateway import ModelGateway, ModelResponseParseError
+from app.services.question_service import QuestionService
+from app.services.cost_control import CostControlService
+from app.services.runtime_settings import apply_runtime_settings
+from app.algorithms.node_coverage import create_batches
+from app.services.generation_cache import GenerationCacheService, build_generation_cache_key, build_prompt_cache_key, sha256_text
+from app.services.token_calibration import OutputTokenCalibrationService
+from app.services.audit_log import AuditErrorType, log_audit
+
+apply_runtime_settings()
+celery_app = Celery('ai_openedx_worker', broker=settings.redis_url, backend=settings.redis_url)
+celery_app.conf.broker_connection_retry_on_startup = True
+
+
+@celery_app.task(name='generate_questions_task')
+def generate_questions_task(job_id: str, content_override: str | None = None, work_items: list[dict] | None = None):
+    return asyncio.run(_generate_questions(job_id, content_override, work_items or []))
+
+
+def _append_usage(
+    *,
+    usage: dict,
+    scope_title: str | None,
+    question_count: int,
+    difficulty: str | None,
+    raw_usage_parts: list[dict],
+    usage_sources: list[str],
+    totals: dict[str, int],
+    raw_output_text: str | None = None,
+    parse_error: str | None = None,
+) -> tuple[str, str]:
+    totals['input'] += int(usage.get('input_tokens') or 0)
+    totals['cached'] += int(usage.get('cached_input_tokens') or 0)
+    totals['output'] += int(usage.get('output_tokens') or 0)
+    if usage.get('token_source'):
+        usage_sources.append(str(usage.get('token_source')))
+    raw_usage_parts.append({
+        'scope_title': scope_title,
+        'difficulty': difficulty,
+        'question_count': question_count,
+        'token_source': usage.get('token_source'),
+        'usage': usage,
+        'response_id': usage.get('response_id'),
+        'parse_error': parse_error,
+        'raw_output_text_preview': (raw_output_text or usage.get('raw_output_text') or '')[:4000],
+    })
+    return str(usage.get('provider') or 'openai'), str(usage.get('model') or settings.openai_model)
+
+
+async def _finalize_job_usage(
+    db,
+    job: GenerationJob,
+    *,
+    status: str,
+    error_message: str | None,
+    totals: dict[str, int],
+    raw_usage_parts: list[dict],
+    usage_sources: list[str],
+    provider_used: str,
+    model_used: str,
+    questions_created: int,
+    parse_error: str | None = None,
+):
+    db.rollback()
+    actual_cost = 0.0
+    token_source = '+'.join(sorted(set(usage_sources))) if usage_sources else None
+    raw_usage_json = json.dumps(raw_usage_parts, ensure_ascii=False) if raw_usage_parts else None
+    if totals['input'] or totals['output']:
+        actual_cost, _pricing = await CostControlService(db).calculate_cost_usd(
+            model_name=model_used,
+            input_tokens=totals['input'],
+            cached_input_tokens=totals['cached'],
+            output_tokens=totals['output'],
+            apply_safety_factor=False,
+        )
+        CostControlService(db).log_usage(
+            job_id=job.id,
+            course_id=job.course_id,
+            user_id=job.requested_by,
+            feature='generate_questions',
+            model_provider=provider_used,
+            model_name=model_used,
+            input_tokens=totals['input'],
+            cached_input_tokens=totals['cached'],
+            output_tokens=totals['output'],
+            cost_usd=actual_cost,
+            token_source=token_source,
+            raw_usage_json=raw_usage_json,
+        )
+
+    # Learn output tokens/question from real model calls. Do not learn from cache hits.
+    calibrator = OutputTokenCalibrationService(db)
+    for part in raw_usage_parts:
+        usage = part.get('usage') or {}
+        output_tokens = int((usage or {}).get('output_tokens') or 0)
+        question_count = int(part.get('question_count') or 0)
+        token_source_part = str(part.get('token_source') or '')
+        if output_tokens > 0 and question_count > 0 and token_source_part != 'output_cache_hit':
+            calibrator.update_from_observation(
+                model_name=model_used,
+                course_id=job.course_id,
+                difficulty=part.get('difficulty'),
+                question_count=question_count,
+                output_tokens=output_tokens,
+            )
+
+    estimated_raw = float(job.estimated_raw_cost_usd or 0)
+    accuracy = 0.0
+    if actual_cost > 0 and estimated_raw > 0:
+        accuracy = max(0.0, 100.0 - abs(actual_cost - estimated_raw) / actual_cost * 100.0)
+    elif actual_cost == 0 and estimated_raw == 0:
+        accuracy = 100.0
+
+    actual_output_per_question = round((totals['output'] / questions_created), 2) if questions_created else 0.0
+    estimated_output = int(job.estimated_output_tokens or 0)
+    output_delta = int(totals['output'] - estimated_output)
+    output_accuracy = 0.0
+    if totals['output'] > 0 and estimated_output > 0:
+        output_accuracy = max(0.0, 100.0 - abs(totals['output'] - estimated_output) / totals['output'] * 100.0)
+    elif totals['output'] == 0 and estimated_output == 0:
+        output_accuracy = 100.0
+
+    job.status = status
+    job.actual_input_tokens = totals['input']
+    job.actual_cached_input_tokens = totals['cached']
+    job.actual_uncached_input_tokens = max(totals['input'] - totals['cached'], 0)
+    job.actual_output_tokens = totals['output']
+    job.actual_output_tokens_per_question = actual_output_per_question
+    job.output_delta_tokens = output_delta
+    job.output_accuracy_percent = round(output_accuracy, 2)
+    job.actual_cost_usd = actual_cost
+    job.actual_cost_vnd = actual_cost * settings.usd_to_vnd
+    job.usage_token_source = token_source
+    job.estimate_accuracy_percent = round(accuracy, 2)
+    job.completed_question_count = questions_created
+    job.openai_response_ids = ','.join([str(p.get('response_id')) for p in raw_usage_parts if p.get('response_id')])[:4000]
+    job.raw_model_output_text = '\n\n--- response ---\n\n'.join([str(p.get('raw_output_text_preview') or '') for p in raw_usage_parts if p.get('raw_output_text_preview')])[:12000] or None
+    job.raw_model_usage_json = raw_usage_json
+    job.model_parse_error = parse_error
+    job.error_message = error_message
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+    log_audit(
+        db,
+        action='generation.job.finish',
+        status='success' if status == 'completed' else 'failed',
+        error_type=None if status == 'completed' else (AuditErrorType.EXTERNAL_SERVICE_ERROR if parse_error else AuditErrorType.SYSTEM_ERROR),
+        message=error_message or f'Hoàn tất job tạo câu hỏi với trạng thái {status}',
+        course_id=job.course_id,
+        target_type='generation_job',
+        target_id=job.id,
+        metadata={
+            'requested_by': job.requested_by,
+            'job_status': status,
+            'question_count': job.question_count,
+            'completed_question_count': questions_created,
+            'actual_input_tokens': job.actual_input_tokens,
+            'actual_cached_input_tokens': job.actual_cached_input_tokens,
+            'actual_output_tokens': job.actual_output_tokens,
+            'actual_cost_usd': job.actual_cost_usd,
+            'token_source': token_source,
+            'parse_error': parse_error,
+        },
+    )
+
+
+def _difficulty_label(item: dict) -> str | None:
+    counts = item.get('difficulty_counts') or {}
+    if counts and len(counts) > 1:
+        return 'mixed'
+    return item.get('target_difficulty')
+
+
+def _prepare_item(job: GenerationJob, item: dict, fallback_content: str, model_used: str, batch_index: int, phase_override: str | None = None) -> dict:
+    count = int(item.get('question_count') or 0)
+    item_content = str(item.get('content') or fallback_content or '')
+    scope_title = item.get('scope_title') or job.topic
+    target_difficulty = item.get('target_difficulty')
+    difficulty_counts = {str(k).lower(): int(v) for k, v in (item.get('difficulty_counts') or {}).items() if int(v or 0) > 0}
+    if not difficulty_counts and target_difficulty and target_difficulty not in {'mixed', 'mixed_tail'}:
+        difficulty_counts = {str(target_difficulty).lower(): count}
+    prompt_cache_key = item.get('prompt_cache_key') or build_prompt_cache_key(
+        course_id=job.course_id,
+        scope_title=scope_title,
+        content=item_content,
+        chunk_ids=item.get('chunk_ids') or [],
+        node_id=item.get('node_id'),
+    )
+    difficulty_for_key = item.get('target_difficulty') or 'mixed'
+    if difficulty_counts and len(difficulty_counts) > 1:
+        difficulty_for_key = 'mixed_' + '_'.join(f'{k}{v}' for k, v in sorted(difficulty_counts.items()))
+    generation_cache_key = item.get('generation_cache_key') or build_generation_cache_key(
+        prompt_cache_key=prompt_cache_key,
+        difficulty=difficulty_for_key,
+        question_count=count,
+        model_name=model_used,
+    )
+    chunk_hash = item.get('chunk_hash') or sha256_text('\n'.join(sorted(item.get('chunk_ids') or [])) + '|' + item_content, 32)
+    prepared = dict(item)
+    prepared.update({
+        'batch_index': batch_index,
+        'phase': phase_override or item.get('phase') or ('tail' if item.get('tail_wait_for_primary') else 'primary'),
+        'content': item_content,
+        'scope_title': scope_title,
+        'question_count': count,
+        'target_difficulty': target_difficulty,
+        'difficulty_counts': difficulty_counts,
+        'prompt_cache_key': prompt_cache_key,
+        'generation_cache_key': generation_cache_key,
+        'chunk_hash': chunk_hash,
+    })
+    return prepared
+
+
+def _upsert_batch_record(db, job: GenerationJob, item: dict, *, status: str = 'queued', error: str | None = None) -> GenerationBatch:
+    batch = db.query(GenerationBatch).filter(
+        GenerationBatch.job_id == job.id,
+        GenerationBatch.batch_index == int(item.get('batch_index') or 0),
+        GenerationBatch.phase == str(item.get('phase') or 'primary'),
+    ).first()
+    now = datetime.utcnow()
+    if not batch:
+        batch = GenerationBatch(
+            job_id=job.id,
+            course_id=job.course_id,
+            batch_index=int(item.get('batch_index') or 0),
+            phase=str(item.get('phase') or 'primary'),
+            difficulty=_difficulty_label(item),
+            difficulty_counts_json=json.dumps(item.get('difficulty_counts') or {}, ensure_ascii=False),
+            requested_questions=int(item.get('question_count') or 0),
+            status=status,
+            prompt_cache_key=item.get('prompt_cache_key'),
+            generation_cache_key=item.get('generation_cache_key'),
+            created_at=now,
+            updated_at=now,
+        )
+    batch.status = status
+    batch.updated_at = now
+    if status == 'running' and not batch.started_at:
+        batch.started_at = now
+    if status in {'completed', 'partial_completed', 'failed', 'parse_failed', 'cache_hit'}:
+        batch.finished_at = now
+    if error:
+        batch.error_message = error
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    if status == 'running':
+        log_audit(
+            db,
+            action='generation.batch.start',
+            status='running',
+            message='Bắt đầu gọi GPT cho batch',
+            course_id=job.course_id,
+            target_type='generation_batch',
+            target_id=batch.id,
+            metadata={
+                'job_id': job.id,
+                'requested_by': job.requested_by,
+                'batch_index': batch.batch_index,
+                'phase': batch.phase,
+                'difficulty': batch.difficulty,
+                'requested_questions': batch.requested_questions,
+                'prompt_cache_key': batch.prompt_cache_key,
+            },
+        )
+    return batch
+
+
+def _finish_batch_record(db, job: GenerationJob, item: dict, *, status: str, completed: int, usage: dict | None = None, error: str | None = None):
+    batch = _upsert_batch_record(db, job, item, status=status, error=error)
+    usage = usage or {}
+    batch.completed_questions = int(completed or 0)
+    batch.actual_input_tokens = int(usage.get('input_tokens') or 0)
+    batch.actual_cached_input_tokens = int(usage.get('cached_input_tokens') or 0)
+    batch.actual_output_tokens = int(usage.get('output_tokens') or 0)
+    batch.token_source = usage.get('token_source')
+    batch.openai_response_id = usage.get('response_id')
+    batch.finished_at = datetime.utcnow()
+    db.add(batch)
+    db.commit()
+    audit_status = 'success' if status in {'completed', 'partial_completed', 'cache_hit'} else 'failed'
+    error_type = None
+    if audit_status == 'failed':
+        error_type = AuditErrorType.EXTERNAL_SERVICE_ERROR if status in {'failed', 'parse_failed'} else AuditErrorType.SYSTEM_ERROR
+    log_audit(
+        db,
+        action='generation.batch.finish',
+        status=audit_status,
+        error_type=error_type,
+        message=error or f'Kết thúc batch với trạng thái {status}',
+        course_id=job.course_id,
+        target_type='generation_batch',
+        target_id=batch.id,
+        metadata={
+            'job_id': job.id,
+            'requested_by': job.requested_by,
+            'batch_index': batch.batch_index,
+            'phase': batch.phase,
+            'difficulty': batch.difficulty,
+            'requested_questions': batch.requested_questions,
+            'completed_questions': batch.completed_questions,
+            'actual_input_tokens': batch.actual_input_tokens,
+            'actual_cached_input_tokens': batch.actual_cached_input_tokens,
+            'actual_output_tokens': batch.actual_output_tokens,
+            'token_source': batch.token_source,
+            'openai_response_id': batch.openai_response_id,
+        },
+    )
+
+
+def _missing_by_difficulty(item: dict, created_count: int) -> dict[str, int]:
+    requested = int(item.get('question_count') or 0)
+    missing = max(requested - int(created_count or 0), 0)
+    if missing <= 0:
+        return {}
+    counts = item.get('difficulty_counts') or {}
+    if len(counts) == 1:
+        diff = next(iter(counts.keys()))
+        return {diff: missing}
+    # If a mixed tail creates too few questions, allocate missing to the largest requested group.
+    if counts:
+        diff = max(counts.items(), key=lambda kv: int(kv[1] or 0))[0]
+        return {diff: missing}
+    diff = item.get('target_difficulty') or 'mixed'
+    return {str(diff): missing}
+
+
+async def _call_gateway_with_retry(gateway: ModelGateway, item: dict, job: GenerationJob) -> dict:
+    attempts = max(1, int(settings.openai_retry_max_attempts or 1))
+    base_seconds = max(0.5, float(settings.openai_retry_base_seconds or 1.0))
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            questions, usage = await gateway.generate_questions(
+                content=item['content'],
+                question_count=int(item['question_count']),
+                scope_title=item.get('scope_title'),
+                target_difficulty=item.get('target_difficulty'),
+                difficulty_counts=item.get('difficulty_counts'),
+                provider=job.provider,
+                prompt_cache_key=item.get('prompt_cache_key'),
+            )
+            return {'ok': True, 'item': item, 'questions': questions, 'usage': usage}
+        except ModelResponseParseError as exc:
+            # This request may already be billed; do not retry blindly because a
+            # retry would spend again. Let recovery/cache handle it.
+            return {'ok': False, 'parse_error': True, 'item': item, 'exception': exc}
+        except Exception as exc:  # provider/network/rate-limit errors before usable response
+            last_error = exc
+            text = str(exc).lower()
+            retryable = any(key in text for key in ['429', 'rate limit', 'temporarily', 'timeout', 'connection', '503', '502'])
+            if not retryable or attempt >= attempts:
+                return {'ok': False, 'parse_error': False, 'item': item, 'exception': exc}
+            await asyncio.sleep(base_seconds * (2 ** (attempt - 1)))
+    return {'ok': False, 'parse_error': False, 'item': item, 'exception': last_error or RuntimeError('unknown model error')}
+
+
+def _split_cache_warmup_items(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Pick one cheap warm-up request per prompt_cache_key.
+
+    OpenAI prompt caching works best when a stable prefix has already been seen
+    before the next requests with the same prefix start. Running all difficulty
+    calls at exactly the same time can be faster, but it may miss cache hits.
+    This warm-up stage sends one request for each content prefix first, then
+    parallelizes the remaining EASY/MEDIUM/HARD batches.
+    """
+    if not settings.openai_prompt_cache_warmup_enabled or len(items) <= 1:
+        return [], items
+
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        groups[str(item.get('prompt_cache_key') or 'no-cache-key')].append(item)
+
+    warmups: list[dict] = []
+    warmup_ids: set[int] = set()
+    for group_items in groups.values():
+        if len(group_items) <= 1:
+            continue
+        # Choose the smallest request in this prefix group. It warms the same
+        # stable content prefix, finishes faster, and lets later/larger batches
+        # benefit from cached input.
+        chosen = sorted(
+            group_items,
+            key=lambda item: (int(item.get('question_count') or 0), int(item.get('batch_index') or 0)),
+        )[0]
+        warmups.append(chosen)
+        warmup_ids.add(id(chosen))
+
+    remaining = [item for item in items if id(item) not in warmup_ids]
+    return warmups, remaining
+
+
+async def _run_api_items_parallel(items: list[dict], job: GenerationJob, gateway: ModelGateway):
+    max_parallel = 1
+    if settings.openai_parallel_enabled:
+        max_parallel = max(1, min(int(settings.openai_max_parallel_calls or 1), 8))
+
+    async def run_many(items_to_run: list[dict]):
+        if not items_to_run:
+            return
+        semaphore = asyncio.Semaphore(max_parallel)
+
+        async def guarded(item: dict):
+            async with semaphore:
+                return await _call_gateway_with_retry(gateway, item, job)
+
+        tasks = [asyncio.create_task(guarded(item)) for item in items_to_run]
+        for task in asyncio.as_completed(tasks):
+            yield await task
+
+    warmup_items, remaining_items = _split_cache_warmup_items(items)
+
+    # Stage 1: one warm-up request per prompt_cache_key. Different cache keys
+    # may run in parallel; same key intentionally waits so following batches can
+    # reuse cached input.
+    async for result in run_many(warmup_items):
+        yield result
+
+    # Stage 2: normal controlled parallelism for all remaining batches.
+    async for result in run_many(remaining_items):
+        yield result
+
+
+def _merge_counts(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+    merged = defaultdict(int)
+    for source in (left or {}, right or {}):
+        for key, value in source.items():
+            if int(value or 0) > 0:
+                merged[str(key).lower()] += int(value)
+    return dict(merged)
+
+
+def _build_tail_items(job: GenerationJob, base_tail_items: list[dict], missing_counts: dict[str, int], content: str, model_used: str, start_batch_index: int) -> list[dict]:
+    """Build delayed tail batches while preserving one prompt per difficulty.
+
+    Do not merge EASY/MEDIUM/HARD tails into one mixed prompt. The project
+    intentionally uses three difficulty prompts so each tail item must keep its
+    own target_difficulty. Example:
+
+        planned EASY tail 1 + missing EASY 1     -> EASY tail 2
+        planned MEDIUM tail 3 + missing MEDIUM 12 -> MEDIUM tail 15
+
+    This still saves input cost because the EASY/MEDIUM/HARD prompts share the
+    same large stable prefix and prompt_cache_key.
+    """
+    counts_by_diff: dict[str, int] = {}
+    base_by_diff: dict[str, dict] = {}
+    fallback_base = base_tail_items[0] if base_tail_items else {}
+
+    for item in base_tail_items:
+        item_counts = item.get('difficulty_counts') or {}
+        if not item_counts and item.get('target_difficulty'):
+            item_counts = {str(item.get('target_difficulty')).lower(): int(item.get('question_count') or 0)}
+        for diff, value in item_counts.items():
+            diff_key = str(diff).lower()
+            if diff_key not in {'easy', 'medium', 'hard'}:
+                continue
+            count = int(value or 0)
+            if count <= 0:
+                continue
+            counts_by_diff[diff_key] = counts_by_diff.get(diff_key, 0) + count
+            base_by_diff.setdefault(diff_key, item)
+
+    for diff, value in (missing_counts or {}).items():
+        diff_key = str(diff).lower()
+        if diff_key not in {'easy', 'medium', 'hard'}:
+            continue
+        count = int(value or 0)
+        if count > 0:
+            counts_by_diff[diff_key] = counts_by_diff.get(diff_key, 0) + count
+
+    tail_items: list[dict] = []
+    offset = 0
+    for diff in ['easy', 'medium', 'hard']:
+        count = int(counts_by_diff.get(diff) or 0)
+        if count <= 0:
+            continue
+        base = base_by_diff.get(diff) or fallback_base
+        raw = dict(base)
+        raw.update({
+            'phase': 'tail',
+            'tail_wait_for_primary': True,
+            'target_difficulty': diff,
+            'difficulty_counts': {diff: count},
+            'question_count': count,
+            'scope_title': base.get('scope_title') or job.topic,
+            'content': base.get('content') or content,
+            'generation_cache_key': None,
+        })
+        tail_items.append(_prepare_item(job, raw, content, model_used, start_batch_index + offset, phase_override='tail'))
+        offset += 1
+    return tail_items
+
+
+async def _generate_questions(job_id: str, content_override: str | None = None, work_items: list[dict] | None = None):
+    apply_runtime_settings()
+    db = SessionLocal()
+    job = None
+    totals = {'input': 0, 'cached': 0, 'output': 0}
+    raw_usage_parts: list[dict] = []
+    usage_sources: list[str] = []
+    provider_used = 'openai'
+    model_used = settings.openai_model
+    all_created = []
+    parse_error: str | None = None
+    error_messages: list[str] = []
+    try:
+        # Acquire a row lock before moving the job to running. This makes
+        # duplicate Celery deliveries safe: a second worker will wait, then see
+        # running/completed and exit without creating duplicate questions.
+        job = db.query(GenerationJob).filter(GenerationJob.id == job_id).with_for_update().first()
+        if not job:
+            return {'error': 'job not found'}
+        if job.status in {'running', 'completed', 'partial_completed', 'partial_failed', 'failed', 'model_parse_failed'}:
+            return {'job_id': job.id, 'status': job.status, 'idempotent_skip': True}
+        provider_used = job.provider
+        model_used = job.model_name or settings.openai_model
+        job.status = 'running'
+        job.updated_at = datetime.utcnow()
+        db.commit()
+
+        content = content_override
+        if not content:
+            chunks = db.query(ContentChunk).filter(ContentChunk.course_id == job.course_id).limit(12).all()
+            content = '\n\n'.join(f"Source: {c.source_ref}\nType: {c.source_type}\nChunkId: {c.id}\nBlockId: {c.block_id}\n{c.content}" for c in chunks) or 'REST API dùng HTTP methods GET, POST, PUT, DELETE.'
+
+        batches = create_batches(job.question_count, min(job.batch_size or settings.generation_batch_size, 6))
+        if not work_items:
+            work_items = [{'scope_title': job.topic, 'question_count': batch, 'content': content, 'phase': 'primary'} for batch in batches if batch > 0]
+
+        prepared_items = [_prepare_item(job, item, content, model_used, idx + 1) for idx, item in enumerate(work_items)]
+        primary_items = [item for item in prepared_items if not item.get('tail_wait_for_primary') and item.get('phase') != 'tail']
+        base_tail_items = [item for item in prepared_items if item.get('tail_wait_for_primary') or item.get('phase') == 'tail']
+
+        cache_service = GenerationCacheService(db)
+        gateway = ModelGateway()
+        missing_counts: dict[str, int] = {}
+
+        async def process_items(items: list[dict], *, phase_name: str):
+            nonlocal provider_used, model_used, parse_error, missing_counts
+            api_items: list[dict] = []
+            for item in items:
+                if int(item.get('question_count') or 0) <= 0:
+                    continue
+                _upsert_batch_record(db, job, item, status='queued')
+                cached_questions = cache_service.get_cached_questions(item['generation_cache_key'], int(item['question_count']))
+                if cached_questions is not None:
+                    usage = {
+                        'input_tokens': 0,
+                        'cached_input_tokens': 0,
+                        'output_tokens': 0,
+                        'provider': 'output_cache',
+                        'model': model_used,
+                        'token_source': 'output_cache_hit',
+                        'raw_usage': {'cache_key': item['generation_cache_key'], 'prompt_cache_key': item['prompt_cache_key']},
+                        'response_id': None,
+                        'raw_output_text': '',
+                        'prompt_cache_key': item['prompt_cache_key'],
+                    }
+                    provider_used, model_used = _append_usage(
+                        usage=usage,
+                        scope_title=item.get('scope_title'),
+                        question_count=int(item['question_count']),
+                        difficulty=_difficulty_label(item),
+                        raw_usage_parts=raw_usage_parts,
+                        usage_sources=usage_sources,
+                        totals=totals,
+                    )
+                    created = QuestionService(db).create_from_ai_items(
+                        course_id=job.course_id,
+                        lesson_id=job.lesson_id,
+                        items=cached_questions,
+                        provider=provider_used,
+                        model_name=model_used,
+                        job_id=job.id,
+                    )
+                    all_created.extend(created)
+                    _finish_batch_record(db, job, item, status='cache_hit', completed=len(created), usage=usage)
+                    missing_counts = _merge_counts(missing_counts, _missing_by_difficulty(item, len(created)))
+                else:
+                    _upsert_batch_record(db, job, item, status='running')
+                    api_items.append(item)
+
+            async for result in _run_api_items_parallel(api_items, job, gateway):
+                item = result['item']
+                count = int(item.get('question_count') or 0)
+                if result.get('ok'):
+                    questions = result['questions']
+                    usage = result['usage']
+                    provider_used, model_used = _append_usage(
+                        usage=usage,
+                        scope_title=item.get('scope_title'),
+                        question_count=count,
+                        difficulty=_difficulty_label(item),
+                        raw_usage_parts=raw_usage_parts,
+                        usage_sources=usage_sources,
+                        totals=totals,
+                    )
+                    cache_service.save_success(
+                        cache_key=item['generation_cache_key'],
+                        prompt_cache_key=item['prompt_cache_key'],
+                        course_id=job.course_id,
+                        source_node_id=item.get('node_id'),
+                        chunk_hash=item.get('chunk_hash'),
+                        difficulty=_difficulty_label(item),
+                        question_count=count,
+                        model_name=model_used,
+                        raw_output_text=usage.get('raw_output_text'),
+                        parsed_questions=questions,
+                        response_id=usage.get('response_id'),
+                        input_tokens=int(usage.get('input_tokens') or 0),
+                        cached_input_tokens=int(usage.get('cached_input_tokens') or 0),
+                        output_tokens=int(usage.get('output_tokens') or 0),
+                    )
+                    created = QuestionService(db).create_from_ai_items(
+                        course_id=job.course_id,
+                        lesson_id=job.lesson_id,
+                        items=questions,
+                        provider=provider_used,
+                        model_name=model_used,
+                        job_id=job.id,
+                    )
+                    all_created.extend(created)
+                    status = 'completed' if len(created) >= count else 'partial_completed'
+                    _finish_batch_record(db, job, item, status=status, completed=len(created), usage=usage)
+                    missing_counts = _merge_counts(missing_counts, _missing_by_difficulty(item, len(created)))
+                elif result.get('parse_error'):
+                    exc = result['exception']
+                    provider_used, model_used = _append_usage(
+                        usage=exc.usage,
+                        scope_title=item.get('scope_title'),
+                        question_count=count,
+                        difficulty=_difficulty_label(item),
+                        raw_usage_parts=raw_usage_parts,
+                        usage_sources=usage_sources,
+                        totals=totals,
+                        raw_output_text=exc.raw_output_text,
+                        parse_error=str(exc),
+                    )
+                    cache_service.save_parse_failure(
+                        cache_key=item['generation_cache_key'],
+                        prompt_cache_key=item['prompt_cache_key'],
+                        course_id=job.course_id,
+                        source_node_id=item.get('node_id'),
+                        chunk_hash=item.get('chunk_hash'),
+                        difficulty=_difficulty_label(item),
+                        question_count=count,
+                        model_name=model_used,
+                        raw_output_text=exc.raw_output_text,
+                        response_id=exc.response_id,
+                        input_tokens=int(exc.usage.get('input_tokens') or 0),
+                        cached_input_tokens=int(exc.usage.get('cached_input_tokens') or 0),
+                        output_tokens=int(exc.usage.get('output_tokens') or 0),
+                        parse_error=str(exc),
+                    )
+                    parse_error = str(exc)
+                    error_messages.append(f'{phase_name} batch {item.get("batch_index")}: {exc}')
+                    _finish_batch_record(db, job, item, status='parse_failed', completed=0, usage=exc.usage, error=str(exc))
+                    missing_counts = _merge_counts(missing_counts, _missing_by_difficulty(item, 0))
+                else:
+                    exc = result.get('exception') or RuntimeError('model call failed')
+                    error_messages.append(f'{phase_name} batch {item.get("batch_index")}: {exc}')
+                    _finish_batch_record(db, job, item, status='failed', completed=0, error=str(exc))
+                    missing_counts = _merge_counts(missing_counts, _missing_by_difficulty(item, 0))
+
+        # v25.9.8.1: run primary batches with controlled concurrency first.
+        # The scheduler warms one prompt_cache_key before parallelizing the rest
+        # so later difficulty prompts can reuse cached input. Delayed tail runs
+        # after primary and preserves one prompt per difficulty: EASY tail,
+        # MEDIUM tail, HARD tail.
+        await process_items(primary_items, phase_name='primary')
+
+        tail_items = _build_tail_items(job, base_tail_items, missing_counts, content or '', model_used, len(prepared_items) + 1)
+        if tail_items and settings.generation_tail_batch_wait_enabled:
+            # Prevent recursive missing from creating another paid tail loop.
+            missing_counts = {}
+            await process_items(tail_items, phase_name='tail')
+        elif base_tail_items:
+            await process_items(base_tail_items, phase_name='tail')
+
+        final_status = 'completed' if len(all_created) >= int(job.question_count or 0) and not error_messages else ('partial_completed' if all_created else 'failed')
+        if parse_error and all_created:
+            final_status = 'partial_failed'
+        elif parse_error and not all_created:
+            final_status = 'model_parse_failed'
+        err = None if final_status == 'completed' else (f'Created {len(all_created)}/{job.question_count} questions. ' + '; '.join(error_messages[:3])).strip()
+        await _finalize_job_usage(
+            db,
+            job,
+            status=final_status,
+            error_message=err,
+            totals=totals,
+            raw_usage_parts=raw_usage_parts,
+            usage_sources=usage_sources,
+            provider_used=provider_used,
+            model_used=model_used,
+            questions_created=len(all_created),
+            parse_error=parse_error,
+        )
+        return {'job_id': job.id, 'questions_created': len(all_created), 'status': final_status}
+    except Exception as exc:
+        if job:
+            status = 'partial_failed' if (all_created or totals['input'] or totals['output']) else 'failed'
+            await _finalize_job_usage(
+                db,
+                job,
+                status=status,
+                error_message=str(exc),
+                totals=totals,
+                raw_usage_parts=raw_usage_parts,
+                usage_sources=usage_sources,
+                provider_used=provider_used,
+                model_used=model_used,
+                questions_created=len(all_created),
+                parse_error=parse_error,
+            )
+        return {'error': str(exc)}
+    finally:
+        db.close()

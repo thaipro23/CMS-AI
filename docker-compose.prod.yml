@@ -1,0 +1,145 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_openedx}
+      POSTGRES_USER: ${POSTGRES_USER:-ai_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - ai_internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - ai_internal
+
+  backend:
+    build:
+      context: ./backend
+    container_name: ai-backend
+    env_file: .env.production
+    restart: unless-stopped
+    command: sh -c "alembic -c alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime_data:/app/.runtime
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()\nPY"]
+      interval: 15s
+      timeout: 8s
+      retries: 20
+      start_period: 30s
+    networks:
+      ai_internal:
+      openedx_shared:
+        aliases:
+          - ai-backend
+
+  worker:
+    build:
+      context: ./backend
+    container_name: ai-worker
+    env_file: .env.production
+    restart: unless-stopped
+    command: celery -A app.worker.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-4}
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime_data:/app/.runtime
+    networks:
+      - ai_internal
+      - openedx_shared
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://api-ai.cms-test.poly.edu.vn}
+        NEXT_PUBLIC_OPENEDX_CMS_BASE_URL: ${NEXT_PUBLIC_OPENEDX_CMS_BASE_URL:-https://scms-test.poly.edu.vn}
+        NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN: ${NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN:-true}
+    container_name: ai-frontend
+    env_file: .env.production
+    restart: unless-stopped
+    expose:
+      - "3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      openedx_shared:
+        aliases:
+          - ai-frontend
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: ai-prometheus
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    expose:
+      - "9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - ai_internal
+      - openedx_shared
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: ai-grafana
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    expose:
+      - "3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    networks:
+      - openedx_shared
+
+volumes:
+  postgres_data:
+  redis_data:
+  runtime_data:
+  grafana_data:
+
+networks:
+  ai_internal:
+    internal: true
+  openedx_shared:
+    external: true
+    name: ${OPENEDX_SHARED_NETWORK:-tutor_local_default}
