@@ -37,11 +37,25 @@ Mức độ câu hỏi:
 - medium: cần hiểu quan hệ, phân biệt khái niệm hoặc chọn cách dùng đúng trong tình huống đơn giản.
 - hard: cần kết hợp 2-3 ý trong tài liệu hoặc áp dụng vào tình huống cụ thể, nhưng tuyệt đối không vượt ngoài nội dung đã cho.
 
+Concept-aware generation:
+- Nếu prompt có phần "Concept-aware generation hints", hãy phân bổ câu hỏi qua nhiều concept khác nhau.
+- Không tạo nhiều câu cùng một concept/gốc nội dung trong cùng batch trừ khi bắt buộc phải tạo biến thể.
+- Mỗi câu phải điền concept_id/concept_title/concept_key nếu tìm được concept phù hợp.
+- Mỗi concept + difficulty tạo thành một question_family_id ổn định. Các biến thể cùng gốc nội dung phải dùng cùng question_family_id.
+- variant_no là số thứ tự biến thể trong cùng question_family_id, bắt đầu từ 1.
+- source_evidence là câu/đoạn ngắn trong học liệu chứng minh câu hỏi dựa trên nguồn nào.
+
 Output trả về JSON hợp lệ dạng:
 {
   "questions": [
     {
       "topic": "tên node/chapter/unit/component",
+      "concept_id": "id concept nếu prompt có cung cấp, hoặc null",
+      "concept_title": "tên concept/vấn đề học tập riêng biệt",
+      "concept_key": "slug concept nếu có, hoặc null",
+      "question_family_id": "family id ổn định cho các câu cùng concept+difficulty",
+      "variant_no": 1,
+      "source_evidence": "bằng chứng/trích dẫn ngắn từ nguồn học liệu",
       "difficulty": "easy|medium|hard",
       "cognitive_level": "remember|understand|recognize_example|simple_apply",
       "learning_objective": "...",
@@ -73,7 +87,7 @@ DIFFICULTY_GUIDE = {
 }
 
 
-PROMPT_VERSION = 'v25_9_13_14_sync_picker_cleanup'
+PROMPT_VERSION = 'v25_9_14_1_question_family_id'
 
 
 def build_question_prompt(content: str, question_count: int, scope_title: str | None = None, target_difficulty: str | None = None, difficulty_counts: dict[str, int] | None = None) -> str:

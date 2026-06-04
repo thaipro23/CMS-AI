@@ -20,6 +20,9 @@ import {
   PublishResult,
   PublishBatchSummary,
   SourceTrace,
+  Concept,
+  ConceptExtractResponse,
+  ConceptListResponse,
 } from "../types";
 
 const rawApiBase =
@@ -151,6 +154,35 @@ export async function getSyncedCourses(
   params.set("limit", String(limit));
   return parseResponse(
     await fetch(`${API}/courses?${params.toString()}`, { headers }),
+  );
+}
+
+
+export async function getCourseConcepts(
+  courseId: string,
+  headers: HeadersInit,
+  nodeId?: string,
+): Promise<ConceptListResponse> {
+  const params = new URLSearchParams();
+  if (nodeId && nodeId !== "all") params.set("node_id", nodeId);
+  return parseResponse(
+    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/concepts?${params.toString()}`, { headers }),
+  );
+}
+
+export async function extractCourseConcepts(
+  courseId: string,
+  headers: HeadersInit,
+  nodeId?: string,
+  force = false,
+  maxConcepts = 20,
+): Promise<ConceptExtractResponse> {
+  return parseResponse(
+    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/concepts/extract`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ node_id: nodeId && nodeId !== "all" ? nodeId : null, force, max_concepts: maxConcepts }),
+    }),
   );
 }
 
@@ -348,6 +380,7 @@ export async function updateQuestion(
     topic: form.node_title || form.topic,
     note: "Teacher edited question",
     source_page: form.source_page ? Number(form.source_page) : null,
+    variant_no: form.variant_no ? Number(form.variant_no) : null,
     tags: form.tags_text
       .split(",")
       .map((tag) => tag.trim())
@@ -763,4 +796,70 @@ export function buildCmsSessionBridgeUrl(courseId?: string) {
   if (courseId) params.set("course_id", courseId);
   params.set("state", Math.random().toString(36).slice(2));
   return `${cmsBase}/api/ai-connector/v1/session/bridge?${params.toString()}`;
+}
+
+export async function previewFamilyBankPlan(
+  courseId: string,
+  payload: {
+    chapter_node_id?: string | null;
+    total_questions: number;
+    difficulty_distribution?: { easy?: number; medium?: number; hard?: number; EASY?: number; MEDIUM?: number; HARD?: number };
+    shortage_policy?: string;
+    max_families_per_bank?: number;
+  },
+  headers: HeadersInit,
+) {
+  return parseResponse(
+    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/family-bank-plan/preview`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function publishFamilyBankPlan(
+  courseId: string,
+  plan: any,
+  headers: HeadersInit,
+  mode: "publish_new" | "replace" | "delete_reimport" = "publish_new",
+  idempotencyKey?: string,
+) {
+  return parseResponse(
+    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/family-bank-plan/publish`, {
+      method: "POST",
+      headers: withIdempotency(headers, idempotencyKey),
+      body: JSON.stringify({ plan, mode }),
+    }),
+  );
+}
+
+export async function createCmsQuizNode(
+  courseId: string,
+  payload: { parent_node_id: string; quiz_title: string; unit_title: string; plan?: any },
+  headers: HeadersInit,
+  idempotencyKey?: string,
+) {
+  return parseResponse(
+    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/cms-quiz-node/create`, {
+      method: "POST",
+      headers: withIdempotency(headers, idempotencyKey),
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function insertCmsProblemBanks(
+  courseId: string,
+  payload: { unit_node_id: string; plan: any; strict_component_selection?: boolean },
+  headers: HeadersInit,
+  idempotencyKey?: string,
+) {
+  return parseResponse(
+    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/cms-problem-banks/insert`, {
+      method: "POST",
+      headers: withIdempotency(headers, idempotencyKey),
+      body: JSON.stringify(payload),
+    }),
+  );
 }

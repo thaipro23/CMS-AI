@@ -295,6 +295,14 @@ def get_question_source_trace(question_id: str, db: Session = Depends(get_db), u
             'content': (chunk.content if chunk else question.source_excerpt) or '',
         },
         'question_source_excerpt': question.source_excerpt,
+        'concept': {
+            'id': question.concept_id,
+            'title': question.concept_title,
+            'key': question.concept_key,
+            'family_id': question.question_family_id,
+            'variant_no': question.variant_no,
+            'source_evidence': question.source_evidence,
+        },
         'publish_trace': question.publish_verification_json or {},
         'tags': question.tags or [],
     }

@@ -605,6 +605,50 @@ class RealOpenEdXConnector(OpenEdXConnector):
             self._raise_for_openedx_error(response, 'delete_problem')
             return response.json()
 
+    async def create_quiz_node(
+        self,
+        course_id: str,
+        parent_node_id: str,
+        quiz_title: str,
+        unit_title: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        endpoint = getattr(settings, 'openedx_quiz_node_create_endpoint', '/api/ai-connector/v1/courses/{course_id}/quiz-nodes')
+        url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
+        payload = {
+            'course_id': course_id,
+            'parent_node_id': parent_node_id,
+            'quiz_title': quiz_title,
+            'unit_title': unit_title,
+            'metadata': metadata or {},
+        }
+        body = self._json_body(payload)
+        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
+            response = await client.post(url, content=body, headers=await self._json_request_headers('POST', url, body))
+            self._raise_for_openedx_error(response, 'create_quiz_node')
+            return response.json()
+
+    async def insert_problem_banks(
+        self,
+        course_id: str,
+        unit_node_id: str,
+        slots: list[dict[str, Any]],
+        metadata: dict | None = None,
+    ) -> dict:
+        endpoint = getattr(settings, 'openedx_problem_bank_insert_endpoint', '/api/ai-connector/v1/courses/{course_id}/problem-banks')
+        url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
+        payload = {
+            'course_id': course_id,
+            'unit_node_id': unit_node_id,
+            'slots': slots or [],
+            'metadata': metadata or {},
+        }
+        body = self._json_body(payload)
+        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
+            response = await client.post(url, content=body, headers=await self._json_request_headers('POST', url, body))
+            self._raise_for_openedx_error(response, 'insert_problem_banks')
+            return response.json()
+
     async def publish_problem_olx(self, course_id: str, parent_block_id: str | None, olx: str, display_name: str) -> dict:
         url = f'{self.cms_base_url}{settings.openedx_publish_endpoint.format(course_id=course_id)}'
         payload = {'parent_block_id': parent_block_id, 'display_name': display_name, 'olx': olx}

@@ -9,6 +9,7 @@ from app.services.duplicate_detector import DuplicateDetector
 from app.services.generation_cache import question_fingerprint
 from app.services.answer_randomizer import normalize_and_shuffle_options
 from app.services.question_diversity import diversity_report
+from app.services.question_family import build_question_family_id, normalize_family_id
 
 
 class QuestionService:
@@ -34,9 +35,52 @@ class QuestionService:
             **(quality.detail or {}),
         }
 
+
+    def _existing_family_variant_count(self, course_id: str, family_id: str) -> int:
+        if not family_id:
+            return 0
+        return int(self.db.query(Question).filter(
+            Question.course_id == course_id,
+            Question.question_family_id == family_id,
+        ).count() or 0)
+
+    def _resolve_family_fields(
+        self,
+        *,
+        course_id: str,
+        item: dict,
+        difficulty: str,
+        source_node_id: str | None,
+        source_chunk_id: str | None,
+        question_text: str,
+    ) -> tuple[str, int, str]:
+        concept_id = item.get('concept_id')
+        concept_key = item.get('concept_key')
+        concept_title = item.get('concept_title') or item.get('concept') or item.get('topic')
+        family_id = normalize_family_id(
+            item.get('question_family_id') or item.get('family_id'),
+            course_id=course_id,
+            difficulty=difficulty,
+            concept_id=concept_id,
+            concept_key=concept_key,
+            concept_title=concept_title,
+            source_node_id=source_node_id,
+            source_chunk_id=source_chunk_id,
+            question_text=question_text,
+        )
+        try:
+            variant_no = int(item.get('variant_no') or 0)
+        except (TypeError, ValueError):
+            variant_no = 0
+        if variant_no <= 0:
+            variant_no = self._existing_family_variant_count(course_id, family_id) + 1
+        source_evidence = str(item.get('source_evidence') or item.get('source_excerpt') or '').strip()
+        return family_id, variant_no, source_evidence
+
     def create_from_ai_items(self, *, course_id: str, lesson_id: str | None, items: list[dict], provider: str, model_name: str, job_id: str | None = None) -> list[Question]:
         questions: list[Question] = []
         detector = DuplicateDetector(self.db)
+        family_variant_offsets: dict[str, int] = {}
         for index, raw_item in enumerate(items):
             item = dict(raw_item or {})
             randomized = normalize_and_shuffle_options(item, index=index, force_shuffle=True)
@@ -79,6 +123,19 @@ class QuestionService:
                 # missing amount in later repair/regenerate jobs.
                 continue
 
+            question_family_id, variant_no, source_evidence = self._resolve_family_fields(
+                course_id=course_id,
+                item=item,
+                difficulty=item_difficulty,
+                source_node_id=source_node_id,
+                source_chunk_id=source_chunk_id,
+                question_text=question_text,
+            )
+            supplied_variant = item.get('variant_no') not in (None, '', 0, '0')
+            if not supplied_variant:
+                variant_no += family_variant_offsets.get(question_family_id, 0)
+            family_variant_offsets[question_family_id] = family_variant_offsets.get(question_family_id, 0) + 1
+
             draft_reason, draft_detail = self._quality_error_payload(quality, duplicate_id, duplicate_score)
             flags = list(quality.flags or [])
             if randomized.changed and 'answer_randomized' not in flags:
@@ -90,6 +147,12 @@ class QuestionService:
                 lesson_title=item.get('lesson_title'),
                 block_id=source_node_id or item.get('block_id') or source.get('block_id'),
                 topic=item.get('topic') or '',
+                concept_id=item.get('concept_id'),
+                concept_title=item.get('concept_title') or item.get('concept') or item.get('topic'),
+                concept_key=item.get('concept_key'),
+                question_family_id=question_family_id,
+                variant_no=variant_no,
+                source_evidence=source_evidence,
                 difficulty=item_difficulty,
                 cognitive_level=item.get('cognitive_level') or item.get('level') or 'remember',
                 learning_objective=item.get('learning_objective') or item.get('learning_purpose') or '',
@@ -152,6 +215,12 @@ class QuestionService:
             'lesson_title': q.lesson_title,
             'block_id': q.block_id,
             'topic': q.topic,
+            'concept_id': q.concept_id,
+            'concept_title': q.concept_title,
+            'concept_key': q.concept_key,
+            'question_family_id': q.question_family_id,
+            'variant_no': q.variant_no,
+            'source_evidence': q.source_evidence,
             'difficulty': q.difficulty,
             'cognitive_level': q.cognitive_level,
             'learning_objective': q.learning_objective,
@@ -194,7 +263,7 @@ class QuestionService:
         self._snapshot(q, actor=actor, note=payload.note)
 
         editable_fields = [
-            'lesson_title', 'block_id', 'topic', 'difficulty', 'cognitive_level', 'learning_objective',
+            'lesson_title', 'block_id', 'topic', 'concept_id', 'concept_title', 'concept_key', 'question_family_id', 'variant_no', 'source_evidence', 'difficulty', 'cognitive_level', 'learning_objective',
             'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation',
             'source_ref', 'source_type', 'source_page', 'source_timestamp_start', 'source_timestamp_end',
             'source_chunk_id', 'source_node_id', 'source_node_title', 'source_excerpt', 'tags'
@@ -212,6 +281,22 @@ class QuestionService:
             q.chapter_title = target.chapter_title
             q.target_library_id = target.library.id
             q.target_library_key = target.library.library_key
+
+        if not q.question_family_id:
+            q.question_family_id = build_question_family_id(
+                course_id=q.course_id,
+                difficulty=q.difficulty,
+                concept_id=q.concept_id,
+                concept_key=q.concept_key,
+                concept_title=q.concept_title,
+                source_node_id=q.source_node_id,
+                source_chunk_id=q.source_chunk_id,
+                question_text=q.question_text,
+            )
+        if not q.variant_no:
+            q.variant_no = self._existing_family_variant_count(q.course_id, q.question_family_id) + 1
+        if not q.source_evidence:
+            q.source_evidence = q.source_excerpt or ''
 
         item = {
             'question': q.question_text,
@@ -295,6 +380,22 @@ class QuestionService:
         if q.status == 'published':
             raise ValueError('Published question cannot be repaired directly.')
         self._snapshot(q, actor=actor, note=note)
+
+        if not q.question_family_id:
+            q.question_family_id = build_question_family_id(
+                course_id=q.course_id,
+                difficulty=q.difficulty,
+                concept_id=q.concept_id,
+                concept_key=q.concept_key,
+                concept_title=q.concept_title,
+                source_node_id=q.source_node_id,
+                source_chunk_id=q.source_chunk_id,
+                question_text=q.question_text,
+            )
+        if not q.variant_no:
+            q.variant_no = self._existing_family_variant_count(q.course_id, q.question_family_id) + 1
+        if not q.source_evidence:
+            q.source_evidence = q.source_excerpt or ''
 
         item = {
             'question': q.question_text,

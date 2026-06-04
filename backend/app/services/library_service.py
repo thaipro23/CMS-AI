@@ -25,7 +25,12 @@ class LibraryTarget:
 
 
 class ChapterLibraryService:
-    """Resolve Unit/PDF/Video/HTML nodes to their parent Chapter/Module + Difficulty Library."""
+    """Resolve Unit/PDF/Video/HTML nodes to a single Chapter/Module Library.
+
+    v25.9.14.2 changes the publish architecture from one Library per
+    Chapter+Difficulty to one Library per Chapter.  Difficulty/family are now
+    Open edX content tags and AI Server metadata, not separate Library keys.
+    """
 
     def __init__(self, db: Session):
         self.db = db
@@ -80,8 +85,7 @@ class ChapterLibraryService:
         return value if value in DIFFICULTIES else 'easy'
 
     def display_name(self, course_id: str, chapter_title: str, difficulty: str | None = None) -> str:
-        diff = self._normalize_difficulty(difficulty).upper()
-        return f'{self._course_code(course_id)} - {chapter_title or "Chapter"} - {diff}'
+        return f'{self._course_code(course_id)} - {chapter_title or "Chapter"}'
 
     def find_chapter_for_node(self, course_id: str, source_node_id: str | None) -> tuple[CourseTreeNode | None, CourseTreeNode | None]:
         """Resolve source node to the best Chapter/Module-level library scope.
@@ -119,32 +123,41 @@ class ChapterLibraryService:
         return None, source
 
     def ensure_library_for_chapter(self, course_id: str, chapter_node_id: str, chapter_title: str, difficulty: str | None = None) -> CourseLibrary:
-        normalized_difficulty = self._normalize_difficulty(difficulty)
+        # Keep the DB uniqueness constraint by using a stable pseudo-difficulty
+        # value, but do not create separate Open edX Libraries per difficulty.
+        # EASY/MEDIUM/HARD are now tags on each component.
+        library_scope = 'all'
         existing = self.db.query(CourseLibrary).filter(
             CourseLibrary.course_id == course_id,
             CourseLibrary.chapter_node_id == chapter_node_id,
-            CourseLibrary.difficulty == normalized_difficulty,
+            CourseLibrary.difficulty == library_scope,
         ).first()
-        display_name = self.display_name(course_id, chapter_title, normalized_difficulty)
+        display_name = self.display_name(course_id, chapter_title, None)
         if existing:
             existing.chapter_title = chapter_title or existing.chapter_title
-            existing.difficulty = normalized_difficulty
+            existing.difficulty = library_scope
             existing.display_name = display_name
             existing.updated_at = datetime.utcnow()
+            existing.metadata_json = {
+                **(existing.metadata_json or {}),
+                'architecture': 'chapter_library_tagged_family_bank',
+                'chapter_node_id': chapter_node_id,
+                'difficulty_scope': 'tagged',
+            }
             self.db.flush()
             return existing
         library = CourseLibrary(
             course_id=course_id,
             chapter_node_id=chapter_node_id,
             chapter_title=chapter_title or chapter_node_id,
-            difficulty=normalized_difficulty,
+            difficulty=library_scope,
             display_name=display_name,
-            library_key=f'{self._course_code(course_id)}-{self._slug(chapter_title or chapter_node_id)}-{normalized_difficulty}',
+            library_key=f'{self._course_code(course_id)}-{self._slug(chapter_title or chapter_node_id)}',
             status='local_ready',
             metadata_json={
-                'architecture': 'course_many_libraries_by_chapter_and_difficulty',
+                'architecture': 'chapter_library_tagged_family_bank',
                 'chapter_node_id': chapter_node_id,
-                'difficulty': normalized_difficulty,
+                'difficulty_scope': 'tagged',
             },
         )
         self.db.add(library)
@@ -178,4 +191,4 @@ class ChapterLibraryService:
         query = self.db.query(CourseLibrary)
         if course_id:
             query = query.filter(CourseLibrary.course_id == course_id)
-        return query.order_by(CourseLibrary.course_id.asc(), CourseLibrary.chapter_title.asc(), CourseLibrary.difficulty.asc()).all()
+        return query.order_by(CourseLibrary.course_id.asc(), CourseLibrary.chapter_title.asc(), CourseLibrary.display_name.asc()).all()

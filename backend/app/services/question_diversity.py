@@ -65,8 +65,12 @@ def near_duplicate_groups(questions: Iterable[Question], threshold: float = 0.88
 
 def diversity_report(questions: list[Question]) -> dict:
     by_concept: dict[str, list[Question]] = defaultdict(list)
+    by_family: dict[str, list[Question]] = defaultdict(list)
     for q in questions:
-        by_concept[concept_key(q.question_text)].append(q)
+        key = getattr(q, 'concept_title', None) or getattr(q, 'concept_key', None) or concept_key(q.question_text)
+        by_concept[key].append(q)
+        family_key = getattr(q, 'question_family_id', None) or f'legacy:{concept_key(q.question_text)}'
+        by_family[family_key].append(q)
     concept_rows = []
     for key, items in by_concept.items():
         concept_rows.append({
@@ -78,6 +82,18 @@ def diversity_report(questions: list[Question]) -> dict:
             'status_counts': dict(Counter(q.status for q in items)),
         })
     concept_rows.sort(key=lambda row: row['count'], reverse=True)
+    family_rows = []
+    for key, items in by_family.items():
+        family_rows.append({
+            'family_id': key,
+            'count': len(items),
+            'concept_title': getattr(items[0], 'concept_title', '') if items else '',
+            'difficulty_counts': dict(Counter(q.difficulty for q in items)),
+            'status_counts': dict(Counter(q.status for q in items)),
+            'variant_numbers': [getattr(q, 'variant_no', None) for q in items if getattr(q, 'variant_no', None)],
+            'question_ids': [q.id for q in items[:20]],
+        })
+    family_rows.sort(key=lambda row: row['count'], reverse=True)
     duplicate_groups = near_duplicate_groups(questions)
     total = len(questions)
     overloaded = [row for row in concept_rows if total and row['count'] / total > 0.25 and row['count'] >= 4]
@@ -86,6 +102,9 @@ def diversity_report(questions: list[Question]) -> dict:
         'concept_count': len(concept_rows),
         'top_concepts': concept_rows[:20],
         'overloaded_concepts': overloaded,
+        'family_count': len(family_rows),
+        'top_families': family_rows[:50],
+        'multi_variant_family_count': len([row for row in family_rows if row['count'] > 1]),
         'near_duplicate_group_count': len(duplicate_groups),
         'near_duplicate_groups': duplicate_groups[:50],
         'diversity_score': round(max(0.0, 100.0 - len(duplicate_groups) * 5 - len(overloaded) * 10), 2),

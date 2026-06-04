@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.db.session import get_db
@@ -9,6 +10,32 @@ from app.modules.publisher.service import OpenEdXPublisher
 from app.services.audit_log import AuditErrorType, log_audit
 
 router = APIRouter()
+
+
+class FamilyBankPlanPreviewRequest(BaseModel):
+    chapter_node_id: str | None = None
+    total_questions: int = Field(default=10, ge=1, le=100)
+    difficulty_distribution: dict[str, int] | None = None
+    shortage_policy: str = 'allow_repeat_with_warning'
+    max_families_per_bank: int = Field(default=2, ge=1, le=2)
+
+
+class FamilyBankPlanPublishRequest(BaseModel):
+    plan: dict
+    mode: str = 'publish_new'
+
+
+class CmsQuizNodeCreateRequest(BaseModel):
+    parent_node_id: str = Field(..., min_length=1)
+    quiz_title: str = Field(default='AI Learning Check', min_length=1, max_length=120)
+    unit_title: str = Field(default='Quiz tự luyện', min_length=1, max_length=120)
+    plan: dict | None = None
+
+
+class CmsProblemBankInsertRequest(BaseModel):
+    unit_node_id: str = Field(..., min_length=1)
+    plan: dict
+    strict_component_selection: bool = False
 
 
 @router.post('/questions/{question_id}/openedx/dry-run')
@@ -123,4 +150,109 @@ async def rollback_publish_batch(batch_id: str, level: str = Query('ai_server'),
         return result
     except Exception as exc:
         log_audit(db, action='openedx.publish.rollback', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=batch.course_id, target_type='publish_batch', target_id=batch_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post('/courses/{course_id}/family-bank-plan/preview')
+def preview_family_bank_plan(course_id: str, payload: FamilyBankPlanPreviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_to_openedx'))):
+    ensure_course_access(user, course_id)
+    try:
+        result = OpenEdXPublisher(db).preview_family_bank_plan(
+            course_id,
+            chapter_node_id=payload.chapter_node_id,
+            total_questions=payload.total_questions,
+            difficulty_distribution=payload.difficulty_distribution,
+            shortage_policy=payload.shortage_policy,
+            max_families_per_bank=payload.max_families_per_bank,
+        )
+        log_audit(db, action='openedx.family_bank_plan.preview', status='success', message='Tạo kế hoạch Family Slot Problem Bank thành công', user=user, course_id=course_id, target_type='course', target_id=course_id, metadata={'coverage': result.get('coverage'), 'warnings': result.get('warnings')})
+        return result
+    except Exception as exc:
+        log_audit(db, action='openedx.family_bank_plan.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course', target_id=course_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/courses/{course_id}/family-bank-plan/publish')
+async def publish_family_bank_plan(course_id: str, payload: FamilyBankPlanPublishRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_to_openedx')), idempotency_key: str | None = Header(default=None, alias='Idempotency-Key')):
+    ensure_course_access(user, course_id)
+    try:
+        result = await OpenEdXPublisher(db).publish_family_bank_plan(
+            course_id,
+            payload.plan,
+            actor=user.user_id,
+            mode=payload.mode,
+            idempotency_key=idempotency_key,
+        )
+        status = 'warning' if result.get('warnings') else ('failed' if result.get('failed') and not result.get('published') else 'success')
+        log_audit(db, action='openedx.family_bank_plan.publish', status=status, message='Publish Family Slot Plan sang Open edX hoàn tất', user=user, course_id=course_id, target_type='course', target_id=course_id, metadata={'result': result})
+        return result
+    except Exception as exc:
+        log_audit(db, action='openedx.family_bank_plan.publish', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course', target_id=course_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post('/courses/{course_id}/cms-quiz-node/create')
+async def create_cms_quiz_node(course_id: str, payload: CmsQuizNodeCreateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_to_openedx')), idempotency_key: str | None = Header(default=None, alias='Idempotency-Key')):
+    ensure_course_access(user, course_id)
+    try:
+        result = await OpenEdXPublisher(db).create_cms_quiz_node(
+            course_id,
+            parent_node_id=payload.parent_node_id,
+            quiz_title=payload.quiz_title,
+            unit_title=payload.unit_title,
+            plan=payload.plan,
+            actor=user.user_id,
+            idempotency_key=idempotency_key,
+        )
+        log_audit(
+            db,
+            action='openedx.cms_quiz_node.create',
+            status='success',
+            message='Tạo Quiz node draft trong Open edX Studio thành công',
+            user=user,
+            course_id=course_id,
+            target_type='course_node',
+            target_id=result.get('leaf_unit_node_id') or payload.parent_node_id,
+            metadata={'result': result},
+        )
+        return result
+    except ValueError as exc:
+        log_audit(db, action='openedx.cms_quiz_node.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.parent_node_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log_audit(db, action='openedx.cms_quiz_node.create', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.parent_node_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+
+@router.post('/courses/{course_id}/cms-problem-banks/insert')
+async def insert_cms_problem_banks(course_id: str, payload: CmsProblemBankInsertRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_to_openedx')), idempotency_key: str | None = Header(default=None, alias='Idempotency-Key')):
+    ensure_course_access(user, course_id)
+    try:
+        result = await OpenEdXPublisher(db).insert_cms_problem_banks(
+            course_id,
+            unit_node_id=payload.unit_node_id,
+            plan=payload.plan,
+            actor=user.user_id,
+            idempotency_key=idempotency_key,
+            strict_component_selection=payload.strict_component_selection,
+        )
+        status = 'warning' if result.get('manual_component_selection_required') or result.get('warnings') else 'success'
+        log_audit(
+            db,
+            action='openedx.cms_problem_banks.insert',
+            status=status,
+            message='Insert Problem Bank blocks vào Open edX Studio hoàn tất' if status == 'success' else 'Đã tạo Problem Bank blocks nhưng cần kiểm tra component selection trong Studio',
+            user=user,
+            course_id=course_id,
+            target_type='course_node',
+            target_id=payload.unit_node_id,
+            metadata={'result': result},
+        )
+        return result
+    except ValueError as exc:
+        log_audit(db, action='openedx.cms_problem_banks.insert', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.unit_node_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log_audit(db, action='openedx.cms_problem_banks.insert', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.unit_node_id)
         raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -10,6 +10,12 @@ class QuestionOut(BaseModel):
     block_id: str | None = None
     topic_id: str | None = None
     topic: str
+    concept_id: str | None = None
+    concept_title: str | None = None
+    concept_key: str | None = None
+    question_family_id: str | None = None
+    variant_no: int | None = None
+    source_evidence: str | None = None
     difficulty: str
     cognitive_level: str
     learning_objective: str
@@ -81,6 +87,12 @@ class QuestionUpdateRequest(BaseModel):
     lesson_title: str | None = None
     block_id: str | None = None
     topic: str | None = None
+    concept_id: str | None = None
+    concept_title: str | None = None
+    concept_key: str | None = None
+    question_family_id: str | None = None
+    variant_no: int | None = None
+    source_evidence: str | None = None
     difficulty: str | None = Field(default=None, pattern='^(easy|medium|hard)$')
     cognitive_level: str | None = Field(default=None, pattern='^(remember|understand|recognize_example|simple_apply)$')
     learning_objective: str | None = None

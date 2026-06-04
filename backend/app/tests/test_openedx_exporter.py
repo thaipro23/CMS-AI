@@ -73,7 +73,7 @@ def test_exporter_rejects_invalid_question_before_cms_import():
 
 def test_question_tags_include_filterable_cms_tags():
     payload = build_question_tags(make_question(), DummyTarget())
-    assert 'AI Learning Check' in payload.tag_names
-    assert 'difficulty:easy' in payload.tag_names
-    assert any(tag.startswith('source:') for tag in payload.tag_names)
+    assert 'ai-learning-check' in payload.tag_names
+    assert 'difficulty:EASY' in payload.tag_names
+    assert any(tag.startswith('family:') for tag in payload.tag_names)
     assert any(tag.startswith('chapter:') for tag in payload.tag_names)

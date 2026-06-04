@@ -8,6 +8,8 @@ import {
   getChunksPage,
   getCourseNodes,
   getCourseTree,
+  getCourseConcepts,
+  extractCourseConcepts,
   getSyncedCourses,
   syncCourse,
   uploadFileToNode,
@@ -17,6 +19,7 @@ import {
   CourseNodeOption,
   CourseOption,
   CourseTreeNode,
+  Concept,
 } from "../../types";
 import {
   ActionMessage,
@@ -49,6 +52,9 @@ export default function SyncPage() {
   const [loading, setLoading] = useState(false);
   const [nodePreviewLoading, setNodePreviewLoading] = useState(false);
   const [nodePreviewChunks, setNodePreviewChunks] = useState<CourseChunk[]>([]);
+  const [concepts, setConcepts] = useState<Concept[]>([]);
+  const [conceptLoading, setConceptLoading] = useState(false);
+  const [conceptExtracting, setConceptExtracting] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [chunkTotal, setChunkTotal] = useState(0);
   const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(
@@ -193,6 +199,7 @@ export default function SyncPage() {
   async function loadSelectedNodePreview(nextNodeId = nodeId) {
     if (!nextNodeId || nextNodeId === "all") {
       setNodePreviewChunks([]);
+    setConcepts([]);
       return;
     }
     setNodePreviewLoading(true);
@@ -232,6 +239,44 @@ export default function SyncPage() {
     }
   }
 
+  async function loadConcepts(nextNodeId = nodeId) {
+    try {
+      setConceptLoading(true);
+      const data = await getCourseConcepts(courseId, authHeaders(), nextNodeId);
+      setConcepts(data.concepts || []);
+    } catch (error) {
+      // Concept panel is optional; do not block sync UI.
+      setConcepts([]);
+    } finally {
+      setConceptLoading(false);
+    }
+  }
+
+  async function handleExtractConcepts(force = false) {
+    if (!nodeId || nodeId === "all") {
+      setMessage({
+        type: "warning",
+        title: "Chưa chọn node",
+        body: "Hãy chọn một node cụ thể để trích xuất concept/vấn đề học tập.",
+      });
+      return;
+    }
+    try {
+      setConceptExtracting(true);
+      const data = await extractCourseConcepts(courseId, authHeaders(false), nodeId, force, 20);
+      setConcepts(data.concepts || []);
+      setMessage({
+        type: "success",
+        title: "Đã trích xuất concept",
+        body: `${data.concept_count} concept/vấn đề học tập đã sẵn sàng cho generation concept-aware.`,
+      });
+    } catch (error) {
+      setMessage(toUserError(error));
+    } finally {
+      setConceptExtracting(false);
+    }
+  }
+
   async function handleSync() {
     const targetCourseId = manualCourseId.trim();
     if (!targetCourseId) {
@@ -248,6 +293,7 @@ export default function SyncPage() {
         setCourseId(targetCourseId);
         setNodeId("all");
         setNodePreviewChunks([]);
+        setConcepts([]);
       }
       setMessage({
         type: "info",
@@ -469,6 +515,7 @@ export default function SyncPage() {
     const timer = window.setTimeout(() => {
       loadChunkSummary(nodeId);
       loadSelectedNodePreview(nodeId);
+      loadConcepts(nodeId);
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -643,6 +690,54 @@ export default function SyncPage() {
                   Node này chưa có nội dung text.
                 </div>
               )}
+
+              <div className="concept-panel">
+                <div className="concept-panel-head">
+                  <div>
+                    <b>Concept / vấn đề học tập</b>
+                    <small>{concepts.length} concept cho node này</small>
+                  </div>
+                  <div className="button-row compact">
+                    <LoadingButton
+                      className="btn secondary"
+                      loading={conceptExtracting}
+                      loadingLabel="Đang trích xuất..."
+                      disabled={!can("generate_questions")}
+                      onClick={() => handleExtractConcepts(false)}
+                    >
+                      Trích xuất concept
+                    </LoadingButton>
+                    <button
+                      className="btn secondary"
+                      type="button"
+                      disabled={conceptExtracting || !can("generate_questions")}
+                      onClick={() => handleExtractConcepts(true)}
+                    >
+                      Làm lại
+                    </button>
+                  </div>
+                </div>
+                {conceptLoading ? (
+                  <div className="empty-state compact-empty">Đang tải concept...</div>
+                ) : concepts.length ? (
+                  <div className="concept-list">
+                    {concepts.slice(0, 8).map((concept) => (
+                      <div key={concept.id} className="concept-row">
+                        <div>
+                          <b>{concept.title}</b>
+                          <small>{concept.learning_objective || concept.summary}</small>
+                        </div>
+                        <span className="badge">{concept.difficulty_hint}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state compact-empty">
+                    Chưa có concept. Bấm Trích xuất concept để hệ thống sinh câu hỏi theo vấn đề học tập thay vì random theo chunk.
+                  </div>
+                )}
+              </div>
+
 
               <div className="upload-node-box upload-node-box-below-content">
                 <div>

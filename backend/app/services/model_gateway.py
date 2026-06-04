@@ -119,6 +119,12 @@ class ModelGateway:
             'additionalProperties': False,
             'properties': {
                 'topic': {'type': 'string'},
+                'concept_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
+                'concept_title': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
+                'concept_key': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
+                'question_family_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
+                'variant_no': {'anyOf': [{'type': 'integer'}, {'type': 'null'}]},
+                'source_evidence': {'type': 'string'},
                 'difficulty': {'type': 'string', 'enum': ['easy', 'medium', 'hard']},
                 'cognitive_level': {'type': 'string', 'enum': ['remember', 'understand', 'recognize_example', 'simple_apply']},
                 'learning_objective': {'type': 'string'},
@@ -149,7 +155,7 @@ class ModelGateway:
                 'ai_rationale': {'type': 'string'},
             },
             'required': [
-                'topic', 'difficulty', 'cognitive_level', 'learning_objective', 'question_type',
+                'topic', 'concept_id', 'concept_title', 'concept_key', 'question_family_id', 'variant_no', 'source_evidence', 'difficulty', 'cognitive_level', 'learning_objective', 'question_type',
                 'question', 'options', 'correct_answer', 'explanation', 'source_ref', 'source_type',
                 'source_page', 'source_timestamp_start', 'source_timestamp_end', 'source_chunk_id',
                 'source_node_id', 'source_excerpt', 'tags', 'ai_rationale'
@@ -481,6 +487,12 @@ class ModelGateway:
             local_topic = scope_title if scope_title and scope_title != 'Nội dung bài học' else template['topic']
             questions.append({
                 'topic': local_topic,
+                'concept_id': None,
+                'concept_title': template.get('topic') or local_topic,
+                'concept_key': None,
+                'question_family_id': None,
+                'variant_no': i,
+                'source_evidence': source.get('source_excerpt') or '',
                 'difficulty': difficulties[i - 1] if i - 1 < len(difficulties) else template.get('difficulty', 'easy'),
                 'cognitive_level': template.get('cognitive_level', 'remember'),
                 'learning_objective': template['learning_objective'],

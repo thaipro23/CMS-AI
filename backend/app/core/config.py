@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.13.48'
+    app_version: str = '25.9.14.4'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     openedx_library_import_endpoint: str = '/api/ai-connector/v1/libraries/{library_key}/problems'
     openedx_library_verify_endpoint: str = '/api/ai-connector/v1/libraries/{library_key}/problems/verify'
     openedx_library_delete_endpoint: str = '/api/ai-connector/v1/libraries/{library_key}/problems/delete'
+    # v25.9.14.4: CMS Quiz Node Creator. This endpoint runs inside Studio/CMS and
+    # creates real draft XBlocks. It must fail loudly if modulestore create_child
+    # is unavailable; AI Server must not fake quiz creation in production.
+    openedx_quiz_node_create_endpoint: str = '/api/ai-connector/v1/courses/{course_id}/quiz-nodes'
+    # v25.9.14.4: create native library_content/Problem Bank blocks inside a Studio Unit.
+    # The CMS connector must return real block usage keys; if it cannot attach
+    # selected Library components, it must say so with manual_component_selection_required.
+    openedx_problem_bank_insert_endpoint: str = '/api/ai-connector/v1/courses/{course_id}/problem-banks'
     openedx_request_timeout_seconds: int = 30
     # Server-to-server HMAC used by the AI Server when calling the CMS connector plugin.
     # The same value must be set in the CMS container as AI_CONNECTOR_HMAC_SECRET.

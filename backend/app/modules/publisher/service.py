@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.question import Question
+from app.models.course import CourseSyncState
 from app.models.publish import PublishBatch, PublishBatchItem
 from app.services.library_service import ChapterLibraryService
 from app.modules.openedx_connector.factory import get_openedx_connector
@@ -18,6 +19,7 @@ from app.services.openedx_exporter import question_to_openedx_olx
 from app.services.question_service import QuestionService
 from app.services.cms_tags import build_library_tags, build_question_tags, merge_tags
 from app.services.quality_checker import QualityChecker
+from app.services.family_bank_planner import FamilyBankPlanService
 
 
 PUBLISH_MODES = {'publish_new', 'replace', 'delete_reimport'}
@@ -148,6 +150,9 @@ class OpenEdXPublisher:
             'errors': batch.errors_json or [],
             'libraries': summary.get('libraries') or [],
             'problem_bank_guide': summary.get('problem_bank_guide') or [],
+            'family_bank_plan': summary.get('family_bank_plan'),
+            'family_bank_slots': summary.get('family_bank_slots') or [],
+            'family_bank_coverage': summary.get('family_bank_coverage') or [],
             'idempotent_replay': True,
         }
 
@@ -276,7 +281,7 @@ class OpenEdXPublisher:
         question.tags = tag_payload.tag_names
         target.library.metadata_json = {
             **(target.library.metadata_json or {}),
-            **build_library_tags(question.course_id, target.chapter_node_id, target.chapter_title, question.difficulty).as_metadata(),
+            **build_library_tags(question.course_id, target.chapter_node_id, target.chapter_title, None).as_metadata(),
         }
         self.db.flush()
 
@@ -296,7 +301,7 @@ class OpenEdXPublisher:
             'previous_openedx_usage_key': question.openedx_library_problem_id,
             'publish_mode': mode,
             'library_key': target.library.library_key,
-            'architecture': 'chapter_difficulty_library_problem_bank_friendly',
+            'architecture': 'chapter_library_tagged_family_bank',
             **tag_payload.as_metadata(),
         }
         display_name = (question.learning_objective or question.topic or target.chapter_title or question.question_text or 'Learning Check')[:90]
@@ -396,8 +401,8 @@ class OpenEdXPublisher:
             'chapter_node_id': target.chapter_node_id,
             'chapter_title': target.chapter_title,
             'difficulty': question.difficulty,
-            'architecture': 'course_many_libraries_by_chapter_and_difficulty',
-            **build_library_tags(question.course_id, target.chapter_node_id, target.chapter_title, question.difficulty).as_metadata(),
+            'architecture': 'chapter_library_tagged_family_bank',
+            **build_library_tags(question.course_id, target.chapter_node_id, target.chapter_title, None).as_metadata(),
         }
 
         item: PublishBatchItem | None = None
@@ -517,22 +522,25 @@ class OpenEdXPublisher:
             if item_question_ids:
                 query = query.filter(Question.id.in_(item_question_ids))
         rows = query.all()
-        grouped: dict[tuple[str, str], dict] = {}
+        grouped: dict[str, dict] = {}
         for q in rows:
-            key = ((q.difficulty or 'unknown').upper(), q.target_library_key or 'unknown')
+            key = q.target_library_key or 'unknown'
             if key not in grouped:
                 grouped[key] = {
-                    'difficulty': key[0],
-                    'library_key': key[1],
-                    'library_display_name': key[1],
+                    'difficulty': 'MIXED',
+                    'difficulties': {},
+                    'library_key': key,
+                    'library_display_name': key,
                     'component_count': 0,
                     'verified_count': 0,
                     'pending_count': 0,
                     'failed_count': 0,
                     'status': 'published',
-                    'studio_url': self._library_studio_url(key[1]),
+                    'studio_url': self._library_studio_url(key),
                 }
             row = grouped[key]
+            diff_key = (q.difficulty or 'unknown').upper()
+            row['difficulties'][diff_key] = row['difficulties'].get(diff_key, 0) + 1
             row['component_count'] += 1
             if self._is_published_ok(q.publish_status):
                 row['verified_count'] += 1
@@ -549,7 +557,7 @@ class OpenEdXPublisher:
                 row['status'] = 'published_with_pending_changes'
             else:
                 row['status'] = 'published'
-        return sorted(grouped.values(), key=lambda r: (r['library_key'], r['difficulty']))
+        return sorted(grouped.values(), key=lambda r: r['library_key'])
 
     async def publish_course_approved(self, course_id: str, actor: str = 'teacher', mode: str = 'publish_new', idempotency_key: str | None = None) -> dict:
         mode = self._normalize_mode(mode)
@@ -613,9 +621,365 @@ class OpenEdXPublisher:
             'problem_bank_guide': self._problem_bank_guide(summary),
         }
 
+
+    def preview_family_bank_plan(
+        self,
+        course_id: str,
+        *,
+        chapter_node_id: str | None = None,
+        total_questions: int = 10,
+        difficulty_distribution: dict[str, int] | None = None,
+        shortage_policy: str = 'allow_repeat_with_warning',
+        max_families_per_bank: int = 2,
+    ) -> dict:
+        return FamilyBankPlanService(self.db).preview_plan(
+            course_id,
+            chapter_node_id=chapter_node_id,
+            total_questions=total_questions,
+            difficulty_distribution=difficulty_distribution,
+            shortage_policy=shortage_policy,
+            max_families_per_bank=max_families_per_bank,
+        )
+
+
+    @staticmethod
+    def _looks_like_real_created_quiz_node(result: dict | None) -> bool:
+        if not isinstance(result, dict):
+            return False
+        if result.get('ok') is not True:
+            return False
+        nodes = result.get('created_nodes') or []
+        if not isinstance(nodes, list) or not nodes:
+            return False
+        return bool(result.get('leaf_unit_node_id') or nodes[-1].get('usage_key'))
+
+    def _sync_created_quiz_nodes(self, course_id: str, result: dict) -> None:
+        """Mirror newly created Studio draft quiz nodes into ai_course_sync_state.
+
+        This does not replace a full /sync. It only makes the new nodes appear in
+        the local tree immediately. A normal sync later should refresh them from
+        CMS/Studio and keep the same usage keys.
+        """
+        nodes = result.get('created_nodes') or []
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            usage_key = str(node.get('usage_key') or node.get('block_id') or '').strip()
+            if not usage_key:
+                continue
+            state = self.db.query(CourseSyncState).filter(
+                CourseSyncState.course_id == course_id,
+                CourseSyncState.block_id == usage_key,
+            ).first()
+            if state is None:
+                state = CourseSyncState(course_id=course_id, block_id=usage_key)
+                self.db.add(state)
+            state.parent_block_id = node.get('parent_usage_key') or result.get('parent_node_id')
+            state.block_type = (node.get('block_type') or 'vertical')[:50]
+            state.display_name = str(node.get('display_name') or 'AI Learning Check')[:512]
+            state.sync_status = 'created_by_ai_quiz_node'
+            state.last_synced_at = datetime.utcnow()
+        self.db.flush()
+
+    def _sync_created_problem_bank_blocks(self, course_id: str, unit_node_id: str, result: dict) -> None:
+        blocks = result.get('problem_bank_blocks') or []
+        if not isinstance(blocks, list):
+            return
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            usage_key = str(block.get('usage_key') or block.get('block_id') or '').strip()
+            if not usage_key:
+                continue
+            state = self.db.query(CourseSyncState).filter(
+                CourseSyncState.course_id == course_id,
+                CourseSyncState.block_id == usage_key,
+            ).first()
+            if state is None:
+                state = CourseSyncState(course_id=course_id, block_id=usage_key)
+                self.db.add(state)
+            state.parent_block_id = unit_node_id
+            state.block_type = (block.get('block_type') or 'library_content')[:50]
+            state.display_name = str(block.get('display_name') or f'Problem Bank Slot {block.get("slot_no") or ""}').strip()[:512]
+            state.sync_status = 'created_by_ai_problem_bank_insert'
+            state.last_synced_at = datetime.utcnow()
+        self.db.flush()
+
+    def _openedx_slots_from_plan(self, course_id: str, plan: dict) -> list[dict]:
+        slots = (plan or {}).get('slots') or []
+        if not isinstance(slots, list) or not slots:
+            raise ValueError('Family Bank Plan không có slot nào để insert Problem Bank.')
+        openedx_slots: list[dict] = []
+        for slot in slots:
+            if not isinstance(slot, dict):
+                raise ValueError('Family Bank Plan chứa slot không hợp lệ.')
+            question_ids = [str(qid).strip() for qid in (slot.get('question_ids') or []) if str(qid).strip()]
+            if not question_ids:
+                raise ValueError(f'Slot {slot.get("slot_no")} không có question_ids.')
+            questions = self.db.query(Question).filter(Question.course_id == course_id, Question.id.in_(question_ids)).all()
+            by_id = {q.id: q for q in questions}
+            missing = [qid for qid in question_ids if qid not in by_id]
+            if missing:
+                raise ValueError(f'Slot {slot.get("slot_no")} có question_ids không tồn tại trong course: {missing[:3]}')
+            not_published = [qid for qid in question_ids if not by_id[qid].openedx_library_problem_id]
+            if not_published:
+                raise ValueError(
+                    f'Slot {slot.get("slot_no")} có {len(not_published)} câu chưa publish/import vào Open edX Library. '
+                    'Hãy bấm Đẩy kế hoạch vào Open edX trước.'
+                )
+            library_keys = {str(by_id[qid].target_library_key or '').strip() for qid in question_ids}
+            library_keys.discard('')
+            if len(library_keys) != 1:
+                raise ValueError(f'Slot {slot.get("slot_no")} có nhiều library_key hoặc thiếu library_key: {sorted(library_keys)}')
+            openedx_problem_ids = [_clean_openedx_usage_key(by_id[qid].openedx_library_problem_id) for qid in question_ids]
+            enriched = {
+                **slot,
+                'library_key': next(iter(library_keys)),
+                'openedx_problem_ids': openedx_problem_ids,
+                'problem_ids': openedx_problem_ids,
+                'question_ids': question_ids,
+                'pick_count': int(slot.get('pick_count') or 1),
+                'variant_count': len(openedx_problem_ids),
+            }
+            openedx_slots.append(enriched)
+        return openedx_slots
+
+    @staticmethod
+    def _looks_like_real_problem_bank_insert(result: dict | None) -> bool:
+        if not isinstance(result, dict) or result.get('ok') is not True:
+            return False
+        blocks = result.get('problem_bank_blocks') or []
+        return isinstance(blocks, list) and bool(blocks) and all(bool(block.get('usage_key')) for block in blocks if isinstance(block, dict))
+
+    async def insert_cms_problem_banks(
+        self,
+        course_id: str,
+        *,
+        unit_node_id: str,
+        plan: dict,
+        actor: str = 'teacher',
+        idempotency_key: str | None = None,
+        strict_component_selection: bool = False,
+    ) -> dict:
+        if settings.use_mock_openedx:
+            raise ValueError('USE_MOCK_OPENEDX=true nên không insert Problem Bank thật trong Open edX.')
+        unit_node_id = (unit_node_id or '').strip()
+        if not unit_node_id:
+            raise ValueError('Thiếu unit_node_id/leaf_unit_node_id để insert Problem Bank.')
+        unit_state = self.db.query(CourseSyncState).filter(
+            CourseSyncState.course_id == course_id,
+            CourseSyncState.block_id == unit_node_id,
+        ).first()
+        if unit_state is None:
+            raise ValueError('Không tìm thấy Unit/vertical trong dữ liệu sync local. Hãy tạo Quiz node hoặc sync course lại trước.')
+        unit_type = (unit_state.block_type or '').lower()
+        if unit_type != 'vertical':
+            raise ValueError(f'unit_node_id phải là Unit/vertical, hiện tại type={unit_type!r}.')
+
+        openedx_slots = self._openedx_slots_from_plan(course_id, plan)
+        metadata = {
+            'actor': actor,
+            'idempotency_key': (idempotency_key or '').strip() or None,
+            'architecture': 'problem_bank_auto_insert_v25_9_14_4',
+            'unit_title': unit_state.display_name,
+            'strict_component_selection': strict_component_selection,
+            'family_bank_plan': plan or {},
+        }
+        connector = get_openedx_connector()
+        result = await connector.insert_problem_banks(
+            course_id=course_id,
+            unit_node_id=unit_node_id,
+            slots=openedx_slots,
+            metadata=metadata,
+        )
+        self._real_publish_guard(result, 'insert_problem_banks')
+        if not self._looks_like_real_problem_bank_insert(result):
+            raise RuntimeError(f'CMS connector không trả về usage_key thật cho Problem Bank blocks: {result}')
+        if strict_component_selection and result.get('manual_component_selection_required'):
+            raise RuntimeError(
+                'CMS đã tạo Problem Bank block nhưng chưa verify được selected components. '
+                'Không đánh dấu hoàn tất vì strict_component_selection=true.'
+            )
+        self._sync_created_problem_bank_blocks(course_id, unit_node_id, result)
+        self.db.commit()
+        return {
+            **result,
+            'course_id': course_id,
+            'unit_node_id': unit_node_id,
+            'unit_title': unit_state.display_name,
+            'openedx_slots': openedx_slots,
+            'family_bank_plan': plan or None,
+            'next_step': (
+                'Mở Studio kiểm tra từng Problem Bank. Nếu manual_component_selection_required=true thì cần Add components hoặc bổ sung connector handler riêng cho Ulmo.3.'
+            ),
+        }
+
+    async def create_cms_quiz_node(
+        self,
+        course_id: str,
+        *,
+        parent_node_id: str,
+        quiz_title: str,
+        unit_title: str,
+        plan: dict | None = None,
+        actor: str = 'teacher',
+        idempotency_key: str | None = None,
+    ) -> dict:
+        if settings.use_mock_openedx:
+            raise ValueError('USE_MOCK_OPENEDX=true nên không tạo Quiz node thật trong Open edX. Hãy tắt mock và dùng CMS connector production.')
+        parent_node_id = (parent_node_id or '').strip()
+        if not parent_node_id:
+            raise ValueError('Thiếu parent_node_id. Hãy chọn node Course/Chapter/Subsection trong cây CMS đã sync.')
+        parent_state = self.db.query(CourseSyncState).filter(
+            CourseSyncState.course_id == course_id,
+            CourseSyncState.block_id == parent_node_id,
+        ).first()
+        if parent_state is None:
+            raise ValueError('Không tìm thấy parent_node_id trong dữ liệu sync của AI Server. Hãy sync course trước rồi chọn node thật trong cây CMS.')
+        parent_type = (parent_state.block_type or '').lower()
+        if parent_type not in {'course', 'chapter', 'sequential'}:
+            raise ValueError(
+                f'Node đã chọn có type={parent_type!r}. v25.9.14.3 chỉ tạo node Quiz dưới course/chapter/sequential. '
+                'Nếu muốn gắn Problem Bank vào Unit/vertical hiện có, đó là bước v25.9.14.4.'
+            )
+        quiz_title = (quiz_title or f'AI Learning Check - {parent_state.display_name or course_id}').strip()[:120]
+        unit_title = (unit_title or 'Quiz tự luyện').strip()[:120]
+        metadata = {
+            'actor': actor,
+            'idempotency_key': (idempotency_key or '').strip() or None,
+            'parent_title': parent_state.display_name,
+            'parent_type': parent_state.block_type,
+            'architecture': 'cms_quiz_node_creator_v25_9_14_3',
+            'problem_bank_auto_inserted': False,
+            'family_bank_plan': plan or {},
+            'family_bank_slots': (plan or {}).get('slots') or [],
+            'family_bank_coverage': (plan or {}).get('coverage') or [],
+        }
+        connector = get_openedx_connector()
+        result = await connector.create_quiz_node(
+            course_id=course_id,
+            parent_node_id=parent_node_id,
+            quiz_title=quiz_title,
+            unit_title=unit_title,
+            metadata=metadata,
+        )
+        self._real_publish_guard(result, 'create_quiz_node')
+        if not self._looks_like_real_created_quiz_node(result):
+            raise RuntimeError(f'CMS connector không trả về usage_key thật cho Quiz node: {result}')
+        self._sync_created_quiz_nodes(course_id, result)
+        self.db.commit()
+        return {
+            **result,
+            'course_id': course_id,
+            'parent_node_id': parent_node_id,
+            'parent_title': parent_state.display_name,
+            'parent_type': parent_state.block_type,
+            'family_bank_plan': plan or None,
+            'next_step': 'v25.9.14.4 sẽ tự insert Problem Bank blocks vào leaf_unit_node_id. Hiện tại hãy mở Studio để kiểm tra draft node.',
+        }
+
+    async def publish_family_bank_plan(
+        self,
+        course_id: str,
+        plan: dict,
+        *,
+        actor: str = 'teacher',
+        mode: str = 'publish_new',
+        idempotency_key: str | None = None,
+    ) -> dict:
+        """Publish the questions referenced by an edited Family Bank plan.
+
+        This does not create Studio Problem Bank blocks yet.  It publishes all
+        variants needed by the plan into the single Chapter Library and returns
+        the edited plan so the UI/teacher can create or verify Problem Bank
+        slots.  A later connector step can use the same plan to auto-create
+        Unit child quiz nodes.
+        """
+        mode = self._normalize_mode(mode)
+        planner = FamilyBankPlanService(self.db)
+        question_ids = planner.selected_question_ids_from_plan(plan)
+        if not question_ids:
+            raise ValueError('Family bank plan không có câu hỏi nào để publish.')
+        idempotency_key = (idempotency_key or '').strip() or None
+        batch_mode = f'family_bank_{mode}'[:50]
+        if idempotency_key:
+            existing = self.db.query(PublishBatch).filter(
+                PublishBatch.course_id == course_id,
+                PublishBatch.actor_id == actor,
+                PublishBatch.mode == batch_mode,
+                PublishBatch.idempotency_key == idempotency_key,
+            ).first()
+            if existing:
+                return self._batch_response(existing)
+
+        batch = PublishBatch(
+            course_id=course_id,
+            actor_id=actor,
+            mode=batch_mode,
+            total_questions=len(question_ids),
+            status='running',
+            created_at=datetime.utcnow(),
+            idempotency_key=idempotency_key,
+        )
+        self.db.add(batch)
+        self.db.commit()
+
+        ok, failed, warnings = 0, 0, 0
+        errors: list[dict] = []
+        for question_id in question_ids:
+            question = self.db.get(Question, question_id)
+            if not question or question.course_id != course_id:
+                failed += 1
+                errors.append({'question_id': question_id, 'error': 'Question not found in course'})
+                continue
+            try:
+                await self.publish_question(question_id, actor, mode=mode, batch_id=batch.id)
+                self.db.refresh(question)
+                if self._is_published_ok(question.publish_status):
+                    ok += 1
+                else:
+                    ok += 1
+                    warnings += 1
+            except Exception as exc:
+                failed += 1
+                errors.append({'question_id': question_id, 'error': str(exc), 'difficulty': getattr(question, 'difficulty', None), 'family': getattr(question, 'question_family_id', None)})
+
+        summary = self._batch_summary(course_id, batch.id)
+        status = 'success' if ok and not failed and not warnings else ('warning' if ok and not failed and warnings else ('partial_success' if ok and failed else 'failed'))
+        batch.status = status
+        batch.published_count = ok
+        batch.failed_count = failed
+        batch.warning_count = warnings
+        batch.summary_json = {
+            'libraries': summary,
+            'family_bank_plan': plan,
+            'family_bank_coverage': plan.get('coverage') or [],
+            'family_bank_slots': plan.get('slots') or [],
+            'idempotency_key': idempotency_key,
+        }
+        batch.errors_json = errors
+        batch.completed_at = datetime.utcnow()
+        self.db.commit()
+        return {
+            'course_id': course_id,
+            'batch_id': batch.id,
+            'mode': batch_mode,
+            'published': ok,
+            'failed': failed,
+            'warnings': warnings,
+            'status': status,
+            'errors': errors,
+            'libraries': summary,
+            'family_bank_plan': plan,
+            'family_bank_slots': plan.get('slots') or [],
+            'family_bank_coverage': plan.get('coverage') or [],
+        }
+
     @staticmethod
     def _problem_bank_guide(summary: list[dict]) -> list[str]:
-        return [f'{row["library_key"]}: {row["component_count"]} components' for row in summary]
+        return [f'{row["library_key"]}: {row["component_count"]} components (tagged family/difficulty)' for row in summary]
 
     async def dry_run_course_approved(self, course_id: str) -> dict:
         questions = self.db.query(Question).filter(Question.course_id == course_id, Question.status == 'approved').all()

@@ -5,6 +5,9 @@ type DiversityReport = {
   concept_count?: number
   diversity_score?: number
   overloaded_concepts?: Array<{ concept: string; count: number; sample?: string; difficulty_counts?: Record<string, number>; status_counts?: Record<string, number> }>
+  family_count?: number
+  multi_variant_family_count?: number
+  top_families?: Array<{ family_id: string; count: number; concept_title?: string; question_ids?: string[] }>
   near_duplicate_group_count?: number
   near_duplicate_groups?: Array<{ size: number; representative_question_text?: string; question_ids?: string[]; statuses?: Record<string, number>; difficulties?: Record<string, number> }>
   top_concepts?: Array<{ concept: string; count: number; sample?: string }>
@@ -15,6 +18,7 @@ export function DiversityReportPanel({ report }: { report: DiversityReport | nul
   const overloaded = report.overloaded_concepts || []
   const duplicates = report.near_duplicate_groups || []
   const topConcepts = report.top_concepts || []
+  const topFamilies = report.top_families || []
   return <section className="card diversity-panel">
     <div className="section-head">
       <div>
@@ -26,9 +30,17 @@ export function DiversityReportPanel({ report }: { report: DiversityReport | nul
     <div className="summary-grid compact-summary">
       <div><span>Tổng</span><b>{report.total_questions ?? 0}</b></div>
       <div><span>Concept</span><b>{report.concept_count ?? 0}</b></div>
+      <div><span>Family</span><b>{report.family_count ?? 0}</b></div>
+      <div><span>Family nhiều variant</span><b>{report.multi_variant_family_count ?? 0}</b></div>
       <div><span>Lặp nhiều</span><b>{overloaded.length}</b></div>
       <div><span>Gần trùng</span><b>{report.near_duplicate_group_count ?? duplicates.length}</b></div>
     </div>
+    {topFamilies.length > 0 && <div className="report-block">
+      <h4>Question family nhiều variant</h4>
+      {topFamilies.filter((item) => item.count > 1).slice(0, 6).map((item) => <div className="report-row" key={item.family_id}>
+        <b>{item.concept_title || item.family_id}</b><span>{item.count} variant</span><small>{item.family_id}</small>
+      </div>)}
+    </div>}
     {overloaded.length > 0 && <div className="report-block">
       <h4>Concept bị lặp nhiều</h4>
       {overloaded.slice(0, 6).map((item) => <div className="report-row" key={item.concept}>

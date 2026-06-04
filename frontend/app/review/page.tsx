@@ -239,6 +239,7 @@ export default function ReviewPage() {
         <div><span className="box-label">Chunk</span><b>{sourceTrace.chunk?.source_type || '—'}</b><small>{sourceTrace.chunk?.id || ''}</small></div>
       </div>
       <label>Nguồn tham chiếu</label><input className="input" readOnly value={sourceTrace.chunk?.source_ref || ''} />
+      <label>Concept / Family</label><pre className="xml-preview source-preview small-preview">{JSON.stringify(sourceTrace.concept || {}, null, 2)}</pre>
       <label>Nội dung chunk/source excerpt</label><pre className="xml-preview source-preview">{sourceTrace.chunk?.content || sourceTrace.question_source_excerpt || 'Không có source excerpt.'}</pre>
       <label>Publish trace</label><pre className="xml-preview source-preview small-preview">{JSON.stringify(sourceTrace.publish_trace || {}, null, 2)}</pre>
     </section></div>}

@@ -10,6 +10,7 @@ from app.models.course import ContentChunk, CourseSyncState
 from app.schemas.generation import GenerateQuestionsRequest
 from app.services.token_counter import count_tokens
 from app.services.generation_cache import build_generation_cache_key, build_prompt_cache_key, sha256_text
+from app.services.concept_service import ConceptService, format_concepts_for_prompt
 
 # v25.2: old v25.0 capped every call to 6 questions. That fixed parsing but
 # repeated the same prompt/content too much. New default groups by difficulty:
@@ -126,6 +127,44 @@ def chunks_to_content(chunks: list[ContentChunk]) -> str:
     return '\n\n---\n\n'.join(render_chunk(chunk) for chunk in chunks)
 
 
+def concept_aware_content(db: Session, course_id: str, *, content: str, chunks: list[ContentChunk], node_id: str | None, node_title: str | None) -> tuple[str, list[dict]]:
+    """Prefix generation content with concept hints without hiding raw source.
+
+    v25.9.14.0 keeps Open edX/native random unchanged, but makes generation
+    concept-aware by extracting teachable concepts before the model call.  The
+    raw chunks remain below the hint block so source grounding still works.
+    """
+    if not chunks:
+        return content, []
+    try:
+        concepts, _reused = ConceptService(db).extract_for_chunks(
+            course_id=course_id,
+            chunks=chunks,
+            node_id=node_id if node_id and node_id != 'course' else None,
+            node_title=node_title,
+            max_concepts=18,
+            force=False,
+        )
+    except Exception:
+        # Concept extraction must never block core generation.  It is a pedagogy
+        # enhancement; raw source-based generation still continues.
+        return content, []
+    hint = format_concepts_for_prompt(concepts, max_items=12)
+    metadata = [
+        {
+            'id': c.id,
+            'concept_key': c.concept_key,
+            'title': c.title,
+            'difficulty_hint': c.difficulty_hint,
+            'importance_score': c.importance_score,
+        }
+        for c in concepts
+    ]
+    if not hint:
+        return content, metadata
+    return f"{hint}\n\n--- Raw source content below ---\n\n{content}", metadata
+
+
 def build_generation_content(db: Session, payload: GenerateQuestionsRequest) -> tuple[str, int, list[ContentChunk]]:
     if payload.content and payload.content.strip():
         return payload.content, count_tokens(payload.content), []
@@ -195,6 +234,7 @@ def _difficulty_work_items(
     node_id: str | None,
     percentages: dict[str, float],
     max_batch_size: int,
+    concepts_metadata: list[dict] | None = None,
 ) -> list[dict]:
     """Build cost-aware work items by difficulty.
 
@@ -244,6 +284,7 @@ def _difficulty_work_items(
             'difficulty_counts': normalized_counts,
             'phase': phase,
             'tail_wait_for_primary': phase == 'tail',
+            'concepts': concepts_metadata or [],
         }
 
     for allocation in _split_count_by_difficulty(total_questions, percentages):
@@ -311,6 +352,14 @@ def _build_node_work_items(
         item_content = chunks_to_content(node_chunks)
         if not item_content.strip():
             continue
+        item_content, concepts_metadata = concept_aware_content(
+            db,
+            course_id,
+            content=item_content,
+            chunks=node_chunks,
+            node_id=node_id,
+            node_title=item.get('title'),
+        )
         item_tokens = sum(chunk.token_count for chunk in node_chunks) or count_tokens(item_content)
         work_items.extend(_difficulty_work_items(
             course_id=course_id,
@@ -322,6 +371,7 @@ def _build_node_work_items(
             node_id=node_id,
             percentages=percentages,
             max_batch_size=max_batch_size,
+            concepts_metadata=concepts_metadata,
         ))
     return work_items
 

@@ -53,40 +53,44 @@ class CMSTagPayload:
         }
 
 
-def build_library_tags(course_id: str, chapter_node_id: str, chapter_title: str | None, difficulty: str | None) -> CMSTagPayload:
-    diff = (difficulty or 'easy').strip().upper() or 'EASY'
+def build_library_tags(course_id: str, chapter_node_id: str, chapter_title: str | None, difficulty: str | None = None) -> CMSTagPayload:
     course = _course_code(course_id).upper()
     chapter_label = _clean_tag(chapter_title or chapter_node_id, 80)
 
-    # v25.9.13.25: keep Open edX UI tags small and useful. Long hashes and
-    # question-specific tags made the Library tag dropdown noisy. Full ids remain
-    # in metadata/publish_verification_json for traceability.
+    # v25.9.14.2: one Library per Chapter.  The Library itself only needs
+    # course/chapter/AI tags; difficulty/family are component tags.
     tag_map = {
-        'taxonomy': 'AI Learning Check',
         'ai': 'ai-learning-check',
         'course': f'course:{course}',
         'chapter': f'chapter:{chapter_label}',
-        'difficulty': f'difficulty:{diff.lower()}',
+        'generated': 'generated',
     }
     return CMSTagPayload(tag_names=_dedupe(tag_map.values()), tag_map=tag_map)
 
 
+def _family_display_name(question: Question) -> str:
+    value = question.concept_title or question.topic or question.learning_objective or question.question_family_id or 'Family'
+    return _clean_tag(value, 80)
+
+
 def build_question_tags(question: Question, target: Any) -> CMSTagPayload:
-    source_type = (question.source_type or 'unknown').strip().lower()
     diff = (question.difficulty or getattr(target, 'difficulty', None) or 'easy').strip().upper()
 
     library_tags = build_library_tags(
         question.course_id,
         getattr(target, 'chapter_node_id', '') or question.chapter_node_id or '',
         getattr(target, 'chapter_title', '') or question.chapter_title or '',
-        diff,
+        None,
     )
     tag_map = {
         **library_tags.tag_map,
-        'source_type': f'source:{_ascii_slug(source_type, 30)}',
-        'generated': 'generated',
+        'family': f'family:{_family_display_name(question)}',
+        'difficulty': f'difficulty:{diff}',
     }
 
+    # Standard tag set for the Open edX Library UI:
+    # course:MUL211, chapter:Bài 2, family:Vector/Raster,
+    # difficulty:EASY/MEDIUM/HARD, ai-learning-check, generated.
     return CMSTagPayload(tag_names=_dedupe(tag_map.values())[:6], tag_map=tag_map)
 
 

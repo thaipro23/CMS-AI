@@ -51,6 +51,12 @@ export type Question = {
   node_id?: string | null
   node_title?: string | null
   topic?: string | null
+  concept_id?: string | null
+  concept_title?: string | null
+  concept_key?: string | null
+  question_family_id?: string | null
+  variant_no?: number | null
+  source_evidence?: string | null
   difficulty: string
   cognitive_level: string
   learning_objective: string
@@ -212,6 +218,42 @@ export type CourseNodeOption = {
   token_count: number
 }
 
+export type Concept = {
+  id: string
+  course_id: string
+  chapter_node_id?: string | null
+  source_node_id?: string | null
+  source_node_title?: string | null
+  concept_key: string
+  title: string
+  summary: string
+  learning_objective: string
+  difficulty_hint: string
+  importance_score: number
+  source_chunk_ids?: string[] | null
+  source_evidence: string
+  token_count: number
+  status: string
+  metadata_json?: Record<string, any> | null
+  created_at: string
+  updated_at: string
+}
+
+export type ConceptExtractResponse = {
+  course_id: string
+  node_id?: string | null
+  concept_count: number
+  reused_existing: boolean
+  concepts: Concept[]
+}
+
+export type ConceptListResponse = {
+  course_id: string
+  node_id?: string | null
+  total: number
+  concepts: Concept[]
+}
+
 export type CourseFileUploadResponse = {
   course_id: string
   node_id: string
@@ -338,6 +380,9 @@ export type EditQuestionForm = {
   source_timestamp_end: string
   source_chunk_id: string
   source_excerpt: string
+  question_family_id: string
+  variant_no: string
+  source_evidence: string
   tags_text: string
   target_status: string
 }
@@ -363,6 +408,9 @@ export function toEditForm(question: Question): EditQuestionForm {
     source_timestamp_end: question.source_timestamp_end || '',
     source_chunk_id: question.source_chunk_id || '',
     source_excerpt: question.source_excerpt || '',
+    question_family_id: question.question_family_id || '',
+    variant_no: question.variant_no ? String(question.variant_no) : '',
+    source_evidence: question.source_evidence || '',
     tags_text: (question.tags || []).join(', '),
     target_status: ['pending_review', 'approved', 'rejected'].includes(question.status) ? question.status : 'pending_review',
   }
@@ -564,7 +612,7 @@ export type PublishBatchSummary = {
   published_count: number
   failed_count: number
   warning_count: number
-  summary?: { libraries?: PublishLibrarySummary[] }
+  summary?: { libraries?: PublishLibrarySummary[]; family_bank_plan?: FamilyBankPlan; family_bank_slots?: FamilyBankSlot[]; family_bank_coverage?: FamilyBankCoverage[] }
   errors?: any[]
   created_at?: string | null
   completed_at?: string | null
@@ -581,6 +629,9 @@ export type PublishResult = {
   errors?: any[]
   libraries?: PublishLibrarySummary[]
   problem_bank_guide?: string[]
+  family_bank_plan?: FamilyBankPlan
+  family_bank_slots?: FamilyBankSlot[]
+  family_bank_coverage?: FamilyBankCoverage[]
 }
 
 export type SourceTrace = {
@@ -590,6 +641,107 @@ export type SourceTrace = {
   chapter_node?: { id?: string | null; title?: string | null; block_type?: string | null }
   chunk?: { id?: string | null; block_id?: string | null; source_type?: string | null; source_ref?: string | null; page_number?: number | null; timestamp_start?: string | null; timestamp_end?: string | null; token_count?: number | null; content?: string }
   question_source_excerpt?: string
+  concept?: { id?: string | null; title?: string | null; key?: string | null; family_id?: string | null; variant_no?: number | null; source_evidence?: string | null }
   publish_trace?: Record<string, any>
   tags?: string[]
+}
+
+export type FamilyBankFamily = {
+  family_id: string
+  family_name: string
+  concept_id?: string | null
+  concept_title?: string | null
+  variant_count: number
+  question_ids: string[]
+}
+
+export type FamilyBankSlot = {
+  slot_no: number
+  difficulty: string
+  pick_count: number
+  repeated_family?: boolean
+  families: FamilyBankFamily[]
+  family_names: string[]
+  question_ids: string[]
+  variant_count: number
+  rule: string
+  warning?: string
+}
+
+export type FamilyBankCoverage = {
+  difficulty: string
+  target_slots: number
+  available_families: number
+  selected_slots: number
+  optional_family_count: number
+  repeated_slot_count: number
+  status: string
+}
+
+export type FamilyBankPlan = {
+  ok: boolean
+  course_id: string
+  chapter_node_id?: string | null
+  total_questions: number
+  target_counts: Record<string, number>
+  shortage_policy: string
+  max_families_per_bank: number
+  coverage: FamilyBankCoverage[]
+  slots: FamilyBankSlot[]
+  warnings: string[]
+  combination_count_estimate: number
+  message?: string
+}
+
+export type CmsQuizNodeResult = {
+  ok: boolean
+  created: boolean
+  status: string
+  course_id: string
+  parent_node_id: string
+  parent_title?: string
+  parent_type?: string
+  quiz_title: string
+  unit_title: string
+  created_nodes: Array<{ usage_key: string; block_id?: string; block_type: string; display_name: string; parent_usage_key?: string | null; created?: boolean }>
+  leaf_unit_node_id?: string
+  leaf_unit_type?: string
+  manual_publish_required?: boolean
+  problem_bank_auto_inserted?: boolean
+  message?: string
+  next_step?: string
+}
+
+export type CmsProblemBankBlock = {
+  usage_key: string
+  block_id?: string
+  block_type: string
+  display_name: string
+  parent_usage_key?: string | null
+  created?: boolean
+  slot_no?: number
+  difficulty?: string
+  family_names?: string[]
+  pick_count?: number
+  library_key?: string
+  openedx_problem_ids?: string[]
+  selection_verified?: boolean
+  verification?: Record<string, any>
+  diagnostics?: any[]
+}
+
+export type CmsProblemBankInsertResult = {
+  ok: boolean
+  created: boolean
+  status: string
+  course_id: string
+  unit_node_id: string
+  unit_title?: string
+  problem_bank_blocks: CmsProblemBankBlock[]
+  slots_requested: number
+  slots_inserted: number
+  manual_component_selection_required?: boolean
+  warnings?: string[]
+  message?: string
+  next_step?: string
 }

@@ -15,6 +15,12 @@ class Question(Base):
     block_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     topic_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_topics.id'), nullable=True)
     topic: Mapped[str] = mapped_column(String(512), default='')
+    concept_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    concept_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    concept_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    question_family_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    variant_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_evidence: Mapped[str] = mapped_column(Text, default='')
     difficulty: Mapped[str] = mapped_column(String(50), default='easy')
     cognitive_level: Mapped[str] = mapped_column(String(100), default='remember')
     learning_objective: Mapped[str] = mapped_column(Text, default='')
@@ -86,6 +92,8 @@ class Question(Base):
         Index('ix_ai_questions_course_source_status_created', 'course_id', 'source_node_id', 'status', 'created_at'),
         Index('ix_ai_questions_course_publish_created', 'course_id', 'publish_status', 'created_at'),
         Index('ix_ai_questions_course_openedx_lifecycle', 'course_id', 'openedx_publish_status', 'openedx_verification_status', 'openedx_delete_status'),
+        Index('ix_ai_questions_course_concept_status', 'course_id', 'concept_id', 'status'),
+        Index('ix_ai_questions_course_family_status', 'course_id', 'question_family_id', 'status'),
     )
 
 

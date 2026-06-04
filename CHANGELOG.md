@@ -1,3 +1,30 @@
+# v25.9.14.4 - Problem Bank Auto Insert
+
+- Added AI Server endpoint `POST /api/publish/courses/{course_id}/cms-problem-banks/insert` to insert Family Slot Plan as Problem Bank / `library_content` blocks into a real Quiz Unit.
+- Added CMS connector endpoint `POST /api/ai-connector/v1/courses/{course_id}/problem-banks`.
+- Added `/export` UI flow **Tạo Quiz + Problem Bank** and **Chỉ insert Problem Bank**.
+- Backend validates that slot questions were already published to one Chapter Library before inserting blocks.
+- Connector verifies created blocks by reading back `source_library_id`, `max_count`, `manual`, `shuffle`, and selected component fields when available.
+- If selected components cannot be verified on Ulmo.3, the API returns `manual_component_selection_required=true` instead of pretending success.
+- No DB migration required.
+
+# v25.9.14.3 - CMS Quiz Node Creator
+
+- Added real CMS/Studio quiz node creation endpoint in AI Server: `POST /api/publish/courses/{course_id}/cms-quiz-node/create`.
+- Added real CMS connector endpoint: `POST /api/ai-connector/v1/courses/{course_id}/quiz-nodes`.
+- Added `/export` UI section for selecting a synced CMS node and creating a draft Quiz node in Studio.
+- Fails closed when `USE_MOCK_OPENEDX=true`, parent node type is unsupported, or CMS connector does not return a real `usage_key`.
+- No DB migration required. Problem Bank block insertion remains explicitly deferred to v25.9.14.4.
+
+
+## v25.9.14.1 - Question Family ID
+
+- Thêm `question_family_id`, `variant_no`, `source_evidence` vào `ai_questions`.
+- Prompt/model schema yêu cầu sinh family id và variant number cho câu hỏi cùng concept/difficulty.
+- Backend fallback tự tạo family ổn định nếu model chưa trả family.
+- Review UI hiển thị Concept/Family/Variant và form sửa cho phép chỉnh family thủ công.
+- Thêm migration `0007_v25_9_14_1_question_family_id.py`.
+
 ## v25.9.13.52 - Analytics PostgreSQL GROUP BY Fix
 
 - Fixed `/api/analytics/overview` HTTP 500 on PostgreSQL caused by duplicate SQLAlchemy bind parameters inside `coalesce(ai_questions.topic, 'unknown')` between SELECT and GROUP BY.
@@ -73,3 +100,12 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 - Added stable container names and network aliases for Caddy/Nginx routing.
 - Added Tutor Caddy reverse proxy plugin and Caddy/Nginx snippets.
 - Added Level 1 deployment guide and network health-check script.
+
+## v25.9.14.1 - Concept-Aware Generation
+
+- Thêm bảng `ai_concepts` để lưu concept/vấn đề học tập theo course/node.
+- Thêm API `GET/POST /api/courses/{course_id}/concepts` để xem/trích xuất concept.
+- Thêm concept panel trong `/sync`.
+- Generation Planner tự thêm `Concept-aware generation hints` vào prompt.
+- Prompt/JSON schema/Question model có thêm `concept_id`, `concept_title`, `concept_key`.
+- Thêm migration `0006_v25_9_14_0_concepts.py`.

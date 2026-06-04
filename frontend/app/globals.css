@@ -797,3 +797,124 @@ label { margin: 5px 0 4px; font-size: 12px; }
 @media (max-width: 700px) {
   .workflow-steps.compact-steps { grid-template-columns: 1fr; }
 }
+
+
+.concept-panel {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.concept-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.concept-panel-head small {
+  display: block;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.concept-list {
+  display: grid;
+  gap: 8px;
+}
+
+.concept-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.concept-row small {
+  display: block;
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+.compact-empty {
+  padding: 10px;
+}
+
+/* v25.9.14.1 - compact concept/family metadata on review cards */
+.question-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 6px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.question-meta-row code {
+  font-size: 11px;
+  background: var(--surface-muted, #f3f4f6);
+  border-radius: 6px;
+  padding: 2px 5px;
+  color: var(--text, #111827);
+}
+
+/* v25.9.14.2 Family Slot Problem Bank plan */
+.inline-form.compact-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+}
+.inline-form.compact-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mini-input {
+  width: 92px;
+}
+.family-slot-table .tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 4px 2px 0;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+.family-slot-table .tag-chip button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 700;
+  line-height: 1;
+}
+.warning-box {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 119, 6, .35);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, .10);
+  color: #92400e;
+  font-size: 13px;
+}
+.warning-text,
+.danger-text {
+  display: block;
+  margin-top: 4px;
+  color: #b45309;
+  font-size: 12px;
+}
+.danger-text { color: #b91c1c; }

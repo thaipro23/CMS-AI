@@ -46,3 +46,40 @@ class OpenEdXConnector(ABC):
 
     async def delete_library_problem(self, course_id: str, library_key: str, problem_id: str, metadata: dict[str, Any] | None = None) -> dict:
         return {'ok': False, 'status': 'delete_unavailable', 'deleted': False, 'library_key': library_key, 'problem_id': problem_id, 'metadata': metadata or {}}
+
+    async def create_quiz_node(
+        self,
+        course_id: str,
+        parent_node_id: str,
+        quiz_title: str,
+        unit_title: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict:
+        return {
+            'ok': False,
+            'created': False,
+            'status': 'quiz_node_create_unavailable',
+            'course_id': course_id,
+            'parent_node_id': parent_node_id,
+            'quiz_title': quiz_title,
+            'unit_title': unit_title,
+            'metadata': metadata or {},
+        }
+
+    async def insert_problem_banks(
+        self,
+        course_id: str,
+        unit_node_id: str,
+        slots: list[dict[str, Any]],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict:
+        return {
+            'ok': False,
+            'created': False,
+            'status': 'problem_bank_insert_unavailable',
+            'course_id': course_id,
+            'unit_node_id': unit_node_id,
+            'problem_bank_blocks': [],
+            'slots_requested': len(slots or []),
+            'metadata': metadata or {},
+        }

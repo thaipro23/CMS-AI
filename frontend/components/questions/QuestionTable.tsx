@@ -82,6 +82,11 @@ export function QuestionTable({ questions, withCheckbox = false, selectedIds = [
               </div>
             })}
           </div>
+          <div className="question-meta-row">
+            {question.concept_title && <span>Concept: <b>{question.concept_title}</b></span>}
+            {question.question_family_id && <span>Family: <code>{question.question_family_id}</code></span>}
+            {question.variant_no && <span>Variant: <b>{question.variant_no}</b></span>}
+          </div>
           {draftReason && <div className="draft-error-reason">
             <strong>Lý do draft_error:</strong> {draftReason}
             {question.draft_error_detail?.message && <span> · {String(question.draft_error_detail.message)}</span>}

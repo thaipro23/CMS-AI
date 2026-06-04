@@ -1,6 +1,6 @@
 from app.core.config import settings
 from app.db.session import Base, engine
-from app.models import course, question, cost, job, generation_cache, token_calibration, generation_batch, audit, publish  # noqa: F401 - import models for metadata
+from app.models import course, question, cost, job, generation_cache, token_calibration, generation_batch, audit, publish, concept  # noqa: F401 - import models for metadata
 
 
 def init_db() -> None:
@@ -37,6 +37,32 @@ def _ensure_v24_columns() -> None:
         """)
 
 
+
+        conn.exec_driver_sql("""
+        CREATE TABLE IF NOT EXISTS ai_concepts (
+            id VARCHAR PRIMARY KEY,
+            course_id VARCHAR(255),
+            chapter_node_id VARCHAR(512),
+            source_node_id VARCHAR(512),
+            source_node_title VARCHAR(512),
+            concept_key VARCHAR(255),
+            title VARCHAR(512) DEFAULT '',
+            summary TEXT DEFAULT '',
+            learning_objective TEXT DEFAULT '',
+            difficulty_hint VARCHAR(50) DEFAULT 'easy',
+            importance_score FLOAT DEFAULT 0.5,
+            source_chunk_ids JSON,
+            source_evidence TEXT DEFAULT '',
+            token_count INTEGER DEFAULT 0,
+            status VARCHAR(50) DEFAULT 'active',
+            metadata_json JSON,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP,
+            CONSTRAINT uq_ai_concepts_course_node_key UNIQUE (course_id, source_node_id, concept_key)
+        )
+        """)
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_ai_concepts_course_node_status ON ai_concepts(course_id, source_node_id, status)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_ai_concepts_course_chapter_difficulty ON ai_concepts(course_id, chapter_node_id, difficulty_hint)")
 
         conn.exec_driver_sql("""
         CREATE TABLE IF NOT EXISTS ai_publish_batches (
@@ -184,6 +210,13 @@ def _ensure_v24_columns() -> None:
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS repair_attempt_count INTEGER DEFAULT 0",
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS duplicate_score FLOAT",
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS publish_status VARCHAR(50)",
+            "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS concept_id VARCHAR",
+            "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS concept_title VARCHAR(512)",
+            "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS concept_key VARCHAR(255)",
+            "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS question_family_id VARCHAR(255)",
+            "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS variant_no INTEGER",
+            "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS source_evidence TEXT DEFAULT ''",
+            "CREATE INDEX IF NOT EXISTS ix_ai_questions_course_family_status ON ai_questions(course_id, question_family_id, status)",
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS publish_verification_json JSON",
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS published_by VARCHAR(255)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_questions_course_hash ON ai_questions(course_id, question_hash) WHERE question_hash IS NOT NULL",
