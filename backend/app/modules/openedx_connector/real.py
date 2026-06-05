@@ -617,7 +617,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
         payload = {
             'course_id': course_id,
-            'parent_node_id': parent_node_id,
+            'parent_node_id': _clean_openedx_usage_key(parent_node_id),
             'quiz_title': quiz_title,
             'unit_title': unit_title,
             'metadata': metadata or {},
@@ -639,7 +639,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
         payload = {
             'course_id': course_id,
-            'unit_node_id': unit_node_id,
+            'unit_node_id': _clean_openedx_usage_key(unit_node_id),
             'slots': slots or [],
             'metadata': metadata or {},
         }

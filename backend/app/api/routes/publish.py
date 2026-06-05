@@ -16,8 +16,10 @@ class FamilyBankPlanPreviewRequest(BaseModel):
     chapter_node_id: str | None = None
     total_questions: int = Field(default=10, ge=1, le=100)
     difficulty_distribution: dict[str, int] | None = None
-    shortage_policy: str = 'allow_repeat_with_warning'
-    max_families_per_bank: int = Field(default=2, ge=1, le=2)
+    require_all_approved: bool = True
+    # Kept for backward-compatible clients; v25.9.14.5 never repeats a question.
+    shortage_policy: str = 'never_repeat_question'
+    max_families_per_bank: int = Field(default=2, ge=1, le=20)
 
 
 class FamilyBankPlanPublishRequest(BaseModel):
@@ -154,22 +156,38 @@ async def rollback_publish_batch(batch_id: str, level: str = Query('ai_server'),
 
 
 @router.post('/courses/{course_id}/family-bank-plan/preview')
-def preview_family_bank_plan(course_id: str, payload: FamilyBankPlanPreviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_to_openedx'))):
+async def preview_family_bank_plan(course_id: str, payload: FamilyBankPlanPreviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_to_openedx'))):
     ensure_course_access(user, course_id)
     try:
-        result = OpenEdXPublisher(db).preview_family_bank_plan(
+        result = await OpenEdXPublisher(db).preview_family_bank_plan(
             course_id,
             chapter_node_id=payload.chapter_node_id,
             total_questions=payload.total_questions,
             difficulty_distribution=payload.difficulty_distribution,
-            shortage_policy=payload.shortage_policy,
-            max_families_per_bank=payload.max_families_per_bank,
+            require_all_approved=payload.require_all_approved,
         )
-        log_audit(db, action='openedx.family_bank_plan.preview', status='success', message='Tạo kế hoạch Family Slot Problem Bank thành công', user=user, course_id=course_id, target_type='course', target_id=course_id, metadata={'coverage': result.get('coverage'), 'warnings': result.get('warnings')})
+        log_audit(
+            db,
+            action='openedx.family_bank_plan.preview',
+            status='success',
+            message='Tính kế hoạch Stable Family và Hard Duplicate Guard thành công',
+            user=user,
+            course_id=course_id,
+            target_type='course',
+            target_id=course_id,
+            metadata={
+                'coverage': result.get('coverage'),
+                'warnings': result.get('warnings'),
+                'planner_engine': result.get('planner_engine'),
+                'uses_llm': result.get('uses_llm'),
+                'family_reconciliation': result.get('family_reconciliation'),
+                'hard_guard': result.get('hard_guard'),
+            },
+        )
         return result
     except Exception as exc:
-        log_audit(db, action='openedx.family_bank_plan.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course', target_id=course_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='openedx.family_bank_plan.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=f'{type(exc).__name__}: {exc}', user=user, course_id=course_id, target_type='course', target_id=course_id)
+        raise HTTPException(status_code=400, detail=f'{type(exc).__name__}: {exc}') from exc
 
 
 @router.post('/courses/{course_id}/family-bank-plan/publish')

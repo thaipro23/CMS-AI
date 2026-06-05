@@ -622,23 +622,21 @@ class OpenEdXPublisher:
         }
 
 
-    def preview_family_bank_plan(
+    async def preview_family_bank_plan(
         self,
         course_id: str,
         *,
         chapter_node_id: str | None = None,
         total_questions: int = 10,
         difficulty_distribution: dict[str, int] | None = None,
-        shortage_policy: str = 'allow_repeat_with_warning',
-        max_families_per_bank: int = 2,
+        require_all_approved: bool = True,
     ) -> dict:
-        return FamilyBankPlanService(self.db).preview_plan(
+        return await FamilyBankPlanService(self.db).preview_optimized_plan(
             course_id,
             chapter_node_id=chapter_node_id,
             total_questions=total_questions,
             difficulty_distribution=difficulty_distribution,
-            shortage_policy=shortage_policy,
-            max_families_per_bank=max_families_per_bank,
+            require_all_approved=require_all_approved,
         )
 
 
@@ -666,7 +664,7 @@ class OpenEdXPublisher:
         for node in nodes:
             if not isinstance(node, dict):
                 continue
-            usage_key = str(node.get('usage_key') or node.get('block_id') or '').strip()
+            usage_key = _clean_openedx_usage_key(node.get('usage_key') or node.get('block_id'))
             if not usage_key:
                 continue
             state = self.db.query(CourseSyncState).filter(
@@ -676,7 +674,7 @@ class OpenEdXPublisher:
             if state is None:
                 state = CourseSyncState(course_id=course_id, block_id=usage_key)
                 self.db.add(state)
-            state.parent_block_id = node.get('parent_usage_key') or result.get('parent_node_id')
+            state.parent_block_id = _clean_openedx_usage_key(node.get('parent_usage_key') or result.get('parent_node_id')) or None
             state.block_type = (node.get('block_type') or 'vertical')[:50]
             state.display_name = str(node.get('display_name') or 'AI Learning Check')[:512]
             state.sync_status = 'created_by_ai_quiz_node'
@@ -690,7 +688,7 @@ class OpenEdXPublisher:
         for block in blocks:
             if not isinstance(block, dict):
                 continue
-            usage_key = str(block.get('usage_key') or block.get('block_id') or '').strip()
+            usage_key = _clean_openedx_usage_key(block.get('usage_key') or block.get('block_id'))
             if not usage_key:
                 continue
             state = self.db.query(CourseSyncState).filter(
@@ -733,7 +731,9 @@ class OpenEdXPublisher:
             library_keys.discard('')
             if len(library_keys) != 1:
                 raise ValueError(f'Slot {slot.get("slot_no")} có nhiều library_key hoặc thiếu library_key: {sorted(library_keys)}')
-            openedx_problem_ids = [_clean_openedx_usage_key(by_id[qid].openedx_library_problem_id) for qid in question_ids]
+            openedx_problem_ids = list(dict.fromkeys(
+                _clean_openedx_usage_key(by_id[qid].openedx_library_problem_id) for qid in question_ids
+            ))
             enriched = {
                 **slot,
                 'library_key': next(iter(library_keys)),
@@ -765,19 +765,32 @@ class OpenEdXPublisher:
     ) -> dict:
         if settings.use_mock_openedx:
             raise ValueError('USE_MOCK_OPENEDX=true nên không insert Problem Bank thật trong Open edX.')
-        unit_node_id = (unit_node_id or '').strip()
+        raw_unit_node_id = str(unit_node_id or '').strip()
+        unit_node_id = _clean_openedx_usage_key(raw_unit_node_id)
         if not unit_node_id:
             raise ValueError('Thiếu unit_node_id/leaf_unit_node_id để insert Problem Bank.')
         unit_state = self.db.query(CourseSyncState).filter(
             CourseSyncState.course_id == course_id,
             CourseSyncState.block_id == unit_node_id,
         ).first()
+        # v25.9.14.4.1: accept and repair rows created by 14.4 where the
+        # opaque usage key was stored as a JSON-quoted string.
+        if unit_state is None and raw_unit_node_id and raw_unit_node_id != unit_node_id:
+            unit_state = self.db.query(CourseSyncState).filter(
+                CourseSyncState.course_id == course_id,
+                CourseSyncState.block_id == raw_unit_node_id,
+            ).first()
+            if unit_state is not None:
+                unit_state.block_id = unit_node_id
+                self.db.flush()
         if unit_state is None:
             raise ValueError('Không tìm thấy Unit/vertical trong dữ liệu sync local. Hãy tạo Quiz node hoặc sync course lại trước.')
         unit_type = (unit_state.block_type or '').lower()
         if unit_type != 'vertical':
             raise ValueError(f'unit_node_id phải là Unit/vertical, hiện tại type={unit_type!r}.')
 
+        planner = FamilyBankPlanService(self.db)
+        hard_guard = planner.assert_plan_safe(course_id, plan, require_all=True)
         openedx_slots = self._openedx_slots_from_plan(course_id, plan)
         metadata = {
             'actor': actor,
@@ -811,6 +824,7 @@ class OpenEdXPublisher:
             'unit_title': unit_state.display_name,
             'openedx_slots': openedx_slots,
             'family_bank_plan': plan or None,
+            'hard_guard': hard_guard,
             'next_step': (
                 'Mở Studio kiểm tra từng Problem Bank. Nếu manual_component_selection_required=true thì cần Add components hoặc bổ sung connector handler riêng cho Ulmo.3.'
             ),
@@ -829,7 +843,7 @@ class OpenEdXPublisher:
     ) -> dict:
         if settings.use_mock_openedx:
             raise ValueError('USE_MOCK_OPENEDX=true nên không tạo Quiz node thật trong Open edX. Hãy tắt mock và dùng CMS connector production.')
-        parent_node_id = (parent_node_id or '').strip()
+        parent_node_id = _clean_openedx_usage_key(parent_node_id)
         if not parent_node_id:
             raise ValueError('Thiếu parent_node_id. Hãy chọn node Course/Chapter/Subsection trong cây CMS đã sync.')
         parent_state = self.db.query(CourseSyncState).filter(
@@ -843,6 +857,11 @@ class OpenEdXPublisher:
             raise ValueError(
                 f'Node đã chọn có type={parent_type!r}. v25.9.14.3 chỉ tạo node Quiz dưới course/chapter/sequential. '
                 'Nếu muốn gắn Problem Bank vào Unit/vertical hiện có, đó là bước v25.9.14.4.'
+            )
+        hard_guard = None
+        if plan:
+            hard_guard = FamilyBankPlanService(self.db).assert_plan_safe(
+                course_id, plan, require_all=True
             )
         quiz_title = (quiz_title or f'AI Learning Check - {parent_state.display_name or course_id}').strip()[:120]
         unit_title = (unit_title or 'Quiz tự luyện').strip()[:120]
@@ -877,7 +896,8 @@ class OpenEdXPublisher:
             'parent_title': parent_state.display_name,
             'parent_type': parent_state.block_type,
             'family_bank_plan': plan or None,
-            'next_step': 'v25.9.14.4 sẽ tự insert Problem Bank blocks vào leaf_unit_node_id. Hiện tại hãy mở Studio để kiểm tra draft node.',
+            'hard_guard': hard_guard,
+            'next_step': 'Kế hoạch đã qua Hard Duplicate Guard. Có thể tiếp tục insert Problem Bank vào leaf_unit_node_id.',
         }
 
     async def publish_family_bank_plan(
@@ -899,6 +919,8 @@ class OpenEdXPublisher:
         """
         mode = self._normalize_mode(mode)
         planner = FamilyBankPlanService(self.db)
+        hard_guard = planner.assert_plan_safe(course_id, plan, require_all=True)
+        plan = {**(plan or {}), 'hard_guard': hard_guard}
         question_ids = planner.selected_question_ids_from_plan(plan)
         if not question_ids:
             raise ValueError('Family bank plan không có câu hỏi nào để publish.')
@@ -975,6 +997,7 @@ class OpenEdXPublisher:
             'family_bank_plan': plan,
             'family_bank_slots': plan.get('slots') or [],
             'family_bank_coverage': plan.get('coverage') or [],
+            'hard_guard': hard_guard,
         }
 
     @staticmethod

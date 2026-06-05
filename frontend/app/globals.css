@@ -594,7 +594,7 @@ code { padding: 1px 5px; border-radius: 6px; }
   display: grid;
   grid-template-columns: minmax(360px, 0.95fr) minmax(420px, 1.25fr) auto;
   gap: 12px;
-  align-items: end;
+  align-items: flex-end;
   overflow: visible;
 }
 .sync-field { min-width: 0; }
@@ -870,7 +870,7 @@ label { margin: 5px 0 4px; font-size: 12px; }
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  align-items: end;
+  align-items: flex-end;
 }
 .inline-form.compact-form label {
   display: flex;
@@ -918,3 +918,22 @@ label { margin: 5px 0 4px; font-size: 12px; }
   font-size: 12px;
 }
 .danger-text { color: #b91c1c; }
+
+/* v25.9.14.5 AI Family Slot Optimizer */
+.success-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #a7f3d0;
+  border-radius: 10px;
+  background: #ecfdf5;
+  color: #065f46;
+  font-weight: 600;
+}
+.family-move-select {
+  margin-left: 6px;
+  max-width: 64px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 11px;
+}

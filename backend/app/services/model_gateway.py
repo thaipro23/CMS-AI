@@ -51,6 +51,77 @@ class ModelGateway:
     without spending API cost.
     """
 
+    async def generate_structured_json(
+        self,
+        *,
+        prompt: str,
+        schema: dict[str, Any],
+        schema_name: str,
+        instructions: str,
+        prompt_cache_key: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Call the real OpenAI Responses API for a custom strict JSON task.
+
+        This is intentionally not available in mock mode. Callers use it for
+        decisions that must be clearly marked as AI-generated, then apply their
+        own deterministic validation before persisting or publishing results.
+        """
+        apply_runtime_settings()
+        if settings.mock_llm:
+            raise RuntimeError('MOCK_LLM=true nên không thể chạy Structured Output task thật.')
+        if not settings.openai_api_key:
+            raise RuntimeError('OPENAI_API_KEY đang trống nên không thể chạy Structured Output task.')
+        if settings.openai_api_mode != 'responses':
+            raise RuntimeError('Structured Output task hiện yêu cầu OPENAI_API_MODE=responses.')
+
+        payload: dict[str, Any] = {
+            'model': settings.openai_model,
+            'instructions': instructions,
+            'input': prompt,
+            'text': {
+                'format': {
+                    'type': 'json_schema',
+                    'name': schema_name[:64],
+                    'schema': schema,
+                    'strict': True,
+                }
+            },
+            'store': False,
+        }
+        if prompt_cache_key:
+            payload['prompt_cache_key'] = prompt_cache_key[:256]
+
+        fallback_input_tokens = count_tokens(json.dumps(payload, ensure_ascii=False), settings.openai_model)
+        timeout_seconds = max(int(settings.llm_timeout_seconds or 90), 90)
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.post('https://api.openai.com/v1/responses', headers=self._auth_headers(), json=payload)
+            if response.status_code == 400 and prompt_cache_key and 'prompt_cache_key' in payload:
+                logger.warning('Structured Responses API rejected prompt_cache_key, retrying without it: %s', response.text[:800])
+                payload.pop('prompt_cache_key', None)
+                response = await client.post('https://api.openai.com/v1/responses', headers=self._auth_headers(), json=payload)
+        if response.status_code >= 400:
+            raise RuntimeError(f'OpenAI Structured Responses API failed {response.status_code}: {response.text[:1200]}')
+
+        data = response.json()
+        usage = data.get('usage') or {}
+        text = self._extract_responses_output_text(data)
+        parsed = self._parse_json_payload(text)
+        input_tokens = int(usage.get('input_tokens') or usage.get('prompt_tokens') or fallback_input_tokens)
+        cached_input_tokens = int(self._cached_tokens_from_usage(usage) or 0)
+        output_tokens = int(usage.get('output_tokens') or usage.get('completion_tokens') or count_tokens(text, settings.openai_model))
+        usage_dict = {
+            'input_tokens': input_tokens,
+            'cached_input_tokens': cached_input_tokens,
+            'uncached_input_tokens': max(input_tokens - cached_input_tokens, 0),
+            'output_tokens': output_tokens,
+            'provider': 'openai_responses',
+            'model': settings.openai_model,
+            'api_mode': 'responses',
+            'response_id': data.get('id'),
+            'prompt_cache_key': prompt_cache_key,
+        }
+        return parsed, usage_dict
+
     async def generate_questions(
         self,
         *,

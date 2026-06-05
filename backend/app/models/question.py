@@ -94,6 +94,7 @@ class Question(Base):
         Index('ix_ai_questions_course_openedx_lifecycle', 'course_id', 'openedx_publish_status', 'openedx_verification_status', 'openedx_delete_status'),
         Index('ix_ai_questions_course_concept_status', 'course_id', 'concept_id', 'status'),
         Index('ix_ai_questions_course_family_status', 'course_id', 'question_family_id', 'status'),
+        Index('ix_ai_questions_course_chapter_family_difficulty', 'course_id', 'chapter_node_id', 'question_family_id', 'difficulty'),
     )
 
 

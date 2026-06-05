@@ -217,6 +217,7 @@ def _ensure_v24_columns() -> None:
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS variant_no INTEGER",
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS source_evidence TEXT DEFAULT ''",
             "CREATE INDEX IF NOT EXISTS ix_ai_questions_course_family_status ON ai_questions(course_id, question_family_id, status)",
+            "CREATE INDEX IF NOT EXISTS ix_ai_questions_course_chapter_family_difficulty ON ai_questions(course_id, chapter_node_id, question_family_id, difficulty)",
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS publish_verification_json JSON",
             "ALTER TABLE ai_questions ADD COLUMN IF NOT EXISTS published_by VARCHAR(255)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_questions_course_hash ON ai_questions(course_id, question_hash) WHERE question_hash IS NOT NULL",

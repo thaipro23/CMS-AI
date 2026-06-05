@@ -1,3 +1,24 @@
+## v25.9.14.5 - Stable Family Reconciliation + Deterministic Hard Duplicate Guard
+
+- Không gọi GPT/OpenAI khi tính Family Slot Plan. Planner dùng `concept_key/concept_id/concept_title` đã có từ bước trích xuất/generate.
+- Backend là nguồn sự thật của `question_family_id`: dạng `fam-v1-*`, ưu tiên `concept_id` rồi `concept_key`, legacy family root chỉ làm fallback; tuyệt đối không chứa `variant_no` hoặc question ID và reconcile chạy idempotent.
+- Thêm migration `0008_v25_9_14_5_stable_family_reconciliation.py` để backfill family ID cũ và đánh lại `variant_no` tuần tự.
+- Trước preview, backend tự reconcile family để sửa dữ liệu mới/cũ chưa chuẩn; response ghi rõ số family trước/sau và không dùng LLM.
+- Stable family luôn nằm trọn trong đúng một Problem Bank slot; không lặp và không tách cùng family sang nhiều slot.
+- Khi family ít hơn số slot yêu cầu, giảm số slot thay vì lặp/tách family. Khi family nhiều hơn slot, bin-pack nhiều family vào slot và vẫn dùng mọi câu duy nhất đúng một lần.
+- Hard Duplicate Guard chặn trùng `question_id`, Open edX component, nội dung normalize và stable family ở trong hoặc giữa các slot.
+- Câu hỏi trùng chính xác chỉ giữ một canonical record để không tăng trọng số random; các câu duy nhất approved/published còn lại đều được sử dụng.
+- Đổi nút UI thành **Tính kế hoạch tối ưu** và hiển thị rõ **Gọi GPT: Không**.
+- Family ID và Variant trong form review chuyển sang read-only vì backend tự quản lý.
+- Thêm index `ix_ai_questions_course_chapter_family_difficulty`.
+- Thêm test report trung thực tại `docs/V25_9_14_5_TEST_REPORT.md`.
+
+## v25.9.14.4.1 - Usage Key Normalization Hotfix
+
+- Fix CMS Quiz Node Creator returning JSON-quoted opaque usage keys such as `"block-v1:..."`.
+- Normalize usage keys at CMS connector, AI connector client, and publisher boundaries.
+- Automatically repair the local `ai_course_sync_state` row created with a quoted Unit key when Problem Bank insertion is retried.
+- Prevent `UsageKey.from_string` validation failures before Problem Bank creation.
 # v25.9.14.4 - Problem Bank Auto Insert
 
 - Added AI Server endpoint `POST /api/publish/courses/{course_id}/cms-problem-banks/insert` to insert Family Slot Plan as Problem Bank / `library_content` blocks into a real Quiz Unit.

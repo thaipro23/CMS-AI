@@ -9,7 +9,7 @@ from app.services.duplicate_detector import DuplicateDetector
 from app.services.generation_cache import question_fingerprint
 from app.services.answer_randomizer import normalize_and_shuffle_options
 from app.services.question_diversity import diversity_report
-from app.services.question_family import build_question_family_id, normalize_family_id
+from app.services.question_family import build_question_family_id, normalize_family_id, reconcile_question_families
 
 
 class QuestionService:
@@ -50,6 +50,7 @@ class QuestionService:
         course_id: str,
         item: dict,
         difficulty: str,
+        chapter_node_id: str | None,
         source_node_id: str | None,
         source_chunk_id: str | None,
         question_text: str,
@@ -60,20 +61,20 @@ class QuestionService:
         family_id = normalize_family_id(
             item.get('question_family_id') or item.get('family_id'),
             course_id=course_id,
+            chapter_node_id=chapter_node_id,
             difficulty=difficulty,
             concept_id=concept_id,
             concept_key=concept_key,
             concept_title=concept_title,
+            topic=item.get('topic'),
+            learning_objective=item.get('learning_objective') or item.get('learning_purpose'),
             source_node_id=source_node_id,
             source_chunk_id=source_chunk_id,
             question_text=question_text,
         )
-        try:
-            variant_no = int(item.get('variant_no') or 0)
-        except (TypeError, ValueError):
-            variant_no = 0
-        if variant_no <= 0:
-            variant_no = self._existing_family_variant_count(course_id, family_id) + 1
+        # variant_no is backend-owned. Model-provided values are ignored because
+        # they may restart at 1 in every batch and create duplicate variant numbers.
+        variant_no = self._existing_family_variant_count(course_id, family_id) + 1
         source_evidence = str(item.get('source_evidence') or item.get('source_excerpt') or '').strip()
         return family_id, variant_no, source_evidence
 
@@ -127,13 +128,12 @@ class QuestionService:
                 course_id=course_id,
                 item=item,
                 difficulty=item_difficulty,
+                chapter_node_id=target.chapter_node_id if target else None,
                 source_node_id=source_node_id,
                 source_chunk_id=source_chunk_id,
                 question_text=question_text,
             )
-            supplied_variant = item.get('variant_no') not in (None, '', 0, '0')
-            if not supplied_variant:
-                variant_no += family_variant_offsets.get(question_family_id, 0)
+            variant_no += family_variant_offsets.get(question_family_id, 0)
             family_variant_offsets[question_family_id] = family_variant_offsets.get(question_family_id, 0) + 1
 
             draft_reason, draft_detail = self._quality_error_payload(quality, duplicate_id, duplicate_score)
@@ -195,6 +195,7 @@ class QuestionService:
             self.db.add(q)
             questions.append(q)
         self.db.flush()
+        reconcile_question_families(self.db, course_id, commit=False)
         for q in questions:
             detector.save_embedding(q)
         self.db.commit()
@@ -263,7 +264,7 @@ class QuestionService:
         self._snapshot(q, actor=actor, note=payload.note)
 
         editable_fields = [
-            'lesson_title', 'block_id', 'topic', 'concept_id', 'concept_title', 'concept_key', 'question_family_id', 'variant_no', 'source_evidence', 'difficulty', 'cognitive_level', 'learning_objective',
+            'lesson_title', 'block_id', 'topic', 'concept_id', 'concept_title', 'concept_key', 'source_evidence', 'difficulty', 'cognitive_level', 'learning_objective',
             'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation',
             'source_ref', 'source_type', 'source_page', 'source_timestamp_start', 'source_timestamp_end',
             'source_chunk_id', 'source_node_id', 'source_node_title', 'source_excerpt', 'tags'
@@ -282,19 +283,20 @@ class QuestionService:
             q.target_library_id = target.library.id
             q.target_library_key = target.library.library_key
 
-        if not q.question_family_id:
-            q.question_family_id = build_question_family_id(
-                course_id=q.course_id,
-                difficulty=q.difficulty,
-                concept_id=q.concept_id,
-                concept_key=q.concept_key,
-                concept_title=q.concept_title,
-                source_node_id=q.source_node_id,
-                source_chunk_id=q.source_chunk_id,
-                question_text=q.question_text,
-            )
-        if not q.variant_no:
-            q.variant_no = self._existing_family_variant_count(q.course_id, q.question_family_id) + 1
+        q.question_family_id = build_question_family_id(
+            course_id=q.course_id,
+            chapter_node_id=q.chapter_node_id,
+            difficulty=q.difficulty,
+            concept_id=q.concept_id,
+            concept_key=q.concept_key,
+            concept_title=q.concept_title,
+            legacy_family_id=q.question_family_id,
+            topic=q.topic,
+            learning_objective=q.learning_objective,
+            source_node_id=q.source_node_id,
+            source_chunk_id=q.source_chunk_id,
+            question_text=q.question_text,
+        )
         if not q.source_evidence:
             q.source_evidence = q.source_excerpt or ''
 
@@ -337,6 +339,7 @@ class QuestionService:
         q.updated_at = datetime.utcnow()
 
         self.db.add(QuestionReviewLog(question_id=q.id, old_status='edited', new_status=q.status, actor=actor, note=payload.note))
+        reconcile_question_families(self.db, q.course_id, chapter_node_id=q.chapter_node_id, commit=False)
         DuplicateDetector(self.db).save_embedding(q)
         self.db.commit()
         self.db.refresh(q)
@@ -381,19 +384,20 @@ class QuestionService:
             raise ValueError('Published question cannot be repaired directly.')
         self._snapshot(q, actor=actor, note=note)
 
-        if not q.question_family_id:
-            q.question_family_id = build_question_family_id(
-                course_id=q.course_id,
-                difficulty=q.difficulty,
-                concept_id=q.concept_id,
-                concept_key=q.concept_key,
-                concept_title=q.concept_title,
-                source_node_id=q.source_node_id,
-                source_chunk_id=q.source_chunk_id,
-                question_text=q.question_text,
-            )
-        if not q.variant_no:
-            q.variant_no = self._existing_family_variant_count(q.course_id, q.question_family_id) + 1
+        q.question_family_id = build_question_family_id(
+            course_id=q.course_id,
+            chapter_node_id=q.chapter_node_id,
+            difficulty=q.difficulty,
+            concept_id=q.concept_id,
+            concept_key=q.concept_key,
+            concept_title=q.concept_title,
+            legacy_family_id=q.question_family_id,
+            topic=q.topic,
+            learning_objective=q.learning_objective,
+            source_node_id=q.source_node_id,
+            source_chunk_id=q.source_chunk_id,
+            question_text=q.question_text,
+        )
         if not q.source_evidence:
             q.source_evidence = q.source_excerpt or ''
 
@@ -447,6 +451,7 @@ class QuestionService:
             q.draft_error_detail = None
         q.updated_at = datetime.utcnow()
         self.db.add(QuestionReviewLog(question_id=q.id, old_status='draft_error', new_status=q.status, actor=actor, note=note))
+        reconcile_question_families(self.db, q.course_id, chapter_node_id=q.chapter_node_id, commit=False)
         DuplicateDetector(self.db).save_embedding(q)
         self.db.commit()
         self.db.refresh(q)

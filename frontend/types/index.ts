@@ -678,6 +678,35 @@ export type FamilyBankCoverage = {
   status: string
 }
 
+export type FamilyBankHardGuard = {
+  valid: boolean
+  mode: string
+  eligible_question_count: number
+  eligible_record_count?: number
+  deduplicated_record_count?: number
+  assigned_question_count: number
+  slot_count: number
+  all_questions_assigned: boolean
+  no_cross_slot_duplicates: boolean
+  no_duplicate_anywhere?: boolean
+  duplicate_question_ids?: string[]
+  duplicate_component_ids?: string[]
+  duplicate_fingerprint_count?: number
+  duplicate_family_ids?: string[]
+  family_mismatch_question_ids?: string[]
+  family_mismatch_slots?: number[]
+  difficulty_mismatch_question_ids?: string[]
+  duplicate_record_question_ids_in_plan?: string[]
+  duplicate_inside_slot_question_ids?: string[]
+  duplicate_inside_slot_component_ids?: string[]
+  duplicate_inside_slot_fingerprint_count?: number
+  unknown_question_ids?: string[]
+  missing_question_ids?: string[]
+  empty_slots?: number[]
+  mixed_scope_slots?: number[]
+  summary: string
+}
+
 export type FamilyBankPlan = {
   ok: boolean
   course_id: string
@@ -691,6 +720,30 @@ export type FamilyBankPlan = {
   warnings: string[]
   combination_count_estimate: number
   message?: string
+  requested_total_questions?: number
+  planner_engine?: string
+  planner_mode?: string
+  uses_llm?: boolean
+  stable_family_count?: number
+  effective_target_counts?: Record<string, number>
+  family_reconciliation?: {
+    strategy: string
+    uses_llm: boolean
+    question_count: number
+    family_count_before: number
+    family_count_after: number
+    merged_family_count: number
+    updated_question_count: number
+    variant_no_updated_count: number
+  }
+  eligible_question_count?: number
+  eligible_record_count?: number
+  assigned_question_count?: number
+  identity_unit_count?: number
+  exact_duplicate_record_count?: number
+  excluded_duplicate_question_ids?: string[]
+  require_all_approved?: boolean
+  hard_guard?: FamilyBankHardGuard
 }
 
 export type CmsQuizNodeResult = {

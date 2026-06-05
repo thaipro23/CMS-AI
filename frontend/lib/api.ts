@@ -804,6 +804,7 @@ export async function previewFamilyBankPlan(
     chapter_node_id?: string | null;
     total_questions: number;
     difficulty_distribution?: { easy?: number; medium?: number; hard?: number; EASY?: number; MEDIUM?: number; HARD?: number };
+    require_all_approved?: boolean;
     shortage_policy?: string;
     max_families_per_bank?: number;
   },

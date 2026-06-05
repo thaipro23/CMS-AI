@@ -58,9 +58,27 @@ function CoverageTable({ plan }: { plan: FamilyBankPlan }) {
 }
 
 function SlotEditor({ plan, onChange }: { plan: FamilyBankPlan, onChange: (plan: FamilyBankPlan) => void }) {
+  const hardLocked = Boolean(plan.require_all_approved)
   function removeSlot(slotNo: number) {
     const slots = plan.slots.filter((slot) => slot.slot_no !== slotNo).map((slot, index) => ({ ...slot, slot_no: index + 1 }))
     onChange({ ...plan, slots, total_questions: slots.length })
+  }
+
+  function moveFamily(fromSlotNo: number, familyId: string, toSlotNo: number) {
+    if (fromSlotNo === toSlotNo) return
+    const source = plan.slots.find((slot) => slot.slot_no === fromSlotNo)
+    const moving = source?.families.find((family) => family.family_id === familyId)
+    if (!source || !moving || source.families.length <= 1) return
+    const rebuild = (slot: FamilyBankSlot, families: FamilyBankSlot['families']): FamilyBankSlot => {
+      const questionIds = Array.from(new Set(families.flatMap((family) => family.question_ids || [])))
+      return { ...slot, families, family_names: families.map((family) => family.family_name), question_ids: questionIds, variant_count: questionIds.length, rule: `random 1/${Math.max(questionIds.length, 1)} variants` }
+    }
+    const slots = plan.slots.map((slot) => {
+      if (slot.slot_no === fromSlotNo) return rebuild(slot, slot.families.filter((family) => family.family_id !== familyId))
+      if (slot.slot_no === toSlotNo) return rebuild(slot, [...slot.families.filter((family) => family.family_id !== familyId), moving])
+      return slot
+    })
+    onChange({ ...plan, slots, hard_guard: undefined, message: 'Kế hoạch đã được giáo viên chỉnh; Hard Guard sẽ kiểm tra lại trước khi publish/insert.' })
   }
 
   function removeFamily(slotNo: number, familyId: string) {
@@ -88,11 +106,11 @@ function SlotEditor({ plan, onChange }: { plan: FamilyBankPlan, onChange: (plan:
       <td>{slot.difficulty}</td>
       <td>{slot.families.map((family) => <span className="tag-chip" key={family.family_id}>
         {family.family_name}
-        <button type="button" title="Bỏ family khỏi slot" onClick={() => removeFamily(slot.slot_no, family.family_id)}>×</button>
+        {hardLocked ? <select className="family-move-select" title="Di chuyển cụm sang slot khác" value={slot.slot_no} disabled={slot.families.length <= 1} onChange={(event) => moveFamily(slot.slot_no, family.family_id, Number(event.target.value))}>{plan.slots.map((target) => <option key={target.slot_no} value={target.slot_no}>S{String(target.slot_no).padStart(2, '0')}</option>)}</select> : <button type="button" title="Bỏ family khỏi slot" onClick={() => removeFamily(slot.slot_no, family.family_id)}>×</button>}
       </span>)}{slot.warning ? <small className="warning-text">{slot.warning}</small> : null}</td>
       <td>{slot.variant_count}</td>
       <td>{slot.rule}</td>
-      <td><button className="btn small secondary" type="button" onClick={() => removeSlot(slot.slot_no)}>Bỏ slot</button></td>
+      <td>{hardLocked ? <small className="success-text">Được di chuyển cụm · không được xóa câu</small> : <button className="btn small secondary" type="button" onClick={() => removeSlot(slot.slot_no)}>Bỏ slot</button>}</td>
     </tr>)}</tbody>
   </table></div>
 }
@@ -164,16 +182,18 @@ export default function ExportPage() {
   async function buildPlan() {
     setLoadingAction('plan')
     try {
+      const selectedPlanNode = courseNodes.find((node) => node.node_id === targetNodeId)
       const data = await previewFamilyBankPlan(courseId, {
-        chapter_node_id: targetNodeId || null,
+        chapter_node_id: selectedPlanNode?.block_type?.toLowerCase() === 'chapter' ? targetNodeId : null,
         total_questions: totalQuestions,
         difficulty_distribution: { easy: easyPercent, medium: mediumPercent, hard: hardPercent },
-        shortage_policy: 'allow_repeat_with_warning',
-        max_families_per_bank: 2,
+        require_all_approved: true,
+        shortage_policy: 'never_repeat_question',
+        max_families_per_bank: 20,
       }, authHeaders(true)) as FamilyBankPlan
       setPlan(data)
       const warnings = data.warnings?.length || 0
-      setMessage({ type: warnings ? 'warning' : 'success', title: 'Đã tính kế hoạch Problem Bank', body: `${data.slots.length} slot · ${formatCombination(data.combination_count_estimate)} tổ hợp đề con${warnings ? ` · ${warnings} cảnh báo` : ''}.` })
+      setMessage({ type: warnings ? 'warning' : 'success', title: 'Đã tính kế hoạch Stable Family', body: `${data.planner_engine || 'stable_family_deterministic_v1'} · không gọi GPT · ${data.assigned_question_count || 0}/${data.eligible_question_count || 0} câu duy nhất dùng đúng một lần · ${data.stable_family_count || 0} stable family · ${data.slots.length} slot${warnings ? ` · ${warnings} cảnh báo` : ''}.` })
     } catch (error) {
       setMessage(toUserError(error))
     } finally {
@@ -209,7 +229,7 @@ export default function ExportPage() {
       return
     }
     if (!latest) {
-      setMessage({ type: 'warning', title: 'Chưa có kế hoạch', body: 'Hãy bấm AI tính kế hoạch trước, sau đó mới tạo Quiz node trên Open edX.' })
+      setMessage({ type: 'warning', title: 'Chưa có kế hoạch', body: 'Hãy bấm Tính kế hoạch tối ưu trước, sau đó mới tạo Quiz node trên Open edX.' })
       return
     }
     setLoadingAction('create-quiz-node')
@@ -367,13 +387,13 @@ export default function ExportPage() {
     <ActionMessage message={message} onClose={() => setMessage(null)} />
 
     <section className="card family-plan-card">
-      <div className="section-head"><div><h2>Kế hoạch Family Slot Problem Bank</h2><p className="helper">AI chọn family, gộp tối đa 2 family vào 1 Problem Bank khi dư family, và cho phép lặp family có cảnh báo khi thiếu family.</p></div></div>
+      <div className="section-head"><div><h2>Kế hoạch Family Slot Problem Bank</h2><p className="helper">Concept và family đã được xác định khi sinh câu hỏi. Bước này không gọi GPT lại: backend chuẩn hóa stable family, giữ nguyên một family trong một slot và dùng mọi câu duy nhất đã duyệt đúng một lần.</p></div></div>
       <div className="inline-form compact-form">
         <label>Tổng câu<input className="input mini-input" type="number" min={1} max={100} value={totalQuestions} onChange={(event) => setTotalQuestions(Number(event.target.value || 1))} /></label>
         <label>EASY %<input className="input mini-input" type="number" min={0} max={100} value={easyPercent} onChange={(event) => setEasyPercent(Number(event.target.value || 0))} /></label>
         <label>MEDIUM %<input className="input mini-input" type="number" min={0} max={100} value={mediumPercent} onChange={(event) => setMediumPercent(Number(event.target.value || 0))} /></label>
         <label>HARD %<input className="input mini-input" type="number" min={0} max={100} value={hardPercent} onChange={(event) => setHardPercent(Number(event.target.value || 0))} /></label>
-        <LoadingButton className="btn" loading={loadingAction === 'plan'} disabled={!can('publish_to_openedx') || Boolean(loadingAction)} onClick={buildPlan}>AI tính kế hoạch</LoadingButton>
+        <LoadingButton className="btn" loading={loadingAction === 'plan'} disabled={!can('publish_to_openedx') || Boolean(loadingAction)} onClick={buildPlan}>Tính kế hoạch tối ưu</LoadingButton>
         <LoadingButton className="btn danger" loading={loadingAction === 'publish-plan'} disabled={!can('publish_to_openedx') || !latestPlan || Boolean(loadingAction)} onClick={publishPlanToOpenEdx}>Đẩy kế hoạch vào Open edX</LoadingButton>
       </div>
       {latestPlan && <div className="summary-grid">
@@ -381,7 +401,14 @@ export default function ExportPage() {
         <div><span>Tổ hợp đề con</span><b>{formatCombination(latestPlan.combination_count_estimate)}</b></div>
         <div><span>Policy</span><b>{latestPlan.shortage_policy}</b></div>
         <div><span>Cảnh báo</span><b>{latestPlan.warnings?.length || 0}</b></div>
+        <div><span>Planner</span><b>{latestPlan.planner_engine || '—'}</b></div>
+        <div><span>Gọi GPT</span><b>{latestPlan.uses_llm ? 'Có' : 'Không'}</b></div>
+        <div><span>Stable family</span><b>{latestPlan.stable_family_count || 0}</b></div>
+        <div><span>Dùng câu duy nhất</span><b>{latestPlan.assigned_question_count || 0}/{latestPlan.eligible_question_count || 0}</b></div>
+        <div><span>Loại bản ghi trùng</span><b>{latestPlan.exact_duplicate_record_count || 0}</b></div>
+        <div><span>Hard Guard</span><b>{latestPlan.hard_guard?.valid ? 'PASS' : 'FAIL'}</b></div>
       </div>}
+      {latestPlan?.hard_guard ? <div className={latestPlan.hard_guard.valid ? 'success-box' : 'warning-box'}>{latestPlan.hard_guard.summary}</div> : null}
       {latestPlan?.warnings?.length ? <div className="warning-box">{latestPlan.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div> : null}
       {latestPlan && <CoverageTable plan={latestPlan} />}
       {latestPlan && <SlotEditor plan={latestPlan} onChange={setPlan} />}

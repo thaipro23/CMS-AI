@@ -1,4 +1,6 @@
-# AI Learning Server for Open edX CMS — v25.9.13.0
+# AI Learning Server for Open edX CMS — v25.9.14.5 Stable Family Reconciliation
+
+Bản này không gọi GPT khi lập Family Slot Plan. Backend chuẩn hóa family từ concept đã lưu, dùng Hard Duplicate Guard để một câu/component/fingerprint không thể xuất hiện ở nhiều slot.
 
 Starter implementation for an Open edX AI Learning Check system.
 

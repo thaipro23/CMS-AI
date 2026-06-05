@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.14.4'
+    app_version: str = '25.9.14.5-stable-family'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # This sacrifices a little latency but maximizes cached input for later batches.
     openai_prompt_cache_warmup_enabled: bool = True
     generation_tail_batch_wait_enabled: bool = True
+
+    # v25.9.14.5 stable family reconciliation. Planning uses concept metadata
+    # already produced during extraction/generation and never sends approved
+    # questions to GPT again.
+    family_plan_reconcile_on_preview: bool = True
+    family_plan_require_all_approved: bool = True
+    family_plan_hard_duplicate_guard: bool = True
 
     # Cost governance
     cost_input_price_per_1m: float = 0.25
@@ -182,6 +189,12 @@ def validate_security_settings() -> None:
         errors.append('USE_MOCK_OPENEDX=false is required in production')
     if settings.mock_llm:
         errors.append('MOCK_LLM=false is required in production')
+    if not settings.family_plan_reconcile_on_preview:
+        errors.append('FAMILY_PLAN_RECONCILE_ON_PREVIEW=true is required in production')
+    if not settings.family_plan_require_all_approved:
+        errors.append('FAMILY_PLAN_REQUIRE_ALL_APPROVED=true is required in production')
+    if not settings.family_plan_hard_duplicate_guard:
+        errors.append('FAMILY_PLAN_HARD_DUPLICATE_GUARD=true is required in production')
     origins = cors_origin_list()
     if not origins or '*' in origins:
         errors.append('CORS_ALLOWED_ORIGINS must be an explicit comma-separated whitelist in production')

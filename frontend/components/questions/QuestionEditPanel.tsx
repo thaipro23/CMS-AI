@@ -19,8 +19,8 @@ export function QuestionEditPanel({ question, form, canEdit, onChange, onSave, o
       <div><label>Node / Phạm vi</label><input className="input" value={form.node_title} onChange={(event) => onChange('node_title', event.target.value)} /></div>
       <div><label>Độ khó</label><select className="input" value={form.difficulty} onChange={(event) => onChange('difficulty', event.target.value)}><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></div>
       <div><label>Trạng thái review</label><select className="input" value={form.target_status} onChange={(event) => onChange('target_status', event.target.value)}><option value="pending_review">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Đã từ chối</option></select></div>
-      <div><label>Family ID</label><input className="input" value={form.question_family_id} onChange={(event) => onChange('question_family_id', event.target.value)} /></div>
-      <div><label>Variant</label><input className="input" type="number" min="1" value={form.variant_no} onChange={(event) => onChange('variant_no', event.target.value)} /></div>
+      <div><label>Family ID (backend tự tính)</label><input className="input" value={form.question_family_id} readOnly /></div>
+      <div><label>Variant (backend tự đánh số)</label><input className="input" type="number" min="1" value={form.variant_no} readOnly /></div>
       <div><label>Mức nhận thức</label><select className="input" value={form.cognitive_level} onChange={(event) => onChange('cognitive_level', event.target.value)}><option value="remember">Ghi nhớ</option><option value="understand">Hiểu</option><option value="recognize_example">Nhận diện ví dụ</option><option value="simple_apply">Áp dụng đơn giản</option></select></div>
       <div><label>Đáp án đúng</label><select className="input" value={form.correct_answer} onChange={(event) => onChange('correct_answer', event.target.value)}><option>A</option><option>B</option><option>C</option><option>D</option></select></div>
     </div>
