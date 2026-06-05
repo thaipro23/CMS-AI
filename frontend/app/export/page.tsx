@@ -130,8 +130,7 @@ export default function ExportPage() {
   const [unitTitle, setUnitTitle] = useState('Quiz tự luyện')
   const [quizNodeResult, setQuizNodeResult] = useState<CmsQuizNodeResult | null>(null)
   const [problemBankResult, setProblemBankResult] = useState<CmsProblemBankInsertResult | null>(null)
-  const [autoInsertProblemBanks, setAutoInsertProblemBanks] = useState(true)
-  const [strictComponentSelection, setStrictComponentSelection] = useState(false)
+  const [planPublished, setPlanPublished] = useState(false)
   const [totalQuestions, setTotalQuestions] = useState(10)
   const [easyPercent, setEasyPercent] = useState(50)
   const [mediumPercent, setMediumPercent] = useState(30)
@@ -142,7 +141,13 @@ export default function ExportPage() {
     if (saved) setOlxPreview(saved)
   }, [])
 
-  useEffect(() => { loadHistory(); loadCourseNodes() }, [courseId])
+  useEffect(() => {
+    setPlanPublished(false)
+    setQuizNodeResult(null)
+    setProblemBankResult(null)
+    loadHistory()
+    loadCourseNodes()
+  }, [courseId])
 
   async function loadCourseNodes() {
     try {
@@ -159,7 +164,9 @@ export default function ExportPage() {
   async function loadHistory() {
     try {
       const data = await getPublishHistory(courseId, authHeaders())
-      setHistory(data.batches || [])
+      const batches = data.batches || []
+      setHistory(batches)
+      setPlanPublished(Boolean(batches.some((batch) => batch.summary?.family_bank_plan)))
     } catch {
       setHistory([])
     }
@@ -192,6 +199,9 @@ export default function ExportPage() {
         max_families_per_bank: 20,
       }, authHeaders(true)) as FamilyBankPlan
       setPlan(data)
+      setPlanPublished(false)
+      setQuizNodeResult(null)
+      setProblemBankResult(null)
       const warnings = data.warnings?.length || 0
       setMessage({ type: warnings ? 'warning' : 'success', title: 'Đã tính kế hoạch Stable Family', body: `${data.planner_engine || 'stable_family_deterministic_v1'} · không gọi GPT · ${data.assigned_question_count || 0}/${data.eligible_question_count || 0} câu duy nhất dùng đúng một lần · ${data.stable_family_count || 0} stable family · ${data.slots.length} slot${warnings ? ` · ${warnings} cảnh báo` : ''}.` })
     } catch (error) {
@@ -210,6 +220,7 @@ export default function ExportPage() {
       await loadHistory()
       const warnings = data?.warnings || 0
       const failed = data?.failed || 0
+      setPlanPublished(failed === 0 && (data?.published || 0) > 0)
       setMessage({
         type: failed ? 'warning' : warnings ? 'warning' : 'success',
         title: failed ? 'Publish kế hoạch chưa hoàn tất' : 'Đã publish kế hoạch',
@@ -225,11 +236,15 @@ export default function ExportPage() {
   async function createQuizNodeInCms() {
     const latest = plan || result?.family_bank_plan || history[0]?.summary?.family_bank_plan || null
     if (!targetNodeId) {
-      setMessage({ type: 'warning', title: 'Chưa chọn node CMS', body: 'Hãy chọn Course/Chapter/Subsection đã sync để tạo node Quiz con.' })
+      setMessage({ type: 'warning', title: 'Chưa chọn vị trí tạo Quiz', body: 'Hãy chọn Course, Chapter hoặc Subsection trong cây nội dung.' })
       return
     }
     if (!latest) {
-      setMessage({ type: 'warning', title: 'Chưa có kế hoạch', body: 'Hãy bấm Tính kế hoạch tối ưu trước, sau đó mới tạo Quiz node trên Open edX.' })
+      setMessage({ type: 'warning', title: 'Chưa có kế hoạch', body: 'Hoàn tất Bước 1: Tính kế hoạch trước.' })
+      return
+    }
+    if (!planPublished) {
+      setMessage({ type: 'warning', title: 'Thư viện chưa sẵn sàng', body: 'Hoàn tất Bước 2: Chuẩn bị thư viện trước khi tạo Quiz.' })
       return
     }
     setLoadingAction('create-quiz-node')
@@ -242,37 +257,27 @@ export default function ExportPage() {
       }, authHeaders(true)) as CmsQuizNodeResult
       setQuizNodeResult(data)
       await loadCourseNodes()
+      if (!data.leaf_unit_node_id) throw new Error('Open edX đã tạo cấu trúc nhưng không trả leaf Unit usage key.')
 
-      if (autoInsertProblemBanks && data.leaf_unit_node_id) {
-        try {
-          const bankData = await insertCmsProblemBanks(courseId, {
-            unit_node_id: data.leaf_unit_node_id,
-            plan: latest,
-            strict_component_selection: strictComponentSelection,
-          }, authHeaders(true)) as CmsProblemBankInsertResult
-          setProblemBankResult(bankData)
-          await loadCourseNodes()
-          const manual = bankData.manual_component_selection_required
-          setMessage({
-            type: manual ? 'warning' : 'success',
-            title: manual ? 'Đã tạo Quiz + Problem Bank, cần kiểm tra Studio' : 'Đã tạo Quiz + Problem Bank',
-            body: `${bankData.message || 'Đã insert Problem Bank blocks.'} Unit: ${data.leaf_unit_node_id}. Slots: ${bankData.slots_inserted}/${bankData.slots_requested}.`,
-          })
-          return
-        } catch (insertError) {
-          setProblemBankResult(null)
-          setMessage(toUserError(insertError, `Quiz node đã tạo thật trong CMS nhưng insert Problem Bank thất bại. Leaf Unit: ${data.leaf_unit_node_id}. Không báo thành công giả; hãy xem backend/CMS connector logs.`))
-          return
-        }
+      try {
+        const bankData = await insertCmsProblemBanks(courseId, {
+          unit_node_id: data.leaf_unit_node_id,
+          plan: latest,
+          strict_component_selection: true,
+        }, authHeaders(true)) as CmsProblemBankInsertResult
+        setProblemBankResult(bankData)
+        await loadCourseNodes()
+        setMessage({
+          type: 'success',
+          title: 'Hoàn tất Quiz trên Open edX',
+          body: `${bankData.message || 'Đã tạo native Problem Bank.'} ${bankData.slots_inserted}/${bankData.slots_requested} slot đã được xác minh.`,
+        })
+      } catch (insertError) {
+        setProblemBankResult(null)
+        setMessage(toUserError(insertError, `Unit Quiz đã được tạo nhưng Problem Bank chưa hoàn tất. Unit: ${data.leaf_unit_node_id}. Dùng mục “Thử lại Problem Bank” sau khi xử lý lỗi.`))
       }
-
-      setMessage({
-        type: data.problem_bank_auto_inserted ? 'success' : 'warning',
-        title: 'Đã tạo Quiz node trong Studio',
-        body: `${data.message || 'Đã tạo draft node thật trong CMS.'} Leaf Unit: ${data.leaf_unit_node_id || '—'}`,
-      })
     } catch (error) {
-      setMessage(toUserError(error, 'Tạo Quiz node trên Open edX thất bại. Không hiển thị thành công giả; hãy xem backend/CMS connector logs.'))
+      setMessage(toUserError(error, 'Tạo Quiz trên Open edX thất bại. Không có trạng thái thành công giả.'))
     } finally {
       setLoadingAction(null)
     }
@@ -281,12 +286,8 @@ export default function ExportPage() {
   async function insertProblemBanksIntoCms() {
     const latest = plan || result?.family_bank_plan || history[0]?.summary?.family_bank_plan || null
     const unitNodeId = quizNodeResult?.leaf_unit_node_id
-    if (!unitNodeId) {
-      setMessage({ type: 'warning', title: 'Chưa có Unit Quiz', body: 'Hãy tạo Quiz node trước, hoặc sync lại rồi chọn leaf Unit.' })
-      return
-    }
-    if (!latest) {
-      setMessage({ type: 'warning', title: 'Chưa có kế hoạch', body: 'Hãy tính và publish Family Slot Plan trước khi insert Problem Bank.' })
+    if (!unitNodeId || !latest) {
+      setMessage({ type: 'warning', title: 'Chưa thể thử lại', body: 'Chưa có Unit Quiz hoặc kế hoạch hợp lệ.' })
       return
     }
     setLoadingAction('insert-problem-banks')
@@ -294,17 +295,17 @@ export default function ExportPage() {
       const data = await insertCmsProblemBanks(courseId, {
         unit_node_id: unitNodeId,
         plan: latest,
-        strict_component_selection: strictComponentSelection,
+        strict_component_selection: true,
       }, authHeaders(true)) as CmsProblemBankInsertResult
       setProblemBankResult(data)
       await loadCourseNodes()
       setMessage({
-        type: data.manual_component_selection_required ? 'warning' : 'success',
-        title: data.manual_component_selection_required ? 'Đã tạo Problem Bank, cần kiểm tra' : 'Đã insert Problem Bank',
-        body: `${data.message || 'Hoàn tất.'} Slots: ${data.slots_inserted}/${data.slots_requested}.`,
+        type: 'success',
+        title: 'Đã hoàn tất Problem Bank',
+        body: `${data.message || 'Hoàn tất.'} ${data.slots_inserted}/${data.slots_requested} slot đã được xác minh.`,
       })
     } catch (error) {
-      setMessage(toUserError(error, 'Insert Problem Bank vào Open edX thất bại. Không báo thành công giả; hãy xem backend/CMS logs.'))
+      setMessage(toUserError(error, 'Thử lại Problem Bank thất bại. Xem Audit Log/CMS connector log để biết lỗi thật.'))
     } finally {
       setLoadingAction(null)
     }
@@ -371,30 +372,40 @@ export default function ExportPage() {
   return <div className="page-stack">
     <section className="card page-intro export-hero">
       <div>
-        <h2>Xuất Open edX Library</h2>
-        <p className="helper">Một Library theo Chapter, quản lý bằng tag course/chapter/family/difficulty. Problem Bank được lập kế hoạch theo family slot.</p>
+        <h2>Tạo Quiz luyện tập trên Open edX</h2>
+        <p className="helper">Thực hiện theo 3 bước. Hệ thống dùng native Problem Bank Beta của Ulmo.3 và chỉ báo hoàn tất sau khi xác minh đầy đủ.</p>
       </div>
-      <div className="export-mode-box">
-        <label>Chế độ publish</label>
+      <details className="export-mode-box">
+        <summary>Tùy chọn cập nhật thư viện</summary>
+        <label>Chế độ cập nhật</label>
         <select className="input" value={publishMode} onChange={(event) => setPublishMode(event.target.value as PublishMode)}>
-          <option value="publish_new">Publish mới</option>
-          <option value="replace">Replace component cũ</option>
-          <option value="delete_reimport">Xóa component cũ rồi import lại</option>
+          <option value="publish_new">Chỉ thêm câu chưa có</option>
+          <option value="replace">Cập nhật component đã có</option>
+          <option value="delete_reimport">Xóa rồi import lại</option>
         </select>
-      </div>
+      </details>
     </section>
 
     <ActionMessage message={message} onClose={() => setMessage(null)} />
 
+    <section className="card">
+      <div className="section-head"><div><h2>Quy trình 3 bước</h2><p className="helper">Mỗi bước chỉ mở khi bước trước đã sẵn sàng.</p></div></div>
+      <div className="summary-grid">
+        <div><span>Bước 1 · Kế hoạch</span><b>{latestPlan ? 'Đã có' : 'Chưa thực hiện'}</b></div>
+        <div><span>Bước 2 · Thư viện</span><b>{planPublished ? 'Sẵn sàng' : 'Chưa sẵn sàng'}</b></div>
+        <div><span>Bước 3 · Quiz</span><b>{problemBankResult?.status === 'native_itembanks_created_and_verified' ? 'Hoàn tất' : 'Chưa hoàn tất'}</b></div>
+      </div>
+    </section>
+
     <section className="card family-plan-card">
-      <div className="section-head"><div><h2>Kế hoạch Family Slot Problem Bank</h2><p className="helper">Concept và family đã được xác định khi sinh câu hỏi. Bước này không gọi GPT lại: backend chuẩn hóa stable family, giữ nguyên một family trong một slot và dùng mọi câu duy nhất đã duyệt đúng một lần.</p></div></div>
+      <div className="section-head"><div><h2>Bước 1 · Tính kế hoạch câu hỏi</h2><p className="helper">Concept và family đã được xác định khi sinh câu hỏi. Bước này không gọi GPT lại: backend chuẩn hóa stable family, giữ nguyên một family trong một slot và dùng mọi câu duy nhất đã duyệt đúng một lần.</p></div></div>
       <div className="inline-form compact-form">
         <label>Tổng câu<input className="input mini-input" type="number" min={1} max={100} value={totalQuestions} onChange={(event) => setTotalQuestions(Number(event.target.value || 1))} /></label>
         <label>EASY %<input className="input mini-input" type="number" min={0} max={100} value={easyPercent} onChange={(event) => setEasyPercent(Number(event.target.value || 0))} /></label>
         <label>MEDIUM %<input className="input mini-input" type="number" min={0} max={100} value={mediumPercent} onChange={(event) => setMediumPercent(Number(event.target.value || 0))} /></label>
         <label>HARD %<input className="input mini-input" type="number" min={0} max={100} value={hardPercent} onChange={(event) => setHardPercent(Number(event.target.value || 0))} /></label>
-        <LoadingButton className="btn" loading={loadingAction === 'plan'} disabled={!can('publish_to_openedx') || Boolean(loadingAction)} onClick={buildPlan}>Tính kế hoạch tối ưu</LoadingButton>
-        <LoadingButton className="btn danger" loading={loadingAction === 'publish-plan'} disabled={!can('publish_to_openedx') || !latestPlan || Boolean(loadingAction)} onClick={publishPlanToOpenEdx}>Đẩy kế hoạch vào Open edX</LoadingButton>
+        <LoadingButton className="btn" loading={loadingAction === 'plan'} disabled={!can('publish_to_openedx') || Boolean(loadingAction)} onClick={buildPlan}>Bước 1 · Tính kế hoạch</LoadingButton>
+        <LoadingButton className="btn danger" loading={loadingAction === 'publish-plan'} disabled={!can('publish_to_openedx') || !latestPlan || Boolean(loadingAction)} onClick={publishPlanToOpenEdx}>Bước 2 · Chuẩn bị thư viện</LoadingButton>
       </div>
       {latestPlan && <div className="summary-grid">
         <div><span>Slot</span><b>{latestPlan.slots.length}</b></div>
@@ -415,22 +426,21 @@ export default function ExportPage() {
     </section>
 
     <section className="card cms-quiz-card">
-      <div className="section-head"><div><h2>Tạo Quiz + Problem Bank trên Open edX</h2><p className="helper">v25.9.14.4 tạo Unit Quiz rồi insert mỗi Family Slot thành một block library_content/Problem Bank thật. Nếu Ulmo chưa verify được selected components, UI sẽ báo cần kiểm tra Studio.</p></div></div>
+      <div className="section-head"><div><h2>Bước 3 · Tạo Quiz trên Open edX</h2><p className="helper">Hệ thống tự tạo Unit và native Problem Bank Beta. Mỗi slot hiển thị ngẫu nhiên 1 câu; mọi component đều được xác minh trước khi báo hoàn tất.</p></div></div>
       <div className="inline-form compact-form">
-        <label>Node cha CMS
+        <label>Vị trí tạo Quiz
           <select className="input wide-input" value={targetNodeId} onChange={(event) => setTargetNodeId(event.target.value)}>
             {!courseNodes.length ? <option value="">Chưa có node phù hợp, hãy sync course trước</option> : null}
             {courseNodes.map((node) => <option key={node.node_id} value={node.node_id}>{`${'— '.repeat(Math.min(node.depth, 4))}${node.title} (${node.block_type})`}</option>)}
           </select>
         </label>
-        <label>Tên mục Quiz<input className="input" value={quizTitle} onChange={(event) => setQuizTitle(event.target.value)} /></label>
+        <label>Tên Quiz<input className="input" value={quizTitle} onChange={(event) => setQuizTitle(event.target.value)} /></label>
         <label>Tên Unit<input className="input" value={unitTitle} onChange={(event) => setUnitTitle(event.target.value)} /></label>
-        <label className="check-row"><input type="checkbox" checked={autoInsertProblemBanks} onChange={(event) => setAutoInsertProblemBanks(event.target.checked)} /> Tự insert Problem Bank sau khi tạo Unit</label>
-        <label className="check-row"><input type="checkbox" checked={strictComponentSelection} onChange={(event) => setStrictComponentSelection(event.target.checked)} /> Strict: lỗi nếu chưa verify selected components</label>
-        <LoadingButton className="btn danger" loading={loadingAction === 'create-quiz-node'} disabled={!can('publish_to_openedx') || !latestPlan || !targetNodeId || Boolean(loadingAction)} onClick={createQuizNodeInCms}>Tạo Quiz + Problem Bank</LoadingButton>
-        <LoadingButton className="btn secondary" loading={loadingAction === 'insert-problem-banks'} disabled={!can('publish_to_openedx') || !latestPlan || !quizNodeResult?.leaf_unit_node_id || Boolean(loadingAction)} onClick={insertProblemBanksIntoCms}>Chỉ insert Problem Bank</LoadingButton>
+        <LoadingButton className="btn danger" loading={loadingAction === 'create-quiz-node'} disabled={!can('publish_to_openedx') || !latestPlan || !planPublished || !targetNodeId || Boolean(loadingAction)} onClick={createQuizNodeInCms}>Bước 3 · Tạo Quiz và Problem Bank</LoadingButton>
       </div>
-      {selectedNode ? <p className="helper">Sẽ tạo dưới: <b>{selectedNode.path}</b>. Chỉ cho phép Course/Chapter/Subsection để tránh tạo sai cấu trúc. Problem Bank chỉ được insert vào leaf Unit/vertical.</p> : null}
+      {selectedNode ? <p className="helper">Quiz sẽ được tạo dưới: <b>{selectedNode.path}</b>.</p> : null}
+      {!planPublished ? <div className="warning-box">Hoàn tất Bước 2 để mở nút tạo Quiz.</div> : null}
+      {quizNodeResult?.leaf_unit_node_id && !problemBankResult ? <details><summary>Xử lý nâng cao</summary><p className="helper">Dùng khi Unit đã tạo nhưng Problem Bank bị lỗi giữa chừng.</p><LoadingButton className="btn secondary" loading={loadingAction === 'insert-problem-banks'} disabled={Boolean(loadingAction)} onClick={insertProblemBanksIntoCms}>Thử lại Problem Bank</LoadingButton></details> : null}
       {quizNodeResult ? <div className="table-wrap"><table className="data-table compact-table">
         <thead><tr><th>Node</th><th>Type</th><th>Usage key</th><th>Trạng thái</th></tr></thead>
         <tbody>{quizNodeResult.created_nodes.map((node) => <tr key={node.usage_key}>
@@ -441,23 +451,26 @@ export default function ExportPage() {
         </tr>)}</tbody>
       </table></div> : null}
       {problemBankResult ? <div className="table-wrap"><table className="data-table compact-table">
-        <thead><tr><th>Problem Bank</th><th>Slot</th><th>Library</th><th>Verify</th></tr></thead>
+        <thead><tr><th>Problem Bank</th><th>Slot</th><th>Component</th><th>Xác minh</th></tr></thead>
         <tbody>{problemBankResult.problem_bank_blocks.map((block) => <tr key={block.usage_key}>
           <td><b>{block.display_name}</b><small>{block.usage_key}</small></td>
           <td>{block.slot_no} · {block.difficulty}</td>
-          <td className="text-clip"><small>{block.library_key || '—'}</small></td>
-          <td><span className={block.selection_verified ? 'status success' : 'status warning'}>{block.selection_verified ? 'selected verified' : 'manual check'}</span></td>
+          <td>{block.verification?.child_count || 0}/{block.verification?.expected_component_count || 0}</td>
+          <td><span className={block.selection_verified ? 'status success' : 'status danger'}>{block.selection_verified ? 'Đã xác minh' : 'Chưa hợp lệ'}</span></td>
         </tr>)}</tbody>
       </table>
       {problemBankResult.warnings?.length ? <div className="warning-box">{problemBankResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div> : null}
       </div> : null}
     </section>
 
-    <section className="card action-strip">
-      <LoadingButton className="btn" loading={loadingAction === 'preview'} disabled={!can('export_questions') || Boolean(loadingAction)} onClick={preview}>Xem trước OLX</LoadingButton>
-      <LoadingButton className="btn secondary" loading={loadingAction === 'download'} disabled={!can('export_questions') || Boolean(loadingAction)} onClick={download}>Tải XML</LoadingButton>
-      <LoadingButton className="btn secondary" loading={loadingAction === 'publish'} disabled={!can('publish_to_openedx') || Boolean(loadingAction)} onClick={publishToOpenEdx}>Publish tất cả approved</LoadingButton>
-    </section>
+    <details className="card">
+      <summary>Công cụ xuất nâng cao</summary>
+      <div className="action-strip">
+        <LoadingButton className="btn" loading={loadingAction === 'preview'} disabled={!can('export_questions') || Boolean(loadingAction)} onClick={preview}>Xem trước OLX</LoadingButton>
+        <LoadingButton className="btn secondary" loading={loadingAction === 'download'} disabled={!can('export_questions') || Boolean(loadingAction)} onClick={download}>Tải XML</LoadingButton>
+        <LoadingButton className="btn secondary" loading={loadingAction === 'publish'} disabled={!can('publish_to_openedx') || Boolean(loadingAction)} onClick={publishToOpenEdx}>Publish tất cả approved</LoadingButton>
+      </div>
+    </details>
 
     <section className="card">
       <div className="section-head"><div><h2>Kết quả publish</h2><p className="helper">Các câu được publish vào cùng Library theo Chapter. Difficulty/family nằm ở tag của component.</p></div></div>

@@ -785,6 +785,7 @@ export type CmsProblemBankBlock = {
 
 export type CmsProblemBankInsertResult = {
   ok: boolean
+  implementation?: string
   created: boolean
   status: string
   course_id: string
@@ -793,6 +794,8 @@ export type CmsProblemBankInsertResult = {
   problem_bank_blocks: CmsProblemBankBlock[]
   slots_requested: number
   slots_inserted: number
+  course_local_problem_children_created?: number
+  legacy_ai_randomized_blocks_removed?: number
   manual_component_selection_required?: boolean
   warnings?: string[]
   message?: string

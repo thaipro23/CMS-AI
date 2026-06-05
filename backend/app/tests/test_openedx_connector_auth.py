@@ -109,14 +109,15 @@ async def test_real_connector_posts_insert_problem_banks_to_cms(monkeypatch):
             return {
                 'ok': True,
                 'created': True,
+                'implementation': 'native_ulmo_itembank',
                 'problem_bank_blocks': [
                     {
-                        'usage_key': 'block-v1:TEST+AI+2026+type@library_content+block@slot-01',
-                        'block_type': 'library_content',
-                        'selection_verified': False,
+                        'usage_key': 'block-v1:TEST+AI+2026+type@itembank+block@slot-01',
+                        'block_type': 'itembank',
+                        'selection_verified': True,
                     }
                 ],
-                'manual_component_selection_required': True,
+                'manual_component_selection_required': False,
             }
 
     class DummyClient:

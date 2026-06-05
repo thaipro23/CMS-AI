@@ -1,6 +1,6 @@
-# AI Learning Server for Open edX CMS — v25.9.14.5 Stable Family Reconciliation
+# AI Learning Server for Open edX CMS — v25.9.14.6 Native Ulmo ItemBank
 
-Bản này không gọi GPT khi lập Family Slot Plan. Backend chuẩn hóa family từ concept đã lưu, dùng Hard Duplicate Guard để một câu/component/fingerprint không thể xuất hiện ở nhiều slot.
+Bản này giữ Stable Family + Hard Duplicate Guard, đồng thời tạo đúng native Problem Bank Beta (`itembank`) trên Open edX Ulmo.3. Mỗi Library V2 problem được đồng bộ thành course-local ProblemBlock bằng luồng Studio native và được xác minh trước khi báo hoàn tất.
 
 Starter implementation for an Open edX AI Learning Check system.
 

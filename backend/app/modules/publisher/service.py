@@ -699,7 +699,7 @@ class OpenEdXPublisher:
                 state = CourseSyncState(course_id=course_id, block_id=usage_key)
                 self.db.add(state)
             state.parent_block_id = unit_node_id
-            state.block_type = (block.get('block_type') or 'library_content')[:50]
+            state.block_type = (block.get('block_type') or 'itembank')[:50]
             state.display_name = str(block.get('display_name') or f'Problem Bank Slot {block.get("slot_no") or ""}').strip()[:512]
             state.sync_status = 'created_by_ai_problem_bank_insert'
             state.last_synced_at = datetime.utcnow()
@@ -713,6 +713,8 @@ class OpenEdXPublisher:
         for slot in slots:
             if not isinstance(slot, dict):
                 raise ValueError('Family Bank Plan chứa slot không hợp lệ.')
+            if int(slot.get('pick_count') or 1) != 1:
+                raise ValueError(f'Slot {slot.get("slot_no")} phải có pick_count=1; không cho một slot hiện nhiều câu.')
             question_ids = [str(qid).strip() for qid in (slot.get('question_ids') or []) if str(qid).strip()]
             if not question_ids:
                 raise ValueError(f'Slot {slot.get("slot_no")} không có question_ids.')
@@ -725,15 +727,24 @@ class OpenEdXPublisher:
             if not_published:
                 raise ValueError(
                     f'Slot {slot.get("slot_no")} có {len(not_published)} câu chưa publish/import vào Open edX Library. '
-                    'Hãy bấm Đẩy kế hoạch vào Open edX trước.'
+                    'Hãy hoàn tất Bước 2: Chuẩn bị thư viện trước.'
                 )
             library_keys = {str(by_id[qid].target_library_key or '').strip() for qid in question_ids}
             library_keys.discard('')
             if len(library_keys) != 1:
                 raise ValueError(f'Slot {slot.get("slot_no")} có nhiều library_key hoặc thiếu library_key: {sorted(library_keys)}')
-            openedx_problem_ids = list(dict.fromkeys(
+            openedx_problem_ids = [
                 _clean_openedx_usage_key(by_id[qid].openedx_library_problem_id) for qid in question_ids
-            ))
+            ]
+            duplicate_component_ids = sorted({
+                component_id for component_id in openedx_problem_ids
+                if openedx_problem_ids.count(component_id) > 1
+            })
+            if duplicate_component_ids:
+                raise ValueError(
+                    f'Slot {slot.get("slot_no")} ánh xạ nhiều câu về cùng một Open edX component; '
+                    f'từ chối tạo trọng số/trùng câu: {duplicate_component_ids[:3]}'
+                )
             enriched = {
                 **slot,
                 'library_key': next(iter(library_keys)),
@@ -744,6 +755,20 @@ class OpenEdXPublisher:
                 'variant_count': len(openedx_problem_ids),
             }
             openedx_slots.append(enriched)
+        all_component_ids = [
+            component_id
+            for slot in openedx_slots
+            for component_id in (slot.get('openedx_problem_ids') or [])
+        ]
+        duplicate_across_slots = sorted({
+            component_id for component_id in all_component_ids
+            if all_component_ids.count(component_id) > 1
+        })
+        if duplicate_across_slots:
+            raise ValueError(
+                'Cùng một Open edX component xuất hiện ở nhiều Family Slot; từ chối tạo Quiz trùng câu: '
+                f'{duplicate_across_slots[:5]}'
+            )
         return openedx_slots
 
     @staticmethod
@@ -751,7 +776,18 @@ class OpenEdXPublisher:
         if not isinstance(result, dict) or result.get('ok') is not True:
             return False
         blocks = result.get('problem_bank_blocks') or []
-        return isinstance(blocks, list) and bool(blocks) and all(bool(block.get('usage_key')) for block in blocks if isinstance(block, dict))
+        return (
+            result.get('implementation') == 'native_ulmo_itembank'
+            and isinstance(blocks, list)
+            and bool(blocks)
+            and all(
+                isinstance(block, dict)
+                and bool(block.get('usage_key'))
+                and (block.get('block_type') or '').lower() == 'itembank'
+                and block.get('selection_verified') is True
+                for block in blocks
+            )
+        )
 
     async def insert_cms_problem_banks(
         self,
@@ -795,9 +831,10 @@ class OpenEdXPublisher:
         metadata = {
             'actor': actor,
             'idempotency_key': (idempotency_key or '').strip() or None,
-            'architecture': 'problem_bank_auto_insert_v25_9_14_4',
+            'architecture': 'native_ulmo_itembank_auto_insert_v25_9_14_6',
             'unit_title': unit_state.display_name,
-            'strict_component_selection': strict_component_selection,
+            'strict_component_selection': True,
+            'cleanup_legacy_ai_randomized_blocks': True,
             'family_bank_plan': plan or {},
         }
         connector = get_openedx_connector()
@@ -826,7 +863,7 @@ class OpenEdXPublisher:
             'family_bank_plan': plan or None,
             'hard_guard': hard_guard,
             'next_step': (
-                'Mở Studio kiểm tra từng Problem Bank. Nếu manual_component_selection_required=true thì cần Add components hoặc bổ sung connector handler riêng cho Ulmo.3.'
+                'Mở Studio kiểm tra Quiz nếu cần. Connector đã tạo native ItemBankBlock và xác minh toàn bộ child/upstream.'
             ),
         }
 
@@ -855,8 +892,7 @@ class OpenEdXPublisher:
         parent_type = (parent_state.block_type or '').lower()
         if parent_type not in {'course', 'chapter', 'sequential'}:
             raise ValueError(
-                f'Node đã chọn có type={parent_type!r}. v25.9.14.3 chỉ tạo node Quiz dưới course/chapter/sequential. '
-                'Nếu muốn gắn Problem Bank vào Unit/vertical hiện có, đó là bước v25.9.14.4.'
+                f'Node đã chọn có type={parent_type!r}. Chỉ hỗ trợ tạo Quiz dưới course/chapter/sequential.'
             )
         hard_guard = None
         if plan:
@@ -870,7 +906,7 @@ class OpenEdXPublisher:
             'idempotency_key': (idempotency_key or '').strip() or None,
             'parent_title': parent_state.display_name,
             'parent_type': parent_state.block_type,
-            'architecture': 'cms_quiz_node_creator_v25_9_14_3',
+            'architecture': 'cms_quiz_native_itembank_workflow_v25_9_14_6',
             'problem_bank_auto_inserted': False,
             'family_bank_plan': plan or {},
             'family_bank_slots': (plan or {}).get('slots') or [],

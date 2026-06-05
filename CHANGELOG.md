@@ -1,3 +1,22 @@
+# v25.9.14.6 - Native Ulmo ItemBank Auto Insert + Guided Workflow
+
+- Thay block sai `library_content`/Randomized Content bằng native Problem Bank Beta `itembank` trên Ulmo.3.
+- Mô phỏng đúng luồng Studio: tạo `itembank`, thêm từng `problem` child tuần tự, đặt `upstream`, gọi `sync_library_content`.
+- Verify bắt buộc block type, `max_count=1`, child count, parent, upstream và chống component trùng giữa các slot.
+- Rollback các node vừa tạo nếu một slot/component lỗi; không báo thành công một phần.
+- Tự dọn chỉ các legacy AI Randomized Content Block có block ID `problem-bank-slot-*`.
+- Backend chỉ chấp nhận kết quả `native_ulmo_itembank` đã verify; từ chối legacy/unverified response.
+- UI `/export` đổi thành quy trình 3 bước, ẩn tùy chọn kỹ thuật và luôn tạo Quiz + native Problem Bank trong luồng chính.
+- Không có migration mới. Thêm tài liệu/test report tại `docs/V25_9_14_6_NATIVE_ULMO_ITEMBANK_GUIDED_WORKFLOW.md`.
+
+# v25.9.14.5.1 - create_child return normalization hotfix
+
+- Fix Ulmo.3 CMS connector when modulestore `create_child` returns a usage-key string instead of an XBlock descriptor.
+- Resolve the returned key to the real draft XBlock before calling `update_item`.
+- Re-read the parent after a partial create failure to avoid duplicate retry-created blocks.
+- Add clearer diagnostics for raw return type/value and resolved usage key.
+- This hotfix fixes the reported `'str' object has no attribute 'block_type'` failure only; selected-component attachment for `library_content` still requires live Ulmo.3 verification.
+
 ## v25.9.14.5 - Stable Family Reconciliation + Deterministic Hard Duplicate Guard
 
 - Không gọi GPT/OpenAI khi tính Family Slot Plan. Planner dùng `concept_key/concept_id/concept_title` đã có từ bước trích xuất/generate.

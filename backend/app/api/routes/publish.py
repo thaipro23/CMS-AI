@@ -260,7 +260,7 @@ async def insert_cms_problem_banks(course_id: str, payload: CmsProblemBankInsert
             db,
             action='openedx.cms_problem_banks.insert',
             status=status,
-            message='Insert Problem Bank blocks vào Open edX Studio hoàn tất' if status == 'success' else 'Đã tạo Problem Bank blocks nhưng cần kiểm tra component selection trong Studio',
+            message='Đã tạo và xác minh native Problem Bank Beta trong Open edX Studio' if status == 'success' else 'Native Problem Bank hoàn tất kèm cảnh báo',
             user=user,
             course_id=course_id,
             target_type='course_node',
