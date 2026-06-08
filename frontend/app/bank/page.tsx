@@ -42,6 +42,7 @@ import {
   previewBankVersionDiff,
   carryOverBankQuestions,
   retireBankQuestions,
+  createCourseChapterMapping,
 } from '../../lib/api'
 
 const emptySummary: BankSummary = {
