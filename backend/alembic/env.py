@@ -3,7 +3,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.core.config import settings
 from app.db.session import Base
-from app.models import course, question, cost, job  # noqa: F401
+from app.models import course, question, cost, job, question_bank  # noqa: F401
 
 config = context.config
 config.set_main_option('sqlalchemy.url', settings.database_url)

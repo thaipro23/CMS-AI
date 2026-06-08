@@ -23,6 +23,15 @@ import {
   Concept,
   ConceptExtractResponse,
   ConceptListResponse,
+  BankSummary,
+  Department,
+  Subject,
+  SubjectChapter,
+  BankVersion,
+  BankRelease,
+  EdxCourseMapping,
+  EdxCourseChapterMapping,
+  QuizBlueprint,
 } from "../types";
 
 const rawApiBase =
@@ -862,5 +871,114 @@ export async function insertCmsProblemBanks(
       headers: withIdempotency(headers, idempotencyKey),
       body: JSON.stringify(payload),
     }),
+  );
+}
+
+export async function getBankSummary(headers: HeadersInit) {
+  return parseResponse<BankSummary>(
+    await fetch(`${API}/question-bank-v2/summary`, { headers }),
+  );
+}
+
+export async function getDepartments(headers: HeadersInit) {
+  return parseResponse<Department[]>(
+    await fetch(`${API}/question-bank-v2/departments`, { headers }),
+  );
+}
+
+export async function createDepartment(headers: HeadersInit, payload: { code: string; name: string; description?: string }) {
+  return parseResponse<Department>(
+    await fetch(`${API}/question-bank-v2/departments`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function getSubjects(headers: HeadersInit, departmentId?: string) {
+  const params = new URLSearchParams();
+  if (departmentId) params.set('department_id', departmentId);
+  return parseResponse<Subject[]>(
+    await fetch(`${API}/question-bank-v2/subjects?${params.toString()}`, { headers }),
+  );
+}
+
+export async function createSubject(headers: HeadersInit, payload: { department_id: string; code: string; name: string; description?: string }) {
+  return parseResponse<Subject>(
+    await fetch(`${API}/question-bank-v2/subjects`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function getSubjectChapters(headers: HeadersInit, subjectId?: string) {
+  const params = new URLSearchParams();
+  if (subjectId) params.set('subject_id', subjectId);
+  return parseResponse<SubjectChapter[]>(
+    await fetch(`${API}/question-bank-v2/chapters?${params.toString()}`, { headers }),
+  );
+}
+
+export async function createSubjectChapter(headers: HeadersInit, payload: { subject_id: string; chapter_no: number; title: string; description?: string; sort_order?: number }) {
+  return parseResponse<SubjectChapter>(
+    await fetch(`${API}/question-bank-v2/chapters`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function getBankVersions(headers: HeadersInit, chapterId?: string) {
+  const params = new URLSearchParams();
+  if (chapterId) params.set('chapter_id', chapterId);
+  return parseResponse<BankVersion[]>(
+    await fetch(`${API}/question-bank-v2/bank-versions?${params.toString()}`, { headers }),
+  );
+}
+
+export async function createBankVersion(headers: HeadersInit, payload: { subject_id: string; chapter_id: string; version_code: string; title?: string; change_note?: string; based_on_version_id?: string | null }) {
+  return parseResponse<BankVersion>(
+    await fetch(`${API}/question-bank-v2/bank-versions`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function getBankReleases(headers: HeadersInit, bankVersionId?: string, chapterId?: string) {
+  const params = new URLSearchParams();
+  if (bankVersionId) params.set('bank_version_id', bankVersionId);
+  if (chapterId) params.set('chapter_id', chapterId);
+  return parseResponse<BankRelease[]>(
+    await fetch(`${API}/question-bank-v2/releases?${params.toString()}`, { headers }),
+  );
+}
+
+export async function createBankRelease(headers: HeadersInit, payload: { bank_version_id: string; release_code?: string; title?: string; include_approved_questions?: boolean }) {
+  return parseResponse<BankRelease>(
+    await fetch(`${API}/question-bank-v2/releases`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function getCourseMappings(headers: HeadersInit, subjectId?: string) {
+  const params = new URLSearchParams();
+  if (subjectId) params.set('subject_id', subjectId);
+  return parseResponse<EdxCourseMapping[]>(
+    await fetch(`${API}/question-bank-v2/course-mappings?${params.toString()}`, { headers }),
+  );
+}
+
+export async function createCourseMapping(headers: HeadersInit, payload: { openedx_course_id: string; subject_id: string; department_id?: string | null; term?: string | null }) {
+  return parseResponse<EdxCourseMapping>(
+    await fetch(`${API}/question-bank-v2/course-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function createCourseChapterMapping(headers: HeadersInit, payload: { course_mapping_id: string; subject_chapter_id: string; bank_release_id?: string | null; openedx_parent_node_id?: string | null; enabled?: boolean }) {
+  return parseResponse<EdxCourseChapterMapping>(
+    await fetch(`${API}/question-bank-v2/course-chapter-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function getQuizBlueprints(headers: HeadersInit, chapterId?: string) {
+  const params = new URLSearchParams();
+  if (chapterId) params.set('chapter_id', chapterId);
+  return parseResponse<QuizBlueprint[]>(
+    await fetch(`${API}/question-bank-v2/quiz-blueprints?${params.toString()}`, { headers }),
+  );
+}
+
+export async function createQuizBlueprint(headers: HeadersInit, payload: { subject_id: string; chapter_id: string; title: string; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number; pick_count_per_slot?: number }) {
+  return parseResponse<QuizBlueprint>(
+    await fetch(`${API}/question-bank-v2/quiz-blueprints`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }

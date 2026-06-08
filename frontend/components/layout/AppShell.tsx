@@ -9,6 +9,7 @@ import { buildCmsSessionBridgeUrl } from '../../lib/api'
 
 const navItems: { href: string; label: string; desc: string; permission?: string }[] = [
   { href: '/workflow', label: 'Quy trình tạo câu hỏi', desc: 'Luồng chính' },
+  { href: '/bank', label: 'Ngân hàng đề', desc: 'Bộ môn/môn/bài/version' },
   { href: '/dashboard', label: 'Tổng quan', desc: 'Thống kê khóa học' },
   { href: '/sync', label: 'Đồng bộ học liệu', desc: 'Open edX nodes/chunks' },
   { href: '/generate', label: 'Tạo câu hỏi', desc: 'Generate nâng cao' },

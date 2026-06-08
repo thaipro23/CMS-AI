@@ -1,3 +1,20 @@
+
+## v25.9.15.0 - Versioned Question Bank First
+
+AI Server now has a bank-first model for managing question banks before an Open edX course exists:
+
+```text
+Department → Subject → Chapter → Bank Version → Bank Release → Open edX Course Mapping
+```
+
+Production rule: `1 Bank Release = 1 Open edX Library`. When learning material changes, create a new Bank Version and Release. Old courses keep their old release until an admin explicitly maps them to a newer release.
+
+Main UI: `/bank`
+
+Main API prefix: `/api/question-bank-v2`
+
+See `docs/V25_9_15_0_VERSIONED_QUESTION_BANK_FIRST.md`.
+
 # AI Learning Server for Open edX CMS — v25.9.14.6 Native Ulmo ItemBank
 
 Bản này giữ Stable Family + Hard Duplicate Guard, đồng thời tạo đúng native Problem Bank Beta (`itembank`) trên Open edX Ulmo.3. Mỗi Library V2 problem được đồng bộ thành course-local ProblemBlock bằng luồng Studio native và được xác minh trước khi báo hoàn tất.

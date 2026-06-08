@@ -10,6 +10,18 @@ class Question(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     course_id: Mapped[str] = mapped_column(String(255), index=True)
+    # v25.9.15 Question Bank-first architecture. These fields let one
+    # approved question live in a versioned subject/chapter bank and later be
+    # mapped into many Open edX courses. They are nullable for backward
+    # compatibility with course-first generated questions.
+    source_course_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    department_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_departments.id'), nullable=True, index=True)
+    subject_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subjects.id'), nullable=True, index=True)
+    subject_chapter_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), nullable=True, index=True)
+    bank_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), nullable=True, index=True)
+    bank_release_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_releases.id'), nullable=True, index=True)
+    material_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_learning_material_versions.id'), nullable=True, index=True)
+    concept_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_concept_versions.id'), nullable=True, index=True)
     lesson_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     lesson_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     block_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
@@ -95,6 +107,9 @@ class Question(Base):
         Index('ix_ai_questions_course_concept_status', 'course_id', 'concept_id', 'status'),
         Index('ix_ai_questions_course_family_status', 'course_id', 'question_family_id', 'status'),
         Index('ix_ai_questions_course_chapter_family_difficulty', 'course_id', 'chapter_node_id', 'question_family_id', 'difficulty'),
+        Index('ix_ai_questions_bank_version_status', 'bank_version_id', 'status'),
+        Index('ix_ai_questions_subject_chapter_status', 'subject_id', 'subject_chapter_id', 'status'),
+        Index('ix_ai_questions_bank_release_status', 'bank_release_id', 'status'),
     )
 
 

@@ -1,3 +1,19 @@
+
+## v25.9.15.0 - Versioned Question Bank First Architecture
+
+- Thêm mô hình Bộ môn / Môn / Chapter / Bank Version / Material Version / Bank Release.
+- Áp dụng nguyên tắc `1 Bank Release = 1 Open edX Library`.
+- Thêm mapping Open edX course vào subject/chapter/release để nhiều khóa học dùng chung một ngân hàng đề đã duyệt.
+- Thêm các cột nullable vào `ai_questions` để gắn câu hỏi cũ vào bank-first mà không phá luồng course-first hiện tại.
+- Thêm API `/api/question-bank-v2/*` và UI `/bank`.
+- Giữ nguyên native Ulmo ItemBank connector từ v25.9.14.6.1; bản này tập trung vào versioned bank architecture.
+
+# v25.9.14.6.1 — Parent Locator String Hotfix
+
+- Sửa native Studio `create_xblock`: truyền `parent_locator` dạng serialized string thay vì `BlockUsageLocator`.
+- Áp dụng cho cả tạo `itembank` và tạo `problem` child.
+- Không thay đổi DB/API/UI.
+
 # v25.9.14.6 - Native Ulmo ItemBank Auto Insert + Guided Workflow
 
 - Thay block sai `library_content`/Randomized Content bằng native Problem Bank Beta `itembank` trên Ulmo.3.

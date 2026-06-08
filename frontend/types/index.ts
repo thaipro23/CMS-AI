@@ -801,3 +801,144 @@ export type CmsProblemBankInsertResult = {
   message?: string
   next_step?: string
 }
+
+export type Department = {
+  id: string
+  code: string
+  name: string
+  description: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export type Subject = {
+  id: string
+  department_id: string
+  code: string
+  name: string
+  description: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export type SubjectChapter = {
+  id: string
+  subject_id: string
+  chapter_no: number
+  title: string
+  description: string
+  sort_order: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export type BankVersion = {
+  id: string
+  subject_id: string
+  chapter_id: string
+  version_no: number
+  version_code: string
+  title: string
+  change_note: string
+  status: string
+  based_on_version_id?: string | null
+  created_by?: string | null
+  approved_by?: string | null
+  published_at?: string | null
+  metadata_json?: Record<string, any> | null
+  created_at: string
+  updated_at: string
+}
+
+export type MaterialVersion = {
+  id: string
+  subject_id: string
+  chapter_id: string
+  bank_version_id: string
+  title: string
+  file_name: string
+  file_type: string
+  storage_path: string
+  content_hash?: string | null
+  version_no: number
+  change_type: string
+  uploaded_by?: string | null
+  status: string
+  created_at: string
+}
+
+export type BankRelease = {
+  id: string
+  bank_version_id: string
+  subject_id: string
+  chapter_id: string
+  release_code: string
+  title: string
+  status: string
+  approved_question_count: number
+  easy_count: number
+  medium_count: number
+  hard_count: number
+  family_count: number
+  openedx_library_key?: string | null
+  openedx_library_version?: number | null
+  publish_batch_id?: string | null
+  published_at?: string | null
+  published_by?: string | null
+  metadata_json?: Record<string, any> | null
+  created_at: string
+  updated_at: string
+}
+
+export type EdxCourseMapping = {
+  id: string
+  openedx_course_id: string
+  department_id?: string | null
+  subject_id: string
+  term?: string | null
+  status: string
+  created_by?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type EdxCourseChapterMapping = {
+  id: string
+  course_mapping_id: string
+  subject_chapter_id: string
+  bank_release_id?: string | null
+  openedx_parent_node_id?: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type QuizBlueprint = {
+  id: string
+  subject_id: string
+  chapter_id: string
+  title: string
+  total_questions: number
+  difficulty_easy: number
+  difficulty_medium: number
+  difficulty_hard: number
+  max_families_per_bank: number
+  pick_count_per_slot: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export type BankSummary = {
+  departments: number
+  subjects: number
+  chapters: number
+  bank_versions: number
+  releases: number
+  published_releases: number
+  course_mappings: number
+  quiz_blueprints: number
+}
