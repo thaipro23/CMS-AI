@@ -29,6 +29,25 @@ def _index_exists(bind, table_name: str, index_name: str) -> bool:
     return any(item.get('name') == index_name for item in sa.inspect(bind).get_indexes(table_name)) if _table_exists(bind, table_name) else False
 
 
+def _unique_constraint_exists(bind, table_name: str, constraint_name: str) -> bool:
+    if not _table_exists(bind, table_name):
+        return False
+    return any(
+        item.get('name') == constraint_name
+        for item in sa.inspect(bind).get_unique_constraints(table_name)
+    )
+
+
+def _drop_unique_constraint_if_exists(bind, table_name: str, constraint_name: str) -> None:
+    if _unique_constraint_exists(bind, table_name, constraint_name):
+        op.drop_constraint(constraint_name, table_name, type_='unique')
+
+
+def _create_unique_constraint_if_missing(bind, table_name: str, constraint_name: str, columns: list[str]) -> None:
+    if _table_exists(bind, table_name) and not _unique_constraint_exists(bind, table_name, constraint_name):
+        op.create_unique_constraint(constraint_name, table_name, columns)
+
+
 def _add_column_if_missing(bind, table: str, column: sa.Column) -> None:
     if _table_exists(bind, table) and column.name not in _columns(bind, table):
         op.add_column(table, column)
@@ -87,14 +106,16 @@ def upgrade() -> None:
         _create_index_if_missing(bind, f'ix_{table}_subject_offering_id', table, ['subject_offering_id'])
 
     if _table_exists(bind, 'ai_subject_chapters'):
-        try:
-            op.drop_constraint('uq_ai_subject_chapter_no', 'ai_subject_chapters', type_='unique')
-        except Exception:
-            pass
-        try:
-            op.create_unique_constraint('uq_ai_subject_offering_chapter_no', 'ai_subject_chapters', ['subject_id', 'subject_offering_id', 'chapter_no'])
-        except Exception:
-            pass
+        # Never execute DDL and swallow the exception inside a Postgres transaction.
+        # A failed DROP/CREATE CONSTRAINT aborts the whole Alembic transaction and
+        # later inspector calls fail with InFailedSqlTransaction. Check first.
+        _drop_unique_constraint_if_exists(bind, 'ai_subject_chapters', 'uq_ai_subject_chapter_no')
+        _create_unique_constraint_if_missing(
+            bind,
+            'ai_subject_chapters',
+            'uq_ai_subject_offering_chapter_no',
+            ['subject_id', 'subject_offering_id', 'chapter_no'],
+        )
     _create_index_if_missing(bind, 'ix_ai_subject_chapters_offering_order', 'ai_subject_chapters', ['subject_offering_id', 'sort_order'])
     _create_index_if_missing(bind, 'ix_ai_bank_versions_offering_status', 'ai_question_bank_versions', ['subject_offering_id', 'status'])
 
