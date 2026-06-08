@@ -937,3 +937,11 @@ label { margin: 5px 0 4px; font-size: 12px; }
   background: #fff;
   font-size: 11px;
 }
+
+/* v25.9.15.2 bank material/generation compact status */
+.mini-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 12px 0; }
+.mini-status-grid > div { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background: #f8fafc; }
+.mini-status-grid b { display: block; font-size: 18px; line-height: 1.2; color: #0f172a; }
+.mini-status-grid small { display: block; color: #64748b; margin-top: 4px; }
+.compact-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.compact-table th, .compact-table td { border-bottom: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }

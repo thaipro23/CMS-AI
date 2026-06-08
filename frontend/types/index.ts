@@ -823,9 +823,28 @@ export type Subject = {
   updated_at: string
 }
 
+export type SubjectOffering = {
+  id: string
+  department_id?: string | null
+  subject_id: string
+  code: string
+  name: string
+  term?: string | null
+  version_code: string
+  based_on_offering_id?: string | null
+  status: string
+  metadata_json?: Record<string, any> | null
+  created_by?: string | null
+  approved_by?: string | null
+  published_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type SubjectChapter = {
   id: string
   subject_id: string
+  subject_offering_id?: string | null
   chapter_no: number
   title: string
   description: string
@@ -839,6 +858,7 @@ export type BankVersion = {
   id: string
   subject_id: string
   chapter_id: string
+  subject_offering_id?: string | null
   version_no: number
   version_code: string
   title: string
@@ -870,6 +890,36 @@ export type MaterialVersion = {
   created_at: string
 }
 
+export type BankReleasePublishResult = {
+  ok: boolean
+  release_id: string
+  release_code: string
+  status: string
+  openedx_library_key?: string | null
+  question_count: number
+  imported_now_count: number
+  skipped_existing_count: number
+  library_result?: Record<string, any> | null
+  imported?: any[]
+  errors?: any[]
+}
+
+export type MappingCheck = {
+  code: string
+  status: 'pass' | 'warn' | 'fail' | string
+  message: string
+  blocking: boolean
+  detail?: Record<string, any>
+}
+
+export type MappingValidation = {
+  ok: boolean
+  risk_level: 'low' | 'medium' | 'high' | string
+  checks: MappingCheck[]
+  can_create_mapping: boolean
+  message: string
+}
+
 export type BankRelease = {
   id: string
   bank_version_id: string
@@ -898,8 +948,12 @@ export type EdxCourseMapping = {
   openedx_course_id: string
   department_id?: string | null
   subject_id: string
+  subject_offering_id?: string | null
   term?: string | null
   status: string
+  validation_status?: string
+  validation_json?: MappingValidation | Record<string, any> | null
+  validated_at?: string | null
   created_by?: string | null
   created_at: string
   updated_at: string
@@ -912,6 +966,9 @@ export type EdxCourseChapterMapping = {
   bank_release_id?: string | null
   openedx_parent_node_id?: string | null
   enabled: boolean
+  validation_status?: string
+  validation_json?: MappingValidation | Record<string, any> | null
+  validated_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -935,10 +992,141 @@ export type QuizBlueprint = {
 export type BankSummary = {
   departments: number
   subjects: number
+  subject_offerings?: number
   chapters: number
   bank_versions: number
   releases: number
   published_releases: number
   course_mappings: number
   quiz_blueprints: number
+  material_versions: number
+  material_chunks: number
+  bank_questions: number
+  bank_diffs?: number
+  carry_over_questions?: number
+  retired_questions?: number
+}
+
+
+export type MaterialChunk = {
+  id: string
+  material_version_id: string
+  bank_version_id: string
+  subject_id: string
+  chapter_id: string
+  chunk_index: number
+  content: string
+  token_count: number
+  source_type: string
+  page_number?: number | null
+  source_ref: string
+  content_hash?: string | null
+  created_at: string
+}
+
+export type MaterialUploadResult = {
+  ok: boolean
+  reused_existing: boolean
+  material_version: MaterialVersion
+  chunks_created: number
+  tokens_indexed: number
+  source_types: string[]
+  message: string
+}
+
+export type BankGenerateResult = {
+  ok: boolean
+  bank_version_id: string
+  requested_questions: number
+  created_questions: number
+  pending_review_count: number
+  approved_count: number
+  draft_error_count: number
+  input_chunks: number
+  input_tokens: number
+  difficulty_counts: Record<string, number>
+  questions: string[]
+  usage: Record<string, any>[]
+  errors: Record<string, any>[]
+  message: string
+}
+
+export type BankVersionQuestion = {
+  id: string
+  bank_version_id?: string | null
+  subject_id?: string | null
+  subject_chapter_id?: string | null
+  material_version_id?: string | null
+  concept_version_id?: string | null
+  question_family_id?: string | null
+  variant_no?: number | null
+  difficulty: string
+  question_text: string
+  correct_answer: string
+  status: string
+  quality_score: number
+  previous_question_id?: string | null
+  lineage_root_question_id?: string | null
+  question_revision_no?: number
+  is_carry_over?: boolean
+  is_retired?: boolean
+  retired_reason?: string | null
+  retired_at?: string | null
+  created_at: string
+}
+
+export type BankVersionDiffSummary = {
+  from_bank_version_id: string
+  to_bank_version_id: string
+  from_version_code?: string | null
+  to_version_code?: string | null
+  material_similarity?: number | null
+  source_material_count: number
+  target_material_count: number
+  exact_shared_material_count: number
+  unchanged_concept_count: number
+  changed_concept_count: number
+  new_concept_count: number
+  removed_concept_count: number
+  source_approved_question_count: number
+  carry_over_candidate_count: number
+  retire_candidate_count: number
+  review_candidate_count: number
+  already_exists_count: number
+  recommendation?: string | null
+  changed_concepts: string[]
+  new_concepts: string[]
+  removed_concepts: string[]
+}
+
+export type BankVersionDiffPreview = {
+  ok: boolean
+  diff_id?: string | null
+  summary: BankVersionDiffSummary
+  material_similarity?: number | null
+  carry_over_candidates: string[]
+  retire_candidates: string[]
+  review_candidates: string[]
+  already_exists: string[]
+  message: string
+}
+
+export type BankCarryOverResult = {
+  ok: boolean
+  created_count: number
+  skipped_count: number
+  created_question_ids: string[]
+  skipped: Record<string, any>[]
+  message: string
+}
+
+export type BankRetireResult = {
+  ok: boolean
+  retired_count: number
+  retired_question_ids: string[]
+  source_question_ids?: string[]
+  excluded_count?: number
+  excluded_question_ids?: string[]
+  skipped?: Record<string, any>[]
+  message: string
 }

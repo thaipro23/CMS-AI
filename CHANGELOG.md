@@ -1,3 +1,52 @@
+## v25.9.15.3.4 - Subject Version Tree Correction
+
+- Sửa wording và UI: `DOM123_SP25`, `DOM123_SU25`, `DOM123_FA25` là các phiên bản trực tiếp của môn `DOM123`, không có tầng container trung gian.
+- UI `/bank` đổi label từ `Môn_kỳ` sang `Phiên bản môn` và hiển thị cây: Bộ môn → Môn → Phiên bản môn → Bài.
+- Thêm alias API `/api/question-bank-v2/subject-versions` cho `/subject-offerings` để tên endpoint khớp nghiệp vụ hơn, vẫn giữ endpoint cũ để tương thích.
+- Giữ nguyên database table `ai_subject_offerings`, nhưng metadata mới dùng `architecture=subject_version_tree`.
+- Cập nhật docs và test để xác nhận Chapter/Bài nằm dưới trực tiếp từng subject version như `DOM123_SP25`.
+
+## v25.9.15.3.3 - Term Offering Codes + Clone Subject Term
+
+- Chuẩn hóa `phiên bản môn` thành term offering với 3 kỳ/năm: `SPyy`, `SUyy`, `FAyy`.
+- Backend tự sinh code dạng `DOM123_SP25`, `DOM123_SU26`, `DOM123_FA27`.
+- Cho phép tạo phiên bản môn mới bằng cách clone từ phiên bản môn cũ.
+- Clone tạo bản ghi mới cho Chapter, Bank Version, Material Version, Material Chunk, Concept Version, Question Family và approved questions.
+- Câu hỏi clone sang kỳ mới giữ `status=approved`, có `previous_question_id`, không giữ Open edX component/library ID cũ.
+- Không clone Bank Release/Open edX Library; release mới vẫn phải publish ra library riêng theo nguyên tắc 1 Bank Release = 1 Open edX Library.
+- UI `/bank` thêm chọn kỳ SP/SU/FA và clone từ phiên bản môn có sẵn.
+
+
+## v25.9.15.3.2 - Subject Version Version Isolation + Approved Carry-over
+
+- Thêm lớp `môn_su/phiên bản môn` (`ai_subject_offerings`) nằm giữa Môn và Chapter.
+- Coi `môn_su/kỳ` là version triển khai của môn; chapters có thể gắn vào offering.
+- Carry-over clone câu từ version cũ sang version mới và đặt `approved` luôn.
+- Câu không còn dùng được không clone vào version mới; không tạo retired snapshot ở version mới.
+- Concept/Family tiếp tục là metadata lõi gắn với câu hỏi, không phải tầng UI điều hướng.
+- Thêm migration `0013_v25_9_15_3_2_subject_offering_version_isolation.py`.
+
+
+## v25.9.15.3 - Version Diff / Carry-over / Retire Questions
+
+- Added Bank Version diff preview between old and new versions.
+- Added lineage fields to `ai_questions`: previous question, lineage root, revision number, carry-over and retired state.
+- Added `ai_bank_version_diffs` and `ai_bank_version_diff_items` tables.
+- Added carry-over API that copies approved questions into the new Bank Version without modifying the old version.
+- Added retire API for marking questions as no longer suitable when source materials change.
+- Updated `/bank` with a guided version comparison step.
+
+
+## v25.9.15.2 - Bank Material Upload + Generate from Bank Version
+
+- Added `ai_material_chunks` and migration `0011_v25_9_15_2`.
+- Added Bank Version material upload endpoint with safe file size/type checks and local storage.
+- Added extraction/chunking for uploaded bank materials using existing ContentExtractor/Chunker.
+- Added generate-from-bank-version endpoint that calls ModelGateway and creates `ai_questions` scoped to `bank_version_id`.
+- Added concept version and bank question family linking during bank generation.
+- Updated `/bank` UI with a simple Upload → Generate step before Release.
+- Kept generated questions in review-first flow; no automatic release publish without teacher review.
+
 
 ## v25.9.15.0 - Versioned Question Bank First Architecture
 
@@ -165,3 +214,20 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 - Generation Planner tự thêm `Concept-aware generation hints` vào prompt.
 - Prompt/JSON schema/Question model có thêm `concept_id`, `concept_title`, `concept_key`.
 - Thêm migration `0006_v25_9_14_0_concepts.py`.
+
+
+## v25.9.15.1 - Safe Mapping Guard + Bank Release Publish Wiring
+
+- Added mapping validation endpoints for Open edX course and chapter mappings.
+- Course code must match subject code before mapping is saved.
+- Chapter mapping requires a published Bank Release and a valid Open edX node usage key.
+- Added release publish endpoint that imports approved Bank Version questions into the release-specific Open edX Library.
+- Release is only marked published after Open edX import succeeds.
+- Added validation metadata columns to course/chapter mappings.
+- Updated /bank UI with Publish Library, Validate Mapping, and Validate Chapter workflow.
+
+## v25.9.15.3.1 - Version Isolation Carry-over Hotfix
+
+- Treat Bank Version v1 and v2 as independent snapshots.
+- Retire action from diff now creates/marks a retired snapshot in the target version, never mutates the source version.
+- UI now calls retire endpoint with `to_bank_version_id`.

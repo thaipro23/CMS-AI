@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Float, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.session import Base
 
@@ -35,11 +35,44 @@ class Subject(Base):
     )
 
 
+class SubjectOffering(Base):
+    """A subject version layer, e.g. DOM123_SU26.
+
+    This is the product-level version boundary requested by the user:
+    Department -> Subject -> Subject Version (DOM123_SP25) -> Chapters.
+    Questions/concepts/families are still data entities attached to the
+    concrete bank/version, not top-level UI hierarchy.
+    """
+    __tablename__ = 'ai_subject_offerings'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    department_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_departments.id'), nullable=True, index=True)
+    subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
+    code: Mapped[str] = mapped_column(String(128), index=True)  # DOM123_SU26 / DOM123_v2
+    name: Mapped[str] = mapped_column(String(255), default='')
+    term: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    version_code: Mapped[str] = mapped_column(String(64), default='v1.0')
+    based_on_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), default='draft', index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('subject_id', 'code', name='uq_ai_subject_offering_subject_code'),
+        Index('ix_ai_subject_offerings_subject_status', 'subject_id', 'status'),
+    )
+
+
 class SubjectChapter(Base):
     __tablename__ = 'ai_subject_chapters'
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     chapter_no: Mapped[int] = mapped_column(Integer, default=1)
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text, default='')
@@ -49,7 +82,8 @@ class SubjectChapter(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint('subject_id', 'chapter_no', name='uq_ai_subject_chapter_no'),
+        UniqueConstraint('subject_id', 'subject_offering_id', 'chapter_no', name='uq_ai_subject_offering_chapter_no'),
+        Index('ix_ai_subject_chapters_offering_order', 'subject_offering_id', 'sort_order'),
         Index('ix_ai_subject_chapters_subject_status', 'subject_id', 'status'),
     )
 
@@ -60,6 +94,7 @@ class QuestionBankVersion(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
     chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     version_no: Mapped[int] = mapped_column(Integer, default=1)
     version_code: Mapped[str] = mapped_column(String(64), default='v1.0')
     title: Mapped[str] = mapped_column(String(255), default='')
@@ -76,6 +111,7 @@ class QuestionBankVersion(Base):
     __table_args__ = (
         UniqueConstraint('subject_id', 'chapter_id', 'version_code', name='uq_ai_bank_version_code'),
         Index('ix_ai_bank_versions_chapter_status', 'chapter_id', 'status'),
+        Index('ix_ai_bank_versions_offering_status', 'subject_offering_id', 'status'),
     )
 
 
@@ -85,6 +121,7 @@ class LearningMaterialVersion(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
     chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
     title: Mapped[str] = mapped_column(String(255), default='')
     file_name: Mapped[str] = mapped_column(String(512), default='')
@@ -102,6 +139,32 @@ class LearningMaterialVersion(Base):
     )
 
 
+
+
+class MaterialChunk(Base):
+    __tablename__ = 'ai_material_chunks'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    material_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_learning_material_versions.id'), index=True)
+    bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
+    subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
+    chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, default=1)
+    content: Mapped[str] = mapped_column(Text)
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_type: Mapped[str] = mapped_column(String(100), default='file')
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_ref: Mapped[str] = mapped_column(String(1024), default='')
+    content_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('material_version_id', 'chunk_index', name='uq_ai_material_chunk_index'),
+        Index('ix_ai_material_chunks_bank_subject_chapter', 'bank_version_id', 'subject_id', 'chapter_id'),
+        Index('ix_ai_material_chunks_bank_source', 'bank_version_id', 'source_type'),
+    )
+
 class ConceptVersion(Base):
     __tablename__ = 'ai_concept_versions'
 
@@ -109,6 +172,7 @@ class ConceptVersion(Base):
     bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
     chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     material_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_learning_material_versions.id'), nullable=True, index=True)
     concept_key: Mapped[str] = mapped_column(String(255), index=True)
     concept_title: Mapped[str] = mapped_column(String(512))
@@ -132,6 +196,7 @@ class BankQuestionFamily(Base):
     bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
     chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     concept_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_concept_versions.id'), nullable=True, index=True)
     difficulty: Mapped[str] = mapped_column(String(50), default='easy', index=True)
     family_key: Mapped[str] = mapped_column(String(255), index=True)
@@ -153,6 +218,7 @@ class QuestionBankRelease(Base):
     bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
     chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     release_code: Mapped[str] = mapped_column(String(128), index=True)
     title: Mapped[str] = mapped_column(String(255), default='')
     status: Mapped[str] = mapped_column(String(50), default='draft', index=True)  # draft | published | deprecated | archived
@@ -174,6 +240,44 @@ class QuestionBankRelease(Base):
         UniqueConstraint('bank_version_id', 'release_code', name='uq_ai_bank_release_code'),
         UniqueConstraint('openedx_library_key', name='uq_ai_bank_release_openedx_library_key'),
         Index('ix_ai_bank_releases_chapter_status', 'chapter_id', 'status'),
+    )
+
+
+class BankVersionDiff(Base):
+    __tablename__ = 'ai_bank_version_diffs'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    from_bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
+    to_bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
+    status: Mapped[str] = mapped_column(String(50), default='preview', index=True)  # preview | applied | archived
+    material_similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_ai_bank_version_diffs_pair_status', 'from_bank_version_id', 'to_bank_version_id', 'status'),
+    )
+
+
+class BankVersionDiffItem(Base):
+    __tablename__ = 'ai_bank_version_diff_items'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    diff_id: Mapped[str] = mapped_column(String, ForeignKey('ai_bank_version_diffs.id'), index=True)
+    item_type: Mapped[str] = mapped_column(String(50), index=True)  # material | concept | question
+    source_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    target_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    change_type: Mapped[str] = mapped_column(String(50), index=True)  # unchanged | changed | new | removed | carry_over_candidate | retire_candidate | already_exists
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default='')
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_ai_bank_diff_items_diff_type_change', 'diff_id', 'item_type', 'change_type'),
     )
 
 
@@ -202,8 +306,12 @@ class EdxCourseMapping(Base):
     openedx_course_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     department_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_departments.id'), nullable=True, index=True)
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     term: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default='active', index=True)
+    validation_status: Mapped[str] = mapped_column(String(50), default='not_validated', index=True)
+    validation_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -218,6 +326,9 @@ class EdxCourseChapterMapping(Base):
     bank_release_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_releases.id'), nullable=True, index=True)
     openedx_parent_node_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    validation_status: Mapped[str] = mapped_column(String(50), default='not_validated', index=True)
+    validation_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -232,6 +343,7 @@ class QuizBlueprint(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
     chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     total_questions: Mapped[int] = mapped_column(Integer, default=15)
     difficulty_easy: Mapped[int] = mapped_column(Integer, default=50)
@@ -255,6 +367,7 @@ class CourseQuizInstance(Base):
     openedx_course_id: Mapped[str] = mapped_column(String(255), index=True)
     subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), index=True)
     chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
     bank_release_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_releases.id'), index=True)
     quiz_blueprint_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_quiz_blueprints.id'), nullable=True, index=True)
     openedx_quiz_node_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)

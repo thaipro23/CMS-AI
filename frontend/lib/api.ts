@@ -26,12 +26,22 @@ import {
   BankSummary,
   Department,
   Subject,
+  SubjectOffering,
   SubjectChapter,
   BankVersion,
   BankRelease,
+  BankReleasePublishResult,
   EdxCourseMapping,
+  MappingValidation,
   EdxCourseChapterMapping,
   QuizBlueprint,
+  MaterialChunk,
+  MaterialUploadResult,
+  BankGenerateResult,
+  BankVersionQuestion,
+  BankVersionDiffPreview,
+  BankCarryOverResult,
+  BankRetireResult,
 } from "../types";
 
 const rawApiBase =
@@ -906,15 +916,30 @@ export async function createSubject(headers: HeadersInit, payload: { department_
   );
 }
 
-export async function getSubjectChapters(headers: HeadersInit, subjectId?: string) {
+export async function getSubjectOfferings(headers: HeadersInit, subjectId?: string) {
   const params = new URLSearchParams();
   if (subjectId) params.set('subject_id', subjectId);
+  return parseResponse<SubjectOffering[]>(
+    await fetch(`${API}/question-bank-v2/subject-versions?${params.toString()}`, { headers }),
+  );
+}
+
+export async function createSubjectOffering(headers: HeadersInit, payload: { subject_id: string; code?: string; name?: string; term?: string | null; season?: string | null; year?: number | string | null; version_code?: string; based_on_offering_id?: string | null; clone_from_offering_id?: string | null; clone_chapters?: boolean; clone_materials?: boolean; clone_questions?: boolean; description?: string }) {
+  return parseResponse<SubjectOffering>(
+    await fetch(`${API}/question-bank-v2/subject-versions`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function getSubjectChapters(headers: HeadersInit, subjectId?: string, subjectOfferingId?: string) {
+  const params = new URLSearchParams();
+  if (subjectId) params.set('subject_id', subjectId);
+  if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
   return parseResponse<SubjectChapter[]>(
     await fetch(`${API}/question-bank-v2/chapters?${params.toString()}`, { headers }),
   );
 }
 
-export async function createSubjectChapter(headers: HeadersInit, payload: { subject_id: string; chapter_no: number; title: string; description?: string; sort_order?: number }) {
+export async function createSubjectChapter(headers: HeadersInit, payload: { subject_id: string; subject_offering_id?: string | null; chapter_no: number; title: string; description?: string; sort_order?: number }) {
   return parseResponse<SubjectChapter>(
     await fetch(`${API}/question-bank-v2/chapters`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
@@ -928,7 +953,7 @@ export async function getBankVersions(headers: HeadersInit, chapterId?: string) 
   );
 }
 
-export async function createBankVersion(headers: HeadersInit, payload: { subject_id: string; chapter_id: string; version_code: string; title?: string; change_note?: string; based_on_version_id?: string | null }) {
+export async function createBankVersion(headers: HeadersInit, payload: { subject_id: string; chapter_id: string; subject_offering_id?: string | null; version_code: string; title?: string; change_note?: string; based_on_version_id?: string | null }) {
   return parseResponse<BankVersion>(
     await fetch(`${API}/question-bank-v2/bank-versions`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
@@ -949,6 +974,12 @@ export async function createBankRelease(headers: HeadersInit, payload: { bank_ve
   );
 }
 
+export async function publishBankRelease(headers: HeadersInit, releaseId: string, payload: { openedx_course_id_for_org?: string | null; force_reimport?: boolean } = {}) {
+  return parseResponse<BankReleasePublishResult>(
+    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/publish-openedx`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
 export async function getCourseMappings(headers: HeadersInit, subjectId?: string) {
   const params = new URLSearchParams();
   if (subjectId) params.set('subject_id', subjectId);
@@ -957,13 +988,25 @@ export async function getCourseMappings(headers: HeadersInit, subjectId?: string
   );
 }
 
-export async function createCourseMapping(headers: HeadersInit, payload: { openedx_course_id: string; subject_id: string; department_id?: string | null; term?: string | null }) {
+export async function validateCourseMapping(headers: HeadersInit, payload: { openedx_course_id: string; subject_id: string; department_id?: string | null; term?: string | null; openedx_course_title?: string | null }) {
+  return parseResponse<MappingValidation>(
+    await fetch(`${API}/question-bank-v2/course-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function createCourseMapping(headers: HeadersInit, payload: { openedx_course_id: string; subject_id: string; department_id?: string | null; term?: string | null; openedx_course_title?: string | null; allow_warnings?: boolean }) {
   return parseResponse<EdxCourseMapping>(
     await fetch(`${API}/question-bank-v2/course-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
-export async function createCourseChapterMapping(headers: HeadersInit, payload: { course_mapping_id: string; subject_chapter_id: string; bank_release_id?: string | null; openedx_parent_node_id?: string | null; enabled?: boolean }) {
+export async function validateCourseChapterMapping(headers: HeadersInit, payload: { course_mapping_id: string; subject_chapter_id: string; bank_release_id: string; openedx_parent_node_id: string; openedx_node_title?: string | null }) {
+  return parseResponse<MappingValidation>(
+    await fetch(`${API}/question-bank-v2/course-chapter-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function createCourseChapterMapping(headers: HeadersInit, payload: { course_mapping_id: string; subject_chapter_id: string; bank_release_id?: string | null; openedx_parent_node_id?: string | null; openedx_node_title?: string | null; enabled?: boolean; allow_warnings?: boolean }) {
   return parseResponse<EdxCourseChapterMapping>(
     await fetch(`${API}/question-bank-v2/course-chapter-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
@@ -980,5 +1023,107 @@ export async function getQuizBlueprints(headers: HeadersInit, chapterId?: string
 export async function createQuizBlueprint(headers: HeadersInit, payload: { subject_id: string; chapter_id: string; title: string; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number; pick_count_per_slot?: number }) {
   return parseResponse<QuizBlueprint>(
     await fetch(`${API}/question-bank-v2/quiz-blueprints`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+
+export async function uploadBankMaterial(
+  headers: HeadersInit,
+  bankVersionId: string,
+  file: File,
+  payload: { title?: string; change_type?: string; replace_existing?: boolean } = {},
+) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('title', payload.title || file.name);
+  form.append('change_type', payload.change_type || 'initial');
+  form.append('replace_existing', String(Boolean(payload.replace_existing)));
+  return parseResponse<MaterialUploadResult>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/upload`, {
+      method: 'POST',
+      headers,
+      body: form,
+    }),
+  );
+}
+
+export async function getBankMaterialChunks(headers: HeadersInit, bankVersionId: string, materialVersionId?: string) {
+  const params = new URLSearchParams();
+  if (materialVersionId) params.set('material_version_id', materialVersionId);
+  return parseResponse<MaterialChunk[]>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/material-chunks?${params.toString()}`, { headers }),
+  );
+}
+
+export async function generateFromBankVersion(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: {
+    question_count: number;
+    difficulty_easy?: number;
+    difficulty_medium?: number;
+    difficulty_hard?: number;
+    material_version_ids?: string[] | null;
+    provider?: string;
+    approve_after_generate?: boolean;
+  },
+) {
+  return parseResponse<BankGenerateResult>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function getBankVersionQuestions(headers: HeadersInit, bankVersionId: string, statusFilter?: string, limit = 100) {
+  const params = new URLSearchParams();
+  if (statusFilter) params.set('status_filter', statusFilter);
+  params.set('limit', String(limit));
+  return parseResponse<BankVersionQuestion[]>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions?${params.toString()}`, { headers }),
+  );
+}
+
+export async function previewBankVersionDiff(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: { base_bank_version_id?: string | null; persist?: boolean } = {},
+) {
+  return parseResponse<BankVersionDiffPreview>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/diff/preview`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function carryOverBankQuestions(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: { base_bank_version_id: string; question_ids?: string[] | null; require_review?: boolean; diff_id?: string | null },
+) {
+  return parseResponse<BankCarryOverResult>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/carry-over`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function retireBankQuestions(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: { question_ids: string[]; reason?: string },
+) {
+  return parseResponse<BankRetireResult>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/retire`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
   );
 }

@@ -20,6 +20,13 @@ class Question(Base):
     subject_chapter_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), nullable=True, index=True)
     bank_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), nullable=True, index=True)
     bank_release_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_releases.id'), nullable=True, index=True)
+    previous_question_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_questions.id'), nullable=True, index=True)
+    lineage_root_question_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    question_revision_no: Mapped[int] = mapped_column(Integer, default=1)
+    is_carry_over: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_retired: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    retired_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     material_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_learning_material_versions.id'), nullable=True, index=True)
     concept_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_concept_versions.id'), nullable=True, index=True)
     lesson_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -110,6 +117,8 @@ class Question(Base):
         Index('ix_ai_questions_bank_version_status', 'bank_version_id', 'status'),
         Index('ix_ai_questions_subject_chapter_status', 'subject_id', 'subject_chapter_id', 'status'),
         Index('ix_ai_questions_bank_release_status', 'bank_release_id', 'status'),
+        Index('ix_ai_questions_bank_lineage', 'bank_version_id', 'lineage_root_question_id'),
+        Index('ix_ai_questions_bank_retired', 'bank_version_id', 'is_retired'),
     )
 
 
