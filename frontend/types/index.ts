@@ -1031,6 +1031,9 @@ export type MaterialUploadResult = {
   chunks_created: number
   tokens_indexed: number
   source_types: string[]
+  diff_required?: boolean
+  diff_base_bank_version_id?: string | null
+  document_change_state?: string | null
   message: string
 }
 

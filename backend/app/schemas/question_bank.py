@@ -76,10 +76,11 @@ class SubjectOfferingOut(BaseModel):
 class ChapterCreate(BaseModel):
     subject_id: str
     subject_offering_id: str | None = None
-    chapter_no: int = Field(default=1, ge=1)
+    # Internal ordering number. UI does not ask teachers to enter this.
+    chapter_no: int | None = Field(default=None, ge=1)
     title: str = Field(min_length=1, max_length=255)
     description: str = ''
-    sort_order: int = Field(default=1, ge=1)
+    sort_order: int | None = Field(default=None, ge=1)
 
 
 class ChapterOut(ChapterCreate):
@@ -333,6 +334,16 @@ class MaterialChunkOut(BaseModel):
         from_attributes = True
 
 
+
+
+class MaterialDeleteOut(BaseModel):
+    ok: bool
+    material_version_id: str
+    bank_version_id: str
+    chunks_deleted: int = 0
+    detached_question_count: int = 0
+    message: str
+
 class MaterialUploadOut(BaseModel):
     ok: bool
     reused_existing: bool = False
@@ -348,6 +359,7 @@ class MaterialUploadOut(BaseModel):
 
 class BankGenerateRequest(BaseModel):
     question_count: int = Field(default=10, ge=1, le=200)
+    target_question_count: int | None = Field(default=None, ge=1, le=1000)
     difficulty_easy: int = Field(default=50, ge=0, le=100)
     difficulty_medium: int = Field(default=30, ge=0, le=100)
     difficulty_hard: int = Field(default=20, ge=0, le=100)

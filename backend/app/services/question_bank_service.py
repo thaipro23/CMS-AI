@@ -367,7 +367,7 @@ class VersionedQuestionBankService:
             if not dst_chapter:
                 continue
             dst_status = 'approved' if src_bv.status in {'published', 'approved'} else 'draft'
-            clone_title = f'{target.code} - Bài {dst_chapter.chapter_no} - {src_bv.version_code}'
+            clone_title = f'{target.code} - {self._chapter_display_name(dst_chapter)} - {src_bv.version_code}'
             dst_bv = QuestionBankVersion(
                 id=str(uuid.uuid4()),
                 subject_id=target.subject_id,
@@ -586,12 +586,29 @@ class VersionedQuestionBankService:
             'diff_policy': 'Không diff khi clone; chỉ diff khi tài liệu ở version mới bị thay đổi.',
         }
 
-    def create_chapter(self, *, subject_id: str, chapter_no: int, title: str, description: str = '', sort_order: int | None = None, subject_offering_id: str | None = None) -> SubjectChapter:
+    def _chapter_display_name(self, chapter: SubjectChapter | None) -> str:
+        if not chapter:
+            return 'Bài'
+        return (chapter.title or '').strip() or 'Bài'
+
+    def _next_chapter_order(self, *, subject_id: str, subject_offering_id: str | None = None) -> int:
+        query = self.db.query(func.max(SubjectChapter.sort_order)).filter(SubjectChapter.subject_id == subject_id)
+        if subject_offering_id:
+            query = query.filter(SubjectChapter.subject_offering_id == subject_offering_id)
+        value = query.scalar()
+        return int(value or 0) + 1
+
+    def create_chapter(self, *, subject_id: str, title: str, chapter_no: int | None = None, description: str = '', sort_order: int | None = None, subject_offering_id: str | None = None) -> SubjectChapter:
         if subject_offering_id:
             offering = self.db.get(SubjectOffering, subject_offering_id)
             if not offering or offering.subject_id != subject_id:
                 raise ValueError('Phiên bản môn không thuộc môn đã chọn')
-        item = SubjectChapter(id=str(uuid.uuid4()), subject_id=subject_id, subject_offering_id=subject_offering_id, chapter_no=chapter_no, title=title.strip(), description=description or '', sort_order=sort_order or chapter_no)
+        clean_title = (title or '').strip()
+        if not clean_title:
+            raise ValueError('Vui lòng nhập bài')
+        next_order = sort_order or self._next_chapter_order(subject_id=subject_id, subject_offering_id=subject_offering_id)
+        internal_no = chapter_no or next_order
+        item = SubjectChapter(id=str(uuid.uuid4()), subject_id=subject_id, subject_offering_id=subject_offering_id, chapter_no=internal_no, title=clean_title, description=description or '', sort_order=next_order)
         self.db.add(item)
         self.db.commit()
         self.db.refresh(item)
@@ -612,7 +629,7 @@ class VersionedQuestionBankService:
         chapter = self.db.get(SubjectChapter, chapter_id)
         offering = self.db.get(SubjectOffering, subject_offering_id) if subject_offering_id else None
         clean_version_code = version_code.strip() or 'v1.0'
-        auto_title = f'{offering.code if offering else ""} - Bài {chapter.chapter_no if chapter else "?"} - {clean_version_code}'.strip(' -')
+        auto_title = f'{offering.code if offering else ""} - {self._chapter_display_name(chapter)} - {clean_version_code}'.strip(' -')
         item = QuestionBankVersion(
             id=str(uuid.uuid4()),
             subject_id=subject_id,
@@ -1195,6 +1212,45 @@ class VersionedQuestionBankService:
             'message': 'Tải tài liệu và tách nội dung vào Bank Version thành công.' + (' Version này clone từ kỳ trước nên đã đánh dấu cần kiểm tra khác biệt tài liệu.' if diff_required else ''),
         }
 
+
+    def delete_material_version(self, *, material_version_id: str, actor: str | None = None) -> dict:
+        material = self.db.get(LearningMaterialVersion, material_version_id)
+        if not material or material.status == 'deleted':
+            raise ValueError('Không tìm thấy tài liệu')
+        version = self._require_mutable_bank_version(material.bank_version_id)
+        chunk_count = self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).count()
+        detached = self.db.query(Question).filter(Question.material_version_id == material.id).update(
+            {Question.material_version_id: None},
+            synchronize_session=False,
+        )
+        self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).delete(synchronize_session=False)
+        # Giữ audit nhẹ bằng trạng thái deleted thay vì xóa cứng record tài liệu.
+        material.status = 'deleted'
+        material.uploaded_by = actor or material.uploaded_by
+        meta = dict(version.metadata_json or {})
+        meta.update({
+            'latest_material_delete_at': datetime.utcnow().isoformat(),
+            'latest_material_deleted_id': material.id,
+            'latest_material_deleted_file': material.file_name,
+        })
+        if version.based_on_version_id:
+            meta.update({
+                'document_change_state': 'changed_after_clone',
+                'diff_required': True,
+                'diff_base_bank_version_id': version.based_on_version_id,
+                'diff_trigger': 'material_deleted_after_clone',
+            })
+        version.metadata_json = meta
+        self.db.commit()
+        return {
+            'ok': True,
+            'material_version_id': material.id,
+            'bank_version_id': version.id,
+            'chunks_deleted': int(chunk_count or 0),
+            'detached_question_count': int(detached or 0),
+            'message': 'Đã xóa tài liệu khỏi bài. Câu hỏi cũ được giữ lại để giáo viên quyết định duyệt/bỏ.',
+        }
+
     def _bank_generation_content(self, *, bank_version_id: str, material_version_ids: list[str] | None = None, max_input_tokens: int = 18000) -> tuple[str, list[MaterialChunk], int]:
         query = self.db.query(MaterialChunk).filter(MaterialChunk.bank_version_id == bank_version_id)
         if material_version_ids:
@@ -1300,6 +1356,7 @@ class VersionedQuestionBankService:
         *,
         bank_version_id: str,
         question_count: int,
+        target_question_count: int | None = None,
         difficulty_easy: int = 50,
         difficulty_medium: int = 30,
         difficulty_hard: int = 20,
@@ -1315,6 +1372,19 @@ class VersionedQuestionBankService:
             raise ValueError('Bank Version thiếu Subject hoặc Chapter')
         if question_count < 1 or question_count > 200:
             raise ValueError('question_count phải trong khoảng 1-200')
+        meta = dict(version.metadata_json or {})
+        effective_target = int(target_question_count or meta.get('target_question_count') or 0)
+        if target_question_count:
+            meta['target_question_count'] = int(target_question_count)
+            version.metadata_json = meta
+        if effective_target:
+            active_count = self.db.query(Question).filter(
+                Question.bank_version_id == version.id,
+                Question.status.in_(['pending_review', 'approved', 'published']),
+            ).count()
+            if active_count + int(question_count) > effective_target:
+                remaining = max(0, effective_target - active_count)
+                raise ValueError(f'Vượt chỉ tiêu của bài. Hiện có {active_count}/{effective_target} câu, chỉ còn được tạo thêm {remaining} câu.')
         content, chunks, input_tokens = self._bank_generation_content(bank_version_id=version.id, material_version_ids=material_version_ids)
         if not content.strip() or not chunks:
             raise ValueError('Bank Version chưa có tài liệu/chunk. Hãy upload tài liệu trước khi generate.')
@@ -1677,7 +1747,7 @@ class VersionedQuestionBankService:
 
     def release_library_key(self, *, subject: Subject, chapter: SubjectChapter, version: QuestionBankVersion) -> str:
         subject_slug = slugify(subject.code or subject.name, 'subject')
-        chapter_slug = f'bai-{chapter.chapter_no}' if chapter.chapter_no else slugify(chapter.title, 'chapter')
+        chapter_slug = slugify(self._chapter_display_name(chapter), 'chapter')
         version_slug = slugify(version.version_code.replace('.', '-'), 'v1')
         return f'lib:FPT:{subject_slug}-{chapter_slug}-{version_slug}'
 
@@ -1698,7 +1768,8 @@ class VersionedQuestionBankService:
         readiness = self.release_readiness(bank_version_id=version.id)
         if not force and not readiness.get('can_create_release'):
             raise ValueError('Chưa thể chốt Release: ' + readiness.get('message', 'Cần xử lý xong câu hỏi/tài liệu trước khi chốt.'))
-        code = release_code or f'{subject.code}-B{chapter.chapter_no}-{version.version_code}'
+        chapter_code = slugify(self._chapter_display_name(chapter), 'chapter')
+        code = release_code or f'{subject.code}-{chapter_code}-{version.version_code}'
         library_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
         questions = self._release_questions_for_version(version) if include_approved_questions else []
         counts = {'easy': 0, 'medium': 0, 'hard': 0}
@@ -1715,7 +1786,7 @@ class VersionedQuestionBankService:
             chapter_id=version.chapter_id,
             subject_offering_id=version.subject_offering_id,
             release_code=code,
-            title=title or f'{subject.code} - Bài {chapter.chapter_no} - {version.version_code}',
+            title=title or f'{subject.code} - {self._chapter_display_name(chapter)} - {version.version_code}',
             # v25.9.15.1: create is a draft/ready metadata step. It is only
             # marked published after Open edX import verifies.
             status='ready' if questions else 'draft',
@@ -1880,9 +1951,10 @@ class VersionedQuestionBankService:
                 checks.append(_check('openedx_node_synced', 'warn', 'Chưa thấy node này trong dữ liệu sync AI Server. Nên sync course trước khi tạo quiz.', blocking=False))
             if title:
                 sim = title_similarity(title, chapter.title)
-                chapter_no_in_title = re.search(r'\b(?:bài|bai|chapter)\s*0*([0-9]+)\b', title.lower())
-                if chapter_no_in_title and int(chapter_no_in_title.group(1)) != int(chapter.chapter_no):
-                    checks.append(_check('chapter_number_match', 'fail', f'Node Open edX có vẻ là Bài {chapter_no_in_title.group(1)}, nhưng ngân hàng là Bài {chapter.chapter_no}.'))
+                chapter_no_in_title = re.search(r'\b(?:bài|bai|chapter)\s*([0-9]+(?:\.[0-9]+)*)\b', title.lower())
+                bank_chapter_label = re.search(r'\b(?:bài|bai|chapter)\s*([0-9]+(?:\.[0-9]+)*)\b', (chapter.title or '').lower())
+                if chapter_no_in_title and bank_chapter_label and chapter_no_in_title.group(1) != bank_chapter_label.group(1):
+                    checks.append(_check('chapter_number_match', 'fail', f'Node Open edX có vẻ là Bài {chapter_no_in_title.group(1)}, nhưng ngân hàng là {self._chapter_display_name(chapter)}.'))
                 elif sim >= 0.45:
                     checks.append(_check('chapter_title_match', 'pass', f'Tên chapter khá khớp ({sim:.0%}).', {'similarity': sim}, blocking=False))
                 else:
@@ -2193,7 +2265,7 @@ class VersionedQuestionBankService:
         chapter = self.db.get(SubjectChapter, release.chapter_id)
         connector = get_openedx_connector()
         course_id = course_mapping.openedx_course_id
-        final_quiz_title = quiz_title.strip() if quiz_title and quiz_title.strip() else f'AI Learning Check - Bài {getattr(chapter, "chapter_no", "")}'
+        final_quiz_title = quiz_title.strip() if quiz_title and quiz_title.strip() else f'AI Learning Check - {self._chapter_display_name(chapter)}'
         final_unit_title = unit_title.strip() if unit_title and unit_title.strip() else 'Quiz tự luyện'
         instance = CourseQuizInstance(
             id=str(uuid.uuid4()),
@@ -2359,7 +2431,7 @@ class VersionedQuestionBankService:
                 'ai-learning-check',
                 'generated',
                 f'subject:{subject.code}',
-                f'chapter:Bài {chapter.chapter_no}',
+                f'chapter:{self._chapter_display_name(chapter)}',
                 f'bank-release:{release.release_code}',
             ],
         }
@@ -2369,7 +2441,7 @@ class VersionedQuestionBankService:
             library_result = await connector.ensure_problem_library(
                 course_id=course_id,
                 chapter_node_id=f'bank-release:{release.id}',
-                display_name=release.title or f'{subject.code} - Bài {chapter.chapter_no} - {version.version_code}',
+                display_name=release.title or f'{subject.code} - {self._chapter_display_name(chapter)} - {version.version_code}',
                 metadata=metadata_base,
             )
             if library_result.get('stub') is True or str(library_result.get('status', '')).startswith('local_stub'):

@@ -70,6 +70,13 @@ function withIdempotency(headers: HeadersInit, idempotencyKey?: string): Headers
   return next;
 }
 
+function withoutContentType(headers: HeadersInit): HeadersInit {
+  const next = new Headers(headers);
+  next.delete('Content-Type');
+  next.delete('content-type');
+  return next;
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -948,7 +955,7 @@ export async function getSubjectChapters(headers: HeadersInit, subjectId?: strin
   );
 }
 
-export async function createSubjectChapter(headers: HeadersInit, payload: { subject_id: string; subject_offering_id?: string | null; chapter_no: number; title: string; description?: string; sort_order?: number }) {
+export async function createSubjectChapter(headers: HeadersInit, payload: { subject_id: string; subject_offering_id?: string | null; chapter_no?: number; title: string; description?: string; sort_order?: number }) {
   return parseResponse<SubjectChapter>(
     await fetch(`${API}/question-bank-v2/chapters`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
@@ -1047,6 +1054,16 @@ export async function getMaterialVersions(headers: HeadersInit, bankVersionId?: 
   );
 }
 
+
+export async function deleteMaterialVersion(headers: HeadersInit, materialVersionId: string) {
+  return parseResponse<{ ok: boolean; material_version_id: string; bank_version_id: string; chunks_deleted: number; detached_question_count: number; message: string }>(
+    await fetch(`${API}/question-bank-v2/material-versions/${encodeURIComponent(materialVersionId)}`, {
+      method: 'DELETE',
+      headers,
+    }),
+  );
+}
+
 export async function uploadBankMaterial(
   headers: HeadersInit,
   bankVersionId: string,
@@ -1061,7 +1078,7 @@ export async function uploadBankMaterial(
   return parseResponse<MaterialUploadResult>(
     await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/upload`, {
       method: 'POST',
-      headers,
+      headers: withoutContentType(headers),
       body: form,
     }),
   );
@@ -1080,6 +1097,7 @@ export async function generateFromBankVersion(
   bankVersionId: string,
   payload: {
     question_count: number;
+    target_question_count?: number;
     difficulty_easy?: number;
     difficulty_medium?: number;
     difficulty_hard?: number;

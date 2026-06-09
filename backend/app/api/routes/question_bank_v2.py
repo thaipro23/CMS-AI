@@ -45,6 +45,7 @@ from app.schemas.question_bank import (
     MaterialVersionOut,
     MaterialChunkOut,
     MaterialUploadOut,
+    MaterialDeleteOut,
     BankGenerateRequest,
     BankGenerateOut,
     BankVersionQuestionOut,
@@ -227,6 +228,19 @@ def create_material_version(payload: MaterialVersionCreate, db: Session = Depend
 
 
 
+
+
+@router.delete('/material-versions/{material_version_id}', response_model=MaterialDeleteOut)
+def delete_material_version(material_version_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
+    try:
+        result = VersionedQuestionBankService(db).delete_material_version(material_version_id=material_version_id, actor=user.user_id)
+        log_audit(db, action='question_bank.material.delete', status='success', message=result.get('message', ''), user=user, target_type='material_version', target_id=material_version_id, metadata=result)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.material.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='material_version', target_id=material_version_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post('/bank-versions/{bank_version_id}/materials/upload', response_model=MaterialUploadOut)
 async def upload_material_to_bank_version(
     bank_version_id: str,
@@ -285,6 +299,7 @@ async def generate_questions_from_bank_version(bank_version_id: str, payload: Ba
         result = await VersionedQuestionBankService(db).generate_from_bank_version(
             bank_version_id=bank_version_id,
             question_count=payload.question_count,
+            target_question_count=payload.target_question_count,
             difficulty_easy=payload.difficulty_easy,
             difficulty_medium=payload.difficulty_medium,
             difficulty_hard=payload.difficulty_hard,

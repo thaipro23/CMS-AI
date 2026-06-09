@@ -1,3 +1,12 @@
+# v25.9.15.6 - Multi-page Bank Manager UI + Exact Clone Flow
+
+- Tách UI ngân hàng đề từ một trang `/bank` lớn thành nhiều route quản trị rõ ràng.
+- `/bank` redirect sang `/bank/departments`.
+- Thêm các trang: Bộ môn, Môn trong bộ môn, Phiên bản môn, Chapter theo version, Chapter Workspace, Lịch sử Quiz.
+- Clone version môn giữ đúng nghĩa clone bản làm việc 100%, không clone Release, không publish Open edX, không chạy diff.
+- Chapter Workspace chỉ quản lý tài liệu/câu hỏi/release; tạo Quiz để riêng ở `/bank/quiz`.
+- Không thêm migration mới.
+
 
 
 ## v25.9.15.9 - Review UI + Release Assistant + Course Quiz History/Rollback
@@ -257,3 +266,23 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 
 - Fixed fresh/cleared DB migration failure where legacy `0001_initial_schema` created current metadata columns before historical migrations ran.
 - Made migrations `0006_v25_9_14_0_concepts.py` and `0007_v25_9_14_1_question_family_id.py` idempotent for duplicate tables, columns, and indexes.
+
+## v25.9.15.6.1 - Bank UI Usability Hotfix
+
+- Chuyển form thêm Bộ môn/Môn/Version/Bài vào popup cạnh ô tìm kiếm.
+- Thêm bài chỉ cần nhập tên, hệ thống tự sinh số bài/ID.
+- Workspace bài tự khởi tạo, bỏ nút “Bắt đầu”.
+- Sửa upload tài liệu Bank Version dùng FormData đúng cách.
+- Thêm xem/xóa tài liệu đã upload.
+- Tự chạy kiểm tra thay đổi tài liệu và hiện kết quả bằng popup.
+- Tạo câu hỏi có chỉ tiêu và chặn vượt chỉ tiêu.
+- Chốt Release tự sinh mã release, không bắt người dùng nhập.
+- Danh sách câu hỏi đổi sang thẻ dễ đọc hơn.
+
+## v25.9.15.6.2 - Chapter Name Input Hotfix
+
+- Sửa popup thêm bài: chỉ nhập phần sau chữ `Bài`, ví dụ `1`, `2`, `1.1`, `1.2`.
+- Hệ thống tự tạo tên bài dạng `Bài {giá trị nhập}`.
+- Không còn hiển thị/nhắc `số bài` cho giáo viên.
+- Ưu tiên hiển thị `chapter.title` trong danh sách bài, breadcrumb, workspace, release title, library key và quiz title.
+- `chapter_no` giữ vai trò nội bộ để sắp xếp/unique, không phải dữ liệu người dùng phải nhập.

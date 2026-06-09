@@ -987,3 +987,86 @@ label { margin: 5px 0 4px; font-size: 12px; }
 .three-col-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .multipage-workspace .workspace-panel { min-height: 240px; }
 @media(max-width: 900px){ .three-col-form { grid-template-columns: 1fr; } }
+
+/* v25.9.15.6.1 bank UI usability hotfix */
+.search-action-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0 14px;
+}
+.bank-modal { width: min(620px, 94vw); }
+.bank-modal .mini-form label { display: grid; gap: 6px; font-size: 12px; font-weight: 700; color: #64748b; }
+.bank-modal .mini-form label span { display: block; }
+.btn.danger { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+.quota-box, .release-line {
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin: 10px 0;
+}
+.quota-box b, .release-line b { display: block; font-size: 18px; color: #0f172a; }
+.quota-box small, .release-line small { display: block; color: #64748b; margin-top: 3px; }
+.bank-question-card-list { display: grid; gap: 10px; }
+.bank-question-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 10px;
+  align-items: stretch;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #fff;
+  padding: 10px;
+}
+.bank-question-card .answer-box {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 13px;
+}
+.material-preview pre {
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  margin: 8px 0;
+}
+.diff-result-box .summary-grid { margin-bottom: 12px; }
+@media(max-width: 760px){
+  .search-action-bar { grid-template-columns: 1fr; }
+  .bank-question-card { grid-template-columns: 1fr; }
+}
+
+/* v25.9.15.6.2 chapter name input: user enters only the lesson label after “Bài” */
+.bank-modal .field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 6px;
+}
+.chapter-input-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.chapter-input-row .input-prefix {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+.bank-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
