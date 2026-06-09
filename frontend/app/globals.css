@@ -945,3 +945,31 @@ label { margin: 5px 0 4px; font-size: 12px; }
 .mini-status-grid small { display: block; color: #64748b; margin-top: 4px; }
 .compact-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .compact-table th, .compact-table td { border-bottom: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
+
+/* v25.9.15.4 simple bank workspace */
+.bank-browser-grid { display: grid; grid-template-columns: minmax(240px, 0.75fr) minmax(260px, 0.9fr) minmax(360px, 1.25fr); gap: 14px; align-items: stretch; }
+.bank-column { min-height: 360px; }
+.bank-column.wide { min-width: 0; }
+.mini-form { display: grid; gap: 8px; margin: 10px 0 14px; }
+.mini-form.version-form { grid-template-columns: minmax(130px, 0.7fr) minmax(180px, 1fr) auto; align-items: end; }
+.entity-list { display: grid; gap: 8px; max-height: 430px; overflow: auto; padding-right: 4px; }
+.entity-list.horizontal { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); max-height: none; }
+.entity-list.compact-list { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.entity-card { width: 100%; text-align: left; border: 1px solid var(--border); background: #fff; border-radius: 14px; padding: 11px 12px; cursor: pointer; display: grid; gap: 4px; }
+.entity-card b { color: #111827; font-size: 14px; word-break: break-word; }
+.entity-card small { line-height: 1.35; }
+.entity-card.active { border-color: #111827; background: #eef2ff; box-shadow: inset 4px 0 0 #111827; }
+.chapter-workspace { display: grid; gap: 14px; }
+.workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.workspace-panel { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: #fff; }
+.workspace-panel.full { grid-column: 1 / -1; }
+.workspace-panel h3 { margin: 0 0 6px; }
+.no-margin { margin: 0; }
+.mini-input { max-width: 120px; }
+.small-chunk-list { grid-template-columns: 1fr; max-height: 330px; }
+.bank-quiz-page .inline-form.compact-form { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: end; }
+@media(max-width: 1180px){
+  .bank-browser-grid { grid-template-columns: 1fr; }
+  .workspace-grid { grid-template-columns: 1fr; }
+  .mini-form.version-form { grid-template-columns: 1fr; }
+}

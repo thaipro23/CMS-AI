@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.course import CourseSyncState
-from app.models.question import Question
+from app.models.question import Question, QuestionReviewLog
 from app.models.question_bank import (
     BankQuestionFamily,
     BankReleaseQuestion,
@@ -29,6 +29,7 @@ from app.models.question_bank import (
     QuestionBankRelease,
     QuestionBankVersion,
     QuizBlueprint,
+    CourseQuizInstance,
     Subject,
     SubjectOffering,
     SubjectChapter,
@@ -265,10 +266,11 @@ class VersionedQuestionBankService:
         FPT-style terms are normalized to SP/SU/FA + 2-digit year, e.g.
         SP25 = Spring 2025, SU26 = Summer 2026, FA27 = Fall 2027.
 
-        A new offering can be cloned from another offering. Clone means new DB
-        rows are created for chapters, bank versions, materials, chunks,
-        concepts, families, and reusable approved questions. No IDs and no Open
-        edX Library/component IDs are reused.
+        A new offering can be cloned from another offering. Clone is an exact
+        working-copy operation: the new term gets new DB rows for chapters, bank
+        versions, materials, chunks, concepts, families, and reusable approved
+        questions. Release/Open edX Library records are intentionally not cloned;
+        teachers create a new Release manually only after they finish editing.
         """
         subject = self.db.get(Subject, subject_id)
         if not subject:
@@ -302,7 +304,9 @@ class VersionedQuestionBankService:
                 'term_policy': 'SP/SU/FA + 2-digit year, e.g. SP25/SU26/FA27',
                 'term': term_info,
                 'description': description or '',
-                'clone_policy': 'new_records_no_shared_ids',
+                'clone_policy': 'exact_working_copy_new_records_no_shared_ids',
+                'release_policy': 'release_not_cloned_create_manually_after_editing',
+                'diff_policy': 'only_when_material_changes_after_clone',
             },
         )
         self.db.add(item)
@@ -314,9 +318,6 @@ class VersionedQuestionBankService:
                 source=source_offering,
                 target=item,
                 actor=actor,
-                clone_chapters=clone_chapters,
-                clone_materials=clone_materials,
-                clone_questions=clone_questions,
             )
             item.metadata_json = {**(item.metadata_json or {}), 'cloned_from_offering_id': source_offering.id, 'clone_result': clone_result}
 
@@ -330,26 +331,23 @@ class VersionedQuestionBankService:
         source: SubjectOffering,
         target: SubjectOffering,
         actor: str | None = None,
-        clone_chapters: bool = True,
-        clone_materials: bool = True,
-        clone_questions: bool = True,
     ) -> dict:
-        """Clone a complete subject-version snapshot into a new subject-version.
+        """Clone an exact working snapshot into a new subject-version.
 
-        This avoids re-uploading unchanged material and avoids manually creating
-        Bài 1/Bài 2/Bài 3 again. Everything is copied as a new row, while
-        lineage fields point back to the source records for audit.
+        Product rule: clone version môn means copy the current working content
+        100% into a new term/version with fresh IDs. It does not run diff, does
+        not create/publish a Release, and does not reuse Open edX component IDs.
+        Release is a manual button after teachers finish editing the new term.
         """
         chapter_map: dict[str, SubjectChapter] = {}
         bank_map: dict[str, QuestionBankVersion] = {}
         material_map: dict[str, LearningMaterialVersion] = {}
         concept_map: dict[str, ConceptVersion] = {}
         family_map: dict[str, BankQuestionFamily] = {}
-        counts = {'chapters': 0, 'bank_versions': 0, 'materials': 0, 'chunks': 0, 'concepts': 0, 'families': 0, 'questions': 0, 'releases_skipped': 0}
+        counts = {'chapters': 0, 'bank_versions': 0, 'materials': 0, 'chunks': 0, 'concepts': 0, 'families': 0, 'questions': 0, 'releases_not_cloned': 0}
 
-        if clone_chapters:
-            for src in self.db.query(SubjectChapter).filter(SubjectChapter.subject_offering_id == source.id).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all():
-                dst = SubjectChapter(
+        for src in self.db.query(SubjectChapter).filter(SubjectChapter.subject_offering_id == source.id).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all():
+            dst = SubjectChapter(
                     id=str(uuid.uuid4()),
                     subject_id=target.subject_id,
                     subject_offering_id=target.id,
@@ -358,17 +356,18 @@ class VersionedQuestionBankService:
                     description=src.description,
                     sort_order=src.sort_order,
                     status=src.status,
-                )
-                self.db.add(dst)
-                self.db.flush()
-                chapter_map[src.id] = dst
-                counts['chapters'] += 1
+            )
+            self.db.add(dst)
+            self.db.flush()
+            chapter_map[src.id] = dst
+            counts['chapters'] += 1
 
         for src_bv in self.db.query(QuestionBankVersion).filter(QuestionBankVersion.subject_offering_id == source.id).order_by(QuestionBankVersion.created_at.asc()).all():
             dst_chapter = chapter_map.get(src_bv.chapter_id)
             if not dst_chapter:
                 continue
             dst_status = 'approved' if src_bv.status in {'published', 'approved'} else 'draft'
+            clone_title = f'{target.code} - Bài {dst_chapter.chapter_no} - {src_bv.version_code}'
             dst_bv = QuestionBankVersion(
                 id=str(uuid.uuid4()),
                 subject_id=target.subject_id,
@@ -376,23 +375,33 @@ class VersionedQuestionBankService:
                 subject_offering_id=target.id,
                 version_no=src_bv.version_no,
                 version_code=src_bv.version_code,
-                title=src_bv.title,
+                title=clone_title,
                 change_note=f'Clone từ {source.code}: {src_bv.change_note or ""}'.strip(),
                 status=dst_status,
                 based_on_version_id=src_bv.id,
                 created_by=actor,
                 approved_by=actor if dst_status == 'approved' else None,
                 published_at=None,
-                metadata_json={**(src_bv.metadata_json or {}), 'cloned_from_bank_version_id': src_bv.id, 'cloned_from_offering_id': source.id, 'clone_policy': 'new_records_no_shared_ids'},
+                metadata_json={
+                    **(src_bv.metadata_json or {}),
+                    'cloned_from_bank_version_id': src_bv.id,
+                    'cloned_from_offering_id': source.id,
+                    'clone_policy': 'exact_working_copy_new_records_no_shared_ids',
+                    'release_policy': 'release_not_cloned_create_manually_after_editing',
+                    'release_cloned': False,
+                    'diff_policy': 'only_when_material_changes_after_clone',
+                    'document_change_state': 'unchanged_after_clone',
+                    'diff_required': False,
+                    'diff_base_bank_version_id': src_bv.id,
+                },
             )
             self.db.add(dst_bv)
             self.db.flush()
             bank_map[src_bv.id] = dst_bv
             counts['bank_versions'] += 1
 
-            if clone_materials:
-                for src_mat in self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.bank_version_id == src_bv.id).order_by(LearningMaterialVersion.created_at.asc()).all():
-                    dst_mat = LearningMaterialVersion(
+            for src_mat in self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.bank_version_id == src_bv.id).order_by(LearningMaterialVersion.created_at.asc()).all():
+                dst_mat = LearningMaterialVersion(
                         id=str(uuid.uuid4()),
                         subject_id=target.subject_id,
                         chapter_id=dst_chapter.id,
@@ -404,16 +413,16 @@ class VersionedQuestionBankService:
                         storage_path=src_mat.storage_path,
                         content_hash=src_mat.content_hash,
                         version_no=src_mat.version_no,
-                        change_type='cloned_from_previous_term',
+                        change_type='cloned_unchanged',
                         uploaded_by=actor or src_mat.uploaded_by,
                         status=src_mat.status,
-                    )
-                    self.db.add(dst_mat)
-                    self.db.flush()
-                    material_map[src_mat.id] = dst_mat
-                    counts['materials'] += 1
-                    for src_chunk in self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == src_mat.id).order_by(MaterialChunk.chunk_index.asc()).all():
-                        self.db.add(MaterialChunk(
+                )
+                self.db.add(dst_mat)
+                self.db.flush()
+                material_map[src_mat.id] = dst_mat
+                counts['materials'] += 1
+                for src_chunk in self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == src_mat.id).order_by(MaterialChunk.chunk_index.asc()).all():
+                    self.db.add(MaterialChunk(
                             id=str(uuid.uuid4()),
                             material_version_id=dst_mat.id,
                             bank_version_id=dst_bv.id,
@@ -427,8 +436,8 @@ class VersionedQuestionBankService:
                             page_number=src_chunk.page_number,
                             source_ref=src_chunk.source_ref,
                             content_hash=src_chunk.content_hash,
-                        ))
-                        counts['chunks'] += 1
+                    ))
+                    counts['chunks'] += 1
 
             for src_concept in self.db.query(ConceptVersion).filter(ConceptVersion.bank_version_id == src_bv.id).order_by(ConceptVersion.created_at.asc()).all():
                 dst_concept = ConceptVersion(
@@ -470,108 +479,112 @@ class VersionedQuestionBankService:
                 family_map[src_family.id] = dst_family
                 counts['families'] += 1
 
-            if clone_questions:
-                questions = self.db.query(Question).filter(
-                    Question.bank_version_id == src_bv.id,
-                    Question.status.in_(['approved', 'published']),
-                    Question.is_retired.is_(False),
-                    Question.is_duplicate.is_(False),
-                ).order_by(Question.created_at.asc()).all()
-                for src_q in questions:
-                    dst_concept = concept_map.get(src_q.concept_version_id)
-                    # Resolve family by fingerprint/key because older question rows store only question_family_id.
-                    dst_family = None
-                    for fam in family_map.values():
-                        if fam.family_key == src_q.question_family_id or fam.family_key == getattr(src_q, 'question_family_id', None):
-                            dst_family = fam
-                            break
-                    new_q = Question(
-                        id=str(uuid.uuid4()),
-                        course_id=f'bank:{dst_bv.id}',
-                        source_course_id=src_q.source_course_id,
-                        department_id=target.department_id,
-                        subject_id=target.subject_id,
-                        subject_chapter_id=dst_chapter.id,
-                        bank_version_id=dst_bv.id,
-                        bank_release_id=None,
-                        previous_question_id=src_q.id,
-                        lineage_root_question_id=question_lineage_root(src_q),
-                        question_revision_no=int(src_q.question_revision_no or 1) + 1,
-                        is_carry_over=True,
-                        is_retired=False,
-                        material_version_id=material_map.get(src_q.material_version_id).id if src_q.material_version_id in material_map else None,
-                        concept_version_id=dst_concept.id if dst_concept else None,
-                        lesson_id=src_q.lesson_id,
-                        lesson_title=src_q.lesson_title,
-                        block_id=f'bank-version:{dst_bv.id}',
-                        topic_id=src_q.topic_id,
-                        topic=src_q.topic,
-                        concept_id=dst_concept.id if dst_concept else src_q.concept_id,
-                        concept_title=dst_concept.concept_title if dst_concept else src_q.concept_title,
-                        concept_key=dst_concept.concept_key if dst_concept else src_q.concept_key,
-                        question_family_id=dst_family.family_key if dst_family else src_q.question_family_id,
-                        variant_no=src_q.variant_no,
-                        source_evidence=src_q.source_evidence,
-                        difficulty=normalize_difficulty(src_q.difficulty),
-                        cognitive_level=src_q.cognitive_level,
-                        learning_objective=src_q.learning_objective,
-                        question_type=src_q.question_type,
-                        question_text=src_q.question_text,
-                        question_hash=src_q.question_hash,
-                        option_a=src_q.option_a,
-                        option_b=src_q.option_b,
-                        option_c=src_q.option_c,
-                        option_d=src_q.option_d,
-                        correct_answer=src_q.correct_answer,
-                        explanation=src_q.explanation,
-                        source_ref=f'term-clone:{source.id}:{src_q.id}',
-                        source_type='subject_offering_clone',
-                        source_page=src_q.source_page,
-                        source_timestamp_start=src_q.source_timestamp_start,
-                        source_timestamp_end=src_q.source_timestamp_end,
-                        source_chunk_id=src_q.source_chunk_id,
-                        source_node_id=f'bank-version:{dst_bv.id}',
-                        source_node_title=f'Clone từ {source.code}',
-                        chapter_node_id=dst_chapter.id,
-                        chapter_title=dst_chapter.title,
-                        target_library_id=None,
-                        target_library_key=None,
-                        source_excerpt=src_q.source_excerpt,
-                        tags=list(src_q.tags or []) + ['term-clone', f'from:{source.code}', f'to:{target.code}'],
-                        ai_rationale=src_q.ai_rationale,
-                        quality_score=src_q.quality_score,
-                        quality_flags=list(src_q.quality_flags or []) + ['cloned_from_previous_subject_offering'],
-                        draft_error_reason=None,
-                        draft_error_detail=None,
-                        repair_attempt_count=0,
-                        is_duplicate=False,
-                        duplicate_of_question_id=None,
-                        duplicate_score=None,
-                        generation_job_id=None,
-                        model_provider=src_q.model_provider,
-                        model_name=src_q.model_name,
-                        status='approved',
-                        version=1,
-                        reviewed_by=actor,
-                        reviewed_at=datetime.utcnow(),
-                        published_at=None,
-                        openedx_block_id=None,
-                        openedx_library_problem_id=None,
-                        imported_library_at=None,
-                        publish_error=None,
-                        publish_status=None,
-                        publish_verification_json=None,
-                        published_by=None,
-                        openedx_publish_status=None,
-                        openedx_verification_status=None,
-                        openedx_delete_status=None,
-                        openedx_manual_action_required=False,
-                    )
-                    self.db.add(new_q)
-                    counts['questions'] += 1
+            questions = self.db.query(Question).filter(
+                Question.bank_version_id == src_bv.id,
+                Question.status.in_(['approved', 'published']),
+                Question.is_retired.is_(False),
+                Question.is_duplicate.is_(False),
+            ).order_by(Question.created_at.asc()).all()
+            for src_q in questions:
+                dst_concept = concept_map.get(src_q.concept_version_id)
+                # Resolve family by fingerprint/key because older question rows store only question_family_id.
+                dst_family = None
+                for fam in family_map.values():
+                    if fam.family_key == src_q.question_family_id or fam.family_key == getattr(src_q, 'question_family_id', None):
+                        dst_family = fam
+                        break
+                new_q = Question(
+                    id=str(uuid.uuid4()),
+                    course_id=f'bank:{dst_bv.id}',
+                    source_course_id=src_q.source_course_id,
+                    department_id=target.department_id,
+                    subject_id=target.subject_id,
+                    subject_chapter_id=dst_chapter.id,
+                    bank_version_id=dst_bv.id,
+                    bank_release_id=None,
+                    previous_question_id=src_q.id,
+                    lineage_root_question_id=question_lineage_root(src_q),
+                    question_revision_no=int(src_q.question_revision_no or 1) + 1,
+                    is_carry_over=True,
+                    is_retired=False,
+                    material_version_id=material_map.get(src_q.material_version_id).id if src_q.material_version_id in material_map else None,
+                    concept_version_id=dst_concept.id if dst_concept else None,
+                    lesson_id=src_q.lesson_id,
+                    lesson_title=src_q.lesson_title,
+                    block_id=f'bank-version:{dst_bv.id}',
+                    topic_id=src_q.topic_id,
+                    topic=src_q.topic,
+                    concept_id=dst_concept.id if dst_concept else src_q.concept_id,
+                    concept_title=dst_concept.concept_title if dst_concept else src_q.concept_title,
+                    concept_key=dst_concept.concept_key if dst_concept else src_q.concept_key,
+                    question_family_id=dst_family.family_key if dst_family else src_q.question_family_id,
+                    variant_no=src_q.variant_no,
+                    source_evidence=src_q.source_evidence,
+                    difficulty=normalize_difficulty(src_q.difficulty),
+                    cognitive_level=src_q.cognitive_level,
+                    learning_objective=src_q.learning_objective,
+                    question_type=src_q.question_type,
+                    question_text=src_q.question_text,
+                    question_hash=src_q.question_hash,
+                    option_a=src_q.option_a,
+                    option_b=src_q.option_b,
+                    option_c=src_q.option_c,
+                    option_d=src_q.option_d,
+                    correct_answer=src_q.correct_answer,
+                    explanation=src_q.explanation,
+                    source_ref=f'term-clone:{source.id}:{src_q.id}',
+                    source_type='subject_offering_clone',
+                    source_page=src_q.source_page,
+                    source_timestamp_start=src_q.source_timestamp_start,
+                    source_timestamp_end=src_q.source_timestamp_end,
+                    source_chunk_id=src_q.source_chunk_id,
+                    source_node_id=f'bank-version:{dst_bv.id}',
+                    source_node_title=f'Clone từ {source.code}',
+                    chapter_node_id=dst_chapter.id,
+                    chapter_title=dst_chapter.title,
+                    target_library_id=None,
+                    target_library_key=None,
+                    source_excerpt=src_q.source_excerpt,
+                    tags=list(src_q.tags or []) + ['term-clone', f'from:{source.code}', f'to:{target.code}'],
+                    ai_rationale=src_q.ai_rationale,
+                    quality_score=src_q.quality_score,
+                    quality_flags=list(src_q.quality_flags or []) + ['cloned_from_previous_subject_offering'],
+                    draft_error_reason=None,
+                    draft_error_detail=None,
+                    repair_attempt_count=0,
+                    is_duplicate=False,
+                    duplicate_of_question_id=None,
+                    duplicate_score=None,
+                    generation_job_id=None,
+                    model_provider=src_q.model_provider,
+                    model_name=src_q.model_name,
+                    status='approved',
+                    version=1,
+                    reviewed_by=actor,
+                    reviewed_at=datetime.utcnow(),
+                    published_at=None,
+                    openedx_block_id=None,
+                    openedx_library_problem_id=None,
+                    imported_library_at=None,
+                    publish_error=None,
+                    publish_status=None,
+                    publish_verification_json=None,
+                    published_by=None,
+                    openedx_publish_status=None,
+                    openedx_verification_status=None,
+                    openedx_delete_status=None,
+                    openedx_manual_action_required=False,
+                )
+                self.db.add(new_q)
+                counts['questions'] += 1
 
-        counts['releases_skipped'] = self.db.query(QuestionBankRelease).filter(QuestionBankRelease.subject_offering_id == source.id).count()
-        return counts
+        counts['releases_not_cloned'] = self.db.query(QuestionBankRelease).filter(QuestionBankRelease.subject_offering_id == source.id).count()
+        return {
+            **counts,
+            'clone_mode': 'exact_working_copy',
+            'release_policy': 'Release không clone theo version môn; giáo viên bấm Chốt Release sau khi sửa xong.',
+            'diff_policy': 'Không diff khi clone; chỉ diff khi tài liệu ở version mới bị thay đổi.',
+        }
 
     def create_chapter(self, *, subject_id: str, chapter_no: int, title: str, description: str = '', sort_order: int | None = None, subject_offering_id: str | None = None) -> SubjectChapter:
         if subject_offering_id:
@@ -596,14 +609,18 @@ class VersionedQuestionBankService:
             offering = self.db.get(SubjectOffering, subject_offering_id)
             if not offering or offering.subject_id != subject_id:
                 raise ValueError('Phiên bản môn không thuộc môn đã chọn')
+        chapter = self.db.get(SubjectChapter, chapter_id)
+        offering = self.db.get(SubjectOffering, subject_offering_id) if subject_offering_id else None
+        clean_version_code = version_code.strip() or 'v1.0'
+        auto_title = f'{offering.code if offering else ""} - Bài {chapter.chapter_no if chapter else "?"} - {clean_version_code}'.strip(' -')
         item = QuestionBankVersion(
             id=str(uuid.uuid4()),
             subject_id=subject_id,
             chapter_id=chapter_id,
             version_no=self.next_bank_version_no(subject_id, chapter_id),
             subject_offering_id=subject_offering_id,
-            version_code=version_code.strip() or 'v1.0',
-            title=title.strip(),
+            version_code=clean_version_code,
+            title=title.strip() or auto_title,
             change_note=change_note or '',
             based_on_version_id=based_on_version_id,
             created_by=actor,
@@ -647,10 +664,13 @@ class VersionedQuestionBankService:
             raise ValueError('Không tìm thấy Bank Version đích')
         if source.id == target.id:
             raise ValueError('Không thể so sánh một Bank Version với chính nó')
-        if source.subject_id != target.subject_id or source.chapter_id != target.chapter_id:
-            raise ValueError('Chỉ được diff/carry-over giữa các Bank Version cùng môn và cùng chapter')
-        if source.subject_offering_id and target.subject_offering_id and source.subject_offering_id != target.subject_offering_id:
-            raise ValueError('Chỉ được diff/carry-over giữa các version trong cùng phiên bản môn triển khai')
+        same_subject = source.subject_id == target.subject_id
+        same_chapter = source.chapter_id == target.chapter_id
+        cloned_lineage = target.based_on_version_id == source.id or source.based_on_version_id == target.id
+        if not same_subject or (not same_chapter and not cloned_lineage):
+            raise ValueError('Chỉ được diff/carry-over giữa các Bank Version cùng môn và cùng bài. Với version môn clone, hệ thống dùng lineage để nhận ra bài tương ứng.')
+        if source.subject_offering_id and target.subject_offering_id and source.subject_offering_id != target.subject_offering_id and not cloned_lineage:
+            raise ValueError('Chỉ được diff/carry-over giữa các version trong cùng phiên bản môn, trừ trường hợp version mới clone từ version cũ')
         if target.status in {'published', 'archived'}:
             raise ValueError(f'Bank Version đích đang ở trạng thái {target.status}; không được sửa đè')
         return source, target
@@ -1046,12 +1066,16 @@ class VersionedQuestionBankService:
             LearningMaterialVersion.status != 'deleted',
         ).first()
         if existing and not replace_existing:
+            meta = version.metadata_json or {}
             return {
                 'ok': True,
                 'reused_existing': True,
                 'material_version': existing,
                 'chunks_created': self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == existing.id).count(),
                 'tokens_indexed': int(self.db.query(func.coalesce(func.sum(MaterialChunk.token_count), 0)).filter(MaterialChunk.material_version_id == existing.id).scalar() or 0),
+                'diff_required': bool(meta.get('diff_required')),
+                'diff_base_bank_version_id': meta.get('diff_base_bank_version_id') or version.based_on_version_id,
+                'document_change_state': meta.get('document_change_state') or 'unchanged',
                 'message': 'File này đã tồn tại trong Bank Version; không tạo bản trùng.',
             }
 
@@ -1133,14 +1157,29 @@ class VersionedQuestionBankService:
                     source_ref=source_ref,
                     content_hash=sha256_text(text, 64),
                 ))
-        version.metadata_json = {
+        uploaded_at = datetime.utcnow().isoformat()
+        meta = {
             **(version.metadata_json or {}),
-            'latest_material_upload_at': datetime.utcnow().isoformat(),
+            'latest_material_upload_at': uploaded_at,
             'latest_material_id': material.id,
             'latest_material_filename': filename,
+            'latest_material_change_type': change_type or 'initial',
             'material_chunks_created': chunks_created,
             'material_tokens_indexed': tokens_indexed,
         }
+        diff_required = bool(version.based_on_version_id)
+        if diff_required:
+            meta.update({
+                'document_change_state': 'changed_after_clone',
+                'diff_required': True,
+                'diff_base_bank_version_id': version.based_on_version_id,
+                'diff_trigger': 'material_uploaded_after_clone',
+                'diff_trigger_material_id': material.id,
+                'diff_trigger_filename': filename,
+                'diff_triggered_at': uploaded_at,
+                'release_policy': 'create_release_manually_after_reviewing_changed_material',
+            })
+        version.metadata_json = meta
         self.db.commit()
         self.db.refresh(material)
         return {
@@ -1150,7 +1189,10 @@ class VersionedQuestionBankService:
             'chunks_created': chunks_created,
             'tokens_indexed': tokens_indexed,
             'source_types': sorted(source_types),
-            'message': 'Tải tài liệu và tách nội dung vào Bank Version thành công.',
+            'diff_required': diff_required,
+            'diff_base_bank_version_id': version.based_on_version_id if diff_required else None,
+            'document_change_state': version.metadata_json.get('document_change_state') if version.metadata_json else None,
+            'message': 'Tải tài liệu và tách nội dung vào Bank Version thành công.' + (' Version này clone từ kỳ trước nên đã đánh dấu cần kiểm tra khác biệt tài liệu.' if diff_required else ''),
         }
 
     def _bank_generation_content(self, *, bank_version_id: str, material_version_ids: list[str] | None = None, max_input_tokens: int = 18000) -> tuple[str, list[MaterialChunk], int]:
@@ -1417,6 +1459,222 @@ class VersionedQuestionBankService:
             'message': 'Đã generate câu hỏi từ Bank Version. Câu hỏi cần review trước khi tạo Release.' if questions_created else 'Không tạo được câu hỏi mới.',
         }
 
+
+    def _require_bank_question(self, question_id: str, bank_version_id: str | None = None) -> Question:
+        question = self.db.get(Question, question_id)
+        if not question or not question.bank_version_id:
+            raise ValueError('Không tìm thấy câu hỏi trong ngân hàng đề')
+        if bank_version_id and question.bank_version_id != bank_version_id:
+            raise ValueError('Câu hỏi không thuộc Bank Version đang chọn')
+        return question
+
+    def review_bank_question(self, *, bank_version_id: str, question_id: str, action: str = 'approve', note: str = '', actor: str | None = None) -> dict:
+        version = self._require_bank_version(bank_version_id)
+        question = self._require_bank_question(question_id, bank_version_id=version.id)
+        action = (action or '').strip().lower()
+        target_status = {'approve': 'approved', 'reject': 'rejected', 'back_to_review': 'pending_review'}.get(action)
+        if not target_status:
+            raise ValueError('Hành động duyệt không hợp lệ')
+        if question.status == 'published':
+            raise ValueError('Câu hỏi đã nằm trong Release published, không đổi trạng thái trực tiếp ở đây')
+        old_status = question.status
+        question.status = target_status
+        question.reviewed_by = actor
+        question.reviewed_at = datetime.utcnow()
+        question.updated_at = datetime.utcnow()
+        if target_status == 'approved':
+            question.is_retired = False
+            question.retired_reason = None
+            question.retired_at = None
+        self.db.add(QuestionReviewLog(
+            id=str(uuid.uuid4()),
+            question_id=question.id,
+            old_status=old_status,
+            new_status=target_status,
+            actor=actor or 'teacher',
+            note=note or f'Bank review: {action}',
+        ))
+        self.db.commit()
+        self.db.refresh(question)
+        return {
+            'ok': True,
+            'question': question,
+            'old_status': old_status,
+            'new_status': target_status,
+            'message': 'Đã duyệt câu hỏi.' if target_status == 'approved' else ('Đã từ chối câu hỏi.' if target_status == 'rejected' else 'Đã đưa câu hỏi về trạng thái chờ duyệt.'),
+        }
+
+    def bulk_review_bank_questions(self, *, bank_version_id: str, action: str = 'approve', question_ids: list[str] | None = None, approve_all_pending: bool = False, note: str = '', actor: str | None = None) -> dict:
+        version = self._require_bank_version(bank_version_id)
+        action = (action or '').strip().lower()
+        if action not in {'approve', 'reject', 'back_to_review'}:
+            raise ValueError('Hành động duyệt không hợp lệ')
+        query = self.db.query(Question).filter(Question.bank_version_id == version.id)
+        if approve_all_pending:
+            query = query.filter(Question.status == 'pending_review')
+        else:
+            ids = [item for item in (question_ids or []) if item]
+            if not ids:
+                raise ValueError('Chưa chọn câu hỏi')
+            query = query.filter(Question.id.in_(ids))
+        rows = query.order_by(Question.created_at.asc()).all()
+        changed: list[str] = []
+        skipped: list[dict] = []
+        for question in rows:
+            if question.status == 'published':
+                skipped.append({'question_id': question.id, 'reason': 'published_question_not_changed'})
+                continue
+            try:
+                result = self.review_bank_question(bank_version_id=version.id, question_id=question.id, action=action, note=note, actor=actor)
+                changed.append(result['question'].id)
+            except Exception as exc:
+                skipped.append({'question_id': question.id, 'reason': str(exc)})
+        return {
+            'ok': True,
+            'changed_count': len(changed),
+            'skipped_count': len(skipped),
+            'changed_question_ids': changed,
+            'skipped': skipped,
+            'message': f'Đã xử lý {len(changed)} câu hỏi.' + (f' Bỏ qua {len(skipped)} câu.' if skipped else ''),
+        }
+
+    def mark_document_diff_resolved(self, *, bank_version_id: str, note: str = '', actor: str | None = None) -> dict:
+        version = self._require_bank_version(bank_version_id)
+        meta = dict(version.metadata_json or {})
+        meta.update({
+            'diff_required': False,
+            'document_change_state': 'diff_resolved',
+            'diff_resolved_at': datetime.utcnow().isoformat(),
+            'diff_resolved_by': actor,
+            'diff_resolved_note': note or 'Giáo viên đã kiểm tra thay đổi tài liệu.',
+        })
+        version.metadata_json = meta
+        version.updated_at = datetime.utcnow()
+        self.db.commit()
+        return {
+            'ok': True,
+            'bank_version_id': version.id,
+            'diff_required': False,
+            'document_change_state': 'diff_resolved',
+            'message': 'Đã đánh dấu tài liệu đã được kiểm tra. Có thể chốt Release nếu câu hỏi đã duyệt đủ.',
+        }
+
+    def release_readiness(self, *, bank_version_id: str) -> dict:
+        version = self._require_bank_version(bank_version_id)
+        meta = version.metadata_json or {}
+        questions = self.db.query(Question).filter(Question.bank_version_id == version.id).all()
+        active = [q for q in questions if not bool(q.is_retired)]
+        approved = [q for q in active if q.status in {'approved', 'published'} and not bool(q.is_duplicate)]
+        pending = [q for q in active if q.status == 'pending_review']
+        draft_error = [q for q in active if q.status == 'draft_error']
+        rejected = [q for q in active if q.status == 'rejected']
+        roots: dict[str, int] = {}
+        for q in approved:
+            root = question_lineage_root(q)
+            roots[root] = roots.get(root, 0) + 1
+        duplicate_lineage_roots = [root for root, count in roots.items() if count > 1]
+        diff_required = bool(meta.get('diff_required'))
+        checks = [
+            _check('document_change', 'fail' if diff_required else 'pass', 'Tài liệu đã thay đổi, cần bấm Kiểm tra thay đổi và đánh dấu đã xử lý trước khi chốt.' if diff_required else 'Tài liệu không còn yêu cầu kiểm tra thay đổi.', {'document_change_state': meta.get('document_change_state'), 'diff_base_bank_version_id': meta.get('diff_base_bank_version_id')}),
+            _check('approved_questions', 'pass' if approved else 'fail', f'Có {len(approved)} câu đã duyệt.' if approved else 'Chưa có câu đã duyệt để chốt Release.', {'approved_count': len(approved)}),
+            _check('pending_review', 'fail' if pending else 'pass', f'Còn {len(pending)} câu chờ duyệt.' if pending else 'Không còn câu chờ duyệt.', {'pending_review_count': len(pending)}),
+            _check('draft_error', 'warning' if draft_error else 'pass', f'Có {len(draft_error)} câu lỗi nháp; nên sửa hoặc bỏ trước khi chốt.' if draft_error else 'Không có câu lỗi nháp.', {'draft_error_count': len(draft_error)}, blocking=False),
+            _check('duplicate_lineage', 'fail' if duplicate_lineage_roots else 'pass', f'Có {len(duplicate_lineage_roots)} nhóm câu trùng gốc cần xử lý.' if duplicate_lineage_roots else 'Không phát hiện câu trùng gốc trong bộ đã duyệt.', {'duplicate_lineage_roots': duplicate_lineage_roots[:20]}),
+        ]
+        can_create = not any(item.get('blocking') for item in checks if item.get('status') == 'fail')
+        actions: list[str] = []
+        if diff_required:
+            actions.append('Bấm Kiểm tra thay đổi tài liệu, xử lý gợi ý, rồi đánh dấu đã xử lý.')
+        if pending:
+            actions.append('Duyệt hoặc từ chối các câu đang chờ duyệt.')
+        if not approved:
+            actions.append('Tạo hoặc duyệt thêm câu hỏi trước khi chốt.')
+        if duplicate_lineage_roots:
+            actions.append('Loại bớt câu trùng gốc để tránh một bộ đề có nhiều câu quá giống nhau.')
+        status = 'ready' if can_create else 'blocked'
+        return {
+            'ok': True,
+            'bank_version_id': version.id,
+            'can_create_release': can_create,
+            'status': status,
+            'checks': checks,
+            'stats': {
+                'total_questions': len(questions),
+                'active_questions': len(active),
+                'approved_count': len(approved),
+                'pending_review_count': len(pending),
+                'draft_error_count': len(draft_error),
+                'rejected_count': len(rejected),
+                'retired_count': len([q for q in questions if bool(q.is_retired)]),
+                'difficulty_counts': {
+                    'easy': len([q for q in approved if (q.difficulty or '').lower() == 'easy']),
+                    'medium': len([q for q in approved if (q.difficulty or '').lower() == 'medium']),
+                    'hard': len([q for q in approved if (q.difficulty or '').lower() == 'hard']),
+                },
+            },
+            'recommended_actions': actions,
+            'message': 'Đủ điều kiện chốt Release.' if can_create else 'Chưa nên chốt Release. Hãy xử lý các mục còn cảnh báo đỏ.',
+        }
+
+    def list_course_quiz_instances(self, *, openedx_course_id: str | None = None, bank_release_id: str | None = None, limit: int = 100) -> list[CourseQuizInstance]:
+        query = self.db.query(CourseQuizInstance)
+        if openedx_course_id:
+            query = query.filter(CourseQuizInstance.openedx_course_id == openedx_course_id)
+        if bank_release_id:
+            query = query.filter(CourseQuizInstance.bank_release_id == bank_release_id)
+        return query.order_by(CourseQuizInstance.created_at.desc()).limit(max(1, min(int(limit or 100), 300))).all()
+
+    async def rollback_course_quiz_instance(self, *, instance_id: str, mode: str = 'safe', note: str = '', actor: str | None = None) -> dict:
+        instance = self.db.get(CourseQuizInstance, instance_id)
+        if not instance:
+            raise ValueError('Không tìm thấy lịch sử Quiz')
+        meta = dict(instance.metadata_json or {})
+        mode = (mode or 'safe').lower()
+        delete_result: dict = {}
+        openedx_deleted = False
+        manual_required = True
+        if mode != 'manual' and instance.openedx_unit_node_id:
+            connector = get_openedx_connector()
+            delete_func = getattr(connector, 'delete_quiz_node', None)
+            if callable(delete_func):
+                try:
+                    delete_result = await delete_func(
+                        course_id=instance.openedx_course_id,
+                        node_id=instance.openedx_unit_node_id,
+                        metadata={'course_quiz_instance_id': instance.id, 'actor': actor, 'note': note, 'rollback_source': 'ai_server_course_quiz_history'},
+                    )
+                    openedx_deleted = bool(delete_result.get('ok') and delete_result.get('deleted'))
+                    manual_required = not openedx_deleted
+                except Exception as exc:
+                    delete_result = {'ok': False, 'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}'}
+                    manual_required = True
+            else:
+                delete_result = {'ok': False, 'status': 'delete_quiz_node_unavailable'}
+        instance.status = 'rolled_back' if openedx_deleted else 'rollback_manual_required'
+        instance.metadata_json = {
+            **meta,
+            'rollback': {
+                'mode': mode,
+                'actor': actor,
+                'note': note,
+                'rolled_back_at': datetime.utcnow().isoformat(),
+                'openedx_deleted': openedx_deleted,
+                'manual_cleanup_required': manual_required,
+                'delete_result': delete_result,
+            },
+        }
+        instance.updated_at = datetime.utcnow()
+        self.db.commit()
+        return {
+            'ok': True,
+            'course_quiz_instance_id': instance.id,
+            'status': instance.status,
+            'openedx_deleted': openedx_deleted,
+            'manual_cleanup_required': manual_required,
+            'delete_result': delete_result,
+            'message': 'Đã rollback Quiz trên Open edX.' if openedx_deleted else 'Đã đánh dấu cần kiểm tra/xóa Quiz thủ công trong Studio.',
+        }
+
     def release_library_key(self, *, subject: Subject, chapter: SubjectChapter, version: QuestionBankVersion) -> str:
         subject_slug = slugify(subject.code or subject.name, 'subject')
         chapter_slug = f'bai-{chapter.chapter_no}' if chapter.chapter_no else slugify(chapter.title, 'chapter')
@@ -1429,7 +1687,7 @@ class VersionedQuestionBankService:
             Question.status.in_(['approved', 'published']),
         ).order_by(Question.difficulty.asc(), Question.question_family_id.asc().nullslast(), Question.created_at.asc()).all()
 
-    def create_release(self, *, bank_version_id: str, release_code: str | None = None, title: str = '', include_approved_questions: bool = True, actor: str | None = None) -> QuestionBankRelease:
+    def create_release(self, *, bank_version_id: str, release_code: str | None = None, title: str = '', include_approved_questions: bool = True, actor: str | None = None, force: bool = False) -> QuestionBankRelease:
         version = self.db.get(QuestionBankVersion, bank_version_id)
         if not version:
             raise ValueError('Không tìm thấy Bank Version')
@@ -1437,6 +1695,9 @@ class VersionedQuestionBankService:
         chapter = self.db.get(SubjectChapter, version.chapter_id)
         if not subject or not chapter:
             raise ValueError('Bank Version thiếu Subject hoặc Chapter')
+        readiness = self.release_readiness(bank_version_id=version.id)
+        if not force and not readiness.get('can_create_release'):
+            raise ValueError('Chưa thể chốt Release: ' + readiness.get('message', 'Cần xử lý xong câu hỏi/tài liệu trước khi chốt.'))
         code = release_code or f'{subject.code}-B{chapter.chapter_no}-{version.version_code}'
         library_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
         questions = self._release_questions_for_version(version) if include_approved_questions else []
@@ -1677,6 +1938,345 @@ class VersionedQuestionBankService:
             ok = True
             message = 'An toàn để map.'
         return {'ok': ok, 'risk_level': risk, 'checks': checks, 'can_create_mapping': ok, 'message': message}
+
+
+    @staticmethod
+    def _target_counts_for_quiz(total_questions: int, easy: int, medium: int, hard: int) -> dict[str, int]:
+        total = max(int(total_questions or 0), 1)
+        weights = {'easy': max(easy, 0), 'medium': max(medium, 0), 'hard': max(hard, 0)}
+        if sum(weights.values()) <= 0:
+            weights = {'easy': 50, 'medium': 30, 'hard': 20}
+        raw = {key: total * weights[key] / sum(weights.values()) for key in weights}
+        counts = {key: int(raw[key]) for key in weights}
+        remaining = total - sum(counts.values())
+        for key in sorted(weights, key=lambda item: (raw[item] - counts[item], {'easy': 0, 'medium': 1, 'hard': 2}[item]), reverse=True):
+            if remaining <= 0:
+                break
+            counts[key] += 1
+            remaining -= 1
+        return counts
+
+    def _published_release_question_rows(self, release: QuestionBankRelease) -> tuple[list[BankReleaseQuestion], dict[str, Question]]:
+        rows = self.db.query(BankReleaseQuestion).filter(BankReleaseQuestion.bank_release_id == release.id).all()
+        if not rows:
+            raise ValueError('Release chưa có câu hỏi nào. Hãy publish release sang Open edX Library trước.')
+        question_ids = [row.question_id for row in rows]
+        questions = {question.id: question for question in self.db.query(Question).filter(Question.id.in_(question_ids)).all()}
+        missing_questions = [row.question_id for row in rows if row.question_id not in questions]
+        if missing_questions:
+            raise ValueError(f'Release có {len(missing_questions)} câu hỏi không còn tồn tại trong AI Server.')
+        return rows, questions
+
+    def _build_release_quiz_plan(
+        self,
+        *,
+        release: QuestionBankRelease,
+        total_questions: int,
+        difficulty_easy: int,
+        difficulty_medium: int,
+        difficulty_hard: int,
+        max_families_per_bank: int = 2,
+    ) -> dict:
+        if release.status != 'published':
+            raise ValueError(f'Release hiện là {release.status}; chỉ tạo quiz từ Release đã published.')
+        if not release.openedx_library_key:
+            raise ValueError('Release chưa có Open edX Library key. Hãy publish Library trước khi tạo quiz.')
+        rows, questions = self._published_release_question_rows(release)
+        by_component: dict[str, BankReleaseQuestion] = {}
+        duplicate_components: list[str] = []
+        for row in rows:
+            component = str(row.openedx_library_problem_id or '').strip().strip('"\'')
+            if not component:
+                raise ValueError(f'Release question {row.question_id} chưa có Open edX Library component. Hãy publish/re-publish Release.')
+            if component in by_component:
+                duplicate_components.append(component)
+            by_component[component] = row
+        if duplicate_components:
+            raise ValueError(f'Release chứa component Open edX bị trùng: {duplicate_components[:5]}')
+
+        # Group by difficulty + family. A family is never split across slots.
+        grouped: dict[str, dict[str, list[BankReleaseQuestion]]] = {'easy': {}, 'medium': {}, 'hard': {}}
+        for row in rows:
+            question = questions[row.question_id]
+            diff = normalize_difficulty(row.difficulty or question.difficulty)
+            family_id = str(row.question_family_id or question.question_family_id or f'family-{question.id}').strip()
+            grouped.setdefault(diff, {}).setdefault(family_id, []).append(row)
+
+        requested = self._target_counts_for_quiz(total_questions, difficulty_easy, difficulty_medium, difficulty_hard)
+        available = {diff: len(grouped.get(diff, {})) for diff in ('easy', 'medium', 'hard')}
+        effective = {diff: min(requested[diff], available[diff]) for diff in ('easy', 'medium', 'hard')}
+        nonempty = [diff for diff, count in available.items() if count]
+        for diff in nonempty:
+            if effective[diff] == 0:
+                effective[diff] = 1
+        desired_total = min(max(sum(requested.values()), len(nonempty)), sum(available.values()))
+        while sum(effective.values()) < desired_total:
+            candidates = [diff for diff in ('easy', 'medium', 'hard') if effective[diff] < available[diff]]
+            if not candidates:
+                break
+            chosen = max(candidates, key=lambda diff: (available[diff] - effective[diff], requested[diff] - effective[diff]))
+            effective[chosen] += 1
+        while sum(effective.values()) > desired_total:
+            candidates = [diff for diff in ('easy', 'medium', 'hard') if effective[diff] > 1]
+            if not candidates:
+                break
+            chosen = max(candidates, key=lambda diff: effective[diff] - requested[diff])
+            effective[chosen] -= 1
+
+        slots: list[dict] = []
+        coverage: list[dict] = []
+        slot_no = 1
+        assigned_question_ids: set[str] = set()
+        assigned_components: set[str] = set()
+        warnings: list[str] = []
+        max_families = max(1, int(max_families_per_bank or 2))
+        for diff in ('easy', 'medium', 'hard'):
+            families = list(grouped.get(diff, {}).items())
+            families.sort(key=lambda item: (-len(item[1]), item[0]))
+            target_slots = effective[diff]
+            if not families:
+                coverage.append({'difficulty': diff.upper(), 'target_slots': requested[diff], 'selected_slots': 0, 'available_families': 0, 'status': 'no_questions'})
+                continue
+            buckets = [[] for _ in range(max(target_slots, 1))]
+            loads = [0 for _ in buckets]
+            family_counts = [0 for _ in buckets]
+            for family_id, family_rows in families:
+                # Prefer buckets with fewer families first, then fewer variants.
+                candidates = [idx for idx in range(len(buckets)) if family_counts[idx] < max_families]
+                if not candidates:
+                    candidates = list(range(len(buckets)))
+                    warnings.append(f'{diff.upper()} có nhiều family hơn giới hạn {max_families} family/slot; một số slot sẽ chứa nhiều family hơn để không bỏ câu.')
+                idx = min(candidates, key=lambda i: (loads[i], family_counts[i], i))
+                buckets[idx].append((family_id, family_rows))
+                loads[idx] += len(family_rows)
+                family_counts[idx] += 1
+            for bucket in buckets:
+                if not bucket:
+                    continue
+                slot_question_ids: list[str] = []
+                problem_ids: list[str] = []
+                family_payloads: list[dict] = []
+                for family_id, family_rows in bucket:
+                    qids: list[str] = []
+                    for row in family_rows:
+                        question = questions[row.question_id]
+                        component = str(row.openedx_library_problem_id or '').strip().strip('"\'')
+                        if question.id in assigned_question_ids:
+                            raise ValueError(f'Câu hỏi {question.id} bị đưa vào nhiều slot; hệ thống từ chối tạo quiz.')
+                        if component in assigned_components:
+                            raise ValueError(f'Open edX component {component} bị đưa vào nhiều slot; hệ thống từ chối tạo quiz.')
+                        assigned_question_ids.add(question.id)
+                        assigned_components.add(component)
+                        slot_question_ids.append(question.id)
+                        problem_ids.append(component)
+                        qids.append(question.id)
+                    sample_question = questions[family_rows[0].question_id]
+                    family_payloads.append({
+                        'family_id': family_id,
+                        'family_name': sample_question.concept_title or sample_question.topic or family_id,
+                        'concept_id': sample_question.concept_id,
+                        'concept_title': sample_question.concept_title,
+                        'variant_count': len(qids),
+                        'question_ids': qids,
+                    })
+                slots.append({
+                    'slot_no': slot_no,
+                    'difficulty': diff.upper(),
+                    'pick_count': 1,
+                    'library_key': release.openedx_library_key,
+                    'openedx_problem_ids': problem_ids,
+                    'question_ids': slot_question_ids,
+                    'families': family_payloads,
+                    'family_names': [item['family_name'] for item in family_payloads],
+                    'variant_count': len(slot_question_ids),
+                    'rule': f'random 1/{max(len(slot_question_ids), 1)} variants',
+                    'warning': '',
+                })
+                slot_no += 1
+            coverage.append({'difficulty': diff.upper(), 'target_slots': requested[diff], 'selected_slots': len([s for s in slots if s['difficulty'] == diff.upper()]), 'available_families': len(families), 'status': 'ok'})
+        if not slots:
+            raise ValueError('Release không đủ câu hỏi/component để tạo bất kỳ Problem Bank slot nào.')
+        if len(slots) != int(total_questions):
+            warnings.append(f'Yêu cầu {total_questions} slot, thực tế tạo {len(slots)} slot vì không lặp/tách family.')
+        plan = {
+            'ok': True,
+            'planner_engine': 'bank_release_deterministic_v1',
+            'uses_llm': False,
+            'release_id': release.id,
+            'release_code': release.release_code,
+            'openedx_library_key': release.openedx_library_key,
+            'requested_total_questions': int(total_questions),
+            'total_questions': len(slots),
+            'target_counts': {k.upper(): v for k, v in requested.items()},
+            'effective_target_counts': {k.upper(): effective[k] for k in effective},
+            'coverage': coverage,
+            'slots': slots,
+            'warnings': list(dict.fromkeys(warnings)),
+            'assigned_question_count': len(assigned_question_ids),
+            'assigned_component_count': len(assigned_components),
+            'hard_guard': {'valid': True, 'summary': 'Release plan hợp lệ: không trùng question_id hoặc Open edX component giữa các slot'},
+            'message': f'Tạo kế hoạch từ Bank Release {release.release_code}: {len(slots)} Problem Bank slot, {len(assigned_components)} component.',
+        }
+        return plan
+
+    def preview_quiz_from_release(
+        self,
+        *,
+        bank_release_id: str,
+        total_questions: int = 15,
+        difficulty_easy: int = 50,
+        difficulty_medium: int = 30,
+        difficulty_hard: int = 20,
+        max_families_per_bank: int = 2,
+    ) -> dict:
+        release = self.db.get(QuestionBankRelease, bank_release_id)
+        if not release:
+            raise ValueError('Không tìm thấy Bank Release')
+        return self._build_release_quiz_plan(
+            release=release,
+            total_questions=total_questions,
+            difficulty_easy=difficulty_easy,
+            difficulty_medium=difficulty_medium,
+            difficulty_hard=difficulty_hard,
+            max_families_per_bank=max_families_per_bank,
+        )
+
+    async def create_quiz_from_release(
+        self,
+        *,
+        course_chapter_mapping_id: str,
+        quiz_title: str,
+        unit_title: str = 'Quiz tự luyện',
+        total_questions: int = 15,
+        difficulty_easy: int = 50,
+        difficulty_medium: int = 30,
+        difficulty_hard: int = 20,
+        max_families_per_bank: int = 2,
+        actor: str | None = None,
+        expected_bank_release_id: str | None = None,
+    ) -> dict:
+        chapter_mapping = self.db.get(EdxCourseChapterMapping, course_chapter_mapping_id)
+        if not chapter_mapping:
+            raise ValueError('Không tìm thấy chapter mapping')
+        course_mapping = self.db.get(EdxCourseMapping, chapter_mapping.course_mapping_id)
+        if not course_mapping:
+            raise ValueError('Không tìm thấy course mapping')
+        release_id = chapter_mapping.bank_release_id
+        if expected_bank_release_id and release_id != expected_bank_release_id:
+            raise ValueError('Release trên URL không khớp với chapter mapping. Hãy chọn lại mapping đúng Release.')
+        if not release_id:
+            raise ValueError('Chapter mapping chưa gắn Bank Release')
+        release = self.db.get(QuestionBankRelease, release_id)
+        if not release:
+            raise ValueError('Không tìm thấy Bank Release')
+        if release.status != 'published':
+            raise ValueError('Chỉ tạo Quiz từ Release đã published sang Open edX Library')
+        if not chapter_mapping.openedx_parent_node_id:
+            raise ValueError('Chapter mapping chưa có node Open edX để đặt Quiz')
+        validation = self._chapter_mapping_validation(
+            course_mapping_id=chapter_mapping.course_mapping_id,
+            subject_chapter_id=chapter_mapping.subject_chapter_id,
+            bank_release_id=release.id,
+            openedx_parent_node_id=chapter_mapping.openedx_parent_node_id,
+        )
+        if not validation.get('can_create_mapping'):
+            raise ValueError(f'Mapping không an toàn để tạo Quiz: {validation.get("message")}')
+        plan = self._build_release_quiz_plan(
+            release=release,
+            total_questions=total_questions,
+            difficulty_easy=difficulty_easy,
+            difficulty_medium=difficulty_medium,
+            difficulty_hard=difficulty_hard,
+            max_families_per_bank=max_families_per_bank,
+        )
+        subject = self.db.get(Subject, release.subject_id)
+        chapter = self.db.get(SubjectChapter, release.chapter_id)
+        connector = get_openedx_connector()
+        course_id = course_mapping.openedx_course_id
+        final_quiz_title = quiz_title.strip() if quiz_title and quiz_title.strip() else f'AI Learning Check - Bài {getattr(chapter, "chapter_no", "")}'
+        final_unit_title = unit_title.strip() if unit_title and unit_title.strip() else 'Quiz tự luyện'
+        instance = CourseQuizInstance(
+            id=str(uuid.uuid4()),
+            openedx_course_id=course_id,
+            subject_id=release.subject_id,
+            chapter_id=release.chapter_id,
+            subject_offering_id=release.subject_offering_id,
+            bank_release_id=release.id,
+            quiz_blueprint_id=None,
+            status='creating',
+            metadata_json={'plan': plan, 'validation': validation, 'actor': actor, 'created_from': 'bank_release'},
+        )
+        self.db.add(instance)
+        self.db.commit()
+        try:
+            quiz_result = await connector.create_quiz_node(
+                course_id=course_id,
+                parent_node_id=chapter_mapping.openedx_parent_node_id,
+                quiz_title=final_quiz_title,
+                unit_title=final_unit_title,
+                metadata={
+                    'bank_release_id': release.id,
+                    'bank_release_code': release.release_code,
+                    'subject_code': getattr(subject, 'code', None),
+                    'chapter_id': release.chapter_id,
+                    'source': 'ai_question_bank_release',
+                },
+            )
+            if quiz_result.get('ok') is not True:
+                raise RuntimeError(f'Open edX không tạo Quiz node thành công: {quiz_result}')
+            unit_node_id = quiz_result.get('leaf_unit_node_id') or quiz_result.get('unit_node_id')
+            if not unit_node_id:
+                raise RuntimeError('Open edX không trả leaf_unit_node_id sau khi tạo Quiz')
+            insert_result = await connector.insert_problem_banks(
+                course_id=course_id,
+                unit_node_id=unit_node_id,
+                slots=plan['slots'],
+                metadata={
+                    'bank_release_id': release.id,
+                    'bank_release_code': release.release_code,
+                    'openedx_library_key': release.openedx_library_key,
+                    'cleanup_legacy_ai_randomized_blocks': True,
+                    'source': 'bank_release_native_itembank',
+                },
+            )
+            if insert_result.get('ok') is not True:
+                raise RuntimeError(f'Open edX không tạo Problem Bank thành công: {insert_result}')
+            instance.openedx_quiz_node_id = quiz_result.get('created_nodes', [{}])[0].get('usage_key') if isinstance(quiz_result.get('created_nodes'), list) and quiz_result.get('created_nodes') else unit_node_id
+            instance.openedx_unit_node_id = unit_node_id
+            instance.status = 'created'
+            instance.metadata_json = {
+                **(instance.metadata_json or {}),
+                'quiz_title': final_quiz_title,
+                'unit_title': final_unit_title,
+                'quiz_result': quiz_result,
+                'problem_bank_result': insert_result,
+                'created_at': datetime.utcnow().isoformat(),
+            }
+            self.db.commit()
+            return {
+                'ok': True,
+                'status': 'created',
+                'course_quiz_instance_id': instance.id,
+                'openedx_course_id': course_id,
+                'openedx_quiz_node_id': instance.openedx_quiz_node_id,
+                'openedx_unit_node_id': instance.openedx_unit_node_id,
+                'bank_release_id': release.id,
+                'release_code': release.release_code,
+                'plan': plan,
+                'quiz_result': quiz_result,
+                'problem_bank_result': insert_result,
+                'message': 'Đã tạo Quiz và native Problem Bank từ Bank Release trên Open edX.',
+            }
+        except Exception as exc:
+            instance.status = 'failed'
+            instance.metadata_json = {
+                **(instance.metadata_json or {}),
+                'failed_at': datetime.utcnow().isoformat(),
+                'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}',
+                'manual_cleanup_note': 'Nếu Quiz node đã được tạo trước khi lỗi insert Problem Bank, hãy kiểm tra/xóa thủ công trong Studio. AI Server không báo thành công một phần.',
+            }
+            self.db.commit()
+            raise
 
     def create_quiz_blueprint(self, *, subject_id: str, chapter_id: str, title: str, total_questions: int, difficulty_easy: int, difficulty_medium: int, difficulty_hard: int, max_families_per_bank: int = 2, pick_count_per_slot: int = 1) -> QuizBlueprint:
         total_pct = difficulty_easy + difficulty_medium + difficulty_hard

@@ -45,6 +45,8 @@ class SubjectOfferingCreate(BaseModel):
     version_code: str = Field(default='', max_length=64)
     based_on_offering_id: str | None = None
     clone_from_offering_id: str | None = None
+    # Deprecated compatibility fields. If clone_from_offering_id is provided,
+    # backend always performs an exact working-copy clone. Release is not cloned.
     clone_chapters: bool = True
     clone_materials: bool = True
     clone_questions: bool = True
@@ -140,6 +142,7 @@ class BankReleaseCreate(BaseModel):
     release_code: str | None = None
     title: str = ''
     include_approved_questions: bool = True
+    force: bool = False  # chỉ dùng khi admin cố tình bỏ qua cảnh báo chốt release
 
 
 class BankReleasePublishRequest(BaseModel):
@@ -337,6 +340,9 @@ class MaterialUploadOut(BaseModel):
     chunks_created: int
     tokens_indexed: int
     source_types: list[str] = Field(default_factory=list)
+    diff_required: bool = False
+    diff_base_bank_version_id: str | None = None
+    document_change_state: str | None = None
     message: str
 
 
@@ -463,4 +469,138 @@ class BankRetireQuestionsOut(BaseModel):
     excluded_count: int = 0
     excluded_question_ids: list[str] = Field(default_factory=list)
     skipped: list[dict] = Field(default_factory=list)
+    message: str
+
+
+class BankQuestionReviewRequest(BaseModel):
+    action: str = Field(default='approve', pattern='^(approve|reject|back_to_review)$')
+    note: str = ''
+
+
+class BankQuestionReviewOut(BaseModel):
+    ok: bool
+    question: BankVersionQuestionOut
+    old_status: str
+    new_status: str
+    message: str
+
+
+class BankQuestionBulkReviewRequest(BaseModel):
+    action: str = Field(default='approve', pattern='^(approve|reject|back_to_review)$')
+    question_ids: list[str] = Field(default_factory=list)
+    approve_all_pending: bool = False
+    note: str = ''
+
+
+class BankQuestionBulkReviewOut(BaseModel):
+    ok: bool
+    changed_count: int
+    skipped_count: int
+    changed_question_ids: list[str] = Field(default_factory=list)
+    skipped: list[dict] = Field(default_factory=list)
+    message: str
+
+
+class BankDocumentDiffResolveRequest(BaseModel):
+    note: str = ''
+
+
+class BankDocumentDiffResolveOut(BaseModel):
+    ok: bool
+    bank_version_id: str
+    diff_required: bool
+    document_change_state: str
+    message: str
+
+
+class BankReleaseReadinessOut(BaseModel):
+    ok: bool
+    bank_version_id: str
+    can_create_release: bool
+    status: str
+    checks: list[dict] = Field(default_factory=list)
+    stats: dict = Field(default_factory=dict)
+    recommended_actions: list[str] = Field(default_factory=list)
+    message: str
+
+
+class BankReleaseQuizPreviewRequest(BaseModel):
+    total_questions: int = Field(default=15, ge=1, le=200)
+    difficulty_easy: int = Field(default=50, ge=0, le=100)
+    difficulty_medium: int = Field(default=30, ge=0, le=100)
+    difficulty_hard: int = Field(default=20, ge=0, le=100)
+    max_families_per_bank: int = Field(default=2, ge=1, le=10)
+
+
+class BankReleaseQuizCreateRequest(BankReleaseQuizPreviewRequest):
+    course_chapter_mapping_id: str
+    quiz_title: str = Field(default='', max_length=255)
+    unit_title: str = Field(default='Quiz tự luyện', max_length=255)
+
+
+class BankReleaseQuizPlanOut(BaseModel):
+    ok: bool
+    planner_engine: str | None = None
+    uses_llm: bool = False
+    release_id: str
+    release_code: str
+    openedx_library_key: str | None = None
+    requested_total_questions: int
+    total_questions: int
+    target_counts: dict = Field(default_factory=dict)
+    effective_target_counts: dict = Field(default_factory=dict)
+    coverage: list[dict] = Field(default_factory=list)
+    slots: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    assigned_question_count: int = 0
+    assigned_component_count: int = 0
+    hard_guard: dict = Field(default_factory=dict)
+    message: str = ''
+
+
+class BankReleaseQuizCreateOut(BaseModel):
+    ok: bool
+    status: str
+    course_quiz_instance_id: str
+    openedx_course_id: str
+    openedx_quiz_node_id: str | None = None
+    openedx_unit_node_id: str | None = None
+    bank_release_id: str
+    release_code: str
+    plan: dict = Field(default_factory=dict)
+    quiz_result: dict = Field(default_factory=dict)
+    problem_bank_result: dict = Field(default_factory=dict)
+    message: str
+
+
+class CourseQuizInstanceOut(BaseModel):
+    id: str
+    openedx_course_id: str
+    subject_id: str
+    chapter_id: str
+    subject_offering_id: str | None = None
+    bank_release_id: str
+    quiz_blueprint_id: str | None = None
+    openedx_quiz_node_id: str | None = None
+    openedx_unit_node_id: str | None = None
+    status: str
+    metadata_json: dict | None = None
+    created_at: datetime
+    updated_at: datetime
+    class Config:
+        from_attributes = True
+
+
+class CourseQuizRollbackRequest(BaseModel):
+    mode: str = Field(default='safe')  # safe = thử xóa trên Open edX nếu connector hỗ trợ, manual = chỉ đánh dấu cần xóa tay
+    note: str = ''
+
+
+class CourseQuizRollbackOut(BaseModel):
+    ok: bool
+    course_quiz_instance_id: str
+    status: str
+    openedx_deleted: bool = False
+    manual_cleanup_required: bool = False
+    delete_result: dict = Field(default_factory=dict)
     message: str

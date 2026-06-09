@@ -1,3 +1,24 @@
+
+
+## v25.9.15.9 - Review UI + Release Assistant + Course Quiz History/Rollback
+
+- Thêm API duyệt/bỏ câu hỏi trong Bank Version.
+- Thêm duyệt hàng loạt câu pending trong Bank Version.
+- Thêm endpoint đánh dấu thay đổi tài liệu đã xử lý.
+- Thêm Release Readiness Assistant để chặn chốt Release khi còn tài liệu/câu hỏi chưa xử lý.
+- Thêm lịch sử CourseQuizInstance và rollback best-effort.
+- Thêm connector endpoint xóa Quiz node trong Studio draft.
+- Cập nhật `/bank` và `/bank/quiz` theo nguyên tắc UI đơn giản cho giáo viên.
+- Không thêm migration mới.
+
+## v25.9.15.6 - Exact Subject Version Clone + Document Change Diff
+
+- Chốt lại nghiệp vụ clone version môn: clone là copy bản làm việc 100%, không clone Release và không publish Open edX.
+- Khi có `clone_from_offering_id`, backend luôn clone đủ bài/tài liệu/chunk/concept/family/câu hỏi approved sang ID mới.
+- Upload tài liệu mới vào Bank Version clone sẽ đánh dấu `diff_required=true` và gợi ý kiểm tra khác biệt.
+- Diff/carry-over cho phép so sánh Bank Version giữa hai kỳ khác nhau nếu có lineage clone.
+- UI `/bank` bỏ clone nửa vời, giải thích rõ Release là nút chốt tay sau khi sửa xong.
+
 ## v25.9.15.3.4 - Subject Version Tree Correction
 
 - Sửa wording và UI: `DOM123_SP25`, `DOM123_SU25`, `DOM123_FA25` là các phiên bản trực tiếp của môn `DOM123`, không có tầng container trung gian.
@@ -231,3 +252,8 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 - Treat Bank Version v1 and v2 as independent snapshots.
 - Retire action from diff now creates/marks a retired snapshot in the target version, never mutates the source version.
 - UI now calls retire endpoint with `to_bank_version_id`.
+
+## v25.9.15.3.4.2 - Migration Idempotency Hotfix
+
+- Fixed fresh/cleared DB migration failure where legacy `0001_initial_schema` created current metadata columns before historical migrations ran.
+- Made migrations `0006_v25_9_14_0_concepts.py` and `0007_v25_9_14_1_question_family_id.py` idempotent for duplicate tables, columns, and indexes.

@@ -628,6 +628,25 @@ class RealOpenEdXConnector(OpenEdXConnector):
             self._raise_for_openedx_error(response, 'create_quiz_node')
             return response.json()
 
+    async def delete_quiz_node(
+        self,
+        course_id: str,
+        node_id: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        endpoint = getattr(settings, 'openedx_quiz_node_delete_endpoint', '/api/ai-connector/v1/courses/{course_id}/quiz-nodes/delete')
+        url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
+        payload = {
+            'course_id': course_id,
+            'node_id': _clean_openedx_usage_key(node_id),
+            'metadata': metadata or {},
+        }
+        body = self._json_body(payload)
+        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
+            response = await client.post(url, content=body, headers=await self._json_request_headers('POST', url, body))
+            self._raise_for_openedx_error(response, 'delete_quiz_node')
+            return response.json()
+
     async def insert_problem_banks(
         self,
         course_id: str,

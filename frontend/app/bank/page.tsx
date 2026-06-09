@@ -1,27 +1,24 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import {
   BankRelease,
   BankSummary,
-  MappingValidation,
   BankVersion,
-  MaterialChunk,
+  BankReleaseReadiness,
   BankVersionQuestion,
-  BankVersionDiffPreview,
   Department,
-  EdxCourseMapping,
+  MaterialChunk,
   Subject,
-  SubjectOffering,
   SubjectChapter,
+  SubjectOffering,
 } from '../../types'
 import {
   createBankRelease,
   publishBankRelease,
   createBankVersion,
-  createCourseMapping,
-  validateCourseMapping,
   createDepartment,
   createSubject,
   createSubjectOffering,
@@ -31,18 +28,17 @@ import {
   getBankVersions,
   getBankMaterialChunks,
   getBankVersionQuestions,
-  getCourseMappings,
   getDepartments,
   getSubjectChapters,
   getSubjects,
   getSubjectOfferings,
   uploadBankMaterial,
   generateFromBankVersion,
-  validateCourseChapterMapping,
   previewBankVersionDiff,
-  carryOverBankQuestions,
-  retireBankQuestions,
-  createCourseChapterMapping,
+  reviewBankQuestion,
+  bulkReviewBankQuestions,
+  markBankDiffResolved,
+  getBankReleaseReadiness,
 } from '../../lib/api'
 
 const emptySummary: BankSummary = {
@@ -62,6 +58,29 @@ const emptySummary: BankSummary = {
   retired_questions: 0,
 }
 
+const TERMS = [
+  ['SP25', 'Spring/Xuân 2025'], ['SU25', 'Summer/Hè 2025'], ['FA25', 'Fall/Đông 2025'],
+  ['SP26', 'Spring/Xuân 2026'], ['SU26', 'Summer/Hè 2026'], ['FA26', 'Fall/Đông 2026'],
+  ['SP27', 'Spring/Xuân 2027'], ['SU27', 'Summer/Hè 2027'], ['FA27', 'Fall/Đông 2027'],
+]
+
+function questionStats(questions: BankVersionQuestion[]) {
+  const families = new Set(questions.map((item) => item.question_family_id).filter(Boolean))
+  return {
+    total: questions.length,
+    approved: questions.filter((item) => item.status === 'approved').length,
+    pending: questions.filter((item) => item.status === 'pending_review').length,
+    rejected: questions.filter((item) => item.status === 'rejected').length,
+    published: questions.filter((item) => item.status === 'published').length,
+    draftError: questions.filter((item) => item.status === 'draft_error').length,
+    families: families.size,
+  }
+}
+
+function classNames(...items: Array<string | false | null | undefined>) {
+  return items.filter(Boolean).join(' ')
+}
+
 export default function BankPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
@@ -72,22 +91,38 @@ export default function BankPage() {
   const [chapters, setChapters] = useState<SubjectChapter[]>([])
   const [versions, setVersions] = useState<BankVersion[]>([])
   const [releases, setReleases] = useState<BankRelease[]>([])
-  const [mappings, setMappings] = useState<EdxCourseMapping[]>([])
   const [materialChunks, setMaterialChunks] = useState<MaterialChunk[]>([])
   const [bankQuestions, setBankQuestions] = useState<BankVersionQuestion[]>([])
-  const [diffPreview, setDiffPreview] = useState<BankVersionDiffPreview | null>(null)
+  const [releaseReadiness, setReleaseReadiness] = useState<BankReleaseReadiness | null>(null)
+
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('')
   const [selectedSubjectId, setSelectedSubjectId] = useState('')
   const [selectedOfferingId, setSelectedOfferingId] = useState('')
   const [selectedChapterId, setSelectedChapterId] = useState('')
   const [selectedVersionId, setSelectedVersionId] = useState('')
+
+  const [deptCode, setDeptCode] = useState('')
+  const [deptName, setDeptName] = useState('')
+  const [subjectCode, setSubjectCode] = useState('')
+  const [subjectName, setSubjectName] = useState('')
+  const [term, setTerm] = useState('SP25')
+  const [cloneFromOfferingId, setCloneFromOfferingId] = useState('')
+  const [chapterNo, setChapterNo] = useState('1')
+  const [chapterTitle, setChapterTitle] = useState('Bài 1: Tổng quan')
+  const [bankVersionCode, setBankVersionCode] = useState('v1.0')
+  const [bankVersionNote, setBankVersionNote] = useState('Tài liệu gốc ban đầu')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [generateCount, setGenerateCount] = useState('5')
+  const [difficultyEasy, setDifficultyEasy] = useState('50')
+  const [difficultyMedium, setDifficultyMedium] = useState('30')
+  const [difficultyHard, setDifficultyHard] = useState('20')
+  const [releaseCode, setReleaseCode] = useState('')
+
   const [message, setMessage] = useState('')
-  const [mappingValidation, setMappingValidation] = useState<MappingValidation | null>(null)
-  const [chapterValidation, setChapterValidation] = useState<MappingValidation | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const refresh = async () => {
-    const [nextSummary, nextDepartments, nextSubjects, nextOfferings, nextChapters, nextVersions, nextReleases, nextMappings] = await Promise.all([
+  const load = async () => {
+    const [nextSummary, nextDepartments, nextSubjects, nextOfferings, nextChapters, nextVersions, nextReleases] = await Promise.all([
       getBankSummary(headers),
       getDepartments(headers),
       getSubjects(headers),
@@ -95,7 +130,6 @@ export default function BankPage() {
       getSubjectChapters(headers),
       getBankVersions(headers),
       getBankReleases(headers),
-      getCourseMappings(headers),
     ])
     setSummary(nextSummary)
     setDepartments(nextDepartments)
@@ -104,46 +138,54 @@ export default function BankPage() {
     setChapters(nextChapters)
     setVersions(nextVersions)
     setReleases(nextReleases)
-    setMappings(nextMappings)
-    if (!selectedDepartmentId && nextDepartments[0]) setSelectedDepartmentId(nextDepartments[0].id)
-    if (!selectedSubjectId && nextSubjects[0]) setSelectedSubjectId(nextSubjects[0].id)
-    if (!selectedOfferingId && nextOfferings[0]) setSelectedOfferingId(nextOfferings[0].id)
-    if (!selectedChapterId && nextChapters[0]) setSelectedChapterId(nextChapters[0].id)
-    if (!selectedVersionId && nextVersions[0]) setSelectedVersionId(nextVersions[0].id)
+
+    const nextDepartmentId = selectedDepartmentId || nextDepartments[0]?.id || ''
+    const nextSubjectId = selectedSubjectId || nextSubjects.find((item) => item.department_id === nextDepartmentId)?.id || nextSubjects[0]?.id || ''
+    const nextOfferingId = selectedOfferingId || nextOfferings.find((item) => item.subject_id === nextSubjectId)?.id || ''
+    const nextChapterId = selectedChapterId || nextChapters.find((item) => item.subject_offering_id === nextOfferingId)?.id || ''
+    const nextVersionId = selectedVersionId || nextVersions.find((item) => item.chapter_id === nextChapterId)?.id || ''
+
+    setSelectedDepartmentId(nextDepartmentId)
+    setSelectedSubjectId(nextSubjectId)
+    setSelectedOfferingId(nextOfferingId)
+    setSelectedChapterId(nextChapterId)
+    setSelectedVersionId(nextVersionId)
+  }
+
+  const loadVersionDetail = async (bankVersionId: string) => {
+    if (!bankVersionId) {
+      setMaterialChunks([])
+      setBankQuestions([])
+      setReleaseReadiness(null)
+      return
+    }
+    const [chunks, questions, readiness] = await Promise.all([
+      getBankMaterialChunks(headers, bankVersionId).catch(() => []),
+      getBankVersionQuestions(headers, bankVersionId).catch(() => []),
+      getBankReleaseReadiness(headers, bankVersionId).catch(() => null),
+    ])
+    setMaterialChunks(chunks)
+    setBankQuestions(questions)
+    setReleaseReadiness(readiness)
   }
 
   useEffect(() => {
-    refresh().catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được ngân hàng đề'))
+    load().catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được ngân hàng đề'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    if (!selectedVersionId) return
-    Promise.all([
-      getBankMaterialChunks(headers, selectedVersionId).catch(() => []),
-      getBankVersionQuestions(headers, selectedVersionId).catch(() => []),
-    ]).then(([chunks, questions]) => {
-      setMaterialChunks(chunks)
-      setBankQuestions(questions)
-    }).catch(() => null)
-  }, [headers, selectedVersionId])
-
-  if (!can('view_questions')) return <div className="card empty-state">Bạn không có quyền xem ngân hàng đề.</div>
+    loadVersionDetail(selectedVersionId).catch(() => null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVersionId])
 
   const run = async (work: () => Promise<unknown>, ok: string) => {
     setBusy(true)
     setMessage('')
     try {
       await work()
-      await refresh()
-      if (selectedVersionId) {
-        const [chunks, questions] = await Promise.all([
-          getBankMaterialChunks(headers, selectedVersionId).catch(() => []),
-          getBankVersionQuestions(headers, selectedVersionId).catch(() => []),
-        ])
-        setMaterialChunks(chunks)
-        setBankQuestions(questions)
-      }
+      await load()
+      await loadVersionDetail(selectedVersionId)
       setMessage(ok)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Thao tác thất bại')
@@ -152,240 +194,284 @@ export default function BankPage() {
     }
   }
 
+  const subjectsOfDepartment = subjects.filter((item) => item.department_id === selectedDepartmentId)
+  const versionsOfSubject = offerings.filter((item) => item.subject_id === selectedSubjectId)
+  const chaptersOfVersion = chapters.filter((item) => item.subject_offering_id === selectedOfferingId)
+  const bankVersionsOfChapter = versions.filter((item) => item.chapter_id === selectedChapterId && (!selectedOfferingId || item.subject_offering_id === selectedOfferingId))
+  const releasesOfVersion = releases.filter((item) => item.bank_version_id === selectedVersionId)
+  const publishedReleases = releasesOfVersion.filter((item) => item.status === 'published')
+  const selectedDepartment = departments.find((item) => item.id === selectedDepartmentId)
   const selectedSubject = subjects.find((item) => item.id === selectedSubjectId)
   const selectedOffering = offerings.find((item) => item.id === selectedOfferingId)
   const selectedChapter = chapters.find((item) => item.id === selectedChapterId)
   const selectedVersion = versions.find((item) => item.id === selectedVersionId)
+  const selectedVersionMeta = selectedVersion?.metadata_json || {}
+  const diffRequired = Boolean(selectedVersionMeta.diff_required)
+  const diffBaseBankVersionId = String(selectedVersionMeta.diff_base_bank_version_id || selectedVersion?.based_on_version_id || '')
+  const isClonedBankVersion = Boolean(selectedVersion?.based_on_version_id || selectedVersionMeta.cloned_from_bank_version_id)
+  const stats = questionStats(bankQuestions)
 
-  return <div className="bank-page">
+  const runDiffPreview = async () => {
+    if (!selectedVersionId || !diffBaseBankVersionId) return
+    setBusy(true)
+    setMessage('')
+    try {
+      const result = await previewBankVersionDiff(headers, selectedVersionId, { base_bank_version_id: diffBaseBankVersionId, persist: true })
+      await load()
+      await loadVersionDetail(selectedVersionId)
+      setMessage(`Đã kiểm tra khác biệt tài liệu: độ giống ${Math.round((result.material_similarity || 0) * 100)}%, ${result.summary.review_candidate_count} câu cần xem lại, ${result.summary.retire_candidate_count} câu có thể cần bỏ, ${result.summary.carry_over_candidate_count} câu có thể dùng lại.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không kiểm tra được khác biệt tài liệu')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selectDepartment = (id: string) => {
+    setSelectedDepartmentId(id)
+    const firstSubject = subjects.find((item) => item.department_id === id)
+    setSelectedSubjectId(firstSubject?.id || '')
+    const firstOffering = firstSubject ? offerings.find((item) => item.subject_id === firstSubject.id) : undefined
+    setSelectedOfferingId(firstOffering?.id || '')
+    const firstChapter = firstOffering ? chapters.find((item) => item.subject_offering_id === firstOffering.id) : undefined
+    setSelectedChapterId(firstChapter?.id || '')
+    const firstVersion = firstChapter ? versions.find((item) => item.chapter_id === firstChapter.id) : undefined
+    setSelectedVersionId(firstVersion?.id || '')
+  }
+
+  const selectSubject = (id: string) => {
+    setSelectedSubjectId(id)
+    const firstOffering = offerings.find((item) => item.subject_id === id)
+    setSelectedOfferingId(firstOffering?.id || '')
+    const firstChapter = firstOffering ? chapters.find((item) => item.subject_offering_id === firstOffering.id) : undefined
+    setSelectedChapterId(firstChapter?.id || '')
+    const firstVersion = firstChapter ? versions.find((item) => item.chapter_id === firstChapter.id) : undefined
+    setSelectedVersionId(firstVersion?.id || '')
+  }
+
+  const selectOffering = (id: string) => {
+    setSelectedOfferingId(id)
+    const firstChapter = chapters.find((item) => item.subject_offering_id === id)
+    setSelectedChapterId(firstChapter?.id || '')
+    const firstVersion = firstChapter ? versions.find((item) => item.chapter_id === firstChapter.id) : undefined
+    setSelectedVersionId(firstVersion?.id || '')
+  }
+
+  const selectChapter = (id: string) => {
+    setSelectedChapterId(id)
+    const firstVersion = versions.find((item) => item.chapter_id === id && (!selectedOfferingId || item.subject_offering_id === selectedOfferingId))
+    setSelectedVersionId(firstVersion?.id || '')
+  }
+
+  if (!can('view_questions')) return <div className="card empty-state">Bạn không có quyền xem ngân hàng đề.</div>
+
+  return <div className="bank-workspace page-stack">
     <section className="card page-intro">
-      <div className="eyebrow">v25.9.15.3.4 · Phiên bản môn SP/SU/FA · Clone version</div>
-      <h1>Ngân hàng đề theo phiên bản</h1>
-      <p>Chuẩn mới: tạo Bộ môn → Môn → Phiên bản môn (SP25/SU26/FA27) → Bài/Chapter → Bank Release. Mỗi Bank Release sinh đúng một Open edX Library, sau đó nhiều course Open edX có thể map vào release đó.</p>
-      {message ? <div className={message.includes('thất bại') || message.includes('lỗi') ? 'alert danger' : 'alert success'}>{message}</div> : null}
+      <div>
+        <div className="eyebrow">v25.9.15.9 · Review, chốt Release, lịch sử Quiz</div>
+        <h1>Ngân hàng đề</h1>
+        <p>Bộ môn → Môn → Phiên bản môn → Bài. Clone version môn chỉ copy bản làm việc; Release vẫn là nút chốt riêng sau khi sửa xong.</p>
+      </div>
+      <Link className="btn secondary" href="/bank/quiz">Map Open edX & tạo Quiz</Link>
     </section>
+
+    {message ? <div className={classNames('alert', message.toLowerCase().includes('lỗi') || message.toLowerCase().includes('thất bại') ? 'danger' : 'success')}>{message}</div> : null}
 
     <section className="metrics-grid compact-summary">
       <div className="metric-card"><small>Bộ môn</small><b>{summary.departments}</b></div>
       <div className="metric-card"><small>Môn</small><b>{summary.subjects}</b></div>
-      <div className="metric-card"><small>Phiên bản môn / Bài</small><b>{summary.subject_offerings || 0}/{summary.chapters}</b></div>
-      <div className="metric-card"><small>Release đã publish</small><b>{summary.published_releases}/{summary.releases}</b></div>
-      <div className="metric-card"><small>Tài liệu/chunk</small><b>{summary.material_versions}/{summary.material_chunks}</b></div>
+      <div className="metric-card"><small>Phiên bản môn</small><b>{summary.subject_offerings || 0}</b></div>
+      <div className="metric-card"><small>Bài</small><b>{summary.chapters}</b></div>
       <div className="metric-card"><small>Câu ngân hàng</small><b>{summary.bank_questions}</b></div>
-      <div className="metric-card"><small>Clone dùng lại / Loại khỏi version</small><b>{summary.carry_over_questions || 0}/{summary.retired_questions || 0}</b></div>
+      <div className="metric-card"><small>Release public</small><b>{summary.published_releases}/{summary.releases}</b></div>
     </section>
 
-    <section className="card">
-      <h2>1. Khai báo Bộ môn → Môn → Phiên bản môn → Bài</h2>
-      <div className="inline-form compact-form">
-        <label>Bộ môn code<input id="dept-code" className="input" placeholder="DESIGN" /></label>
-        <label>Tên bộ môn<input id="dept-name" className="input" placeholder="Bộ môn Thiết kế" /></label>
-        <button className="btn" disabled={busy || !can('manage_settings')} onClick={() => {
-          const code = (document.getElementById('dept-code') as HTMLInputElement)?.value || ''
-          const name = (document.getElementById('dept-name') as HTMLInputElement)?.value || ''
-          run(() => createDepartment(headers, { code, name }), 'Đã tạo bộ môn')
-        }}>Tạo bộ môn</button>
+    <section className="bank-browser-grid">
+      <div className="card bank-column">
+        <div className="section-head"><div><h2>Bộ môn</h2><small>Click bộ môn để xem môn bên trong.</small></div></div>
+        <div className="mini-form">
+          <input className="input" placeholder="Code: DESIGN" value={deptCode} onChange={(event) => setDeptCode(event.target.value)} />
+          <input className="input" placeholder="Tên bộ môn" value={deptName} onChange={(event) => setDeptName(event.target.value)} />
+          <button className="btn" disabled={busy || !can('manage_settings')} onClick={() => run(() => createDepartment(headers, { code: deptCode, name: deptName }), 'Đã thêm bộ môn')}>+ Thêm bộ môn</button>
+        </div>
+        <div className="entity-list">
+          {departments.map((item) => <button key={item.id} className={classNames('entity-card', selectedDepartmentId === item.id && 'active')} onClick={() => selectDepartment(item.id)}>
+            <b>{item.name}</b><small>{item.code}</small>
+          </button>)}
+        </div>
       </div>
-      <div className="inline-form compact-form">
-        <label>Chọn bộ môn<select className="input" value={selectedDepartmentId} onChange={(event) => setSelectedDepartmentId(event.target.value)}>{departments.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
-        <label>Mã môn<input id="subject-code" className="input" placeholder="DOM123" /></label>
-        <label>Tên môn<input id="subject-name" className="input" placeholder="Thiết kế nhận diện thương hiệu" /></label>
-        <button className="btn" disabled={busy || !selectedDepartmentId || !can('manage_settings')} onClick={() => {
-          const code = (document.getElementById('subject-code') as HTMLInputElement)?.value || ''
-          const name = (document.getElementById('subject-name') as HTMLInputElement)?.value || ''
-          run(() => createSubject(headers, { department_id: selectedDepartmentId, code, name }), 'Đã tạo môn học')
-        }}>Tạo môn</button>
-      </div>
-      <div className="inline-form compact-form">
-        <label>Chọn môn<select className="input" value={selectedSubjectId} onChange={(event) => setSelectedSubjectId(event.target.value)}>{subjects.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
-        <label>Kỳ<select id="offering-term" className="input" defaultValue="SP25"><option value="SP25">SP25 · Spring/Xuân 2025</option><option value="SU25">SU25 · Summer/Hè 2025</option><option value="FA25">FA25 · Fall/Đông 2025</option><option value="SP26">SP26 · Spring/Xuân 2026</option><option value="SU26">SU26 · Summer/Hè 2026</option><option value="FA26">FA26 · Fall/Đông 2026</option><option value="SP27">SP27 · Spring/Xuân 2027</option><option value="SU27">SU27 · Summer/Hè 2027</option><option value="FA27">FA27 · Fall/Đông 2027</option></select></label>
-        <label>Clone từ phiên bản môn<select id="clone-offering-id" className="input" defaultValue=""><option value="">Tạo version trống</option>{offerings.filter((item) => item.subject_id === selectedSubjectId).map((item) => <option key={item.id} value={item.id}>{item.code}</option>)}</select></label>
-        <button className="btn" disabled={busy || !selectedSubjectId || !can('manage_settings')} onClick={() => {
-          const term = (document.getElementById('offering-term') as HTMLSelectElement)?.value || 'SP25'
-          const clone_from_offering_id = (document.getElementById('clone-offering-id') as HTMLSelectElement)?.value || null
-          run(() => createSubjectOffering(headers, { subject_id: selectedSubjectId, term, clone_from_offering_id, clone_chapters: true, clone_materials: true, clone_questions: true }), clone_from_offering_id ? 'Đã clone phiên bản môn thành bản ghi mới' : 'Đã tạo phiên bản môn')
-        }}>Tạo / clone phiên bản môn</button>
-      </div>
-      <div className="inline-form compact-form">
-        <label>Chọn phiên bản môn<select className="input" value={selectedOfferingId} onChange={(event) => setSelectedOfferingId(event.target.value)}>{offerings.filter((item) => item.subject_id === selectedSubjectId).map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
-        <label>Số bài<input id="chapter-no" className="input" type="number" defaultValue={1} /></label>
-        <label>Tên bài/chapter<input id="chapter-title" className="input" placeholder="Bài 1: Tổng quan" /></label>
-        <button className="btn" disabled={busy || !selectedSubjectId || !can('manage_settings')} onClick={() => {
-          const chapter_no = Number((document.getElementById('chapter-no') as HTMLInputElement)?.value || '1')
-          const title = (document.getElementById('chapter-title') as HTMLInputElement)?.value || ''
-          run(() => createSubjectChapter(headers, { subject_id: selectedSubjectId, subject_offering_id: selectedOfferingId || null, chapter_no, title, sort_order: chapter_no }), 'Đã tạo bài/chapter')
-        }}>Tạo chapter</button>
-      </div>
-    </section>
 
-    <section className="card">
-      <h2>2. Tạo phiên bản ngân hàng đề</h2>
-      <p className="muted">Phiên bản môn chính là version triển khai của môn. Mỗi version có các bài riêng và câu hỏi riêng; câu dùng lại được sẽ clone sang version mới và approved luôn.</p>
-      <div className="inline-form compact-form">
-        <label>Bài/Chapter<select className="input" value={selectedChapterId} onChange={(event) => setSelectedChapterId(event.target.value)}>{chapters.map((item) => <option key={item.id} value={item.id}>{item.chapter_no}. {item.title}</option>)}</select></label>
-        <label>Version<input id="version-code" className="input" placeholder="v1.0" defaultValue="v1.0" /></label>
-        <label>Ghi chú thay đổi<input id="change-note" className="input" placeholder="Tài liệu gốc ban đầu" /></label>
-        <button className="btn" disabled={busy || !selectedSubjectId || !selectedChapterId || !can('edit_questions')} onClick={() => {
-          const version_code = (document.getElementById('version-code') as HTMLInputElement)?.value || 'v1.0'
-          const change_note = (document.getElementById('change-note') as HTMLInputElement)?.value || ''
-          run(() => createBankVersion(headers, { subject_id: selectedSubjectId, subject_offering_id: selectedOfferingId || selectedChapter?.subject_offering_id || null, chapter_id: selectedChapterId, version_code, title: `${selectedSubject?.code || ''} - ${selectedOffering?.term || ''} - ${selectedChapter?.title || ''} - ${version_code}`, change_note }), 'Đã tạo Bank Version')
-        }}>Tạo Bank Version</button>
+      <div className="card bank-column">
+        <div className="section-head"><div><h2>Môn</h2><small>{selectedDepartment ? `Trong ${selectedDepartment.name}` : 'Chọn bộ môn trước.'}</small></div></div>
+        <div className="mini-form">
+          <input className="input" placeholder="Mã môn: WEB107" value={subjectCode} onChange={(event) => setSubjectCode(event.target.value)} />
+          <input className="input" placeholder="Tên môn" value={subjectName} onChange={(event) => setSubjectName(event.target.value)} />
+          <button className="btn" disabled={busy || !selectedDepartmentId || !can('manage_settings')} onClick={() => run(() => createSubject(headers, { department_id: selectedDepartmentId, code: subjectCode, name: subjectName }), 'Đã thêm môn')}>+ Thêm môn</button>
+        </div>
+        <div className="entity-list">
+          {subjectsOfDepartment.map((item) => <button key={item.id} className={classNames('entity-card', selectedSubjectId === item.id && 'active')} onClick={() => selectSubject(item.id)}>
+            <b>{item.code}</b><small>{item.name}</small>
+          </button>)}
+          {!subjectsOfDepartment.length ? <div className="empty-state">Chưa có môn trong bộ môn này.</div> : null}
+        </div>
+      </div>
+
+      <div className="card bank-column wide">
+        <div className="section-head"><div><h2>Phiên bản môn</h2><small>{selectedSubject ? `Ví dụ ${selectedSubject.code}_SP25, ${selectedSubject.code}_SU25, ${selectedSubject.code}_FA25` : 'Chọn môn trước.'}</small></div></div>
+        <div className="mini-form version-form">
+          <select className="input" value={term} onChange={(event) => setTerm(event.target.value)}>{TERMS.map(([value, label]) => <option key={value} value={value}>{value} · {label}</option>)}</select>
+          <select className="input" value={cloneFromOfferingId} onChange={(event) => setCloneFromOfferingId(event.target.value)}>
+            <option value="">Tạo version trống</option>
+            {versionsOfSubject.map((item) => <option key={item.id} value={item.id}>Clone từ {item.code}</option>)}
+          </select>
+          <button className="btn" disabled={busy || !selectedSubjectId || !can('manage_settings')} onClick={() => run(() => createSubjectOffering(headers, {
+            subject_id: selectedSubjectId,
+            term,
+            clone_from_offering_id: cloneFromOfferingId || null,
+          }), cloneFromOfferingId ? 'Đã clone 100% bản làm việc sang version mới. Release chưa tạo; hãy chốt sau khi sửa xong.' : 'Đã tạo phiên bản môn')}>+ Tạo / clone version</button>
+          <small className="muted full-row">{cloneFromOfferingId ? 'Clone sẽ copy bài, tài liệu, câu hỏi đã duyệt và nhóm kiến thức sang ID mới. Không clone Release, không publish Open edX, không chạy diff lúc clone.' : 'Tạo version trống nếu kỳ mới chưa muốn lấy dữ liệu từ kỳ cũ.'}</small>
+        </div>
+        <div className="entity-list horizontal">
+          {versionsOfSubject.map((item) => <button key={item.id} className={classNames('entity-card', selectedOfferingId === item.id && 'active')} onClick={() => selectOffering(item.id)}>
+            <b>{item.code}</b><small>{item.name || item.term || item.version_code}</small>
+          </button>)}
+          {!versionsOfSubject.length ? <div className="empty-state">Chưa có version môn. Có thể tạo mới hoặc clone từ kỳ trước.</div> : null}
+        </div>
       </div>
     </section>
 
-    <section className="card">
-      <h2>3. Upload tài liệu và sinh câu hỏi</h2>
-      <p className="muted">Chọn Bank Version, upload PDF/DOCX/PPTX/XLSX/CSV/TXT. AI Server tách chunk, sau đó generate câu hỏi vào chính Bank Version này. Câu hỏi sinh ra vẫn cần review trước khi tạo Release.</p>
-      <div className="inline-form compact-form">
-        <label>Bank Version<select className="input" value={selectedVersionId} onChange={(event) => setSelectedVersionId(event.target.value)}>{versions.map((item) => <option key={item.id} value={item.id}>{item.version_code} · {item.title || item.id}</option>)}</select></label>
-        <label>Tài liệu<input id="bank-material-file" className="input" type="file" /></label>
-        <button className="btn" disabled={busy || !selectedVersionId || !can('edit_questions')} onClick={() => {
-          const input = document.getElementById('bank-material-file') as HTMLInputElement
-          const file = input?.files?.[0]
-          if (!file) { setMessage('Chưa chọn file tài liệu'); return }
-          run(() => uploadBankMaterial(authHeaders(false), selectedVersionId, file, { title: file.name, change_type: 'initial', replace_existing: false }), 'Đã upload và tách tài liệu vào Bank Version')
-        }}>Upload tài liệu</button>
+    {selectedOffering ? <section className="card">
+      <div className="section-head">
+        <div><h2>{selectedOffering.code} · Bài/Chapter</h2><small>Click vào bài để mở workspace tài liệu, câu hỏi và release.</small></div>
+        <div className="inline-form compact-form no-margin">
+          <input className="input mini-input" placeholder="Số bài" value={chapterNo} onChange={(event) => setChapterNo(event.target.value)} />
+          <input className="input" placeholder="Tên bài/chapter" value={chapterTitle} onChange={(event) => setChapterTitle(event.target.value)} />
+          <button className="btn" disabled={busy || !selectedSubjectId || !selectedOfferingId || !can('edit_questions')} onClick={() => run(() => createSubjectChapter(headers, {
+            subject_id: selectedSubjectId,
+            subject_offering_id: selectedOfferingId,
+            chapter_no: Number(chapterNo || 1),
+            sort_order: Number(chapterNo || 1),
+            title: chapterTitle,
+          }), 'Đã thêm chapter')}>+ Thêm chapter</button>
+        </div>
       </div>
-      <div className="inline-form compact-form">
-        <label>Số câu<input id="bank-generate-count" className="input" type="number" defaultValue={10} min={1} max={200} /></label>
-        <label>Easy %<input id="bank-easy" className="input" type="number" defaultValue={50} /></label>
-        <label>Medium %<input id="bank-medium" className="input" type="number" defaultValue={30} /></label>
-        <label>Hard %<input id="bank-hard" className="input" type="number" defaultValue={20} /></label>
-        <button className="btn primary" disabled={busy || !selectedVersionId || materialChunks.length === 0 || !can('generate_questions')} onClick={() => {
-          const question_count = Number((document.getElementById('bank-generate-count') as HTMLInputElement)?.value || '10')
-          const difficulty_easy = Number((document.getElementById('bank-easy') as HTMLInputElement)?.value || '50')
-          const difficulty_medium = Number((document.getElementById('bank-medium') as HTMLInputElement)?.value || '30')
-          const difficulty_hard = Number((document.getElementById('bank-hard') as HTMLInputElement)?.value || '20')
-          run(() => generateFromBankVersion(headers, selectedVersionId, { question_count, difficulty_easy, difficulty_medium, difficulty_hard, provider: 'openai', approve_after_generate: false }), 'Đã tạo câu hỏi từ Bank Version, vui lòng review trước khi tạo Release')
-        }}>Generate từ Bank Version</button>
+      <div className="entity-list horizontal">
+        {chaptersOfVersion.map((item) => <button key={item.id} className={classNames('entity-card', selectedChapterId === item.id && 'active')} onClick={() => selectChapter(item.id)}>
+          <b>Bài {item.chapter_no}</b><small>{item.title}</small>
+        </button>)}
+        {!chaptersOfVersion.length ? <div className="empty-state">Version này chưa có bài nào.</div> : null}
       </div>
-      <div className="mini-status-grid">
-        <div><b>{selectedVersion?.version_code || '-'}</b><small>Version đang chọn</small></div>
-        <div><b>{materialChunks.length}</b><small>Chunk tài liệu</small></div>
-        <div><b>{materialChunks.reduce((sum, item) => sum + (item.token_count || 0), 0)}</b><small>Tokens đã index</small></div>
-        <div><b>{bankQuestions.length}</b><small>Câu trong version</small></div>
-      </div>
-      {bankQuestions.length ? <div className="compact-table"><table><thead><tr><th>Trạng thái</th><th>Độ khó</th><th>Concept/Family</th><th>Câu hỏi mới nhất</th></tr></thead><tbody>{bankQuestions.slice(0, 5).map((item) => <tr key={item.id}><td>{item.status}</td><td>{item.difficulty}</td><td><small>{item.concept_version_id || item.question_family_id || '—'}</small></td><td>{item.question_text}</td></tr>)}</tbody></table></div> : <p className="muted">Chưa có câu hỏi trong Bank Version này.</p>}
-    </section>
+    </section> : null}
 
-    <section className="card">
-      <h2>4. So sánh version và kế thừa câu hỏi</h2>
-      <p className="muted">Dùng khi tài liệu thay đổi: so sánh version cũ và version mới. Câu còn dùng được sẽ clone sang version mới và approved luôn; câu không còn phù hợp thì không clone vào version mới.</p>
-      <div className="inline-form compact-form">
-        <label>Version cũ<select id="base-version-id" className="input" defaultValue=""> <option value="">Chọn version cũ</option>{versions.filter((item) => item.id !== selectedVersionId).map((item) => <option key={item.id} value={item.id}>{item.version_code} · {item.title || item.id}</option>)}</select></label>
-        <label>Version mới<select className="input" value={selectedVersionId} onChange={(event) => setSelectedVersionId(event.target.value)}>{versions.map((item) => <option key={item.id} value={item.id}>{item.version_code} · {item.title || item.id}</option>)}</select></label>
-        <button className="btn" disabled={busy || !selectedVersionId || !can('view_questions')} onClick={() => {
-          const base_bank_version_id = (document.getElementById('base-version-id') as HTMLSelectElement)?.value || undefined
-          if (!base_bank_version_id) { setMessage('Chưa chọn version cũ để so sánh'); return }
-          run(async () => { const result = await previewBankVersionDiff(headers, selectedVersionId, { base_bank_version_id, persist: true }); setDiffPreview(result) }, 'Đã so sánh version ngân hàng đề')
-        }}>So sánh version</button>
+    {selectedChapter ? <section className="card chapter-workspace">
+      <div className="section-head">
+        <div>
+          <div className="eyebrow">{selectedSubject?.code} / {selectedOffering?.code}</div>
+          <h2>Bài {selectedChapter.chapter_no}: {selectedChapter.title}</h2>
+          <small>Workspace chính: gắn tài liệu, tạo câu hỏi, duyệt câu hỏi và publish bộ đề.</small>
+        </div>
+        <Link className="btn secondary" href="/bank/quiz">Tạo Quiz ở trang Open edX</Link>
       </div>
-      {diffPreview ? <div className="mini-status-grid">
-        <div><b>{Math.round((diffPreview.summary.material_similarity || 0) * 100)}%</b><small>Độ giống tài liệu</small></div>
-        <div><b>{diffPreview.summary.carry_over_candidate_count}</b><small>Câu có thể carry-over</small></div>
-        <div><b>{diffPreview.summary.retire_candidate_count}</b><small>Câu không đưa vào version mới</small></div>
-        <div><b>{diffPreview.summary.review_candidate_count}</b><small>Phần cần sinh/review mới</small></div>
-        <div><b>{diffPreview.summary.new_concept_count}</b><small>Concept mới</small></div>
-        <div><b>{diffPreview.summary.removed_concept_count}</b><small>Concept bị bỏ</small></div>
-      </div> : <p className="muted">Chưa có kết quả so sánh version.</p>}
-      {diffPreview ? <div className="inline-form compact-form">
-        <button className="btn primary" disabled={busy || !diffPreview.carry_over_candidates.length || !can('edit_questions')} onClick={() => run(() => carryOverBankQuestions(headers, selectedVersionId, { base_bank_version_id: diffPreview.summary.from_bank_version_id, question_ids: diffPreview.carry_over_candidates, require_review: false, diff_id: diffPreview.diff_id || null }), 'Đã clone câu còn dùng được sang version mới và approved luôn')}>Clone câu dùng lại được</button>
-        <button className="btn danger" disabled={busy || !diffPreview.retire_candidates.length || !can('review_questions')} onClick={() => run(() => retireBankQuestions(headers, diffPreview.summary.to_bank_version_id, { question_ids: diffPreview.retire_candidates, reason: `Không clone vào ${diffPreview.summary.to_version_code} vì không còn phù hợp` }), 'Đã ghi nhận các câu không clone vào version mới; version cũ giữ nguyên')}>Không clone câu không còn phù hợp</button>
+
+      <div className="metrics-grid compact-summary">
+        <div className="metric-card"><small>Tài liệu chunks</small><b>{materialChunks.length}</b></div>
+        <div className="metric-card"><small>Tổng câu</small><b>{stats.total}</b></div>
+        <div className="metric-card"><small>Đã duyệt</small><b>{stats.approved}</b></div>
+        <div className="metric-card"><small>Chờ duyệt</small><b>{stats.pending}</b></div>
+        <div className="metric-card"><small>Nhóm kiến thức</small><b>{stats.families}</b></div>
+        <div className="metric-card"><small>Release public</small><b>{publishedReleases.length}</b></div>
+      </div>
+
+      {selectedVersion && isClonedBankVersion ? <div className={classNames('alert', diffRequired ? 'warning' : 'success')}>
+        {diffRequired ? <>Tài liệu của version clone này đã thay đổi. Hãy bấm kiểm tra khác biệt trước khi chốt Release. <button className="btn small secondary" disabled={busy || !diffBaseBankVersionId} onClick={runDiffPreview}>Kiểm tra thay đổi</button> <button className="btn small" disabled={busy || !can('review_questions')} onClick={() => run(() => markBankDiffResolved(headers, selectedVersionId, { note: 'Đã kiểm tra và xử lý thay đổi tài liệu' }), 'Đã đánh dấu tài liệu đã xử lý')}>Đánh dấu đã xử lý</button></> : <>Version này đang là bản clone sạch từ kỳ trước. Chưa cần kiểm tra khác biệt. Khi upload tài liệu mới, hệ thống sẽ tự đánh dấu cần kiểm tra.</>}
       </div> : null}
-    </section>
 
-    <section className="card">
-      <h2>5. Chốt Release và Library</h2>
-      <p className="muted">Mỗi Bank Release sẽ có một Open edX Library riêng. Course cũ giữ release cũ, course mới có thể dùng release mới.</p>
-      <div className="inline-form compact-form">
-        <label>Bank Version<select className="input" value={selectedVersionId} onChange={(event) => setSelectedVersionId(event.target.value)}>{versions.map((item) => <option key={item.id} value={item.id}>{item.version_code} · {item.title || item.id}</option>)}</select></label>
-        <label>Release code<input id="release-code" className="input" placeholder="DOM123-B1-v1.0" /></label>
-        <button className="btn" disabled={busy || !selectedVersionId || !can('publish_questions')} onClick={() => {
-          const release_code = (document.getElementById('release-code') as HTMLInputElement)?.value || undefined
-          run(() => createBankRelease(headers, { bank_version_id: selectedVersionId, release_code, include_approved_questions: true }), 'Đã tạo Bank Release')
-        }}>Tạo Release</button>
-      </div>
-      <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Release</th><th>Trạng thái</th><th>Câu hỏi</th><th>Open edX Library</th><th></th></tr></thead><tbody>{releases.slice(0, 8).map((item) => <tr key={item.id}><td><b>{item.release_code}</b><small>{item.title}</small></td><td>{item.status}</td><td>{item.approved_question_count} câu · {item.family_count} family</td><td><code>{item.openedx_library_key}</code></td><td><button className="btn secondary" disabled={busy || item.status === 'published' || !can('publish_questions')} onClick={() => run(() => publishBankRelease(headers, item.id, {}), 'Đã publish release sang Open edX Library')}>Publish Library</button></td></tr>)}</tbody></table></div>
-    </section>
+      <div className="workspace-grid">
+        <div className="workspace-panel">
+          <h3>1. Bank Version của bài</h3>
+          <p className="muted">Mỗi bài có thể có v1.0, v2.0... để giữ lịch sử thay đổi tài liệu/câu hỏi.</p>
+          <div className="inline-form compact-form no-margin">
+            <input className="input mini-input" value={bankVersionCode} onChange={(event) => setBankVersionCode(event.target.value)} placeholder="v1.0" />
+            <input className="input" value={bankVersionNote} onChange={(event) => setBankVersionNote(event.target.value)} placeholder="Ghi chú" />
+            <button className="btn" disabled={busy || !can('edit_questions')} onClick={() => run(() => createBankVersion(headers, {
+              subject_id: selectedSubjectId,
+              subject_offering_id: selectedOfferingId,
+              chapter_id: selectedChapterId,
+              version_code: bankVersionCode,
+              title: '',
+              change_note: bankVersionNote,
+            }), 'Đã tạo Bank Version')}>+ Tạo Bank Version</button>
+          </div>
+          <div className="entity-list horizontal compact-list">
+            {bankVersionsOfChapter.map((item) => <button key={item.id} className={classNames('entity-card', selectedVersionId === item.id && 'active')} onClick={() => setSelectedVersionId(item.id)}>
+              <b>{item.version_code}</b><small>{item.title || `${selectedOffering?.code || ''} · Bài ${selectedChapter.chapter_no}`}</small>
+            </button>)}
+          </div>
+        </div>
 
-    <section className="card">
-      <h2>6. Map course Open edX vào ngân hàng đề</h2>
-      <p className="muted">Luôn bấm kiểm tra trước khi lưu. Hệ thống chặn nếu mã course không khớp mã môn hoặc release/chapter sai.</p>
-      <div className="inline-form compact-form">
-        <label>Course ID<input id="map-course" className="input" placeholder="course-v1:FPT+DOM123+SU26" /></label>
-        <label>Tên course (tuỳ chọn)<input id="map-course-title" className="input" placeholder="Tên khóa học trong Studio" /></label>
-        <label>Môn<select className="input" value={selectedSubjectId} onChange={(event) => setSelectedSubjectId(event.target.value)}>{subjects.map((item) => <option key={item.id} value={item.id}>{item.code}</option>)}</select></label>
-        <label>Kỳ<input id="map-term" className="input" placeholder="SU26" /></label>
+        <div className="workspace-panel">
+          <h3>2. Gắn tài liệu và sinh câu hỏi</h3>
+          <p className="muted">Chọn Bank Version, upload tài liệu, rồi generate câu hỏi vào đúng version đó.</p>
+          <select className="input" value={selectedVersionId} onChange={(event) => setSelectedVersionId(event.target.value)}>
+            <option value="">Chọn Bank Version</option>
+            {bankVersionsOfChapter.map((item) => <option key={item.id} value={item.id}>{item.version_code} · {item.title || selectedChapter.title}</option>)}
+          </select>
+          <div className="inline-form compact-form no-margin">
+            <input className="input" type="file" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
+            <button className="btn" disabled={busy || !selectedVersionId || !selectedFile || !can('edit_questions')} onClick={() => run(() => uploadBankMaterial(headers, selectedVersionId, selectedFile as File, { title: selectedFile?.name }), 'Đã upload tài liệu vào Bank Version. Nếu đây là version clone, hệ thống đã đánh dấu cần kiểm tra khác biệt.')}>Upload tài liệu</button>
+          </div>
+          <div className="inline-form compact-form no-margin">
+            <input className="input mini-input" value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Số câu" />
+            <input className="input mini-input" value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} placeholder="Easy %" />
+            <input className="input mini-input" value={difficultyMedium} onChange={(event) => setDifficultyMedium(event.target.value)} placeholder="Medium %" />
+            <input className="input mini-input" value={difficultyHard} onChange={(event) => setDifficultyHard(event.target.value)} placeholder="Hard %" />
+            <button className="btn" disabled={busy || !selectedVersionId || !can('generate_questions')} onClick={() => run(() => generateFromBankVersion(headers, selectedVersionId, {
+              question_count: Number(generateCount || 5),
+              difficulty_easy: Number(difficultyEasy || 50),
+              difficulty_medium: Number(difficultyMedium || 30),
+              difficulty_hard: Number(difficultyHard || 20),
+              provider: 'openai',
+              approve_after_generate: false,
+            }), 'Đã generate câu hỏi vào Bank Version')}>Tạo câu hỏi</button>
+          </div>
+        </div>
       </div>
-      <div className="button-row">
-        <button className="btn secondary" disabled={busy || !selectedSubjectId || !can('publish_questions')} onClick={async () => {
-          const openedx_course_id = (document.getElementById('map-course') as HTMLInputElement)?.value || ''
-          const openedx_course_title = (document.getElementById('map-course-title') as HTMLInputElement)?.value || ''
-          const term = (document.getElementById('map-term') as HTMLInputElement)?.value || ''
-          setBusy(true)
-          try {
-            const result = await validateCourseMapping(headers, { openedx_course_id, subject_id: selectedSubjectId, department_id: selectedDepartmentId || null, term, openedx_course_title })
-            setMappingValidation(result)
-            setMessage(result.message)
-          } catch (error) {
-            setMessage(error instanceof Error ? error.message : 'Kiểm tra mapping thất bại')
-          } finally {
-            setBusy(false)
-          }
-        }}>Kiểm tra mapping</button>
-        <button className="btn" disabled={busy || !selectedSubjectId || mappingValidation?.can_create_mapping !== true || mappingValidation?.risk_level === 'high' || !can('publish_questions')} onClick={() => {
-          const openedx_course_id = (document.getElementById('map-course') as HTMLInputElement)?.value || ''
-          const openedx_course_title = (document.getElementById('map-course-title') as HTMLInputElement)?.value || ''
-          const term = (document.getElementById('map-term') as HTMLInputElement)?.value || ''
-          run(() => createCourseMapping(headers, { openedx_course_id, subject_id: selectedSubjectId, department_id: selectedDepartmentId || null, term, openedx_course_title, allow_warnings: mappingValidation?.risk_level === 'medium' }), 'Đã map course Open edX vào môn')
-        }}>Lưu mapping an toàn</button>
-      </div>
-      {mappingValidation ? <div className={`alert ${mappingValidation.risk_level === 'high' ? 'danger' : mappingValidation.risk_level === 'medium' ? 'warning' : 'success'}`}>
-        <b>{mappingValidation.risk_level === 'low' ? 'An toàn để map' : mappingValidation.risk_level === 'medium' ? 'Có cảnh báo cần kiểm tra' : 'Rủi ro cao, không được map'}</b>
-        <ul>{mappingValidation.checks.map((check) => <li key={check.code}>{check.status.toUpperCase()} · {check.message}</li>)}</ul>
-      </div> : null}
-      <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Course</th><th>Subject</th><th>Kỳ</th><th>Validate</th><th>Trạng thái</th></tr></thead><tbody>{mappings.slice(0, 8).map((item) => <tr key={item.id}><td><code>{item.openedx_course_id}</code></td><td>{subjects.find((subject) => subject.id === item.subject_id)?.code || item.subject_id}</td><td>{item.term || '—'}</td><td>{item.validation_status || '—'}</td><td>{item.status}</td></tr>)}</tbody></table></div>
-    </section>
 
-    <section className="card">
-      <h2>5. Map chapter vào Bank Release</h2>
-      <p className="muted">Chỉ map release đã publish. Node Open edX phải thuộc đúng course và khớp bài/chapter.</p>
-      <div className="inline-form compact-form">
-        <label>Course mapping<select id="chapter-course-mapping" className="input">{mappings.map((item) => <option key={item.id} value={item.id}>{item.openedx_course_id}</option>)}</select></label>
-        <label>Chapter ngân hàng<select id="chapter-bank" className="input" value={selectedChapterId} onChange={(event) => setSelectedChapterId(event.target.value)}>{chapters.map((item) => <option key={item.id} value={item.id}>{item.chapter_no}. {item.title}</option>)}</select></label>
-        <label>Release<select id="chapter-release" className="input">{releases.map((item) => <option key={item.id} value={item.id}>{item.release_code} · {item.status}</option>)}</select></label>
-        <label>Node Open edX<input id="chapter-node" className="input" placeholder="block-v1:...+type@chapter+block@..." /></label>
-        <label>Tên node<input id="chapter-node-title" className="input" placeholder="Bài 4 ..." /></label>
+      <div className="workspace-grid">
+        <div className="workspace-panel">
+          <h3>3. Chốt bộ đề đã duyệt</h3>
+          <p className="muted">Release là bước chốt tay sau cùng. Chỉ tạo sau khi đã sửa tài liệu, kiểm tra thay đổi nếu có, và duyệt xong câu hỏi.</p>
+          {releaseReadiness ? <div className={classNames('alert', releaseReadiness.can_create_release ? 'success' : 'warning')}>
+            <b>{releaseReadiness.message}</b>
+            <div className="mini-readiness">
+              <span>Đã duyệt: {releaseReadiness.stats?.approved_count || 0}</span>
+              <span>Chờ duyệt: {releaseReadiness.stats?.pending_review_count || 0}</span>
+              <span>Lỗi nháp: {releaseReadiness.stats?.draft_error_count || 0}</span>
+            </div>
+            {releaseReadiness.recommended_actions?.length ? <ul>{releaseReadiness.recommended_actions.map((item) => <li key={item}>{item}</li>)}</ul> : null}
+          </div> : null}
+          <div className="inline-form compact-form no-margin">
+            <input className="input" value={releaseCode} onChange={(event) => setReleaseCode(event.target.value)} placeholder={`${selectedSubject?.code || 'MON'}-${selectedOffering?.term || 'SU26'}-B${selectedChapter.chapter_no}-${selectedVersion?.version_code || 'v1.0'}`} />
+            <button className="btn" disabled={busy || !selectedVersionId || !releaseReadiness?.can_create_release || !can('publish_questions')} onClick={() => run(() => createBankRelease(headers, { bank_version_id: selectedVersionId, release_code: releaseCode || undefined, include_approved_questions: true }), 'Đã tạo Release từ câu đã duyệt')}>Chốt bộ đề</button>
+          </div>
+          <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Release</th><th>Trạng thái</th><th>Câu</th><th>Library</th><th></th></tr></thead><tbody>{releasesOfVersion.map((item) => <tr key={item.id}><td><b>{item.release_code}</b><small>{item.title}</small></td><td><span className={classNames('status', item.status === 'published' ? 'success' : 'pending')}>{item.status}</span></td><td>{item.approved_question_count}</td><td><code>{item.openedx_library_key || '—'}</code></td><td><button className="btn small secondary" disabled={busy || item.status === 'published' || !can('publish_questions')} onClick={() => run(() => publishBankRelease(headers, item.id, {}), 'Đã publish Release sang Open edX Library')}>Publish Library</button></td></tr>)}</tbody></table></div>
+        </div>
+
+        <div className="workspace-panel">
+          <h3>4. Tài liệu đã gắn</h3>
+          <p className="muted">{materialChunks.length} chunk đang được dùng để sinh câu hỏi cho Bank Version này.</p>
+          <div className="chunk-list small-chunk-list">
+            {materialChunks.slice(0, 6).map((chunk) => <div key={chunk.id} className="chunk-card readonly"><div className="chunk-title">#{chunk.chunk_index} · {chunk.token_count} tokens</div><p>{chunk.content.slice(0, 220)}...</p></div>)}
+            {!materialChunks.length ? <div className="empty-state">Chưa có tài liệu/chunk.</div> : null}
+          </div>
+        </div>
       </div>
-      <div className="button-row">
-        <button className="btn secondary" disabled={busy || !can('publish_questions')} onClick={async () => {
-          const course_mapping_id = (document.getElementById('chapter-course-mapping') as HTMLSelectElement)?.value || ''
-          const bank_release_id = (document.getElementById('chapter-release') as HTMLSelectElement)?.value || ''
-          const openedx_parent_node_id = (document.getElementById('chapter-node') as HTMLInputElement)?.value || ''
-          const openedx_node_title = (document.getElementById('chapter-node-title') as HTMLInputElement)?.value || ''
-          setBusy(true)
-          try {
-            const result = await validateCourseChapterMapping(headers, { course_mapping_id, subject_chapter_id: selectedChapterId, bank_release_id, openedx_parent_node_id, openedx_node_title })
-            setChapterValidation(result)
-            setMessage(result.message)
-          } catch (error) {
-            setMessage(error instanceof Error ? error.message : 'Kiểm tra chapter mapping thất bại')
-          } finally {
-            setBusy(false)
-          }
-        }}>Kiểm tra chapter</button>
-        <button className="btn" disabled={busy || chapterValidation?.can_create_mapping !== true || chapterValidation?.risk_level === 'high' || !can('publish_questions')} onClick={() => {
-          const course_mapping_id = (document.getElementById('chapter-course-mapping') as HTMLSelectElement)?.value || ''
-          const bank_release_id = (document.getElementById('chapter-release') as HTMLSelectElement)?.value || ''
-          const openedx_parent_node_id = (document.getElementById('chapter-node') as HTMLInputElement)?.value || ''
-          const openedx_node_title = (document.getElementById('chapter-node-title') as HTMLInputElement)?.value || ''
-          run(() => createCourseChapterMapping(headers, { course_mapping_id, subject_chapter_id: selectedChapterId, bank_release_id, openedx_parent_node_id, openedx_node_title, allow_warnings: chapterValidation?.risk_level === 'medium' }), 'Đã map chapter vào Bank Release')
-        }}>Lưu chapter mapping</button>
+
+      <div className="workspace-panel full">
+        <div className="section-head"><div><h3>Duyệt câu hỏi</h3><small>Giữ giao diện đơn giản: đọc câu hỏi, bấm Duyệt hoặc Bỏ. Hệ thống tự dùng dữ liệu kỹ thuật phía sau.</small></div><button className="btn small" disabled={busy || !selectedVersionId || !stats.pending || !can('review_questions')} onClick={() => run(() => bulkReviewBankQuestions(headers, selectedVersionId, { action: 'approve', approve_all_pending: true, note: 'Duyệt nhanh toàn bộ câu đang chờ' }), 'Đã duyệt toàn bộ câu đang chờ')}>Duyệt hết câu chờ</button></div>
+        <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Câu hỏi</th><th>Độ khó</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody>{bankQuestions.slice(0, 60).map((item) => <tr key={item.id}><td><b>{item.question_text}</b><small>{item.correct_answer ? `Đáp án: ${item.correct_answer}` : ''}</small></td><td>{item.difficulty}</td><td><span className={classNames('status', item.status === 'approved' || item.status === 'published' ? 'success' : item.status === 'rejected' ? 'danger' : 'pending')}>{item.status === 'pending_review' ? 'Chờ duyệt' : item.status === 'approved' ? 'Đã duyệt' : item.status === 'rejected' ? 'Đã bỏ' : item.status}</span></td><td><div className="button-row no-margin">{item.status !== 'approved' && item.status !== 'published' ? <button className="btn small" disabled={busy || !can('review_questions')} onClick={() => run(() => reviewBankQuestion(headers, selectedVersionId, item.id, { action: 'approve', note: 'Giữ câu hỏi này' }), 'Đã duyệt câu hỏi')}>Duyệt</button> : null}{item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => run(() => reviewBankQuestion(headers, selectedVersionId, item.id, { action: 'reject', note: 'Không dùng câu này trong version hiện tại' }), 'Đã bỏ câu hỏi khỏi bộ đang chốt')}>Bỏ</button> : null}</div></td></tr>)}</tbody></table></div>
+        {!bankQuestions.length ? <div className="empty-state">Chưa có câu hỏi trong Bank Version này.</div> : null}
       </div>
-      {chapterValidation ? <div className={`alert ${chapterValidation.risk_level === 'high' ? 'danger' : chapterValidation.risk_level === 'medium' ? 'warning' : 'success'}`}>
-        <b>{chapterValidation.message}</b>
-        <ul>{chapterValidation.checks.map((check) => <li key={check.code}>{check.status.toUpperCase()} · {check.message}</li>)}</ul>
-      </div> : null}
-    </section>
+    </section> : null}
   </div>
 }

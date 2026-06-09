@@ -42,6 +42,14 @@ import {
   BankVersionDiffPreview,
   BankCarryOverResult,
   BankRetireResult,
+  BankReleaseQuizPlan,
+  BankReleaseQuizCreateResult,
+  BankReleaseReadiness,
+  BankQuestionReviewResult,
+  BankQuestionBulkReviewResult,
+  BankDocumentDiffResolveResult,
+  CourseQuizInstance,
+  CourseQuizRollbackResult,
 } from "../types";
 
 const rawApiBase =
@@ -1121,6 +1129,113 @@ export async function retireBankQuestions(
 ) {
   return parseResponse<BankRetireResult>(
     await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/retire`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+
+export async function previewQuizFromBankRelease(
+  headers: HeadersInit,
+  releaseId: string,
+  payload: { total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number },
+) {
+  return parseResponse<BankReleaseQuizPlan>(
+    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/preview`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function createQuizFromBankRelease(
+  headers: HeadersInit,
+  releaseId: string,
+  payload: { course_chapter_mapping_id: string; quiz_title?: string; unit_title?: string; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number },
+) {
+  return parseResponse<BankReleaseQuizCreateResult>(
+    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/create`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+
+export async function reviewBankQuestion(
+  headers: HeadersInit,
+  bankVersionId: string,
+  questionId: string,
+  payload: { action: 'approve' | 'reject' | 'back_to_review'; note?: string },
+) {
+  return parseResponse<BankQuestionReviewResult>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}/review`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function bulkReviewBankQuestions(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: { action: 'approve' | 'reject' | 'back_to_review'; question_ids?: string[]; approve_all_pending?: boolean; note?: string },
+) {
+  return parseResponse<BankQuestionBulkReviewResult>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/bulk-review`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function markBankDiffResolved(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: { note?: string } = {},
+) {
+  return parseResponse<BankDocumentDiffResolveResult>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/diff/mark-resolved`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function getBankReleaseReadiness(headers: HeadersInit, bankVersionId: string) {
+  return parseResponse<BankReleaseReadiness>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/release/readiness`, { headers }),
+  );
+}
+
+export async function getCourseQuizInstances(
+  headers: HeadersInit,
+  params: { openedx_course_id?: string; bank_release_id?: string; limit?: number } = {},
+) {
+  const search = new URLSearchParams();
+  if (params.openedx_course_id) search.set('openedx_course_id', params.openedx_course_id);
+  if (params.bank_release_id) search.set('bank_release_id', params.bank_release_id);
+  if (params.limit) search.set('limit', String(params.limit));
+  const suffix = search.toString() ? `?${search.toString()}` : '';
+  return parseResponse<CourseQuizInstance[]>(
+    await fetch(`${API}/question-bank-v2/course-quiz-instances${suffix}`, { headers }),
+  );
+}
+
+export async function rollbackCourseQuizInstance(
+  headers: HeadersInit,
+  instanceId: string,
+  payload: { mode?: 'safe' | 'manual'; note?: string } = {},
+) {
+  return parseResponse<CourseQuizRollbackResult>(
+    await fetch(`${API}/question-bank-v2/course-quiz-instances/${encodeURIComponent(instanceId)}/rollback`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),

@@ -13,6 +13,7 @@ from app.models.question_bank import (
     QuestionBankRelease,
     QuestionBankVersion,
     QuizBlueprint,
+    CourseQuizInstance,
     Subject,
     SubjectOffering,
     SubjectChapter,
@@ -22,6 +23,10 @@ from app.schemas.question_bank import (
     BankReleaseOut,
     BankReleasePublishOut,
     BankReleasePublishRequest,
+    BankReleaseQuizCreateOut,
+    BankReleaseQuizCreateRequest,
+    BankReleaseQuizPlanOut,
+    BankReleaseQuizPreviewRequest,
     BankSummaryOut,
     BankVersionCreate,
     BankVersionOut,
@@ -49,6 +54,16 @@ from app.schemas.question_bank import (
     BankCarryOverOut,
     BankRetireQuestionsRequest,
     BankRetireQuestionsOut,
+    BankQuestionReviewRequest,
+    BankQuestionReviewOut,
+    BankQuestionBulkReviewRequest,
+    BankQuestionBulkReviewOut,
+    BankDocumentDiffResolveRequest,
+    BankDocumentDiffResolveOut,
+    BankReleaseReadinessOut,
+    CourseQuizInstanceOut,
+    CourseQuizRollbackRequest,
+    CourseQuizRollbackOut,
     QuizBlueprintCreate,
     QuizBlueprintOut,
     SubjectCreate,
@@ -242,7 +257,13 @@ async def upload_material_to_bank_version(
             user=user,
             target_type='bank_version',
             target_id=bank_version_id,
-            metadata={'chunks_created': result.get('chunks_created'), 'tokens_indexed': result.get('tokens_indexed'), 'reused_existing': result.get('reused_existing')},
+            metadata={
+                'chunks_created': result.get('chunks_created'),
+                'tokens_indexed': result.get('tokens_indexed'),
+                'reused_existing': result.get('reused_existing'),
+                'diff_required': result.get('diff_required'),
+                'diff_base_bank_version_id': result.get('diff_base_bank_version_id'),
+            },
         )
         return result
     except Exception as exc:
@@ -354,6 +375,57 @@ def retire_bank_questions(bank_version_id: str, payload: BankRetireQuestionsRequ
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post('/bank-versions/{bank_version_id}/questions/{question_id}/review', response_model=BankQuestionReviewOut)
+def review_bank_question(bank_version_id: str, question_id: str, payload: BankQuestionReviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    try:
+        result = VersionedQuestionBankService(db).review_bank_question(
+            bank_version_id=bank_version_id,
+            question_id=question_id,
+            action=payload.action,
+            note=payload.note,
+            actor=user.user_id,
+        )
+        log_audit(db, action='question_bank.version.question.review', status='success', message=result.get('message', ''), user=user, target_type='question', target_id=question_id, metadata={'bank_version_id': bank_version_id, 'new_status': result.get('new_status')})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.version.question.review', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='question', target_id=question_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/bank-versions/{bank_version_id}/questions/bulk-review', response_model=BankQuestionBulkReviewOut)
+def bulk_review_bank_questions(bank_version_id: str, payload: BankQuestionBulkReviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    try:
+        result = VersionedQuestionBankService(db).bulk_review_bank_questions(
+            bank_version_id=bank_version_id,
+            action=payload.action,
+            question_ids=payload.question_ids,
+            approve_all_pending=payload.approve_all_pending,
+            note=payload.note,
+            actor=user.user_id,
+        )
+        log_audit(db, action='question_bank.version.question.bulk_review', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={'changed_count': result.get('changed_count'), 'action': payload.action})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.version.question.bulk_review', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/bank-versions/{bank_version_id}/diff/mark-resolved', response_model=BankDocumentDiffResolveOut)
+def mark_bank_diff_resolved(bank_version_id: str, payload: BankDocumentDiffResolveRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    try:
+        result = VersionedQuestionBankService(db).mark_document_diff_resolved(bank_version_id=bank_version_id, note=payload.note, actor=user.user_id)
+        log_audit(db, action='question_bank.version.diff.mark_resolved', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.version.diff.mark_resolved', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get('/bank-versions/{bank_version_id}/release/readiness', response_model=BankReleaseReadinessOut)
+def bank_release_readiness(bank_version_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).release_readiness(bank_version_id=bank_version_id)
+
+
 @router.get('/releases', response_model=list[BankReleaseOut])
 def list_releases(bank_version_id: str | None = None, chapter_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(QuestionBankRelease)
@@ -388,6 +460,49 @@ async def publish_release_to_openedx(release_id: str, payload: BankReleasePublis
         return result
     except Exception as exc:
         log_audit(db, action='question_bank.release.publish_openedx', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post('/releases/{release_id}/quiz/preview', response_model=BankReleaseQuizPlanOut)
+def preview_quiz_from_release(release_id: str, payload: BankReleaseQuizPreviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    try:
+        result = VersionedQuestionBankService(db).preview_quiz_from_release(
+            bank_release_id=release_id,
+            total_questions=payload.total_questions,
+            difficulty_easy=payload.difficulty_easy,
+            difficulty_medium=payload.difficulty_medium,
+            difficulty_hard=payload.difficulty_hard,
+            max_families_per_bank=payload.max_families_per_bank,
+        )
+        log_audit(db, action='question_bank.release.quiz.preview', status='success', message=result.get('message', ''), user=user, target_type='bank_release', target_id=release_id, metadata={'slot_count': result.get('total_questions'), 'warnings': result.get('warnings')})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.release.quiz.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/releases/{release_id}/quiz/create', response_model=BankReleaseQuizCreateOut)
+async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCreateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    try:
+        result = await VersionedQuestionBankService(db).create_quiz_from_release(
+            course_chapter_mapping_id=payload.course_chapter_mapping_id,
+            quiz_title=payload.quiz_title,
+            unit_title=payload.unit_title,
+            total_questions=payload.total_questions,
+            difficulty_easy=payload.difficulty_easy,
+            difficulty_medium=payload.difficulty_medium,
+            difficulty_hard=payload.difficulty_hard,
+            max_families_per_bank=payload.max_families_per_bank,
+            actor=user.user_id,
+            expected_bank_release_id=release_id,
+        )
+        log_audit(db, action='question_bank.release.quiz.create', status='success', message='Tạo Quiz từ Bank Release thành công', user=user, course_id=result.get('openedx_course_id'), target_type='course_quiz_instance', target_id=result.get('course_quiz_instance_id'), metadata={'bank_release_id': release_id, 'openedx_unit_node_id': result.get('openedx_unit_node_id')})
+        return result
+    except ValueError as exc:
+        log_audit(db, action='question_bank.release.quiz.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log_audit(db, action='question_bank.release.quiz.create', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
@@ -440,6 +555,22 @@ def create_course_chapter_mapping(payload: CourseChapterMappingCreate, db: Sessi
         return item
     except Exception as exc:
         log_audit(db, action='question_bank.course_chapter_mapping.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='course_chapter_mapping')
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get('/course-quiz-instances', response_model=list[CourseQuizInstanceOut])
+def list_course_quiz_instances(openedx_course_id: str | None = None, bank_release_id: str | None = None, limit: int = 100, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).list_course_quiz_instances(openedx_course_id=openedx_course_id, bank_release_id=bank_release_id, limit=limit)
+
+
+@router.post('/course-quiz-instances/{instance_id}/rollback', response_model=CourseQuizRollbackOut)
+async def rollback_course_quiz_instance(instance_id: str, payload: CourseQuizRollbackRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    try:
+        result = await VersionedQuestionBankService(db).rollback_course_quiz_instance(instance_id=instance_id, mode=payload.mode, note=payload.note, actor=user.user_id)
+        log_audit(db, action='question_bank.course_quiz.rollback', status='success', message=result.get('message', ''), user=user, target_type='course_quiz_instance', target_id=instance_id, metadata=result)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.course_quiz.rollback', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='course_quiz_instance', target_id=instance_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

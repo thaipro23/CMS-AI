@@ -66,6 +66,17 @@ class OpenEdXConnector(ABC):
             'metadata': metadata or {},
         }
 
+    async def delete_quiz_node(self, course_id: str, node_id: str, metadata: dict[str, Any] | None = None) -> dict:
+        return {
+            'ok': False,
+            'deleted': False,
+            'status': 'quiz_node_delete_unavailable',
+            'course_id': course_id,
+            'node_id': node_id,
+            'manual_cleanup_required': True,
+            'metadata': metadata or {},
+        }
+
     async def insert_problem_banks(
         self,
         course_id: str,

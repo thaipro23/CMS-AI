@@ -1130,3 +1130,102 @@ export type BankRetireResult = {
   skipped?: Record<string, any>[]
   message: string
 }
+
+
+export type BankReleaseQuizPlan = {
+  ok: boolean
+  planner_engine?: string | null
+  uses_llm: boolean
+  release_id: string
+  release_code: string
+  openedx_library_key?: string | null
+  requested_total_questions: number
+  total_questions: number
+  target_counts: Record<string, number>
+  effective_target_counts: Record<string, number>
+  coverage: Record<string, any>[]
+  slots: Record<string, any>[]
+  warnings: string[]
+  assigned_question_count: number
+  assigned_component_count: number
+  hard_guard: Record<string, any>
+  message: string
+}
+
+export type BankReleaseQuizCreateResult = {
+  ok: boolean
+  status: string
+  course_quiz_instance_id: string
+  openedx_course_id: string
+  openedx_quiz_node_id?: string | null
+  openedx_unit_node_id?: string | null
+  bank_release_id: string
+  release_code: string
+  plan: Record<string, any>
+  quiz_result: Record<string, any>
+  problem_bank_result: Record<string, any>
+  message: string
+}
+
+
+export type BankReleaseReadiness = {
+  ok: boolean
+  bank_version_id: string
+  can_create_release: boolean
+  status: string
+  checks: Record<string, any>[]
+  stats: Record<string, any>
+  recommended_actions: string[]
+  message: string
+}
+
+export type BankQuestionReviewResult = {
+  ok: boolean
+  question: BankVersionQuestion
+  old_status: string
+  new_status: string
+  message: string
+}
+
+export type BankQuestionBulkReviewResult = {
+  ok: boolean
+  changed_count: number
+  skipped_count: number
+  changed_question_ids: string[]
+  skipped: Record<string, any>[]
+  message: string
+}
+
+export type BankDocumentDiffResolveResult = {
+  ok: boolean
+  bank_version_id: string
+  diff_required: boolean
+  document_change_state: string
+  message: string
+}
+
+export type CourseQuizInstance = {
+  id: string
+  openedx_course_id: string
+  subject_id: string
+  chapter_id: string
+  subject_offering_id?: string | null
+  bank_release_id: string
+  quiz_blueprint_id?: string | null
+  openedx_quiz_node_id?: string | null
+  openedx_unit_node_id?: string | null
+  status: string
+  metadata_json?: Record<string, any> | null
+  created_at: string
+  updated_at: string
+}
+
+export type CourseQuizRollbackResult = {
+  ok: boolean
+  course_quiz_instance_id: string
+  status: string
+  openedx_deleted: boolean
+  manual_cleanup_required: boolean
+  delete_result: Record<string, any>
+  message: string
+}
