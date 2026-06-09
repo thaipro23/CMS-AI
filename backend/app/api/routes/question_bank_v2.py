@@ -47,6 +47,7 @@ from app.schemas.question_bank import (
     MaterialUploadOut,
     MaterialDeleteOut,
     BankGenerateRequest,
+    BankGeneratePreviewOut,
     BankGenerateOut,
     BankVersionQuestionOut,
     BankVersionDiffPreviewRequest,
@@ -106,6 +107,36 @@ async def _read_bank_upload_limited(file: UploadFile, *, max_bytes: int = _BANK_
 @router.get('/summary', response_model=BankSummaryOut)
 def summary(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     return VersionedQuestionBankService(db).summary()
+
+
+@router.get('/dashboard/overview')
+def dashboard_overview(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).dashboard_overview()
+
+
+@router.get('/dashboard/search')
+def dashboard_search(q: str = '', limit: int = 20, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).dashboard_search(q=q, limit=limit)
+
+
+@router.get('/departments/summary')
+def department_summaries(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).department_summaries()
+
+
+@router.get('/departments/{department_id}/subjects/summary')
+def subject_summaries(department_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).subject_summaries(department_id=department_id)
+
+
+@router.get('/subjects/{subject_id}/versions/summary')
+def subject_version_summaries(subject_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).subject_version_summaries(subject_id=subject_id)
+
+
+@router.get('/subject-versions/{subject_offering_id}/chapters/summary')
+def chapter_summaries(subject_offering_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return VersionedQuestionBankService(db).chapter_summaries(subject_offering_id=subject_offering_id)
 
 
 @router.get('/departments', response_model=list[DepartmentOut])
@@ -292,6 +323,25 @@ def list_bank_material_chunks(bank_version_id: str, material_version_id: str | N
     if material_version_id:
         query = query.filter(MaterialChunk.material_version_id == material_version_id)
     return query.order_by(MaterialChunk.material_version_id.asc(), MaterialChunk.chunk_index.asc()).all()
+
+
+@router.post('/bank-versions/{bank_version_id}/generate/preview', response_model=BankGeneratePreviewOut)
+async def preview_generate_questions_from_bank_version(bank_version_id: str, payload: BankGenerateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('estimate_cost'))):
+    try:
+        result = await VersionedQuestionBankService(db).preview_generate_from_bank_version(
+            bank_version_id=bank_version_id,
+            question_count=payload.question_count,
+            target_question_count=payload.target_question_count,
+            difficulty_easy=payload.difficulty_easy,
+            difficulty_medium=payload.difficulty_medium,
+            difficulty_hard=payload.difficulty_hard,
+            material_version_ids=payload.material_version_ids,
+        )
+        log_audit(db, action='question_bank.bank_version.generate.preview', status='success', message='Đã tính chi phí dự kiến trước khi tạo câu hỏi', user=user, target_type='bank_version', target_id=bank_version_id, metadata={'question_count': payload.question_count, 'estimated_cost_usd': result.get('estimated_cost_usd'), 'difficulty_counts': result.get('difficulty_counts')})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.bank_version.generate.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/generate', response_model=BankGenerateOut)

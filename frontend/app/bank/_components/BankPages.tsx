@@ -6,6 +6,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import {
   BankRelease,
+  BankDashboardOverview,
+  BankSearchResult,
+  DepartmentSummary,
+  SubjectSummary,
+  SubjectVersionSummary,
+  ChapterSummary,
+  BankGeneratePreview,
   BankReleaseReadiness,
   BankVersion,
   BankVersionDiffPreview,
@@ -28,6 +35,12 @@ import {
   createSubjectOffering,
   deleteMaterialVersion,
   generateFromBankVersion,
+  getBankDashboardOverview,
+  searchBankDashboard,
+  getDepartmentSummaries,
+  getSubjectSummaries,
+  getSubjectVersionSummaries,
+  getChapterSummaries,
   getBankMaterialChunks,
   getBankReleaseReadiness,
   getBankReleases,
@@ -41,6 +54,7 @@ import {
   getSubjects,
   markBankDiffResolved,
   previewBankVersionDiff,
+  previewGenerateFromBankVersion,
   publishBankRelease,
   reviewBankQuestion,
   rollbackCourseQuizInstance,
@@ -98,8 +112,10 @@ function useBankData() {
 function useAsyncMessage() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const run = async (work: () => Promise<unknown>, ok: string, after?: () => Promise<void>) => {
+  const [busyLabel, setBusyLabel] = useState('Đang xử lý, vui lòng chờ...')
+  const run = async (work: () => Promise<unknown>, ok: string, after?: () => Promise<void>, loadingText = 'Đang xử lý, vui lòng chờ...') => {
     setBusy(true)
+    setBusyLabel(loadingText)
     setMessage('')
     try {
       await work()
@@ -111,7 +127,7 @@ function useAsyncMessage() {
       setBusy(false)
     }
   }
-  return { message, setMessage, busy, run }
+  return { message, setMessage, busy, busyLabel, run }
 }
 
 function Breadcrumb({ items }: { items: Array<{ label: string; href?: string }> }) {
@@ -172,6 +188,57 @@ function matchesSearch(text: string, search: string) {
   const s = search.trim().toLowerCase()
   if (!s) return true
   return text.toLowerCase().includes(s)
+}
+
+
+function reviewStatusText(status?: string | null) {
+  const labels: Record<string, string> = {
+    ready: 'Đã xử lý xong',
+    needs_review: 'Còn câu cần duyệt',
+    needs_fix: 'Có câu lỗi',
+    empty: 'Chưa có dữ liệu',
+    not_ready: 'Chưa sẵn sàng',
+  }
+  return labels[status || ''] || 'Chưa sẵn sàng'
+}
+
+function reviewStatusClass(status?: string | null) {
+  if (status === 'ready') return 'bank-status-card status-ready'
+  if (status === 'needs_fix') return 'bank-status-card status-danger'
+  if (status === 'needs_review') return 'bank-status-card status-warning'
+  if (status === 'empty') return 'bank-status-card status-empty'
+  return 'bank-status-card status-warning'
+}
+
+function StatLine({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div className="bank-stat-line"><span>{label}</span><b>{value}</b></div>
+}
+
+function QuickSearchBox({ compact = false }: { compact?: boolean }) {
+  const { headers } = useBankData()
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<BankSearchResult[]>([])
+  const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    const text = q.trim()
+    if (text.length < 2) { setResults([]); return undefined }
+    const timer = window.setTimeout(() => {
+      setLoading(true)
+      searchBankDashboard(headers, text, 8).then(setResults).catch(() => setResults([])).finally(() => setLoading(false))
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [q, headers])
+  return <div className={compact ? 'quick-search quick-search-compact' : 'quick-search'}>
+    <input className="input" value={q} onChange={(event) => setQ(event.target.value)} placeholder="Tìm nhanh bộ môn / môn / version / bài..." />
+    {q.trim().length >= 2 ? <div className="quick-search-results">
+      {loading ? <div className="quick-search-row muted">Đang tìm...</div> : null}
+      {!loading && results.map((item) => <Link key={`${item.type}-${item.href}`} className="quick-search-row" href={item.href}>
+        <b>{item.title}</b>
+        <small>{item.subtitle}</small>
+      </Link>)}
+      {!loading && !results.length ? <div className="quick-search-row muted">Không tìm thấy kết quả phù hợp.</div> : null}
+    </div> : null}
+  </div>
 }
 
 function questionStats(questions: BankVersionQuestion[]) {
@@ -268,38 +335,73 @@ function toBankQuestionEditForm(question: BankVersionQuestion): BankQuestionEdit
   }
 }
 
+
+export function BankDashboardPage() {
+  const { headers } = useBankData()
+  const [overview, setOverview] = useState<BankDashboardOverview | null>(null)
+  useEffect(() => { getBankDashboardOverview(headers).then(setOverview).catch(() => null) }, [headers])
+  return <div className="page-stack bank-multipage">
+    <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
+    <Toolbar title="Ngân hàng đề" helper="Trang tổng quan giúp giáo viên biết ngay việc nào cần làm tiếp." action={<div className="button-row no-margin"><Link className="btn secondary" href="/bank/departments">Quản lý bộ môn</Link><Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link></div>} />
+    <section className="card bank-guide-card">
+      <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Gõ WEB107, WEB107_SU25, Bài 1, HTML/CSS, Database hoặc tên bộ môn để đi thẳng tới nơi cần xử lý.</p></div></div>
+      <QuickSearchBox />
+    </section>
+    <section className="summary-grid compact-summary dashboard-summary">
+      <div><span>Bộ môn còn việc</span><b>{overview?.departments_not_done ?? '—'}</b><small>{overview?.departments_done ?? 0} bộ môn đã xử lý xong</small></div>
+      <div><span>Môn đã duyệt xong</span><b>{overview?.subjects_done ?? '—'}</b><small>{overview?.subjects_not_done ?? 0} môn còn việc</small></div>
+      <div><span>Version môn đã xong</span><b>{overview?.subject_versions_done ?? '—'}</b><small>{overview?.subject_versions_not_done ?? 0} version còn việc</small></div>
+      <div><span>Bài cần xử lý</span><b>{overview?.chapters_needing_review ?? '—'}</b><small>{overview?.chapters_ready_to_release ?? 0} bài sẵn sàng chốt</small></div>
+      <div><span>Tổng câu hỏi</span><b>{overview?.total_questions ?? '—'}</b><small>{overview?.approved_count ?? 0} đã duyệt</small></div>
+      <div><span>Câu chưa xử lý</span><b>{(overview?.pending_review_count || 0) + (overview?.draft_error_count || 0)}</b><small>{overview?.pending_review_count ?? 0} chờ duyệt · {overview?.draft_error_count ?? 0} lỗi</small></div>
+    </section>
+    <section className="card">
+      <div className="section-head"><div><h2>Việc cần làm</h2><p className="helper">Hệ thống tự gom những nơi còn câu chưa duyệt, câu lỗi hoặc bài đã sẵn sàng chốt bộ đề.</p></div></div>
+      <div className="entity-list dashboard-task-list">
+        {(overview?.next_actions || []).map((item) => <Link href={item.href} className={`entity-card link-card ${item.type === 'fix_errors' ? 'danger-card' : item.type === 'review_questions' ? 'warning-card' : 'success-card'}`} key={`${item.type}-${item.href}`}>
+          <b>{item.title}</b>
+          <small>{item.message}</small>
+          <span className={item.type === 'create_release' ? 'status success' : item.type === 'fix_errors' ? 'status danger' : 'status warning'}>{item.type === 'create_release' ? 'Sẵn sàng chốt' : item.type === 'fix_errors' ? 'Cần sửa lỗi' : 'Cần duyệt'}</span>
+        </Link>)}
+      </div>
+      {overview && !overview.next_actions.length ? <div className="empty-state">Chưa có việc cần xử lý. Có thể bắt đầu từ Quản lý bộ môn hoặc Tạo Quiz Open edX.</div> : null}
+      {!overview ? <div className="empty-state">Đang tải tổng quan...</div> : null}
+    </section>
+  </div>
+}
+
 export function DepartmentsPage() {
   const { headers, can } = useBankData()
-  const { message, busy, run } = useAsyncMessage()
-  const [departments, setDepartments] = useState<Department[]>([])
-  const [subjects, setSubjects] = useState<Subject[]>([])
+  const { message, busy, busyLabel, run } = useAsyncMessage()
+  const [summaries, setSummaries] = useState<DepartmentSummary[]>([])
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
 
-  const load = async () => {
-    const [nextDepartments, nextSubjects] = await Promise.all([getDepartments(headers), getSubjects(headers)])
-    setDepartments(nextDepartments)
-    setSubjects(nextSubjects)
-  }
+  const load = async () => { setSummaries(await getDepartmentSummaries(headers)) }
   useEffect(() => { load().catch(() => null) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visible = departments.filter((item) => matchesSearch(`${item.code} ${item.name}`, search))
-  const countSubjects = (departmentId: string) => subjects.filter((item) => item.department_id === departmentId).length
+  const visible = summaries.filter(({ department }) => matchesSearch(`${department.code} ${department.name}`, search))
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Bộ môn' }]} />
-    <Toolbar title="Bộ môn" helper="Trang này chỉ quản lý danh sách bộ môn." action={<Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link>} />
+    {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
+    <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]} />
+    <Toolbar title="Bộ môn" helper="Nhìn card là biết bộ môn nào đã xử lý xong, bộ môn nào còn câu cần duyệt." action={<Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link>} />
+    <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>Danh sách bộ môn</h2><p className="helper">Click vào bộ môn để xem các môn bên trong.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button>} />
       <div className="entity-list horizontal multipage-list">
-        {visible.map((item) => <Link key={item.id} href={`/bank/departments/${item.id}/subjects`} className="entity-card link-card">
-          <b>{item.name}</b>
-          <small>{item.code} · {countSubjects(item.id)} môn</small>
-          <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
+        {visible.map(({ department, stats }) => <Link key={department.id} href={`/bank/departments/${department.id}/subjects`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <div className="entity-card-head"><b>{department.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
+          <small>{department.code}</small>
+          <StatLine label="Môn" value={stats.subject_count || 0} />
+          <StatLine label="Đã duyệt xong" value={`${stats.review_done_subject_count || 0} môn`} />
+          <StatLine label="Chưa duyệt xong" value={`${stats.review_not_done_subject_count || 0} môn`} />
+          <StatLine label="Câu chờ xử lý" value={stats.unresolved_count || 0} />
+          <StatLine label="Bài sẵn sàng chốt" value={stats.ready_to_release_chapter_count || 0} />
         </Link>)}
       </div>
       {!visible.length ? <div className="empty-state">Chưa có bộ môn phù hợp.</div> : null}
@@ -321,37 +423,38 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   const { headers, can } = useBankData()
   const { message, busy, run } = useAsyncMessage()
   const [departments, setDepartments] = useState<Department[]>([])
-  const [subjects, setSubjects] = useState<Subject[]>([])
-  const [offerings, setOfferings] = useState<SubjectOffering[]>([])
+  const [summaries, setSummaries] = useState<SubjectSummary[]>([])
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
 
   const load = async () => {
-    const [nextDepartments, nextSubjects, nextOfferings] = await Promise.all([
-      getDepartments(headers), getSubjects(headers, departmentId), getSubjectOfferings(headers),
-    ])
-    setDepartments(nextDepartments); setSubjects(nextSubjects); setOfferings(nextOfferings)
+    const [nextDepartments, nextSummaries] = await Promise.all([getDepartments(headers), getSubjectSummaries(headers, departmentId)])
+    setDepartments(nextDepartments); setSummaries(nextSummaries)
   }
   useEffect(() => { load().catch(() => null) }, [departmentId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const department = departments.find((item) => item.id === departmentId)
-  const visible = subjects.filter((item) => matchesSearch(`${item.code} ${item.name}`, search))
-  const countVersions = (subjectId: string) => offerings.filter((item) => item.subject_id === subjectId).length
+  const visible = summaries.filter(({ subject }) => matchesSearch(`${subject.code} ${subject.name}`, search))
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
-    <Toolbar title={department ? `Môn trong ${department.name}` : 'Môn trong bộ môn'} helper="Trang này chỉ quản lý danh sách môn." />
+    <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
+    <Toolbar title={department ? `Môn trong ${department.name}` : 'Môn trong bộ môn'} helper="Mỗi môn hiển thị version đã duyệt xong, version còn việc và số câu chờ xử lý." />
+    <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>Danh sách môn</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
       <div className="entity-list horizontal multipage-list">
-        {visible.map((item) => <Link key={item.id} href={`/bank/subjects/${item.id}/versions`} className="entity-card link-card">
-          <b>{item.code} - {item.name}</b>
-          <small>{countVersions(item.id)} phiên bản môn</small>
-          <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
+        {visible.map(({ subject, stats }) => <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <div className="entity-card-head"><b>{subject.code} - {subject.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
+          <StatLine label="Phiên bản môn" value={stats.subject_version_count || 0} />
+          <StatLine label="Đã duyệt xong" value={`${stats.review_done_version_count || 0} version`} />
+          <StatLine label="Chưa duyệt xong" value={`${stats.review_not_done_version_count || 0} version`} />
+          <StatLine label="Tổng câu" value={stats.total_questions || 0} />
+          <StatLine label="Câu chờ xử lý" value={stats.unresolved_count || 0} />
+          <StatLine label="Bài sẵn sàng chốt" value={stats.ready_to_release_chapter_count || 0} />
         </Link>)}
       </div>
       {!visible.length ? <div className="empty-state">Chưa có môn phù hợp.</div> : null}
@@ -375,10 +478,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const router = useRouter()
   const [departments, setDepartments] = useState<Department[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
-  const [offerings, setOfferings] = useState<SubjectOffering[]>([])
-  const [chapters, setChapters] = useState<SubjectChapter[]>([])
-  const [versions, setVersions] = useState<BankVersion[]>([])
-  const [releases, setReleases] = useState<BankRelease[]>([])
+  const [summaries, setSummaries] = useState<SubjectVersionSummary[]>([])
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [term, setTerm] = useState('SU25')
@@ -386,56 +486,50 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const [cloneFromId, setCloneFromId] = useState('')
 
   const load = async () => {
-    const [nextDepartments, nextSubjects, nextOfferings, nextChapters, nextVersions, nextReleases] = await Promise.all([
-      getDepartments(headers), getSubjects(headers), getSubjectOfferings(headers, subjectId), getSubjectChapters(headers, subjectId), getBankVersions(headers, undefined, subjectId), getBankReleases(headers),
+    const [nextDepartments, nextSubjects, nextSummaries] = await Promise.all([
+      getDepartments(headers), getSubjects(headers), getSubjectVersionSummaries(headers, subjectId),
     ])
-    setDepartments(nextDepartments); setSubjects(nextSubjects); setOfferings(nextOfferings); setChapters(nextChapters); setVersions(nextVersions); setReleases(nextReleases)
-    if (!cloneFromId && nextOfferings.length) setCloneFromId(nextOfferings[0].id)
+    setDepartments(nextDepartments); setSubjects(nextSubjects); setSummaries(nextSummaries)
+    if (!cloneFromId && nextSummaries.length) setCloneFromId(nextSummaries[0].subject_version.id)
   }
   useEffect(() => { load().catch(() => null) }, [subjectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const subject = subjects.find((item) => item.id === subjectId)
   const department = departments.find((item) => item.id === subject?.department_id)
-  const visible = offerings.filter((item) => matchesSearch(`${item.code} ${item.name} ${item.term || ''}`, search))
-  const chapterCount = (offeringId: string) => chapters.filter((item) => item.subject_offering_id === offeringId).length
-  const questionCount = (offeringId: string) => versions.filter((item) => item.subject_offering_id === offeringId).reduce((sum, bv) => sum + (Number((bv.metadata_json as any)?.question_count || 0) || 0), 0)
-  const releaseCount = (offeringId: string) => releases.filter((release) => {
-    const bv = versions.find((item) => item.id === release.bank_version_id)
-    return bv?.subject_offering_id === offeringId
-  }).length
-  const publishedCount = (offeringId: string) => releases.filter((release) => {
-    const bv = versions.find((item) => item.id === release.bank_version_id)
-    return bv?.subject_offering_id === offeringId && release.status === 'published'
-  }).length
+  const visible = summaries.filter(({ subject_version }) => matchesSearch(`${subject_version.code} ${subject_version.name} ${subject_version.term || ''}`, search))
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
-    <Toolbar title={subject ? `Phiên bản môn ${subject.code}` : 'Phiên bản môn'} helper="Quản lý các kỳ/version của môn. Clone không chạy diff và không bắt duyệt lại." />
+    <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
+    <Toolbar title={subject ? `Phiên bản môn ${subject.code}` : 'Phiên bản môn'} helper="Mỗi version hiển thị tổng số bài, số câu đã duyệt/chưa duyệt và release đã publish." />
+    <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>Các phiên bản theo kỳ</h2><p className="helper">Click vào version để xem các bài.</p></div></div>
+      <div className="section-head"><div><h2>Danh sách phiên bản theo kỳ</h2><p className="helper">Tạo version mới trống hoặc clone 100% bản làm việc từ kỳ cũ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm version môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Tạo version môn</button>} />
       <div className="entity-list horizontal multipage-list">
-        {visible.map((item) => <Link key={item.id} href={`/bank/subject-versions/${item.id}/chapters`} className="entity-card link-card">
-          <b>{item.code}</b>
-          <small>{chapterCount(item.id)} bài · {questionCount(item.id)} câu · {releaseCount(item.id)} release</small>
-          <small>{publishedCount(item.id)} release đã publish</small>
-          <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
+        {visible.map(({ subject_version, stats }) => <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
+          <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
+          <StatLine label="Bài" value={stats.chapter_count || 0} />
+          <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/100`} />
+          <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
+          <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
+          <StatLine label="Release đã publish" value={`${stats.published_release_count || 0}/${stats.chapter_count || 0} bài`} />
         </Link>)}
       </div>
-      {!visible.length ? <div className="empty-state">Chưa có version môn phù hợp.</div> : null}
+      {!visible.length ? <div className="empty-state">Chưa có version phù hợp.</div> : null}
     </section>
     <Modal open={createOpen} title="Tạo version môn" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
-        <label><span>Kỳ mới</span><select className="input" value={term} onChange={(event) => setTerm(event.target.value)}>{TERMS.map(([value, label]) => <option key={value} value={value}>{value} · {label}</option>)}</select></label>
-        <label><span>Cách tạo</span><select className="input" value={mode} onChange={(event) => setMode(event.target.value as 'blank' | 'clone')}><option value="clone">Clone 100% từ version khác</option><option value="blank">Tạo mới trống</option></select></label>
-        {mode === 'clone' ? <label><span>Clone từ</span><select className="input" value={cloneFromId} onChange={(event) => setCloneFromId(event.target.value)}>{offerings.map((item) => <option key={item.id} value={item.id}>{item.code}</option>)}</select></label> : null}
-        <p className="helper">Clone sẽ copy bài, tài liệu và câu hỏi đã duyệt sang bản ghi mới. Release vẫn chốt tay sau khi giáo viên sửa xong.</p>
-        <button className="btn" type="button" disabled={busy || (mode === 'clone' && !cloneFromId)} onClick={() => run(async () => {
-          const saved = await createSubjectOffering(headers, { subject_id: subjectId, term, version_code: term, clone_from_offering_id: mode === 'clone' ? cloneFromId : null })
+        <div className="button-row"><button className={mode === 'clone' ? 'btn' : 'btn secondary'} onClick={() => setMode('clone')}>Clone từ version khác</button><button className={mode === 'blank' ? 'btn' : 'btn secondary'} onClick={() => setMode('blank')}>Tạo mới trống</button></div>
+        <select className="input" value={term} onChange={(event) => setTerm(event.target.value)}>{TERMS.map(([value, label]) => <option value={value} key={value}>{value} - {label}</option>)}</select>
+        {mode === 'clone' ? <select className="input" value={cloneFromId} onChange={(event) => setCloneFromId(event.target.value)}>{summaries.map(({ subject_version }) => <option value={subject_version.id} key={subject_version.id}>Clone từ {subject_version.code}</option>)}</select> : null}
+        <p className="helper">Clone 100% bản làm việc: bài, tài liệu, bank version, câu hỏi approved. Không clone Release/Open edX Library và không chạy diff khi clone.</p>
+        <div className="modal-actions"><button className="btn secondary" onClick={() => setCreateOpen(false)}>Hủy</button><button className="btn" disabled={busy || !term || (mode === 'clone' && !cloneFromId)} onClick={() => run(async () => {
+          const created = await createSubjectOffering(headers, { subject_id: subjectId, term, clone_from_offering_id: mode === 'clone' ? cloneFromId : null, version_code: term, clone_chapters: true, clone_materials: true, clone_questions: true })
           setCreateOpen(false)
-          router.push(`/bank/subject-versions/${saved.id}/chapters`)
-        }, 'Đã tạo version môn', load)}>Tạo version môn</button>
+          router.push(`/bank/subject-versions/${created.id}/chapters`)
+        }, 'Đã tạo version môn', load)}>Tạo version</button></div>
       </div>
     </Modal>
   </div>
@@ -447,40 +541,41 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const [departments, setDepartments] = useState<Department[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [offerings, setOfferings] = useState<SubjectOffering[]>([])
-  const [chapters, setChapters] = useState<SubjectChapter[]>([])
-  const [versions, setVersions] = useState<BankVersion[]>([])
-  const [releases, setReleases] = useState<BankRelease[]>([])
+  const [summaries, setSummaries] = useState<ChapterSummary[]>([])
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [chapterInput, setChapterInput] = useState('')
 
   const load = async () => {
-    const [nextDepartments, nextSubjects, nextOfferings, nextChapters, nextVersions, nextReleases] = await Promise.all([
-      getDepartments(headers), getSubjects(headers), getSubjectOfferings(headers), getSubjectChapters(headers, undefined, versionId), getBankVersions(headers, undefined, undefined, versionId), getBankReleases(headers),
+    const [nextDepartments, nextSubjects, nextOfferings, nextSummaries] = await Promise.all([
+      getDepartments(headers), getSubjects(headers), getSubjectOfferings(headers), getChapterSummaries(headers, versionId),
     ])
-    setDepartments(nextDepartments); setSubjects(nextSubjects); setOfferings(nextOfferings); setChapters(nextChapters); setVersions(nextVersions); setReleases(nextReleases)
+    setDepartments(nextDepartments); setSubjects(nextSubjects); setOfferings(nextOfferings); setSummaries(nextSummaries)
   }
   useEffect(() => { load().catch(() => null) }, [versionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const offering = offerings.find((item) => item.id === versionId)
   const subject = subjects.find((item) => item.id === offering?.subject_id)
   const department = departments.find((item) => item.id === subject?.department_id)
-  const visible = chapters.filter((item) => matchesSearch(chapterDisplayName(item), search))
-  const countBankVersions = (chapterId: string) => versions.filter((item) => item.chapter_id === chapterId).length
-  const countReleases = (chapterId: string) => releases.filter((item) => versions.some((bv) => bv.chapter_id === chapterId && bv.id === item.bank_version_id)).length
+  const visible = summaries.filter(({ chapter }) => matchesSearch(chapterDisplayName(chapter), search))
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
-    <Toolbar title={offering ? `Bài trong ${offering.code}` : 'Bài trong version môn'} helper="Trang này chỉ quản lý danh sách bài/chapter." />
+    <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
+    <Toolbar title={offering ? `Bài trong ${offering.code}` : 'Bài trong version môn'} helper="Mỗi bài hiển thị tài liệu, tổng câu, câu đã duyệt, câu chưa duyệt/lỗi và trạng thái Release." />
+    <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>Danh sách bài</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
       <div className="entity-list horizontal multipage-list">
-        {visible.map((item) => <Link key={item.id} href={`/bank/chapters/${item.id}`} className="entity-card link-card">
-          <b>{chapterDisplayName(item)}</b>
-          <small>{countBankVersions(item.id)} bộ câu hỏi · {countReleases(item.id)} release</small>
-          <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
+        {visible.map(({ chapter, stats }) => <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
+          <StatLine label="Tài liệu" value={stats.material_count || 0} />
+          <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
+          <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
+          <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
+          <StatLine label="Release" value={stats.release_status === 'published' ? 'Đã publish' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
+          {stats.ready_to_release ? <span className="status success">Sẵn sàng chốt bộ đề</span> : null}
         </Link>)}
       </div>
       {!visible.length ? <div className="empty-state">Chưa có bài phù hợp.</div> : null}
@@ -497,7 +592,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
           <button className="btn secondary" type="button" onClick={() => { setChapterInput(''); setCreateOpen(false) }}>Hủy</button>
           <button className="btn" type="button" disabled={busy || !offering || !normalizeLessonInput(chapterInput)} onClick={() => run(async () => {
             if (!offering) return
-            const nextNo = (chapters.reduce((max, item) => Math.max(max, Number(item.sort_order || item.chapter_no || 0)), 0) || 0) + 1
+            const nextNo = (summaries.reduce((max, item) => Math.max(max, Number(item.chapter.sort_order || item.chapter.chapter_no || 0)), 0) || 0) + 1
             const title = buildChapterTitle(chapterInput)
             await createSubjectChapter(headers, { subject_id: offering.subject_id, subject_offering_id: offering.id, title, sort_order: nextNo })
             setChapterInput(''); setCreateOpen(false)
@@ -510,7 +605,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
 
 export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const { headers, can } = useBankData()
-  const { message, busy, run } = useAsyncMessage()
+  const { message, busy, busyLabel, run } = useAsyncMessage()
   const [departments, setDepartments] = useState<Department[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [offerings, setOfferings] = useState<SubjectOffering[]>([])
@@ -528,8 +623,11 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [autoCreateTried, setAutoCreateTried] = useState(false)
   const [materialView, setMaterialView] = useState<{ material: MaterialVersion; chunks: MaterialChunk[] } | null>(null)
   const [diffPreview, setDiffPreview] = useState<BankVersionDiffPreview | null>(null)
+  const [generatePreview, setGeneratePreview] = useState<BankGeneratePreview | null>(null)
   const [editingQuestion, setEditingQuestion] = useState<BankVersionQuestion | null>(null)
   const [editForm, setEditForm] = useState<BankQuestionEditForm | null>(null)
+  const [rejectingQuestion, setRejectingQuestion] = useState<BankVersionQuestion | null>(null)
+  const [rejectReason, setRejectReason] = useState('')
 
   const load = async () => {
     const [nextDepartments, nextSubjects, nextOfferings, nextChapters, nextBankVersions, nextReleases] = await Promise.all([
@@ -565,9 +663,9 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const publishedRelease = releases.find((item) => item.status === 'published')
   const latestRelease = releases[0]
   const numericGenerateCount = Number(generateCount || 0)
-  const chapterQuestionLimit = 100
-  const usedQuestionCount = stats.total
-  const unresolvedQuestionCount = stats.pending + stats.draftError
+  const chapterQuestionLimit = Number((readiness?.stats as any)?.chapter_question_limit || 100)
+  const usedQuestionCount = Number((readiness?.stats as any)?.chapter_total_count ?? stats.total)
+  const unresolvedQuestionCount = Number((readiness?.stats as any)?.unresolved_count ?? (stats.pending + stats.draftError))
   const releaseReviewBlocked = unresolvedQuestionCount > 0
   const remainingQuota = Math.max(0, chapterQuestionLimit - usedQuestionCount)
   const difficultyTotal = Number(difficultyEasy || 0) + Number(difficultyMedium || 0) + Number(difficultyHard || 0)
@@ -646,18 +744,60 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     }, 'Đã lưu câu hỏi', refreshCurrent)
   }
 
+
+
+  const openRejectQuestion = (question: BankVersionQuestion) => {
+    setRejectingQuestion(question)
+    setRejectReason(question.status === 'draft_error' ? 'Bỏ câu lỗi: ' : '')
+  }
+
+  const confirmRejectQuestion = async () => {
+    if (!selectedBankVersion || !rejectingQuestion || !rejectReason.trim()) return
+    await run(async () => {
+      await reviewBankQuestion(headers, selectedBankVersion.id, rejectingQuestion.id, { action: 'reject', note: rejectReason.trim() })
+      setRejectingQuestion(null)
+      setRejectReason('')
+    }, 'Đã bỏ câu hỏi', refreshCurrent)
+  }
+  const generationPayload = { question_count: numericGenerateCount, target_question_count: 100, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) }
+
+  const openGenerateConfirm = async () => {
+    if (!selectedBankVersion) return
+    await run(async () => {
+      const preview = await previewGenerateFromBankVersion(headers, selectedBankVersion.id, generationPayload)
+      setGeneratePreview(preview)
+    }, 'Đã tính chi phí dự kiến', undefined, 'Đang tính chi phí dự kiến...')
+  }
+
+  const confirmGenerateQuestions = async () => {
+    if (!selectedBankVersion || !generatePreview) return
+    await run(async () => {
+      await generateFromBankVersion(headers, selectedBankVersion.id, generationPayload)
+      setGeneratePreview(null)
+    }, 'Đã tạo câu hỏi', refreshCurrent, 'Đang tạo câu hỏi bằng GPT, vui lòng chờ...')
+  }
+
   const materialPreviewChunks = (materialView?.chunks || []).slice(0, 80)
   const materialPreviewText = materialPreviewChunks.map((chunk, index) => `Đoạn ${index + 1}
 ${chunk.content}`).join('\n\n')
 
   return <div className="page-stack bank-multipage">
+    {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }, { label: chapterDisplayName(chapter) }]} />
     <Toolbar title={chapter ? `${offering?.code || ''} / ${chapterDisplayName(chapter)}` : 'Workspace của bài'} helper={'Quản lý tài liệu, câu hỏi và release của một bài.'} />
     {message ? <div className="alert info">{message}</div> : null}
     {diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
+    {unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
+
+    <section className={`card teacher-next-step ${unresolvedQuestionCount > 0 ? 'warning-card' : readiness?.can_create_release ? 'success-card' : ''}`}>
+      <div className="section-head"><div><h2>Bạn cần làm gì tiếp?</h2><p className="helper">Hệ thống tự đọc trạng thái bài và chỉ ra bước tiếp theo, không cần giáo viên tự đoán.</p></div></div>
+      {stats.draftError > 0 ? <div className="next-step-message"><b>Còn {stats.draftError} câu lỗi.</b><span>Hãy bấm Sửa hoặc Bỏ câu lỗi. Khi bấm Bỏ, hệ thống yêu cầu nhập lý do để sau này fine-tune AI.</span></div> : stats.pending > 0 ? <div className="next-step-message"><b>Còn {stats.pending} câu chưa duyệt.</b><span>Hãy duyệt hoặc bỏ hết các câu này. Sau đó mới chốt bộ đề.</span></div> : readiness?.can_create_release ? <div className="next-step-message"><b>Sẵn sàng chốt bộ đề.</b><span>Tất cả câu đã được xử lý. Có thể bấm Chốt bộ đề.</span></div> : <div className="next-step-message"><b>Chưa có việc cần duyệt.</b><span>Hãy gắn tài liệu và tạo câu hỏi nếu bài này chưa đủ câu.</span></div>}
+      <div className="button-row no-margin"><button className="btn secondary" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>Duyệt câu hỏi</button>{!latestRelease ? <button className="btn" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} onClick={() => run(async () => { if (!selectedBankVersion) return; await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true }) }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : null}</div>
+    </section>
 
     <section className="summary-grid compact-summary">
       <div><span>Tài liệu</span><b>{materials.length}</b></div>
+      <div><span>Tổng câu hiện có</span><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Còn {remainingQuota} câu</small></div>
       <div><span>Câu đã duyệt</span><b>{stats.approved}</b></div>
       <div><span>Câu chờ duyệt</span><b>{stats.pending}</b></div>
       <div><span>Câu bị loại</span><b>{stats.rejected}</b></div>
@@ -732,15 +872,12 @@ ${chunk.content}`).join('\n\n')
           {invalidDifficulty ? <div className="alert warning">Tổng tỷ lệ Dễ/Trung bình/Khó phải bằng 100%.</div> : null}
           {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
           {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn 100 câu. Không thể tạo thêm.</div> : null}
-          <button className="btn" disabled={busy || !canGenerateNow} onClick={() => run(async () => {
-            if (!selectedBankVersion) return
-            await generateFromBankVersion(headers, selectedBankVersion.id, { question_count: numericGenerateCount, target_question_count: 100, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) })
-          }, 'Đã tạo câu hỏi', refreshCurrent)}>Tạo câu hỏi</button>
+          <button className="btn" disabled={busy || !canGenerateNow} onClick={openGenerateConfirm}>Tạo câu hỏi</button>
         </div>
       </div>
 
 
-      <div className="workspace-panel full">
+      <div className="workspace-panel full" id="bank-question-list">
         <div className="section-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Giao diện giống trang /review: đọc câu hỏi, xem đủ đáp án, rồi duyệt hoặc bỏ. Phải xử lý hết mới được chốt bộ đề.</p></div><button className="btn secondary" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
@@ -783,10 +920,7 @@ ${chunk.content}`).join('\n\n')
                       if (!selectedBankVersion) return
                       await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' })
                     }, 'Đã duyệt câu hỏi', refreshCurrent)}>{item.status === 'rejected' ? 'Duyệt lại' : 'Duyệt'}</button> : null}
-                    {item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
-                      if (!selectedBankVersion) return
-                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'reject', note: item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Không dùng câu này' })
-                    }, 'Đã bỏ câu hỏi', refreshCurrent)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
+                    {item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={busy || !can('review_questions')} onClick={() => openRejectQuestion(item)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
                     {item.status === 'approved' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
                       if (!selectedBankVersion) return
                       await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' })
@@ -800,6 +934,35 @@ ${chunk.content}`).join('\n\n')
         {!questions.length ? <div className="empty-state">Chưa có câu hỏi.</div> : null}
       </div>
     </section>}
+
+    <Modal open={Boolean(generatePreview)} title="Xác nhận tạo câu hỏi" onClose={() => setGeneratePreview(null)}>
+      {generatePreview ? <div className="generate-confirm-box">
+        <div className="summary-grid compact-summary">
+          <div><span>Số câu</span><b>{generatePreview.question_count}</b></div>
+          <div><span>Dễ</span><b>{generatePreview.difficulty_counts.easy || 0}</b></div>
+          <div><span>Trung bình</span><b>{generatePreview.difficulty_counts.medium || 0}</b></div>
+          <div><span>Khó</span><b>{generatePreview.difficulty_counts.hard || 0}</b></div>
+          <div><span>Đã có trong bài</span><b>{generatePreview.current_question_count}/{generatePreview.chapter_question_limit}</b></div>
+          <div><span>Còn lại sau lần này</span><b>{Math.max(0, generatePreview.remaining_quota - generatePreview.question_count)}</b></div>
+        </div>
+        <div className="cost-preview-box">
+          <div><span>Chi phí dự kiến</span><b>{Number(generatePreview.estimated_cost_vnd || 0).toLocaleString('vi-VN')} ₫</b><small>~ ${Number(generatePreview.estimated_cost_usd || 0).toFixed(6)} USD</small></div>
+          <div><span>Token dự kiến</span><b>{Number(generatePreview.estimated_input_tokens + generatePreview.estimated_output_tokens).toLocaleString('vi-VN')}</b><small>Input {generatePreview.estimated_input_tokens.toLocaleString('vi-VN')} · Output {generatePreview.estimated_output_tokens.toLocaleString('vi-VN')}</small></div>
+        </div>
+        <p className="helper">{generatePreview.message}</p>
+        <div className="button-row"><button className="btn secondary" disabled={busy} onClick={() => setGeneratePreview(null)}>Hủy</button><button className="btn" disabled={busy} onClick={confirmGenerateQuestions}>Xác nhận tạo câu hỏi</button></div>
+      </div> : null}
+    </Modal>
+
+
+    <Modal open={Boolean(rejectingQuestion)} title={rejectingQuestion?.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ câu hỏi'} onClose={() => { setRejectingQuestion(null); setRejectReason('') }}>
+      <div className="mini-form">
+        <p className="helper">Nhập lý do hủy/bỏ câu. Lý do này được lưu lại để biết ai làm gì và dùng làm dữ liệu fine-tune AI sau này.</p>
+        {rejectingQuestion ? <div className="reject-question-preview"><b>{rejectingQuestion.question_text || 'Câu lỗi chưa có nội dung'}</b>{rejectingQuestion.status === 'draft_error' ? <small>Lý do lỗi: {bankQuestionErrorMessage(rejectingQuestion) || 'Không rõ'}</small> : null}</div> : null}
+        <textarea className="input" rows={4} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Ví dụ: Câu hỏi không đúng tài liệu, đáp án sai, câu lỗi không sửa được..." />
+        <div className="modal-actions"><button className="btn secondary" disabled={busy} onClick={() => { setRejectingQuestion(null); setRejectReason('') }}>Hủy</button><button className="btn danger" disabled={busy || !rejectReason.trim()} onClick={confirmRejectQuestion}>Xác nhận bỏ câu</button></div>
+      </div>
+    </Modal>
 
     <Modal open={Boolean(editingQuestion && editForm)} title="Sửa câu hỏi" onClose={() => { setEditingQuestion(null); setEditForm(null) }} wide>
       {editingQuestion && editForm ? <div className="bank-question-edit-form">

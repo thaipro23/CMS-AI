@@ -1,2 +1,2 @@
-import { redirect } from 'next/navigation'
-export default function BankHome() { redirect('/bank/departments') }
+import { BankDashboardPage } from './_components/BankPages'
+export default function BankHome() { return <BankDashboardPage /> }

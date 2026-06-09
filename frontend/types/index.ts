@@ -1037,6 +1037,27 @@ export type MaterialUploadResult = {
   message: string
 }
 
+export type BankGeneratePreview = {
+  ok: boolean
+  bank_version_id: string
+  chapter_id: string
+  question_count: number
+  difficulty_counts: Record<string, number>
+  current_question_count: number
+  chapter_question_limit: number
+  remaining_quota: number
+  estimated_input_tokens: number
+  estimated_cached_input_tokens: number
+  estimated_output_tokens: number
+  estimated_raw_cost_usd: number
+  estimated_cost_usd: number
+  estimated_cost_vnd: number
+  model_name: string
+  pricing?: Record<string, any> | null
+  token_source: string
+  message: string
+}
+
 export type BankGenerateResult = {
   ok: boolean
   bank_version_id: string
@@ -1251,3 +1272,67 @@ export type CourseQuizRollbackResult = {
   delete_result: Record<string, any>
   message: string
 }
+
+export type BankReviewStatusStats = {
+  total_questions: number
+  approved_count: number
+  pending_review_count: number
+  draft_error_count: number
+  unresolved_count: number
+  rejected_count?: number
+  is_review_done: boolean
+  status: string
+  has_questions?: boolean
+  subject_count?: number
+  review_done_subject_count?: number
+  review_not_done_subject_count?: number
+  subject_version_count?: number
+  review_done_version_count?: number
+  review_not_done_version_count?: number
+  chapter_count?: number
+  review_done_chapter_count?: number
+  review_not_done_chapter_count?: number
+  material_count?: number
+  bank_version_count?: number
+  release_count?: number
+  published_release_count?: number
+  ready_to_release?: boolean
+  ready_to_release_chapter_count?: number
+  question_limit?: number
+  remaining_quota?: number
+  [key: string]: any
+}
+
+export type BankDashboardOverview = {
+  ok: boolean
+  departments_total: number
+  departments_done: number
+  departments_not_done: number
+  subjects_total: number
+  subjects_done: number
+  subjects_not_done: number
+  subject_versions_total: number
+  subject_versions_done: number
+  subject_versions_not_done: number
+  chapters_total: number
+  chapters_needing_review: number
+  chapters_ready_to_release: number
+  total_questions: number
+  approved_count: number
+  pending_review_count: number
+  draft_error_count: number
+  next_actions: Array<{ type: string; title: string; message: string; href: string; priority: number }>
+}
+
+export type BankSearchResult = {
+  type: 'department' | 'subject' | 'subject_version' | 'chapter' | string
+  title: string
+  subtitle: string
+  href: string
+  stats: BankReviewStatusStats
+}
+
+export type DepartmentSummary = { department: Department; stats: BankReviewStatusStats }
+export type SubjectSummary = { subject: Subject; stats: BankReviewStatusStats }
+export type SubjectVersionSummary = { subject_version: SubjectOffering; stats: BankReviewStatusStats }
+export type ChapterSummary = { chapter: SubjectChapter; stats: BankReviewStatusStats }

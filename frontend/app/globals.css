@@ -1187,3 +1187,110 @@ label { margin: 5px 0 4px; font-size: 12px; }
   .material-preview-meta { display: grid; }
   .material-preview .material-preview-text { min-height: 320px; }
 }
+
+/* v25.9.15.6.8 generate preview, loading overlay, accountability */
+.bank-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, .48);
+  backdrop-filter: blur(2px);
+}
+.bank-loading-card {
+  width: min(360px, calc(100vw - 32px));
+  border-radius: 18px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, .28);
+  padding: 22px;
+  text-align: center;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+.bank-loading-card b { color: #0f172a; font-size: 16px; }
+.bank-loading-card small { color: #64748b; }
+.spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 4px solid #e5e7eb;
+  border-top-color: #2563eb;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.generate-confirm-box { display: grid; gap: 12px; }
+.cost-preview-box {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.cost-preview-box > div {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 12px 14px;
+}
+.cost-preview-box span { display: block; color: #64748b; font-size: 12px; font-weight: 800; }
+.cost-preview-box b { display: block; color: #0f172a; font-size: 20px; margin-top: 4px; }
+.cost-preview-box small { display: block; color: #64748b; margin-top: 4px; }
+
+/* v25.9.15.6.9 Bank dashboard, review status and quick search */
+.quick-search { position: relative; width: 100%; max-width: 860px; }
+.quick-search-compact { max-width: 720px; margin-bottom: 12px; }
+.quick-search-results {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 55px rgba(15,23,42,.16);
+  overflow: hidden;
+}
+.quick-search-row {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  text-decoration: none;
+  color: #0f172a;
+  border-bottom: 1px solid #f1f5f9;
+}
+.quick-search-row:last-child { border-bottom: none; }
+.quick-search-row:hover { background: #eff6ff; }
+.quick-search-row small { color: #64748b; }
+.quick-search-row.muted { color: #64748b; }
+.dashboard-summary > div { min-height: 92px; }
+.dashboard-task-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.entity-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.status-pill {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  background: #f1f5f9;
+  color: #475569;
+  white-space: nowrap;
+}
+.bank-stat-line { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid #f1f5f9; padding-top: 7px; margin-top: 7px; }
+.bank-stat-line span { color: #64748b; font-size: 12px; }
+.bank-stat-line b { color: #0f172a; }
+.bank-status-card { border-left: 5px solid #cbd5e1; }
+.status-ready { border-left-color: #22c55e; background: linear-gradient(180deg, #fff, #f0fdf4); }
+.status-warning { border-left-color: #f59e0b; background: linear-gradient(180deg, #fff, #fffbeb); }
+.status-danger { border-left-color: #ef4444; background: linear-gradient(180deg, #fff, #fef2f2); }
+.status-empty { border-left-color: #94a3b8; background: linear-gradient(180deg, #fff, #f8fafc); }
+.warning-card { border-left: 5px solid #f59e0b; }
+.danger-card { border-left: 5px solid #ef4444; }
+.success-card { border-left: 5px solid #22c55e; }
+.teacher-next-step { display: grid; gap: 12px; }
+.next-step-message { display: grid; gap: 4px; padding: 12px 14px; border-radius: 14px; background: #f8fafc; border: 1px solid #e5e7eb; }
+.next-step-message b { color: #0f172a; }
+.next-step-message span { color: #475569; }
+.reject-question-preview { display: grid; gap: 6px; border: 1px solid #fee2e2; background: #fef2f2; padding: 12px; border-radius: 12px; }
+.reject-question-preview small { color: #991b1b; }

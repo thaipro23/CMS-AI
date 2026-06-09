@@ -39,6 +39,7 @@ from app.services.openedx_exporter import question_to_openedx_olx
 from app.services.answer_randomizer import normalize_and_shuffle_options
 from app.services.chunker import Chunker
 from app.services.content_extractor import ContentExtractor
+from app.services.cost_control import CostControlService
 from app.services.generation_cache import question_fingerprint, sha256_text
 from app.services.model_gateway import ModelGateway
 from app.services.quality_checker import QualityChecker
@@ -227,6 +228,292 @@ class VersionedQuestionBankService:
             'carry_over_questions': self.db.query(Question).filter(Question.is_carry_over.is_(True)).count(),
             'retired_questions': self.db.query(Question).filter(Question.is_retired.is_(True)).count(),
         }
+
+
+    # v25.9.15.6.9 - Teacher guidance dashboard helpers
+    BANK_PENDING_STATUSES = {'pending_review', 'needs_review'}
+    BANK_ERROR_STATUSES = {'draft_error'}
+    BANK_APPROVED_STATUSES = {'approved', 'published'}
+
+    def _bank_question_status_counts(self, questions: list[Question]) -> dict:
+        active = [q for q in questions if not bool(q.is_retired)]
+        approved = [q for q in active if q.status in self.BANK_APPROVED_STATUSES]
+        pending = [q for q in active if q.status in self.BANK_PENDING_STATUSES]
+        draft_error = [q for q in active if q.status in self.BANK_ERROR_STATUSES]
+        rejected = [q for q in active if q.status == 'rejected']
+        unresolved = pending + draft_error
+        total = len(active)
+        return {
+            'total_questions': total,
+            'approved_count': len(approved),
+            'pending_review_count': len(pending),
+            'draft_error_count': len(draft_error),
+            'unresolved_count': len(unresolved),
+            'rejected_count': len(rejected),
+            'is_review_done': bool(approved) and not unresolved,
+            'has_questions': bool(active),
+            'status': 'ready' if bool(approved) and not unresolved else ('needs_fix' if draft_error else ('needs_review' if pending else ('empty' if not active else 'not_ready'))),
+        }
+
+    def _chapter_stats_map(self) -> dict[str, dict]:
+        chapters = self.db.query(SubjectChapter).all()
+        bank_versions = self.db.query(QuestionBankVersion).all()
+        releases = self.db.query(QuestionBankRelease).all()
+        materials = self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.status != 'deleted').all()
+        questions = self.db.query(Question).filter(Question.bank_version_id.isnot(None)).all()
+        versions_by_chapter: dict[str, list[QuestionBankVersion]] = {}
+        questions_by_chapter: dict[str, list[Question]] = {}
+        releases_by_chapter: dict[str, list[QuestionBankRelease]] = {}
+        materials_by_chapter: dict[str, list[LearningMaterialVersion]] = {}
+        version_to_chapter = {v.id: v.chapter_id for v in bank_versions}
+        for v in bank_versions:
+            versions_by_chapter.setdefault(v.chapter_id, []).append(v)
+        for q in questions:
+            chapter_id = version_to_chapter.get(q.bank_version_id or '') or q.subject_chapter_id
+            if chapter_id:
+                questions_by_chapter.setdefault(chapter_id, []).append(q)
+        for r in releases:
+            chapter_id = version_to_chapter.get(r.bank_version_id or '') or r.chapter_id
+            if chapter_id:
+                releases_by_chapter.setdefault(chapter_id, []).append(r)
+        for m in materials:
+            materials_by_chapter.setdefault(m.chapter_id, []).append(m)
+        out: dict[str, dict] = {}
+        for chapter in chapters:
+            qstats = self._bank_question_status_counts(questions_by_chapter.get(chapter.id, []))
+            rels = releases_by_chapter.get(chapter.id, [])
+            published = [r for r in rels if r.status == 'published']
+            out[chapter.id] = {
+                **qstats,
+                'chapter_id': chapter.id,
+                'subject_id': chapter.subject_id,
+                'subject_offering_id': chapter.subject_offering_id,
+                'title': chapter.title,
+                'material_count': len(materials_by_chapter.get(chapter.id, [])),
+                'bank_version_count': len(versions_by_chapter.get(chapter.id, [])),
+                'release_count': len(rels),
+                'published_release_count': len(published),
+                'release_status': 'published' if published else ('ready_to_release' if qstats['is_review_done'] else ('has_release' if rels else 'none')),
+                'ready_to_release': qstats['is_review_done'] and not published,
+                'question_limit': 100,
+                'remaining_quota': max(0, 100 - qstats['total_questions']),
+            }
+        return out
+
+    def _offering_summary_map(self, chapter_stats: dict[str, dict] | None = None) -> dict[str, dict]:
+        chapter_stats = chapter_stats or self._chapter_stats_map()
+        offerings = self.db.query(SubjectOffering).all()
+        chapters = self.db.query(SubjectChapter).all()
+        out: dict[str, dict] = {}
+        for offering in offerings:
+            own_chapters = [c for c in chapters if c.subject_offering_id == offering.id]
+            stats = [chapter_stats.get(c.id, {}) for c in own_chapters]
+            chapter_count = len(own_chapters)
+            done = len([s for s in stats if s.get('is_review_done')])
+            unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
+            draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
+            total_questions = sum(int(s.get('total_questions') or 0) for s in stats)
+            approved = sum(int(s.get('approved_count') or 0) for s in stats)
+            pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
+            published_releases = sum(int(s.get('published_release_count') or 0) for s in stats)
+            ready_to_release = sum(1 for s in stats if s.get('ready_to_release'))
+            is_done = chapter_count > 0 and done == chapter_count
+            out[offering.id] = {
+                'subject_offering_id': offering.id,
+                'subject_id': offering.subject_id,
+                'code': offering.code,
+                'name': offering.name,
+                'chapter_count': chapter_count,
+                'review_done_chapter_count': done,
+                'review_not_done_chapter_count': max(0, chapter_count - done),
+                'total_questions': total_questions,
+                'approved_count': approved,
+                'pending_review_count': pending,
+                'draft_error_count': draft_error,
+                'unresolved_count': unresolved,
+                'published_release_count': published_releases,
+                'ready_to_release_chapter_count': ready_to_release,
+                'is_review_done': is_done,
+                'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if chapter_count == 0 else 'not_ready'))),
+            }
+        return out
+
+    def _subject_summary_map(self, offering_stats: dict[str, dict] | None = None) -> dict[str, dict]:
+        offering_stats = offering_stats or self._offering_summary_map()
+        subjects = self.db.query(Subject).all()
+        offerings = self.db.query(SubjectOffering).all()
+        out: dict[str, dict] = {}
+        for subject in subjects:
+            own = [o for o in offerings if o.subject_id == subject.id]
+            stats = [offering_stats.get(o.id, {}) for o in own]
+            version_count = len(own)
+            done = len([s for s in stats if s.get('is_review_done')])
+            unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
+            draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
+            total_questions = sum(int(s.get('total_questions') or 0) for s in stats)
+            approved = sum(int(s.get('approved_count') or 0) for s in stats)
+            pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
+            ready_to_release = sum(int(s.get('ready_to_release_chapter_count') or 0) for s in stats)
+            is_done = version_count > 0 and done == version_count
+            out[subject.id] = {
+                'subject_id': subject.id,
+                'department_id': subject.department_id,
+                'code': subject.code,
+                'name': subject.name,
+                'subject_version_count': version_count,
+                'review_done_version_count': done,
+                'review_not_done_version_count': max(0, version_count - done),
+                'total_questions': total_questions,
+                'approved_count': approved,
+                'pending_review_count': pending,
+                'draft_error_count': draft_error,
+                'unresolved_count': unresolved,
+                'ready_to_release_chapter_count': ready_to_release,
+                'is_review_done': is_done,
+                'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if version_count == 0 else 'not_ready'))),
+            }
+        return out
+
+    def _department_summary_map(self, subject_stats: dict[str, dict] | None = None) -> dict[str, dict]:
+        subject_stats = subject_stats or self._subject_summary_map()
+        departments = self.db.query(Department).all()
+        subjects = self.db.query(Subject).all()
+        out: dict[str, dict] = {}
+        for department in departments:
+            own = [s for s in subjects if s.department_id == department.id]
+            stats = [subject_stats.get(s.id, {}) for s in own]
+            subject_count = len(own)
+            done = len([s for s in stats if s.get('is_review_done')])
+            unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
+            draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
+            total_questions = sum(int(s.get('total_questions') or 0) for s in stats)
+            approved = sum(int(s.get('approved_count') or 0) for s in stats)
+            pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
+            ready_to_release = sum(int(s.get('ready_to_release_chapter_count') or 0) for s in stats)
+            is_done = subject_count > 0 and done == subject_count
+            out[department.id] = {
+                'department_id': department.id,
+                'code': department.code,
+                'name': department.name,
+                'subject_count': subject_count,
+                'review_done_subject_count': done,
+                'review_not_done_subject_count': max(0, subject_count - done),
+                'total_questions': total_questions,
+                'approved_count': approved,
+                'pending_review_count': pending,
+                'draft_error_count': draft_error,
+                'unresolved_count': unresolved,
+                'ready_to_release_chapter_count': ready_to_release,
+                'is_review_done': is_done,
+                'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if subject_count == 0 else 'not_ready'))),
+            }
+        return out
+
+    def dashboard_overview(self) -> dict:
+        chapter_stats = self._chapter_stats_map()
+        offering_stats = self._offering_summary_map(chapter_stats)
+        subject_stats = self._subject_summary_map(offering_stats)
+        department_stats = self._department_summary_map(subject_stats)
+        chapters_needing_work = [s for s in chapter_stats.values() if int(s.get('unresolved_count') or 0) > 0]
+        chapters_ready = [s for s in chapter_stats.values() if s.get('ready_to_release')]
+        return {
+            'ok': True,
+            'departments_total': len(department_stats),
+            'departments_done': len([s for s in department_stats.values() if s.get('is_review_done')]),
+            'departments_not_done': len([s for s in department_stats.values() if not s.get('is_review_done')]),
+            'subjects_total': len(subject_stats),
+            'subjects_done': len([s for s in subject_stats.values() if s.get('is_review_done')]),
+            'subjects_not_done': len([s for s in subject_stats.values() if not s.get('is_review_done')]),
+            'subject_versions_total': len(offering_stats),
+            'subject_versions_done': len([s for s in offering_stats.values() if s.get('is_review_done')]),
+            'subject_versions_not_done': len([s for s in offering_stats.values() if not s.get('is_review_done')]),
+            'chapters_total': len(chapter_stats),
+            'chapters_needing_review': len(chapters_needing_work),
+            'chapters_ready_to_release': len(chapters_ready),
+            'total_questions': sum(int(s.get('total_questions') or 0) for s in chapter_stats.values()),
+            'approved_count': sum(int(s.get('approved_count') or 0) for s in chapter_stats.values()),
+            'pending_review_count': sum(int(s.get('pending_review_count') or 0) for s in chapter_stats.values()),
+            'draft_error_count': sum(int(s.get('draft_error_count') or 0) for s in chapter_stats.values()),
+            'next_actions': self._build_dashboard_next_actions(chapter_stats),
+        }
+
+    def _build_dashboard_next_actions(self, chapter_stats: dict[str, dict]) -> list[dict]:
+        chapters = {c.id: c for c in self.db.query(SubjectChapter).all()}
+        offerings = {o.id: o for o in self.db.query(SubjectOffering).all()}
+        subjects = {s.id: s for s in self.db.query(Subject).all()}
+        actions: list[dict] = []
+        for stat in chapter_stats.values():
+            chapter = chapters.get(stat.get('chapter_id'))
+            if not chapter:
+                continue
+            offering = offerings.get(chapter.subject_offering_id or '')
+            subject = subjects.get(chapter.subject_id)
+            label = ' / '.join([x for x in [subject.code if subject else None, offering.code if offering else None, chapter.title] if x])
+            if int(stat.get('draft_error_count') or 0) > 0:
+                actions.append({'type': 'fix_errors', 'title': label, 'message': f"Còn {stat.get('draft_error_count')} câu lỗi cần sửa hoặc bỏ.", 'href': f"/bank/chapters/{chapter.id}", 'priority': 1})
+            elif int(stat.get('pending_review_count') or 0) > 0:
+                actions.append({'type': 'review_questions', 'title': label, 'message': f"Còn {stat.get('pending_review_count')} câu chưa duyệt.", 'href': f"/bank/chapters/{chapter.id}", 'priority': 2})
+            elif stat.get('ready_to_release'):
+                actions.append({'type': 'create_release', 'title': label, 'message': 'Đã duyệt xong, có thể chốt bộ đề.', 'href': f"/bank/chapters/{chapter.id}", 'priority': 3})
+        return sorted(actions, key=lambda x: (x['priority'], x['title']))[:12]
+
+    def department_summaries(self) -> list[dict]:
+        stats = self._department_summary_map()
+        departments = self.db.query(Department).order_by(Department.code.asc()).all()
+        return [{'department': d, 'stats': stats.get(d.id, {})} for d in departments]
+
+    def subject_summaries(self, *, department_id: str) -> list[dict]:
+        stats = self._subject_summary_map()
+        subjects = self.db.query(Subject).filter(Subject.department_id == department_id).order_by(Subject.code.asc()).all()
+        return [{'subject': s, 'stats': stats.get(s.id, {})} for s in subjects]
+
+    def subject_version_summaries(self, *, subject_id: str) -> list[dict]:
+        stats = self._offering_summary_map()
+        offerings = self.db.query(SubjectOffering).filter(SubjectOffering.subject_id == subject_id).order_by(SubjectOffering.code.asc()).all()
+        return [{'subject_version': o, 'stats': stats.get(o.id, {})} for o in offerings]
+
+    def chapter_summaries(self, *, subject_offering_id: str) -> list[dict]:
+        stats = self._chapter_stats_map()
+        chapters = self.db.query(SubjectChapter).filter(SubjectChapter.subject_offering_id == subject_offering_id).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
+        return [{'chapter': c, 'stats': stats.get(c.id, {})} for c in chapters]
+
+    def dashboard_search(self, *, q: str, limit: int = 20) -> list[dict]:
+        query = normalize_text(q)
+        if not query:
+            return []
+        chapter_stats = self._chapter_stats_map()
+        offering_stats = self._offering_summary_map(chapter_stats)
+        subject_stats = self._subject_summary_map(offering_stats)
+        department_stats = self._department_summary_map(subject_stats)
+        departments = {d.id: d for d in self.db.query(Department).all()}
+        subjects = {s.id: s for s in self.db.query(Subject).all()}
+        offerings = {o.id: o for o in self.db.query(SubjectOffering).all()}
+        chapters = {c.id: c for c in self.db.query(SubjectChapter).all()}
+        results: list[dict] = []
+        def match(text: str) -> bool:
+            norm = normalize_text(text)
+            tokens = [t for t in query.split(' ') if t]
+            return all(t in norm for t in tokens)
+        for d in departments.values():
+            if match(f"{d.code} {d.name}"):
+                st = department_stats.get(d.id, {})
+                results.append({'type': 'department', 'title': d.name, 'subtitle': f"{d.code} · {st.get('subject_count', 0)} môn · {st.get('unresolved_count', 0)} câu chưa xử lý", 'href': f"/bank/departments/{d.id}/subjects", 'stats': st})
+        for s in subjects.values():
+            if match(f"{s.code} {s.name} {departments.get(s.department_id).name if departments.get(s.department_id) else ''}"):
+                st = subject_stats.get(s.id, {})
+                results.append({'type': 'subject', 'title': f"{s.code} - {s.name}", 'subtitle': f"{st.get('subject_version_count', 0)} phiên bản · {st.get('unresolved_count', 0)} câu chưa xử lý", 'href': f"/bank/subjects/{s.id}/versions", 'stats': st})
+        for o in offerings.values():
+            subj = subjects.get(o.subject_id)
+            if match(f"{o.code} {o.name} {o.term or ''} {subj.code if subj else ''} {subj.name if subj else ''}"):
+                st = offering_stats.get(o.id, {})
+                results.append({'type': 'subject_version', 'title': o.code, 'subtitle': f"{subj.code if subj else ''} · {st.get('chapter_count', 0)} bài · {st.get('unresolved_count', 0)} câu chưa xử lý", 'href': f"/bank/subject-versions/{o.id}/chapters", 'stats': st})
+        for c in chapters.values():
+            off = offerings.get(c.subject_offering_id or '')
+            subj = subjects.get(c.subject_id)
+            if match(f"{c.title} {off.code if off else ''} {subj.code if subj else ''} {subj.name if subj else ''}"):
+                st = chapter_stats.get(c.id, {})
+                results.append({'type': 'chapter', 'title': f"{subj.code if subj else ''} > {off.code if off else ''} > {c.title}", 'subtitle': f"{st.get('total_questions', 0)} câu | {st.get('approved_count', 0)} đã duyệt | {st.get('unresolved_count', 0)} chưa xử lý", 'href': f"/bank/chapters/{c.id}", 'stats': st})
+        return results[:max(1, min(limit, 50))]
 
     def create_department(self, *, code: str, name: str, description: str = '') -> Department:
         item = Department(id=str(uuid.uuid4()), code=code.strip().upper(), name=name.strip(), description=description or '')
@@ -1361,6 +1648,79 @@ class VersionedQuestionBankService:
         ).scalar()
         return int(value or 0) + 1
 
+    def _chapter_question_count(self, *, chapter_id: str) -> int:
+        # Người dùng hiểu quota theo Bài/Chapter, không theo Bank Version kỹ thuật.
+        # Tính cả approved / pending / rejected / draft_error để không thể bỏ câu rồi tạo vô hạn.
+        return int(self.db.query(func.count(Question.id)).filter(
+            Question.bank_version_id.isnot(None),
+            Question.subject_chapter_id == chapter_id,
+            or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
+        ).scalar() or 0)
+
+    async def preview_generate_from_bank_version(
+        self,
+        *,
+        bank_version_id: str,
+        question_count: int,
+        target_question_count: int | None = None,
+        difficulty_easy: int = 50,
+        difficulty_medium: int = 30,
+        difficulty_hard: int = 20,
+        material_version_ids: list[str] | None = None,
+    ) -> dict:
+        version = self._require_bank_version(bank_version_id)
+        subject = self.db.get(Subject, version.subject_id)
+        chapter = self.db.get(SubjectChapter, version.chapter_id)
+        if not subject or not chapter:
+            raise ValueError('Bank Version thiếu Subject hoặc Chapter')
+        if question_count < 1 or question_count > 100:
+            raise ValueError('Số câu tạo thêm phải trong khoảng 1-100')
+        if int(difficulty_easy or 0) + int(difficulty_medium or 0) + int(difficulty_hard or 0) != 100:
+            raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%')
+        effective_target = min(100, int(target_question_count or 100))
+        chapter_total = self._chapter_question_count(chapter_id=version.chapter_id)
+        remaining = max(0, effective_target - chapter_total)
+        if question_count > remaining:
+            raise ValueError(f'Vượt chỉ tiêu của bài. Hiện có {chapter_total}/{effective_target} câu, chỉ còn được tạo thêm {remaining} câu.')
+        content, chunks, content_tokens = self._bank_generation_content(bank_version_id=version.id, material_version_ids=material_version_ids)
+        if not content.strip() or not chunks:
+            raise ValueError('Bank Version chưa có tài liệu/chunk. Hãy upload tài liệu trước khi tạo câu hỏi.')
+        counts = self._difficulty_counts(total_questions=question_count, easy=difficulty_easy, medium=difficulty_medium, hard=difficulty_hard)
+        model_calls = len([value for value in counts.values() if int(value or 0) > 0]) or 1
+        # Estimate nhanh, không gọi GPT thật. Input tính theo số lần gọi EASY/MEDIUM/HARD + schema/system overhead.
+        estimated_input_tokens = int(content_tokens * model_calls + 4300 * model_calls)
+        estimated_cached_input_tokens = 0
+        estimated_output_tokens = int(question_count * 320)
+        raw_cost, pricing = await CostControlService(self.db).calculate_cost_usd(
+            model_name=settings.openai_model,
+            input_tokens=estimated_input_tokens,
+            cached_input_tokens=estimated_cached_input_tokens,
+            output_tokens=estimated_output_tokens,
+            apply_safety_factor=False,
+            refresh_pricing=False,
+        )
+        estimated_cost_usd = raw_cost * settings.cost_safety_factor
+        return {
+            'ok': True,
+            'bank_version_id': version.id,
+            'chapter_id': version.chapter_id,
+            'question_count': int(question_count),
+            'difficulty_counts': counts,
+            'current_question_count': chapter_total,
+            'chapter_question_limit': effective_target,
+            'remaining_quota': remaining,
+            'estimated_input_tokens': estimated_input_tokens,
+            'estimated_cached_input_tokens': estimated_cached_input_tokens,
+            'estimated_output_tokens': estimated_output_tokens,
+            'estimated_raw_cost_usd': round(raw_cost, 6),
+            'estimated_cost_usd': round(estimated_cost_usd, 6),
+            'estimated_cost_vnd': round(estimated_cost_usd * settings.usd_to_vnd, 0),
+            'model_name': settings.openai_model,
+            'pricing': pricing.as_dict() if pricing else None,
+            'token_source': 'local_bank_generation_estimate',
+            'message': 'Đây là ước tính trước khi gọi GPT thật. Chi phí thực tế có thể chênh lệch theo output của model.',
+        }
+
     async def generate_from_bank_version(
         self,
         *,
@@ -1390,10 +1750,7 @@ class VersionedQuestionBankService:
             meta['target_question_count'] = int(target_question_count)
             version.metadata_json = meta
         if effective_target:
-            active_count = self.db.query(Question).filter(
-                Question.bank_version_id == version.id,
-                or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
-            ).count()
+            active_count = self._chapter_question_count(chapter_id=version.chapter_id)
             if active_count + int(question_count) > effective_target:
                 remaining = max(0, effective_target - active_count)
                 raise ValueError(f'Vượt chỉ tiêu của bài. Hiện có {active_count}/{effective_target} câu, chỉ còn được tạo thêm {remaining} câu.')
@@ -1420,7 +1777,7 @@ class VersionedQuestionBankService:
                     scope_title=scope_title,
                     target_difficulty=difficulty,
                     provider=provider,
-                    prompt_cache_key=f'bank:{version.id}:{difficulty}:{sha256_text(content, 24)}',
+                    prompt_cache_key='qbank:' + sha256_text(f'{version.id}:{difficulty}:{content}:{settings.openai_model}', 56),
                 )
                 raw_usage_parts.append({'difficulty': difficulty, 'requested': count, 'usage': usage})
             except Exception as exc:
@@ -1520,6 +1877,14 @@ class VersionedQuestionBankService:
                 )
                 self.db.add(q)
                 self.db.flush()
+                self.db.add(QuestionReviewLog(
+                    id=str(uuid.uuid4()),
+                    question_id=q.id,
+                    old_status='generated',
+                    new_status=status,
+                    actor=actor or 'system',
+                    note='Tạo câu hỏi từ tài liệu trong ngân hàng đề',
+                ))
                 questions_created.append(q)
 
         version.metadata_json = {
@@ -1529,6 +1894,7 @@ class VersionedQuestionBankService:
             'last_bank_generate_created_questions': len(questions_created),
             'last_bank_generate_input_tokens': input_tokens,
             'last_bank_generate_errors': errors,
+            'last_bank_generate_by': actor,
         }
         self.db.commit()
         return {
@@ -1760,6 +2126,9 @@ class VersionedQuestionBankService:
                 'unresolved_count': len(unresolved),
                 'rejected_count': len(rejected),
                 'retired_count': len([q for q in questions if bool(q.is_retired)]),
+                'chapter_question_limit': 100,
+                'chapter_total_count': self._chapter_question_count(chapter_id=version.chapter_id),
+                'chapter_remaining_quota': max(0, 100 - self._chapter_question_count(chapter_id=version.chapter_id)),
                 'difficulty_counts': {
                     'easy': len([q for q in approved if (q.difficulty or '').lower() == 'easy']),
                     'medium': len([q for q in approved if (q.difficulty or '').lower() == 'medium']),

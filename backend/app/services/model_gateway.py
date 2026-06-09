@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import re
@@ -88,8 +89,9 @@ class ModelGateway:
             },
             'store': False,
         }
-        if prompt_cache_key:
-            payload['prompt_cache_key'] = prompt_cache_key[:256]
+        safe_prompt_cache_key = self._safe_prompt_cache_key(prompt_cache_key)
+        if safe_prompt_cache_key:
+            payload['prompt_cache_key'] = safe_prompt_cache_key
 
         fallback_input_tokens = count_tokens(json.dumps(payload, ensure_ascii=False), settings.openai_model)
         timeout_seconds = max(int(settings.llm_timeout_seconds or 90), 90)
@@ -118,7 +120,7 @@ class ModelGateway:
             'model': settings.openai_model,
             'api_mode': 'responses',
             'response_id': data.get('id'),
-            'prompt_cache_key': prompt_cache_key,
+            'prompt_cache_key': safe_prompt_cache_key,
         }
         return parsed, usage_dict
 
@@ -257,6 +259,14 @@ class ModelGateway:
             }
         }
 
+    def _safe_prompt_cache_key(self, prompt_cache_key: str | None) -> str | None:
+        if not prompt_cache_key:
+            return None
+        text = re.sub(r'[^A-Za-z0-9_.:-]+', '-', str(prompt_cache_key).strip())
+        if len(text) <= 64:
+            return text
+        return 'pc_' + hashlib.sha256(str(prompt_cache_key).encode('utf-8')).hexdigest()[:61]
+
     def _responses_payload(self, prompt: str, prompt_cache_key: str | None = None) -> dict[str, Any]:
         payload = {
             'model': settings.openai_model,
@@ -265,8 +275,9 @@ class ModelGateway:
             'text': self._structured_output_config(),
             'store': False,
         }
-        if prompt_cache_key:
-            payload['prompt_cache_key'] = prompt_cache_key[:256]
+        safe_prompt_cache_key = self._safe_prompt_cache_key(prompt_cache_key)
+        if safe_prompt_cache_key:
+            payload['prompt_cache_key'] = safe_prompt_cache_key
         return payload
 
     def _responses_input_token_payload(self, prompt: str, *, include_schema: bool = True) -> dict[str, Any]:
@@ -399,7 +410,7 @@ class ModelGateway:
             'raw_usage': usage,
             'response_id': data.get('id'),
             'raw_output_text': text[:12000],
-            'prompt_cache_key': prompt_cache_key,
+            'prompt_cache_key': payload.get('prompt_cache_key'),
         }
 
         try:

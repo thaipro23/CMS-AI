@@ -38,6 +38,7 @@ import {
   MaterialChunk,
   MaterialVersion,
   MaterialUploadResult,
+  BankGeneratePreview,
   BankGenerateResult,
   BankVersionQuestion,
   BankVersionDiffPreview,
@@ -51,6 +52,12 @@ import {
   BankDocumentDiffResolveResult,
   CourseQuizInstance,
   CourseQuizRollbackResult,
+  BankDashboardOverview,
+  BankSearchResult,
+  DepartmentSummary,
+  SubjectSummary,
+  SubjectVersionSummary,
+  ChapterSummary,
 } from "../types";
 
 const rawApiBase =
@@ -900,6 +907,46 @@ export async function insertCmsProblemBanks(
   );
 }
 
+
+export async function getBankDashboardOverview(headers: HeadersInit) {
+  return parseResponse<BankDashboardOverview>(
+    await fetch(`${API}/question-bank-v2/dashboard/overview`, { headers }),
+  );
+}
+
+export async function searchBankDashboard(headers: HeadersInit, q: string, limit = 20) {
+  const params = new URLSearchParams();
+  params.set('q', q);
+  params.set('limit', String(limit));
+  return parseResponse<BankSearchResult[]>(
+    await fetch(`${API}/question-bank-v2/dashboard/search?${params.toString()}`, { headers }),
+  );
+}
+
+export async function getDepartmentSummaries(headers: HeadersInit) {
+  return parseResponse<DepartmentSummary[]>(
+    await fetch(`${API}/question-bank-v2/departments/summary`, { headers }),
+  );
+}
+
+export async function getSubjectSummaries(headers: HeadersInit, departmentId: string) {
+  return parseResponse<SubjectSummary[]>(
+    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(departmentId)}/subjects/summary`, { headers }),
+  );
+}
+
+export async function getSubjectVersionSummaries(headers: HeadersInit, subjectId: string) {
+  return parseResponse<SubjectVersionSummary[]>(
+    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(subjectId)}/versions/summary`, { headers }),
+  );
+}
+
+export async function getChapterSummaries(headers: HeadersInit, subjectOfferingId: string) {
+  return parseResponse<ChapterSummary[]>(
+    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(subjectOfferingId)}/chapters/summary`, { headers }),
+  );
+}
+
 export async function getBankSummary(headers: HeadersInit) {
   return parseResponse<BankSummary>(
     await fetch(`${API}/question-bank-v2/summary`, { headers }),
@@ -1089,6 +1136,27 @@ export async function getBankMaterialChunks(headers: HeadersInit, bankVersionId:
   if (materialVersionId) params.set('material_version_id', materialVersionId);
   return parseResponse<MaterialChunk[]>(
     await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/material-chunks?${params.toString()}`, { headers }),
+  );
+}
+
+export async function previewGenerateFromBankVersion(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: {
+    question_count: number;
+    target_question_count?: number;
+    difficulty_easy?: number;
+    difficulty_medium?: number;
+    difficulty_hard?: number;
+    material_version_ids?: string[] | null;
+  },
+) {
+  return parseResponse<BankGeneratePreview>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate/preview`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
   );
 }
 

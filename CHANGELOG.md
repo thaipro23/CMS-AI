@@ -1,4 +1,15 @@
 
+## v25.9.15.6.8 - Bank Generate Cost + Loading + Audit Hotfix
+
+- Fix prompt_cache_key quá dài bằng cách hash/sanitize về tối đa 64 ký tự.
+- Thêm preview trước khi tạo câu hỏi: số câu EASY/MEDIUM/HARD, quota chapter, chi phí/token dự kiến.
+- UI Tạo câu hỏi mở popup Hủy/Xác nhận; chỉ xác nhận mới gọi GPT thật.
+- Thêm loading overlay khi đang tính chi phí hoặc generate.
+- Quota 100 câu/chapter tính theo toàn bộ chapter, không chỉ bank version hiện tại.
+- Không draft_error với đáp án gần giống nhau; chỉ bắt lỗi khi đáp án trùng hẳn.
+- Trả thêm reviewed_by/reviewed_at để biết ai duyệt hoặc bỏ câu.
+
+
 ## v25.9.15.6.6 - Bank Review UI + Release Guard Hotfix
 
 - Sửa danh sách câu hỏi trong Bank Chapter Workspace theo UI trang `/review`.
@@ -329,3 +340,13 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 - Backend validate đủ câu hỏi, đủ 4 đáp án và đáp án đúng A/B/C/D.
 - Câu `draft_error` sau khi sửa được đưa về `pending_review` nếu không chọn trạng thái khác.
 - Không cho sửa câu đã `published`.
+
+## v25.9.15.6.9 - Bank Dashboard + Review Status + Quick Search
+
+- `/bank` thành Dashboard tổng quan thay vì redirect thẳng vào danh sách bộ môn.
+- Thêm quick search tìm nhanh bộ môn/môn/version/bài.
+- Thêm summary API cho bộ môn, môn, version môn, chapter.
+- Card bộ môn/môn/version/chapter hiển thị rõ đã duyệt xong/chưa duyệt xong, câu chờ xử lý, bài sẵn sàng chốt.
+- Workspace chapter thêm khối “Bạn cần làm gì tiếp?”.
+- Bỏ/Bỏ câu lỗi bắt nhập lý do trong popup để lưu review/audit phục vụ truy vết và fine-tune AI.
+- Không thêm migration mới.

@@ -65,10 +65,12 @@ class QualityChecker:
 
         normalized_options = [str(v or '').strip().lower() for v in options.values()]
         if len(set(normalized_options)) < 4:
-            return self._fail('duplicate_options', 'Đáp án bị trùng hoặc quá giống nhau.')
+            return self._fail('duplicate_options', 'Đáp án giống nhau.', detail={'reason': 'exact_duplicate_options'})
         similar_pair = self._answers_too_similar(normalized_options)
         if similar_pair:
-            return self._fail('similar_options', 'Các đáp án quá giống nhau, dễ gây đánh đố.', detail={'pair': similar_pair})
+            # Bank-first review policy: đáp án gần giống nhau chỉ là cảnh báo để giáo viên sửa nếu muốn,
+            # không biến thành draft_error. Chỉ bắt lỗi khi đáp án trùng hẳn.
+            flags.append('similar_options')
         problem_source_text = ''
         if self.db and source_chunk_id:
             chunk = self.db.get(ContentChunk, source_chunk_id)

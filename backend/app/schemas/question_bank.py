@@ -368,6 +368,27 @@ class BankGenerateRequest(BaseModel):
     approve_after_generate: bool = False
 
 
+class BankGeneratePreviewOut(BaseModel):
+    ok: bool
+    bank_version_id: str
+    chapter_id: str
+    question_count: int
+    difficulty_counts: dict
+    current_question_count: int
+    chapter_question_limit: int
+    remaining_quota: int
+    estimated_input_tokens: int
+    estimated_cached_input_tokens: int = 0
+    estimated_output_tokens: int
+    estimated_raw_cost_usd: float = 0
+    estimated_cost_usd: float
+    estimated_cost_vnd: float
+    model_name: str
+    pricing: dict | None = None
+    token_source: str = 'local_bank_generation_estimate'
+    message: str
+
+
 class BankGenerateOut(BaseModel):
     ok: bool
     bank_version_id: str
@@ -411,6 +432,8 @@ class BankVersionQuestionOut(BaseModel):
     source_excerpt: str | None = None
     source_evidence: str | None = None
     status: str
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
     quality_score: float
     quality_flags: list[str] | None = None
     draft_error_reason: str | None = None
