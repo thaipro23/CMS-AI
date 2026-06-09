@@ -36,6 +36,7 @@ import {
   EdxCourseChapterMapping,
   QuizBlueprint,
   MaterialChunk,
+  MaterialVersion,
   MaterialUploadResult,
   BankGenerateResult,
   BankVersionQuestion,
@@ -953,9 +954,11 @@ export async function createSubjectChapter(headers: HeadersInit, payload: { subj
   );
 }
 
-export async function getBankVersions(headers: HeadersInit, chapterId?: string) {
+export async function getBankVersions(headers: HeadersInit, chapterId?: string, subjectId?: string, subjectOfferingId?: string) {
   const params = new URLSearchParams();
   if (chapterId) params.set('chapter_id', chapterId);
+  if (subjectId) params.set('subject_id', subjectId);
+  if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
   return parseResponse<BankVersion[]>(
     await fetch(`${API}/question-bank-v2/bank-versions?${params.toString()}`, { headers }),
   );
@@ -1034,6 +1037,15 @@ export async function createQuizBlueprint(headers: HeadersInit, payload: { subje
   );
 }
 
+
+
+export async function getMaterialVersions(headers: HeadersInit, bankVersionId?: string) {
+  const params = new URLSearchParams();
+  if (bankVersionId) params.set('bank_version_id', bankVersionId);
+  return parseResponse<MaterialVersion[]>(
+    await fetch(`${API}/question-bank-v2/material-versions?${params.toString()}`, { headers }),
+  );
+}
 
 export async function uploadBankMaterial(
   headers: HeadersInit,

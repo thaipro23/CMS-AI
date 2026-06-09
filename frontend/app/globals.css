@@ -973,3 +973,17 @@ label { margin: 5px 0 4px; font-size: 12px; }
   .workspace-grid { grid-template-columns: 1fr; }
   .mini-form.version-form { grid-template-columns: 1fr; }
 }
+
+/* v25.9.15.6 multi-page bank manager */
+.bank-multipage .breadcrumb-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: #64748b; font-size: 13px; }
+.bank-multipage .breadcrumb-row a { color: #334155; font-weight: 700; text-decoration: none; }
+.bank-multipage .breadcrumb-row b { color: #0f172a; }
+.bank-multipage .breadcrumb-row em { font-style: normal; color: #94a3b8; margin-left: 6px; }
+.compact-page-header { align-items: flex-start; }
+.multipage-list .link-card { text-decoration: none; color: inherit; min-height: 112px; }
+.version-create-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: end; }
+.version-create-grid label, .three-col-form { display: grid; gap: 6px; }
+.version-create-grid label span { font-size: 12px; font-weight: 700; color: #64748b; }
+.three-col-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.multipage-workspace .workspace-panel { min-height: 240px; }
+@media(max-width: 900px){ .three-col-form { grid-template-columns: 1fr; } }

@@ -9,8 +9,9 @@ import { buildCmsSessionBridgeUrl } from '../../lib/api'
 
 const navItems: { href: string; label: string; desc: string; permission?: string }[] = [
   { href: '/workflow', label: 'Quy trình tạo câu hỏi', desc: 'Luồng chính' },
-  { href: '/bank', label: 'Ngân hàng đề', desc: 'Bộ môn/môn/version/bài' },
-  { href: '/bank/quiz', label: 'Map & Quiz', desc: 'Gắn Open edX' },
+  { href: '/bank/departments', label: 'Bộ môn', desc: 'Quản lý ngân hàng đề' },
+  { href: '/bank/quiz', label: 'Tạo Quiz Open edX', desc: 'Gắn release vào course' },
+  { href: '/bank/history', label: 'Lịch sử publish / quiz', desc: 'Theo dõi & rollback' },
   { href: '/dashboard', label: 'Tổng quan', desc: 'Thống kê khóa học' },
   { href: '/sync', label: 'Đồng bộ học liệu', desc: 'Open edX nodes/chunks' },
   { href: '/generate', label: 'Tạo câu hỏi', desc: 'Generate nâng cao' },
@@ -24,7 +25,7 @@ const navItems: { href: string; label: string; desc: string; permission?: string
 ]
 
 function pageTitle(pathname: string) {
-  const item = navItems.find((item) => item.href === pathname)
+  const item = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
   return item ? item.label : 'Máy chủ AI học liệu'
 }
 
@@ -78,7 +79,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div><b>Open edX AI</b><small>Máy chủ học liệu</small></div>
       </div>
       <nav className="side-nav">
-        {navItems.filter((item) => !item.permission || can(item.permission)).map((item) => <Link key={item.href} href={item.href} className={pathname === item.href ? 'nav-link active' : 'nav-link'}>
+        {navItems.filter((item) => !item.permission || can(item.permission)).map((item) => <Link key={item.href} href={item.href} className={pathname === item.href || pathname.startsWith(`${item.href}/`) ? 'nav-link active' : 'nav-link'}>
           <b>{item.label}</b><small>{item.desc}</small>
         </Link>)}
       </nav>
