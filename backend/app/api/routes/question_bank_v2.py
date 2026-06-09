@@ -56,6 +56,7 @@ from app.schemas.question_bank import (
     BankRetireQuestionsRequest,
     BankRetireQuestionsOut,
     BankQuestionReviewRequest,
+    BankQuestionUpdateRequest,
     BankQuestionReviewOut,
     BankQuestionBulkReviewRequest,
     BankQuestionBulkReviewOut,
@@ -387,6 +388,22 @@ def retire_bank_questions(bank_version_id: str, payload: BankRetireQuestionsRequ
         return result
     except Exception as exc:
         log_audit(db, action='question_bank.version.questions.retire', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch('/bank-versions/{bank_version_id}/questions/{question_id}', response_model=BankVersionQuestionOut)
+def update_bank_question(bank_version_id: str, question_id: str, payload: BankQuestionUpdateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    try:
+        question = VersionedQuestionBankService(db).update_bank_question(
+            bank_version_id=bank_version_id,
+            question_id=question_id,
+            payload=payload,
+            actor=user.user_id,
+        )
+        log_audit(db, action='question_bank.version.question.update', status='success', message='Đã sửa câu hỏi trong ngân hàng đề', user=user, target_type='question', target_id=question_id, metadata={'bank_version_id': bank_version_id, 'new_status': question.status})
+        return question
+    except Exception as exc:
+        log_audit(db, action='question_bank.version.question.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='question', target_id=question_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

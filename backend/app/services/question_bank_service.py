@@ -9,7 +9,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -482,7 +482,7 @@ class VersionedQuestionBankService:
             questions = self.db.query(Question).filter(
                 Question.bank_version_id == src_bv.id,
                 Question.status.in_(['approved', 'published']),
-                Question.is_retired.is_(False),
+                or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
                 Question.is_duplicate.is_(False),
             ).order_by(Question.created_at.asc()).all()
             for src_q in questions:
@@ -1271,7 +1271,12 @@ class VersionedQuestionBankService:
             selected.append(row)
             total += token_count
             parts.append(
-                f"[bank_chunk_id={row.id}; material_id={row.material_version_id}; source={row.source_ref}; page={row.page_number or ''}]\n{row.content}"
+                "Source: " + str(row.source_ref or f'bank-material:{row.material_version_id}') + "\n"
+                + "Type: " + str(row.source_type or 'file') + "\n"
+                + "ChunkId: " + str(row.id) + "\n"
+                + "BlockId: " + str(row.material_version_id) + "\n"
+                + (f"Page: {row.page_number}\n" if row.page_number else "")
+                + str(row.content or '')
             )
         return '\n\n---\n\n'.join(parts), selected, total
 
@@ -1377,17 +1382,17 @@ class VersionedQuestionBankService:
             raise ValueError('Bank Version thiếu Subject hoặc Chapter')
         if question_count < 1 or question_count > 100:
             raise ValueError('Số câu tạo thêm phải trong khoảng 1-100')
+        if int(difficulty_easy or 0) + int(difficulty_medium or 0) + int(difficulty_hard or 0) != 100:
+            raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%')
         meta = dict(version.metadata_json or {})
-        effective_target = int(target_question_count or meta.get('target_question_count') or 100)
-        if effective_target > 100:
-            raise ValueError('Mỗi bài chỉ được tối đa 100 câu hỏi')
+        effective_target = min(100, int(target_question_count or meta.get('target_question_count') or 100))
         if target_question_count:
             meta['target_question_count'] = int(target_question_count)
             version.metadata_json = meta
         if effective_target:
             active_count = self.db.query(Question).filter(
                 Question.bank_version_id == version.id,
-                Question.status.in_(['pending_review', 'approved', 'published']),
+                or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
             ).count()
             if active_count + int(question_count) > effective_target:
                 remaining = max(0, effective_target - active_count)
@@ -1434,6 +1439,13 @@ class VersionedQuestionBankService:
                     item['source_type'] = 'bank_material'
                 if not item.get('source_excerpt'):
                     item['source_excerpt'] = item.get('source_evidence') or ''
+                # Bank-first dùng MaterialChunk riêng, không phải ContentChunk của course-first.
+                # Nếu model trả về source_chunk_id theo bank chunk thì không đưa field đó vào
+                # QualityChecker course-first, tránh bị false draft_error invalid_source_chunk.
+                bank_source_chunk_id = str(item.get('source_chunk_id') or item.get('bank_chunk_id') or '').strip()
+                if bank_source_chunk_id in chunk_ids:
+                    item['source_ref'] = item.get('source_ref') or f'bank-chunk:{bank_source_chunk_id}'
+                    item['source_chunk_id'] = None
                 quality = checker.check(item)
                 status = 'approved' if (quality.passed and approve_after_generate) else ('pending_review' if quality.passed else 'draft_error')
                 question_text = str(item.get('question') or item.get('question_text') or '').strip()
@@ -1545,6 +1557,67 @@ class VersionedQuestionBankService:
             raise ValueError('Câu hỏi không thuộc Bank Version đang chọn')
         return question
 
+    def update_bank_question(self, *, bank_version_id: str, question_id: str, payload, actor: str | None = None):
+        version = self._require_bank_version(bank_version_id)
+        question = self._require_bank_question(question_id, bank_version_id=version.id)
+        if question.status == 'published':
+            raise ValueError('Câu hỏi đã nằm trong Release published, không sửa trực tiếp ở đây')
+
+        data = payload.model_dump(exclude_unset=True) if hasattr(payload, 'model_dump') else dict(payload or {})
+        note = data.pop('note', '') or 'Giáo viên sửa câu hỏi trong ngân hàng đề'
+        target_status = data.pop('target_status', None)
+        allowed_fields = {
+            'difficulty', 'cognitive_level', 'learning_objective', 'question_text',
+            'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer',
+            'explanation', 'concept_title', 'question_family_id', 'source_ref',
+            'source_type', 'source_excerpt', 'source_evidence',
+        }
+        changed = False
+        for field, value in data.items():
+            if field in allowed_fields and value is not None:
+                setattr(question, field, value)
+                changed = True
+
+        if not (question.question_text or '').strip():
+            raise ValueError('Câu hỏi không được để trống')
+        options = [question.option_a, question.option_b, question.option_c, question.option_d]
+        if any(not (opt or '').strip() for opt in options):
+            raise ValueError('Phải có đủ 4 đáp án A/B/C/D')
+        if question.correct_answer not in ('A', 'B', 'C', 'D'):
+            raise ValueError('Đáp án đúng phải là A, B, C hoặc D')
+
+        if question.status == 'draft_error' and changed:
+            question.draft_error_reason = None
+            question.draft_error_detail = None
+            question.quality_flags = []
+            if not target_status:
+                target_status = 'pending_review'
+
+        if target_status:
+            if target_status not in ('pending_review', 'approved', 'rejected'):
+                raise ValueError('Trạng thái sau khi sửa không hợp lệ')
+            question.status = target_status
+            if target_status == 'approved':
+                question.reviewed_by = actor
+                question.reviewed_at = datetime.utcnow()
+                question.is_retired = False
+                question.retired_reason = None
+                question.retired_at = None
+
+        question.updated_at = datetime.utcnow()
+        self.db.add(question)
+        self.db.add(QuestionReviewLog(
+            id=str(uuid.uuid4()),
+            question_id=question.id,
+            old_status='edit',
+            new_status=question.status,
+            actor=actor or 'teacher',
+            note=note,
+        ))
+        self.db.commit()
+        self.db.refresh(question)
+        return question
+
     def review_bank_question(self, *, bank_version_id: str, question_id: str, action: str = 'approve', note: str = '', actor: str | None = None) -> dict:
         version = self._require_bank_version(bank_version_id)
         question = self._require_bank_question(question_id, bank_version_id=version.id)
@@ -1588,7 +1661,7 @@ class VersionedQuestionBankService:
             raise ValueError('Hành động duyệt không hợp lệ')
         query = self.db.query(Question).filter(Question.bank_version_id == version.id)
         if approve_all_pending:
-            query = query.filter(Question.status == 'pending_review')
+            query = query.filter(Question.status.in_(['pending_review', 'needs_review']))
         else:
             ids = [item for item in (question_ids or []) if item]
             if not ids:
@@ -1642,9 +1715,10 @@ class VersionedQuestionBankService:
         questions = self.db.query(Question).filter(Question.bank_version_id == version.id).all()
         active = [q for q in questions if not bool(q.is_retired)]
         approved = [q for q in active if q.status in {'approved', 'published'} and not bool(q.is_duplicate)]
-        pending = [q for q in active if q.status == 'pending_review']
+        pending = [q for q in active if q.status in {'pending_review', 'needs_review'}]
         draft_error = [q for q in active if q.status == 'draft_error']
         rejected = [q for q in active if q.status == 'rejected']
+        unresolved = pending + draft_error
         roots: dict[str, int] = {}
         for q in approved:
             root = question_lineage_root(q)
@@ -1654,8 +1728,8 @@ class VersionedQuestionBankService:
         checks = [
             _check('document_change', 'fail' if diff_required else 'pass', 'Tài liệu đã thay đổi, cần bấm Kiểm tra thay đổi và đánh dấu đã xử lý trước khi chốt.' if diff_required else 'Tài liệu không còn yêu cầu kiểm tra thay đổi.', {'document_change_state': meta.get('document_change_state'), 'diff_base_bank_version_id': meta.get('diff_base_bank_version_id')}),
             _check('approved_questions', 'pass' if approved else 'fail', f'Có {len(approved)} câu đã duyệt.' if approved else 'Chưa có câu đã duyệt để chốt Release.', {'approved_count': len(approved)}),
-            _check('pending_review', 'fail' if pending else 'pass', f'Còn {len(pending)} câu chờ duyệt.' if pending else 'Không còn câu chờ duyệt.', {'pending_review_count': len(pending)}),
-            _check('draft_error', 'warning' if draft_error else 'pass', f'Có {len(draft_error)} câu lỗi nháp; nên sửa hoặc bỏ trước khi chốt.' if draft_error else 'Không có câu lỗi nháp.', {'draft_error_count': len(draft_error)}, blocking=False),
+            _check('pending_review', 'fail' if pending else 'pass', f'Còn {len(pending)} câu chờ duyệt. Phải duyệt hoặc bỏ hết trước khi chốt bộ đề.' if pending else 'Không còn câu chờ duyệt.', {'pending_review_count': len(pending)}),
+            _check('draft_error', 'fail' if draft_error else 'pass', f'Còn {len(draft_error)} câu lỗi. Phải sửa hoặc bỏ hết trước khi chốt bộ đề.' if draft_error else 'Không còn câu lỗi.', {'draft_error_count': len(draft_error)}),
             _check('duplicate_lineage', 'fail' if duplicate_lineage_roots else 'pass', f'Có {len(duplicate_lineage_roots)} nhóm câu trùng gốc cần xử lý.' if duplicate_lineage_roots else 'Không phát hiện câu trùng gốc trong bộ đã duyệt.', {'duplicate_lineage_roots': duplicate_lineage_roots[:20]}),
         ]
         can_create = not any(item.get('blocking') for item in checks if item.get('status') == 'fail')
@@ -1663,7 +1737,9 @@ class VersionedQuestionBankService:
         if diff_required:
             actions.append('Bấm Kiểm tra thay đổi tài liệu, xử lý gợi ý, rồi đánh dấu đã xử lý.')
         if pending:
-            actions.append('Duyệt hoặc từ chối các câu đang chờ duyệt.')
+            actions.append('Duyệt hoặc bỏ tất cả câu đang chờ duyệt.')
+        if draft_error:
+            actions.append('Sửa hoặc bỏ tất cả câu lỗi trước khi chốt bộ đề.')
         if not approved:
             actions.append('Tạo hoặc duyệt thêm câu hỏi trước khi chốt.')
         if duplicate_lineage_roots:
@@ -1681,6 +1757,7 @@ class VersionedQuestionBankService:
                 'approved_count': len(approved),
                 'pending_review_count': len(pending),
                 'draft_error_count': len(draft_error),
+                'unresolved_count': len(unresolved),
                 'rejected_count': len(rejected),
                 'retired_count': len([q for q in questions if bool(q.is_retired)]),
                 'difficulty_counts': {
@@ -1690,7 +1767,7 @@ class VersionedQuestionBankService:
                 },
             },
             'recommended_actions': actions,
-            'message': 'Đủ điều kiện chốt Release.' if can_create else 'Chưa nên chốt Release. Hãy xử lý các mục còn cảnh báo đỏ.',
+            'message': 'Đủ điều kiện chốt bộ đề.' if can_create else 'Chưa thể chốt bộ đề. Phải duyệt hoặc bỏ hết tất cả câu hỏi trước.',
         }
 
     def list_course_quiz_instances(self, *, openedx_course_id: str | None = None, bank_release_id: str | None = None, limit: int = 100) -> list[CourseQuizInstance]:

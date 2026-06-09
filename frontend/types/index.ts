@@ -1061,13 +1061,32 @@ export type BankVersionQuestion = {
   subject_chapter_id?: string | null
   material_version_id?: string | null
   concept_version_id?: string | null
+  concept_title?: string | null
   question_family_id?: string | null
   variant_no?: number | null
   difficulty: string
+  cognitive_level?: string | null
+  learning_objective?: string | null
+  question_type?: string | null
   question_text: string
+  option_a?: string | null
+  option_b?: string | null
+  option_c?: string | null
+  option_d?: string | null
   correct_answer: string
+  explanation?: string | null
+  source_ref?: string | null
+  source_type?: string | null
+  source_excerpt?: string | null
+  source_evidence?: string | null
   status: string
   quality_score: number
+  quality_flags?: string[] | null
+  draft_error_reason?: string | null
+  draft_error_detail?: Record<string, any> | null
+  is_duplicate?: boolean | null
+  duplicate_score?: number | null
+  duplicate_of_question_id?: string | null
   previous_question_id?: string | null
   lineage_root_question_id?: string | null
   question_revision_no?: number

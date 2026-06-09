@@ -392,13 +392,32 @@ class BankVersionQuestionOut(BaseModel):
     subject_chapter_id: str | None = None
     material_version_id: str | None = None
     concept_version_id: str | None = None
+    concept_title: str | None = None
     question_family_id: str | None = None
     variant_no: int | None = None
     difficulty: str
+    cognitive_level: str | None = None
+    learning_objective: str | None = None
+    question_type: str | None = None
     question_text: str
+    option_a: str | None = None
+    option_b: str | None = None
+    option_c: str | None = None
+    option_d: str | None = None
     correct_answer: str
+    explanation: str | None = None
+    source_ref: str | None = None
+    source_type: str | None = None
+    source_excerpt: str | None = None
+    source_evidence: str | None = None
     status: str
     quality_score: float
+    quality_flags: list[str] | None = None
+    draft_error_reason: str | None = None
+    draft_error_detail: dict | None = None
+    is_duplicate: bool | None = None
+    duplicate_score: float | None = None
+    duplicate_of_question_id: str | None = None
     previous_question_id: str | None = None
     lineage_root_question_id: str | None = None
     question_revision_no: int | None = None
@@ -487,6 +506,27 @@ class BankRetireQuestionsOut(BaseModel):
 class BankQuestionReviewRequest(BaseModel):
     action: str = Field(default='approve', pattern='^(approve|reject|back_to_review)$')
     note: str = ''
+
+
+class BankQuestionUpdateRequest(BaseModel):
+    difficulty: str | None = Field(default=None, pattern='^(easy|medium|hard)$')
+    cognitive_level: str | None = None
+    learning_objective: str | None = None
+    question_text: str | None = None
+    option_a: str | None = None
+    option_b: str | None = None
+    option_c: str | None = None
+    option_d: str | None = None
+    correct_answer: str | None = Field(default=None, pattern='^[ABCD]$')
+    explanation: str | None = None
+    concept_title: str | None = None
+    question_family_id: str | None = None
+    source_ref: str | None = None
+    source_type: str | None = None
+    source_excerpt: str | None = None
+    source_evidence: str | None = None
+    target_status: str | None = Field(default=None, pattern='^(pending_review|approved|rejected)$')
+    note: str = 'Giáo viên sửa câu hỏi trong ngân hàng đề'
 
 
 class BankQuestionReviewOut(BaseModel):

@@ -45,6 +45,7 @@ import {
   reviewBankQuestion,
   rollbackCourseQuizInstance,
   uploadBankMaterial,
+  updateBankQuestion,
 } from '../../../lib/api'
 
 const TERMS = [
@@ -189,6 +190,82 @@ function questionStats(questions: BankVersionQuestion[]) {
 function nextReleaseText(release?: BankRelease | null) {
   if (!release) return 'Chưa có Release'
   return `${release.release_code} · ${statusLabel(release.status)} · ${release.approved_question_count} câu`
+}
+
+
+const bankAnswerRows = [
+  ['A', 'option_a'],
+  ['B', 'option_b'],
+  ['C', 'option_c'],
+  ['D', 'option_d'],
+] as const
+
+function bankQuestionErrorMessage(question: BankVersionQuestion) {
+  const reason = question.draft_error_reason || (question.quality_flags || [])[0]
+  if (!reason) return null
+  const detail = question.draft_error_detail || {}
+  if (reason === 'duplicate_question') {
+    const score = question.duplicate_score || detail.duplicate_score
+    return `Trùng/gần trùng${score ? ` (${Math.round(Number(score) * 100)}%)` : ''}${question.duplicate_of_question_id ? ` với ${question.duplicate_of_question_id.slice(0, 8)}` : ''}`
+  }
+  const labels: Record<string, string> = {
+    invalid_answer: 'Đáp án đúng không hợp lệ',
+    invalid_source_chunk: 'Source chunk không tồn tại',
+    similar_options: 'Các đáp án quá giống nhau',
+    duplicate_options: 'Đáp án bị trùng',
+    anti_trick: 'Vi phạm anti-trick rule',
+    double_negative: 'Câu hỏi có phủ định kép',
+    missing_options: 'Thiếu đáp án',
+    missing_question: 'Thiếu câu hỏi',
+    quality_failed: 'Không đạt kiểm tra chất lượng',
+  }
+  return labels[reason] || reason
+}
+
+function isQuestionWaitingForReview(question: BankVersionQuestion) {
+  return question.status === 'pending_review' || question.status === 'needs_review' || question.status === 'draft_error'
+}
+
+type BankQuestionEditForm = {
+  difficulty: string
+  cognitive_level: string
+  learning_objective: string
+  question_text: string
+  option_a: string
+  option_b: string
+  option_c: string
+  option_d: string
+  correct_answer: string
+  explanation: string
+  concept_title: string
+  question_family_id: string
+  source_ref: string
+  source_type: string
+  source_excerpt: string
+  source_evidence: string
+  target_status: string
+}
+
+function toBankQuestionEditForm(question: BankVersionQuestion): BankQuestionEditForm {
+  return {
+    difficulty: question.difficulty || 'easy',
+    cognitive_level: question.cognitive_level || 'remember',
+    learning_objective: question.learning_objective || '',
+    question_text: question.question_text || '',
+    option_a: question.option_a || '',
+    option_b: question.option_b || '',
+    option_c: question.option_c || '',
+    option_d: question.option_d || '',
+    correct_answer: question.correct_answer || 'A',
+    explanation: question.explanation || '',
+    concept_title: question.concept_title || '',
+    question_family_id: question.question_family_id || '',
+    source_ref: question.source_ref || '',
+    source_type: question.source_type || 'bank_material',
+    source_excerpt: question.source_excerpt || '',
+    source_evidence: question.source_evidence || '',
+    target_status: ['pending_review', 'approved', 'rejected'].includes(question.status) ? question.status : 'pending_review',
+  }
 }
 
 export function DepartmentsPage() {
@@ -445,13 +522,14 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [readiness, setReadiness] = useState<BankReleaseReadiness | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [generateCount, setGenerateCount] = useState('10')
-  const [targetCount, setTargetCount] = useState('100')
   const [difficultyEasy, setDifficultyEasy] = useState('50')
   const [difficultyMedium, setDifficultyMedium] = useState('30')
   const [difficultyHard, setDifficultyHard] = useState('20')
   const [autoCreateTried, setAutoCreateTried] = useState(false)
   const [materialView, setMaterialView] = useState<{ material: MaterialVersion; chunks: MaterialChunk[] } | null>(null)
   const [diffPreview, setDiffPreview] = useState<BankVersionDiffPreview | null>(null)
+  const [editingQuestion, setEditingQuestion] = useState<BankVersionQuestion | null>(null)
+  const [editForm, setEditForm] = useState<BankQuestionEditForm | null>(null)
 
   const load = async () => {
     const [nextDepartments, nextSubjects, nextOfferings, nextChapters, nextBankVersions, nextReleases] = await Promise.all([
@@ -471,8 +549,6 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     setMaterials(nextMaterials.filter((item) => item.status !== 'deleted'))
     setQuestions(nextQuestions)
     setReadiness(nextReadiness)
-    const target = Math.min(100, Number((bankVersions.find((item) => item.id === bankVersionId)?.metadata_json as any)?.target_question_count || 100))
-    setTargetCount(String(target))
   }
 
   useEffect(() => { load().catch(() => null) }, [chapterId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -489,9 +565,15 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const publishedRelease = releases.find((item) => item.status === 'published')
   const latestRelease = releases[0]
   const numericGenerateCount = Number(generateCount || 0)
-  const numericTarget = Number(targetCount || 0)
-  const remainingQuota = Math.max(0, numericTarget - stats.active)
-  const overQuota = numericTarget > 0 && numericGenerateCount > remainingQuota
+  const chapterQuestionLimit = 100
+  const usedQuestionCount = stats.total
+  const unresolvedQuestionCount = stats.pending + stats.draftError
+  const releaseReviewBlocked = unresolvedQuestionCount > 0
+  const remainingQuota = Math.max(0, chapterQuestionLimit - usedQuestionCount)
+  const difficultyTotal = Number(difficultyEasy || 0) + Number(difficultyMedium || 0) + Number(difficultyHard || 0)
+  const overQuota = numericGenerateCount > remainingQuota
+  const invalidDifficulty = difficultyTotal !== 100
+  const canGenerateNow = Boolean(selectedBankVersion && materials.length && can('generate_questions') && !overQuota && !invalidDifficulty && numericGenerateCount >= 1 && remainingQuota > 0)
 
   const ensureBankVersion = async () => {
     if (!chapter) throw new Error('Không tìm thấy bài')
@@ -546,6 +628,24 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     await refreshCurrent()
   }
 
+  const startEditQuestion = (question: BankVersionQuestion) => {
+    setEditingQuestion(question)
+    setEditForm(toBankQuestionEditForm(question))
+  }
+
+  const updateEditForm = <K extends keyof BankQuestionEditForm>(key: K, value: BankQuestionEditForm[K]) => {
+    setEditForm((current) => current ? { ...current, [key]: value } : current)
+  }
+
+  const saveEditedQuestion = async () => {
+    if (!selectedBankVersion || !editingQuestion || !editForm) return
+    await run(async () => {
+      await updateBankQuestion(headers, selectedBankVersion.id, editingQuestion.id, { ...editForm, note: 'Giáo viên sửa câu hỏi trong workspace bài' })
+      setEditingQuestion(null)
+      setEditForm(null)
+    }, 'Đã lưu câu hỏi', refreshCurrent)
+  }
+
   const materialPreviewChunks = (materialView?.chunks || []).slice(0, 80)
   const materialPreviewText = materialPreviewChunks.map((chunk, index) => `Đoạn ${index + 1}
 ${chunk.content}`).join('\n\n')
@@ -568,23 +668,24 @@ ${chunk.content}`).join('\n\n')
     <section className="card chapter-top-actions">
       <div>
         <b>Thao tác nhanh</b>
-        <p className="helper">Chỉ dùng 2 nút chính. Các chi tiết kỹ thuật hệ thống tự xử lý phía sau.</p>
+        <p className="helper">Chỉ dùng 2 nút chính. Chỉ được chốt bộ đề khi tất cả câu hỏi đã được duyệt hoặc bỏ.</p>
       </div>
       <div className="button-row no-margin">
         <button className="btn secondary" disabled={busy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
         }, 'Đã kiểm tra khác biệt', refreshCurrent)}>Kiểm tra thay đổi</button>
-        {!latestRelease ? <button className="btn" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release} onClick={() => run(async () => {
+        {!latestRelease ? <button className="btn" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
         }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={busy || !can('publish_questions')} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã publish Library sang Open edX', refreshCurrent)}>Publish Library</button> : <button className="btn secondary" disabled>Đã publish</button>}
       </div>
+      {releaseReviewBlocked ? <div className="alert warning"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace">
       <div className="workspace-panel">
-        <h3>1. Tài liệu</h3>
+        <h3>Tài liệu</h3>
         <p className="helper">Gắn tài liệu để hệ thống tạo câu hỏi. Nếu version clone bị đổi tài liệu, hệ thống tự kiểm tra khác biệt.</p>
         <div className="mini-form">
           <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
@@ -611,18 +712,27 @@ ${chunk.content}`).join('\n\n')
       </div>
 
       <div className="workspace-panel">
-        <h3>2. Tạo câu hỏi</h3>
-        <p className="helper">Không cho tạo vượt chỉ tiêu của bài.</p>
-        <div className="quota-box"><b>{stats.active}/{numericTarget || 0}</b><small>Đã dùng / chỉ tiêu · còn {remainingQuota} câu</small></div>
+        <h3>Tạo câu hỏi từ tài liệu</h3>
+        <p className="helper">Luồng này giống phần tạo câu hỏi theo course trước đây: lấy tài liệu đã gắn làm nguồn, chia EASY/MEDIUM/HARD, kiểm tra chất lượng và chống trùng trước khi đưa vào danh sách duyệt.</p>
+        <div className="quota-box"><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Tổng câu đã tạo / tối đa 100 câu cho bài này · còn {remainingQuota} câu</small></div>
+        <div className="generation-plan-box">
+          <div><span>Nguồn tạo</span><b>{materials.length ? `${materials.length} tài liệu đã gắn` : 'Chưa có tài liệu'}</b></div>
+          <div><span>Sẽ tạo</span><b>{Math.max(0, numericGenerateCount || 0)} câu mới</b></div>
+          <div><span>Tỷ lệ</span><b>{difficultyEasy}/{difficultyMedium}/{difficultyHard}</b><small>Dễ / Trung bình / Khó</small></div>
+        </div>
         <div className="mini-form">
-          <input className="input" value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Số câu muốn tạo thêm" />
+          <label>Số câu muốn tạo thêm</label>
+          <input className="input" type="number" min={1} max={remainingQuota || 1} value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Ví dụ: 10" />
           <div className="three-col-form">
-            <input className="input" value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} placeholder="Easy %" />
-            <input className="input" value={difficultyMedium} onChange={(event) => setDifficultyMedium(event.target.value)} placeholder="Medium %" />
-            <input className="input" value={difficultyHard} onChange={(event) => setDifficultyHard(event.target.value)} placeholder="Hard %" />
+            <label>Dễ %<input className="input" type="number" min={0} max={100} value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} /></label>
+            <label>Trung bình %<input className="input" type="number" min={0} max={100} value={difficultyMedium} onChange={(event) => setDifficultyMedium(event.target.value)} /></label>
+            <label>Khó %<input className="input" type="number" min={0} max={100} value={difficultyHard} onChange={(event) => setDifficultyHard(event.target.value)} /></label>
           </div>
-          {overQuota ? <div className="alert warning">Vượt chỉ tiêu. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
-          <button className="btn" disabled={busy || !can('generate_questions') || overQuota || numericGenerateCount < 1} onClick={() => run(async () => {
+          {!materials.length ? <div className="alert warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</div> : null}
+          {invalidDifficulty ? <div className="alert warning">Tổng tỷ lệ Dễ/Trung bình/Khó phải bằng 100%.</div> : null}
+          {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
+          {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn 100 câu. Không thể tạo thêm.</div> : null}
+          <button className="btn" disabled={busy || !canGenerateNow} onClick={() => run(async () => {
             if (!selectedBankVersion) return
             await generateFromBankVersion(headers, selectedBankVersion.id, { question_count: numericGenerateCount, target_question_count: 100, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) })
           }, 'Đã tạo câu hỏi', refreshCurrent)}>Tạo câu hỏi</button>
@@ -631,35 +741,97 @@ ${chunk.content}`).join('\n\n')
 
 
       <div className="workspace-panel full">
-        <div className="section-head"><div><h3>5. Danh sách câu hỏi</h3><p className="helper">Hiển thị theo dạng thẻ để giáo viên đọc và duyệt nhanh.</p></div><button className="btn secondary" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
+        <div className="section-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Giao diện giống trang /review: đọc câu hỏi, xem đủ đáp án, rồi duyệt hoặc bỏ. Phải xử lý hết mới được chốt bộ đề.</p></div><button className="btn secondary" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
         }, 'Đã duyệt hết câu chờ', refreshCurrent)}>Duyệt hết câu chờ</button></div>
-        <div className="bank-question-card-list">
-          {questions.slice(0, 120).map((item, index) => <div className="bank-question-card" key={item.id}>
-            <div className="question-main-box">
-              <div className="question-main-head"><span className="question-index">Câu {index + 1}</span><span className={statusClass(item.status)}>{statusLabel(item.status)}</span></div>
-              <div className="question-prompt">{item.question_text}</div>
-              <div className="question-meta-row"><span>Độ khó: <b>{item.difficulty}</b></span>{item.is_carry_over ? <span>Clone từ kỳ trước</span> : null}<span>Điểm chất lượng: {Math.round(Number(item.quality_score || 0) * 100)}%</span></div>
-              <div className="answer-box"><b>Đáp án đúng: {item.correct_answer}</b></div>
-            </div>
-            <div className="question-control-box">
-              <div className="question-actions">
-                {item.status !== 'approved' && item.status !== 'published' ? <button className="btn small" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
-                  if (!selectedBankVersion) return
-                  await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' })
-                }, 'Đã duyệt câu hỏi', refreshCurrent)}>Duyệt</button> : null}
-                {item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
-                  if (!selectedBankVersion) return
-                  await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'reject', note: 'Không dùng câu này' })
-                }, 'Đã bỏ câu hỏi', refreshCurrent)}>Bỏ</button> : null}
+        <div className="question-card-list bank-review-list">
+          {questions.slice(0, 120).map((item, index) => {
+            const draftReason = item.status === 'draft_error' ? bankQuestionErrorMessage(item) : null
+            const waitingForReview = isQuestionWaitingForReview(item)
+            return <article className="question-review-card" key={item.id}>
+              <div className="question-main-box">
+                <div className="question-main-head"><span className="question-index">Câu {index + 1}</span><span className={statusClass(item.status)}>{statusLabel(item.status)}</span></div>
+                <div className="question-prompt">{item.question_text}</div>
+                <div className="answer-grid">
+                  {bankAnswerRows.map(([letter, field]) => {
+                    const isCorrect = item.correct_answer === letter
+                    return <div key={letter} className={isCorrect ? 'answer-option correct' : 'answer-option'}>
+                      <span className="answer-letter">{letter}</span>
+                      <span>{item[field] || '—'}</span>
+                    </div>
+                  })}
+                </div>
+                <div className="question-meta-row">
+                  <span>Độ khó: <b>{item.difficulty}</b></span>
+                  {item.concept_title ? <span>Concept: <b>{item.concept_title}</b></span> : null}
+                  {item.question_family_id ? <span>Family: <code>{item.question_family_id}</code></span> : null}
+                  {item.variant_no ? <span>Variant: <b>{item.variant_no}</b></span> : null}
+                  {item.is_carry_over ? <span>Clone từ kỳ trước</span> : null}
+                  <span>Điểm chất lượng: {Math.round(Number(item.quality_score || 0) * 100)}%</span>
+                </div>
+                {item.explanation ? <div className="question-explanation"><b>Giải thích:</b> {item.explanation}</div> : null}
+                {draftReason ? <div className="draft-error-reason"><strong>Lý do lỗi:</strong> {draftReason}{item.draft_error_detail?.message ? <span> · {String(item.draft_error_detail.message)}</span> : null}</div> : null}
               </div>
-            </div>
-          </div>)}
+              <div className="question-control-box">
+                <div className="question-control-status"><div className="box-label">Trạng thái</div><span className={statusClass(item.status)}>{statusLabel(item.status)}</span><small className="control-note">{waitingForReview ? 'Cần xử lý trước khi chốt bộ đề' : 'Đã xử lý'}</small></div>
+                <div className="question-control-actions">
+                  <div className="box-label">Thao tác</div>
+                  <div className="question-actions">
+                    {item.status !== 'published' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => startEditQuestion(item)}>Sửa</button> : null}
+                    {(item.status === 'pending_review' || item.status === 'needs_review' || item.status === 'rejected') ? <button className="btn small success" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
+                      if (!selectedBankVersion) return
+                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' })
+                    }, 'Đã duyệt câu hỏi', refreshCurrent)}>{item.status === 'rejected' ? 'Duyệt lại' : 'Duyệt'}</button> : null}
+                    {item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
+                      if (!selectedBankVersion) return
+                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'reject', note: item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Không dùng câu này' })
+                    }, 'Đã bỏ câu hỏi', refreshCurrent)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
+                    {item.status === 'approved' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
+                      if (!selectedBankVersion) return
+                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' })
+                    }, 'Đã đưa câu hỏi về chờ duyệt', refreshCurrent)}>Hoàn tác</button> : null}
+                  </div>
+                </div>
+              </div>
+            </article>
+          })}
         </div>
         {!questions.length ? <div className="empty-state">Chưa có câu hỏi.</div> : null}
       </div>
     </section>}
+
+    <Modal open={Boolean(editingQuestion && editForm)} title="Sửa câu hỏi" onClose={() => { setEditingQuestion(null); setEditForm(null) }} wide>
+      {editingQuestion && editForm ? <div className="bank-question-edit-form">
+        <p className="helper">Sửa nội dung câu hỏi giống trang /review. Sau khi sửa, giáo viên chọn trạng thái phù hợp rồi lưu.</p>
+        <div className="grid grid-3">
+          <label>Độ khó<select className="input" value={editForm.difficulty} onChange={(event) => updateEditForm('difficulty', event.target.value)}><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
+          <label>Mức nhận thức<select className="input" value={editForm.cognitive_level} onChange={(event) => updateEditForm('cognitive_level', event.target.value)}><option value="remember">Ghi nhớ</option><option value="understand">Hiểu</option><option value="recognize_example">Nhận diện ví dụ</option><option value="simple_apply">Áp dụng đơn giản</option></select></label>
+          <label>Trạng thái sau khi lưu<select className="input" value={editForm.target_status} onChange={(event) => updateEditForm('target_status', event.target.value)}><option value="pending_review">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option></select></label>
+        </div>
+        <label>Mục tiêu học tập<input className="input" value={editForm.learning_objective} onChange={(event) => updateEditForm('learning_objective', event.target.value)} /></label>
+        <label>Câu hỏi<textarea className="input" rows={3} value={editForm.question_text} onChange={(event) => updateEditForm('question_text', event.target.value)} /></label>
+        <div className="grid grid-2">
+          <label>A<input className="input" value={editForm.option_a} onChange={(event) => updateEditForm('option_a', event.target.value)} /></label>
+          <label>B<input className="input" value={editForm.option_b} onChange={(event) => updateEditForm('option_b', event.target.value)} /></label>
+          <label>C<input className="input" value={editForm.option_c} onChange={(event) => updateEditForm('option_c', event.target.value)} /></label>
+          <label>D<input className="input" value={editForm.option_d} onChange={(event) => updateEditForm('option_d', event.target.value)} /></label>
+        </div>
+        <div className="grid grid-3">
+          <label>Đáp án đúng<select className="input" value={editForm.correct_answer} onChange={(event) => updateEditForm('correct_answer', event.target.value)}><option>A</option><option>B</option><option>C</option><option>D</option></select></label>
+          <label>Concept<input className="input" value={editForm.concept_title} onChange={(event) => updateEditForm('concept_title', event.target.value)} /></label>
+          <label>Family<input className="input" value={editForm.question_family_id} onChange={(event) => updateEditForm('question_family_id', event.target.value)} /></label>
+        </div>
+        <label>Giải thích<textarea className="input" rows={2} value={editForm.explanation} onChange={(event) => updateEditForm('explanation', event.target.value)} /></label>
+        <div className="grid grid-2">
+          <label>Nguồn tham chiếu<input className="input" value={editForm.source_ref} onChange={(event) => updateEditForm('source_ref', event.target.value)} /></label>
+          <label>Loại nguồn<input className="input" value={editForm.source_type} onChange={(event) => updateEditForm('source_type', event.target.value)} /></label>
+        </div>
+        <label>Trích đoạn nguồn<textarea className="input" rows={2} value={editForm.source_excerpt} onChange={(event) => updateEditForm('source_excerpt', event.target.value)} /></label>
+        <label>Bằng chứng nguồn<textarea className="input" rows={2} value={editForm.source_evidence} onChange={(event) => updateEditForm('source_evidence', event.target.value)} /></label>
+        <div className="button-row"><button className="btn" disabled={busy || !editForm.question_text.trim() || !editForm.option_a.trim() || !editForm.option_b.trim() || !editForm.option_c.trim() || !editForm.option_d.trim()} onClick={saveEditedQuestion}>Lưu chỉnh sửa</button><button className="btn secondary" onClick={() => { setEditingQuestion(null); setEditForm(null) }}>Hủy</button></div>
+      </div> : null}
+    </Modal>
 
     <Modal open={Boolean(materialView)} title={materialView?.material.title || 'Tài liệu'} onClose={() => setMaterialView(null)} wide>
       <div className="material-preview material-preview-single">

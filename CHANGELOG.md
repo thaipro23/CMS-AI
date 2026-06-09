@@ -1,3 +1,20 @@
+
+## v25.9.15.6.6 - Bank Review UI + Release Guard Hotfix
+
+- Sửa danh sách câu hỏi trong Bank Chapter Workspace theo UI trang `/review`.
+- Hiển thị đủ đáp án A/B/C/D và highlight đáp án đúng.
+- Thêm lý do lỗi cho câu `draft_error`, nút `Bỏ câu lỗi`.
+- Chặn chốt bộ đề nếu còn câu chờ duyệt hoặc câu lỗi.
+- Backend `release_readiness` chặn release khi còn `draft_error`; không chỉ cảnh báo.
+- Quota 100 câu/chapter tính theo tổng câu đã tạo chưa retired, kể cả câu rejected/draft_error.
+
+# v25.9.15.6.5 - Bank Generation Flow + Chapter Quota Hotfix
+
+- Sửa UI tạo câu hỏi trong Chapter Workspace theo hướng Bank-first nhưng giữ nguyên tinh thần course-first: tạo từ tài liệu thật, có phân bổ độ khó, qua quality check và chống trùng.
+- Sửa giới hạn 100 câu/chapter: quota tính cả câu đang lỗi draft_error để không bị tạo vượt.
+- Sửa backend tránh false draft_error khi model trả source_chunk_id của Bank MaterialChunk.
+- Sửa format nội dung bank chunk sang Source/Type/ChunkId/BlockId giống luồng course-first.
+
 # v25.9.15.6 - Multi-page Bank Manager UI + Exact Clone Flow
 
 - Tách UI ngân hàng đề từ một trang `/bank` lớn thành nhiều route quản trị rõ ràng.
@@ -286,3 +303,29 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 - Không còn hiển thị/nhắc `số bài` cho giáo viên.
 - Ưu tiên hiển thị `chapter.title` trong danh sách bài, breadcrumb, workspace, release title, library key và quiz title.
 - `chapter_no` giữ vai trò nội bộ để sắp xếp/unique, không phải dữ liệu người dùng phải nhập.
+
+## v25.9.15.6.3 - Bank UI Delete + Popup + 100 Question Limit Hotfix
+
+- Fixed material delete API crash caused by missing `_require_mutable_bank_version`.
+- Hardened modal/popup layout for Bank management screens.
+- Enforced 100 questions/chapter default limit in both frontend and backend.
+- Removed separate Change Check and Release panels from chapter workspace.
+- Moved quick actions to top action bar.
+
+## v25.9.15.6.4 - Bank Popup Document Preview Hotfix
+
+- Sửa popup xem tài liệu trong `/bank/chapters/{chapterId}`.
+- Không còn render mỗi chunk thành một box cuộn riêng.
+- Gộp nội dung tài liệu thành một vùng đọc duy nhất.
+- Khóa scroll nền khi popup mở.
+- Thêm ESC để đóng popup.
+- Không thêm migration, không đổi API backend.
+
+## v25.9.15.6.7 - Bank Question Edit Popup Hotfix
+
+- Thêm nút Sửa vào từng thẻ câu hỏi trong Bank Chapter Workspace.
+- Thêm popup chỉnh sửa câu hỏi theo hướng UI `/review`.
+- Thêm API PATCH để sửa câu hỏi trong `question-bank-v2`.
+- Backend validate đủ câu hỏi, đủ 4 đáp án và đáp án đúng A/B/C/D.
+- Câu `draft_error` sau khi sửa được đưa về `pending_review` nếu không chọn trạng thái khác.
+- Không cho sửa câu đã `published`.

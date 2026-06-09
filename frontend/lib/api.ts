@@ -1196,6 +1196,41 @@ export async function createQuizFromBankRelease(
 }
 
 
+export async function updateBankQuestion(
+  headers: HeadersInit,
+  bankVersionId: string,
+  questionId: string,
+  payload: {
+    difficulty?: string;
+    cognitive_level?: string;
+    learning_objective?: string;
+    question_text?: string;
+    option_a?: string;
+    option_b?: string;
+    option_c?: string;
+    option_d?: string;
+    correct_answer?: string;
+    explanation?: string;
+    concept_title?: string;
+    question_family_id?: string;
+    source_ref?: string;
+    source_type?: string;
+    source_excerpt?: string;
+    source_evidence?: string;
+    target_status?: string;
+    note?: string;
+  },
+) {
+  return parseResponse<BankVersionQuestion>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+
 export async function reviewBankQuestion(
   headers: HeadersInit,
   bankVersionId: string,
