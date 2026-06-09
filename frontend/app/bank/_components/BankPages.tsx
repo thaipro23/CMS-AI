@@ -140,15 +140,29 @@ function SearchActionBar({ search, setSearch, placeholder, action }: { search: s
   </div>
 }
 
-function Modal({ open, title, children, onClose }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void }) {
+function Modal({ open, title, children, onClose, wide = false }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
+  useEffect(() => {
+    if (!open) return undefined
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, onClose])
+
   if (!open) return null
-  return <div className="modal-backdrop" onMouseDown={onClose}>
-    <div className="modal-card bank-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <div className="section-head">
+  return <div className="modal-backdrop bank-popup-backdrop" onMouseDown={onClose}>
+    <div className={`modal-card bank-modal${wide ? ' bank-modal-wide' : ''}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="section-head bank-modal-head">
         <div><h2>{title}</h2></div>
         <button className="btn small secondary" type="button" onClick={onClose}>Đóng</button>
       </div>
-      {children}
+      <div className="bank-modal-body">{children}</div>
     </div>
   </div>
 }
@@ -217,7 +231,7 @@ export function DepartmentsPage() {
       <div className="mini-form">
         <input className="input" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Mã bộ môn, ví dụ CNTT" />
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Tên bộ môn, ví dụ Công nghệ thông tin" />
-        <button className="btn" disabled={busy || !code.trim() || !name.trim()} onClick={() => run(async () => {
+        <button className="btn" type="button" disabled={busy || !code.trim() || !name.trim()} onClick={() => run(async () => {
           await createDepartment(headers, { code, name })
           setCode(''); setName(''); setCreateOpen(false)
         }, 'Đã thêm bộ môn', load)}>Lưu bộ môn</button>
@@ -269,7 +283,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
       <div className="mini-form">
         <input className="input" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Mã môn, ví dụ WEB107" />
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Tên môn, ví dụ Thiết kế trang web" />
-        <button className="btn" disabled={busy || !code.trim() || !name.trim()} onClick={() => run(async () => {
+        <button className="btn" type="button" disabled={busy || !code.trim() || !name.trim()} onClick={() => run(async () => {
           await createSubject(headers, { department_id: departmentId, code, name })
           setCode(''); setName(''); setCreateOpen(false)
         }, 'Đã thêm môn', load)}>Lưu môn</button>
@@ -340,7 +354,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
         <label><span>Cách tạo</span><select className="input" value={mode} onChange={(event) => setMode(event.target.value as 'blank' | 'clone')}><option value="clone">Clone 100% từ version khác</option><option value="blank">Tạo mới trống</option></select></label>
         {mode === 'clone' ? <label><span>Clone từ</span><select className="input" value={cloneFromId} onChange={(event) => setCloneFromId(event.target.value)}>{offerings.map((item) => <option key={item.id} value={item.id}>{item.code}</option>)}</select></label> : null}
         <p className="helper">Clone sẽ copy bài, tài liệu và câu hỏi đã duyệt sang bản ghi mới. Release vẫn chốt tay sau khi giáo viên sửa xong.</p>
-        <button className="btn" disabled={busy || (mode === 'clone' && !cloneFromId)} onClick={() => run(async () => {
+        <button className="btn" type="button" disabled={busy || (mode === 'clone' && !cloneFromId)} onClick={() => run(async () => {
           const saved = await createSubjectOffering(headers, { subject_id: subjectId, term, version_code: term, clone_from_offering_id: mode === 'clone' ? cloneFromId : null })
           setCreateOpen(false)
           router.push(`/bank/subject-versions/${saved.id}/chapters`)
@@ -404,7 +418,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
         <p className="helper">Ví dụ nhập 1.2, hệ thống tự tạo tên “Bài 1.2”. ID do hệ thống tự sinh.</p>
         <div className="modal-actions">
           <button className="btn secondary" type="button" onClick={() => { setChapterInput(''); setCreateOpen(false) }}>Hủy</button>
-          <button className="btn" disabled={busy || !offering || !normalizeLessonInput(chapterInput)} onClick={() => run(async () => {
+          <button className="btn" type="button" disabled={busy || !offering || !normalizeLessonInput(chapterInput)} onClick={() => run(async () => {
             if (!offering) return
             const nextNo = (chapters.reduce((max, item) => Math.max(max, Number(item.sort_order || item.chapter_no || 0)), 0) || 0) + 1
             const title = buildChapterTitle(chapterInput)
@@ -431,7 +445,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [readiness, setReadiness] = useState<BankReleaseReadiness | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [generateCount, setGenerateCount] = useState('10')
-  const [targetCount, setTargetCount] = useState('120')
+  const [targetCount, setTargetCount] = useState('100')
   const [difficultyEasy, setDifficultyEasy] = useState('50')
   const [difficultyMedium, setDifficultyMedium] = useState('30')
   const [difficultyHard, setDifficultyHard] = useState('20')
@@ -457,7 +471,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     setMaterials(nextMaterials.filter((item) => item.status !== 'deleted'))
     setQuestions(nextQuestions)
     setReadiness(nextReadiness)
-    const target = Number((bankVersions.find((item) => item.id === bankVersionId)?.metadata_json as any)?.target_question_count || 120)
+    const target = Math.min(100, Number((bankVersions.find((item) => item.id === bankVersionId)?.metadata_json as any)?.target_question_count || 100))
     setTargetCount(String(target))
   }
 
@@ -532,6 +546,10 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     await refreshCurrent()
   }
 
+  const materialPreviewChunks = (materialView?.chunks || []).slice(0, 80)
+  const materialPreviewText = materialPreviewChunks.map((chunk, index) => `Đoạn ${index + 1}
+${chunk.content}`).join('\n\n')
+
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }, { label: chapterDisplayName(chapter) }]} />
     <Toolbar title={chapter ? `${offering?.code || ''} / ${chapterDisplayName(chapter)}` : 'Workspace của bài'} helper={'Quản lý tài liệu, câu hỏi và release của một bài.'} />
@@ -545,6 +563,23 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       <div><span>Câu bị loại</span><b>{stats.rejected}</b></div>
       <div><span>Nhóm kiến thức</span><b>{stats.families}</b></div>
       <div><span>Release</span><b>{publishedRelease ? 'Đã publish' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b><small>{nextReleaseText(publishedRelease || latestRelease)}</small></div>
+    </section>
+
+    <section className="card chapter-top-actions">
+      <div>
+        <b>Thao tác nhanh</b>
+        <p className="helper">Chỉ dùng 2 nút chính. Các chi tiết kỹ thuật hệ thống tự xử lý phía sau.</p>
+      </div>
+      <div className="button-row no-margin">
+        <button className="btn secondary" disabled={busy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => run(async () => {
+          if (!selectedBankVersion) return
+          await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
+        }, 'Đã kiểm tra khác biệt', refreshCurrent)}>Kiểm tra thay đổi</button>
+        {!latestRelease ? <button className="btn" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release} onClick={() => run(async () => {
+          if (!selectedBankVersion) return
+          await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
+        }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={busy || !can('publish_questions')} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã publish Library sang Open edX', refreshCurrent)}>Publish Library</button> : <button className="btn secondary" disabled>Đã publish</button>}
+      </div>
     </section>
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace">
@@ -580,7 +615,6 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
         <p className="helper">Không cho tạo vượt chỉ tiêu của bài.</p>
         <div className="quota-box"><b>{stats.active}/{numericTarget || 0}</b><small>Đã dùng / chỉ tiêu · còn {remainingQuota} câu</small></div>
         <div className="mini-form">
-          <input className="input" value={targetCount} onChange={(event) => setTargetCount(event.target.value)} placeholder="Chỉ tiêu câu của bài" />
           <input className="input" value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Số câu muốn tạo thêm" />
           <div className="three-col-form">
             <input className="input" value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} placeholder="Easy %" />
@@ -590,33 +624,11 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
           {overQuota ? <div className="alert warning">Vượt chỉ tiêu. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
           <button className="btn" disabled={busy || !can('generate_questions') || overQuota || numericGenerateCount < 1} onClick={() => run(async () => {
             if (!selectedBankVersion) return
-            await generateFromBankVersion(headers, selectedBankVersion.id, { question_count: numericGenerateCount, target_question_count: numericTarget || undefined, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) })
+            await generateFromBankVersion(headers, selectedBankVersion.id, { question_count: numericGenerateCount, target_question_count: 100, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) })
           }, 'Đã tạo câu hỏi', refreshCurrent)}>Tạo câu hỏi</button>
         </div>
       </div>
 
-      <div className="workspace-panel">
-        <h3>3. Kiểm tra thay đổi</h3>
-        <p className="helper">Hệ thống tự chạy khi tài liệu thay đổi. Nút này chỉ để kiểm tra lại.</p>
-        <button className="btn secondary" disabled={busy || !diffBaseBankVersionId} onClick={() => run(async () => {
-          if (!selectedBankVersion) return
-          await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
-        }, 'Đã kiểm tra khác biệt', refreshCurrent)}>Xem kết quả khác biệt</button>
-      </div>
-
-      <div className="workspace-panel">
-        <h3>4. Chốt Release</h3>
-        <p className="helper">Hệ thống tự chọn mã release. Giáo viên chỉ bấm chốt khi câu hỏi đã ổn.</p>
-        <div className="release-line"><b>{nextReleaseText(latestRelease)}</b>{latestRelease?.openedx_library_key ? <small>{latestRelease.openedx_library_key}</small> : null}</div>
-        {readiness ? <div className={readiness.can_create_release ? 'alert success' : 'alert warning'}>{readiness.message}</div> : null}
-        <div className="button-row no-margin">
-          <button className="btn" disabled={busy || !can('publish_questions') || !readiness?.can_create_release} onClick={() => run(async () => {
-            if (!selectedBankVersion) return
-            await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
-          }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button>
-          {latestRelease ? <button className="btn secondary" disabled={busy || !can('publish_questions') || latestRelease.status === 'published'} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã publish Library sang Open edX', refreshCurrent)}>Publish Library</button> : null}
-        </div>
-      </div>
 
       <div className="workspace-panel full">
         <div className="section-head"><div><h3>5. Danh sách câu hỏi</h3><p className="helper">Hiển thị theo dạng thẻ để giáo viên đọc và duyệt nhanh.</p></div><button className="btn secondary" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
@@ -649,11 +661,14 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       </div>
     </section>}
 
-    <Modal open={Boolean(materialView)} title={materialView?.material.title || 'Tài liệu'} onClose={() => setMaterialView(null)}>
-      <div className="material-preview">
-        <p className="helper">{materialView?.material.file_name} · {materialView?.chunks.length || 0} đoạn nội dung</p>
-        {(materialView?.chunks || []).slice(0, 20).map((chunk) => <pre key={chunk.id}>{chunk.content}</pre>)}
-        {materialView && materialView.chunks.length > 20 ? <div className="empty-state">Chỉ hiển thị 20 đoạn đầu để trang không quá nặng.</div> : null}
+    <Modal open={Boolean(materialView)} title={materialView?.material.title || 'Tài liệu'} onClose={() => setMaterialView(null)} wide>
+      <div className="material-preview material-preview-single">
+        <div className="material-preview-meta">
+          <span>{materialView?.material.file_name}</span>
+          <b>{materialView?.chunks.length || 0} đoạn nội dung</b>
+        </div>
+        <pre className="material-preview-text">{materialPreviewText || 'Không có nội dung để hiển thị.'}</pre>
+        {materialView && materialView.chunks.length > materialPreviewChunks.length ? <div className="empty-state">Đang hiển thị {materialPreviewChunks.length} đoạn đầu để popup không quá nặng.</div> : null}
       </div>
     </Modal>
 

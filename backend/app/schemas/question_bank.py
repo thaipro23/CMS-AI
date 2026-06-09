@@ -358,8 +358,8 @@ class MaterialUploadOut(BaseModel):
 
 
 class BankGenerateRequest(BaseModel):
-    question_count: int = Field(default=10, ge=1, le=200)
-    target_question_count: int | None = Field(default=None, ge=1, le=1000)
+    question_count: int = Field(default=10, ge=1, le=100)
+    target_question_count: int | None = Field(default=100, ge=1, le=100)
     difficulty_easy: int = Field(default=50, ge=0, le=100)
     difficulty_medium: int = Field(default=30, ge=0, le=100)
     difficulty_hard: int = Field(default=20, ge=0, le=100)

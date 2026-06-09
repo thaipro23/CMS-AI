@@ -1048,6 +1048,11 @@ class VersionedQuestionBankService:
             raise ValueError(f'Bank Version đang ở trạng thái {version.status}; hãy tạo version mới nếu tài liệu thay đổi.')
         return version
 
+    def _require_mutable_bank_version(self, bank_version_id: str) -> QuestionBankVersion:
+        # Alias rõ nghĩa dùng cho upload/xóa tài liệu. Giữ riêng tên này để các luồng UI
+        # gọi xóa tài liệu không bị lỗi AttributeError khi service được refactor.
+        return self._require_bank_version(bank_version_id)
+
     def upload_material_bytes(
         self,
         *,
@@ -1370,10 +1375,12 @@ class VersionedQuestionBankService:
         chapter = self.db.get(SubjectChapter, version.chapter_id)
         if not subject or not chapter:
             raise ValueError('Bank Version thiếu Subject hoặc Chapter')
-        if question_count < 1 or question_count > 200:
-            raise ValueError('question_count phải trong khoảng 1-200')
+        if question_count < 1 or question_count > 100:
+            raise ValueError('Số câu tạo thêm phải trong khoảng 1-100')
         meta = dict(version.metadata_json or {})
-        effective_target = int(target_question_count or meta.get('target_question_count') or 0)
+        effective_target = int(target_question_count or meta.get('target_question_count') or 100)
+        if effective_target > 100:
+            raise ValueError('Mỗi bài chỉ được tối đa 100 câu hỏi')
         if target_question_count:
             meta['target_question_count'] = int(target_question_count)
             version.metadata_json = meta
