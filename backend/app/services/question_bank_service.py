@@ -1105,6 +1105,12 @@ class VersionedQuestionBankService:
         if sort_order is not None:
             item.sort_order = sort_order
             item.chapter_no = sort_order
+        # If a chapter was renamed after a failed publish, old release/library
+        # state must not be reused. Clean non-published releases so publish uses
+        # the current chapter title/library key.
+        reset_count = self._cleanup_stale_release_keys_for_chapter(chapter=item, reason='chapter_basic_info_updated')
+        if reset_count:
+            item.description = item.description or ''
         item.updated_at = datetime.utcnow()
         self.db.commit(); self.db.refresh(item)
         return item
@@ -2479,6 +2485,75 @@ class VersionedQuestionBankService:
             return False
         return f'-{term_slug.lower()}-' not in str(library_key).lower()
 
+    def _library_key_same(self, left: str | None, right: str | None) -> bool:
+        return str(left or '').strip().lower() == str(right or '').strip().lower()
+
+    def _reset_release_openedx_state_for_key_change(self, *, release: QuestionBankRelease, expected_library_key: str, reason: str) -> bool:
+        """Reset stale Open edX import ids when a draft/failed release changes library key.
+
+        This fixes the real workflow where a teacher creates Chapter `Bài 2.1`,
+        publish fails because a library with that name already exists, then the
+        teacher renames the chapter to `Bài 2.2`. The Release row can still hold
+        the old `openedx_library_key` and component ids from the failed attempt.
+        If we reuse those stale values, Open edX raises `LearningPackage matching
+        query does not exist` or imports into the wrong library.
+        """
+        old_key = str(release.openedx_library_key or '').strip()
+        new_key = str(expected_library_key or '').strip()
+        if not new_key or self._library_key_same(old_key, new_key):
+            return False
+        if release.status == 'published' and release.published_at:
+            # A truly published release may already be referenced by quizzes. Do
+            # not silently move it to a new library just because the chapter was
+            # renamed later. Users should create a new Release instead.
+            return False
+
+        release.openedx_library_key = new_key
+        release.openedx_library_version = None
+        release.status = 'ready'
+        release.published_at = None
+        release.published_by = None
+        release.metadata_json = {
+            **(release.metadata_json or {}),
+            'stale_openedx_state_reset_at': datetime.utcnow().isoformat(),
+            'stale_openedx_state_reset_reason': reason,
+            'old_openedx_library_key': old_key or None,
+            'new_openedx_library_key': new_key,
+        }
+        rows = self.db.query(BankReleaseQuestion).filter(BankReleaseQuestion.bank_release_id == release.id).all()
+        question_ids = [row.question_id for row in rows]
+        for row in rows:
+            row.openedx_library_problem_id = None
+        if question_ids:
+            questions = self.db.query(Question).filter(Question.id.in_(question_ids)).all()
+            for question in questions:
+                if not question.target_library_key or self._library_key_same(question.target_library_key, old_key):
+                    question.openedx_library_problem_id = None
+                    question.openedx_block_id = None
+                    question.target_library_key = None
+                    question.imported_library_at = None
+                    question.publish_error = None
+                    question.publish_status = None
+                    question.openedx_publish_status = None
+                    question.openedx_verification_status = None
+                    question.openedx_manual_action_required = False
+                    if question.status == 'published':
+                        question.status = 'approved'
+        return True
+
+    def _cleanup_stale_release_keys_for_chapter(self, *, chapter: SubjectChapter, reason: str) -> int:
+        releases = self.db.query(QuestionBankRelease).filter(QuestionBankRelease.chapter_id == chapter.id).all()
+        changed = 0
+        for release in releases:
+            version = self.db.get(QuestionBankVersion, release.bank_version_id)
+            subject = self.db.get(Subject, release.subject_id)
+            if not version or not subject:
+                continue
+            expected_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
+            if self._reset_release_openedx_state_for_key_change(release=release, expected_library_key=expected_key, reason=reason):
+                changed += 1
+        return changed
+
     def _release_questions_for_version(self, version: QuestionBankVersion) -> list[Question]:
         return self.db.query(Question).filter(
             Question.bank_version_id == version.id,
@@ -2542,6 +2617,35 @@ class VersionedQuestionBankService:
         self.db.commit()
         self.db.refresh(release)
         return release
+
+    def cancel_failed_release(self, *, release_id: str, actor: str | None = None) -> dict:
+        release = self.db.get(QuestionBankRelease, release_id)
+        if not release:
+            raise ValueError('Không tìm thấy Bank Release')
+        if release.status == 'published' or release.published_at:
+            raise ValueError('Không thể hủy Release đã published. Hãy tạo Release mới nếu cần đổi tên/chỉnh nội dung.')
+        if release.status in {'deprecated', 'archived'}:
+            raise ValueError(f'Release đang ở trạng thái {release.status}, không hủy bằng thao tác này.')
+        rows = self.db.query(BankReleaseQuestion).filter(BankReleaseQuestion.bank_release_id == release.id).all()
+        question_ids = [row.question_id for row in rows]
+        old_key = release.openedx_library_key
+        for row in rows:
+            self.db.delete(row)
+        if question_ids:
+            questions = self.db.query(Question).filter(Question.id.in_(question_ids)).all()
+            for question in questions:
+                if not question.target_library_key or self._library_key_same(question.target_library_key, old_key):
+                    question.openedx_library_problem_id = None
+                    question.openedx_block_id = None
+                    question.target_library_key = None
+                    question.publish_error = None
+                    question.publish_status = None
+                    question.openedx_publish_status = None
+                    if question.status == 'published':
+                        question.status = 'approved'
+        self.db.delete(release)
+        self.db.commit()
+        return {'ok': True, 'deleted': True, 'entity_type': 'bank_release', 'entity_id': release_id, 'message': 'Đã hủy Release lỗi/chưa publish'}
 
     def _course_mapping_validation(self, *, openedx_course_id: str, subject_id: str, subject_offering_id: str | None = None, department_id: str | None = None, term: str | None = None, openedx_course_title: str | None = None) -> dict:
         checks: list[dict] = []
@@ -3546,10 +3650,26 @@ class VersionedQuestionBankService:
         connector = get_openedx_connector()
         expected_library_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
         previous_library_key = release.openedx_library_key
-        if not release.openedx_library_key or self._release_library_key_needs_term_upgrade(library_key=release.openedx_library_key, subject=subject, version=version):
+        if not release.openedx_library_key:
             release.openedx_library_key = expected_library_key
+        elif not self._library_key_same(release.openedx_library_key, expected_library_key):
+            if release.status == 'published' and release.published_at and not force_reimport:
+                raise ValueError(
+                    'Release này đã published bằng Library key cũ. Nếu đã đổi tên Bài/Chapter, hãy tạo Release mới thay vì ghi đè Release đã published.'
+                )
+            self._reset_release_openedx_state_for_key_change(
+                release=release,
+                expected_library_key=expected_library_key,
+                reason='publish_expected_library_key_changed_after_rename_or_failed_publish',
+            )
+        elif self._release_library_key_needs_term_upgrade(library_key=release.openedx_library_key, subject=subject, version=version):
+            self._reset_release_openedx_state_for_key_change(
+                release=release,
+                expected_library_key=expected_library_key,
+                reason='publish_library_key_term_upgrade',
+            )
         library_key = release.openedx_library_key
-        library_key_changed = bool(previous_library_key and previous_library_key != library_key)
+        library_key_changed = bool(previous_library_key and not self._library_key_same(previous_library_key, library_key))
         release.status = 'publish_in_progress'
         release.metadata_json = {
             **(release.metadata_json or {}),
@@ -3596,6 +3716,23 @@ class VersionedQuestionBankService:
             )
             if library_result.get('stub') is True or str(library_result.get('status', '')).startswith('local_stub'):
                 raise RuntimeError('Open edX connector trả về stub khi ensure library. Không đánh dấu published.')
+            actual_library_key = str(library_result.get('library_key') or library_result.get('openedx_library_id') or library_key).strip()
+            if actual_library_key and actual_library_key != library_key:
+                release.openedx_library_key = actual_library_key
+                library_key = actual_library_key
+                metadata_base = {
+                    **metadata_base,
+                    'library_key': library_key,
+                    'requested_library_key': expected_library_key,
+                    'actual_openedx_library_key': library_key,
+                }
+                release.metadata_json = {
+                    **(release.metadata_json or {}),
+                    'actual_openedx_library_key': library_key,
+                    'requested_openedx_library_key': expected_library_key,
+                    'library_key_canonicalized_by_connector': True,
+                }
+                self.db.flush()
             for question in questions:
                 item = existing_items[question.id]
                 if item.openedx_library_problem_id and not force_reimport and not library_key_changed:
@@ -3615,13 +3752,42 @@ class VersionedQuestionBankService:
                     'difficulty': question.difficulty,
                     'tag_names': tag_names,
                 }
-                result = await connector.import_problem_to_library(
-                    course_id=course_id,
-                    library_key=library_key,
-                    olx=olx,
-                    display_name=(question.question_text or 'AI Question')[:180],
-                    metadata=metadata,
-                )
+                try:
+                    result = await connector.import_problem_to_library(
+                        course_id=course_id,
+                        library_key=library_key,
+                        olx=olx,
+                        display_name=(question.question_text or 'AI Question')[:180],
+                        metadata=metadata,
+                    )
+                except Exception as import_exc:
+                    text = str(import_exc)
+                    if 'LearningPackage matching query does not exist' not in text and 'openedx_library_import_failed' not in text:
+                        raise
+                    # The library key in DB may be stale/case-mismatched after a
+                    # previous failed publish. Re-ensure the current expected
+                    # library and retry once with the canonical key returned by
+                    # the connector.
+                    retry_library = await connector.ensure_problem_library(
+                        course_id=course_id,
+                        chapter_node_id=f'bank-release:{release.id}',
+                        display_name=release.title or f'{subject.code} - {self._chapter_display_name(chapter)} - {version.version_code}',
+                        metadata={**metadata_base, 'retry_after_learningpackage_missing': True},
+                    )
+                    retry_key = str(retry_library.get('library_key') or retry_library.get('openedx_library_id') or expected_library_key).strip()
+                    if retry_key and not self._library_key_same(retry_key, library_key):
+                        release.openedx_library_key = retry_key
+                        library_key = retry_key
+                        metadata_base = {**metadata_base, 'library_key': library_key, 'actual_openedx_library_key': library_key}
+                        metadata = {**metadata, 'library_key': library_key, 'actual_openedx_library_key': library_key}
+                        self.db.flush()
+                    result = await connector.import_problem_to_library(
+                        course_id=course_id,
+                        library_key=library_key,
+                        olx=olx,
+                        display_name=(question.question_text or 'AI Question')[:180],
+                        metadata=metadata,
+                    )
                 if result.get('stub') is True or str(result.get('status', '')).startswith('local_stub'):
                     raise RuntimeError('Open edX connector trả về stub khi import problem. Không đánh dấu published.')
                 problem_id = result.get('openedx_library_problem_id') or result.get('library_problem_id') or result.get('problem_id') or result.get('block_id')

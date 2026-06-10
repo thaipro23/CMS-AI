@@ -626,6 +626,17 @@ def create_release(payload: BankReleaseCreate, db: Session = Depends(get_db), us
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete('/releases/{release_id}', response_model=EntityDeleteOut)
+def cancel_failed_release(release_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    try:
+        result = VersionedQuestionBankService(db).cancel_failed_release(release_id=release_id, actor=user.user_id)
+        log_audit(db, action='question_bank.release.cancel_failed', status='success', message=result.get('message', ''), user=user, target_type='bank_release', target_id=release_id, metadata=result)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.release.cancel_failed', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post('/releases/{release_id}/publish-openedx', response_model=BankReleasePublishOut)
 async def publish_release_to_openedx(release_id: str, payload: BankReleasePublishRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
     try:
