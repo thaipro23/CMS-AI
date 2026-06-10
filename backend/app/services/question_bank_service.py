@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import uuid
+import re
 import unicodedata
 from pathlib import Path
 from datetime import datetime
@@ -903,6 +904,11 @@ class VersionedQuestionBankService:
         if not chapter:
             return 'Bài'
         return (chapter.title or '').strip() or 'Bài'
+
+    def _chapter_quiz_suffix(self, chapter: SubjectChapter | None) -> str:
+        title = self._chapter_display_name(chapter)
+        cleaned = re.sub(r'^\s*bài\s*', '', title, flags=re.IGNORECASE).strip()
+        return cleaned or title or '1'
 
     def _next_chapter_order(self, *, subject_id: str, subject_offering_id: str | None = None) -> int:
         query = self.db.query(func.max(SubjectChapter.sort_order)).filter(SubjectChapter.subject_id == subject_id)
@@ -3110,8 +3116,13 @@ class VersionedQuestionBankService:
         chapter = self.db.get(SubjectChapter, release.chapter_id)
         connector = get_openedx_connector()
         course_id = course_mapping.openedx_course_id
-        final_quiz_title = quiz_title.strip() if quiz_title and quiz_title.strip() else f'AI Learning Check - {self._chapter_display_name(chapter)}'
-        final_unit_title = unit_title.strip() if unit_title and unit_title.strip() else 'Quiz tự luyện'
+        # FPT convention: if the source Section/Chapter is "Bài 1" then the created
+        # Subsection is "Quiz 1" and the Unit is always "Quiz". Keep this as a
+        # backend rule so old frontends or API callers cannot accidentally create
+        # "AI Learning Check" / "Quiz tự luyện" names anymore.
+        quiz_suffix = self._chapter_quiz_suffix(chapter)
+        final_quiz_title = f'Quiz {quiz_suffix}'.strip()
+        final_unit_title = 'Quiz'
         timer_config = {
             'custom_timer_enabled': bool(custom_timer_enabled),
             'time_limit_minutes': int(time_limit_minutes or 15),
@@ -3151,6 +3162,11 @@ class VersionedQuestionBankService:
                     'source': 'ai_question_bank_release',
                     'custom_timer_enabled': timer_config['custom_timer_enabled'],
                     'timer_config': timer_config,
+                    'sequential_title': final_quiz_title,
+                    'unit_title': final_unit_title,
+                    'grade_as': 'Quiz',
+                    'format': 'Quiz',
+                    'graded': True,
                 },
             )
             if quiz_result.get('ok') is not True:

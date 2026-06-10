@@ -610,7 +610,7 @@ class BankReleaseQuizPreviewRequest(BaseModel):
 class BankReleaseQuizCreateRequest(BankReleaseQuizPreviewRequest):
     course_chapter_mapping_id: str
     quiz_title: str = Field(default='', max_length=255)
-    unit_title: str = Field(default='Quiz tự luyện', max_length=255)
+    unit_title: str = Field(default='Quiz', max_length=255)
     custom_timer_enabled: bool = True
     time_limit_minutes: int = Field(default=15, ge=1, le=300)
     retake_cooldown_minutes: int = Field(default=5, ge=0, le=10080)

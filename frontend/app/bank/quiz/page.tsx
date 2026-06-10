@@ -20,6 +20,12 @@ function percent(value: number | undefined | null) {
   return `${Math.round((Number(value || 0)) * 100)}%`
 }
 
+function quizSuffixFromChapterTitle(title: string | undefined | null) {
+  const text = String(title || '').trim()
+  const withoutPrefix = text.replace(/^bài\s*/i, '').trim()
+  return withoutPrefix || text || '1'
+}
+
 export default function BankQuizPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
@@ -114,11 +120,12 @@ export default function BankQuizPage() {
     setCreatingKey(item.chapter_id)
     setMessage('')
     try {
-      const title = `AI Learning Check - ${item.chapter_title}`
+      const suffix = quizSuffixFromChapterTitle(item.chapter_title)
+      const title = `Quiz ${suffix}`
       const result = await createQuizFromBankRelease(headers, item.release_id, {
         course_chapter_mapping_id: item.course_chapter_mapping_id,
         quiz_title: title,
-        unit_title: 'Quiz tự luyện',
+        unit_title: 'Quiz',
         total_questions: totalQuestions,
         difficulty_easy: difficultyEasy,
         difficulty_medium: difficultyMedium,
@@ -191,6 +198,29 @@ export default function BankQuizPage() {
         <label>Medium %<input className="input" type="number" value={difficultyMedium} onChange={(event) => setDifficultyMedium(Number(event.target.value || 0))} /></label>
         <label>Hard %<input className="input" type="number" value={difficultyHard} onChange={(event) => setDifficultyHard(Number(event.target.value || 0))} /></label>
       </div>
+
+      <div className="card-soft timer-config-panel">
+        <div className="section-heading">
+          <div>
+            <h3>Timer quiz tự luyện</h3>
+            <p className="muted">Không dùng Timed Exam native. Hệ thống dùng đồng hồ riêng để tự nộp, khóa submit và cho làm lại theo cooldown.</p>
+          </div>
+          <label className="toggle-line">
+            <input type="checkbox" checked={customTimerEnabled} onChange={(event) => setCustomTimerEnabled(event.target.checked)} />
+            <span>Bật timer</span>
+          </label>
+        </div>
+        <div className="inline-form compact-form">
+          <label>Thời gian làm bài/phút<input className="input" type="number" min={1} max={300} disabled={!customTimerEnabled} value={timeLimitMinutes} onChange={(event) => setTimeLimitMinutes(Number(event.target.value || 15))} /></label>
+          <label>Thời gian chờ làm lại/phút<input className="input" type="number" min={0} max={10080} disabled={!customTimerEnabled} value={retakeCooldownMinutes} onChange={(event) => setRetakeCooldownMinutes(Number(event.target.value || 0))} /></label>
+        </div>
+        <div className="option-grid">
+          <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={autoSubmitOnTimeout} onChange={(event) => setAutoSubmitOnTimeout(event.target.checked)} /><span>Tự nộp các câu đã chọn khi hết giờ</span></label>
+          <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={lockAfterTimeout} onChange={(event) => setLockAfterTimeout(event.target.checked)} /><span>Khóa submit sau khi hết giờ</span></label>
+        </div>
+        <div className="alert info">Quy định FPT: Section có tên <b>Bài 1</b> thì Subsection quiz tự tạo là <b>Quiz 1</b>, Unit luôn tên <b>Quiz</b>, Grade as luôn là <b>Quiz</b>.</div>
+      </div>
+
       <div className="button-row">
         <button className="btn" disabled={busy || !courseId.trim()} onClick={() => runPreview()}>{busy ? 'Đang kiểm tra...' : 'Tự tìm version và Section'}</button>
         <button className="btn secondary" disabled={busy || !autoMap?.can_apply} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu mapping tự động'}</button>
