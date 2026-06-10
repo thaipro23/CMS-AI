@@ -69,6 +69,8 @@ from app.schemas.question_bank import (
     CourseQuizRollbackOut,
     QuizBlueprintCreate,
     QuizBlueprintOut,
+    QuizAutoMapRequest,
+    QuizAutoMapOut,
     SubjectCreate,
     SubjectOut,
     SubjectOfferingCreate,
@@ -575,6 +577,12 @@ async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCrea
             difficulty_medium=payload.difficulty_medium,
             difficulty_hard=payload.difficulty_hard,
             max_families_per_bank=payload.max_families_per_bank,
+            custom_timer_enabled=payload.custom_timer_enabled,
+            time_limit_minutes=payload.time_limit_minutes,
+            retake_cooldown_minutes=payload.retake_cooldown_minutes,
+            auto_submit_on_timeout=payload.auto_submit_on_timeout,
+            lock_after_timeout=payload.lock_after_timeout,
+            native_timed_exam=payload.native_timed_exam,
             actor=user.user_id,
             expected_bank_release_id=release_id,
         )
@@ -585,6 +593,33 @@ async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCrea
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         log_audit(db, action='question_bank.release.quiz.create', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+
+
+@router.post('/quiz/auto-map/preview', response_model=QuizAutoMapOut)
+async def preview_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    try:
+        result = await VersionedQuestionBankService(db).preview_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id)
+        log_audit(db, action='question_bank.quiz.auto_map.preview', status='success' if result.get('ok') else 'failed', error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR, message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'blocking_errors': result.get('blocking_errors')})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.quiz.auto_map.preview', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post('/quiz/auto-map/apply', response_model=QuizAutoMapOut)
+async def apply_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    try:
+        result = await VersionedQuestionBankService(db).apply_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id, actor=user.user_id)
+        log_audit(db, action='question_bank.quiz.auto_map.apply', status='success', message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'mapping_count': len(result.get('mappings') or [])})
+        return result
+    except ValueError as exc:
+        log_audit(db, action='question_bank.quiz.auto_map.apply', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log_audit(db, action='question_bank.quiz.auto_map.apply', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 

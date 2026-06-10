@@ -28,6 +28,24 @@ const STORAGE_KEYS = {
   sessionToken: 'ai_openedx_session_token',
 }
 
+function getStoredSession(): StoredSession | null {
+  if (typeof window === 'undefined') return null
+  const raw = window.sessionStorage.getItem(STORAGE_KEYS.sessionToken)
+  if (!raw) return null
+  try {
+    const session = JSON.parse(raw) as StoredSession
+    return session.access_token ? session : null
+  } catch {
+    window.sessionStorage.removeItem(STORAGE_KEYS.sessionToken)
+    return null
+  }
+}
+
+function getStoredString(key: string, fallback: string) {
+  if (typeof window === 'undefined') return fallback
+  return window.localStorage.getItem(key) || fallback
+}
+
 type StoredSession = {
   access_token: string
   user_id?: string
@@ -37,31 +55,27 @@ type StoredSession = {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [courseId, setCourseIdState] = useState('course-v1:FPT+PRN232+2026')
-  const [role, setRoleState] = useState<Role>('teacher')
-  const [userId, setUserIdState] = useState('demo-teacher')
-  const [accessToken, setAccessTokenState] = useState('')
-  const [authReady, setAuthReady] = useState(false)
+  const [courseId, setCourseIdState] = useState(() => getStoredString(STORAGE_KEYS.courseId, 'course-v1:FPT+PRN232+2026'))
+  const [role, setRoleState] = useState<Role>(() => {
+    const saved = getStoredString(STORAGE_KEYS.role, 'teacher') as Role
+    return ROLE_PERMISSIONS[saved] ? saved : 'teacher'
+  })
+  const [userId, setUserIdState] = useState(() => getStoredSession()?.user_id || getStoredString(STORAGE_KEYS.userId, 'demo-teacher'))
+  const [accessToken, setAccessTokenState] = useState(() => getStoredSession()?.access_token || '')
+  const [authReady, setAuthReady] = useState(() => typeof window !== 'undefined')
 
   useEffect(() => {
     const savedCourseId = window.localStorage.getItem(STORAGE_KEYS.courseId)
     const savedRole = window.localStorage.getItem(STORAGE_KEYS.role) as Role | null
     const savedUserId = window.localStorage.getItem(STORAGE_KEYS.userId)
-    const savedSession = window.sessionStorage.getItem(STORAGE_KEYS.sessionToken)
+    const savedSession = getStoredSession()
     if (savedCourseId) setCourseIdState(savedCourseId)
     if (savedRole && ROLE_PERMISSIONS[savedRole]) setRoleState(savedRole)
     if (savedUserId) setUserIdState(savedUserId)
     if (savedSession) {
-      try {
-        const session = JSON.parse(savedSession) as StoredSession
-        if (session.access_token) {
-          setAccessTokenState(session.access_token)
-          if (session.role && ROLE_PERMISSIONS[session.role]) setRoleState(session.role)
-          if (session.user_id) setUserIdState(session.user_id)
-        }
-      } catch {
-        window.sessionStorage.removeItem(STORAGE_KEYS.sessionToken)
-      }
+      setAccessTokenState(savedSession.access_token)
+      if (savedSession.role && ROLE_PERMISSIONS[savedSession.role]) setRoleState(savedSession.role)
+      if (savedSession.user_id) setUserIdState(savedSession.user_id)
     }
     setAuthReady(true)
   }, [])
@@ -126,8 +140,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     can: (permission: Permission | string) => ROLE_PERMISSIONS[role].includes(permission as Permission),
     authHeaders: (json = false) => {
       const headers: Record<string, string> = {}
-      if (accessToken.trim()) {
-        headers.Authorization = `Bearer ${accessToken.trim()}`
+      const sessionToken = accessToken.trim() || getStoredSession()?.access_token || ''
+      if (sessionToken) {
+        headers.Authorization = `Bearer ${sessionToken}`
       } else {
         headers['X-User-Role'] = role
         headers['X-User-Id'] = userId

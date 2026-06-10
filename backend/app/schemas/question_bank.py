@@ -611,6 +611,12 @@ class BankReleaseQuizCreateRequest(BankReleaseQuizPreviewRequest):
     course_chapter_mapping_id: str
     quiz_title: str = Field(default='', max_length=255)
     unit_title: str = Field(default='Quiz tự luyện', max_length=255)
+    custom_timer_enabled: bool = True
+    time_limit_minutes: int = Field(default=15, ge=1, le=300)
+    retake_cooldown_minutes: int = Field(default=5, ge=0, le=10080)
+    auto_submit_on_timeout: bool = True
+    lock_after_timeout: bool = True
+    native_timed_exam: bool = False
 
 
 class BankReleaseQuizPlanOut(BaseModel):
@@ -645,6 +651,7 @@ class BankReleaseQuizCreateOut(BaseModel):
     plan: dict = Field(default_factory=dict)
     quiz_result: dict = Field(default_factory=dict)
     problem_bank_result: dict = Field(default_factory=dict)
+    timer_config: dict = Field(default_factory=dict)
     message: str
 
 
@@ -678,4 +685,30 @@ class CourseQuizRollbackOut(BaseModel):
     openedx_deleted: bool = False
     manual_cleanup_required: bool = False
     delete_result: dict = Field(default_factory=dict)
+    message: str
+
+
+class QuizAutoMapRequest(BaseModel):
+    openedx_course_id: str = Field(min_length=1, max_length=255)
+    selected_subject_offering_id: str | None = None
+    total_questions: int = Field(default=15, ge=1, le=200)
+    difficulty_easy: int = Field(default=50, ge=0, le=100)
+    difficulty_medium: int = Field(default=30, ge=0, le=100)
+    difficulty_hard: int = Field(default=20, ge=0, le=100)
+    max_families_per_bank: int = Field(default=2, ge=1, le=10)
+
+
+class QuizAutoMapOut(BaseModel):
+    ok: bool
+    openedx_course_id: str
+    mode: str = 'preview'
+    subject: dict | None = None
+    offering: dict | None = None
+    course_mapping: dict | None = None
+    summary: dict = Field(default_factory=dict)
+    sections: list[dict] = Field(default_factory=list)
+    mappings: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
+    can_apply: bool = False
     message: str

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import {
   BankRelease,
@@ -104,9 +104,9 @@ function statusClass(status?: string | null) {
 }
 
 function useBankData() {
-  const { authHeaders, can } = useAppContext()
+  const { authHeaders, can, authReady } = useAppContext()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
-  return { headers, can }
+  return { headers, can, authReady }
 }
 
 function useAsyncMessage() {
@@ -337,9 +337,20 @@ function toBankQuestionEditForm(question: BankVersionQuestion): BankQuestionEdit
 
 
 export function BankDashboardPage() {
-  const { headers } = useBankData()
+  const { headers, authReady } = useBankData()
   const [overview, setOverview] = useState<BankDashboardOverview | null>(null)
-  useEffect(() => { getBankDashboardOverview(headers).then(setOverview).catch(() => null) }, [headers])
+  const overviewLoadKey = useRef('')
+  useEffect(() => {
+    if (!authReady) return
+    const key = JSON.stringify(headers)
+    if (overviewLoadKey.current === key) return
+    overviewLoadKey.current = key
+    let cancelled = false
+    getBankDashboardOverview(headers)
+      .then((data) => { if (!cancelled) setOverview(data) })
+      .catch(() => { if (!cancelled) overviewLoadKey.current = '' })
+    return () => { cancelled = true }
+  }, [authReady, headers])
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
     <Toolbar title="Ngân hàng đề" helper="Trang tổng quan giúp giáo viên biết ngay việc nào cần làm tiếp." action={<div className="button-row no-margin"><Link className="btn secondary" href="/bank/departments">Quản lý bộ môn</Link><Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link></div>} />
@@ -348,9 +359,9 @@ export function BankDashboardPage() {
       <QuickSearchBox />
     </section>
     <section className="summary-grid compact-summary dashboard-summary">
-      <div><span>Bộ môn còn việc</span><b>{overview?.departments_not_done ?? '—'}</b><small>{overview?.departments_done ?? 0} bộ môn đã xử lý xong</small></div>
-      <div><span>Môn đã duyệt xong</span><b>{overview?.subjects_done ?? '—'}</b><small>{overview?.subjects_not_done ?? 0} môn còn việc</small></div>
-      <div><span>Version môn đã xong</span><b>{overview?.subject_versions_done ?? '—'}</b><small>{overview?.subject_versions_not_done ?? 0} version còn việc</small></div>
+      <div><span>Bộ môn</span><b>{overview?.departments_total ?? '—'}</b><small>{overview?.departments_done ?? 0} đã xong · {overview?.departments_not_done ?? 0} còn việc</small></div>
+      <div><span>Môn</span><b>{overview?.subjects_total ?? '—'}</b><small>{overview?.subjects_done ?? 0} đã xong · {overview?.subjects_not_done ?? 0} còn việc</small></div>
+      <div><span>Version môn</span><b>{overview?.subject_versions_total ?? '—'}</b><small>{overview?.subject_versions_done ?? 0} đã xong · {overview?.subject_versions_not_done ?? 0} còn việc</small></div>
       <div><span>Bài cần xử lý</span><b>{overview?.chapters_needing_review ?? '—'}</b><small>{overview?.chapters_ready_to_release ?? 0} bài sẵn sàng chốt</small></div>
       <div><span>Tổng câu hỏi</span><b>{overview?.total_questions ?? '—'}</b><small>{overview?.approved_count ?? 0} đã duyệt</small></div>
       <div><span>Câu chưa xử lý</span><b>{(overview?.pending_review_count || 0) + (overview?.draft_error_count || 0)}</b><small>{overview?.pending_review_count ?? 0} chờ duyệt · {overview?.draft_error_count ?? 0} lỗi</small></div>

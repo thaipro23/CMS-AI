@@ -1207,6 +1207,7 @@ export type BankReleaseQuizCreateResult = {
   plan: Record<string, any>
   quiz_result: Record<string, any>
   problem_bank_result: Record<string, any>
+  timer_config?: Record<string, any>
   message: string
 }
 
@@ -1261,6 +1262,53 @@ export type CourseQuizInstance = {
   metadata_json?: Record<string, any> | null
   created_at: string
   updated_at: string
+}
+
+
+
+
+export type QuizAutoMapCandidate = {
+  offering_id: string
+  offering_code: string
+  name?: string | null
+  term?: string | null
+  version_code?: string | null
+  status?: string | null
+  score: number
+  course_run_match: boolean
+  all_ready: boolean
+  chapter_count: number
+  ready_chapter_count: number
+  missing_chapters: string[]
+  disabled_reason?: string | null
+}
+
+export type QuizAutoMapResult = {
+  ok: boolean
+  openedx_course_id: string
+  mode: 'preview' | 'applied' | string
+  subject?: { id: string; code: string; name: string; department_id?: string | null; department_name?: string | null } | null
+  offering?: { id: string; code: string; name?: string | null; term?: string | null; version_code?: string | null } | null
+  course_mapping?: { id: string; openedx_course_id: string; status?: string } | null
+  summary: Record<string, any> & { candidates?: QuizAutoMapCandidate[]; selected_subject_offering_id?: string | null }
+  sections: Array<{ openedx_section_id: string; title: string; type: string }>
+  mappings: Array<{
+    chapter_id: string
+    chapter_title: string
+    release_id?: string | null
+    release_code?: string | null
+    openedx_library_key?: string | null
+    openedx_section_id?: string | null
+    openedx_section_title?: string | null
+    match_score: number
+    match_reason: string
+    ready: boolean
+    course_chapter_mapping_id?: string | null
+  }>
+  warnings: string[]
+  blocking_errors: string[]
+  can_apply: boolean
+  message: string
 }
 
 export type CourseQuizRollbackResult = {
