@@ -934,6 +934,202 @@ class VersionedQuestionBankService:
         self.db.refresh(item)
         return item
 
+
+    def _empty_block_message(self, *, entity_label: str, counts: dict[str, int]) -> str | None:
+        used = {key: int(value or 0) for key, value in counts.items() if int(value or 0) > 0}
+        if not used:
+            return None
+        human = {
+            'subjects': 'môn',
+            'subject_versions': 'phiên bản môn',
+            'chapters': 'bài/chapter',
+            'bank_versions': 'bank version',
+            'materials': 'tài liệu',
+            'chunks': 'chunk nội dung',
+            'concepts': 'concept',
+            'families': 'family',
+            'questions': 'câu hỏi',
+            'releases': 'Release',
+            'course_mappings': 'mapping course',
+            'chapter_mappings': 'mapping bài Open edX',
+            'quiz_blueprints': 'blueprint quiz',
+            'quiz_instances': 'Quiz Open edX đã tạo',
+        }
+        parts = [f"{human.get(key, key)}: {value}" for key, value in used.items()]
+        return f'Không thể xóa {entity_label} vì bên trong chưa trống ({"; ".join(parts)}). Hãy xóa nội dung con trước.'
+
+    def update_department(self, department_id: str, *, code: str | None = None, name: str | None = None, description: str | None = None) -> Department:
+        item = self.db.get(Department, department_id)
+        if not item:
+            raise ValueError('Không tìm thấy bộ môn')
+        if code is not None:
+            clean = code.strip().upper()
+            if not clean:
+                raise ValueError('Mã bộ môn không được để trống')
+            exists = self.db.query(Department).filter(Department.code == clean, Department.id != item.id).first()
+            if exists:
+                raise ValueError('Mã bộ môn đã tồn tại')
+            item.code = clean
+        if name is not None:
+            clean_name = name.strip()
+            if not clean_name:
+                raise ValueError('Tên bộ môn không được để trống')
+            item.name = clean_name
+        if description is not None:
+            item.description = description or ''
+        item.updated_at = datetime.utcnow()
+        self.db.commit(); self.db.refresh(item)
+        return item
+
+    def delete_department(self, department_id: str) -> dict:
+        item = self.db.get(Department, department_id)
+        if not item:
+            raise ValueError('Không tìm thấy bộ môn')
+        msg = self._empty_block_message(entity_label='bộ môn', counts={
+            'subjects': self.db.query(Subject).filter(Subject.department_id == department_id).count(),
+            'subject_versions': self.db.query(SubjectOffering).filter(SubjectOffering.department_id == department_id).count(),
+        })
+        if msg:
+            raise ValueError(msg)
+        self.db.delete(item); self.db.commit()
+        return {'ok': True, 'deleted': True, 'entity_type': 'department', 'entity_id': department_id, 'message': 'Đã xóa bộ môn'}
+
+    def update_subject(self, subject_id: str, *, code: str | None = None, name: str | None = None, description: str | None = None) -> Subject:
+        item = self.db.get(Subject, subject_id)
+        if not item:
+            raise ValueError('Không tìm thấy môn')
+        if code is not None:
+            clean = code.strip().upper()
+            if not clean:
+                raise ValueError('Mã môn không được để trống')
+            exists = self.db.query(Subject).filter(Subject.department_id == item.department_id, Subject.code == clean, Subject.id != item.id).first()
+            if exists:
+                raise ValueError('Mã môn đã tồn tại trong bộ môn này')
+            item.code = clean
+        if name is not None:
+            clean_name = name.strip()
+            if not clean_name:
+                raise ValueError('Tên môn không được để trống')
+            item.name = clean_name
+        if description is not None:
+            item.description = description or ''
+        item.updated_at = datetime.utcnow()
+        self.db.commit(); self.db.refresh(item)
+        return item
+
+    def delete_subject(self, subject_id: str) -> dict:
+        item = self.db.get(Subject, subject_id)
+        if not item:
+            raise ValueError('Không tìm thấy môn')
+        msg = self._empty_block_message(entity_label='môn', counts={
+            'subject_versions': self.db.query(SubjectOffering).filter(SubjectOffering.subject_id == subject_id).count(),
+            'chapters': self.db.query(SubjectChapter).filter(SubjectChapter.subject_id == subject_id).count(),
+            'bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.subject_id == subject_id).count(),
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.subject_id == subject_id).count(),
+            'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.subject_id == subject_id).count(),
+            'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.subject_id == subject_id).count(),
+            'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.subject_id == subject_id).count(),
+            'questions': self.db.query(Question).filter(Question.subject_id == subject_id).count(),
+            'releases': self.db.query(QuestionBankRelease).filter(QuestionBankRelease.subject_id == subject_id).count(),
+            'course_mappings': self.db.query(EdxCourseMapping).filter(EdxCourseMapping.subject_id == subject_id).count(),
+            'quiz_blueprints': self.db.query(QuizBlueprint).filter(QuizBlueprint.subject_id == subject_id).count(),
+            'quiz_instances': self.db.query(CourseQuizInstance).filter(CourseQuizInstance.subject_id == subject_id).count(),
+        })
+        if msg:
+            raise ValueError(msg)
+        self.db.delete(item); self.db.commit()
+        return {'ok': True, 'deleted': True, 'entity_type': 'subject', 'entity_id': subject_id, 'message': 'Đã xóa môn'}
+
+    def update_subject_offering(self, subject_offering_id: str, *, code: str | None = None, name: str | None = None, term: str | None = None, version_code: str | None = None, description: str | None = None) -> SubjectOffering:
+        item = self.db.get(SubjectOffering, subject_offering_id)
+        if not item:
+            raise ValueError('Không tìm thấy phiên bản môn')
+        subject = self.db.get(Subject, item.subject_id)
+        if code is not None:
+            clean = code.strip().upper()
+            if not clean:
+                raise ValueError('Mã version môn không được để trống')
+            if subject and not clean.startswith(subject.code.upper()):
+                clean = f'{subject.code}_{clean}'
+            exists = self.db.query(SubjectOffering).filter(SubjectOffering.subject_id == item.subject_id, SubjectOffering.code == clean, SubjectOffering.id != item.id).first()
+            if exists:
+                raise ValueError('Mã version môn đã tồn tại trong môn này')
+            item.code = clean
+        if name is not None:
+            item.name = name.strip()
+        if term is not None:
+            item.term = term.strip().upper() or None
+        if version_code is not None:
+            item.version_code = version_code.strip().upper() or (item.term or item.version_code)
+        if description is not None:
+            meta = dict(item.metadata_json or {})
+            meta['description'] = description or ''
+            item.metadata_json = meta
+        item.updated_at = datetime.utcnow()
+        self.db.commit(); self.db.refresh(item)
+        return item
+
+    def delete_subject_offering(self, subject_offering_id: str) -> dict:
+        item = self.db.get(SubjectOffering, subject_offering_id)
+        if not item:
+            raise ValueError('Không tìm thấy phiên bản môn')
+        msg = self._empty_block_message(entity_label='phiên bản môn', counts={
+            'chapters': self.db.query(SubjectChapter).filter(SubjectChapter.subject_offering_id == subject_offering_id).count(),
+            'bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.subject_offering_id == subject_offering_id).count(),
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.subject_offering_id == subject_offering_id).count(),
+            'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.subject_offering_id == subject_offering_id).count(),
+            'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.subject_offering_id == subject_offering_id).count(),
+            'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.subject_offering_id == subject_offering_id).count(),
+            'questions': self.db.query(Question).filter(Question.subject_id == item.subject_id, Question.bank_version_id.isnot(None)).join(QuestionBankVersion, Question.bank_version_id == QuestionBankVersion.id).filter(QuestionBankVersion.subject_offering_id == subject_offering_id).count(),
+            'releases': self.db.query(QuestionBankRelease).filter(QuestionBankRelease.subject_offering_id == subject_offering_id).count(),
+            'course_mappings': self.db.query(EdxCourseMapping).filter(EdxCourseMapping.subject_offering_id == subject_offering_id).count(),
+            'quiz_blueprints': self.db.query(QuizBlueprint).filter(QuizBlueprint.subject_offering_id == subject_offering_id).count(),
+            'quiz_instances': self.db.query(CourseQuizInstance).filter(CourseQuizInstance.subject_offering_id == subject_offering_id).count(),
+        })
+        if msg:
+            raise ValueError(msg)
+        self.db.delete(item); self.db.commit()
+        return {'ok': True, 'deleted': True, 'entity_type': 'subject_offering', 'entity_id': subject_offering_id, 'message': 'Đã xóa phiên bản môn'}
+
+    def update_chapter(self, chapter_id: str, *, title: str | None = None, description: str | None = None, sort_order: int | None = None) -> SubjectChapter:
+        item = self.db.get(SubjectChapter, chapter_id)
+        if not item:
+            raise ValueError('Không tìm thấy bài/chapter')
+        if title is not None:
+            clean = title.strip()
+            if not clean:
+                raise ValueError('Tên bài không được để trống')
+            item.title = clean
+        if description is not None:
+            item.description = description or ''
+        if sort_order is not None:
+            item.sort_order = sort_order
+            item.chapter_no = sort_order
+        item.updated_at = datetime.utcnow()
+        self.db.commit(); self.db.refresh(item)
+        return item
+
+    def delete_chapter(self, chapter_id: str) -> dict:
+        item = self.db.get(SubjectChapter, chapter_id)
+        if not item:
+            raise ValueError('Không tìm thấy bài/chapter')
+        msg = self._empty_block_message(entity_label='bài/chapter', counts={
+            'bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).count(),
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id).count(),
+            'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.chapter_id == chapter_id).count(),
+            'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.chapter_id == chapter_id).count(),
+            'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.chapter_id == chapter_id).count(),
+            'questions': self.db.query(Question).filter(Question.subject_chapter_id == chapter_id).count(),
+            'releases': self.db.query(QuestionBankRelease).filter(QuestionBankRelease.chapter_id == chapter_id).count(),
+            'chapter_mappings': self.db.query(EdxCourseChapterMapping).filter(EdxCourseChapterMapping.subject_chapter_id == chapter_id).count(),
+            'quiz_blueprints': self.db.query(QuizBlueprint).filter(QuizBlueprint.chapter_id == chapter_id).count(),
+            'quiz_instances': self.db.query(CourseQuizInstance).filter(CourseQuizInstance.chapter_id == chapter_id).count(),
+        })
+        if msg:
+            raise ValueError(msg)
+        self.db.delete(item); self.db.commit()
+        return {'ok': True, 'deleted': True, 'entity_type': 'chapter', 'entity_id': chapter_id, 'message': 'Đã xóa bài/chapter'}
+
     def next_bank_version_no(self, subject_id: str, chapter_id: str) -> int:
         value = self.db.query(func.max(QuestionBankVersion.version_no)).filter(
             QuestionBankVersion.subject_id == subject_id,
@@ -2232,11 +2428,56 @@ class VersionedQuestionBankService:
             'message': 'Đã rollback Quiz trên Open edX.' if openedx_deleted else 'Đã đánh dấu cần kiểm tra/xóa Quiz thủ công trong Studio.',
         }
 
+    def _release_offering_term_slug(self, *, subject: Subject, version: QuestionBankVersion) -> str | None:
+        """Return the subject offering/term part used in Open edX Library keys.
+
+        FPT rule: library keys for question-bank releases must include the
+        subject version/term. Example:
+            WEB107_FA26 / Bài 2.1 / v1.0
+            -> lib:FPT:web107-FA26-b-i-2-1-v1-0
+
+        Older builds produced keys without the term, for example:
+            lib:FPT:web107-b-i-2-1-v1-0
+        """
+        offering = self.db.get(SubjectOffering, version.subject_offering_id) if version.subject_offering_id else None
+        if not offering:
+            return None
+
+        raw_term = (offering.term or '').strip()
+        if not raw_term:
+            offering_code = (offering.code or '').strip()
+            subject_code = (subject.code or '').strip()
+            if offering_code and subject_code and offering_code.upper().startswith(subject_code.upper()):
+                raw_term = offering_code[len(subject_code):].strip(' _-')
+            else:
+                raw_term = offering_code
+
+        if not raw_term:
+            return None
+
+        # Keep FPT term readable in the key: FA26/SU25/SP25, not fa26/su25.
+        term = re.sub(r'[^A-Za-z0-9]+', '-', raw_term).strip('-').upper()
+        return term or None
+
     def release_library_key(self, *, subject: Subject, chapter: SubjectChapter, version: QuestionBankVersion) -> str:
         subject_slug = slugify(subject.code or subject.name, 'subject')
+        term_slug = self._release_offering_term_slug(subject=subject, version=version)
         chapter_slug = slugify(self._chapter_display_name(chapter), 'chapter')
         version_slug = slugify(version.version_code.replace('.', '-'), 'v1')
-        return f'lib:FPT:{subject_slug}-{chapter_slug}-{version_slug}'
+        parts = [subject_slug]
+        if term_slug:
+            parts.append(term_slug)
+        parts.extend([chapter_slug, version_slug])
+        key_slug = '-'.join(parts)
+        return f'lib:FPT:{key_slug}'
+
+    def _release_library_key_needs_term_upgrade(self, *, library_key: str | None, subject: Subject, version: QuestionBankVersion) -> bool:
+        if not library_key:
+            return False
+        term_slug = self._release_offering_term_slug(subject=subject, version=version)
+        if not term_slug:
+            return False
+        return f'-{term_slug.lower()}-' not in str(library_key).lower()
 
     def _release_questions_for_version(self, version: QuestionBankVersion) -> list[Question]:
         return self.db.query(Question).filter(
@@ -3303,10 +3544,21 @@ class VersionedQuestionBankService:
 
         course_id = self._release_publish_course_id(release, subject, course_id_for_org)
         connector = get_openedx_connector()
-        library_key = release.openedx_library_key or self.release_library_key(subject=subject, chapter=chapter, version=version)
-        release.openedx_library_key = library_key
+        expected_library_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
+        previous_library_key = release.openedx_library_key
+        if not release.openedx_library_key or self._release_library_key_needs_term_upgrade(library_key=release.openedx_library_key, subject=subject, version=version):
+            release.openedx_library_key = expected_library_key
+        library_key = release.openedx_library_key
+        library_key_changed = bool(previous_library_key and previous_library_key != library_key)
         release.status = 'publish_in_progress'
-        release.metadata_json = {**(release.metadata_json or {}), 'publish_started_at': datetime.utcnow().isoformat(), 'publish_course_id_for_org': course_id}
+        release.metadata_json = {
+            **(release.metadata_json or {}),
+            'publish_started_at': datetime.utcnow().isoformat(),
+            'publish_course_id_for_org': course_id,
+            'expected_openedx_library_key': expected_library_key,
+            'previous_openedx_library_key': previous_library_key if previous_library_key != release.openedx_library_key else None,
+            'library_key_rule': 'subject-term-chapter-release-version',
+        }
         self.db.commit()
 
         metadata_base = {
@@ -3346,7 +3598,7 @@ class VersionedQuestionBankService:
                 raise RuntimeError('Open edX connector trả về stub khi ensure library. Không đánh dấu published.')
             for question in questions:
                 item = existing_items[question.id]
-                if item.openedx_library_problem_id and not force_reimport:
+                if item.openedx_library_problem_id and not force_reimport and not library_key_changed:
                     continue
                 olx = question_to_openedx_olx(question)
                 family_tag = question.question_family_id or 'unknown-family'
@@ -3383,10 +3635,8 @@ class VersionedQuestionBankService:
                 item.openedx_library_problem_id = problem_id
                 item.difficulty = question.difficulty
                 item.question_family_id = question.question_family_id
-                if not question.openedx_library_problem_id:
-                    question.openedx_library_problem_id = problem_id
-                if not question.target_library_key:
-                    question.target_library_key = library_key
+                question.openedx_library_problem_id = problem_id
+                question.target_library_key = library_key
                 question.status = 'published'
                 question.published_at = datetime.utcnow()
                 question.published_by = actor
@@ -3414,6 +3664,7 @@ class VersionedQuestionBankService:
                 'published_question_count': len(questions),
                 'imported_now_count': len(imported_now),
                 'publish_wiring': 'openedx_library_verified_or_imported',
+                'library_key_changed': library_key_changed,
             }
             version.status = 'published'
             version.published_at = release.published_at

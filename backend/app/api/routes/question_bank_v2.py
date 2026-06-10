@@ -31,7 +31,9 @@ from app.schemas.question_bank import (
     BankVersionCreate,
     BankVersionOut,
     ChapterCreate,
+    ChapterUpdate,
     ChapterOut,
+    EntityDeleteOut,
     CourseChapterMappingCreate,
     CourseChapterMappingOut,
     CourseChapterMappingValidateRequest,
@@ -40,6 +42,7 @@ from app.schemas.question_bank import (
     CourseMappingValidateRequest,
     MappingValidationOut,
     DepartmentCreate,
+    DepartmentUpdate,
     DepartmentOut,
     MaterialVersionCreate,
     MaterialVersionOut,
@@ -72,8 +75,10 @@ from app.schemas.question_bank import (
     QuizAutoMapRequest,
     QuizAutoMapOut,
     SubjectCreate,
+    SubjectUpdate,
     SubjectOut,
     SubjectOfferingCreate,
+    SubjectOfferingUpdate,
     SubjectOfferingOut,
 )
 from app.services.audit_log import AuditErrorType, log_audit
@@ -157,6 +162,28 @@ def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.patch('/departments/{department_id}', response_model=DepartmentOut)
+def update_department(department_id: str, payload: DepartmentUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        item = VersionedQuestionBankService(db).update_department(department_id, **payload.model_dump(exclude_unset=True))
+        log_audit(db, action='question_bank.department.update', status='success', message='Sửa bộ môn thành công', user=user, target_type='department', target_id=item.id)
+        return item
+    except Exception as exc:
+        log_audit(db, action='question_bank.department.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='department', target_id=department_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete('/departments/{department_id}', response_model=EntityDeleteOut)
+def delete_department(department_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        result = VersionedQuestionBankService(db).delete_department(department_id)
+        log_audit(db, action='question_bank.department.delete', status='success', message=result.get('message', 'Đã xóa bộ môn'), user=user, target_type='department', target_id=department_id)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.department.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='department', target_id=department_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get('/subjects', response_model=list[SubjectOut])
 def list_subjects(department_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(Subject)
@@ -173,6 +200,28 @@ def create_subject(payload: SubjectCreate, db: Session = Depends(get_db), user: 
         return item
     except Exception as exc:
         log_audit(db, action='question_bank.subject.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject')
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch('/subjects/{subject_id}', response_model=SubjectOut)
+def update_subject(subject_id: str, payload: SubjectUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        item = VersionedQuestionBankService(db).update_subject(subject_id, **payload.model_dump(exclude_unset=True))
+        log_audit(db, action='question_bank.subject.update', status='success', message='Sửa môn thành công', user=user, target_type='subject', target_id=item.id)
+        return item
+    except Exception as exc:
+        log_audit(db, action='question_bank.subject.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject', target_id=subject_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete('/subjects/{subject_id}', response_model=EntityDeleteOut)
+def delete_subject(subject_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        result = VersionedQuestionBankService(db).delete_subject(subject_id)
+        log_audit(db, action='question_bank.subject.delete', status='success', message=result.get('message', 'Đã xóa môn'), user=user, target_type='subject', target_id=subject_id)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.subject.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject', target_id=subject_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -197,6 +246,30 @@ def create_subject_offering(payload: SubjectOfferingCreate, db: Session = Depend
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.patch('/subject-offerings/{subject_offering_id}', response_model=SubjectOfferingOut)
+@router.patch('/subject-versions/{subject_offering_id}', response_model=SubjectOfferingOut)
+def update_subject_offering(subject_offering_id: str, payload: SubjectOfferingUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        item = VersionedQuestionBankService(db).update_subject_offering(subject_offering_id, **payload.model_dump(exclude_unset=True))
+        log_audit(db, action='question_bank.subject_offering.update', status='success', message='Sửa phiên bản môn thành công', user=user, target_type='subject_offering', target_id=item.id)
+        return item
+    except Exception as exc:
+        log_audit(db, action='question_bank.subject_offering.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject_offering', target_id=subject_offering_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete('/subject-offerings/{subject_offering_id}', response_model=EntityDeleteOut)
+@router.delete('/subject-versions/{subject_offering_id}', response_model=EntityDeleteOut)
+def delete_subject_offering(subject_offering_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        result = VersionedQuestionBankService(db).delete_subject_offering(subject_offering_id)
+        log_audit(db, action='question_bank.subject_offering.delete', status='success', message=result.get('message', 'Đã xóa phiên bản môn'), user=user, target_type='subject_offering', target_id=subject_offering_id)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.subject_offering.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject_offering', target_id=subject_offering_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get('/chapters', response_model=list[ChapterOut])
 def list_chapters(subject_id: str | None = None, subject_offering_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(SubjectChapter)
@@ -215,6 +288,28 @@ def create_chapter(payload: ChapterCreate, db: Session = Depends(get_db), user: 
         return item
     except Exception as exc:
         log_audit(db, action='question_bank.chapter.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter')
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch('/chapters/{chapter_id}', response_model=ChapterOut)
+def update_chapter(chapter_id: str, payload: ChapterUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        item = VersionedQuestionBankService(db).update_chapter(chapter_id, **payload.model_dump(exclude_unset=True))
+        log_audit(db, action='question_bank.chapter.update', status='success', message='Sửa bài/chapter thành công', user=user, target_type='chapter', target_id=item.id)
+        return item
+    except Exception as exc:
+        log_audit(db, action='question_bank.chapter.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter', target_id=chapter_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete('/chapters/{chapter_id}', response_model=EntityDeleteOut)
+def delete_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    try:
+        result = VersionedQuestionBankService(db).delete_chapter(chapter_id)
+        log_audit(db, action='question_bank.chapter.delete', status='success', message=result.get('message', 'Đã xóa bài/chapter'), user=user, target_type='chapter', target_id=chapter_id)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.chapter.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter', target_id=chapter_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

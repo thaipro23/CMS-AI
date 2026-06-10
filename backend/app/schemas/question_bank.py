@@ -8,6 +8,41 @@ class DepartmentCreate(BaseModel):
     description: str = ''
 
 
+class DepartmentUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+
+
+class SubjectUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+
+
+class SubjectOfferingUpdate(BaseModel):
+    code: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str | None = Field(default=None, max_length=255)
+    term: str | None = None
+    version_code: str | None = Field(default=None, max_length=64)
+    description: str | None = None
+
+
+class ChapterUpdate(BaseModel):
+    # UI can send either full title (Bài 1.1) or a renamed title.
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    sort_order: int | None = Field(default=None, ge=1)
+
+
+class EntityDeleteOut(BaseModel):
+    ok: bool
+    deleted: bool
+    entity_type: str
+    entity_id: str
+    message: str
+
+
 class DepartmentOut(DepartmentCreate):
     id: str
     status: str

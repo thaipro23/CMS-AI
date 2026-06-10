@@ -33,6 +33,10 @@ import {
   createSubject,
   createSubjectChapter,
   createSubjectOffering,
+  deleteDepartment,
+  deleteSubject,
+  deleteSubjectChapter,
+  deleteSubjectOffering,
   deleteMaterialVersion,
   generateFromBankVersion,
   getBankDashboardOverview,
@@ -60,6 +64,10 @@ import {
   rollbackCourseQuizInstance,
   uploadBankMaterial,
   updateBankQuestion,
+  updateDepartment,
+  updateSubject,
+  updateSubjectChapter,
+  updateSubjectOffering,
 } from '../../../lib/api'
 
 const TERMS = [
@@ -183,6 +191,23 @@ function Modal({ open, title, children, onClose, wide = false }: { open: boolean
     </div>
   </div>
 }
+function EntityActions({ canManage, onEdit, onDelete }: { canManage: boolean; onEdit: () => void; onDelete: () => void }) {
+  if (!canManage) return null
+  const stop = (event: React.MouseEvent) => { event.preventDefault(); event.stopPropagation() }
+  return <details className="entity-actions" onClick={stop}>
+    <summary aria-label="Hành động">...</summary>
+    <div className="entity-actions-menu">
+      <button type="button" onClick={(event) => { stop(event); onEdit() }}>Sửa thông tin</button>
+      <button type="button" className="danger" onClick={(event) => { stop(event); onDelete() }}>Xóa</button>
+    </div>
+  </details>
+}
+
+function promptText(label: string, current: string) {
+  const value = window.prompt(label, current || '')
+  return value === null ? null : value.trim()
+}
+
 
 function matchesSearch(text: string, search: string) {
   const s = search.trim().toLowerCase()
@@ -395,6 +420,18 @@ export function DepartmentsPage() {
 
   const visible = summaries.filter(({ department }) => matchesSearch(`${department.code} ${department.name}`, search))
 
+  const editDepartment = (department: Department) => {
+    const nextCode = promptText('Sửa mã bộ môn', department.code)
+    if (nextCode === null) return
+    const nextName = promptText('Sửa tên bộ môn', department.name)
+    if (nextName === null) return
+    run(async () => { await updateDepartment(headers, department.id, { code: nextCode, name: nextName }) }, 'Đã sửa bộ môn', load)
+  }
+  const removeDepartment = (department: Department) => {
+    if (!window.confirm(`Chỉ xóa được khi bộ môn chưa có môn bên trong. Xóa ${department.name}?`)) return
+    run(async () => { await deleteDepartment(headers, department.id) }, 'Đã xóa bộ môn', load)
+  }
+
   return <div className="page-stack bank-multipage">
     {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]} />
@@ -406,6 +443,7 @@ export function DepartmentsPage() {
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ department, stats }) => <Link key={department.id} href={`/bank/departments/${department.id}/subjects`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <EntityActions canManage={can('manage_settings')} onEdit={() => editDepartment(department)} onDelete={() => removeDepartment(department)} />
           <div className="entity-card-head"><b>{department.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <small>{department.code}</small>
           <StatLine label="Môn" value={stats.subject_count || 0} />
@@ -449,6 +487,18 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   const department = departments.find((item) => item.id === departmentId)
   const visible = summaries.filter(({ subject }) => matchesSearch(`${subject.code} ${subject.name}`, search))
 
+  const editSubject = (subject: Subject) => {
+    const nextCode = promptText('Sửa mã môn', subject.code)
+    if (nextCode === null) return
+    const nextName = promptText('Sửa tên môn', subject.name)
+    if (nextName === null) return
+    run(async () => { await updateSubject(headers, subject.id, { code: nextCode, name: nextName }) }, 'Đã sửa môn', load)
+  }
+  const removeSubject = (subject: Subject) => {
+    if (!window.confirm(`Chỉ xóa được khi môn chưa có version/bài/câu hỏi bên trong. Xóa ${subject.code}?`)) return
+    run(async () => { await deleteSubject(headers, subject.id) }, 'Đã xóa môn', load)
+  }
+
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
     <Toolbar title={department ? `Môn trong ${department.name}` : 'Môn trong bộ môn'} helper="Mỗi môn hiển thị version đã duyệt xong, version còn việc và số câu chờ xử lý." />
@@ -459,6 +509,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject, stats }) => <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <EntityActions canManage={can('manage_settings')} onEdit={() => editSubject(subject)} onDelete={() => removeSubject(subject)} />
           <div className="entity-card-head"><b>{subject.code} - {subject.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <StatLine label="Phiên bản môn" value={stats.subject_version_count || 0} />
           <StatLine label="Đã duyệt xong" value={`${stats.review_done_version_count || 0} version`} />
@@ -509,6 +560,18 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const department = departments.find((item) => item.id === subject?.department_id)
   const visible = summaries.filter(({ subject_version }) => matchesSearch(`${subject_version.code} ${subject_version.name} ${subject_version.term || ''}`, search))
 
+  const editSubjectVersion = (subjectVersion: SubjectOffering) => {
+    const nextCode = promptText('Sửa mã version môn', subjectVersion.code)
+    if (nextCode === null) return
+    const nextName = promptText('Sửa tên version môn', subjectVersion.name || '')
+    if (nextName === null) return
+    run(async () => { await updateSubjectOffering(headers, subjectVersion.id, { code: nextCode, name: nextName }) }, 'Đã sửa version môn', load)
+  }
+  const removeSubjectVersion = (subjectVersion: SubjectOffering) => {
+    if (!window.confirm(`Chỉ xóa được khi version môn chưa có bài/tài liệu/câu hỏi/release. Xóa ${subjectVersion.code}?`)) return
+    run(async () => { await deleteSubjectOffering(headers, subjectVersion.id) }, 'Đã xóa version môn', load)
+  }
+
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
     <Toolbar title={subject ? `Phiên bản môn ${subject.code}` : 'Phiên bản môn'} helper="Mỗi version hiển thị tổng số bài, số câu đã duyệt/chưa duyệt và release đã publish." />
@@ -519,6 +582,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm version môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Tạo version môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject_version, stats }) => <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <EntityActions canManage={can('manage_settings')} onEdit={() => editSubjectVersion(subject_version)} onDelete={() => removeSubjectVersion(subject_version)} />
           <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
           <StatLine label="Bài" value={stats.chapter_count || 0} />
@@ -570,6 +634,18 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const department = departments.find((item) => item.id === subject?.department_id)
   const visible = summaries.filter(({ chapter }) => matchesSearch(chapterDisplayName(chapter), search))
 
+  const editChapter = (chapter: SubjectChapter) => {
+    const current = normalizeLessonInput(chapterDisplayName(chapter))
+    const nextLesson = promptText('Sửa bài, ví dụ 1, 2, 1.1, 1.2', current)
+    if (nextLesson === null) return
+    const nextTitle = buildChapterTitle(nextLesson) || nextLesson
+    run(async () => { await updateSubjectChapter(headers, chapter.id, { title: nextTitle }) }, 'Đã sửa bài', load)
+  }
+  const removeChapter = (chapter: SubjectChapter) => {
+    if (!window.confirm(`Chỉ xóa được khi bài chưa có tài liệu/câu hỏi/release/mapping. Xóa ${chapterDisplayName(chapter)}?`)) return
+    run(async () => { await deleteSubjectChapter(headers, chapter.id) }, 'Đã xóa bài', load)
+  }
+
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
     <Toolbar title={offering ? `Bài trong ${offering.code}` : 'Bài trong version môn'} helper="Mỗi bài hiển thị tài liệu, tổng câu, câu đã duyệt, câu chưa duyệt/lỗi và trạng thái Release." />
@@ -580,6 +656,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ chapter, stats }) => <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          <EntityActions canManage={can('manage_settings')} onEdit={() => editChapter(chapter)} onDelete={() => removeChapter(chapter)} />
           <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <StatLine label="Tài liệu" value={stats.material_count || 0} />
           <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />

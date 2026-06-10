@@ -966,6 +966,19 @@ export async function createDepartment(headers: HeadersInit, payload: { code: st
   );
 }
 
+
+export async function updateDepartment(headers: HeadersInit, id: string, payload: { code?: string; name?: string; description?: string }) {
+  return parseResponse<Department>(
+    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function deleteDepartment(headers: HeadersInit, id: string) {
+  return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
+    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
+  );
+}
+
 export async function getSubjects(headers: HeadersInit, departmentId?: string) {
   const params = new URLSearchParams();
   if (departmentId) params.set('department_id', departmentId);
@@ -977,6 +990,19 @@ export async function getSubjects(headers: HeadersInit, departmentId?: string) {
 export async function createSubject(headers: HeadersInit, payload: { department_id: string; code: string; name: string; description?: string }) {
   return parseResponse<Subject>(
     await fetch(`${API}/question-bank-v2/subjects`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+
+export async function updateSubject(headers: HeadersInit, id: string, payload: { code?: string; name?: string; description?: string }) {
+  return parseResponse<Subject>(
+    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function deleteSubject(headers: HeadersInit, id: string) {
+  return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
+    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
   );
 }
 
@@ -994,6 +1020,19 @@ export async function createSubjectOffering(headers: HeadersInit, payload: { sub
   );
 }
 
+
+export async function updateSubjectOffering(headers: HeadersInit, id: string, payload: { code?: string; name?: string; term?: string | null; version_code?: string; description?: string }) {
+  return parseResponse<SubjectOffering>(
+    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function deleteSubjectOffering(headers: HeadersInit, id: string) {
+  return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
+    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
+  );
+}
+
 export async function getSubjectChapters(headers: HeadersInit, subjectId?: string, subjectOfferingId?: string) {
   const params = new URLSearchParams();
   if (subjectId) params.set('subject_id', subjectId);
@@ -1006,6 +1045,19 @@ export async function getSubjectChapters(headers: HeadersInit, subjectId?: strin
 export async function createSubjectChapter(headers: HeadersInit, payload: { subject_id: string; subject_offering_id?: string | null; chapter_no?: number; title: string; description?: string; sort_order?: number }) {
   return parseResponse<SubjectChapter>(
     await fetch(`${API}/question-bank-v2/chapters`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+
+export async function updateSubjectChapter(headers: HeadersInit, id: string, payload: { title?: string; description?: string; sort_order?: number }) {
+  return parseResponse<SubjectChapter>(
+    await fetch(`${API}/question-bank-v2/chapters/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+  );
+}
+
+export async function deleteSubjectChapter(headers: HeadersInit, id: string) {
+  return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
+    await fetch(`${API}/question-bank-v2/chapters/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
   );
 }
 
