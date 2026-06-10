@@ -1322,10 +1322,12 @@ label { margin: 5px 0 4px; font-size: 12px; }
 }
 
 .entity-card { position: relative; }
-.entity-actions { position: absolute; top: 8px; right: 8px; z-index: 4; }
-.entity-actions summary { list-style: none; cursor: pointer; border: 1px solid var(--border); border-radius: 999px; background: #fff; color: #111827; font-weight: 800; width: 30px; height: 26px; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08); }
-.entity-actions summary::-webkit-details-marker { display: none; }
-.entity-actions-menu { position: absolute; top: 30px; right: 0; min-width: 150px; display: grid; gap: 2px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: #fff; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16); }
-.entity-actions-menu button { border: 0; border-radius: 8px; background: transparent; color: #111827; padding: 8px 10px; text-align: left; font-weight: 700; cursor: pointer; }
+.entity-actions { position: absolute; top: 8px; right: 8px; z-index: 30; }
+.entity-actions.open { z-index: 80; }
+.entity-actions-trigger { cursor: pointer; border: 1px solid var(--border); border-radius: 999px; background: #fff; color: #111827; font-weight: 900; width: 30px; height: 28px; display: inline-flex; align-items: center; justify-content: center; line-height: 1; font-size: 18px; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12); }
+.entity-actions-trigger:hover { background: #f8fafc; border-color: #94a3b8; }
+.entity-actions-menu { position: absolute; top: 34px; right: 0; min-width: 158px; display: grid; gap: 2px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: #fff; box-shadow: 0 16px 34px rgba(15, 23, 42, 0.22); }
+.entity-actions-menu button { border: 0; border-radius: 8px; background: transparent; color: #111827; padding: 9px 10px; text-align: left; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .entity-actions-menu button:hover { background: #f1f5f9; }
 .entity-actions-menu button.danger { color: #b91c1c; }
+.entity-actions-menu button.danger:hover { background: #fef2f2; }

@@ -192,15 +192,36 @@ function Modal({ open, title, children, onClose, wide = false }: { open: boolean
   </div>
 }
 function EntityActions({ canManage, onEdit, onDelete }: { canManage: boolean; onEdit: () => void; onDelete: () => void }) {
+  const [open, setOpen] = useState(false)
   if (!canManage) return null
-  const stop = (event: React.MouseEvent) => { event.preventDefault(); event.stopPropagation() }
-  return <details className="entity-actions" onClick={stop}>
-    <summary aria-label="Hành động">...</summary>
-    <div className="entity-actions-menu">
-      <button type="button" onClick={(event) => { stop(event); onEdit() }}>Sửa thông tin</button>
-      <button type="button" className="danger" onClick={(event) => { stop(event); onDelete() }}>Xóa</button>
-    </div>
-  </details>
+
+  const stop = (event: React.MouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const runAction = (event: React.MouseEvent, action: () => void) => {
+    stop(event)
+    setOpen(false)
+    action()
+  }
+
+  return <div className={`entity-actions${open ? ' open' : ''}`} onClick={stop} onMouseDown={stop}>
+    <button
+      type="button"
+      className="entity-actions-trigger"
+      aria-label="Hành động"
+      aria-expanded={open}
+      title="Hành động"
+      onClick={(event) => { stop(event); setOpen((current) => !current) }}
+    >
+      ⋮
+    </button>
+    {open ? <div className="entity-actions-menu" role="menu">
+      <button type="button" role="menuitem" onClick={(event) => runAction(event, onEdit)}>Sửa thông tin</button>
+      <button type="button" role="menuitem" className="danger" onClick={(event) => runAction(event, onDelete)}>Xóa</button>
+    </div> : null}
+  </div>
 }
 
 function promptText(label: string, current: string) {
