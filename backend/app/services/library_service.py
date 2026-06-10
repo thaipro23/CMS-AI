@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.algorithms.course_tree import CourseTreeBuilder, CourseTreeNode
 from app.models.course import ContentChunk, CourseLibrary, CourseSyncState
+from app.services.source_chunk_refs import first_existing_content_chunk
 from app.models.question import Question
 
 CHAPTER_TYPES = {'chapter', 'section', 'module', 'learning_module', 'week'}
@@ -182,7 +183,7 @@ class ChapterLibraryService:
     def resolve_question_target(self, question: Question) -> LibraryTarget | None:
         source_node_id = question.source_node_id or question.block_id
         if not source_node_id and question.source_chunk_id:
-            chunk = self.db.get(ContentChunk, question.source_chunk_id)
+            chunk = first_existing_content_chunk(self.db, question.source_chunk_id)
             if chunk:
                 source_node_id = chunk.block_id
         return self.resolve_target(question.course_id, source_node_id, question.source_node_title, question.difficulty)

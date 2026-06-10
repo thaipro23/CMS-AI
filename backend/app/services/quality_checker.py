@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 from sqlalchemy.orm import Session
 
 from app.models.course import ContentChunk
+from app.services.source_chunk_refs import get_existing_content_chunks, get_missing_content_chunk_ids, split_source_chunk_ids
 
 FORBIDDEN_PATTERNS = [
     'không phải là không',
@@ -73,11 +74,21 @@ class QualityChecker:
             flags.append('similar_options')
         problem_source_text = ''
         if self.db and source_chunk_id:
-            chunk = self.db.get(ContentChunk, source_chunk_id)
-            if not chunk:
-                return self._fail('invalid_source_chunk', 'Source chunk không tồn tại trong dữ liệu đã sync.', detail={'source_chunk_id': source_chunk_id})
-            if (chunk.source_type or '').lower() == 'problem':
-                problem_source_text = chunk.content or ''
+            source_chunk_ids = split_source_chunk_ids(source_chunk_id)
+            missing_chunk_ids = get_missing_content_chunk_ids(self.db, source_chunk_ids)
+            if missing_chunk_ids:
+                return self._fail(
+                    'invalid_source_chunk',
+                    'Source chunk không tồn tại trong dữ liệu đã sync.',
+                    detail={
+                        'source_chunk_id': source_chunk_id,
+                        'source_chunk_ids': source_chunk_ids,
+                        'missing_source_chunk_ids': missing_chunk_ids,
+                    },
+                )
+            for chunk in get_existing_content_chunks(self.db, source_chunk_ids):
+                if (chunk.source_type or '').lower() == 'problem':
+                    problem_source_text = (problem_source_text + '\n' + (chunk.content or '')).strip()
         if not problem_source_text and str(item.get('source_type') or '').lower() == 'problem':
             problem_source_text = item.get('source_excerpt') or ''
         if problem_source_text:

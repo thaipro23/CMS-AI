@@ -47,6 +47,7 @@ from app.services.model_gateway import ModelGateway
 from app.services.quality_checker import QualityChecker
 from app.services.question_family import build_question_family_id, normalize_difficulty
 from app.services.token_counter import count_tokens
+from app.services.source_chunk_refs import join_source_chunk_ids, split_source_chunk_ids
 
 
 def slugify(value: str, fallback: str = 'item') -> str:
@@ -1831,9 +1832,10 @@ class VersionedQuestionBankService:
                 # Bank-first dùng MaterialChunk riêng, không phải ContentChunk của course-first.
                 # Nếu model trả về source_chunk_id theo bank chunk thì không đưa field đó vào
                 # QualityChecker course-first, tránh bị false draft_error invalid_source_chunk.
-                bank_source_chunk_id = str(item.get('source_chunk_id') or item.get('bank_chunk_id') or '').strip()
-                if bank_source_chunk_id in chunk_ids:
-                    item['source_ref'] = item.get('source_ref') or f'bank-chunk:{bank_source_chunk_id}'
+                bank_source_chunk_ids = split_source_chunk_ids(item.get('source_chunk_id') or item.get('bank_chunk_id'))
+                if bank_source_chunk_ids and all(chunk_id in chunk_ids for chunk_id in bank_source_chunk_ids):
+                    joined_chunk_ids = join_source_chunk_ids(bank_source_chunk_ids)
+                    item['source_ref'] = item.get('source_ref') or f'bank-chunks:{joined_chunk_ids}'
                     item['source_chunk_id'] = None
                 quality = checker.check(item)
                 status = 'approved' if (quality.passed and approve_after_generate) else ('pending_review' if quality.passed else 'draft_error')
@@ -3102,8 +3104,21 @@ class VersionedQuestionBankService:
             bank_release_id=release.id,
             openedx_parent_node_id=chapter_mapping.openedx_parent_node_id,
         )
-        if not validation.get('can_create_mapping'):
-            raise ValueError(f'Mapping không an toàn để tạo Quiz: {validation.get("message")}')
+        # _chapter_mapping_validation is also used before creating a new mapping,
+        # so it intentionally flags an existing chapter mapping as a duplicate.
+        # At quiz creation time we already receive a concrete
+        # course_chapter_mapping_id. Reusing that exact row is valid and must not
+        # block quiz creation. Still block if the duplicate check points to a
+        # different mapping row.
+        blocking_checks = []
+        for check in validation.get('checks', []):
+            if check.get('status') != 'fail':
+                continue
+            if check.get('code') == 'existing_chapter_mapping' and str((check.get('detail') or {}).get('mapping_id')) == str(chapter_mapping.id):
+                continue
+            blocking_checks.append(check)
+        if blocking_checks:
+            raise ValueError(f'Mapping không an toàn để tạo Quiz: {blocking_checks[0].get("message") or validation.get("message")}')
         plan = self._build_release_quiz_plan(
             release=release,
             total_questions=total_questions,

@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission, restrict_query_to_courses
 from app.models.question import Question
 from app.models.course import ContentChunk, CourseSyncState
+from app.services.source_chunk_refs import first_existing_content_chunk, get_existing_content_chunks, split_source_chunk_ids
 from app.schemas.question import (
     BulkApproveRequest,
     ChangeQuestionStatusRequest,
@@ -262,7 +263,9 @@ def draft_error_reasons(course_id: str | None = None, db: Session = Depends(get_
 @router.get('/{question_id}/source-trace')
 def get_question_source_trace(question_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     question = _question_for_user(db, question_id, user)
-    chunk = db.get(ContentChunk, question.source_chunk_id) if question.source_chunk_id else None
+    source_chunk_ids = split_source_chunk_ids(question.source_chunk_id)
+    chunks = get_existing_content_chunks(db, source_chunk_ids) if source_chunk_ids else []
+    chunk = chunks[0] if chunks else None
     node = None
     chapter = None
     if question.source_node_id:
@@ -294,6 +297,21 @@ def get_question_source_trace(question_id: str, db: Session = Depends(get_db), u
             'token_count': chunk.token_count if chunk else None,
             'content': (chunk.content if chunk else question.source_excerpt) or '',
         },
+        'chunks': [
+            {
+                'id': c.id,
+                'block_id': c.block_id,
+                'source_type': c.source_type,
+                'source_ref': c.source_ref,
+                'page_number': c.page_number,
+                'timestamp_start': c.timestamp_start,
+                'timestamp_end': c.timestamp_end,
+                'token_count': c.token_count,
+                'content': c.content or '',
+            }
+            for c in chunks
+        ],
+        'source_chunk_ids': source_chunk_ids,
         'question_source_excerpt': question.source_excerpt,
         'concept': {
             'id': question.concept_id,

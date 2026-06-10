@@ -10,6 +10,7 @@ from app.services.generation_cache import question_fingerprint
 from app.services.answer_randomizer import normalize_and_shuffle_options
 from app.services.question_diversity import diversity_report
 from app.services.question_family import build_question_family_id, normalize_family_id, reconcile_question_families
+from app.services.source_chunk_refs import first_existing_content_chunk, join_source_chunk_ids, split_source_chunk_ids
 
 
 class QuestionService:
@@ -98,11 +99,11 @@ class QuestionService:
 
             options = item.get('options') or {}
             source = item.get('source') or {}
-            source_chunk_id = item.get('source_chunk_id') or source.get('chunk_id')
+            source_chunk_id = join_source_chunk_ids(split_source_chunk_ids(item.get('source_chunk_id') or source.get('chunk_id')))
             source_node_id = item.get('source_node_id') or item.get('block_id') or source.get('block_id')
             source_node_title = item.get('source_node_title') or item.get('node_title')
             if not source_node_id and source_chunk_id:
-                chunk = self.db.get(ContentChunk, source_chunk_id)
+                chunk = first_existing_content_chunk(self.db, source_chunk_id)
                 if chunk:
                     source_node_id = chunk.block_id
             item_difficulty = item.get('difficulty') or 'easy'

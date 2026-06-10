@@ -19,7 +19,7 @@ Yêu cầu:
 - Hard chỉ có nghĩa là cần hiểu sâu hơn, phân biệt tình huống hơn hoặc áp dụng trực tiếp hơn; không phải đánh đố.
 - Gắn cognitive_level: remember, understand, recognize_example hoặc simple_apply.
 - Gắn learning_objective để giáo viên hiểu câu hỏi kiểm tra mục tiêu gì.
-- Gắn source reference: source_node_id/block_id, source_type, page/timestamp/chunk_id/excerpt nếu có.
+- Gắn source reference: source_node_id/block_id, source_type, page/timestamp/chunk_id/excerpt nếu có. Nếu câu hỏi dựa trên nhiều chunk, source_chunk_id dùng dạng "chunk_id_1;chunk_id_2".
 - Không dùng câu hỏi phủ định kép.
 - Hạn chế câu hỏi kiểu "đáp án nào sai".
 - Không dùng "tất cả các đáp án trên" nếu không cần thiết.
@@ -68,7 +68,7 @@ Output trả về JSON hợp lệ dạng:
       "source_page": null,
       "source_timestamp_start": null,
       "source_timestamp_end": null,
-      "source_chunk_id": "...",
+      "source_chunk_id": "... hoặc chunk_id_1;chunk_id_2 nếu dùng nhiều chunk",
       "source_node_id": "Open edX node/component id gốc tạo câu hỏi",
       "source_excerpt": "đoạn nội dung ngắn chứng minh câu hỏi dựa vào tài liệu",
       "tags": ["..."],
