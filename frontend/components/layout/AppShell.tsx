@@ -7,21 +7,38 @@ import { useAppContext } from '../../context/AppContext'
 import { ROLE_LABELS, Role } from '../../types'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
 
-const navItems: { href: string; label: string; desc: string; permission?: string }[] = [
-  { href: '/workflow', label: 'Quy trình tạo câu hỏi', desc: 'Luồng chính' },
-  { href: '/bank/departments', label: 'Bộ môn', desc: 'Quản lý ngân hàng đề' },
-  { href: '/bank/quiz', label: 'Tạo Quiz Open edX', desc: 'Gắn release vào course' },
-  { href: '/bank/history', label: 'Lịch sử publish / quiz', desc: 'Theo dõi & rollback' },
-  { href: '/dashboard', label: 'Tổng quan', desc: 'Thống kê khóa học' },
-  { href: '/sync', label: 'Đồng bộ học liệu', desc: 'Open edX nodes/chunks' },
-  { href: '/generate', label: 'Tạo câu hỏi', desc: 'Generate nâng cao' },
-  { href: '/review', label: 'Duyệt câu hỏi', desc: 'Hàng chờ giảng viên' },
-  { href: '/question-bank', label: 'Ngân hàng câu hỏi', desc: 'Lọc, sửa, publish' },
-  { href: '/export', label: 'Xuất Open edX', desc: 'OLX/XML' },
-  { href: '/jobs', label: 'Tiến trình', desc: 'Theo dõi job' },
-  { href: '/audit', label: 'Nhật ký hệ thống', desc: 'Lỗi do ai/cái gì' },
-  { href: '/users', label: 'Thống kê người dùng', desc: 'Theo từng user', permission: 'view_user_analytics' },
-  { href: '/settings', label: 'Cấu hình', desc: 'Quyền & hệ thống', permission: 'manage_settings' },
+type NavItem = {
+  href: string
+  label: string
+  desc: string
+  icon: string
+  group: 'main' | 'bank' | 'ops' | 'admin'
+  permission?: string
+}
+
+const navItems: NavItem[] = [
+  { href: '/bank', label: 'Dashboard Bank', desc: 'Việc cần làm', icon: '🏦', group: 'bank' },
+  { href: '/bank/departments', label: 'Bộ môn', desc: 'Môn, version, bài', icon: '📚', group: 'bank' },
+  { href: '/bank/quiz', label: 'Tạo Quiz Open edX', desc: 'Map course & timer', icon: '🧩', group: 'bank' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Theo dõi & rollback', icon: '🕘', group: 'bank' },
+  { href: '/workflow', label: 'Quy trình', desc: 'Luồng chính', icon: '🧭', group: 'main' },
+  { href: '/sync', label: 'Đồng bộ học liệu', desc: 'Open edX nodes/chunks', icon: '🔄', group: 'main' },
+  { href: '/generate', label: 'Tạo câu hỏi', desc: 'Generate nâng cao', icon: '✨', group: 'main' },
+  { href: '/review', label: 'Duyệt câu hỏi', desc: 'Hàng chờ giảng viên', icon: '✅', group: 'main' },
+  { href: '/question-bank', label: 'Ngân hàng câu hỏi', desc: 'Lọc, sửa, publish', icon: '🗂️', group: 'main' },
+  { href: '/export', label: 'Xuất Open edX', desc: 'OLX/XML', icon: '📤', group: 'main' },
+  { href: '/dashboard', label: 'Tổng quan', desc: 'Thống kê khóa học', icon: '📊', group: 'ops' },
+  { href: '/jobs', label: 'Tiến trình', desc: 'Theo dõi job', icon: '⚙️', group: 'ops' },
+  { href: '/audit', label: 'Nhật ký hệ thống', desc: 'Lỗi do ai/cái gì', icon: '🧾', group: 'ops' },
+  { href: '/users', label: 'Người dùng', desc: 'Theo từng user', icon: '👥', group: 'admin', permission: 'view_user_analytics' },
+  { href: '/settings', label: 'Cấu hình', desc: 'Quyền & hệ thống', icon: '🔐', group: 'admin', permission: 'manage_settings' },
+]
+
+const navGroups: Array<{ key: NavItem['group']; label: string }> = [
+  { key: 'bank', label: 'Ngân hàng đề' },
+  { key: 'main', label: 'Tạo & duyệt' },
+  { key: 'ops', label: 'Vận hành' },
+  { key: 'admin', label: 'Quản trị' },
 ]
 
 function pageTitle(pathname: string) {
@@ -33,6 +50,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { courseId, setCourseId, role, setRole, userId, setUserId, accessToken, setAccessToken, can, isAuthenticated, authReady } = useAppContext()
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
+  const visibleItems = navItems.filter((item) => !item.permission || can(item.permission))
   const loginWithCms = () => {
     try {
       window.location.href = buildCmsSessionBridgeUrl(courseId)
@@ -41,11 +59,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
   useEffect(() => {
-    // Production behavior: if user already has a CMS/Studio session, they should
-    // appear in AI Server automatically. We still need a top-level redirect to CMS
-    // because browser security prevents AI Server from reading CMS cookies directly
-    // across domains. The CMS bridge endpoint reads its own session cookie and
-    // returns a short-lived signed ticket.
     if (typeof window === 'undefined') return
     if (!authReady) return
     if (isAuthenticated) {
@@ -78,10 +91,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="brand-mark">AI</div>
         <div><b>Open edX AI</b><small>Máy chủ học liệu</small></div>
       </div>
-      <nav className="side-nav">
-        {navItems.filter((item) => !item.permission || can(item.permission)).map((item) => <Link key={item.href} href={item.href} className={pathname === item.href || pathname.startsWith(`${item.href}/`) ? 'nav-link active' : 'nav-link'}>
-          <b>{item.label}</b><small>{item.desc}</small>
-        </Link>)}
+      <nav className="side-nav grouped-side-nav">
+        {navGroups.map((group) => {
+          const items = visibleItems.filter((item) => item.group === group.key)
+          if (!items.length) return null
+          return <div className="nav-group" key={group.key}>
+            <div className="nav-group-title">{group.label}</div>
+            <div className="nav-group-items">
+              {items.map((item) => <Link key={item.href} href={item.href} className={pathname === item.href || pathname.startsWith(`${item.href}/`) ? 'nav-link active' : 'nav-link'}>
+                <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+                <span className="nav-text"><b>{item.label}</b><small>{item.desc}</small></span>
+              </Link>)}
+            </div>
+          </div>
+        })}
       </nav>
       <div className="sidebar-note">
         <b>{accessToken.trim() ? 'Đã có phiên AI' : 'Đang lấy phiên CMS'}</b>
