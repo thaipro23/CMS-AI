@@ -409,6 +409,7 @@ class BankGeneratePreviewOut(BaseModel):
     chapter_id: str
     question_count: int
     difficulty_counts: dict
+    material_balancing: list[dict] = Field(default_factory=list)
     current_question_count: int
     chapter_question_limit: int
     remaining_quota: int
@@ -435,6 +436,7 @@ class BankGenerateOut(BaseModel):
     input_chunks: int
     input_tokens: int
     difficulty_counts: dict
+    material_balancing: list[dict] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
     usage: list[dict] = Field(default_factory=list)
     errors: list[dict] = Field(default_factory=list)

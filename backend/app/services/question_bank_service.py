@@ -1802,6 +1802,68 @@ class VersionedQuestionBankService:
             )
         return '\n\n---\n\n'.join(parts), selected, total
 
+    def _chunks_to_generation_content(self, chunks: list[MaterialChunk], *, max_input_tokens: int = 18000) -> tuple[str, list[MaterialChunk], int]:
+        selected: list[MaterialChunk] = []
+        total = 0
+        parts: list[str] = []
+        for row in chunks:
+            token_count = int(row.token_count or count_tokens(row.content or ''))
+            if selected and total + token_count > max_input_tokens:
+                break
+            selected.append(row)
+            total += token_count
+            parts.append(
+                "Source: " + str(row.source_ref or f'bank-material:{row.material_version_id}') + "\n"
+                + "Type: " + str(row.source_type or 'file') + "\n"
+                + "ChunkId: " + str(row.id) + "\n"
+                + "BlockId: " + str(row.material_version_id) + "\n"
+                + (f"Page: {row.page_number}\n" if row.page_number else "")
+                + str(row.content or '')
+            )
+        return '\n\n---\n\n'.join(parts), selected, total
+
+    @staticmethod
+    def _split_count_evenly(total: int, bucket_count: int) -> list[int]:
+        total = max(0, int(total or 0))
+        bucket_count = max(1, int(bucket_count or 1))
+        base = total // bucket_count
+        remainder = total % bucket_count
+        return [base + (1 if index < remainder else 0) for index in range(bucket_count)]
+
+    def _balanced_material_generation_plan(
+        self,
+        *,
+        chunks: list[MaterialChunk],
+        question_count: int,
+        difficulty_easy: int,
+        difficulty_medium: int,
+        difficulty_hard: int,
+    ) -> list[dict]:
+        grouped: dict[str, list[MaterialChunk]] = {}
+        for chunk in chunks:
+            grouped.setdefault(str(chunk.material_version_id), []).append(chunk)
+        material_ids = sorted(grouped.keys())
+        if not material_ids:
+            return []
+        material_counts = self._split_count_evenly(int(question_count), len(material_ids))
+        plan: list[dict] = []
+        for material_id, material_total in zip(material_ids, material_counts):
+            if material_total <= 0:
+                continue
+            diff_counts = self._difficulty_counts(
+                total_questions=material_total,
+                easy=difficulty_easy,
+                medium=difficulty_medium,
+                hard=difficulty_hard,
+            )
+            plan.append({
+                'material_version_id': material_id,
+                'question_count': material_total,
+                'difficulty_counts': diff_counts,
+                'chunks': grouped[material_id],
+            })
+        return plan
+
     def _difficulty_counts(self, *, total_questions: int, easy: int, medium: int, hard: int) -> dict[str, int]:
         total_percent = max(int(easy or 0) + int(medium or 0) + int(hard or 0), 1)
         raw = {
@@ -1921,8 +1983,15 @@ class VersionedQuestionBankService:
         if not content.strip() or not chunks:
             raise ValueError('Bank Version chưa có tài liệu/chunk. Hãy upload tài liệu trước khi tạo câu hỏi.')
         counts = self._difficulty_counts(total_questions=question_count, easy=difficulty_easy, medium=difficulty_medium, hard=difficulty_hard)
-        model_calls = len([value for value in counts.values() if int(value or 0) > 0]) or 1
-        # Estimate nhanh, không gọi GPT thật. Input tính theo số lần gọi EASY/MEDIUM/HARD + schema/system overhead.
+        material_plan = self._balanced_material_generation_plan(
+            chunks=chunks,
+            question_count=question_count,
+            difficulty_easy=difficulty_easy,
+            difficulty_medium=difficulty_medium,
+            difficulty_hard=difficulty_hard,
+        )
+        model_calls = sum(len([value for value in item.get('difficulty_counts', {}).values() if int(value or 0) > 0]) for item in material_plan) or 1
+        # Estimate nhanh, không gọi GPT thật. Input tính theo tài liệu x difficulty, để phản ánh việc chia đều câu theo tài liệu.
         estimated_input_tokens = int(content_tokens * model_calls + 4300 * model_calls)
         estimated_cached_input_tokens = 0
         estimated_output_tokens = int(question_count * 320)
@@ -1941,6 +2010,15 @@ class VersionedQuestionBankService:
             'chapter_id': version.chapter_id,
             'question_count': int(question_count),
             'difficulty_counts': counts,
+            'material_balancing': [
+                {
+                    'material_version_id': item.get('material_version_id'),
+                    'question_count': item.get('question_count'),
+                    'difficulty_counts': item.get('difficulty_counts'),
+                    'chunk_count': len(item.get('chunks') or []),
+                }
+                for item in material_plan
+            ],
             'current_question_count': chapter_total,
             'chapter_question_limit': effective_target,
             'remaining_quota': remaining,
@@ -1993,135 +2071,167 @@ class VersionedQuestionBankService:
         if not content.strip() or not chunks:
             raise ValueError('Bank Version chưa có tài liệu/chunk. Hãy upload tài liệu trước khi generate.')
         counts = self._difficulty_counts(total_questions=question_count, easy=difficulty_easy, medium=difficulty_medium, hard=difficulty_hard)
+        material_plan = self._balanced_material_generation_plan(
+            chunks=chunks,
+            question_count=question_count,
+            difficulty_easy=difficulty_easy,
+            difficulty_medium=difficulty_medium,
+            difficulty_hard=difficulty_hard,
+        )
+        if not material_plan:
+            raise ValueError('Không có tài liệu hợp lệ để chia đều số câu hỏi.')
+        material_titles = {
+            row.id: (row.title or row.file_name or row.id)
+            for row in self.db.query(LearningMaterialVersion).filter(
+                LearningMaterialVersion.id.in_([item['material_version_id'] for item in material_plan])
+            ).all()
+        }
         scope_title = f'{subject.code} · {chapter.title} · {version.version_code}'
         questions_created: list[Question] = []
         raw_usage_parts: list[dict] = []
         errors: list[dict] = []
         gateway = ModelGateway()
         checker = QualityChecker(self.db)
-        chunk_ids = [row.id for row in chunks]
-        first_material_id = chunks[0].material_version_id if chunks else None
 
-        for difficulty, count in counts.items():
-            if count <= 0:
+        for material_item in material_plan:
+            active_material_id = str(material_item['material_version_id'])
+            material_title = material_titles.get(active_material_id, active_material_id)
+            material_content, material_chunks, material_tokens = self._chunks_to_generation_content(material_item.get('chunks') or [])
+            local_chunk_ids = [row.id for row in material_chunks]
+            if not material_content.strip() or not local_chunk_ids:
+                errors.append({'material_version_id': active_material_id, 'error': 'Tài liệu không còn chunk hợp lệ để tạo câu hỏi.'})
                 continue
-            try:
-                items, usage = await gateway.generate_questions(
-                    content=content,
-                    question_count=count,
-                    scope_title=scope_title,
-                    target_difficulty=difficulty,
-                    provider=provider,
-                    prompt_cache_key='qbank:' + sha256_text(f'{version.id}:{difficulty}:{content}:{settings.openai_model}', 56),
-                )
-                raw_usage_parts.append({'difficulty': difficulty, 'requested': count, 'usage': usage})
-            except Exception as exc:
-                errors.append({'difficulty': difficulty, 'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}'})
-                continue
+            material_scope_title = f'{scope_title} · Tài liệu: {material_title}'
+            for difficulty, count in (material_item.get('difficulty_counts') or {}).items():
+                if count <= 0:
+                    continue
+                try:
+                    items, usage = await gateway.generate_questions(
+                        content=material_content,
+                        question_count=count,
+                        scope_title=material_scope_title,
+                        target_difficulty=difficulty,
+                        provider=provider,
+                        prompt_cache_key='qbank:' + sha256_text(f'{version.id}:{active_material_id}:{difficulty}:{material_content}:{settings.openai_model}', 56),
+                    )
+                    raw_usage_parts.append({
+                        'material_version_id': active_material_id,
+                        'material_title': material_title,
+                        'difficulty': difficulty,
+                        'requested': count,
+                        'input_tokens': material_tokens,
+                        'usage': usage,
+                    })
+                except Exception as exc:
+                    errors.append({
+                        'material_version_id': active_material_id,
+                        'material_title': material_title,
+                        'difficulty': difficulty,
+                        'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}',
+                    })
+                    continue
 
-            for index, raw_item in enumerate(items or []):
-                item = dict(raw_item or {})
-                item['difficulty'] = normalize_difficulty(item.get('difficulty') or difficulty)
-                randomized = normalize_and_shuffle_options(item, index=index, force_shuffle=True)
-                item['options'] = randomized.options
-                item['correct_answer'] = randomized.correct_answer
-                if not item.get('source_ref'):
-                    item['source_ref'] = f'bank-version:{version.id}'
-                if not item.get('source_type'):
-                    item['source_type'] = 'bank_material'
-                if not item.get('source_excerpt'):
-                    item['source_excerpt'] = item.get('source_evidence') or ''
-                # Bank-first dùng MaterialChunk riêng, không phải ContentChunk của course-first.
-                # Nếu model trả về source_chunk_id theo bank chunk thì không đưa field đó vào
-                # QualityChecker course-first, tránh bị false draft_error invalid_source_chunk.
-                bank_source_chunk_ids = split_source_chunk_ids(item.get('source_chunk_id') or item.get('bank_chunk_id'))
-                if bank_source_chunk_ids and all(chunk_id in chunk_ids for chunk_id in bank_source_chunk_ids):
-                    joined_chunk_ids = join_source_chunk_ids(bank_source_chunk_ids)
-                    item['source_ref'] = item.get('source_ref') or f'bank-chunks:{joined_chunk_ids}'
+                for index, raw_item in enumerate(items or []):
+                    item = dict(raw_item or {})
+                    item['difficulty'] = normalize_difficulty(item.get('difficulty') or difficulty)
+                    randomized = normalize_and_shuffle_options(item, index=index, force_shuffle=True)
+                    item['options'] = randomized.options
+                    item['correct_answer'] = randomized.correct_answer
+                    if not item.get('source_ref'):
+                        item['source_ref'] = f'bank-material:{active_material_id}'
+                    if not item.get('source_type'):
+                        item['source_type'] = 'bank_material'
+                    if not item.get('source_excerpt'):
+                        item['source_excerpt'] = item.get('source_evidence') or ''
+                    bank_source_chunk_ids = split_source_chunk_ids(item.get('source_chunk_id') or item.get('bank_chunk_id'))
+                    valid_bank_chunk_ids = [chunk_id for chunk_id in bank_source_chunk_ids if chunk_id in local_chunk_ids]
+                    joined_chunk_ids = join_source_chunk_ids(valid_bank_chunk_ids) if valid_bank_chunk_ids else None
+                    # QualityChecker is course-first and validates ContentChunk IDs. Bank-first chunk IDs live in
+                    # MaterialChunk, so keep the check payload clean while still saving the bank chunk reference below.
                     item['source_chunk_id'] = None
-                quality = checker.check(item)
-                status = 'approved' if (quality.passed and approve_after_generate) else ('pending_review' if quality.passed else 'draft_error')
-                question_text = str(item.get('question') or item.get('question_text') or '').strip()
-                if not question_text:
-                    continue
-                concept = self._get_or_create_concept_version(version=version, material_version_id=first_material_id, item=item, chunk_ids=chunk_ids)
-                family = self._get_or_create_bank_family(version=version, concept=concept, difficulty=item['difficulty'], item=item)
-                q_hash = question_fingerprint(
-                    question_text,
-                    course_id=f'bank:{version.id}',
-                    source_node_id=family.family_key,
-                    difficulty=item['difficulty'],
-                )
-                existing = self.db.query(Question.id).filter(Question.bank_version_id == version.id, Question.question_hash == q_hash).first()
-                if existing:
-                    continue
-                options = item.get('options') or {}
-                q = Question(
-                    course_id=f'bank:{version.id}',
-                    source_course_id=None,
-                    department_id=subject.department_id,
-                    subject_id=version.subject_id,
-                    subject_chapter_id=version.chapter_id,
-                    bank_version_id=version.id,
-                    material_version_id=first_material_id,
-                    concept_version_id=concept.id,
-                    lesson_id=None,
-                    lesson_title=scope_title,
-                    block_id=f'bank-version:{version.id}',
-                    topic=item.get('topic') or chapter.title,
-                    concept_id=concept.id,
-                    concept_title=concept.concept_title,
-                    concept_key=concept.concept_key,
-                    question_family_id=family.family_key,
-                    variant_no=self._next_variant_no(bank_version_id=version.id, family_key=family.family_key),
-                    source_evidence=str(item.get('source_evidence') or item.get('source_excerpt') or ''),
-                    difficulty=item['difficulty'],
-                    cognitive_level=item.get('cognitive_level') or 'remember',
-                    learning_objective=item.get('learning_objective') or concept.learning_objective or '',
-                    question_type=item.get('question_type') or 'single_choice',
-                    question_text=question_text,
-                    question_hash=q_hash,
-                    option_a=options.get('A', ''),
-                    option_b=options.get('B', ''),
-                    option_c=options.get('C', ''),
-                    option_d=options.get('D', ''),
-                    correct_answer=item.get('correct_answer') or randomized.correct_answer or 'A',
-                    explanation=item.get('explanation') or quality.reason,
-                    source_ref=item.get('source_ref') or f'bank-version:{version.id}',
-                    source_type=item.get('source_type') or 'bank_material',
-                    source_page=item.get('source_page'),
-                    source_timestamp_start=item.get('source_timestamp_start'),
-                    source_timestamp_end=item.get('source_timestamp_end'),
-                    source_chunk_id=None,
-                    source_node_id=f'bank-version:{version.id}',
-                    source_node_title=scope_title,
-                    chapter_node_id=version.chapter_id,
-                    chapter_title=chapter.title,
-                    source_excerpt=item.get('source_excerpt') or item.get('source_evidence') or '',
-                    tags=item.get('tags') or [],
-                    ai_rationale=item.get('ai_rationale') or '',
-                    quality_score=quality.score,
-                    quality_flags=(quality.flags or []) + (['answer_randomized'] if randomized.changed else []),
-                    draft_error_reason=None if quality.passed else (quality.error_code or 'quality_failed'),
-                    draft_error_detail=None if quality.passed else (quality.detail or {'reason': quality.reason}),
-                    generation_job_id=None,
-                    model_provider=provider,
-                    model_name=settings.openai_model,
-                    status=status,
-                    reviewed_by=actor if status == 'approved' else None,
-                    reviewed_at=datetime.utcnow() if status == 'approved' else None,
-                )
-                self.db.add(q)
-                self.db.flush()
-                self.db.add(QuestionReviewLog(
-                    id=str(uuid.uuid4()),
-                    question_id=q.id,
-                    old_status='generated',
-                    new_status=status,
-                    actor=actor or 'system',
-                    note='Tạo câu hỏi từ tài liệu trong ngân hàng đề',
-                ))
-                questions_created.append(q)
+                    quality = checker.check(item)
+                    status = 'approved' if (quality.passed and approve_after_generate) else ('pending_review' if quality.passed else 'draft_error')
+                    question_text = str(item.get('question') or item.get('question_text') or '').strip()
+                    if not question_text:
+                        continue
+                    concept = self._get_or_create_concept_version(version=version, material_version_id=active_material_id, item=item, chunk_ids=local_chunk_ids)
+                    family = self._get_or_create_bank_family(version=version, concept=concept, difficulty=item['difficulty'], item=item)
+                    q_hash = question_fingerprint(
+                        question_text,
+                        course_id=f'bank:{version.id}',
+                        source_node_id=f'{family.family_key}:{active_material_id}',
+                        difficulty=item['difficulty'],
+                    )
+                    existing = self.db.query(Question.id).filter(Question.bank_version_id == version.id, Question.question_hash == q_hash).first()
+                    if existing:
+                        continue
+                    options = item.get('options') or {}
+                    q = Question(
+                        course_id=f'bank:{version.id}',
+                        source_course_id=None,
+                        department_id=subject.department_id,
+                        subject_id=version.subject_id,
+                        subject_chapter_id=version.chapter_id,
+                        bank_version_id=version.id,
+                        material_version_id=active_material_id,
+                        concept_version_id=concept.id,
+                        lesson_id=None,
+                        lesson_title=material_scope_title,
+                        block_id=f'bank-version:{version.id}:material:{active_material_id}',
+                        topic=item.get('topic') or chapter.title,
+                        concept_id=concept.id,
+                        concept_title=concept.concept_title,
+                        concept_key=concept.concept_key,
+                        question_family_id=family.family_key,
+                        variant_no=self._next_variant_no(bank_version_id=version.id, family_key=family.family_key),
+                        source_evidence=str(item.get('source_evidence') or item.get('source_excerpt') or ''),
+                        difficulty=item['difficulty'],
+                        cognitive_level=item.get('cognitive_level') or 'remember',
+                        learning_objective=item.get('learning_objective') or concept.learning_objective or '',
+                        question_type=item.get('question_type') or 'single_choice',
+                        question_text=question_text,
+                        question_hash=q_hash,
+                        option_a=options.get('A', ''),
+                        option_b=options.get('B', ''),
+                        option_c=options.get('C', ''),
+                        option_d=options.get('D', ''),
+                        correct_answer=item.get('correct_answer') or randomized.correct_answer or 'A',
+                        explanation=item.get('explanation') or quality.reason,
+                        source_ref=item.get('source_ref') or f'bank-material:{active_material_id}',
+                        source_type=item.get('source_type') or 'bank_material',
+                        source_page=item.get('source_page'),
+                        source_timestamp_start=item.get('source_timestamp_start'),
+                        source_timestamp_end=item.get('source_timestamp_end'),
+                        source_chunk_id=joined_chunk_ids,
+                        source_node_id=f'bank-version:{version.id}:material:{active_material_id}',
+                        source_node_title=material_scope_title,
+                        chapter_node_id=version.chapter_id,
+                        chapter_title=chapter.title,
+                        source_excerpt=item.get('source_excerpt') or item.get('source_evidence') or '',
+                        tags=item.get('tags') or [],
+                        ai_rationale=item.get('ai_rationale') or '',
+                        quality_score=quality.score,
+                        quality_flags=(quality.flags or []) + (['answer_randomized'] if randomized.changed else []),
+                        draft_error_reason=None if quality.passed else (quality.error_code or 'quality_failed'),
+                        draft_error_detail=None if quality.passed else (quality.detail or {'reason': quality.reason}),
+                        generation_job_id=None,
+                        model_provider=provider,
+                        model_name=settings.openai_model,
+                        status=status,
+                        reviewed_by=actor if status == 'approved' else None,
+                        reviewed_at=datetime.utcnow() if status == 'approved' else None,
+                    )
+                    self.db.add(q)
+                    self.db.flush()
+                    self.db.add(QuestionReviewLog(
+                        id=str(uuid.uuid4()),
+                        question_id=q.id,
+                        old_status='generated',
+                        new_status=status,
+                        actor=actor or 'system',
+                        note=f'Tạo câu hỏi từ tài liệu trong ngân hàng đề: {material_title}',
+                    ))
+                    questions_created.append(q)
 
         version.metadata_json = {
             **(version.metadata_json or {}),
@@ -2129,6 +2239,15 @@ class VersionedQuestionBankService:
             'last_bank_generate_requested_questions': question_count,
             'last_bank_generate_created_questions': len(questions_created),
             'last_bank_generate_input_tokens': input_tokens,
+            'last_bank_generate_material_balancing': [
+                {
+                    'material_version_id': item.get('material_version_id'),
+                    'question_count': item.get('question_count'),
+                    'difficulty_counts': item.get('difficulty_counts'),
+                    'chunk_count': len(item.get('chunks') or []),
+                }
+                for item in material_plan
+            ],
             'last_bank_generate_errors': errors,
             'last_bank_generate_by': actor,
         }
@@ -2144,6 +2263,15 @@ class VersionedQuestionBankService:
             'input_chunks': len(chunks),
             'input_tokens': input_tokens,
             'difficulty_counts': counts,
+            'material_balancing': [
+                {
+                    'material_version_id': item.get('material_version_id'),
+                    'question_count': item.get('question_count'),
+                    'difficulty_counts': item.get('difficulty_counts'),
+                    'chunk_count': len(item.get('chunks') or []),
+                }
+                for item in material_plan
+            ],
             'questions': [q.id for q in questions_created],
             'usage': raw_usage_parts,
             'errors': errors,
@@ -3258,128 +3386,282 @@ class VersionedQuestionBankService:
         if duplicate_components:
             raise ValueError(f'Release chứa component Open edX bị trùng: {duplicate_components[:5]}')
 
-        # Group by difficulty + family. A family is never split across slots.
-        grouped: dict[str, dict[str, list[BankReleaseQuestion]]] = {'easy': {}, 'medium': {}, 'hard': {}}
+        # FPT slot planner v3:
+        # - learner-visible question count is exact per difficulty (one ItemBank slot = one visible question)
+        # - a Library component/question is assigned to exactly one slot
+        # - a concept/family stays in exactly one slot when there are enough concepts
+        # - when concepts/families are more than slots, whole concepts are bin-packed so slot candidate counts are balanced
+        # - when concepts/families are fewer than slots, the planner splits large concepts only as a last-resort soft mode
+        #   to still satisfy the requested EASY/MEDIUM/HARD counts.
+        grouped_rows: dict[str, list[BankReleaseQuestion]] = {'easy': [], 'medium': [], 'hard': []}
         for row in rows:
             question = questions[row.question_id]
             diff = normalize_difficulty(row.difficulty or question.difficulty)
-            family_id = str(row.question_family_id or question.question_family_id or f'family-{question.id}').strip()
-            grouped.setdefault(diff, {}).setdefault(family_id, []).append(row)
+            grouped_rows.setdefault(diff, []).append(row)
 
-        requested = self._target_counts_for_quiz(total_questions, difficulty_easy, difficulty_medium, difficulty_hard)
-        available = {diff: len(grouped.get(diff, {})) for diff in ('easy', 'medium', 'hard')}
-        effective = {diff: min(requested[diff], available[diff]) for diff in ('easy', 'medium', 'hard')}
-        nonempty = [diff for diff, count in available.items() if count]
-        for diff in nonempty:
-            if effective[diff] == 0:
-                effective[diff] = 1
-        desired_total = min(max(sum(requested.values()), len(nonempty)), sum(available.values()))
-        while sum(effective.values()) < desired_total:
-            candidates = [diff for diff in ('easy', 'medium', 'hard') if effective[diff] < available[diff]]
-            if not candidates:
-                break
-            chosen = max(candidates, key=lambda diff: (available[diff] - effective[diff], requested[diff] - effective[diff]))
-            effective[chosen] += 1
-        while sum(effective.values()) > desired_total:
-            candidates = [diff for diff in ('easy', 'medium', 'hard') if effective[diff] > 1]
-            if not candidates:
-                break
-            chosen = max(candidates, key=lambda diff: effective[diff] - requested[diff])
-            effective[chosen] -= 1
+        def concept_key_for(row: BankReleaseQuestion) -> str:
+            question = questions[row.question_id]
+            key = (
+                getattr(question, 'concept_id', None)
+                or row.question_family_id
+                or getattr(question, 'question_family_id', None)
+                or getattr(question, 'concept_title', None)
+                or getattr(question, 'topic', None)
+                or f'question-{question.id}'
+            )
+            return str(key).strip() or f'question-{question.id}'
 
-        slots: list[dict] = []
-        coverage: list[dict] = []
-        slot_no = 1
-        assigned_question_ids: set[str] = set()
-        assigned_components: set[str] = set()
-        warnings: list[str] = []
-        max_families = max(1, int(max_families_per_bank or 2))
-        for diff in ('easy', 'medium', 'hard'):
-            families = list(grouped.get(diff, {}).items())
-            families.sort(key=lambda item: (-len(item[1]), item[0]))
-            target_slots = effective[diff]
-            if not families:
-                coverage.append({'difficulty': diff.upper(), 'target_slots': requested[diff], 'selected_slots': 0, 'available_families': 0, 'status': 'no_questions'})
-                continue
-            buckets = [[] for _ in range(max(target_slots, 1))]
-            loads = [0 for _ in buckets]
-            family_counts = [0 for _ in buckets]
-            for family_id, family_rows in families:
-                # Prefer buckets with fewer families first, then fewer variants.
-                candidates = [idx for idx in range(len(buckets)) if family_counts[idx] < max_families]
-                if not candidates:
-                    candidates = list(range(len(buckets)))
-                    warnings.append(f'{diff.upper()} có nhiều family hơn giới hạn {max_families} family/slot; một số slot sẽ chứa nhiều family hơn để không bỏ câu.')
-                idx = min(candidates, key=lambda i: (loads[i], family_counts[i], i))
-                buckets[idx].append((family_id, family_rows))
-                loads[idx] += len(family_rows)
-                family_counts[idx] += 1
-            for bucket in buckets:
-                if not bucket:
+        def concept_name_for(row: BankReleaseQuestion, key: str) -> str:
+            question = questions[row.question_id]
+            return str(
+                getattr(question, 'concept_title', None)
+                or getattr(question, 'topic', None)
+                or row.question_family_id
+                or getattr(question, 'question_family_id', None)
+                or key
+            ).strip() or key
+
+        def add_row_to_bucket(bucket: dict, row: BankReleaseQuestion, *, split: bool = False) -> None:
+            key = concept_key_for(row)
+            name = concept_name_for(row, key)
+            question = questions[row.question_id]
+            payload = bucket['families'].setdefault(key, {
+                'family_id': key,
+                'family_name': name,
+                'concept_id': getattr(question, 'concept_id', None),
+                'concept_title': getattr(question, 'concept_title', None),
+                'variant_count': 0,
+                'question_ids': [],
+                'split_across_slots': bool(split),
+            })
+            payload['variant_count'] += 1
+            payload['question_ids'].append(question.id)
+            payload['split_across_slots'] = bool(payload.get('split_across_slots') or split)
+            bucket['rows'].append(row)
+            bucket['load'] += 1
+
+        def remove_one_row_from_bucket(bucket: dict, family_key: str) -> BankReleaseQuestion | None:
+            for idx in range(len(bucket['rows']) - 1, -1, -1):
+                row = bucket['rows'][idx]
+                if concept_key_for(row) != family_key:
                     continue
-                slot_question_ids: list[str] = []
+                bucket['rows'].pop(idx)
+                bucket['load'] -= 1
+                payload = bucket['families'].get(family_key)
+                question = questions[row.question_id]
+                if payload:
+                    payload['question_ids'] = [qid for qid in payload.get('question_ids', []) if qid != question.id]
+                    payload['variant_count'] = max(0, int(payload.get('variant_count') or 0) - 1)
+                    if not payload['question_ids']:
+                        bucket['families'].pop(family_key, None)
+                return row
+            return None
+
+        def build_balanced_slots_for_difficulty(diff: str, diff_rows: list[BankReleaseQuestion], target_count: int) -> tuple[list[dict], dict, list[str]]:
+            diff_warnings: list[str] = []
+            available_count = len(diff_rows)
+            if target_count <= 0:
+                return [], {
+                    'difficulty': diff.upper(),
+                    'target_questions': 0,
+                    'available_questions': available_count,
+                    'selected_slots': 0,
+                    'status': 'not_requested',
+                }, []
+            if available_count <= 0:
+                raise ValueError(f'Release chưa có câu {diff.upper()} để tạo Problem Bank {diff.upper()}.')
+            if available_count < target_count:
+                raise ValueError(
+                    f'Release không đủ câu {diff.upper()}: cần {target_count}, hiện có {available_count}. '
+                    'Hãy tạo/publish thêm câu hoặc giảm tỷ lệ/số câu Quiz.'
+                )
+
+            # Group by concept/family. The planner keeps a group whole unless it is impossible
+            # to satisfy the exact requested slot count without splitting.
+            group_map: dict[str, dict] = {}
+            for row in sorted(diff_rows, key=lambda item: (
+                concept_key_for(item),
+                str(getattr(questions[item.question_id], 'created_at', '') or ''),
+                str(item.question_id),
+            )):
+                key = concept_key_for(row)
+                group = group_map.setdefault(key, {
+                    'key': key,
+                    'name': concept_name_for(row, key),
+                    'rows': [],
+                })
+                group['rows'].append(row)
+            groups = list(group_map.values())
+            groups.sort(key=lambda group: (-len(group['rows']), str(group['name']).casefold(), str(group['key'])))
+
+            buckets = [{'rows': [], 'families': {}, 'load': 0} for _ in range(target_count)]
+            split_family_keys: set[str] = set()
+
+            if len(groups) >= target_count:
+                # Enough concepts: never split a concept. Put whole concepts into the currently lightest slot.
+                for group in groups:
+                    index = min(range(target_count), key=lambda idx: (buckets[idx]['load'], len(buckets[idx]['families']), idx))
+                    for row in group['rows']:
+                        add_row_to_bucket(buckets[index], row, split=False)
+            else:
+                # Not enough concepts for the required number of visible questions. Soft mode:
+                # split only the minimum needed to make every slot non-empty, then balance loads.
+                diff_warnings.append(
+                    f'{diff.upper()} chỉ có {len(groups)} concept/family cho {target_count} slot; '
+                    'hệ thống phải tách một số concept sang nhiều slot để đủ số câu hiển thị.'
+                )
+                for idx, group in enumerate(groups):
+                    for row in group['rows']:
+                        add_row_to_bucket(buckets[idx], row, split=False)
+
+                def donor_choice() -> tuple[int | None, str | None]:
+                    best_idx: int | None = None
+                    best_key: str | None = None
+                    best_score = (-1, '')
+                    for idx, bucket in enumerate(buckets):
+                        if bucket['load'] <= 1:
+                            continue
+                        family_counts: dict[str, int] = {}
+                        for row in bucket['rows']:
+                            key = concept_key_for(row)
+                            family_counts[key] = family_counts.get(key, 0) + 1
+                        for key, count in family_counts.items():
+                            if count <= 1:
+                                continue
+                            score = (count, str(key))
+                            if score > best_score:
+                                best_score = score
+                                best_idx = idx
+                                best_key = key
+                    return best_idx, best_key
+
+                for empty_idx, bucket in enumerate(buckets):
+                    if bucket['load'] > 0:
+                        continue
+                    donor_idx, donor_key = donor_choice()
+                    if donor_idx is None or donor_key is None:
+                        raise ValueError(f'Không thể chia đủ {target_count} slot {diff.upper()} mà vẫn có câu trong mỗi slot.')
+                    moved = remove_one_row_from_bucket(buckets[donor_idx], donor_key)
+                    if moved is None:
+                        raise ValueError(f'Không thể tách concept {donor_key} để tạo slot {diff.upper()}.')
+                    split_family_keys.add(donor_key)
+                    add_row_to_bucket(bucket, moved, split=True)
+
+                # Balance candidate counts so slots are not extremely uneven.
+                guard = 0
+                while guard < 1000:
+                    guard += 1
+                    max_idx = max(range(target_count), key=lambda idx: (buckets[idx]['load'], -idx))
+                    min_idx = min(range(target_count), key=lambda idx: (buckets[idx]['load'], idx))
+                    if buckets[max_idx]['load'] - buckets[min_idx]['load'] <= 1:
+                        break
+                    donor_idx, donor_key = donor_choice()
+                    if donor_idx is None or donor_key is None or donor_idx == min_idx:
+                        break
+                    moved = remove_one_row_from_bucket(buckets[donor_idx], donor_key)
+                    if moved is None:
+                        break
+                    split_family_keys.add(donor_key)
+                    add_row_to_bucket(buckets[min_idx], moved, split=True)
+
+            result_slots: list[dict] = []
+            loads = []
+            for bucket_index, bucket in enumerate(buckets, start=1):
+                if bucket['load'] <= 0:
+                    raise ValueError(f'Slot {bucket_index} {diff.upper()} không có câu hỏi nào; từ chối tạo Quiz rỗng.')
+                family_payloads = list(bucket['families'].values())
+                question_ids: list[str] = []
                 problem_ids: list[str] = []
-                family_payloads: list[dict] = []
-                for family_id, family_rows in bucket:
-                    qids: list[str] = []
-                    for row in family_rows:
-                        question = questions[row.question_id]
-                        component = str(row.openedx_library_problem_id or '').strip().strip('"\'')
-                        if question.id in assigned_question_ids:
-                            raise ValueError(f'Câu hỏi {question.id} bị đưa vào nhiều slot; hệ thống từ chối tạo quiz.')
-                        if component in assigned_components:
-                            raise ValueError(f'Open edX component {component} bị đưa vào nhiều slot; hệ thống từ chối tạo quiz.')
-                        assigned_question_ids.add(question.id)
-                        assigned_components.add(component)
-                        slot_question_ids.append(question.id)
-                        problem_ids.append(component)
-                        qids.append(question.id)
-                    sample_question = questions[family_rows[0].question_id]
-                    family_payloads.append({
-                        'family_id': family_id,
-                        'family_name': sample_question.concept_title or sample_question.topic or family_id,
-                        'concept_id': sample_question.concept_id,
-                        'concept_title': sample_question.concept_title,
-                        'variant_count': len(qids),
-                        'question_ids': qids,
-                    })
-                slots.append({
-                    'slot_no': slot_no,
+                for row in bucket['rows']:
+                    question = questions[row.question_id]
+                    component = str(row.openedx_library_problem_id or '').strip().strip('"\'')
+                    if not component:
+                        raise ValueError(f'Release question {row.question_id} chưa có Open edX Library component. Hãy publish/re-publish Release.')
+                    question_ids.append(question.id)
+                    problem_ids.append(component)
+                loads.append(len(problem_ids))
+                result_slots.append({
                     'difficulty': diff.upper(),
                     'pick_count': 1,
+                    'max_count': 1,
                     'library_key': release.openedx_library_key,
                     'openedx_problem_ids': problem_ids,
-                    'question_ids': slot_question_ids,
+                    'question_ids': question_ids,
                     'families': family_payloads,
                     'family_names': [item['family_name'] for item in family_payloads],
-                    'variant_count': len(slot_question_ids),
-                    'rule': f'random 1/{max(len(slot_question_ids), 1)} variants',
-                    'warning': '',
+                    'variant_count': len(question_ids),
+                    'repeated_family': bool(split_family_keys),
+                    'split_family_keys': sorted(split_family_keys),
+                    'rule': f'random 1/{max(len(question_ids), 1)} {diff.upper()} variants',
+                    'warning': 'Có concept bị tách do thiếu concept/family.' if split_family_keys else '',
                 })
+
+            coverage = {
+                'difficulty': diff.upper(),
+                'target_questions': target_count,
+                'available_questions': available_count,
+                'selected_slots': len(result_slots),
+                'concept_count': len(groups),
+                'split_concept_count': len(split_family_keys),
+                'slot_candidate_loads': loads,
+                'status': 'balanced_no_concept_split' if not split_family_keys else 'balanced_soft_split_due_to_insufficient_concepts',
+            }
+            return result_slots, coverage, diff_warnings
+
+        requested = self._target_counts_for_quiz(total_questions, difficulty_easy, difficulty_medium, difficulty_hard)
+        slots: list[dict] = []
+        coverage: list[dict] = []
+        warnings: list[str] = []
+        assigned_question_ids: set[str] = set()
+        assigned_components: set[str] = set()
+        slot_no = 1
+
+        for diff in ('easy', 'medium', 'hard'):
+            target_count = int(requested.get(diff) or 0)
+            diff_slots, diff_coverage, diff_warnings = build_balanced_slots_for_difficulty(diff, list(grouped_rows.get(diff) or []), target_count)
+            warnings.extend(diff_warnings)
+            for slot in diff_slots:
+                slot['slot_no'] = slot_no
                 slot_no += 1
-            coverage.append({'difficulty': diff.upper(), 'target_slots': requested[diff], 'selected_slots': len([s for s in slots if s['difficulty'] == diff.upper()]), 'available_families': len(families), 'status': 'ok'})
+                unique_questions = []
+                unique_components = []
+                for question_id, component in zip(slot.get('question_ids') or [], slot.get('openedx_problem_ids') or []):
+                    if question_id in assigned_question_ids:
+                        raise ValueError(f'Câu hỏi {question_id} bị đưa vào nhiều Problem Bank; hệ thống từ chối tạo quiz.')
+                    if component in assigned_components:
+                        raise ValueError(f'Open edX component {component} bị đưa vào nhiều Problem Bank; hệ thống từ chối tạo quiz.')
+                    assigned_question_ids.add(question_id)
+                    assigned_components.add(component)
+                    unique_questions.append(question_id)
+                    unique_components.append(component)
+                slot['question_ids'] = unique_questions
+                slot['openedx_problem_ids'] = unique_components
+                slots.append(slot)
+            coverage.append(diff_coverage)
         if not slots:
-            raise ValueError('Release không đủ câu hỏi/component để tạo bất kỳ Problem Bank slot nào.')
-        if len(slots) != int(total_questions):
-            warnings.append(f'Yêu cầu {total_questions} slot, thực tế tạo {len(slots)} slot vì không lặp/tách family.')
+            raise ValueError('Không có mức độ nào được chọn để tạo Problem Bank.')
+        if sum(int(slot.get('pick_count') or 0) for slot in slots) != int(total_questions):
+            warnings.append(
+                f'Tổng pick_count thực tế {sum(int(slot.get("pick_count") or 0) for slot in slots)} khác yêu cầu {total_questions}; hãy kiểm tra tỷ lệ difficulty.'
+            )
         plan = {
             'ok': True,
-            'planner_engine': 'bank_release_deterministic_v1',
+            'planner_engine': 'bank_release_export_parity_difficulty_itembank_v2',
             'uses_llm': False,
             'release_id': release.id,
             'release_code': release.release_code,
             'openedx_library_key': release.openedx_library_key,
             'requested_total_questions': int(total_questions),
-            'total_questions': len(slots),
+            'total_questions': int(total_questions),
             'target_counts': {k.upper(): v for k, v in requested.items()},
-            'effective_target_counts': {k.upper(): effective[k] for k in effective},
+            'effective_target_counts': {k.upper(): requested[k] for k in requested},
             'coverage': coverage,
             'slots': slots,
             'warnings': list(dict.fromkeys(warnings)),
             'assigned_question_count': len(assigned_question_ids),
             'assigned_component_count': len(assigned_components),
-            'hard_guard': {'valid': True, 'summary': 'Release plan hợp lệ: không trùng question_id hoặc Open edX component giữa các slot'},
-            'message': f'Tạo kế hoạch từ Bank Release {release.release_code}: {len(slots)} Problem Bank slot, {len(assigned_components)} component.',
+            'hard_guard': {'valid': True, 'summary': 'Release plan hợp lệ: EASY/MEDIUM/HARD tách riêng; không trùng question_id hoặc Open edX component giữa các bank.'},
+            'message': f'Tạo kế hoạch theo chuẩn /export: {len(slots)} Problem Bank EASY/MEDIUM/HARD, learner thấy {int(total_questions)} câu.',
         }
         return plan
 
