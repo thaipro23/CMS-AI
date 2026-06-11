@@ -3816,6 +3816,44 @@ class VersionedQuestionBankService:
             unit_node_id = quiz_result.get('leaf_unit_node_id') or quiz_result.get('unit_node_id')
             if not unit_node_id:
                 raise RuntimeError('Open edX không trả leaf_unit_node_id sau khi tạo Quiz')
+            created_nodes = quiz_result.get('created_nodes') if isinstance(quiz_result.get('created_nodes'), list) else []
+            sequence_usage_key = ''
+            for node in reversed(created_nodes):
+                if str(node.get('block_type') or '').lower() == 'sequential':
+                    sequence_usage_key = node.get('usage_key') or ''
+                    break
+            if not sequence_usage_key and len(created_nodes) >= 2:
+                sequence_usage_key = created_nodes[-2].get('usage_key') or ''
+
+            # Force-save timer config through the LMS unit-reset plugin after we know
+            # the real sequential/unit usage keys returned by Open edX. The earlier
+            # best-effort save inside the CMS connector can be skipped if CMS has not
+            # loaded the unit-reset plugin yet, so do not rely on it.
+            forced_timer_result = {'enabled': False, 'status': 'not_requested'}
+            if timer_config['custom_timer_enabled']:
+                forced_timer_result = await connector.upsert_quiz_timer_config(
+                    course_id=course_id,
+                    sequence_usage_key=sequence_usage_key,
+                    unit_usage_key=unit_node_id,
+                    title=final_unit_title,
+                    duration_seconds=timer_config['duration_seconds'],
+                    cooldown_seconds=timer_config['cooldown_seconds'],
+                    enabled=True,
+                    auto_submit_on_timeout=timer_config['auto_submit_on_timeout'],
+                    lock_after_timeout=timer_config['lock_after_timeout'],
+                    native_timed_exam=False,
+                    metadata={
+                        'source': 'ai_server_force_save_after_quiz_create',
+                        'course_quiz_instance_id': instance.id,
+                        'bank_release_id': release.id,
+                        'release_code': release.release_code,
+                        'quiz_title': final_quiz_title,
+                        'cms_timer_config_result': quiz_result.get('timer_config_result'),
+                    },
+                )
+                if forced_timer_result.get('ok') is False or forced_timer_result.get('success') is False:
+                    raise RuntimeError(f'Không lưu được cấu hình timer vào LMS plugin: {forced_timer_result}')
+
             insert_result = await connector.insert_problem_banks(
                 course_id=course_id,
                 unit_node_id=unit_node_id,
@@ -3843,8 +3881,9 @@ class VersionedQuestionBankService:
                     **timer_config,
                     'course_id': course_id,
                     'unit_usage_key': unit_node_id,
-                    'sequence_usage_key': (quiz_result.get('created_nodes') or [{}])[-2].get('usage_key') if isinstance(quiz_result.get('created_nodes'), list) and len(quiz_result.get('created_nodes')) >= 2 else None,
+                    'sequence_usage_key': sequence_usage_key,
                     'unit_reset_plugin_result': quiz_result.get('timer_config_result'),
+                    'force_saved_timer_result': forced_timer_result,
                 },
                 'created_at': datetime.utcnow().isoformat(),
             }

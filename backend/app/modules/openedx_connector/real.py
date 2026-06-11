@@ -647,6 +647,43 @@ class RealOpenEdXConnector(OpenEdXConnector):
             self._raise_for_openedx_error(response, 'delete_quiz_node')
             return response.json()
 
+    async def upsert_quiz_timer_config(
+        self,
+        *,
+        course_id: str,
+        sequence_usage_key: str,
+        unit_usage_key: str,
+        title: str,
+        duration_seconds: int,
+        cooldown_seconds: int,
+        enabled: bool = True,
+        auto_submit_on_timeout: bool = True,
+        lock_after_timeout: bool = True,
+        native_timed_exam: bool = False,
+        metadata: dict | None = None,
+    ) -> dict:
+        endpoint = getattr(settings, 'openedx_quiz_timer_config_upsert_endpoint', '/api/unit-reset/v1/quiz-config/upsert')
+        # Timer sessions are enforced in LMS, so write config through LMS rather than CMS.
+        url = f'{self.lms_base_url}{endpoint.format(course_id=course_id)}'
+        payload = {
+            'course_id': course_id,
+            'sequence_usage_key': _clean_openedx_usage_key(sequence_usage_key),
+            'unit_usage_key': _clean_openedx_usage_key(unit_usage_key),
+            'title': title or 'Quiz',
+            'duration_seconds': int(duration_seconds or 0),
+            'cooldown_seconds': int(cooldown_seconds or 0),
+            'enabled': bool(enabled),
+            'auto_submit_on_timeout': bool(auto_submit_on_timeout),
+            'lock_after_timeout': bool(lock_after_timeout),
+            'native_timed_exam': bool(native_timed_exam),
+            'metadata': metadata or {},
+        }
+        body = self._json_body(payload)
+        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
+            response = await client.post(url, content=body, headers=await self._json_request_headers('POST', url, body))
+            self._raise_for_openedx_error(response, 'upsert_quiz_timer_config')
+            return response.json()
+
     async def insert_problem_banks(
         self,
         course_id: str,

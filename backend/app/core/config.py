@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     # The CMS connector creates course-local ProblemBlock children through
     # sync_library_content and returns success only after exact upstream verification.
     openedx_problem_bank_insert_endpoint: str = '/api/ai-connector/v1/courses/{course_id}/problem-banks'
+    # Force-save custom timed-practice config after Quiz node creation.
+    # This endpoint lives in the LMS unit-reset plugin and accepts the same HMAC headers.
+    openedx_quiz_timer_config_upsert_endpoint: str = '/api/unit-reset/v1/quiz-config/upsert'
     openedx_request_timeout_seconds: int = 30
     # Server-to-server HMAC used by the AI Server when calling the CMS connector plugin.
     # The same value must be set in the CMS container as AI_CONNECTOR_HMAC_SECRET.

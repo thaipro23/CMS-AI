@@ -77,6 +77,31 @@ class OpenEdXConnector(ABC):
             'metadata': metadata or {},
         }
 
+    async def upsert_quiz_timer_config(
+        self,
+        *,
+        course_id: str,
+        sequence_usage_key: str,
+        unit_usage_key: str,
+        title: str,
+        duration_seconds: int,
+        cooldown_seconds: int,
+        enabled: bool = True,
+        auto_submit_on_timeout: bool = True,
+        lock_after_timeout: bool = True,
+        native_timed_exam: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict:
+        return {
+            'ok': False,
+            'status': 'quiz_timer_config_upsert_unavailable',
+            'course_id': course_id,
+            'sequence_usage_key': sequence_usage_key,
+            'unit_usage_key': unit_usage_key,
+            'title': title,
+            'metadata': metadata or {},
+        }
+
     async def insert_problem_banks(
         self,
         course_id: str,
