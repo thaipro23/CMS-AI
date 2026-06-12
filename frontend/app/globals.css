@@ -2932,3 +2932,246 @@ html[data-theme='dark'] .product-flow-row span { background: rgba(96,165,250,.16
   .landing-hero h1 { font-size: 38px; }
   .landing-feature-grid, .product-metrics { grid-template-columns: 1fr; }
 }
+
+/* Dark theme completion.
+   Older releases used literal light colors, so cover shared surfaces here while
+   preserving semantic success/warning/error accents. */
+html[data-theme='dark'] {
+  --surface-sunken: #0b1220;
+  --surface-hover: #1b2940;
+  --border-strong: #334155;
+  --text-subtle: #94a3b8;
+}
+
+html[data-theme='dark'] .topbar,
+html[data-theme='dark'] .accent-card,
+html[data-theme='dark'] .mode-card,
+html[data-theme='dark'] .mini-metrics > div,
+html[data-theme='dark'] .chunk-toolbar,
+html[data-theme='dark'] .chunk-card,
+html[data-theme='dark'] .summary-grid > div,
+html[data-theme='dark'] .role-box,
+html[data-theme='dark'] .hero-card,
+html[data-theme='dark'] .inline-check,
+html[data-theme='dark'] .tree-box,
+html[data-theme='dark'] .tree-row,
+html[data-theme='dark'] .topic-card,
+html[data-theme='dark'] .workflow-step,
+html[data-theme='dark'] .estimate-summary > div,
+html[data-theme='dark'] .pricing-summary > div,
+html[data-theme='dark'] .report-row,
+html[data-theme='dark'] .node-detail-head,
+html[data-theme='dark'] .node-stats span,
+html[data-theme='dark'] .course-combobox-trigger,
+html[data-theme='dark'] .course-combobox-menu,
+html[data-theme='dark'] .course-combobox-option,
+html[data-theme='dark'] .step-card,
+html[data-theme='dark'] .bank-entity-card,
+html[data-theme='dark'] .bank-list-card,
+html[data-theme='dark'] .bank-summary-card,
+html[data-theme='dark'] .bank-status-card,
+html[data-theme='dark'] .bank-loading-card,
+html[data-theme='dark'] .cost-preview-box,
+html[data-theme='dark'] .quick-search-row,
+html[data-theme='dark'] .next-step-message,
+html[data-theme='dark'] .entity-actions-trigger,
+html[data-theme='dark'] .entity-actions-menu,
+html[data-theme='dark'] .quiz-workbench,
+html[data-theme='dark'] .quiz-workspace-main,
+html[data-theme='dark'] .quiz-settings-panel,
+html[data-theme='dark'] .quiz-summary-card,
+html[data-theme='dark'] .quiz-inline-message,
+html[data-theme='dark'] .timer-config-panel,
+html[data-theme='dark'] .toggle-line,
+html[data-theme='dark'] .mini-status-grid > div,
+html[data-theme='dark'] .chapter-toolbar,
+html[data-theme='dark'] .chapter-question-filters,
+html[data-theme='dark'] .chapter-question-list,
+html[data-theme='dark'] .bank-chart-plot {
+  background: var(--surface-raised) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+html[data-theme='dark'] .tree-box,
+html[data-theme='dark'] .chunk-toolbar,
+html[data-theme='dark'] .mini-metrics > div,
+html[data-theme='dark'] .question-control-box,
+html[data-theme='dark'] .report-row,
+html[data-theme='dark'] .node-detail-head,
+html[data-theme='dark'] .cost-preview-box,
+html[data-theme='dark'] .next-step-message,
+html[data-theme='dark'] .quiz-summary-card,
+html[data-theme='dark'] .mini-status-grid > div,
+html[data-theme='dark'] .bank-bar-track {
+  background: var(--surface-sunken) !important;
+}
+
+html[data-theme='dark'] .mode-card:hover,
+html[data-theme='dark'] .chunk-card:hover,
+html[data-theme='dark'] .tree-row:hover,
+html[data-theme='dark'] .topic-card:hover,
+html[data-theme='dark'] .course-combobox-option:hover,
+html[data-theme='dark'] .quick-search-row:hover,
+html[data-theme='dark'] .entity-actions-menu button:hover,
+html[data-theme='dark'] .data-table tbody tr:hover {
+  background: var(--surface-hover) !important;
+  border-color: var(--border-strong) !important;
+}
+
+html[data-theme='dark'] .mode-card.selected,
+html[data-theme='dark'] .chunk-card.selected,
+html[data-theme='dark'] .tree-row-button.selected,
+html[data-theme='dark'] .topic-card.selected,
+html[data-theme='dark'] .course-combobox-option.selected {
+  background: var(--accent-soft) !important;
+  color: #dbeafe !important;
+  border-color: #3b82f6 !important;
+}
+
+html[data-theme='dark'] .table,
+html[data-theme='dark'] .data-table,
+html[data-theme='dark'] .quiz-map-table {
+  color: var(--text) !important;
+}
+
+html[data-theme='dark'] .table th,
+html[data-theme='dark'] .data-table th,
+html[data-theme='dark'] .quiz-map-table thead th {
+  background: var(--surface-sunken) !important;
+  color: #dbeafe !important;
+  border-color: var(--border) !important;
+}
+
+html[data-theme='dark'] .table td,
+html[data-theme='dark'] .data-table td,
+html[data-theme='dark'] .quiz-map-table td,
+html[data-theme='dark'] .quiz-map-table tbody tr.row-ready,
+html[data-theme='dark'] .quiz-map-table tbody tr.row-blocked {
+  background: transparent !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+html[data-theme='dark'] .bank-modal .section-head {
+  background: var(--surface-raised) !important;
+}
+
+html[data-theme='dark'] .entity-actions-trigger,
+html[data-theme='dark'] .entity-actions-menu button {
+  color: var(--text) !important;
+}
+
+html[data-theme='dark'] .entity-actions-menu button.danger {
+  color: #fca5a5 !important;
+}
+
+html[data-theme='dark'] .entity-actions-menu button.danger:hover {
+  background: rgba(239, 68, 68, .14) !important;
+}
+
+html[data-theme='dark'] .question-index,
+html[data-theme='dark'] .badge,
+html[data-theme='dark'] .soft-tag,
+html[data-theme='dark'] .tree-toggle {
+  background: var(--accent-soft) !important;
+  color: #bfdbfe !important;
+  border-color: rgba(96, 165, 250, .3) !important;
+}
+
+html[data-theme='dark'] .answer-letter {
+  background: #243045 !important;
+  color: #dbeafe !important;
+}
+
+html[data-theme='dark'] .question-select,
+html[data-theme='dark'] .check-row,
+html[data-theme='dark'] .explanation,
+html[data-theme='dark'] .source-excerpt,
+html[data-theme='dark'] .chunk-card p,
+html[data-theme='dark'] .hero-card p,
+html[data-theme='dark'] .topic-meta span,
+html[data-theme='dark'] .report-row span,
+html[data-theme='dark'] .quick-search-row small,
+html[data-theme='dark'] .next-step-message span,
+html[data-theme='dark'] .settings-panel-head p,
+html[data-theme='dark'] .quiz-summary-card span,
+html[data-theme='dark'] .data-table small,
+html[data-theme='dark'] .control-note,
+html[data-theme='dark'] .box-label {
+  color: var(--text-subtle) !important;
+}
+
+html[data-theme='dark'] .quick-search-row b,
+html[data-theme='dark'] .next-step-message b,
+html[data-theme='dark'] .bank-loading-card b,
+html[data-theme='dark'] .cost-preview-box b,
+html[data-theme='dark'] .bank-stat-line b,
+html[data-theme='dark'] .quiz-summary-card b,
+html[data-theme='dark'] .timer-config-panel h3,
+html[data-theme='dark'] .upload-node-box b {
+  color: var(--text-strong) !important;
+}
+
+html[data-theme='dark'] .alert.success,
+html[data-theme='dark'] .notice-success,
+html[data-theme='dark'] .status.approved,
+html[data-theme='dark'] .status.success,
+html[data-theme='dark'] .correct-option {
+  background: rgba(34, 197, 94, .14) !important;
+  color: #bbf7d0 !important;
+  border-color: rgba(34, 197, 94, .34) !important;
+}
+
+html[data-theme='dark'] .alert.warning,
+html[data-theme='dark'] .notice-warning,
+html[data-theme='dark'] .status.warning,
+html[data-theme='dark'] .draft-error-reason,
+html[data-theme='dark'] .warning-card,
+html[data-theme='dark'] .notice-card.warning {
+  background: rgba(245, 158, 11, .14) !important;
+  color: #fde68a !important;
+  border-color: rgba(245, 158, 11, .36) !important;
+}
+
+html[data-theme='dark'] .alert.danger,
+html[data-theme='dark'] .notice-error,
+html[data-theme='dark'] .status.rejected,
+html[data-theme='dark'] .status.danger,
+html[data-theme='dark'] .reject-question-preview,
+html[data-theme='dark'] .delete-node-box {
+  background: rgba(239, 68, 68, .14) !important;
+  color: #fecaca !important;
+  border-color: rgba(239, 68, 68, .36) !important;
+}
+
+html[data-theme='dark'] .notice-info,
+html[data-theme='dark'] .notice-card.info,
+html[data-theme='dark'] .status.pending,
+html[data-theme='dark'] .status.published,
+html[data-theme='dark'] .upload-node-box {
+  background: rgba(59, 130, 246, .14) !important;
+  color: #bfdbfe !important;
+  border-color: rgba(59, 130, 246, .36) !important;
+}
+
+html[data-theme='dark'] .app-footer,
+html[data-theme='dark'] .app-footer span {
+  color: var(--text-subtle) !important;
+}
+
+html[data-theme='dark'] .footer-links a,
+html[data-theme='dark'] a:not(.btn):not(.nav-link):not(.landing-brand) {
+  color: #93c5fd;
+}
+
+html[data-theme='dark'] input[type='file']::file-selector-button {
+  background: #1e293b;
+  color: #e5e7eb;
+  border: 1px solid #475569;
+}
+
+html[data-theme='dark'] select option {
+  background: #0f172a;
+  color: #e5e7eb;
+}
