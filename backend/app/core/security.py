@@ -72,9 +72,20 @@ def _principal_from_jwt(token: str) -> Principal:
         if settings.app_env.lower() in {'prod', 'production'}:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='JWT secret is not configured for production')
     try:
-        claims = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        claims = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            options={'require_exp': True, 'require_sub': True},
+        )
     except JWTError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token') from exc
+    if not claims.get('sub') or not claims.get('exp'):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token claims')
+    if claims.get('token_type') != 'ai_session':
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token type')
     role = _normalize_role(claims.get('role'))
     course_ids = _normalize_courses(claims.get('courses') or claims.get('course_ids'))
     return Principal(
@@ -113,7 +124,7 @@ def get_principal(
             return _principal_from_jwt(authorization.split(' ', 1)[1])
         # Production-friendly option for reverse proxies/SSO: store the JWT in an
         # HttpOnly Secure SameSite cookie instead of localStorage.
-        cookie_token = request.cookies.get('ai_openedx_access_token') or request.cookies.get('access_token')
+        cookie_token = request.cookies.get('ai_openedx_access_token')
         if cookie_token:
             return _principal_from_jwt(cookie_token)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Missing Bearer access token')

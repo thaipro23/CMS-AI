@@ -1,6 +1,6 @@
 import hmac
 
-from fastapi import FastAPI, Header, HTTPException, Response, status
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -8,6 +8,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.api.router import api_router
 from app.core.config import cors_origin_list, settings, validate_security_settings
 from app.core.errors import http_exception_handler, validation_exception_handler
+from app.core.origin_guard import enforce_mutating_origin_guard
 from app.db.init_db import init_db
 from app.services.runtime_settings import apply_runtime_settings
 
@@ -24,6 +25,14 @@ app.add_middleware(
     allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allow_headers=['Authorization', 'Content-Type', 'X-Requested-With', 'X-User-Id', 'X-User-Role', 'X-User-Email', 'X-Course-Ids', 'X-Metrics-Token', 'Idempotency-Key'],
 )
+
+
+@app.middleware('http')
+async def mutating_origin_guard_middleware(request: Request, call_next):
+    blocked = await enforce_mutating_origin_guard(request)
+    if blocked is not None:
+        return blocked
+    return await call_next(request)
 
 
 @app.on_event('startup')

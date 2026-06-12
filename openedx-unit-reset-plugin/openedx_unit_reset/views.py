@@ -79,6 +79,17 @@ def _staff_or_hmac(request):
     return bool(getattr(user, 'is_authenticated', False) and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)))
 
 
+def _debug_errors_enabled():
+    value = os.environ.get('AI_CONNECTOR_DEBUG_ERRORS')
+    if value is not None:
+        return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+    return bool(getattr(settings, 'DEBUG', False))
+
+
+def _hmac_required_response():
+    return JsonResponse({'success': False, 'code': 'CONNECTOR_AUTH_REQUIRED', 'message': 'HMAC server-to-server required'}, status=403)
+
+
 @login_required
 @require_GET
 def reset_unit_status(request):
@@ -282,8 +293,8 @@ def quiz_session_reset(request):
 @csrf_exempt
 @require_POST
 def quiz_timer_config_upsert(request):
-    if not _staff_or_hmac(request):
-        return JsonResponse({'success': False, 'code': 'CONNECTOR_AUTH_REQUIRED', 'message': 'HMAC hoặc staff required'}, status=403)
+    if not _valid_connector_hmac(request):
+        return _hmac_required_response()
     payload = _json_body(request)
     try:
         result = upsert_unit_quiz_timer_config(
@@ -297,7 +308,7 @@ def quiz_timer_config_upsert(request):
             auto_submit_on_timeout=payload.get('auto_submit_on_timeout', True),
             lock_after_timeout=payload.get('lock_after_timeout', True),
             native_timed_exam=payload.get('native_timed_exam', False),
-            actor=getattr(request.user, 'username', '') or str(request.user.id),
+            actor=(getattr(getattr(request, 'user', None), 'username', '') or 'ai-server-hmac'),
             metadata_json=payload.get('metadata') or {},
         )
         return JsonResponse(result, status=200)
@@ -351,12 +362,22 @@ def quiz_session_runtime_js(request):
     });
     document.body.classList.add('ai-quiz-timeout-locked');
   }
+  var configuredOrigins = __ALLOWED_PARENT_ORIGINS__;
+  function allowedOrigin(origin){
+    if (!origin) return false;
+    if (origin === window.location.origin) return true;
+    return configuredOrigins.indexOf(origin) >= 0;
+  }
   window.addEventListener('message', async function(event){
+    if (!allowedOrigin(event.origin)) return;
     if (!event.data || event.data.type !== 'AI_QUIZ_TIMEOUT_AUTO_SUBMIT') return;
     var count = await autoSubmit();
     lock();
-    window.parent && window.parent.postMessage({type:'AI_QUIZ_TIMEOUT_AUTO_SUBMIT_DONE', submitted_problem_count: count}, '*');
+    window.parent && window.parent.postMessage({type:'AI_QUIZ_TIMEOUT_AUTO_SUBMIT_DONE', submitted_problem_count: count}, event.origin);
   });
 })();
 """
+    raw_origins = os.environ.get('AI_QUIZ_RUNTIME_ALLOWED_ORIGINS') or getattr(settings, 'AI_QUIZ_RUNTIME_ALLOWED_ORIGINS', '') or ''
+    allowed_origins = [item.strip().rstrip('/') for item in str(raw_origins).split(',') if item.strip()]
+    js = js.replace('__ALLOWED_PARENT_ORIGINS__', json.dumps(allowed_origins))
     return HttpResponse(js, content_type='application/javascript; charset=utf-8')

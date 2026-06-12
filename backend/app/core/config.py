@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.15.2-bank-material-upload-generate'
+    app_version: str = '25.9.15.6.31.13-bank-business-rbac'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -137,7 +137,11 @@ class Settings(BaseSettings):
     auth_mode: str = 'demo'  # demo | jwt | openedx_sso
     jwt_secret: str = Field(default='dev_secret_change_me')
     jwt_algorithm: str = 'HS256'
+    jwt_issuer: str = 'ai-learning-server'
+    jwt_audience: str = 'ai-learning-server-api'
     allow_demo_role_header: bool = True
+    # One-time RBAC bootstrap guard. Production bootstrap is disabled unless this token is set and supplied via X-RBAC-Bootstrap-Token.
+    rbac_bootstrap_token: str | None = None
 
     # Worker behavior
     task_always_eager: bool = False
@@ -188,6 +192,10 @@ def validate_security_settings() -> None:
         errors.append('ALLOW_DEMO_ROLE_HEADER=false is required in production')
     if not settings.jwt_secret or settings.jwt_secret == 'dev_secret_change_me' or settings.jwt_secret.startswith('CHANGE_ME') or len(settings.jwt_secret) < 32:
         errors.append('JWT_SECRET must be a real strong secret with at least 32 characters in production')
+    if not settings.jwt_issuer:
+        errors.append('JWT_ISSUER is required in production')
+    if not settings.jwt_audience:
+        errors.append('JWT_AUDIENCE is required in production')
     if settings.use_mock_openedx:
         errors.append('USE_MOCK_OPENEDX=false is required in production')
     if settings.mock_llm:

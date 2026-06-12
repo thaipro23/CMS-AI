@@ -1,0 +1,502 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from fastapi import HTTPException, status
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
+from app.models.rbac import RBACPermission, RBACRole, RBACRolePermission, UserRoleAssignment
+from app.models.question_bank import Department, Subject, SubjectChapter, SubjectOffering, QuestionBankRelease, QuestionBankVersion
+
+SYSTEM_ADMIN = 'SYSTEM_ADMIN'
+DEPARTMENT_HEAD = 'DEPARTMENT_HEAD'
+SUBJECT_OWNER = 'SUBJECT_OWNER'
+QUESTION_REVIEWER = 'QUESTION_REVIEWER'
+
+ROLE_RANK = {
+    SYSTEM_ADMIN: 100,
+    DEPARTMENT_HEAD: 70,
+    SUBJECT_OWNER: 50,
+    QUESTION_REVIEWER: 20,
+}
+
+ROLE_LABELS = {
+    SYSTEM_ADMIN: 'Quản trị web',
+    DEPARTMENT_HEAD: 'Trưởng bộ môn',
+    SUBJECT_OWNER: 'Chủ môn',
+    QUESTION_REVIEWER: 'Người duyệt câu hỏi',
+}
+
+ROLE_PERMISSIONS: dict[str, set[str]] = {
+    SYSTEM_ADMIN: {
+        'user.manage_all', 'department.manage_all', 'department.assign_head', 'subject.create', 'subject.update',
+        'subject.assign_owner', 'reviewer.assign', 'course.sync', 'document.manage', 'question.generate',
+        'question.edit', 'question.approve', 'question.reject', 'bank.release.create', 'bank.release.publish',
+        'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view', 'bank.view',
+    },
+    DEPARTMENT_HEAD: {
+        'bank.view', 'subject.create', 'subject.update', 'subject.assign_owner', 'reviewer.assign', 'course.sync',
+        'document.manage', 'question.generate', 'question.edit', 'question.approve', 'question.reject',
+        'bank.release.create', 'bank.release.publish', 'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view',
+    },
+    SUBJECT_OWNER: {
+        'bank.view', 'subject.update', 'reviewer.assign', 'course.sync', 'document.manage', 'question.generate',
+        'question.edit', 'question.approve', 'question.reject', 'bank.release.create', 'bank.release.publish',
+        'quiz.preview', 'quiz.create_openedx', 'audit.view',
+    },
+    QUESTION_REVIEWER: {'bank.view', 'question.edit', 'question.approve', 'question.reject', 'audit.view'},
+}
+
+LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
+    'view_dashboard': {'bank.view', 'audit.view'},
+    'view_questions': {'bank.view', 'question.edit', 'question.approve', 'question.reject'},
+    'view_jobs': {'bank.view', 'audit.view'},
+    'sync_course': {'course.sync'},
+    'estimate_cost': {'question.generate', 'document.manage', 'bank.view'},
+    'generate_questions': {'question.generate'},
+    'edit_questions': {'subject.update', 'document.manage', 'question.edit'},
+    'delete_questions': {'question.edit'},
+    'review_questions': {'question.approve', 'question.reject'},
+    'publish_questions': {'bank.release.create', 'bank.release.publish', 'quiz.preview', 'quiz.create_openedx'},
+    'export_questions': {'bank.release.create', 'bank.release.publish'},
+    'publish_to_openedx': {'bank.release.publish', 'quiz.create_openedx'},
+    'manage_budget': {'quota.manage'},
+    'manage_settings': {'user.manage_all', 'department.manage_all', 'department.assign_head'},
+    'view_user_analytics': {'user.manage_all'},
+}
+
+ROLE_TO_LEGACY = {
+    SYSTEM_ADMIN: 'admin',
+    DEPARTMENT_HEAD: 'teacher',
+    SUBJECT_OWNER: 'teacher',
+    QUESTION_REVIEWER: 'reviewer',
+}
+LEGACY_RANK = {'viewer': 0, 'reviewer': 20, 'teacher': 50, 'admin': 100}
+
+
+@dataclass(frozen=True)
+class EntityScope:
+    scope_type: str
+    scope_id: str
+    department_id: str | None = None
+    subject_id: str | None = None
+    subject_offering_id: str | None = None
+    chapter_id: str | None = None
+    course_id: str | None = None
+
+
+class BusinessRBACService:
+    def __init__(self, db: Session):
+        self.db = db
+
+
+    def ensure_default_catalog(self) -> None:
+        for code, name in ROLE_LABELS.items():
+            role = self.db.get(RBACRole, code)
+            if not role:
+                role = RBACRole(code=code, name=name, description='', rank=ROLE_RANK.get(code, 0), status='active')
+                self.db.add(role)
+            else:
+                role.name = name
+                role.rank = ROLE_RANK.get(code, role.rank)
+                role.status = role.status or 'active'
+        permission_names = {
+            'user.manage_all': 'Quản lý toàn bộ người dùng',
+            'department.manage_all': 'Quản lý toàn bộ bộ môn',
+            'department.assign_head': 'Gán Trưởng bộ môn',
+            'subject.create': 'Tạo môn',
+            'subject.update': 'Cập nhật môn',
+            'subject.assign_owner': 'Gán Chủ môn',
+            'reviewer.assign': 'Gán Người duyệt',
+            'course.sync': 'Đồng bộ course/học liệu',
+            'document.manage': 'Quản lý tài liệu',
+            'question.generate': 'Tạo câu hỏi',
+            'question.edit': 'Sửa câu hỏi',
+            'question.approve': 'Duyệt câu hỏi',
+            'question.reject': 'Từ chối câu hỏi',
+            'bank.release.create': 'Tạo Bank Release',
+            'bank.release.publish': 'Publish Bank Release',
+            'quiz.preview': 'Preview Quiz Open edX',
+            'quiz.create_openedx': 'Tạo Quiz Open edX',
+            'quota.manage': 'Quản lý quota',
+            'audit.view': 'Xem audit',
+            'bank.view': 'Xem ngân hàng đề',
+        }
+        for code, name in permission_names.items():
+            perm = self.db.get(RBACPermission, code)
+            if not perm:
+                self.db.add(RBACPermission(code=code, name=name, group_code=code.split('.', 1)[0]))
+            else:
+                perm.name = name
+                perm.group_code = code.split('.', 1)[0]
+        self.db.flush()
+        existing = {(row.role_code, row.permission_code) for row in self.db.query(RBACRolePermission).all()}
+        for role_code, permissions in ROLE_PERMISSIONS.items():
+            for permission_code in permissions:
+                if (role_code, permission_code) not in existing:
+                    self.db.add(RBACRolePermission(id=str(uuid.uuid4()), role_code=role_code, permission_code=permission_code))
+        self.db.commit()
+
+    def active_assignments_query(self):
+        return self.db.query(UserRoleAssignment).filter(UserRoleAssignment.revoked_at.is_(None))
+
+    def active_assignments_for_identity(self, user_id: str | None, email: str | None = None, username: str | None = None) -> list[UserRoleAssignment]:
+        values = {str(item).strip() for item in [user_id, username] if str(item or '').strip()}
+        filters = []
+        if values:
+            filters.append(UserRoleAssignment.user_id.in_(sorted(values)))
+        if email:
+            filters.append(UserRoleAssignment.email == email)
+        if not filters:
+            return []
+        return self.active_assignments_query().filter(or_(*filters)).all()
+
+    def active_assignments_for_user(self, user_id: str | None) -> list[UserRoleAssignment]:
+        return self.active_assignments_for_identity(user_id)
+
+    def active_assignments_for_actor(self, user: Any) -> list[UserRoleAssignment]:
+        raw_claims = getattr(user, 'raw_claims', None) or {}
+        return self.active_assignments_for_identity(
+            getattr(user, 'user_id', None),
+            email=getattr(user, 'email', None) or raw_claims.get('email'),
+            username=getattr(user, 'username', None) or raw_claims.get('username'),
+        )
+
+    def is_legacy_system_admin(self, user: Any) -> bool:
+        return str(getattr(user, 'role', '') or '').lower() == 'admin'
+
+    def is_system_admin(self, user: Any) -> bool:
+        if self.is_legacy_system_admin(user):
+            return True
+        return any(a.role_code == SYSTEM_ADMIN for a in self.active_assignments_for_actor(user))
+
+    def effective_legacy_role_for_user(self, user_id: str, base_role: str = 'viewer', email: str | None = None, username: str | None = None) -> str:
+        best = base_role if base_role in LEGACY_RANK else 'viewer'
+        best_rank = LEGACY_RANK.get(best, 0)
+        for assignment in self.active_assignments_for_identity(user_id, email=email, username=username):
+            mapped = ROLE_TO_LEGACY.get(assignment.role_code, 'viewer')
+            rank = LEGACY_RANK.get(mapped, 0)
+            if rank > best_rank:
+                best = mapped
+                best_rank = rank
+        return best
+
+    def effective_permissions_for_user(self, user: Any) -> set[str]:
+        permissions: set[str] = set()
+        if self.is_legacy_system_admin(user):
+            permissions.update(ROLE_PERMISSIONS[SYSTEM_ADMIN])
+        for assignment in self.active_assignments_for_actor(user):
+            permissions.update(ROLE_PERMISSIONS.get(assignment.role_code, set()))
+        return permissions
+
+    def has_any_business_permission(self, user: Any, permission: str) -> bool:
+        if self.is_legacy_system_admin(user):
+            return True
+        wanted = LEGACY_PERMISSION_BRIDGE.get(permission, {permission})
+        user_permissions = self.effective_permissions_for_user(user)
+        return bool(user_permissions.intersection(wanted))
+
+    def _subject_department_id(self, subject_id: str | None) -> str | None:
+        if not subject_id:
+            return None
+        subject = self.db.get(Subject, subject_id)
+        return subject.department_id if subject else None
+
+    def _offering_scope(self, offering_id: str | None) -> EntityScope | None:
+        if not offering_id:
+            return None
+        offering = self.db.get(SubjectOffering, offering_id)
+        if not offering:
+            return None
+        department_id = offering.department_id or self._subject_department_id(offering.subject_id)
+        return EntityScope('SUBJECT_VERSION', offering.id, department_id=department_id, subject_id=offering.subject_id, subject_offering_id=offering.id)
+
+    def _chapter_scope(self, chapter_id: str | None) -> EntityScope | None:
+        if not chapter_id:
+            return None
+        chapter = self.db.get(SubjectChapter, chapter_id)
+        if not chapter:
+            return None
+        department_id = self._subject_department_id(chapter.subject_id)
+        offering_scope = self._offering_scope(chapter.subject_offering_id) if chapter.subject_offering_id else None
+        if offering_scope and offering_scope.department_id:
+            department_id = offering_scope.department_id
+        return EntityScope('CHAPTER', chapter.id, department_id=department_id, subject_id=chapter.subject_id, subject_offering_id=chapter.subject_offering_id, chapter_id=chapter.id)
+
+    def entity_scope(self, scope_type: str, scope_id: str | None) -> EntityScope:
+        normalized = (scope_type or 'SYSTEM').strip().upper()
+        scope_id = (scope_id or '*').strip() or '*'
+        if normalized == 'SYSTEM':
+            return EntityScope('SYSTEM', '*')
+        if normalized == 'DEPARTMENT':
+            return EntityScope('DEPARTMENT', scope_id, department_id=scope_id)
+        if normalized == 'SUBJECT':
+            return EntityScope('SUBJECT', scope_id, department_id=self._subject_department_id(scope_id), subject_id=scope_id)
+        if normalized == 'SUBJECT_VERSION':
+            scope = self._offering_scope(scope_id)
+            if scope:
+                return scope
+            return EntityScope('SUBJECT_VERSION', scope_id, subject_offering_id=scope_id)
+        if normalized == 'CHAPTER':
+            scope = self._chapter_scope(scope_id)
+            if scope:
+                return scope
+            return EntityScope('CHAPTER', scope_id, chapter_id=scope_id)
+        if normalized == 'COURSE':
+            return EntityScope('COURSE', scope_id, course_id=scope_id)
+        if normalized == 'BANK_VERSION':
+            bank = self.db.get(QuestionBankVersion, scope_id)
+            if bank:
+                return EntityScope('BANK_VERSION', scope_id, department_id=self._subject_department_id(bank.subject_id), subject_id=bank.subject_id, subject_offering_id=bank.subject_offering_id, chapter_id=bank.chapter_id)
+            return EntityScope('BANK_VERSION', scope_id)
+        if normalized == 'RELEASE':
+            release = self.db.get(QuestionBankRelease, scope_id)
+            if release:
+                return EntityScope('RELEASE', scope_id, department_id=self._subject_department_id(release.subject_id), subject_id=release.subject_id, subject_offering_id=release.subject_offering_id, chapter_id=release.chapter_id)
+            return EntityScope('RELEASE', scope_id)
+        return EntityScope(normalized, scope_id)
+
+    def _assignment_covers(self, assignment: UserRoleAssignment, target: EntityScope) -> bool:
+        assignment_scope = self.entity_scope(assignment.scope_type, assignment.scope_id)
+        if assignment_scope.scope_type == 'SYSTEM' or assignment.role_code == SYSTEM_ADMIN:
+            return True
+        if target.scope_type == 'SYSTEM':
+            return False
+        if assignment_scope.scope_type == 'DEPARTMENT':
+            return bool(target.department_id and target.department_id == assignment_scope.department_id)
+        if assignment_scope.scope_type == 'SUBJECT':
+            return bool(target.subject_id and target.subject_id == assignment_scope.subject_id)
+        if assignment_scope.scope_type == 'SUBJECT_VERSION':
+            return bool(target.subject_offering_id and target.subject_offering_id == assignment_scope.subject_offering_id)
+        if assignment_scope.scope_type == 'CHAPTER':
+            return bool(target.chapter_id and target.chapter_id == assignment_scope.chapter_id)
+        if assignment_scope.scope_type == 'COURSE':
+            return bool(target.course_id and target.course_id == assignment_scope.course_id)
+        return assignment_scope.scope_type == target.scope_type and assignment_scope.scope_id == target.scope_id
+
+    def has_permission(self, user: Any, permission: str, target: EntityScope | None = None) -> bool:
+        if self.is_legacy_system_admin(user):
+            return True
+        target = target or EntityScope('SYSTEM', '*')
+        for assignment in self.active_assignments_for_actor(user):
+            if permission not in ROLE_PERMISSIONS.get(assignment.role_code, set()):
+                continue
+            if self._assignment_covers(assignment, target):
+                return True
+        return False
+
+    def require_permission(self, user: Any, permission: str, scope_type: str = 'SYSTEM', scope_id: str | None = '*') -> None:
+        target = self.entity_scope(scope_type, scope_id)
+        if not self.has_permission(user, permission, target):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f'Không đủ quyền {permission} trong scope {target.scope_type}:{target.scope_id}',
+            )
+
+    def require_system_admin(self, user: Any) -> None:
+        if not self.is_system_admin(user):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Chỉ Quản trị web mới được thao tác toàn hệ thống')
+
+    def can_grant(self, actor: Any, role_code: str, scope_type: str, scope_id: str) -> bool:
+        if self.is_system_admin(actor):
+            return True
+        target = self.entity_scope(scope_type, scope_id)
+        if role_code == SUBJECT_OWNER:
+            return self.has_permission(actor, 'subject.assign_owner', target)
+        if role_code == QUESTION_REVIEWER:
+            return self.has_permission(actor, 'reviewer.assign', target)
+        return False
+
+    def _validate_assignment_scope(self, role_code: str, scope_type: str, scope_id: str) -> None:
+        scope_type = scope_type.upper()
+        if role_code == SYSTEM_ADMIN and scope_type != 'SYSTEM':
+            raise HTTPException(status_code=400, detail='SYSTEM_ADMIN chỉ được gán ở scope SYSTEM')
+        if role_code == DEPARTMENT_HEAD and scope_type != 'DEPARTMENT':
+            raise HTTPException(status_code=400, detail='DEPARTMENT_HEAD chỉ được gán ở scope DEPARTMENT')
+        if role_code == SUBJECT_OWNER and scope_type not in {'SUBJECT', 'SUBJECT_VERSION'}:
+            raise HTTPException(status_code=400, detail='SUBJECT_OWNER chỉ được gán ở scope SUBJECT hoặc SUBJECT_VERSION')
+        if role_code == QUESTION_REVIEWER and scope_type not in {'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'}:
+            raise HTTPException(status_code=400, detail='QUESTION_REVIEWER chỉ được gán ở scope SUBJECT/SUBJECT_VERSION/CHAPTER')
+        if scope_type == 'SYSTEM':
+            return
+        if scope_type == 'DEPARTMENT' and not self.db.get(Department, scope_id):
+            raise HTTPException(status_code=404, detail='Không tìm thấy bộ môn để gán quyền')
+        if scope_type == 'SUBJECT' and not self.db.get(Subject, scope_id):
+            raise HTTPException(status_code=404, detail='Không tìm thấy môn để gán quyền')
+        if scope_type == 'SUBJECT_VERSION' and not self.db.get(SubjectOffering, scope_id):
+            raise HTTPException(status_code=404, detail='Không tìm thấy phiên bản môn để gán quyền')
+        if scope_type == 'CHAPTER' and not self.db.get(SubjectChapter, scope_id):
+            raise HTTPException(status_code=404, detail='Không tìm thấy bài/chapter để gán quyền')
+
+    def create_assignment(self, *, actor: Any, user_id: str, email: str | None, role_code: str, scope_type: str, scope_id: str = '*', grant_reason: str = '', sync_openedx: bool = False) -> UserRoleAssignment:
+        role_code = role_code.strip().upper()
+        scope_type = scope_type.strip().upper()
+        scope_id = (scope_id or '*').strip() or '*'
+        self._validate_assignment_scope(role_code, scope_type, scope_id)
+        if not self.can_grant(actor, role_code, scope_type, scope_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được gán role này trong scope này')
+        existing = self.active_assignments_query().filter(
+            UserRoleAssignment.user_id == user_id,
+            UserRoleAssignment.role_code == role_code,
+            UserRoleAssignment.scope_type == scope_type,
+            UserRoleAssignment.scope_id == scope_id,
+        ).first()
+        if existing:
+            if email and not existing.email:
+                existing.email = email
+            if grant_reason:
+                existing.grant_reason = grant_reason
+            existing.metadata_json = {**(existing.metadata_json or {}), 'sync_openedx_requested': bool(sync_openedx)}
+            self.db.add(existing)
+            self.db.commit()
+            self.db.refresh(existing)
+            return existing
+        item = UserRoleAssignment(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            email=email,
+            role_code=role_code,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            granted_by=getattr(actor, 'user_id', None),
+            grant_reason=grant_reason or '',
+            metadata_json={'sync_openedx_requested': bool(sync_openedx)},
+        )
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def revoke_assignment(self, assignment_id: str, actor: Any, revoke_reason: str = '') -> UserRoleAssignment:
+        item = self.db.get(UserRoleAssignment, assignment_id)
+        if not item or item.revoked_at is not None:
+            raise HTTPException(status_code=404, detail='Không tìm thấy assignment đang hiệu lực')
+        if not self.can_grant(actor, item.role_code, item.scope_type, item.scope_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được thu hồi assignment này')
+        item.revoked_at = datetime.utcnow()
+        item.revoked_by = getattr(actor, 'user_id', None)
+        item.revoke_reason = revoke_reason or ''
+        self.db.add(item)
+        self.db.commit()
+        self.db.refresh(item)
+        return item
+
+    def bootstrap_system_admin(self, *, user_id: str, email: str | None = None, reason: str = '') -> tuple[UserRoleAssignment | None, bool]:
+        existing_admins = self.active_assignments_query().filter(UserRoleAssignment.role_code == SYSTEM_ADMIN).first()
+        if existing_admins:
+            return None, False
+        pseudo_actor = type('Actor', (), {'user_id': 'bootstrap', 'role': 'admin'})()
+        item = self.create_assignment(actor=pseudo_actor, user_id=user_id, email=email, role_code=SYSTEM_ADMIN, scope_type='SYSTEM', scope_id='*', grant_reason=reason or 'Bootstrap SYSTEM_ADMIN')
+        return item, True
+
+    def list_roles(self) -> list[RBACRole]:
+        return self.db.query(RBACRole).order_by(RBACRole.rank.desc(), RBACRole.code.asc()).all()
+
+    def list_permissions(self) -> list[RBACPermission]:
+        return self.db.query(RBACPermission).order_by(RBACPermission.group_code.asc(), RBACPermission.code.asc()).all()
+
+    def list_assignments(self, *, actor: Any, user_id: str | None = None, role_code: str | None = None, scope_type: str | None = None, scope_id: str | None = None, include_revoked: bool = False) -> list[UserRoleAssignment]:
+        query = self.db.query(UserRoleAssignment)
+        if not include_revoked:
+            query = query.filter(UserRoleAssignment.revoked_at.is_(None))
+        if user_id:
+            query = query.filter(UserRoleAssignment.user_id == user_id)
+        if role_code:
+            query = query.filter(UserRoleAssignment.role_code == role_code.upper())
+        if scope_type:
+            query = query.filter(UserRoleAssignment.scope_type == scope_type.upper())
+        if scope_id:
+            query = query.filter(UserRoleAssignment.scope_id == scope_id)
+        items = query.order_by(UserRoleAssignment.created_at.desc()).all()
+        if self.is_system_admin(actor):
+            return items
+        # Non-system actors can only see assignments they would be able to grant/revoke.
+        return [item for item in items if self.can_grant(actor, item.role_code, item.scope_type, item.scope_id) or item.user_id == getattr(actor, 'user_id', None)]
+
+    def scope_label(self, scope_type: str, scope_id: str) -> str:
+        scope_type = scope_type.upper()
+        if scope_type == 'SYSTEM':
+            return 'Toàn hệ thống'
+        if scope_type == 'DEPARTMENT':
+            item = self.db.get(Department, scope_id)
+            return f'{item.code} · {item.name}' if item else scope_id
+        if scope_type == 'SUBJECT':
+            item = self.db.get(Subject, scope_id)
+            return f'{item.code} · {item.name}' if item else scope_id
+        if scope_type == 'SUBJECT_VERSION':
+            item = self.db.get(SubjectOffering, scope_id)
+            return f'{item.code} · {item.name or item.version_code}' if item else scope_id
+        if scope_type == 'CHAPTER':
+            item = self.db.get(SubjectChapter, scope_id)
+            return item.title if item else scope_id
+        return scope_id
+
+    def serialize_assignment(self, item: UserRoleAssignment) -> dict[str, Any]:
+        return {
+            'id': item.id,
+            'user_id': item.user_id,
+            'email': item.email,
+            'role_code': item.role_code,
+            'role_name': ROLE_LABELS.get(item.role_code, item.role_code),
+            'scope_type': item.scope_type,
+            'scope_id': item.scope_id,
+            'scope_label': self.scope_label(item.scope_type, item.scope_id),
+            'granted_by': item.granted_by,
+            'grant_reason': item.grant_reason or '',
+            'metadata_json': item.metadata_json or {},
+            'revoked_at': item.revoked_at,
+            'revoked_by': item.revoked_by,
+            'revoke_reason': item.revoke_reason or '',
+            'created_at': item.created_at,
+            'updated_at': item.updated_at,
+        }
+
+    def accessible_department_ids(self, user: Any) -> set[str] | None:
+        if self.is_system_admin(user):
+            return None
+        departments: set[str] = set()
+        for assignment in self.active_assignments_for_actor(user):
+            scope = self.entity_scope(assignment.scope_type, assignment.scope_id)
+            if scope.department_id:
+                departments.add(scope.department_id)
+            elif scope.subject_id:
+                dep = self._subject_department_id(scope.subject_id)
+                if dep:
+                    departments.add(dep)
+        return departments
+
+    def accessible_subject_ids(self, user: Any) -> set[str] | None:
+        if self.is_system_admin(user):
+            return None
+        subjects: set[str] = set()
+        department_ids: set[str] = set()
+        for assignment in self.active_assignments_for_actor(user):
+            scope = self.entity_scope(assignment.scope_type, assignment.scope_id)
+            if scope.department_id and assignment.scope_type == 'DEPARTMENT':
+                department_ids.add(scope.department_id)
+            if scope.subject_id:
+                subjects.add(scope.subject_id)
+        if department_ids:
+            rows = self.db.query(Subject.id).filter(Subject.department_id.in_(department_ids)).all()
+            subjects.update(row[0] for row in rows)
+        return subjects
+
+    def apply_department_filter(self, query, user: Any):
+        ids = self.accessible_department_ids(user)
+        if ids is None:
+            return query
+        if not ids:
+            return query.filter(False)
+        return query.filter(Department.id.in_(ids))
+
+    def apply_subject_filter(self, query, user: Any):
+        ids = self.accessible_subject_ids(user)
+        if ids is None:
+            return query
+        if not ids:
+            return query.filter(False)
+        return query.filter(Subject.id.in_(ids))

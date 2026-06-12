@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.rbac import UserContext, require_permission
+from app.core.rbac import UserContext, get_user_context, require_permission
 from app.db.session import get_db
 from app.models.question import Question
 from app.models.question_bank import (
@@ -83,6 +83,7 @@ from app.schemas.question_bank import (
 )
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.question_bank_service import VersionedQuestionBankService
+from app.services.business_rbac import BusinessRBACService
 
 router = APIRouter()
 
@@ -109,6 +110,22 @@ async def _read_bank_upload_limited(file: UploadFile, *, max_bytes: int = _BANK_
             raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail='File quá lớn. Giới hạn hiện tại là 50MB/file.')
         chunks.append(chunk)
     return b''.join(chunks)
+
+
+def _biz(db: Session) -> BusinessRBACService:
+    return BusinessRBACService(db)
+
+
+def _require_business(db: Session, user: UserContext, permission: str, scope_type: str = 'SYSTEM', scope_id: str | None = '*') -> None:
+    _biz(db).require_permission(user, permission, scope_type, scope_id)
+
+
+def _require_bank_version(db: Session, user: UserContext, permission: str, bank_version_id: str) -> None:
+    _require_business(db, user, permission, 'BANK_VERSION', bank_version_id)
+
+
+def _require_release(db: Session, user: UserContext, permission: str, release_id: str) -> None:
+    _require_business(db, user, permission, 'RELEASE', release_id)
 
 
 @router.get('/summary', response_model=BankSummaryOut)
@@ -148,11 +165,13 @@ def chapter_summaries(subject_offering_id: str, db: Session = Depends(get_db), u
 
 @router.get('/departments', response_model=list[DepartmentOut])
 def list_departments(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return db.query(Department).order_by(Department.code.asc()).all()
+    query = _biz(db).apply_department_filter(db.query(Department), user)
+    return query.order_by(Department.code.asc()).all()
 
 
 @router.post('/departments', response_model=DepartmentOut)
 def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _require_business(db, user, 'department.manage_all')
     try:
         item = VersionedQuestionBankService(db).create_department(**payload.model_dump())
         log_audit(db, action='question_bank.department.create', status='success', message='Tạo bộ môn thành công', user=user, target_type='department', target_id=item.id)
@@ -164,6 +183,7 @@ def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), 
 
 @router.patch('/departments/{department_id}', response_model=DepartmentOut)
 def update_department(department_id: str, payload: DepartmentUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _require_business(db, user, 'department.manage_all')
     try:
         item = VersionedQuestionBankService(db).update_department(department_id, **payload.model_dump(exclude_unset=True))
         log_audit(db, action='question_bank.department.update', status='success', message='Sửa bộ môn thành công', user=user, target_type='department', target_id=item.id)
@@ -175,6 +195,7 @@ def update_department(department_id: str, payload: DepartmentUpdate, db: Session
 
 @router.delete('/departments/{department_id}', response_model=EntityDeleteOut)
 def delete_department(department_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _require_business(db, user, 'department.manage_all')
     try:
         result = VersionedQuestionBankService(db).delete_department(department_id)
         log_audit(db, action='question_bank.department.delete', status='success', message=result.get('message', 'Đã xóa bộ môn'), user=user, target_type='department', target_id=department_id)
@@ -186,14 +207,16 @@ def delete_department(department_id: str, db: Session = Depends(get_db), user: U
 
 @router.get('/subjects', response_model=list[SubjectOut])
 def list_subjects(department_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(Subject)
+    query = _biz(db).apply_subject_filter(db.query(Subject), user)
     if department_id:
+        _require_business(db, user, 'bank.view', 'DEPARTMENT', department_id)
         query = query.filter(Subject.department_id == department_id)
     return query.order_by(Subject.code.asc()).all()
 
 
 @router.post('/subjects', response_model=SubjectOut)
-def create_subject(payload: SubjectCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def create_subject(payload: SubjectCreate, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.create', 'DEPARTMENT', payload.department_id)
     try:
         item = VersionedQuestionBankService(db).create_subject(**payload.model_dump())
         log_audit(db, action='question_bank.subject.create', status='success', message='Tạo môn học thành công', user=user, target_type='subject', target_id=item.id)
@@ -204,7 +227,8 @@ def create_subject(payload: SubjectCreate, db: Session = Depends(get_db), user: 
 
 
 @router.patch('/subjects/{subject_id}', response_model=SubjectOut)
-def update_subject(subject_id: str, payload: SubjectUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def update_subject(subject_id: str, payload: SubjectUpdate, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.update', 'SUBJECT', subject_id)
     try:
         item = VersionedQuestionBankService(db).update_subject(subject_id, **payload.model_dump(exclude_unset=True))
         log_audit(db, action='question_bank.subject.update', status='success', message='Sửa môn thành công', user=user, target_type='subject', target_id=item.id)
@@ -215,7 +239,8 @@ def update_subject(subject_id: str, payload: SubjectUpdate, db: Session = Depend
 
 
 @router.delete('/subjects/{subject_id}', response_model=EntityDeleteOut)
-def delete_subject(subject_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def delete_subject(subject_id: str, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.update', 'SUBJECT', subject_id)
     try:
         result = VersionedQuestionBankService(db).delete_subject(subject_id)
         log_audit(db, action='question_bank.subject.delete', status='success', message=result.get('message', 'Đã xóa môn'), user=user, target_type='subject', target_id=subject_id)
@@ -229,14 +254,21 @@ def delete_subject(subject_id: str, db: Session = Depends(get_db), user: UserCon
 @router.get('/subject-versions', response_model=list[SubjectOfferingOut])
 def list_subject_offerings(subject_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(SubjectOffering)
+    subject_ids = _biz(db).accessible_subject_ids(user)
+    if subject_ids is not None:
+        if not subject_ids:
+            return []
+        query = query.filter(SubjectOffering.subject_id.in_(subject_ids))
     if subject_id:
+        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
         query = query.filter(SubjectOffering.subject_id == subject_id)
     return query.order_by(SubjectOffering.code.asc()).all()
 
 
 @router.post('/subject-offerings', response_model=SubjectOfferingOut)
 @router.post('/subject-versions', response_model=SubjectOfferingOut)
-def create_subject_offering(payload: SubjectOfferingCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def create_subject_offering(payload: SubjectOfferingCreate, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.update', 'SUBJECT', payload.subject_id)
     try:
         item = VersionedQuestionBankService(db).create_subject_offering(**payload.model_dump(), actor=user.user_id)
         log_audit(db, action='question_bank.subject_offering.create', status='success', message='Tạo phiên bản môn thành công', user=user, target_type='subject_offering', target_id=item.id)
@@ -248,7 +280,8 @@ def create_subject_offering(payload: SubjectOfferingCreate, db: Session = Depend
 
 @router.patch('/subject-offerings/{subject_offering_id}', response_model=SubjectOfferingOut)
 @router.patch('/subject-versions/{subject_offering_id}', response_model=SubjectOfferingOut)
-def update_subject_offering(subject_offering_id: str, payload: SubjectOfferingUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def update_subject_offering(subject_offering_id: str, payload: SubjectOfferingUpdate, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.update', 'SUBJECT_VERSION', subject_offering_id)
     try:
         item = VersionedQuestionBankService(db).update_subject_offering(subject_offering_id, **payload.model_dump(exclude_unset=True))
         log_audit(db, action='question_bank.subject_offering.update', status='success', message='Sửa phiên bản môn thành công', user=user, target_type='subject_offering', target_id=item.id)
@@ -260,7 +293,8 @@ def update_subject_offering(subject_offering_id: str, payload: SubjectOfferingUp
 
 @router.delete('/subject-offerings/{subject_offering_id}', response_model=EntityDeleteOut)
 @router.delete('/subject-versions/{subject_offering_id}', response_model=EntityDeleteOut)
-def delete_subject_offering(subject_offering_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def delete_subject_offering(subject_offering_id: str, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.update', 'SUBJECT_VERSION', subject_offering_id)
     try:
         result = VersionedQuestionBankService(db).delete_subject_offering(subject_offering_id)
         log_audit(db, action='question_bank.subject_offering.delete', status='success', message=result.get('message', 'Đã xóa phiên bản môn'), user=user, target_type='subject_offering', target_id=subject_offering_id)
@@ -273,15 +307,26 @@ def delete_subject_offering(subject_offering_id: str, db: Session = Depends(get_
 @router.get('/chapters', response_model=list[ChapterOut])
 def list_chapters(subject_id: str | None = None, subject_offering_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(SubjectChapter)
+    subject_ids = _biz(db).accessible_subject_ids(user)
+    if subject_ids is not None:
+        if not subject_ids:
+            return []
+        query = query.filter(SubjectChapter.subject_id.in_(subject_ids))
     if subject_id:
+        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
         query = query.filter(SubjectChapter.subject_id == subject_id)
     if subject_offering_id:
+        _require_business(db, user, 'bank.view', 'SUBJECT_VERSION', subject_offering_id)
         query = query.filter(SubjectChapter.subject_offering_id == subject_offering_id)
     return query.order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
 
 
 @router.post('/chapters', response_model=ChapterOut)
-def create_chapter(payload: ChapterCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def create_chapter(payload: ChapterCreate, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    if payload.subject_offering_id:
+        _require_business(db, user, 'subject.update', 'SUBJECT_VERSION', payload.subject_offering_id)
+    else:
+        _require_business(db, user, 'subject.update', 'SUBJECT', payload.subject_id)
     try:
         item = VersionedQuestionBankService(db).create_chapter(**payload.model_dump())
         log_audit(db, action='question_bank.chapter.create', status='success', message='Tạo chapter/bài học thành công', user=user, target_type='chapter', target_id=item.id)
@@ -292,7 +337,8 @@ def create_chapter(payload: ChapterCreate, db: Session = Depends(get_db), user: 
 
 
 @router.patch('/chapters/{chapter_id}', response_model=ChapterOut)
-def update_chapter(chapter_id: str, payload: ChapterUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def update_chapter(chapter_id: str, payload: ChapterUpdate, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.update', 'CHAPTER', chapter_id)
     try:
         item = VersionedQuestionBankService(db).update_chapter(chapter_id, **payload.model_dump(exclude_unset=True))
         log_audit(db, action='question_bank.chapter.update', status='success', message='Sửa bài/chapter thành công', user=user, target_type='chapter', target_id=item.id)
@@ -303,7 +349,8 @@ def update_chapter(chapter_id: str, payload: ChapterUpdate, db: Session = Depend
 
 
 @router.delete('/chapters/{chapter_id}', response_model=EntityDeleteOut)
-def delete_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+def delete_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserContext = Depends(get_user_context)):
+    _require_business(db, user, 'subject.update', 'CHAPTER', chapter_id)
     try:
         result = VersionedQuestionBankService(db).delete_chapter(chapter_id)
         log_audit(db, action='question_bank.chapter.delete', status='success', message=result.get('message', 'Đã xóa bài/chapter'), user=user, target_type='chapter', target_id=chapter_id)
@@ -316,17 +363,26 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserCon
 @router.get('/bank-versions', response_model=list[BankVersionOut])
 def list_bank_versions(chapter_id: str | None = None, subject_id: str | None = None, subject_offering_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(QuestionBankVersion)
+    subject_ids = _biz(db).accessible_subject_ids(user)
+    if subject_ids is not None:
+        if not subject_ids:
+            return []
+        query = query.filter(QuestionBankVersion.subject_id.in_(subject_ids))
     if chapter_id:
+        _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
         query = query.filter(QuestionBankVersion.chapter_id == chapter_id)
     if subject_id:
+        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
         query = query.filter(QuestionBankVersion.subject_id == subject_id)
     if subject_offering_id:
+        _require_business(db, user, 'bank.view', 'SUBJECT_VERSION', subject_offering_id)
         query = query.filter(QuestionBankVersion.subject_offering_id == subject_offering_id)
     return query.order_by(QuestionBankVersion.created_at.desc()).all()
 
 
 @router.post('/bank-versions', response_model=BankVersionOut)
 def create_bank_version(payload: BankVersionCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
+    _require_business(db, user, 'document.manage', 'CHAPTER', payload.chapter_id)
     try:
         item = VersionedQuestionBankService(db).create_bank_version(**payload.model_dump(), actor=user.user_id)
         log_audit(db, action='question_bank.version.create', status='success', message='Tạo phiên bản ngân hàng câu hỏi thành công', user=user, target_type='bank_version', target_id=item.id)
@@ -340,12 +396,20 @@ def create_bank_version(payload: BankVersionCreate, db: Session = Depends(get_db
 def list_material_versions(bank_version_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(LearningMaterialVersion)
     if bank_version_id:
+        _require_bank_version(db, user, 'bank.view', bank_version_id)
         query = query.filter(LearningMaterialVersion.bank_version_id == bank_version_id)
+    else:
+        subject_ids = _biz(db).accessible_subject_ids(user)
+        if subject_ids is not None:
+            if not subject_ids:
+                return []
+            query = query.filter(LearningMaterialVersion.subject_id.in_(subject_ids))
     return query.order_by(LearningMaterialVersion.created_at.desc()).all()
 
 
 @router.post('/material-versions', response_model=MaterialVersionOut)
 def create_material_version(payload: MaterialVersionCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
+    _require_bank_version(db, user, 'document.manage', payload.bank_version_id)
     try:
         item = VersionedQuestionBankService(db).create_material_version(**payload.model_dump(), actor=user.user_id)
         log_audit(db, action='question_bank.material_version.create', status='success', message='Tạo phiên bản tài liệu thành công', user=user, target_type='material_version', target_id=item.id)
@@ -361,6 +425,10 @@ def create_material_version(payload: MaterialVersionCreate, db: Session = Depend
 
 @router.delete('/material-versions/{material_version_id}', response_model=MaterialDeleteOut)
 def delete_material_version(material_version_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
+    material = db.get(LearningMaterialVersion, material_version_id)
+    if not material:
+        raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu')
+    _require_bank_version(db, user, 'document.manage', material.bank_version_id)
     try:
         result = VersionedQuestionBankService(db).delete_material_version(material_version_id=material_version_id, actor=user.user_id)
         log_audit(db, action='question_bank.material.delete', status='success', message=result.get('message', ''), user=user, target_type='material_version', target_id=material_version_id, metadata=result)
@@ -380,6 +448,7 @@ async def upload_material_to_bank_version(
     db: Session = Depends(get_db),
     user: UserContext = Depends(require_permission('edit_questions')),
 ):
+    _require_bank_version(db, user, 'document.manage', bank_version_id)
     try:
         raw = await _read_bank_upload_limited(file)
         result = VersionedQuestionBankService(db).upload_material_bytes(
@@ -416,6 +485,7 @@ async def upload_material_to_bank_version(
 
 @router.get('/bank-versions/{bank_version_id}/material-chunks', response_model=list[MaterialChunkOut])
 def list_bank_material_chunks(bank_version_id: str, material_version_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
     query = db.query(MaterialChunk).filter(MaterialChunk.bank_version_id == bank_version_id)
     if material_version_id:
         query = query.filter(MaterialChunk.material_version_id == material_version_id)
@@ -424,6 +494,7 @@ def list_bank_material_chunks(bank_version_id: str, material_version_id: str | N
 
 @router.post('/bank-versions/{bank_version_id}/generate/preview', response_model=BankGeneratePreviewOut)
 async def preview_generate_questions_from_bank_version(bank_version_id: str, payload: BankGenerateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('estimate_cost'))):
+    _require_bank_version(db, user, 'question.generate', bank_version_id)
     try:
         result = await VersionedQuestionBankService(db).preview_generate_from_bank_version(
             bank_version_id=bank_version_id,
@@ -443,6 +514,7 @@ async def preview_generate_questions_from_bank_version(bank_version_id: str, pay
 
 @router.post('/bank-versions/{bank_version_id}/generate', response_model=BankGenerateOut)
 async def generate_questions_from_bank_version(bank_version_id: str, payload: BankGenerateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('generate_questions'))):
+    _require_bank_version(db, user, 'question.generate', bank_version_id)
     try:
         result = await VersionedQuestionBankService(db).generate_from_bank_version(
             bank_version_id=bank_version_id,
@@ -475,6 +547,7 @@ async def generate_questions_from_bank_version(bank_version_id: str, payload: Ba
 
 @router.get('/bank-versions/{bank_version_id}/questions', response_model=list[BankVersionQuestionOut])
 def list_bank_version_questions(bank_version_id: str, status_filter: str | None = None, limit: int = 100, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
     query = db.query(Question).filter(Question.bank_version_id == bank_version_id)
     if status_filter:
         query = query.filter(Question.status == status_filter)
@@ -484,6 +557,7 @@ def list_bank_version_questions(bank_version_id: str, status_filter: str | None 
 
 @router.post('/bank-versions/{bank_version_id}/diff/preview', response_model=BankVersionDiffPreviewOut)
 def preview_bank_version_diff(bank_version_id: str, payload: BankVersionDiffPreviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
     try:
         base_id = payload.base_bank_version_id
         if not base_id:
@@ -506,6 +580,8 @@ def preview_bank_version_diff(bank_version_id: str, payload: BankVersionDiffPrev
 
 @router.post('/bank-versions/{bank_version_id}/carry-over', response_model=BankCarryOverOut)
 def carry_over_bank_questions(bank_version_id: str, payload: BankCarryOverRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
+    _require_bank_version(db, user, 'question.edit', bank_version_id)
+    _require_bank_version(db, user, 'bank.view', payload.base_bank_version_id)
     try:
         result = VersionedQuestionBankService(db).carry_over_questions(
             from_bank_version_id=payload.base_bank_version_id,
@@ -524,6 +600,7 @@ def carry_over_bank_questions(bank_version_id: str, payload: BankCarryOverReques
 
 @router.post('/bank-versions/{bank_version_id}/questions/retire', response_model=BankRetireQuestionsOut)
 def retire_bank_questions(bank_version_id: str, payload: BankRetireQuestionsRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    _require_bank_version(db, user, 'question.reject', bank_version_id)
     try:
         result = VersionedQuestionBankService(db).retire_questions(
             bank_version_id=bank_version_id,
@@ -540,6 +617,7 @@ def retire_bank_questions(bank_version_id: str, payload: BankRetireQuestionsRequ
 
 @router.patch('/bank-versions/{bank_version_id}/questions/{question_id}', response_model=BankVersionQuestionOut)
 def update_bank_question(bank_version_id: str, question_id: str, payload: BankQuestionUpdateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    _require_bank_version(db, user, 'question.edit', bank_version_id)
     try:
         question = VersionedQuestionBankService(db).update_bank_question(
             bank_version_id=bank_version_id,
@@ -556,6 +634,7 @@ def update_bank_question(bank_version_id: str, question_id: str, payload: BankQu
 
 @router.post('/bank-versions/{bank_version_id}/questions/{question_id}/review', response_model=BankQuestionReviewOut)
 def review_bank_question(bank_version_id: str, question_id: str, payload: BankQuestionReviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    _require_bank_version(db, user, 'question.approve' if payload.action != 'reject' else 'question.reject', bank_version_id)
     try:
         result = VersionedQuestionBankService(db).review_bank_question(
             bank_version_id=bank_version_id,
@@ -573,6 +652,7 @@ def review_bank_question(bank_version_id: str, question_id: str, payload: BankQu
 
 @router.post('/bank-versions/{bank_version_id}/questions/bulk-review', response_model=BankQuestionBulkReviewOut)
 def bulk_review_bank_questions(bank_version_id: str, payload: BankQuestionBulkReviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    _require_bank_version(db, user, 'question.approve' if payload.action != 'reject' else 'question.reject', bank_version_id)
     try:
         result = VersionedQuestionBankService(db).bulk_review_bank_questions(
             bank_version_id=bank_version_id,
@@ -591,6 +671,7 @@ def bulk_review_bank_questions(bank_version_id: str, payload: BankQuestionBulkRe
 
 @router.post('/bank-versions/{bank_version_id}/diff/mark-resolved', response_model=BankDocumentDiffResolveOut)
 def mark_bank_diff_resolved(bank_version_id: str, payload: BankDocumentDiffResolveRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    _require_bank_version(db, user, 'question.approve', bank_version_id)
     try:
         result = VersionedQuestionBankService(db).mark_document_diff_resolved(bank_version_id=bank_version_id, note=payload.note, actor=user.user_id)
         log_audit(db, action='question_bank.version.diff.mark_resolved', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id)
@@ -602,6 +683,7 @@ def mark_bank_diff_resolved(bank_version_id: str, payload: BankDocumentDiffResol
 
 @router.get('/bank-versions/{bank_version_id}/release/readiness', response_model=BankReleaseReadinessOut)
 def bank_release_readiness(bank_version_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
     return VersionedQuestionBankService(db).release_readiness(bank_version_id=bank_version_id)
 
 
@@ -617,6 +699,7 @@ def list_releases(bank_version_id: str | None = None, chapter_id: str | None = N
 
 @router.post('/releases', response_model=BankReleaseOut)
 def create_release(payload: BankReleaseCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_bank_version(db, user, 'bank.release.create', payload.bank_version_id)
     try:
         item = VersionedQuestionBankService(db).create_release(**payload.model_dump(), actor=user.user_id)
         log_audit(db, action='question_bank.release.create', status='success', message='Tạo Bank Release thành công; 1 release = 1 Open edX Library', user=user, target_type='bank_release', target_id=item.id, metadata={'openedx_library_key': item.openedx_library_key})
@@ -628,6 +711,7 @@ def create_release(payload: BankReleaseCreate, db: Session = Depends(get_db), us
 
 @router.delete('/releases/{release_id}', response_model=EntityDeleteOut)
 def cancel_failed_release(release_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_release(db, user, 'bank.release.publish', release_id)
     try:
         result = VersionedQuestionBankService(db).cancel_failed_release(release_id=release_id, actor=user.user_id)
         log_audit(db, action='question_bank.release.cancel_failed', status='success', message=result.get('message', ''), user=user, target_type='bank_release', target_id=release_id, metadata=result)
@@ -639,6 +723,7 @@ def cancel_failed_release(release_id: str, db: Session = Depends(get_db), user: 
 
 @router.post('/releases/{release_id}/publish-openedx', response_model=BankReleasePublishOut)
 async def publish_release_to_openedx(release_id: str, payload: BankReleasePublishRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_release(db, user, 'bank.release.publish', release_id)
     try:
         result = await VersionedQuestionBankService(db).publish_release_to_openedx(
             release_id=release_id,
@@ -655,6 +740,7 @@ async def publish_release_to_openedx(release_id: str, payload: BankReleasePublis
 
 @router.post('/releases/{release_id}/quiz/preview', response_model=BankReleaseQuizPlanOut)
 def preview_quiz_from_release(release_id: str, payload: BankReleaseQuizPreviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_release(db, user, 'quiz.preview', release_id)
     try:
         result = VersionedQuestionBankService(db).preview_quiz_from_release(
             bank_release_id=release_id,
@@ -673,6 +759,7 @@ def preview_quiz_from_release(release_id: str, payload: BankReleaseQuizPreviewRe
 
 @router.post('/releases/{release_id}/quiz/create', response_model=BankReleaseQuizCreateOut)
 async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCreateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_release(db, user, 'quiz.create_openedx', release_id)
     try:
         result = await VersionedQuestionBankService(db).create_quiz_from_release(
             course_chapter_mapping_id=payload.course_chapter_mapping_id,
@@ -706,6 +793,8 @@ async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCrea
 
 @router.post('/quiz/auto-map/preview', response_model=QuizAutoMapOut)
 async def preview_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    if payload.selected_subject_offering_id:
+        _require_business(db, user, 'quiz.preview', 'SUBJECT_VERSION', payload.selected_subject_offering_id)
     try:
         result = await VersionedQuestionBankService(db).preview_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id)
         log_audit(db, action='question_bank.quiz.auto_map.preview', status='success' if result.get('ok') else 'failed', error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR, message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'blocking_errors': result.get('blocking_errors')})
@@ -717,6 +806,8 @@ async def preview_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depen
 
 @router.post('/quiz/auto-map/apply', response_model=QuizAutoMapOut)
 async def apply_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    if payload.selected_subject_offering_id:
+        _require_business(db, user, 'quiz.create_openedx', 'SUBJECT_VERSION', payload.selected_subject_offering_id)
     try:
         result = await VersionedQuestionBankService(db).apply_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id, actor=user.user_id)
         log_audit(db, action='question_bank.quiz.auto_map.apply', status='success', message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'mapping_count': len(result.get('mappings') or [])})
@@ -739,6 +830,7 @@ def list_course_mappings(subject_id: str | None = None, db: Session = Depends(ge
 
 @router.post('/course-mappings/validate', response_model=MappingValidationOut)
 def validate_course_mapping(payload: CourseMappingValidateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_business(db, user, 'quiz.preview', 'SUBJECT', payload.subject_id)
     result = VersionedQuestionBankService(db).validate_course_mapping(**payload.model_dump())
     log_audit(db, action='question_bank.course_mapping.validate', status='success' if result.get('ok') else 'failed', error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR, message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='course_mapping', metadata=result)
     return result
@@ -746,6 +838,7 @@ def validate_course_mapping(payload: CourseMappingValidateRequest, db: Session =
 
 @router.post('/course-mappings', response_model=CourseMappingOut)
 def create_course_mapping(payload: CourseMappingCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_business(db, user, 'quiz.create_openedx', 'SUBJECT', payload.subject_id)
     try:
         item = VersionedQuestionBankService(db).create_course_mapping(**payload.model_dump(), actor=user.user_id)
         log_audit(db, action='question_bank.course_mapping.create', status='success', message='Map khóa học Open edX vào môn học thành công', user=user, course_id=item.openedx_course_id, target_type='course_mapping', target_id=item.id)
@@ -765,6 +858,7 @@ def list_course_chapter_mappings(course_mapping_id: str | None = None, db: Sessi
 
 @router.post('/course-chapter-mappings/validate', response_model=MappingValidationOut)
 def validate_course_chapter_mapping(payload: CourseChapterMappingValidateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_release(db, user, 'quiz.preview', payload.bank_release_id)
     result = VersionedQuestionBankService(db).validate_course_chapter_mapping(**payload.model_dump())
     log_audit(db, action='question_bank.course_chapter_mapping.validate', status='success' if result.get('ok') else 'failed', error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR, message=result.get('message', ''), user=user, target_type='course_chapter_mapping', metadata=result)
     return result
@@ -772,6 +866,10 @@ def validate_course_chapter_mapping(payload: CourseChapterMappingValidateRequest
 
 @router.post('/course-chapter-mappings', response_model=CourseChapterMappingOut)
 def create_course_chapter_mapping(payload: CourseChapterMappingCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    if payload.bank_release_id:
+        _require_release(db, user, 'quiz.create_openedx', payload.bank_release_id)
+    else:
+        _require_business(db, user, 'quiz.create_openedx', 'CHAPTER', payload.subject_chapter_id)
     try:
         item = VersionedQuestionBankService(db).create_course_chapter_mapping(**payload.model_dump())
         log_audit(db, action='question_bank.course_chapter_mapping.create', status='success', message='Map chapter Open edX vào Bank Release thành công', user=user, target_type='course_chapter_mapping', target_id=item.id)
@@ -788,6 +886,10 @@ def list_course_quiz_instances(openedx_course_id: str | None = None, bank_releas
 
 @router.post('/course-quiz-instances/{instance_id}/rollback', response_model=CourseQuizRollbackOut)
 async def rollback_course_quiz_instance(instance_id: str, payload: CourseQuizRollbackRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    quiz_instance = db.get(CourseQuizInstance, instance_id)
+    if not quiz_instance:
+        raise HTTPException(status_code=404, detail='Không tìm thấy CourseQuizInstance')
+    _require_release(db, user, 'quiz.create_openedx', quiz_instance.bank_release_id)
     try:
         result = await VersionedQuestionBankService(db).rollback_course_quiz_instance(instance_id=instance_id, mode=payload.mode, note=payload.note, actor=user.user_id)
         log_audit(db, action='question_bank.course_quiz.rollback', status='success', message=result.get('message', ''), user=user, target_type='course_quiz_instance', target_id=instance_id, metadata=result)
@@ -800,13 +902,20 @@ async def rollback_course_quiz_instance(instance_id: str, payload: CourseQuizRol
 @router.get('/quiz-blueprints', response_model=list[QuizBlueprintOut])
 def list_quiz_blueprints(chapter_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(QuizBlueprint)
+    subject_ids = _biz(db).accessible_subject_ids(user)
+    if subject_ids is not None:
+        if not subject_ids:
+            return []
+        query = query.filter(QuizBlueprint.subject_id.in_(subject_ids))
     if chapter_id:
+        _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
         query = query.filter(QuizBlueprint.chapter_id == chapter_id)
     return query.order_by(QuizBlueprint.created_at.desc()).all()
 
 
 @router.post('/quiz-blueprints', response_model=QuizBlueprintOut)
 def create_quiz_blueprint(payload: QuizBlueprintCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_business(db, user, 'quiz.create_openedx', 'CHAPTER', payload.chapter_id)
     try:
         item = VersionedQuestionBankService(db).create_quiz_blueprint(**payload.model_dump())
         log_audit(db, action='question_bank.quiz_blueprint.create', status='success', message='Tạo blueprint quiz thành công', user=user, target_type='quiz_blueprint', target_id=item.id)

@@ -28,6 +28,8 @@ const STORAGE_KEYS = {
   sessionToken: 'ai_openedx_session_token',
 }
 
+const IS_PRODUCTION = process.env.NEXT_PUBLIC_APP_ENV === 'production' || process.env.NODE_ENV === 'production'
+
 function getStoredSession(): StoredSession | null {
   if (typeof window === 'undefined') return null
   const raw = window.sessionStorage.getItem(STORAGE_KEYS.sessionToken)
@@ -57,6 +59,7 @@ type StoredSession = {
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [courseId, setCourseIdState] = useState(() => getStoredString(STORAGE_KEYS.courseId, 'course-v1:FPT+PRN232+2026'))
   const [role, setRoleState] = useState<Role>(() => {
+    if (IS_PRODUCTION) return 'viewer'
     const saved = getStoredString(STORAGE_KEYS.role, 'teacher') as Role
     return ROLE_PERMISSIONS[saved] ? saved : 'teacher'
   })
@@ -70,7 +73,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const savedUserId = window.localStorage.getItem(STORAGE_KEYS.userId)
     const savedSession = getStoredSession()
     if (savedCourseId) setCourseIdState(savedCourseId)
-    if (savedRole && ROLE_PERMISSIONS[savedRole]) setRoleState(savedRole)
+    if (!IS_PRODUCTION && savedRole && ROLE_PERMISSIONS[savedRole]) setRoleState(savedRole)
     if (savedUserId) setUserIdState(savedUserId)
     if (savedSession) {
       setAccessTokenState(savedSession.access_token)
@@ -86,6 +89,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 
   const setRole = (value: Role) => {
+    if (IS_PRODUCTION) return
     setRoleState(value)
     window.localStorage.setItem(STORAGE_KEYS.role, value)
   }
@@ -117,7 +121,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     if (session.role && ROLE_PERMISSIONS[session.role]) {
       setRoleState(session.role)
-      window.localStorage.setItem(STORAGE_KEYS.role, session.role)
+      if (!IS_PRODUCTION) window.localStorage.setItem(STORAGE_KEYS.role, session.role)
     }
     if (session.user_id) {
       setUserIdState(session.user_id)
@@ -143,7 +147,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const sessionToken = accessToken.trim() || getStoredSession()?.access_token || ''
       if (sessionToken) {
         headers.Authorization = `Bearer ${sessionToken}`
-      } else {
+      } else if (!IS_PRODUCTION) {
         headers['X-User-Role'] = role
         headers['X-User-Id'] = userId
       }

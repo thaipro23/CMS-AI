@@ -59,6 +59,12 @@ import {
   SubjectSummary,
   SubjectVersionSummary,
   ChapterSummary,
+  RBACRole,
+  RBACPermission,
+  RoleAssignment,
+  RoleAssignmentCreate,
+  RoleAssignmentListResponse,
+  EffectiveRBAC,
 } from "../types";
 
 const rawApiBase =
@@ -1455,4 +1461,43 @@ export async function rollbackCourseQuizInstance(
       body: JSON.stringify(payload),
     }),
   );
+}
+
+
+export async function getEffectiveRBAC(headers: HeadersInit): Promise<EffectiveRBAC> {
+  return parseResponse<EffectiveRBAC>(await fetch(`${API}/rbac/me`, { headers }))
+}
+
+export async function getRBACRoles(headers: HeadersInit): Promise<RBACRole[]> {
+  return parseResponse<RBACRole[]>(await fetch(`${API}/rbac/roles`, { headers }))
+}
+
+export async function getRBACPermissions(headers: HeadersInit): Promise<RBACPermission[]> {
+  return parseResponse<RBACPermission[]>(await fetch(`${API}/rbac/permissions`, { headers }))
+}
+
+export async function getRoleAssignments(
+  headers: HeadersInit,
+  filters: { userId?: string; roleCode?: string; scopeType?: string; scopeId?: string; includeRevoked?: boolean } = {},
+): Promise<RoleAssignmentListResponse> {
+  const params = new URLSearchParams()
+  if (filters.userId) params.set('user_id', filters.userId)
+  if (filters.roleCode) params.set('role_code', filters.roleCode)
+  if (filters.scopeType) params.set('scope_type', filters.scopeType)
+  if (filters.scopeId) params.set('scope_id', filters.scopeId)
+  if (filters.includeRevoked) params.set('include_revoked', 'true')
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return parseResponse<RoleAssignmentListResponse>(await fetch(`${API}/rbac/assignments${suffix}`, { headers }))
+}
+
+export async function createRoleAssignment(payload: RoleAssignmentCreate, headers: HeadersInit): Promise<RoleAssignment> {
+  return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments`, { method: 'POST', headers, body: JSON.stringify(payload) }))
+}
+
+export async function revokeRoleAssignment(assignmentId: string, headers: HeadersInit, revokeReason = ''): Promise<RoleAssignment> {
+  return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments/${encodeURIComponent(assignmentId)}`, {
+    method: 'DELETE',
+    headers,
+    body: JSON.stringify({ revoke_reason: revokeReason }),
+  }))
 }

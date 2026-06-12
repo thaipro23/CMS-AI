@@ -23,7 +23,7 @@ const navItems: NavItem[] = [
   { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Theo dõi & rollback', icon: '🕘', group: 'bank' },
   { href: '/jobs', label: 'Tiến trình job', desc: 'Generate, publish, tạo quiz', icon: '⚙️', group: 'ops' },
   { href: '/audit', label: 'Nhật ký thao tác', desc: 'Ai làm gì, lỗi gì', icon: '🧾', group: 'ops' },
-  { href: '/users', label: 'Người dùng', desc: 'Theo dõi giáo viên làm việc', icon: '👥', group: 'admin', permission: 'view_user_analytics' },
+  { href: '/users', label: 'Người dùng & quyền', desc: 'RBAC Bank-first', icon: '👥', group: 'admin', permission: 'view_questions' },
   { href: '/settings', label: 'Cấu hình', desc: 'Quyền & hệ thống', icon: '🔐', group: 'admin', permission: 'manage_settings' },
 ]
 
@@ -48,7 +48,7 @@ function AppFooter({ compact = false }: { compact?: boolean }) {
       <Link href="/bank">Dashboard Bank</Link>
       <Link href="/bank/quiz">Tạo Quiz</Link>
       <Link href="/audit">Nhật ký</Link>
-      <span>v25.9.15.6.31.11</span>
+      <span>v25.9.15.6.31.13</span>
     </div>
   </footer>
 }

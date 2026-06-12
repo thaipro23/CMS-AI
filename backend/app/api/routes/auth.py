@@ -8,10 +8,13 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.orm import Session
 from jose import jwt
 from pydantic import BaseModel
 
 from app.core.rbac import ROLE_LABELS, ROLE_PERMISSIONS, UserContext, get_user_context
+from app.db.session import get_db
+from app.services.business_rbac import BusinessRBACService
 from app.core.config import settings
 from app.core.security import _normalize_role
 
@@ -79,13 +82,17 @@ def _normalize_courses(value: Any) -> list[str]:
 
 
 @router.get('/me')
-def me(user: UserContext = Depends(get_user_context)):
+def me(user: UserContext = Depends(get_user_context), db: Session = Depends(get_db)):
+    business = BusinessRBACService(db)
+    business_permissions = business.effective_permissions_for_user(user)
     return {
         'user_id': user.user_id,
         'email': user.email,
         'role': user.role,
         'label': ROLE_LABELS[user.role],
         'permissions': sorted(user.permissions),
+        'business_permissions': sorted(business_permissions),
+        'effective_legacy_role': business.effective_legacy_role_for_user(user.user_id, user.role, email=user.email, username=getattr(user, 'username', None)),
         'course_ids': user.course_ids or [],
         'auth_mode': settings.auth_mode,
     }
@@ -100,7 +107,7 @@ def roles():
 
 
 @router.post('/openedx-session/exchange', response_model=OpenEdxSessionExchangeResponse)
-def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: Response):
+def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: Response, db: Session = Depends(get_db)):
     """Exchange a CMS/Studio session bridge ticket for an AI Server JWT.
 
     The ticket is created by the Open edX CMS connector while the browser is
@@ -109,11 +116,15 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
     and signed with the shared AI_CONNECTOR_HMAC_SECRET/OPENEDX_CONNECTOR_HMAC_SECRET.
     """
     data = _decode_bridge_ticket(payload.ticket)
-    role = _normalize_role(str(data.get('role') or 'viewer'))
+    base_role = _normalize_role(str(data.get('role') or 'viewer'))
     course_ids = _normalize_courses(data.get('course_ids') or data.get('courses'))
     ttl = int(settings.auth_session_token_ttl_seconds or 28800)
     now = int(time.time())
     user_id = str(data.get('sub') or data.get('user_id') or data.get('username') or 'openedx-user')
+    # Business RBAC can intentionally upgrade the UI/API legacy role after the
+    # user has been assigned SYSTEM_ADMIN/DEPARTMENT_HEAD/SUBJECT_OWNER/etc.
+    # Open edX is_staff alone is still not trusted as AI admin.
+    role = _normalize_role(BusinessRBACService(db).effective_legacy_role_for_user(user_id, base_role, email=data.get('email'), username=data.get('username')))
     claims = {
         'sub': user_id,
         'user_id': user_id,
@@ -122,7 +133,9 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
         'email': data.get('email'),
         'role': role,
         'course_ids': course_ids,
-        'iss': 'ai-learning-server',
+        'iss': settings.jwt_issuer,
+        'aud': settings.jwt_audience,
+        'token_type': 'ai_session',
         'auth_source': 'openedx_cms_session_bridge',
         'iat': now,
         'exp': now + ttl,

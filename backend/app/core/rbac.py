@@ -3,6 +3,8 @@ from typing import Any
 from fastapi import Depends, HTTPException, status
 from app.core.config import settings
 from app.core.security import Principal, ROLE_LABELS, ROLE_PERMISSIONS, get_principal
+from app.db.session import get_db
+from sqlalchemy.orm import Session
 
 
 @dataclass
@@ -11,27 +13,43 @@ class UserContext:
     role: str
     permissions: set[str]
     email: str | None = None
+    username: str | None = None
     course_ids: list[str] | None = None
+    raw_claims: dict | None = None
 
 
 def get_user_context(principal: Principal = Depends(get_principal)) -> UserContext:
     return UserContext(
         user_id=principal.user_id,
         email=principal.email,
+        username=str(principal.raw_claims.get('username') or '') or None,
         role=principal.role,
         permissions=ROLE_PERMISSIONS[principal.role],
         course_ids=principal.course_ids,
+        raw_claims=principal.raw_claims,
     )
 
 
 def require_permission(permission: str):
-    def checker(user: UserContext = Depends(get_user_context)) -> UserContext:
-        if permission not in user.permissions:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f'Role {user.role} does not have permission: {permission}',
-            )
-        return user
+    def checker(user: UserContext = Depends(get_user_context), db: Session = Depends(get_db)) -> UserContext:
+        if permission in user.permissions:
+            return user
+        # Bank-first business RBAC lives in the database. This bridge lets a CMS
+        # session token with legacy role=viewer still gain the exact AI Server
+        # permissions assigned by SYSTEM_ADMIN/DEPARTMENT_HEAD/SUBJECT_OWNER.
+        try:
+            from app.services.business_rbac import BusinessRBACService
+            if BusinessRBACService(db).has_any_business_permission(user, permission):
+                return user
+        except HTTPException:
+            raise
+        except Exception:
+            # Do not turn a broken RBAC table into an accidental allow.
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f'Role {user.role} does not have permission: {permission}',
+        )
     return checker
 
 

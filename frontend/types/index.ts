@@ -1391,3 +1391,62 @@ export type DepartmentSummary = { department: Department; stats: BankReviewStatu
 export type SubjectSummary = { subject: Subject; stats: BankReviewStatusStats }
 export type SubjectVersionSummary = { subject_version: SubjectOffering; stats: BankReviewStatusStats }
 export type ChapterSummary = { chapter: SubjectChapter; stats: BankReviewStatusStats }
+
+export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER'
+export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE'
+
+export type RBACRole = {
+  code: BusinessRoleCode | string
+  name: string
+  description: string
+  rank: number
+  status: string
+}
+
+export type RBACPermission = {
+  code: string
+  name: string
+  group_code: string
+}
+
+export type RoleAssignment = {
+  id: string
+  user_id: string
+  email?: string | null
+  role_code: BusinessRoleCode | string
+  role_name?: string | null
+  scope_type: BusinessScopeType | string
+  scope_id: string
+  scope_label?: string | null
+  granted_by?: string | null
+  grant_reason?: string
+  metadata_json?: Record<string, any> | null
+  revoked_at?: string | null
+  revoked_by?: string | null
+  revoke_reason?: string
+  created_at: string
+  updated_at: string
+}
+
+export type RoleAssignmentCreate = {
+  user_id: string
+  email?: string | null
+  role_code: BusinessRoleCode | string
+  scope_type: BusinessScopeType | string
+  scope_id: string
+  grant_reason?: string
+  sync_openedx?: boolean
+}
+
+export type RoleAssignmentListResponse = {
+  items: RoleAssignment[]
+  total: number
+}
+
+export type EffectiveRBAC = {
+  user_id: string
+  legacy_role: string
+  effective_legacy_role: string
+  permissions: string[]
+  assignments: RoleAssignment[]
+}

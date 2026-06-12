@@ -3013,3 +3013,14 @@ body { background: #ffffff !important; }
   .bank-kpi-grid, .strong-chart-grid { grid-template-columns: 1fr; }
   .bank-command-copy h1 { font-size: 30px; }
 }
+
+/* v25.9.15.6.31.13 RBAC cards */
+.mini-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 14px;
+  box-shadow: var(--shadow-soft, 0 8px 22px rgba(15, 23, 42, 0.06));
+}
+.mini-card b { display: block; margin-bottom: 6px; }
+.mini-card p { margin: 0 0 10px; color: var(--muted); font-size: 13px; line-height: 1.45; }

@@ -1,6 +1,6 @@
 from app.core.config import settings
-from app.db.session import Base, engine
-from app.models import course, question, cost, job, generation_cache, token_calibration, generation_batch, audit, publish, concept, question_bank  # noqa: F401 - import models for metadata
+from app.db.session import Base, engine, SessionLocal
+from app.models import course, question, cost, job, generation_cache, token_calibration, generation_batch, audit, publish, concept, question_bank, rbac  # noqa: F401 - import models for metadata
 
 
 def init_db() -> None:
@@ -12,6 +12,7 @@ def init_db() -> None:
     if settings.auto_create_tables:
         Base.metadata.create_all(bind=engine)
         _ensure_v24_columns()
+        _ensure_rbac_catalog()
 
 
 
@@ -320,3 +321,14 @@ def _ensure_v24_columns() -> None:
         END
         WHERE error_type IS NOT NULL
         """)
+
+
+def _ensure_rbac_catalog() -> None:
+    """Dev/demo safety net. Production uses Alembic seed in revision 0014."""
+    from app.services.business_rbac import BusinessRBACService
+
+    db = SessionLocal()
+    try:
+        BusinessRBACService(db).ensure_default_catalog()
+    finally:
+        db.close()
