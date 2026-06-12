@@ -115,8 +115,13 @@ class Question(Base):
         Index('ix_ai_questions_course_family_status', 'course_id', 'question_family_id', 'status'),
         Index('ix_ai_questions_course_chapter_family_difficulty', 'course_id', 'chapter_node_id', 'question_family_id', 'difficulty'),
         Index('ix_ai_questions_bank_version_status', 'bank_version_id', 'status'),
+        Index('ix_ai_questions_bank_status_created_id', 'bank_version_id', 'status', 'created_at', 'id'),
+        Index('ix_ai_questions_bank_difficulty_status_retired', 'bank_version_id', 'difficulty', 'status', 'is_retired'),
+        Index('ix_ai_questions_bank_family_difficulty', 'bank_version_id', 'question_family_id', 'difficulty'),
+        Index('ix_ai_questions_chapter_status_created', 'subject_chapter_id', 'status', 'created_at', 'id'),
         Index('ix_ai_questions_subject_chapter_status', 'subject_id', 'subject_chapter_id', 'status'),
         Index('ix_ai_questions_bank_release_status', 'bank_release_id', 'status'),
+        Index('ix_ai_questions_release_difficulty', 'bank_release_id', 'difficulty'),
         Index('ix_ai_questions_bank_lineage', 'bank_version_id', 'lineage_root_question_id'),
         Index('ix_ai_questions_bank_retired', 'bank_version_id', 'is_retired'),
     )

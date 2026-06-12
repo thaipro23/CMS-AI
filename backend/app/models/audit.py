@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, Text, JSON
+from sqlalchemy import String, DateTime, Text, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.session import Base
 
@@ -21,3 +21,8 @@ class AuditLog(Base):
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index('ix_ai_audit_logs_actor_status_created', 'actor_id', 'status', 'created_at'),
+        Index('ix_ai_audit_logs_target_created', 'target_type', 'target_id', 'created_at'),
+    )

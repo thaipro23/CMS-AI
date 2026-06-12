@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.15.6.31.13-bank-business-rbac'
+    app_version: str = '25.9.15.6.32-database-scale-foundation'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+psycopg://ai_user:ai_password@postgres:5432/ai_openedx'
     test_database_url: str = 'sqlite+pysqlite:///:memory:'
     redis_url: str = 'redis://redis:6379/0'
+
+    # v25.9.15.6.32 database scale foundation.
+    # These protect the API from unbounded connection growth and runaway queries
+    # when Bank Manager grows to hundreds of subjects and millions of questions.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+    db_statement_timeout_ms: int = 5000
 
     # Object storage adapter. MinIO is dev/demo only unless your organization approves AGPL/commercial terms.
     storage_provider: str = 'local'  # local | s3 | azure | gcs | minio
@@ -215,6 +224,14 @@ def validate_security_settings() -> None:
         errors.append('DATABASE_URL must point to PostgreSQL in production')
     if 'CHANGE_ME' in settings.database_url:
         errors.append('DATABASE_URL still contains CHANGE_ME placeholder')
+    if settings.db_pool_size < 1:
+        errors.append('DB_POOL_SIZE must be at least 1 in production')
+    if settings.db_max_overflow < 0:
+        errors.append('DB_MAX_OVERFLOW must be at least 0 in production')
+    if settings.db_pool_timeout < 1:
+        errors.append('DB_POOL_TIMEOUT must be at least 1 second in production')
+    if settings.db_statement_timeout_ms < 1000:
+        errors.append('DB_STATEMENT_TIMEOUT_MS should be at least 1000ms in production')
     if not settings.openai_api_key or settings.openai_api_key.startswith('CHANGE_ME'):
         errors.append('OPENAI_API_KEY is required in production when MOCK_LLM=false')
     if not settings.openedx_client_id or settings.openedx_client_id.startswith('CHANGE_ME'):

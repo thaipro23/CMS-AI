@@ -64,6 +64,7 @@ class SubjectOffering(Base):
     __table_args__ = (
         UniqueConstraint('subject_id', 'code', name='uq_ai_subject_offering_subject_code'),
         Index('ix_ai_subject_offerings_subject_status', 'subject_id', 'status'),
+        Index('ix_ai_subject_offerings_subject_status_created', 'subject_id', 'status', 'created_at', 'id'),
     )
 
 
@@ -85,6 +86,7 @@ class SubjectChapter(Base):
         UniqueConstraint('subject_id', 'subject_offering_id', 'chapter_no', name='uq_ai_subject_offering_chapter_no'),
         Index('ix_ai_subject_chapters_offering_order', 'subject_offering_id', 'sort_order'),
         Index('ix_ai_subject_chapters_subject_status', 'subject_id', 'status'),
+        Index('ix_ai_subject_chapters_offering_status_order', 'subject_offering_id', 'status', 'sort_order', 'id'),
     )
 
 
@@ -112,6 +114,7 @@ class QuestionBankVersion(Base):
         UniqueConstraint('subject_id', 'chapter_id', 'version_code', name='uq_ai_bank_version_code'),
         Index('ix_ai_bank_versions_chapter_status', 'chapter_id', 'status'),
         Index('ix_ai_bank_versions_offering_status', 'subject_offering_id', 'status'),
+        Index('ix_ai_bank_versions_offering_chapter_status', 'subject_offering_id', 'chapter_id', 'status'),
     )
 
 
@@ -163,6 +166,7 @@ class MaterialChunk(Base):
         UniqueConstraint('material_version_id', 'chunk_index', name='uq_ai_material_chunk_index'),
         Index('ix_ai_material_chunks_bank_subject_chapter', 'bank_version_id', 'subject_id', 'chapter_id'),
         Index('ix_ai_material_chunks_bank_source', 'bank_version_id', 'source_type'),
+        Index('ix_ai_material_chunks_bank_chunk', 'bank_version_id', 'material_version_id', 'chunk_index'),
     )
 
 class ConceptVersion(Base):
@@ -240,6 +244,7 @@ class QuestionBankRelease(Base):
         UniqueConstraint('bank_version_id', 'release_code', name='uq_ai_bank_release_code'),
         UniqueConstraint('openedx_library_key', name='uq_ai_bank_release_openedx_library_key'),
         Index('ix_ai_bank_releases_chapter_status', 'chapter_id', 'status'),
+        Index('ix_ai_releases_bank_status_created', 'bank_version_id', 'status', 'created_at'),
     )
 
 
@@ -296,6 +301,7 @@ class BankReleaseQuestion(Base):
         UniqueConstraint('bank_release_id', 'question_id', name='uq_ai_release_question'),
         UniqueConstraint('bank_release_id', 'openedx_library_problem_id', name='uq_ai_release_openedx_problem'),
         Index('ix_ai_release_questions_release_family', 'bank_release_id', 'question_family_id'),
+        Index('ix_ai_release_questions_release_difficulty', 'bank_release_id', 'difficulty'),
     )
 
 
@@ -379,4 +385,6 @@ class CourseQuizInstance(Base):
 
     __table_args__ = (
         Index('ix_ai_course_quiz_instances_course_chapter', 'openedx_course_id', 'chapter_id'),
+        Index('ix_ai_course_quiz_instances_release_status_created', 'bank_release_id', 'status', 'created_at'),
+        Index('ix_ai_course_quiz_instances_course_status_created', 'openedx_course_id', 'status', 'created_at'),
     )
