@@ -1,4 +1,97 @@
 
+## v25.9.15.6.31.8 - Bank Hierarchy Inline Section Headers
+
+- Bỏ page header lớn ở các trang phân cấp Ngân hàng đề.
+- Đưa tiêu đề/mô tả vào section-head của card chính để màn hình gọn hơn.
+- Các trang được chỉnh: departments, subjects, versions, chapters, chapter workspace, history.
+- Không sửa backend, không cần migrate DB.
+
+
+## v25.9.15.6.31.7 - Merge Dashboard into Bank + Chart Overview
+
+- Gộp `/dashboard` vào `/bank`; `/dashboard` redirect về `/bank`.
+- Sidebar bỏ mục Tổng quan vận hành để tránh trùng Dashboard Bank.
+- `/bank` thêm biểu đồ tổng quan theo luồng Bank/Quiz-first: tình trạng câu hỏi, quy mô ngân hàng, Quiz Open edX, job generate.
+- `/bank` giữ tìm nhanh, việc cần làm và nhật ký gần đây để giáo viên/quản trị xem một màn hình là đủ.
+
+
+## v25.9.15.6.31.5 - Chapter Action Buttons + System Font Polish
+
+- Make chapter workspace action buttons more visible and easier to scan.
+- Add button-specific affordances for material, generate, review, diff and published states.
+- Reset question-card typography to system font stack; remove aggressive letter spacing / heavy font rendering.
+- Frontend-only release; no migration required.
+
+
+## v25.9.15.6.31.4 - Bank hierarchy polish + stronger actions + question typography
+
+- Removed redundant Bank flow tabs from Department/Subject/Version/Chapter pages because breadcrumbs already carry the hierarchy.
+- Made buttons more visible and action-oriented across Bank workspace, filters and popups.
+- Refined question card typography, spacing and answer option readability.
+- Kept operations/admin sidebar labels aligned with the new Bank workflow.
+
+
+## v25.9.15.6.31 - Cohesive Bank Hierarchy + Chapter Workspace UX
+
+- Làm đồng bộ bố cục các trang Bank hierarchy: Departments, Subjects, Subject Versions, Chapters và Chapter Workspace.
+- Thêm flow tabs để giáo viên biết đang ở bước nào trong luồng Bộ môn → Môn → Version → Bài → Câu hỏi → Release.
+- Chuyển khối Tài liệu và Tạo câu hỏi từ tài liệu trong chapter workspace thành popup mở bằng nút.
+- Thêm filter câu hỏi theo trạng thái, độ khó và sắp xếp theo ưu tiên xử lý/độ khó/chất lượng.
+- Bổ sung CSS hiện đại hơn cho card/list, command bar, filter bar và popup workspace.
+
+
+## v25.9.15.6.28 - Bank Quiz Clean Workbench UX
+
+- Cleaned `/bank/quiz` to reduce scrolling and visual noise.
+- Course ID now triggers auto map preview after input; removed the manual auto-find button.
+- Moved `Lưu cấu hình` and `Tạo Quiz` actions to the top of the sticky settings panel.
+- Quiz history is filtered by the current Course ID only.
+- Simplified result copy and renamed mapping to configuration.
+- Switched the main workspace background to white while keeping FPT orange accents.
+
+
+## v25.9.15.6.26 - Bank Quiz UX + Sidebar Polish
+
+- Reworked `/bank/quiz` into a two-column workbench with a sticky settings panel for Course ID, version, difficulty, and timer configuration.
+- Added summary cards and kept create actions accessible without scrolling back to the top.
+- Added missing global CSS for `.alert`, `.card-soft`, `.toggle-line`, `.option-grid`, and quiz workbench states.
+- Grouped sidebar navigation and added icons for faster scanning.
+
+
+## v25.9.15.6.25 - Force Save Quiz Timer Config After Quiz Create
+
+- AI Server force-save timer config into LMS `openedx_unit_reset` after Quiz node creation, using real sequence/unit usage keys returned by Open edX.
+- Added `OpenEdXConnector.upsert_quiz_timer_config` and real LMS HMAC call to `/api/unit-reset/v1/quiz-config/upsert`.
+- `openedx_unit_reset` timer config upsert endpoint now accepts HMAC server-to-server in addition to staff.
+- If timer is enabled and config cannot be saved, Quiz creation reports an explicit error instead of silently creating a Quiz without countdown.
+
+
+## v25.9.15.6.23 - Quiz Create Export Parity + Document Balanced Generation + HTTP MFE Config
+
+- Sửa planner tạo Quiz từ Bank Release: tạo đúng 3 native ItemBank theo EASY/MEDIUM/HARD, `max_count` theo số câu cần hiện, không dồn tất cả vào slot đầu.
+- Open edX connector cho phép `pick_count/max_count > 1` và verify theo slot.
+- Bank generation chia đều quota câu hỏi theo tài liệu trước, rồi chia EASY/MEDIUM/HARD trong từng tài liệu.
+- API preview/generate trả thêm `material_balancing` để kiểm tra phân bổ tài liệu.
+- Thêm hướng dẫn build Learning MFE với HTTP để tránh `login_refresh` nhảy sang HTTPS khi UAT đang chạy HTTP.
+
+
+## v25.9.15.6.22 - Rename Chapter Release State Cleanup Hotfix
+
+- Fix publish Library after renaming a Chapter whose previous publish failed because of duplicate library key/name.
+- Reset stale Open edX library/component state for non-published releases when expected library key changes.
+- Retry import after LearningPackage missing by re-ensuring library and using connector canonical key.
+- Canonicalize Content Library V2 keys in connector to match Open edX LearningPackage slug normalization.
+- Add DELETE /api/question-bank-v2/releases/{release_id} for failed/unpublished release cleanup.
+
+
+## v25.9.15.6.19 - Library Key Term Hotfix
+
+- Fixed Bank Release Open edX Library keys to include the subject offering/term.
+- Example: `WEB107_FA26 / Bài 2.1 / v1.0` now publishes to `lib:FPT:web107-FA26-b-i-2-1-v1-0`.
+- Old stored release keys missing the term are upgraded on publish and re-imported into the correct Library when needed.
+- Backend-only hotfix; no migration required.
+
+
 ## v25.9.15.6.14 - Bank Quiz Timer UI + FPT Naming/Grading Hotfix
 
 - `/bank/quiz` hiển thị đầy đủ cấu hình custom timer: bật timer, thời gian làm bài, cooldown, tự nộp khi hết giờ, khóa submit.
@@ -394,3 +487,114 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 - AI Server lưu timer config vào metadata của CourseQuizInstance.
 - Connector best-effort ghi config sang plugin `openedx_unit_reset`.
 - Plugin `openedx_unit_reset` thêm UnitQuizTimerConfig, UnitQuizSession, quiz-session APIs, runtime JS và middleware chặn submit sau hết giờ.
+
+## v25.9.15.6.16 - Multi Source Chunk Reference Hotfix
+
+- Fixed `invalid_source_chunk` false draft errors when AI returns multiple source chunks in one field, e.g. `chunkA;chunkB`.
+- Added backend helper to split/normalize multi chunk references separated by `;`, `,`, `|`, or newline.
+- Quality checker now validates each chunk id individually and reports only actual missing ids.
+- Course-first source node resolution now uses the first existing chunk when a question references multiple chunks.
+- Source trace API now returns both the first `chunk` for backward compatibility and a new `chunks` list for all referenced chunks.
+- Bank-first generation now recognizes multi MaterialChunk ids and does not pass them to the course ContentChunk validator.
+
+## v25.9.15.6.17 - Quiz Create Existing Mapping Guard Hotfix
+
+- Fixed `/api/question-bank-v2/releases/{release_id}/quiz/create` rejecting a valid saved `course_chapter_mapping_id` with `existing_chapter_mapping`.
+- Quiz creation now allows reusing the exact mapping row selected from `/bank/quiz`.
+- Duplicate mapping protection remains active if validation points to a different mapping row.
+- No database migration.
+
+## v25.9.15.6.18 - Bank Entity Actions + Empty Delete Guard
+
+- Add `...` action menu on Department, Subject, Subject Version, and Chapter cards.
+- Add basic edit APIs for code/name/description/title.
+- Add delete APIs guarded by "empty only" checks.
+- Prevent deleting entities that already contain child data such as chapters, bank versions, materials, questions, releases, Open edX mappings, or created quizzes.
+- No database migration required.
+
+## v25.9.15.6.20 - Bank Entity Action Menu Click Hotfix
+- Fixed entity action menu not opening on Bộ môn / Môn / Phiên bản môn / Bài cards.
+- Replaced broken `details/summary` toggle with a controlled React button menu.
+- Changed visible trigger from `...` text to `⋮` icon.
+- Prevented menu clicks from navigating into the card.
+- Raised menu z-index so it appears above neighboring cards.
+
+## v25.9.15.6.21 - Library LearningPackage Canonical Key Hotfix
+
+- Fix publish/import problem failed with `LearningPackage matching query does not exist` on Open edX Content Libraries V2.
+- Connector now canonicalizes the library key using the actual key returned by Open edX after ensure/create library.
+- AI Server updates release.openedx_library_key before importing problem components when connector returns a canonical key.
+- No migration required.
+
+## v25.9.15.6.24 - Quiz Slot Concept Balance Hotfix
+
+- Reworked Bank Release quiz planner from 3 difficulty banks into exact visible-question slots.
+- Each requested quiz question is now represented by one native ItemBank slot with `pick_count=1` and `max_count=1`.
+- Ensures a question/component is never assigned to more than one slot.
+- Keeps a concept/family wholly inside one slot when there are enough concepts/families.
+- When concepts/families exceed the number of slots, bin-packs whole concepts into slots to balance candidate question counts.
+- When concepts/families are fewer than required slots, uses soft split of large concepts only to satisfy exact EASY/MEDIUM/HARD counts and emits warnings.
+- No database migration.
+
+## v25.9.15.6.27 - FPT Light Orange Theme Polish
+
+- Đổi theme AI Server sang tông cam nhạt + trắng phù hợp nhận diện FPT.
+- Sidebar chuyển từ nền tối sang nền trắng/cam nhạt, active item rõ hơn bằng viền/cam gradient.
+- Chuẩn hóa button, input focus, card, alert, toggle, quiz workbench, table header theo palette cam nhạt.
+- Giữ layout /bank/quiz 2 cột sticky settings từ v25.9.15.6.26, chỉ polish giao diện.
+
+## v25.9.15.6.29 - Modern White UI Refresh
+
+- Removed the FPT orange-tint theme as the primary UI surface.
+- Switched the app shell, sidebar, cards, quiz workbench, forms, tables and alerts to a clean white SaaS-style theme.
+- Kept a restrained blue accent for primary actions, focus states and active navigation.
+- Improved visual hierarchy with neutral borders, subtle shadows, cleaner hover states and better table readability.
+- No backend or database migration required.
+
+
+## v25.9.15.6.30 - Bank Quiz Focused Navigation + Create Confirm UX
+
+- Sidebar: tạm ẩn nhóm Tạo & duyệt cũ để tập trung vào luồng Ngân hàng đề.
+- Sidebar Vận hành: đổi nhãn theo luồng mới: tổng quan vận hành, tiến trình job, nhật ký thao tác.
+- Sidebar Quản trị: Người dùng nhấn mạnh theo dõi giáo viên làm việc.
+- /bank/quiz: bỏ ghi chú FPT naming cố định trong panel timer; chuyển thành popup xác nhận khi tạo Quiz.
+- /bank/quiz: nút tạo hàng loạt rút gọn thành “Tạo Quiz (X)” và popup tóm tắt Course ID, số câu, độ khó, timer, naming.
+- Settings: đổi “Giới hạn tạo câu hỏi theo khóa học” thành “Giới hạn tạo câu hỏi theo Bài (Chapter)”.
+- Settings: bỏ khối “Phân quyền demo” khỏi UI quản trị.
+
+## v25.9.15.6.31.1 - Build Fix for Bank Quiz Popup String
+
+- Fixed `frontend/app/bank/quiz/page.tsx` TypeScript build failure caused by an unterminated string literal in the quiz confirmation popup formatter.
+- No backend/database changes.
+
+## v25.9.15.6.31.3 - Bank Quiz Create Popup Settings UX
+
+- Moved question plan and practice quiz timer settings out of the right-side `/bank/quiz` panel.
+- Creating one quiz or bulk quiz now opens a reusable modal popup where users can edit question count, difficulty ratio, timer duration, retake cooldown, auto-submit and lock options.
+- Right-side panel now focuses on Course ID, version detection, saving configuration and a compact current-settings summary.
+- Reused the existing bank modal/popup pattern so future create/edit flows should follow the same UX pattern.
+
+## v25.9.15.6.31.6 - Bank-first Operations Backend Audit Hotfix
+
+- Audited the Operations/Admin pages after the navigation was changed to the Bank-first flow.
+- Replaced `/dashboard` data source from legacy course-first analytics to Bank dashboard + Quiz instances + global audit/job data.
+- Updated `/jobs` to show global Generate jobs, CourseQuizInstance history, and publish/quiz/rollback audit activity.
+- Updated `/audit` to read global audit logs by default so Bank actions without course_id are not hidden.
+- Expanded audit action labels for question_bank.* actions.
+- Updated `/users` to track teacher work from audit logs: bank actions, quiz creation, release publish, rollback, and failures.
+- Removed remaining demo-role wording from the user analytics permission warning.
+
+
+## v25.9.15.6.31.9 - Chapter quota backend + version capacity fix
+
+- Fixed Bank-first quota to use chapter default policy instead of old course-first policy.
+- Fixed version cards showing `total_questions/100`; they now show total capacity across all chapters.
+- Fixed generate preview/create to pass the configured chapter limit instead of hard-coded 100.
+
+## v25.9.15.6.31.10 - Light/Dark Theme + Landing Page + Footer
+
+- Added light/dark theme toggle with `localStorage` persistence and `html[data-theme]` styling.
+- Added app footer to authenticated app pages.
+- Added public landing page at `/` instead of redirecting immediately to dashboard.
+- Landing page introduces Open edX AI Server, Bank-first workflow, Quiz creation, operations tracking, and CTA links.
+- Skips automatic CMS session bridge redirect on `/` so the landing page is visible at `http://ai.cms-test.poly.edu.vn/`.
