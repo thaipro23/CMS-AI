@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { getRuntimeSettings, updateRuntimeSettings, testModelGateway, getRealtimePricing, testOpenEdxConnection } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
-import { ROLE_LABELS, ROLE_PERMISSIONS, Role, RuntimeSettings, RuntimeSettingsUpdate, PricingResponse } from '../../types'
+import { ROLE_LABELS, ROLE_PERMISSIONS, RuntimeSettings, RuntimeSettingsUpdate, PricingResponse } from '../../types'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { LoadingButton } from '../../components/ui/LoadingButton'
 import { CoursePolicyPanel } from '../../components/settings/CoursePolicyPanel'
@@ -106,7 +106,7 @@ function mergeField<T extends keyof RuntimeSettingsUpdate>(form: RuntimeSettings
 
 
 export default function SettingsPage() {
-  const { courseId, setCourseId, role, setRole, userId, setUserId, authHeaders, can } = useAppContext()
+  const { courseId, role, authHeaders, can } = useAppContext()
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   const [form, setForm] = useState<RuntimeSettingsUpdate>(defaultForm)
   const [message, setMessage] = useState<ActionMessageData | null>(null)
@@ -213,15 +213,6 @@ export default function SettingsPage() {
 
     <CoursePolicyPanel courseId={courseId} headers={authHeaders()} writeHeaders={authHeaders(true)} canEdit={can('manage_settings')} />
 
-    <section className="card">
-      <div className="section-head"><div><h2>Phân quyền demo</h2><p className="helper">Dùng để test quyền trong môi trường dev. Production sẽ lấy role từ SSO/Open edX staff mapping.</p></div></div>
-      <div className="grid grid-3">
-        <div><label>Mã khóa học</label><input className="input" value={courseId} onChange={(event) => setCourseId(event.target.value)} /></div>
-        <div><label>Người dùng hiện tại</label><input className="input" value={userId} onChange={(event) => setUserId(event.target.value)} /></div>
-        <div><label>Vai trò</label><select className="input" value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="admin">admin</option><option value="teacher">teacher</option><option value="reviewer">reviewer</option><option value="viewer">viewer</option></select></div>
-      </div>
-      <div className="role-box large"><b>{ROLE_LABELS[role]}</b><small>{ROLE_PERMISSIONS[role].join(', ')}</small></div>
-    </section>
 
     <section className="grid grid-2">
       <div className="card">
@@ -276,12 +267,11 @@ export default function SettingsPage() {
       </div>
 
       <div className="card">
-        <div className="section-head"><div><h2>SSO / Auth</h2><p className="helper">Demo dùng X-User-* header. Production nên dùng JWT hoặc Open edX SSO/plugin proxy.</p></div></div>
+        <div className="section-head"><div><h2>SSO / phân quyền</h2><p className="helper">Production dùng JWT hoặc Open edX SSO/plugin proxy. UI không còn chỉnh role demo.</p></div></div>
         <div className="form-stack">
           <div><label>Auth mode</label><select className="input" value={form.sso.auth_mode} onChange={(e) => setForm(mergeField(form, 'sso', 'auth_mode', e.target.value))}><option value="demo">demo</option><option value="jwt">jwt</option><option value="openedx_sso">openedx_sso</option></select></div>
-          <label className="check-row"><input type="checkbox" checked={form.sso.allow_demo_role_header} onChange={(e) => setForm(mergeField(form, 'sso', 'allow_demo_role_header', e.target.checked))} /> Cho phép demo role header</label>
           <div><label>JWT secret</label><input className="input" type="password" value="" disabled placeholder={settings?.sso.has_jwt_secret ? `Env đã có secret: ${settings?.sso.jwt_secret_masked}` : 'Cấu hình bằng JWT_SECRET trong env'} /></div>
-          <p className="helper">Secret không lưu runtime JSON. Cẩn thận: nếu tắt demo header và chuyển sang openedx_sso khi chưa có verifier/plugin thật, API sẽ trả 401.</p>
+          <p className="helper">Secret không lưu runtime JSON. Khi chuyển sang openedx_sso cần bảo đảm verifier/plugin SSO đã hoạt động, nếu không API sẽ trả 401.</p>
         </div>
       </div>
     </section>

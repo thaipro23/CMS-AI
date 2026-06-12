@@ -33,6 +33,42 @@ function isErrorMessage(message: string) {
   return lower.includes('lỗi') || lower.includes('thất bại') || lower.includes('không') || lower.includes('failed')
 }
 
+
+function buildQuizConfirmText(kind: 'one' | 'all', args: {
+  courseId: string
+  chapterTitle?: string
+  count: number
+  totalQuestions: number
+  difficultyEasy: number
+  difficultyMedium: number
+  difficultyHard: number
+  customTimerEnabled: boolean
+  timeLimitMinutes: number
+  retakeCooldownMinutes: number
+  autoSubmitOnTimeout: boolean
+  lockAfterTimeout: boolean
+}) {
+  const target = kind === 'all'
+    ? `${args.count} bài sẵn sàng`
+    : (args.chapterTitle || '1 bài')
+  const timerText = args.customTimerEnabled
+    ? `Bật timer: ${args.timeLimitMinutes} phút, chờ làm lại ${args.retakeCooldownMinutes} phút, ${args.autoSubmitOnTimeout ? 'tự nộp khi hết giờ' : 'không tự nộp'}, ${args.lockAfterTimeout ? 'khóa sau hết giờ' : 'không khóa sau hết giờ'}`
+    : 'Không bật timer'
+  return [
+    `Tạo Quiz cho: ${target}`,
+    `Course ID: ${args.courseId}`,
+    `Số câu/quiz: ${args.totalQuestions}`,
+    `Độ khó: Easy ${args.difficultyEasy}% · Medium ${args.difficultyMedium}% · Hard ${args.difficultyHard}%`,
+    timerText,
+    '',
+    'Quy tắc FPT:',
+    'Section Bài 1 → Subsection Quiz 1 → Unit Quiz → Grade as Quiz.',
+    '',
+    'Xác nhận tạo Quiz?'
+  ].join('
+')
+}
+
 export default function BankQuizPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
@@ -128,6 +164,21 @@ export default function BankQuizPage() {
 
   const createOneQuiz = async (item: QuizMapping) => {
     if (!item.release_id || !item.course_chapter_mapping_id) return
+    const confirmed = window.confirm(buildQuizConfirmText('one', {
+      courseId: courseId.trim(),
+      chapterTitle: item.chapter_title,
+      count: 1,
+      totalQuestions,
+      difficultyEasy,
+      difficultyMedium,
+      difficultyHard,
+      customTimerEnabled,
+      timeLimitMinutes,
+      retakeCooldownMinutes,
+      autoSubmitOnTimeout,
+      lockAfterTimeout,
+    }))
+    if (!confirmed) return
     setCreatingKey(item.chapter_id)
     setMessage('')
     try {
@@ -162,6 +213,20 @@ export default function BankQuizPage() {
   const createAllQuiz = async () => {
     if (!autoMap?.mappings?.length) return
     const ready = autoMap.mappings.filter((item) => item.ready && item.release_id && item.course_chapter_mapping_id)
+    const confirmed = window.confirm(buildQuizConfirmText('all', {
+      courseId: courseId.trim(),
+      count: ready.length,
+      totalQuestions,
+      difficultyEasy,
+      difficultyMedium,
+      difficultyHard,
+      customTimerEnabled,
+      timeLimitMinutes,
+      retakeCooldownMinutes,
+      autoSubmitOnTimeout,
+      lockAfterTimeout,
+    }))
+    if (!confirmed) return
     setBusy(true)
     setMessage(`Đang tạo ${ready.length} Quiz. Vui lòng chờ...`)
     try {
@@ -251,7 +316,7 @@ export default function BankQuizPage() {
           </label> : null}
           <div className="settings-actions settings-actions-top">
             <button className="btn secondary full-width" disabled={busy || !autoMap?.can_apply} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
-            <button className="btn success full-width" disabled={!canCreateQuiz || busy || Boolean(creatingKey)} onClick={createAllQuiz}>Tạo Quiz cho {readyRows.length || 0} bài sẵn sàng</button>
+            <button className="btn success full-width" disabled={!canCreateQuiz || busy || Boolean(creatingKey)} onClick={createAllQuiz}>Tạo Quiz ({readyRows.length || 0})</button>
           </div>
         </div>
 
@@ -275,7 +340,7 @@ export default function BankQuizPage() {
           <div className="section-heading compact-heading">
             <div>
               <h3>Timer quiz tự luyện</h3>
-              <p className="muted">Không dùng Timed Exam native. Timer/cooldown do plugin quản lý.</p>
+              <p className="muted">Thời gian làm bài và chờ làm lại cho Quiz tự luyện.</p>
             </div>
             <label className="toggle-line toggle-strong">
               <input type="checkbox" checked={customTimerEnabled} onChange={(event) => setCustomTimerEnabled(event.target.checked)} />
@@ -290,7 +355,6 @@ export default function BankQuizPage() {
             <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={autoSubmitOnTimeout} onChange={(event) => setAutoSubmitOnTimeout(event.target.checked)} /><span>Tự nộp khi hết giờ</span></label>
             <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={lockAfterTimeout} onChange={(event) => setLockAfterTimeout(event.target.checked)} /><span>Khóa sau hết giờ</span></label>
           </div>
-          <div className="alert info compact-alert">FPT naming: Section <b>Bài 1</b> → Subsection <b>Quiz 1</b>, Unit <b>Quiz</b>, Grade as <b>Quiz</b>.</div>
         </div>
 
       </aside>

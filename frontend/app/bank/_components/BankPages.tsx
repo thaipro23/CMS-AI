@@ -457,6 +457,7 @@ export function DepartmentsPage() {
     {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]} />
     <Toolbar title="Bộ môn" helper="Nhìn card là biết bộ môn nào đã xử lý xong, bộ môn nào còn câu cần duyệt." action={<Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link>} />
+    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span className="active">1. Bộ môn</span><span>2. Môn</span><span>3. Version</span><span>4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -523,6 +524,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
     <Toolbar title={department ? `Môn trong ${department.name}` : 'Môn trong bộ môn'} helper="Mỗi môn hiển thị version đã duyệt xong, version còn việc và số câu chờ xử lý." />
+    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span>1. Bộ môn</span><span className="active">2. Môn</span><span>3. Version</span><span>4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -596,6 +598,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
     <Toolbar title={subject ? `Phiên bản môn ${subject.code}` : 'Phiên bản môn'} helper="Mỗi version hiển thị tổng số bài, số câu đã duyệt/chưa duyệt và release đã publish." />
+    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span>1. Bộ môn</span><span>2. Môn</span><span className="active">3. Version</span><span>4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -670,6 +673,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
     <Toolbar title={offering ? `Bài trong ${offering.code}` : 'Bài trong version môn'} helper="Mỗi bài hiển thị tài liệu, tổng câu, câu đã duyệt, câu chưa duyệt/lỗi và trạng thái Release." />
+    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span>1. Bộ môn</span><span>2. Môn</span><span>3. Version</span><span className="active">4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -737,6 +741,11 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [editForm, setEditForm] = useState<BankQuestionEditForm | null>(null)
   const [rejectingQuestion, setRejectingQuestion] = useState<BankVersionQuestion | null>(null)
   const [rejectReason, setRejectReason] = useState('')
+  const [materialManagerOpen, setMaterialManagerOpen] = useState(false)
+  const [generateManagerOpen, setGenerateManagerOpen] = useState(false)
+  const [questionStatusFilter, setQuestionStatusFilter] = useState('all')
+  const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState('all')
+  const [questionSort, setQuestionSort] = useState('needs_review')
 
   const load = async () => {
     const [nextDepartments, nextSubjects, nextOfferings, nextChapters, nextBankVersions, nextReleases] = await Promise.all([
@@ -781,6 +790,30 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const overQuota = numericGenerateCount > remainingQuota
   const invalidDifficulty = difficultyTotal !== 100
   const canGenerateNow = Boolean(selectedBankVersion && materials.length && can('generate_questions') && !overQuota && !invalidDifficulty && numericGenerateCount >= 1 && remainingQuota > 0)
+  const filteredQuestions = useMemo(() => {
+    const reviewRank = (q: BankVersionQuestion) => {
+      if (q.status === 'draft_error') return 0
+      if (q.status === 'pending_review' || q.status === 'needs_review') return 1
+      if (q.status === 'approved') return 2
+      if (q.status === 'rejected') return 3
+      if (q.status === 'published') return 4
+      return 5
+    }
+    const difficultyRank = (difficulty?: string | null) => ({ easy: 1, medium: 2, hard: 3 } as Record<string, number>)[String(difficulty || '').toLowerCase()] || 9
+    const result = questions.filter((question) => {
+      const statusOk = questionStatusFilter === 'all'
+        || (questionStatusFilter === 'needs_action' && isQuestionWaitingForReview(question))
+        || question.status === questionStatusFilter
+      const difficultyOk = questionDifficultyFilter === 'all' || String(question.difficulty || '').toLowerCase() === questionDifficultyFilter
+      return statusOk && difficultyOk
+    })
+    return result.sort((a, b) => {
+      if (questionSort === 'difficulty') return difficultyRank(a.difficulty) - difficultyRank(b.difficulty)
+      if (questionSort === 'quality_low') return Number(a.quality_score || 0) - Number(b.quality_score || 0)
+      if (questionSort === 'quality_high') return Number(b.quality_score || 0) - Number(a.quality_score || 0)
+      return reviewRank(a) - reviewRank(b)
+    })
+  }, [questions, questionStatusFilter, questionDifficultyFilter, questionSort])
 
   const ensureBankVersion = async () => {
     if (!chapter) throw new Error('Không tìm thấy bài')
@@ -893,7 +926,10 @@ ${chunk.content}`).join('\n\n')
   return <div className="page-stack bank-multipage">
     {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }, { label: chapterDisplayName(chapter) }]} />
-    <Toolbar title={chapter ? `${offering?.code || ''} / ${chapterDisplayName(chapter)}` : 'Workspace của bài'} helper={'Quản lý tài liệu, câu hỏi và release của một bài.'} />
+    <Toolbar title={chapter ? `${offering?.code || ''} / ${chapterDisplayName(chapter)}` : 'Workspace của bài'} helper={'Một màn hình để quản lý tài liệu, tạo câu hỏi, duyệt câu và chốt release cho bài.'} />
+    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề">
+      <span>1. Bộ môn</span><span>2. Môn</span><span>3. Version</span><span className="active">4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span>
+    </div>
     {message ? <div className="alert info">{message}</div> : null}
     {diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
     {unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
@@ -914,12 +950,16 @@ ${chunk.content}`).join('\n\n')
       <div><span>Release</span><b>{publishedRelease ? 'Đã publish' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b><small>{nextReleaseText(publishedRelease || latestRelease)}</small></div>
     </section>
 
-    <section className="card chapter-top-actions">
+    <section className="card chapter-command-bar">
       <div>
-        <b>Thao tác nhanh</b>
-        <p className="helper">Chỉ dùng 2 nút chính. Chỉ được chốt bộ đề khi tất cả câu hỏi đã được duyệt hoặc bỏ.</p>
+        <div className="eyebrow">Workspace bài</div>
+        <h2>{chapterDisplayName(chapter)}</h2>
+        <p className="helper">Các thao tác chính nằm trong popup để màn hình duyệt câu hỏi không bị rời rạc.</p>
       </div>
       <div className="button-row no-margin">
+        <button className="btn secondary" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>Tài liệu ({materials.length})</button>
+        <button className="btn secondary" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>Tạo câu hỏi</button>
+        <button className="btn secondary" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>Duyệt câu hỏi</button>
         <button className="btn secondary" disabled={busy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
@@ -929,70 +969,24 @@ ${chunk.content}`).join('\n\n')
           await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
         }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={busy || !can('publish_questions')} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã publish Library sang Open edX', refreshCurrent)}>Publish Library</button> : <button className="btn secondary" disabled>Đã publish</button>}
       </div>
-      {releaseReviewBlocked ? <div className="alert warning"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
+      {releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
 
-    {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace">
-      <div className="workspace-panel">
-        <h3>Tài liệu</h3>
-        <p className="helper">Gắn tài liệu để hệ thống tạo câu hỏi. Nếu version clone bị đổi tài liệu, hệ thống tự kiểm tra khác biệt.</p>
-        <div className="mini-form">
-          <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
-          <button className="btn" disabled={busy || !file || !can('edit_questions')} onClick={() => run(async () => {
-            if (!file || !selectedBankVersion) return
-            const result = await uploadBankMaterial(headers, selectedBankVersion.id, file, { title: file.name, change_type: diffBaseBankVersionId ? 'updated_after_clone' : 'initial', replace_existing: false })
-            setFile(null)
-            if (result.diff_required && result.diff_base_bank_version_id) {
-              await runDiffNow(selectedBankVersion.id, result.diff_base_bank_version_id)
-            }
-          }, 'Đã gắn tài liệu', refreshCurrent)}>+ Gắn tài liệu</button>
-        </div>
-        <div className="entity-list compact-list small-chunk-list">
-          {materials.map((item) => <div className="entity-card" key={item.id}>
-            <b>{item.title || item.file_name}</b>
-            <small>{item.file_type} · {new Date(item.created_at).toLocaleString('vi-VN')}</small>
-            <div className="button-row no-margin">
-              <button className="btn small secondary" onClick={() => openMaterial(item)}>Xem</button>
-              <button className="btn small danger" disabled={busy || !can('edit_questions')} onClick={() => run(async () => { await deleteMaterialVersion(headers, item.id) }, 'Đã xóa tài liệu', refreshCurrent)}>Xóa</button>
-            </div>
-          </div>)}
-          {!materials.length ? <div className="empty-state">Chưa có tài liệu.</div> : null}
-        </div>
-      </div>
-
-      <div className="workspace-panel">
-        <h3>Tạo câu hỏi từ tài liệu</h3>
-        <p className="helper">Luồng này giống phần tạo câu hỏi theo course trước đây: lấy tài liệu đã gắn làm nguồn, chia EASY/MEDIUM/HARD, kiểm tra chất lượng và chống trùng trước khi đưa vào danh sách duyệt.</p>
-        <div className="quota-box"><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Tổng câu đã tạo / tối đa 100 câu cho bài này · còn {remainingQuota} câu</small></div>
-        <div className="generation-plan-box">
-          <div><span>Nguồn tạo</span><b>{materials.length ? `${materials.length} tài liệu đã gắn` : 'Chưa có tài liệu'}</b></div>
-          <div><span>Sẽ tạo</span><b>{Math.max(0, numericGenerateCount || 0)} câu mới</b></div>
-          <div><span>Tỷ lệ</span><b>{difficultyEasy}/{difficultyMedium}/{difficultyHard}</b><small>Dễ / Trung bình / Khó</small></div>
-        </div>
-        <div className="mini-form">
-          <label>Số câu muốn tạo thêm</label>
-          <input className="input" type="number" min={1} max={remainingQuota || 1} value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Ví dụ: 10" />
-          <div className="three-col-form">
-            <label>Dễ %<input className="input" type="number" min={0} max={100} value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} /></label>
-            <label>Trung bình %<input className="input" type="number" min={0} max={100} value={difficultyMedium} onChange={(event) => setDifficultyMedium(event.target.value)} /></label>
-            <label>Khó %<input className="input" type="number" min={0} max={100} value={difficultyHard} onChange={(event) => setDifficultyHard(event.target.value)} /></label>
-          </div>
-          {!materials.length ? <div className="alert warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</div> : null}
-          {invalidDifficulty ? <div className="alert warning">Tổng tỷ lệ Dễ/Trung bình/Khó phải bằng 100%.</div> : null}
-          {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
-          {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn 100 câu. Không thể tạo thêm.</div> : null}
-          <button className="btn" disabled={busy || !canGenerateNow} onClick={openGenerateConfirm}>Tạo câu hỏi</button>
-        </div>
-      </div>
-
-
+    {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">
-        <div className="section-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Giao diện giống trang /review: đọc câu hỏi, xem đủ đáp án, rồi duyệt hoặc bỏ. Phải xử lý hết mới được chốt bộ đề.</p></div><button className="btn secondary" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
+        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div><button className="btn secondary" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
         }, 'Đã duyệt hết câu chờ', refreshCurrent)}>Duyệt hết câu chờ</button></div>
+        <div className="question-filter-bar">
+          <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => setQuestionStatusFilter(event.target.value)}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã publish</option></select></label>
+          <label>Độ khó<select className="input" value={questionDifficultyFilter} onChange={(event) => setQuestionDifficultyFilter(event.target.value)}><option value="all">Tất cả</option><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
+          <label>Sắp xếp<select className="input" value={questionSort} onChange={(event) => setQuestionSort(event.target.value)}><option value="needs_review">Cần xử lý trước</option><option value="difficulty">Theo độ khó</option><option value="quality_low">Điểm chất lượng thấp trước</option><option value="quality_high">Điểm chất lượng cao trước</option></select></label>
+          <button className="btn secondary" type="button" onClick={() => { setQuestionStatusFilter('all'); setQuestionDifficultyFilter('all'); setQuestionSort('needs_review') }}>Xóa lọc</button>
+          <span className="filter-result-count">Hiện {filteredQuestions.length}/{questions.length} câu</span>
+        </div>
         <div className="question-card-list bank-review-list">
-          {questions.slice(0, 120).map((item, index) => {
+          {filteredQuestions.slice(0, 160).map((item, index) => {
             const draftReason = item.status === 'draft_error' ? bankQuestionErrorMessage(item) : null
             const waitingForReview = isQuestionWaitingForReview(item)
             return <article className="question-review-card" key={item.id}>
@@ -1040,9 +1034,74 @@ ${chunk.content}`).join('\n\n')
             </article>
           })}
         </div>
-        {!questions.length ? <div className="empty-state">Chưa có câu hỏi.</div> : null}
+        {!filteredQuestions.length ? <div className="empty-state">Không có câu hỏi phù hợp bộ lọc.</div> : null}
       </div>
     </section>}
+
+    <Modal open={materialManagerOpen} title="Tài liệu của bài" onClose={() => setMaterialManagerOpen(false)} wide>
+      <div className="chapter-popup-grid">
+        <div className="popup-action-panel">
+          <h3>Gắn tài liệu</h3>
+          <p className="helper">Tài liệu là nguồn để AI tạo câu hỏi cho đúng bài này. Nếu version clone bị đổi tài liệu, hệ thống sẽ kiểm tra khác biệt.</p>
+          <div className="mini-form">
+            <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
+            <button className="btn" disabled={busy || !file || !can('edit_questions')} onClick={() => run(async () => {
+              if (!file || !selectedBankVersion) return
+              const result = await uploadBankMaterial(headers, selectedBankVersion.id, file, { title: file.name, change_type: diffBaseBankVersionId ? 'updated_after_clone' : 'initial', replace_existing: false })
+              setFile(null)
+              if (result.diff_required && result.diff_base_bank_version_id) {
+                await runDiffNow(selectedBankVersion.id, result.diff_base_bank_version_id)
+              }
+            }, 'Đã gắn tài liệu', refreshCurrent)}>+ Gắn tài liệu</button>
+          </div>
+        </div>
+        <div className="popup-list-panel">
+          <h3>Tài liệu đã gắn</h3>
+          <div className="entity-list compact-list small-chunk-list popup-scroll-list">
+            {materials.map((item) => <div className="entity-card" key={item.id}>
+              <b>{item.title || item.file_name}</b>
+              <small>{item.file_type} · {new Date(item.created_at).toLocaleString('vi-VN')}</small>
+              <div className="button-row no-margin">
+                <button className="btn small secondary" onClick={() => openMaterial(item)}>Xem</button>
+                <button className="btn small danger" disabled={busy || !can('edit_questions')} onClick={() => run(async () => { await deleteMaterialVersion(headers, item.id) }, 'Đã xóa tài liệu', refreshCurrent)}>Xóa</button>
+              </div>
+            </div>)}
+            {!materials.length ? <div className="empty-state">Chưa có tài liệu.</div> : null}
+          </div>
+        </div>
+      </div>
+    </Modal>
+
+    <Modal open={generateManagerOpen} title="Tạo câu hỏi từ tài liệu" onClose={() => setGenerateManagerOpen(false)} wide>
+      <div className="chapter-popup-grid">
+        <div className="popup-action-panel">
+          <h3>Kế hoạch tạo câu hỏi</h3>
+          <p className="helper">AI dùng tài liệu đã gắn để tạo câu hỏi theo tỷ lệ EASY/MEDIUM/HARD, kiểm tra chất lượng rồi đưa vào hàng chờ duyệt.</p>
+          <div className="quota-box"><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Tổng câu đã tạo / giới hạn của bài · còn {remainingQuota} câu</small></div>
+          <div className="generation-plan-box">
+            <div><span>Nguồn tạo</span><b>{materials.length ? `${materials.length} tài liệu đã gắn` : 'Chưa có tài liệu'}</b></div>
+            <div><span>Sẽ tạo</span><b>{Math.max(0, numericGenerateCount || 0)} câu mới</b></div>
+            <div><span>Tỷ lệ</span><b>{difficultyEasy}/{difficultyMedium}/{difficultyHard}</b><small>Dễ / Trung bình / Khó</small></div>
+          </div>
+        </div>
+        <div className="popup-list-panel">
+          <div className="mini-form">
+            <label>Số câu muốn tạo thêm</label>
+            <input className="input" type="number" min={1} max={remainingQuota || 1} value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Ví dụ: 10" />
+            <div className="three-col-form">
+              <label>Dễ %<input className="input" type="number" min={0} max={100} value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} /></label>
+              <label>Trung bình %<input className="input" type="number" min={0} max={100} value={difficultyMedium} onChange={(event) => setDifficultyMedium(event.target.value)} /></label>
+              <label>Khó %<input className="input" type="number" min={0} max={100} value={difficultyHard} onChange={(event) => setDifficultyHard(event.target.value)} /></label>
+            </div>
+            {!materials.length ? <div className="alert warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</div> : null}
+            {invalidDifficulty ? <div className="alert warning">Tổng tỷ lệ Dễ/Trung bình/Khó phải bằng 100%.</div> : null}
+            {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
+            {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu. Không thể tạo thêm.</div> : null}
+            <div className="modal-actions"><button className="btn secondary" onClick={() => setGenerateManagerOpen(false)}>Đóng</button><button className="btn" disabled={busy || !canGenerateNow} onClick={openGenerateConfirm}>Tính chi phí & tạo</button></div>
+          </div>
+        </div>
+      </div>
+    </Modal>
 
     <Modal open={Boolean(generatePreview)} title="Xác nhận tạo câu hỏi" onClose={() => setGeneratePreview(null)}>
       {generatePreview ? <div className="generate-confirm-box">

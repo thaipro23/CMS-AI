@@ -12,7 +12,7 @@ type NavItem = {
   label: string
   desc: string
   icon: string
-  group: 'main' | 'bank' | 'ops' | 'admin'
+  group: 'bank' | 'ops' | 'admin'
   permission?: string
 }
 
@@ -21,22 +21,15 @@ const navItems: NavItem[] = [
   { href: '/bank/departments', label: 'Bộ môn', desc: 'Môn, version, bài', icon: '📚', group: 'bank' },
   { href: '/bank/quiz', label: 'Tạo Quiz Open edX', desc: 'Map course & timer', icon: '🧩', group: 'bank' },
   { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Theo dõi & rollback', icon: '🕘', group: 'bank' },
-  { href: '/workflow', label: 'Quy trình', desc: 'Luồng chính', icon: '🧭', group: 'main' },
-  { href: '/sync', label: 'Đồng bộ học liệu', desc: 'Open edX nodes/chunks', icon: '🔄', group: 'main' },
-  { href: '/generate', label: 'Tạo câu hỏi', desc: 'Generate nâng cao', icon: '✨', group: 'main' },
-  { href: '/review', label: 'Duyệt câu hỏi', desc: 'Hàng chờ giảng viên', icon: '✅', group: 'main' },
-  { href: '/question-bank', label: 'Ngân hàng câu hỏi', desc: 'Lọc, sửa, publish', icon: '🗂️', group: 'main' },
-  { href: '/export', label: 'Xuất Open edX', desc: 'OLX/XML', icon: '📤', group: 'main' },
-  { href: '/dashboard', label: 'Tổng quan', desc: 'Thống kê khóa học', icon: '📊', group: 'ops' },
-  { href: '/jobs', label: 'Tiến trình', desc: 'Theo dõi job', icon: '⚙️', group: 'ops' },
-  { href: '/audit', label: 'Nhật ký hệ thống', desc: 'Lỗi do ai/cái gì', icon: '🧾', group: 'ops' },
-  { href: '/users', label: 'Người dùng', desc: 'Theo từng user', icon: '👥', group: 'admin', permission: 'view_user_analytics' },
+  { href: '/dashboard', label: 'Tổng quan vận hành', desc: 'Theo luồng ngân hàng đề', icon: '📊', group: 'ops' },
+  { href: '/jobs', label: 'Tiến trình job', desc: 'Generate, publish, quiz', icon: '⚙️', group: 'ops' },
+  { href: '/audit', label: 'Nhật ký thao tác', desc: 'Ai làm gì, lỗi gì', icon: '🧾', group: 'ops' },
+  { href: '/users', label: 'Người dùng', desc: 'Theo dõi giáo viên làm việc', icon: '👥', group: 'admin', permission: 'view_user_analytics' },
   { href: '/settings', label: 'Cấu hình', desc: 'Quyền & hệ thống', icon: '🔐', group: 'admin', permission: 'manage_settings' },
 ]
 
 const navGroups: Array<{ key: NavItem['group']; label: string }> = [
   { key: 'bank', label: 'Ngân hàng đề' },
-  { key: 'main', label: 'Tạo & duyệt' },
   { key: 'ops', label: 'Vận hành' },
   { key: 'admin', label: 'Quản trị' },
 ]
