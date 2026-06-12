@@ -18,6 +18,8 @@ import {
   BankVersionDiffPreview,
   BankVersionQuestion,
   CourseQuizInstance,
+  AuditLogRow,
+  Job,
   Department,
   MaterialChunk,
   MaterialVersion,
@@ -40,6 +42,8 @@ import {
   deleteMaterialVersion,
   generateFromBankVersion,
   getBankDashboardOverview,
+  getAuditLogs,
+  getJobs,
   searchBankDashboard,
   getDepartmentSummaries,
   getSubjectSummaries,
@@ -382,24 +386,110 @@ function toBankQuestionEditForm(question: BankVersionQuestion): BankQuestionEdit
 }
 
 
+type BankChartRow = { label: string; value: number; tone?: 'blue' | 'green' | 'amber' | 'red' | 'slate' }
+
+function BankBarChart({ title, helper, rows, empty }: { title: string; helper?: string; rows: BankChartRow[]; empty?: string }) {
+  const max = Math.max(...rows.map((row) => row.value), 0)
+  return <div className="card bank-chart-card">
+    <div className="section-head compact-section-head"><div><h2>{title}</h2>{helper ? <p className="helper">{helper}</p> : null}</div></div>
+    {max <= 0 ? <div className="empty-state small-empty">{empty || 'Chưa có dữ liệu.'}</div> : <div className="bank-bar-chart">
+      {rows.map((row) => {
+        const width = max > 0 ? Math.max(4, Math.round((row.value / max) * 100)) : 0
+        return <div className="bank-bar-row" key={row.label}>
+          <div className="bank-bar-label"><span>{row.label}</span><b>{row.value}</b></div>
+          <div className="bank-bar-track"><span className={`bank-bar-fill tone-${row.tone || 'blue'}`} style={{ width: `${width}%` }} /></div>
+        </div>
+      })}
+    </div>}
+  </div>
+}
+
+function BankStackedChart({ title, helper, rows }: { title: string; helper?: string; rows: BankChartRow[] }) {
+  const total = rows.reduce((sum, row) => sum + row.value, 0)
+  return <div className="card bank-chart-card">
+    <div className="section-head compact-section-head"><div><h2>{title}</h2>{helper ? <p className="helper">{helper}</p> : null}</div><b className="chart-total">{total}</b></div>
+    {total <= 0 ? <div className="empty-state small-empty">Chưa có dữ liệu.</div> : <>
+      <div className="bank-stacked-bar">
+        {rows.filter((row) => row.value > 0).map((row) => <span key={row.label} className={`tone-${row.tone || 'blue'}`} style={{ width: `${Math.max(3, (row.value / total) * 100)}%` }} title={`${row.label}: ${row.value}`} />)}
+      </div>
+      <div className="bank-chart-legend">
+        {rows.map((row) => <span key={row.label}><i className={`tone-${row.tone || 'blue'}`} />{row.label}: <b>{row.value}</b></span>)}
+      </div>
+    </>}
+  </div>
+}
+
+function countRows<T>(items: T[], getter: (item: T) => string | null | undefined, tones: Record<string, BankChartRow['tone']> = {}) {
+  const counts: Record<string, number> = {}
+  items.forEach((item) => {
+    const key = getter(item) || 'unknown'
+    counts[key] = (counts[key] || 0) + 1
+  })
+  return Object.entries(counts).map(([label, value]) => ({ label: statusLabel(label), value, tone: tones[label] || 'blue' }))
+}
+
+function auditActionText(action?: string | null) {
+  const map: Record<string, string> = {
+    'question_bank.release.quiz.create': 'Tạo Quiz Open edX',
+    'question_bank.course_quiz.rollback': 'Rollback Quiz',
+    'question_bank.release.publish_openedx': 'Publish Release',
+    'question_bank.version.question.review': 'Duyệt câu hỏi',
+    'question_bank.version.question.bulk_review': 'Duyệt hàng loạt',
+    'question_bank.bank_version.generate': 'Tạo câu hỏi',
+    'question_bank.material.upload': 'Upload tài liệu',
+    'question_bank.quiz.auto_map.apply': 'Lưu cấu hình map Quiz',
+  }
+  return map[action || ''] || action || '—'
+}
+
 export function BankDashboardPage() {
   const { headers, authReady } = useBankData()
   const [overview, setOverview] = useState<BankDashboardOverview | null>(null)
+  const [quizInstances, setQuizInstances] = useState<CourseQuizInstance[]>([])
+  const [auditRows, setAuditRows] = useState<AuditLogRow[]>([])
+  const [jobs, setJobs] = useState<Job[]>([])
   const overviewLoadKey = useRef('')
+
+  const load = async () => {
+    const [nextOverview, nextQuizInstances, nextAudit, nextJobs] = await Promise.all([
+      getBankDashboardOverview(headers),
+      getCourseQuizInstances(headers, { limit: 50 }),
+      getAuditLogs('', { page: 1, pageSize: 8 }, headers),
+      getJobs('', headers),
+    ])
+    setOverview(nextOverview)
+    setQuizInstances(nextQuizInstances)
+    setAuditRows(nextAudit.items || [])
+    setJobs(nextJobs)
+  }
+
   useEffect(() => {
     if (!authReady) return
     const key = JSON.stringify(headers)
     if (overviewLoadKey.current === key) return
     overviewLoadKey.current = key
     let cancelled = false
-    getBankDashboardOverview(headers)
-      .then((data) => { if (!cancelled) setOverview(data) })
-      .catch(() => { if (!cancelled) overviewLoadKey.current = '' })
+    load().catch(() => { if (!cancelled) overviewLoadKey.current = '' })
     return () => { cancelled = true }
-  }, [authReady, headers])
+  }, [authReady, headers]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const questionRows: BankChartRow[] = [
+    { label: 'Đã duyệt', value: overview?.approved_count || 0, tone: 'green' },
+    { label: 'Chờ duyệt', value: overview?.pending_review_count || 0, tone: 'amber' },
+    { label: 'Câu lỗi', value: overview?.draft_error_count || 0, tone: 'red' },
+  ]
+  const hierarchyRows: BankChartRow[] = [
+    { label: 'Bộ môn', value: overview?.departments_total || 0, tone: 'blue' },
+    { label: 'Môn', value: overview?.subjects_total || 0, tone: 'green' },
+    { label: 'Version', value: overview?.subject_versions_total || 0, tone: 'amber' },
+    { label: 'Bài', value: overview?.chapters_total || 0, tone: 'slate' },
+  ]
+  const quizRows = countRows(quizInstances, (row) => row.status, { created: 'green', failed: 'red', rolled_back: 'amber' })
+  const jobRows = countRows(jobs, (row) => row.status, { completed: 'green', failed: 'red', running: 'blue', queued: 'amber' })
+
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
-    <Toolbar title="Ngân hàng đề" helper="Trang tổng quan giúp giáo viên biết ngay việc nào cần làm tiếp." action={<div className="button-row no-margin"><Link className="btn secondary" href="/bank/departments">Quản lý bộ môn</Link><Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link></div>} />
+    <Toolbar title="Tổng quan ngân hàng đề" helper="Gộp Dashboard Bank và vận hành vào một màn hình: việc cần làm, biểu đồ thống kê, Quiz Open edX, job và nhật ký gần đây." action={<div className="button-row no-margin"><button className="btn secondary" type="button" onClick={load}>Tải lại</button><Link className="btn secondary" href="/bank/departments">Quản lý bộ môn</Link><Link className="btn" href="/bank/quiz">Tạo Quiz Open edX</Link></div>} />
     <section className="card bank-guide-card">
       <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Gõ WEB107, WEB107_SU25, Bài 1, HTML/CSS, Database hoặc tên bộ môn để đi thẳng tới nơi cần xử lý.</p></div></div>
       <QuickSearchBox />
@@ -410,7 +500,13 @@ export function BankDashboardPage() {
       <div><span>Version môn</span><b>{overview?.subject_versions_total ?? '—'}</b><small>{overview?.subject_versions_done ?? 0} đã xong · {overview?.subject_versions_not_done ?? 0} còn việc</small></div>
       <div><span>Bài cần xử lý</span><b>{overview?.chapters_needing_review ?? '—'}</b><small>{overview?.chapters_ready_to_release ?? 0} bài sẵn sàng chốt</small></div>
       <div><span>Tổng câu hỏi</span><b>{overview?.total_questions ?? '—'}</b><small>{overview?.approved_count ?? 0} đã duyệt</small></div>
-      <div><span>Câu chưa xử lý</span><b>{(overview?.pending_review_count || 0) + (overview?.draft_error_count || 0)}</b><small>{overview?.pending_review_count ?? 0} chờ duyệt · {overview?.draft_error_count ?? 0} lỗi</small></div>
+      <div><span>Quiz Open edX</span><b>{quizInstances.length}</b><small>{quizInstances.filter((item) => item.status === 'created').length} đã tạo · {quizInstances.filter((item) => item.status === 'failed').length} lỗi</small></div>
+    </section>
+    <section className="bank-chart-grid">
+      <BankStackedChart title="Tình trạng câu hỏi" helper="Tỷ lệ câu đã duyệt, chờ duyệt và lỗi trong toàn ngân hàng." rows={questionRows} />
+      <BankBarChart title="Quy mô ngân hàng" helper="Số lượng entity chính theo luồng Bank-first." rows={hierarchyRows} />
+      <BankBarChart title="Quiz Open edX" helper="Trạng thái các Quiz đã tạo từ Bank Release." rows={quizRows} empty="Chưa có Quiz Open edX." />
+      <BankBarChart title="Job generate" helper="Theo dõi job tạo câu hỏi/publish/quiz gần đây." rows={jobRows} empty="Chưa có job." />
     </section>
     <section className="card">
       <div className="section-head"><div><h2>Việc cần làm</h2><p className="helper">Hệ thống tự gom những nơi còn câu chưa duyệt, câu lỗi hoặc bài đã sẵn sàng chốt bộ đề.</p></div></div>
@@ -423,6 +519,10 @@ export function BankDashboardPage() {
       </div>
       {overview && !overview.next_actions.length ? <div className="empty-state">Chưa có việc cần xử lý. Có thể bắt đầu từ Quản lý bộ môn hoặc Tạo Quiz Open edX.</div> : null}
       {!overview ? <div className="empty-state">Đang tải tổng quan...</div> : null}
+    </section>
+    <section className="card">
+      <div className="section-head"><div><h2>Hoạt động gần đây</h2><p className="helper">Nhật ký toàn hệ thống theo luồng Bank/Quiz-first.</p></div><Link className="btn secondary" href="/audit">Xem nhật ký</Link></div>
+      <div className="table-wrap"><table className="table"><thead><tr><th>Thời điểm</th><th>Người</th><th>Hành động</th><th>Kết quả</th><th>Nội dung</th></tr></thead><tbody>{auditRows.length ? auditRows.map((row) => <tr key={row.id}><td>{row.created_at ? new Date(row.created_at).toLocaleString('vi-VN') : '—'}</td><td><b>{row.actor_id}</b><br /><span className="helper">{row.actor_role || '—'}</span></td><td>{auditActionText(row.action)}</td><td><span className={row.status === 'failed' ? 'status danger' : 'status success'}>{row.status}</span></td><td>{row.message || '—'}</td></tr>) : <tr><td colSpan={5}><div className="empty-state">Chưa có hoạt động.</div></td></tr>}</tbody></table></div>
     </section>
   </div>
 }
@@ -457,7 +557,6 @@ export function DepartmentsPage() {
     {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]} />
     <Toolbar title="Bộ môn" helper="Nhìn card là biết bộ môn nào đã xử lý xong, bộ môn nào còn câu cần duyệt." action={<Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link>} />
-    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span className="active">1. Bộ môn</span><span>2. Môn</span><span>3. Version</span><span>4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -524,7 +623,6 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
     <Toolbar title={department ? `Môn trong ${department.name}` : 'Môn trong bộ môn'} helper="Mỗi môn hiển thị version đã duyệt xong, version còn việc và số câu chờ xử lý." />
-    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span>1. Bộ môn</span><span className="active">2. Môn</span><span>3. Version</span><span>4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -598,7 +696,6 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
     <Toolbar title={subject ? `Phiên bản môn ${subject.code}` : 'Phiên bản môn'} helper="Mỗi version hiển thị tổng số bài, số câu đã duyệt/chưa duyệt và release đã publish." />
-    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span>1. Bộ môn</span><span>2. Môn</span><span className="active">3. Version</span><span>4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -673,7 +770,6 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
     <Toolbar title={offering ? `Bài trong ${offering.code}` : 'Bài trong version môn'} helper="Mỗi bài hiển thị tài liệu, tổng câu, câu đã duyệt, câu chưa duyệt/lỗi và trạng thái Release." />
-    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề"><span>1. Bộ môn</span><span>2. Môn</span><span>3. Version</span><span className="active">4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span></div>
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -927,9 +1023,6 @@ ${chunk.content}`).join('\n\n')
     {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }, { label: chapterDisplayName(chapter) }]} />
     <Toolbar title={chapter ? `${offering?.code || ''} / ${chapterDisplayName(chapter)}` : 'Workspace của bài'} helper={'Một màn hình để quản lý tài liệu, tạo câu hỏi, duyệt câu và chốt release cho bài.'} />
-    <div className="bank-flow-tabs" aria-label="Luồng ngân hàng đề">
-      <span>1. Bộ môn</span><span>2. Môn</span><span>3. Version</span><span className="active">4. Bài</span><span>5. Câu hỏi</span><span>6. Release</span>
-    </div>
     {message ? <div className="alert info">{message}</div> : null}
     {diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
     {unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
@@ -937,7 +1030,7 @@ ${chunk.content}`).join('\n\n')
     <section className={`card teacher-next-step ${unresolvedQuestionCount > 0 ? 'warning-card' : readiness?.can_create_release ? 'success-card' : ''}`}>
       <div className="section-head"><div><h2>Bạn cần làm gì tiếp?</h2><p className="helper">Hệ thống tự đọc trạng thái bài và chỉ ra bước tiếp theo, không cần giáo viên tự đoán.</p></div></div>
       {stats.draftError > 0 ? <div className="next-step-message"><b>Còn {stats.draftError} câu lỗi.</b><span>Hãy bấm Sửa hoặc Bỏ câu lỗi. Khi bấm Bỏ, hệ thống yêu cầu nhập lý do để sau này fine-tune AI.</span></div> : stats.pending > 0 ? <div className="next-step-message"><b>Còn {stats.pending} câu chưa duyệt.</b><span>Hãy duyệt hoặc bỏ hết các câu này. Sau đó mới chốt bộ đề.</span></div> : readiness?.can_create_release ? <div className="next-step-message"><b>Sẵn sàng chốt bộ đề.</b><span>Tất cả câu đã được xử lý. Có thể bấm Chốt bộ đề.</span></div> : <div className="next-step-message"><b>Chưa có việc cần duyệt.</b><span>Hãy gắn tài liệu và tạo câu hỏi nếu bài này chưa đủ câu.</span></div>}
-      <div className="button-row no-margin"><button className="btn secondary" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>Duyệt câu hỏi</button>{!latestRelease ? <button className="btn" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} onClick={() => run(async () => { if (!selectedBankVersion) return; await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true }) }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : null}</div>
+      <div className="button-row no-margin chapter-primary-actions"><button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>Duyệt câu hỏi</button>{!latestRelease ? <button className="btn chapter-action-button release" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} onClick={() => run(async () => { if (!selectedBankVersion) return; await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true }) }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : null}</div>
     </section>
 
     <section className="summary-grid compact-summary">
@@ -957,24 +1050,24 @@ ${chunk.content}`).join('\n\n')
         <p className="helper">Các thao tác chính nằm trong popup để màn hình duyệt câu hỏi không bị rời rạc.</p>
       </div>
       <div className="button-row no-margin">
-        <button className="btn secondary" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>Tài liệu ({materials.length})</button>
-        <button className="btn secondary" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>Tạo câu hỏi</button>
-        <button className="btn secondary" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>Duyệt câu hỏi</button>
-        <button className="btn secondary" disabled={busy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => run(async () => {
+        <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>Tài liệu ({materials.length})</button>
+        <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>Tạo câu hỏi</button>
+        <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>Duyệt câu hỏi</button>
+        <button className="btn secondary chapter-action-button diff" disabled={busy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
         }, 'Đã kiểm tra khác biệt', refreshCurrent)}>Kiểm tra thay đổi</button>
         {!latestRelease ? <button className="btn" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
-        }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={busy || !can('publish_questions')} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã publish Library sang Open edX', refreshCurrent)}>Publish Library</button> : <button className="btn secondary" disabled>Đã publish</button>}
+        }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={busy || !can('publish_questions')} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã publish Library sang Open edX', refreshCurrent)}>Publish Library</button> : <button className="btn secondary chapter-action-button published" disabled>Đã publish</button>}
       </div>
       {releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">
-        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div><button className="btn secondary" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
+        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div><button className="btn secondary chapter-action-button review" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
           if (!selectedBankVersion) return
           await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
         }, 'Đã duyệt hết câu chờ', refreshCurrent)}>Duyệt hết câu chờ</button></div>

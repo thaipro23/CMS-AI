@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.models.cost import UsageLog
 from app.models.job import GenerationJob
 from app.models.question import Question, QuestionReviewLog
+from app.models.audit import AuditLog
 from app.services.cost_control import USD_TO_VND
 
 router = APIRouter()
@@ -31,6 +32,13 @@ def _empty_user(user_id: str):
         'cost_usd': 0.0,
         'cost_vnd': 0.0,
         'last_activity': None,
+        'audit_actions': 0,
+        'audit_failed': 0,
+        'bank_entity_changes': 0,
+        'quiz_creates': 0,
+        'release_publishes': 0,
+        'rollbacks': 0,
+        'last_action': None,
     }
 
 
@@ -107,6 +115,27 @@ def user_analytics(course_id: str | None = None, search: str | None = None, sort
             row['published'] += 1
         _touch(row, log.created_at)
 
+    audit_query = db.query(AuditLog)
+    if course_id:
+        audit_query = audit_query.filter(AuditLog.course_id == course_id)
+    for audit in audit_query.all():
+        uid = audit.actor_id or 'unknown'
+        row = users.setdefault(uid, _empty_user(uid))
+        action = (audit.action or '').lower()
+        row['audit_actions'] += 1
+        if audit.status == 'failed':
+            row['audit_failed'] += 1
+        if action.startswith('question_bank.'):
+            row['bank_entity_changes'] += 1
+        if 'release.quiz.create' in action or 'course_quiz' in action or 'quiz.auto_map' in action:
+            row['quiz_creates'] += 1
+        if 'release.publish_openedx' in action or 'publish' in action:
+            row['release_publishes'] += 1
+        if 'rollback' in action:
+            row['rollbacks'] += 1
+        row['last_action'] = audit.action or row.get('last_action')
+        _touch(row, audit.created_at)
+
     rows = list(users.values())
     for row in rows:
         row['estimated_cost_usd'] = round(row['estimated_cost_usd'], 6)
@@ -122,7 +151,7 @@ def user_analytics(course_id: str | None = None, search: str | None = None, sort
         needle = search.lower().strip()
         rows = [row for row in rows if needle in row['user_id'].lower()]
 
-    allowed = {'user_id', 'generate_jobs', 'questions_requested', 'approved', 'rejected', 'published', 'edits', 'input_tokens', 'cached_input_tokens', 'uncached_input_tokens', 'output_tokens', 'estimated_cost_usd', 'actual_cost_usd', 'estimate_accuracy_percent', 'cost_usd', 'cost_vnd', 'last_activity'}
+    allowed = {'user_id', 'generate_jobs', 'questions_requested', 'approved', 'rejected', 'published', 'edits', 'input_tokens', 'cached_input_tokens', 'uncached_input_tokens', 'output_tokens', 'estimated_cost_usd', 'actual_cost_usd', 'estimate_accuracy_percent', 'cost_usd', 'cost_vnd', 'last_activity', 'audit_actions', 'audit_failed', 'bank_entity_changes', 'quiz_creates', 'release_publishes', 'rollbacks'}
     key = sort_by if sort_by in allowed else 'cost_usd'
     reverse = sort_dir != 'asc'
     rows.sort(key=lambda row: (row.get(key) is None, row.get(key)), reverse=reverse)

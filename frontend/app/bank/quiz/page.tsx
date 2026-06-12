@@ -13,6 +13,7 @@ import {
 } from '../../../lib/api'
 
 type QuizMapping = QuizAutoMapResult['mappings'][number]
+type PendingCreate = { kind: 'one'; item: QuizMapping } | { kind: 'all' }
 
 function classNames(...items: Array<string | false | null | undefined>) {
   return items.filter(Boolean).join(' ')
@@ -34,39 +35,6 @@ function isErrorMessage(message: string) {
 }
 
 
-function buildQuizConfirmText(kind: 'one' | 'all', args: {
-  courseId: string
-  chapterTitle?: string
-  count: number
-  totalQuestions: number
-  difficultyEasy: number
-  difficultyMedium: number
-  difficultyHard: number
-  customTimerEnabled: boolean
-  timeLimitMinutes: number
-  retakeCooldownMinutes: number
-  autoSubmitOnTimeout: boolean
-  lockAfterTimeout: boolean
-}) {
-  const target = kind === 'all'
-    ? `${args.count} bài sẵn sàng`
-    : (args.chapterTitle || '1 bài')
-  const timerText = args.customTimerEnabled
-    ? `Bật timer: ${args.timeLimitMinutes} phút, chờ làm lại ${args.retakeCooldownMinutes} phút, ${args.autoSubmitOnTimeout ? 'tự nộp khi hết giờ' : 'không tự nộp'}, ${args.lockAfterTimeout ? 'khóa sau hết giờ' : 'không khóa sau hết giờ'}`
-    : 'Không bật timer'
-  return [
-    `Tạo Quiz cho: ${target}`,
-    `Course ID: ${args.courseId}`,
-    `Số câu/quiz: ${args.totalQuestions}`,
-    `Độ khó: Easy ${args.difficultyEasy}% · Medium ${args.difficultyMedium}% · Hard ${args.difficultyHard}%`,
-    timerText,
-    '',
-    'Quy tắc FPT:',
-    'Section Bài 1 → Subsection Quiz 1 → Unit Quiz → Grade as Quiz.',
-    '',
-    'Xác nhận tạo Quiz?'
-  ].join('\n')
-}
 
 export default function BankQuizPage() {
   const { authHeaders, can } = useAppContext()
@@ -88,6 +56,7 @@ export default function BankQuizPage() {
   const [retakeCooldownMinutes, setRetakeCooldownMinutes] = useState(5)
   const [autoSubmitOnTimeout, setAutoSubmitOnTimeout] = useState(false)
   const [lockAfterTimeout, setLockAfterTimeout] = useState(true)
+  const [createModal, setCreateModal] = useState<PendingCreate | null>(null)
 
   const loadHistory = async (targetCourseId = courseId) => {
     const normalizedCourseId = String(targetCourseId || '').trim()
@@ -161,23 +130,8 @@ export default function BankQuizPage() {
     }
   }
 
-  const createOneQuiz = async (item: QuizMapping) => {
+  const executeCreateOneQuiz = async (item: QuizMapping, refreshHistory = true) => {
     if (!item.release_id || !item.course_chapter_mapping_id) return
-    const confirmed = window.confirm(buildQuizConfirmText('one', {
-      courseId: courseId.trim(),
-      chapterTitle: item.chapter_title,
-      count: 1,
-      totalQuestions,
-      difficultyEasy,
-      difficultyMedium,
-      difficultyHard,
-      customTimerEnabled,
-      timeLimitMinutes,
-      retakeCooldownMinutes,
-      autoSubmitOnTimeout,
-      lockAfterTimeout,
-    }))
-    if (!confirmed) return
     setCreatingKey(item.chapter_id)
     setMessage('')
     try {
@@ -201,7 +155,7 @@ export default function BankQuizPage() {
       })
       const timerText = customTimerEnabled ? ` · Timer ${timeLimitMinutes} phút · làm lại sau ${retakeCooldownMinutes} phút` : ''
       setMessage((result.message || `Đã tạo Quiz cho ${item.chapter_title}`) + timerText)
-      await loadHistory(courseId.trim())
+      if (refreshHistory) await loadHistory(courseId.trim())
     } catch (error) {
       setMessage(error instanceof Error ? error.message : `Tạo Quiz cho ${item.chapter_title} thất bại`)
     } finally {
@@ -209,29 +163,23 @@ export default function BankQuizPage() {
     }
   }
 
-  const createAllQuiz = async () => {
+  const confirmCreateFromModal = async () => {
+    if (!createModal) return
+    if (createModal.kind === 'one') {
+      const item = createModal.item
+      setCreateModal(null)
+      await executeCreateOneQuiz(item)
+      return
+    }
     if (!autoMap?.mappings?.length) return
     const ready = autoMap.mappings.filter((item) => item.ready && item.release_id && item.course_chapter_mapping_id)
-    const confirmed = window.confirm(buildQuizConfirmText('all', {
-      courseId: courseId.trim(),
-      count: ready.length,
-      totalQuestions,
-      difficultyEasy,
-      difficultyMedium,
-      difficultyHard,
-      customTimerEnabled,
-      timeLimitMinutes,
-      retakeCooldownMinutes,
-      autoSubmitOnTimeout,
-      lockAfterTimeout,
-    }))
-    if (!confirmed) return
+    setCreateModal(null)
     setBusy(true)
     setMessage(`Đang tạo ${ready.length} Quiz. Vui lòng chờ...`)
     try {
       for (const item of ready) {
         // eslint-disable-next-line no-await-in-loop
-        await createOneQuiz(item)
+        await executeCreateOneQuiz(item, false)
       }
       setMessage(`Đã gửi tạo Quiz cho ${ready.length} bài.`)
       await loadHistory(courseId.trim())
@@ -289,7 +237,7 @@ export default function BankQuizPage() {
           <div>
             <div className="eyebrow">Cấu hình</div>
             <h2>Tạo Quiz</h2>
-            <p>Course ID, cấu hình câu hỏi, timer và thao tác nằm cùng một panel.</p>
+            <p>Nhập Course ID để hệ thống tự map. Cấu hình số câu, độ khó và timer sẽ chỉnh trong popup khi tạo Quiz.</p>
           </div>
           {applied ? <span className="status success">Đã lưu cấu hình</span> : autoMap ? <span className="status warning">Preview</span> : <span className="status pending">Chưa kiểm tra</span>}
         </div>
@@ -315,46 +263,25 @@ export default function BankQuizPage() {
           </label> : null}
           <div className="settings-actions settings-actions-top">
             <button className="btn secondary full-width" disabled={busy || !autoMap?.can_apply} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
-            <button className="btn success full-width" disabled={!canCreateQuiz || busy || Boolean(creatingKey)} onClick={createAllQuiz}>Tạo Quiz ({readyRows.length || 0})</button>
+            <button className="btn success full-width" disabled={!canCreateQuiz || busy || Boolean(creatingKey)} onClick={() => setCreateModal({ kind: 'all' })}>Tạo Quiz ({readyRows.length || 0})</button>
           </div>
         </div>
 
-        <div className="settings-section settings-card-soft">
+        <div className="settings-section settings-card-soft quiz-config-summary">
           <div className="section-heading compact-heading">
             <div>
-              <h3>Kế hoạch câu hỏi</h3>
-              <p className="muted">Áp dụng cho từng Quiz được tạo.</p>
+              <h3>Cấu hình hiện tại</h3>
+              <p className="muted">Sẽ được chỉnh lại trong popup trước khi tạo Quiz.</p>
             </div>
             <span className={classNames('status', difficultyTotal === 100 ? 'success' : 'warning')}>{difficultyTotal}%</span>
           </div>
-          <div className="quiz-small-grid">
-            <label>Số câu<input className="input" type="number" min={1} max={200} value={totalQuestions} onChange={(event) => setTotalQuestions(Number(event.target.value || 15))} /></label>
-            <label>Easy %<input className="input" type="number" value={difficultyEasy} onChange={(event) => setDifficultyEasy(Number(event.target.value || 0))} /></label>
-            <label>Medium %<input className="input" type="number" value={difficultyMedium} onChange={(event) => setDifficultyMedium(Number(event.target.value || 0))} /></label>
-            <label>Hard %<input className="input" type="number" value={difficultyHard} onChange={(event) => setDifficultyHard(Number(event.target.value || 0))} /></label>
+          <div className="quiz-config-summary-list">
+            <span><b>{totalQuestions}</b> câu/Quiz</span>
+            <span>Easy {difficultyEasy}% · Medium {difficultyMedium}% · Hard {difficultyHard}%</span>
+            <span>{customTimerEnabled ? `Timer ${timeLimitMinutes} phút · chờ làm lại ${retakeCooldownMinutes} phút` : 'Không bật timer'}</span>
           </div>
         </div>
 
-        <div className="settings-section settings-card-soft timer-config-panel">
-          <div className="section-heading compact-heading">
-            <div>
-              <h3>Timer quiz tự luyện</h3>
-              <p className="muted">Thời gian làm bài và chờ làm lại cho Quiz tự luyện.</p>
-            </div>
-            <label className="toggle-line toggle-strong">
-              <input type="checkbox" checked={customTimerEnabled} onChange={(event) => setCustomTimerEnabled(event.target.checked)} />
-              <span>Bật</span>
-            </label>
-          </div>
-          <div className="quiz-small-grid two-cols">
-            <label>Thời gian làm bài/phút<input className="input" type="number" min={1} max={300} disabled={!customTimerEnabled} value={timeLimitMinutes} onChange={(event) => setTimeLimitMinutes(Number(event.target.value || 15))} /></label>
-            <label>Chờ làm lại/phút<input className="input" type="number" min={0} max={10080} disabled={!customTimerEnabled} value={retakeCooldownMinutes} onChange={(event) => setRetakeCooldownMinutes(Number(event.target.value || 0))} /></label>
-          </div>
-          <div className="option-grid compact-options">
-            <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={autoSubmitOnTimeout} onChange={(event) => setAutoSubmitOnTimeout(event.target.checked)} /><span>Tự nộp khi hết giờ</span></label>
-            <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={lockAfterTimeout} onChange={(event) => setLockAfterTimeout(event.target.checked)} /><span>Khóa sau hết giờ</span></label>
-          </div>
-        </div>
 
       </aside>
 
@@ -388,7 +315,7 @@ export default function BankQuizPage() {
                 <td>{item.release_code ? <><b>{item.release_code}</b><small>{item.openedx_library_key}</small></> : <span className="status danger">Chưa publish</span>}</td>
                 <td>{percent(item.match_score)}<small>{item.match_reason}</small></td>
                 <td><span className={classNames('status', item.ready ? 'success' : 'danger')}>{item.ready ? 'Sẵn sàng' : 'Chưa sẵn sàng'}</span>{item.course_chapter_mapping_id ? <small>Đã lưu cấu hình</small> : null}</td>
-                <td><button className="btn small" disabled={!item.ready || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => createOneQuiz(item)}>{creatingKey === item.chapter_id ? 'Đang tạo...' : 'Tạo Quiz'}</button></td>
+                <td><button className="btn small" disabled={!item.ready || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{creatingKey === item.chapter_id ? 'Đang tạo...' : 'Tạo Quiz'}</button></td>
               </tr>)}</tbody>
             </table>
           </div>
@@ -420,5 +347,66 @@ export default function BankQuizPage() {
         </section>
       </main>
     </div>
+
+    {createModal ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => setCreateModal(null)}>
+      <section className="modal-card bank-modal bank-modal-wide quiz-config-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="section-heading bank-modal-head">
+          <div>
+            <div className="eyebrow">Cấu hình tạo Quiz</div>
+            <h2>{createModal.kind === 'all' ? `Tạo Quiz cho ${readyRows.length} bài sẵn sàng` : `Tạo Quiz cho ${createModal.item.chapter_title}`}</h2>
+            <p className="muted">Chỉnh số câu, độ khó và timer tại đây trước khi xác nhận tạo Quiz.</p>
+          </div>
+          <button className="btn secondary" type="button" onClick={() => setCreateModal(null)}>Đóng</button>
+        </div>
+        <div className="bank-modal-body quiz-config-modal-body">
+          <div className="quiz-modal-grid">
+            <div className="popup-action-panel">
+              <div className="section-heading compact-heading">
+                <div>
+                  <h3>Kế hoạch câu hỏi</h3>
+                  <p className="muted">Áp dụng cho từng Quiz được tạo.</p>
+                </div>
+                <span className={classNames('status', difficultyTotal === 100 ? 'success' : 'warning')}>{difficultyTotal}%</span>
+              </div>
+              <div className="quiz-small-grid">
+                <label>Số câu<input className="input" type="number" min={1} max={200} value={totalQuestions} onChange={(event) => setTotalQuestions(Number(event.target.value || 15))} /></label>
+                <label>Easy %<input className="input" type="number" value={difficultyEasy} onChange={(event) => setDifficultyEasy(Number(event.target.value || 0))} /></label>
+                <label>Medium %<input className="input" type="number" value={difficultyMedium} onChange={(event) => setDifficultyMedium(Number(event.target.value || 0))} /></label>
+                <label>Hard %<input className="input" type="number" value={difficultyHard} onChange={(event) => setDifficultyHard(Number(event.target.value || 0))} /></label>
+              </div>
+            </div>
+            <div className="popup-action-panel">
+              <div className="section-heading compact-heading">
+                <div>
+                  <h3>Timer quiz tự luyện</h3>
+                  <p className="muted">Thời gian làm bài và chờ làm lại do plugin quản lý.</p>
+                </div>
+                <label className="toggle-line toggle-strong">
+                  <input type="checkbox" checked={customTimerEnabled} onChange={(event) => setCustomTimerEnabled(event.target.checked)} />
+                  <span>Bật</span>
+                </label>
+              </div>
+              <div className="quiz-small-grid two-cols">
+                <label>Thời gian làm bài/phút<input className="input" type="number" min={1} max={300} disabled={!customTimerEnabled} value={timeLimitMinutes} onChange={(event) => setTimeLimitMinutes(Number(event.target.value || 15))} /></label>
+                <label>Chờ làm lại/phút<input className="input" type="number" min={0} max={10080} disabled={!customTimerEnabled} value={retakeCooldownMinutes} onChange={(event) => setRetakeCooldownMinutes(Number(event.target.value || 0))} /></label>
+              </div>
+              <div className="option-grid compact-options">
+                <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={autoSubmitOnTimeout} onChange={(event) => setAutoSubmitOnTimeout(event.target.checked)} /><span>Tự nộp khi hết giờ</span></label>
+                <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={lockAfterTimeout} onChange={(event) => setLockAfterTimeout(event.target.checked)} /><span>Khóa sau hết giờ</span></label>
+              </div>
+            </div>
+          </div>
+          <div className="quiz-create-preview">
+            <b>Quy tắc FPT</b>
+            <span>Section Bài 1 → Subsection Quiz 1 → Unit Quiz → Grade as Quiz.</span>
+            <small>Course ID: {courseId.trim() || '—'} · {createModal.kind === 'all' ? `${readyRows.length} bài` : createModal.item.chapter_title}</small>
+          </div>
+          <div className="modal-actions">
+            <button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button>
+            <button className="btn" type="button" disabled={busy || Boolean(creatingKey) || difficultyTotal !== 100} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} Quiz` : 'Tạo Quiz'}</button>
+          </div>
+        </div>
+      </section>
+    </div> : null}
   </div>
 }

@@ -435,6 +435,13 @@ export type UserAnalyticsRow = {
   cost_usd: number
   cost_vnd: number
   last_activity?: string | null
+  audit_actions?: number
+  audit_failed?: number
+  bank_entity_changes?: number
+  quiz_creates?: number
+  release_publishes?: number
+  rollbacks?: number
+  last_action?: string | null
 }
 
 export type UserAnalyticsResponse = {
