@@ -2932,3 +2932,84 @@ html[data-theme='dark'] .product-flow-row span { background: rgba(96,165,250,.16
   .landing-hero h1 { font-size: 38px; }
   .landing-feature-grid, .product-metrics { grid-template-columns: 1fr; }
 }
+
+/* v25.9.15.6.31.11 — remove dark/landing and rebuild useful Bank dashboard */
+html, body { background: #ffffff !important; color-scheme: light !important; }
+body { background: #ffffff !important; }
+.landing-shell, .landing-page, .landing-nav, .landing-hero, .landing-section { display: none !important; }
+.theme-toggle, .sidebar-tools { display: none !important; }
+.content-shell.compact-content-shell { max-width: 1560px; padding: 22px 28px 28px; background: #ffffff; }
+.main-area { background: #ffffff; }
+.app-footer { background: #ffffff; border-top: 1px solid #e5e7eb; color: #475569; }
+.app-footer b { color: #0f172a; }
+.app-footer a { color: #2563eb; }
+.bank-dashboard-modern { gap: 18px; }
+.bank-command-center { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: stretch; padding: 26px; border-radius: 24px; background: linear-gradient(135deg, #ffffff 0%, #f8fbff 60%, #eef6ff 100%); border-color: #dbeafe; box-shadow: 0 16px 50px rgba(15, 23, 42, .08); }
+.bank-command-copy h1 { margin: 8px 0 10px; font-size: 36px; letter-spacing: -.045em; line-height: 1.05; color: #0f172a; }
+.bank-command-copy p { max-width: 780px; color: #475569; line-height: 1.6; margin: 0 0 18px; }
+.bank-command-score { display: grid; align-content: center; gap: 6px; background: #0f172a; color: #ffffff; border-radius: 22px; padding: 22px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+.bank-command-score span { color: #bfdbfe; font-weight: 800; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.bank-command-score b { font-size: 52px; line-height: 1; letter-spacing: -.05em; }
+.bank-command-score small { color: #cbd5e1; }
+.bank-progress { height: 10px; border-radius: 999px; background: rgba(255,255,255,.14); overflow: hidden; margin-top: 8px; }
+.bank-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #60a5fa, #22c55e); }
+.bank-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.bank-kpi-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 18px; box-shadow: 0 14px 36px rgba(15,23,42,.06); min-height: 128px; display: grid; align-content: space-between; gap: 6px; }
+.bank-kpi-card span { color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; font-weight: 900; }
+.bank-kpi-card b { color: #0f172a; font-size: 34px; line-height: 1; letter-spacing: -.04em; }
+.bank-kpi-card small { color: #475569; line-height: 1.45; }
+.bank-kpi-card.danger { border-color: #fecaca; background: linear-gradient(180deg, #fff, #fff7f7); }
+.bank-kpi-card.danger b { color: #dc2626; }
+.bank-kpi-card.success { border-color: #bbf7d0; background: linear-gradient(180deg, #fff, #f6fff9); }
+.bank-kpi-card.success b { color: #16a34a; }
+.bank-search-card { padding: 18px; box-shadow: none; }
+.bank-dashboard-layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 18px; align-items: start; }
+.bank-dashboard-main { display: grid; gap: 18px; min-width: 0; }
+.bank-dashboard-side { display: grid; gap: 18px; position: sticky; top: 18px; }
+.bank-focus-card { padding: 22px; }
+.modern-task-list { display: grid; gap: 10px; }
+.task-row { display: grid; grid-template-columns: 44px minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 16px; text-decoration: none; background: #ffffff; transition: transform .12s ease, box-shadow .15s ease, border-color .15s ease; }
+.task-row:hover { transform: translateY(-1px); box-shadow: 0 12px 26px rgba(15,23,42,.08); border-color: #bfdbfe; }
+.task-row > span { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: #eff6ff; font-size: 20px; }
+.task-row b { color: #0f172a; display: block; margin-bottom: 4px; }
+.task-row small { color: #64748b; line-height: 1.35; }
+.task-row em { font-style: normal; font-size: 12px; font-weight: 900; border-radius: 999px; padding: 7px 10px; color: #0f172a; background: #f1f5f9; white-space: nowrap; }
+.task-row.danger { border-color: #fecaca; background: #fffafa; }
+.task-row.danger > span, .task-row.danger em { background: #fee2e2; color: #991b1b; }
+.task-row.warning { border-color: #fde68a; background: #fffdf5; }
+.task-row.warning > span, .task-row.warning em { background: #fef3c7; color: #92400e; }
+.task-row.success { border-color: #bbf7d0; background: #fbfffd; }
+.task-row.success > span, .task-row.success em { background: #dcfce7; color: #166534; }
+.strong-chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.strong-chart-grid .bank-chart-card { min-height: 255px; }
+.bank-chart-card { box-shadow: 0 12px 34px rgba(15,23,42,.06); }
+.bank-stacked-bar { height: 18px; border-radius: 999px; overflow: hidden; background: #f1f5f9; display: flex; margin: 16px 0 14px; }
+.bank-stacked-bar span { height: 100%; }
+.bank-bar-chart { display: grid; gap: 14px; }
+.bank-bar-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; color: #475569; }
+.bank-bar-label b { color: #0f172a; }
+.bank-bar-track { height: 11px; border-radius: 999px; background: #f1f5f9; overflow: hidden; }
+.bank-bar-fill { display: block; height: 100%; border-radius: inherit; }
+.tone-blue, .bank-bar-fill.tone-blue { background: #2563eb; }
+.tone-green, .bank-bar-fill.tone-green { background: #16a34a; }
+.tone-amber, .bank-bar-fill.tone-amber { background: #f59e0b; }
+.tone-red, .bank-bar-fill.tone-red { background: #ef4444; }
+.tone-slate, .bank-bar-fill.tone-slate { background: #64748b; }
+.mini-feed-card { padding: 18px; }
+.mini-feed-list { display: grid; gap: 10px; }
+.mini-feed-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid #e2e8f0; border-radius: 15px; background: #ffffff; }
+.mini-feed-row b { display: block; color: #0f172a; word-break: break-word; }
+.mini-feed-row small { display: block; margin-top: 3px; color: #64748b; line-height: 1.35; }
+.status.success { background: #dcfce7; color: #166534; }
+.status.danger { background: #fee2e2; color: #991b1b; }
+.status.warning { background: #fef3c7; color: #92400e; }
+@media(max-width: 1180px){
+  .bank-command-center, .bank-dashboard-layout { grid-template-columns: 1fr; }
+  .bank-dashboard-side { position: static; }
+  .bank-kpi-grid, .strong-chart-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media(max-width: 760px){
+  .content-shell.compact-content-shell { padding: 14px; }
+  .bank-kpi-grid, .strong-chart-grid { grid-template-columns: 1fr; }
+  .bank-command-copy h1 { font-size: 30px; }
+}
