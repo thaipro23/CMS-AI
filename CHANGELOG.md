@@ -1,3 +1,26 @@
+## v25.9.15.6.32 - Database Scale Foundation
+
+- Added PostgreSQL-safe composite indexes required before scaling Bank Manager to 6 departments, 300 subjects, 1,500 subject versions, 15,000 chapters and 1,500,000 questions.
+- New migration `0015_v25_9_15_6_32_database_scale_foundation.py` uses `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on PostgreSQL and normal idempotent indexes in dev/test databases.
+- Added hot-path indexes for `ai_questions`, `ai_question_bank_versions`, `ai_question_bank_releases`, `ai_bank_release_questions`, and `ai_material_chunks`.
+- Added safe extra indexes for subject offerings, chapters, quiz history and audit drill-down.
+- Added DB pool settings: `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_POOL_RECYCLE`, `DB_STATEMENT_TIMEOUT_MS`.
+- Runtime SQLAlchemy engine now applies PostgreSQL pool sizing and per-connection `statement_timeout`.
+- Production backend now runs Gunicorn + UvicornWorker with `WEB_CONCURRENCY` instead of a single Uvicorn worker.
+- Added `GET /api/health/db` to verify database reachability and pool settings after deploy.
+- This version intentionally does not change pagination/dashboard contracts; those remain the next planned versions.
+
+## v25.9.15.6.31.13 - Bank Business RBAC Roles
+
+- Thêm RBAC nghiệp vụ Bank-first theo đúng kế hoạch: SYSTEM_ADMIN, DEPARTMENT_HEAD, SUBJECT_OWNER, QUESTION_REVIEWER.
+- Thêm bảng `ai_rbac_roles`, `ai_rbac_permissions`, `ai_rbac_role_permissions`, `ai_user_role_assignments`.
+- Gán quyền theo scope SYSTEM / DEPARTMENT / SUBJECT / SUBJECT_VERSION / CHAPTER / COURSE.
+- Bậc trên kế thừa quyền bậc dưới nhưng chỉ trong scope cha: Trưởng bộ môn chỉ trong bộ môn, Chủ môn chỉ trong môn/phiên bản, Người duyệt chỉ trong môn/chapter được giao.
+- Thêm API `/api/rbac/me`, `/api/rbac/roles`, `/api/rbac/permissions`, `/api/rbac/assignments`, `/api/rbac/bootstrap/system-admin`.
+- `/auth/openedx-session/exchange` nâng legacy role theo assignment AI Server sau khi user đăng nhập CMS, nhưng vẫn không tin `is_staff` Open edX là AI admin.
+- Bank Manager kiểm tra business permission cho bộ môn/môn/version/chapter/bank/release/quiz thay vì chỉ dựa vào legacy role.
+- Trang `/users` có tab quản lý assignment: Admin gán Trưởng bộ môn, Trưởng bộ môn gán Chủ môn, Chủ môn gán Người duyệt.
+
 
 ## v25.9.15.6.31.8 - Bank Hierarchy Inline Section Headers
 
@@ -598,3 +621,10 @@ See `docs/RELEASE_v25.9.13.42_SCALE_MAINTAINABILITY.md` for deployment notes.
 - Added public landing page at `/` instead of redirecting immediately to dashboard.
 - Landing page introduces Open edX AI Server, Bank-first workflow, Quiz creation, operations tracking, and CTA links.
 - Skips automatic CMS session bridge redirect on `/` so the landing page is visible at `http://ai.cms-test.poly.edu.vn/`.
+
+## v25.9.15.6.31.11 - Remove dark/landing and rebuild Bank dashboard
+
+- Removed dark theme toggle and landing shell from the app runtime.
+- Changed `/` to redirect to `/bank`.
+- Rebuilt `/bank` into a stronger Bank-first command center with useful KPI cards, review progress, charts, recent Quiz feed, recent job feed and audit log.
+- Kept footer but removed the theme controls.
