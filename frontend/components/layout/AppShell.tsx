@@ -7,6 +7,8 @@ import { useAppContext } from '../../context/AppContext'
 import { ROLE_LABELS, Role } from '../../types'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
 
+type AppTheme = 'light' | 'dark'
+
 type NavItem = {
   href: string
   label: string
@@ -38,11 +40,66 @@ function pageTitle(pathname: string) {
   return item ? item.label : 'Máy chủ AI học liệu'
 }
 
+function getInitialTheme(): AppTheme {
+  if (typeof window === 'undefined') return 'light'
+  const stored = window.localStorage.getItem('ai_openedx_theme')
+  if (stored === 'light' || stored === 'dark') return stored
+  if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'dark'
+  return 'light'
+}
+
+function useThemeToggle() {
+  const [theme, setTheme] = useState<AppTheme>('light')
+
+  useEffect(() => {
+    const initialTheme = getInitialTheme()
+    setTheme(initialTheme)
+    document.documentElement.dataset.theme = initialTheme
+  }, [])
+
+  const toggleTheme = () => {
+    setTheme((current) => {
+      const next = current === 'dark' ? 'light' : 'dark'
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('ai_openedx_theme', next)
+        document.documentElement.dataset.theme = next
+      }
+      return next
+    })
+  }
+
+  return { theme, toggleTheme }
+}
+
+function ThemeToggleButton({ theme, onToggle, className = '' }: { theme: AppTheme; onToggle: () => void; className?: string }) {
+  return <button type="button" className={`theme-toggle ${className}`} onClick={onToggle} aria-label="Đổi giao diện sáng tối">
+    <span aria-hidden="true">{theme === 'dark' ? '🌙' : '☀️'}</span>
+    <b>{theme === 'dark' ? 'Tối' : 'Sáng'}</b>
+  </button>
+}
+
+function AppFooter({ compact = false }: { compact?: boolean }) {
+  return <footer className={compact ? 'app-footer app-footer-compact' : 'app-footer'}>
+    <div>
+      <b>Open edX AI Server</b>
+      <span>Ngân hàng đề · Tạo Quiz Open edX · Theo dõi giáo viên</span>
+    </div>
+    <div className="footer-links">
+      <Link href="/bank">Dashboard Bank</Link>
+      <Link href="/bank/quiz">Tạo Quiz</Link>
+      <Link href="/audit">Nhật ký</Link>
+      <span>v25.9.15.6.31.10</span>
+    </div>
+  </footer>
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { courseId, setCourseId, role, setRole, userId, setUserId, accessToken, setAccessToken, can, isAuthenticated, authReady } = useAppContext()
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
+  const { theme, toggleTheme } = useThemeToggle()
   const visibleItems = navItems.filter((item) => !item.permission || can(item.permission))
+  const isLandingPage = pathname === '/'
   const loginWithCms = () => {
     try {
       window.location.href = buildCmsSessionBridgeUrl(courseId)
@@ -53,6 +110,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (!authReady) return
+    if (isLandingPage) return
     if (isAuthenticated) {
       window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
       return
@@ -74,7 +132,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     } catch (error) {
       setAutoLoginMessage(error instanceof Error ? error.message : 'Không tạo được CMS session bridge URL')
     }
-  }, [authReady, courseId, isAuthenticated, pathname])
+  }, [authReady, courseId, isAuthenticated, isLandingPage, pathname])
+
+  if (isLandingPage) {
+    return <div className="landing-shell">
+      <header className="landing-nav">
+        <Link className="landing-brand" href="/">
+          <span className="brand-mark">AI</span>
+          <span><b>Open edX AI</b><small>FPT Polytechnic quiz bank</small></span>
+        </Link>
+        <nav>
+          <Link href="/bank">Dashboard</Link>
+          <Link href="/bank/quiz">Tạo Quiz</Link>
+          <Link href="/audit">Nhật ký</Link>
+          <ThemeToggleButton theme={theme} onToggle={toggleTheme} />
+          <button className="btn small" onClick={loginWithCms}>Đăng nhập CMS</button>
+        </nav>
+      </header>
+      <main>{children}</main>
+      <AppFooter compact />
+    </div>
+  }
 
   const hideTopbar = true
   return <div className="app-layout">
@@ -98,6 +176,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         })}
       </nav>
+      <div className="sidebar-tools">
+        <ThemeToggleButton theme={theme} onToggle={toggleTheme} />
+      </div>
       <div className="sidebar-note">
         <b>{accessToken.trim() ? 'Đã có phiên AI' : 'Đang lấy phiên CMS'}</b>
         <span>{accessToken.trim() ? `User ${userId} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'Nếu đã đăng nhập CMS/Open edX, AI Server sẽ tự nhận phiên.')} </span>
@@ -124,6 +205,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header> : null}
       <main className="content-shell compact-content-shell">{children}</main>
+      <AppFooter />
     </div>
   </div>
 }

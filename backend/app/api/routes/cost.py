@@ -15,6 +15,19 @@ from app.services.audit_log import log_audit
 router = APIRouter()
 
 
+BANK_CHAPTER_POLICY_ID = '__bank_chapter_default__'
+
+def _policy_scope(course_id: str) -> tuple[str, str]:
+    # Bank-first UI stores the default quota for every Bài/Chapter here.
+    if course_id in {BANK_CHAPTER_POLICY_ID, 'chapter', 'chapter_default'}:
+        return 'chapter', 'default'
+    return 'course', course_id
+
+
+def _policy_course_id(scope: str, scope_id: str) -> str:
+    return BANK_CHAPTER_POLICY_ID if scope == 'chapter' and scope_id == 'default' else scope_id
+
+
 @router.post('/estimate', response_model=CostEstimateResponse)
 async def estimate_cost(payload: CostEstimateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('estimate_cost'))):
     ensure_course_access(user, payload.course_id)
@@ -79,16 +92,18 @@ async def estimate_cost(payload: CostEstimateRequest, db: Session = Depends(get_
 
 @router.get('/policy', response_model=CoursePolicyResponse)
 async def get_course_policy(course_id: str = Query(...), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('estimate_cost'))):
-    ensure_course_access(user, course_id)
-    policy = db.query(BudgetPolicy).filter(BudgetPolicy.scope == 'course', BudgetPolicy.scope_id == course_id).one_or_none()
+    scope, scope_id = _policy_scope(course_id)
+    if scope == 'course':
+        ensure_course_access(user, course_id)
+    policy = db.query(BudgetPolicy).filter(BudgetPolicy.scope == scope, BudgetPolicy.scope_id == scope_id).one_or_none()
     if policy is None:
-        policy = BudgetPolicy(scope='course', scope_id=course_id, monthly_budget_usd=10.0, max_questions_per_course=200, max_questions_per_job=50, max_retry=2)
+        policy = BudgetPolicy(scope=scope, scope_id=scope_id, monthly_budget_usd=10.0, max_questions_per_course=100, max_questions_per_job=50, max_retry=2)
         db.add(policy)
         db.commit()
         db.refresh(policy)
-    generated = db.query(Question).filter(Question.course_id == course_id).count()
+    generated = db.query(Question).filter(Question.course_id == course_id).count() if scope == 'course' else 0
     return CoursePolicyResponse(
-        course_id=course_id,
+        course_id=_policy_course_id(scope, scope_id),
         monthly_budget_usd=policy.monthly_budget_usd,
         max_questions_per_course=policy.max_questions_per_course,
         max_questions_per_job=policy.max_questions_per_job,
@@ -100,18 +115,20 @@ async def get_course_policy(course_id: str = Query(...), db: Session = Depends(g
 
 @router.patch('/policy', response_model=CoursePolicyResponse)
 async def update_course_policy(payload: CoursePolicyUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
-    ensure_course_access(user, payload.course_id)
-    policy = db.query(BudgetPolicy).filter(BudgetPolicy.scope == 'course', BudgetPolicy.scope_id == payload.course_id).one_or_none()
+    scope, scope_id = _policy_scope(payload.course_id)
+    if scope == 'course':
+        ensure_course_access(user, payload.course_id)
+    policy = db.query(BudgetPolicy).filter(BudgetPolicy.scope == scope, BudgetPolicy.scope_id == scope_id).one_or_none()
     if policy is None:
-        policy = BudgetPolicy(scope='course', scope_id=payload.course_id)
+        policy = BudgetPolicy(scope=scope, scope_id=scope_id)
         db.add(policy)
     policy.monthly_budget_usd = payload.monthly_budget_usd
     policy.max_questions_per_course = payload.max_questions_per_course
     policy.max_questions_per_job = payload.max_questions_per_job
     policy.max_retry = payload.max_retry
     db.commit()
-    log_audit(db, action='course_policy.update', status='success', message='Admin updated course generation limits', user=user, course_id=payload.course_id, target_type='course_policy', metadata=payload.model_dump())
-    return await get_course_policy(payload.course_id, db, user)
+    log_audit(db, action='chapter_policy.update' if scope == 'chapter' else 'course_policy.update', status='success', message='Admin updated bank chapter generation limits' if scope == 'chapter' else 'Admin updated course generation limits', user=user, course_id=None if scope == 'chapter' else payload.course_id, target_type='chapter_policy' if scope == 'chapter' else 'course_policy', metadata={**payload.model_dump(), 'scope': scope, 'scope_id': scope_id})
+    return await get_course_policy(_policy_course_id(scope, scope_id), db, user)
 
 
 @router.get('/pricing/realtime', response_model=PricingResponse, dependencies=[Depends(require_permission('manage_settings'))])

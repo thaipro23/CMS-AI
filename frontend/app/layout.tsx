@@ -4,10 +4,10 @@ import { AppProvider } from '../context/AppContext'
 import { AppShell } from '../components/layout/AppShell'
 
 export const metadata: Metadata = {
-  title: 'Bảng điều khiển AI Open edX',
-  description: 'Máy chủ AI Learning cho Open edX CMS'
+  title: 'Open edX AI Server · FPT Polytechnic',
+  description: 'Máy chủ AI quản lý ngân hàng đề, tạo Quiz Open edX và theo dõi vận hành giảng viên.'
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="vi"><body><AppProvider><AppShell>{children}</AppShell></AppProvider></body></html>
+  return <html lang="vi" suppressHydrationWarning><body><AppProvider><AppShell>{children}</AppShell></AppProvider></body></html>
 }

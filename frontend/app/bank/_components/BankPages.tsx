@@ -556,7 +556,6 @@ export function DepartmentsPage() {
   return <div className="page-stack bank-multipage">
     {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]} />
-    <Toolbar title="Bộ môn" helper="Nhìn card là biết bộ môn nào đã xử lý xong, bộ môn nào còn câu cần duyệt." action={<Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link>} />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
@@ -622,11 +621,10 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
-    <Toolbar title={department ? `Môn trong ${department.name}` : 'Môn trong bộ môn'} helper="Mỗi môn hiển thị version đã duyệt xong, version còn việc và số câu chờ xử lý." />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>Danh sách môn</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
+      <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject, stats }) => <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
@@ -695,11 +693,10 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
-    <Toolbar title={subject ? `Phiên bản môn ${subject.code}` : 'Phiên bản môn'} helper="Mỗi version hiển thị tổng số bài, số câu đã duyệt/chưa duyệt và release đã publish." />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>Danh sách phiên bản theo kỳ</h2><p className="helper">Tạo version mới trống hoặc clone 100% bản làm việc từ kỳ cũ.</p></div></div>
+      <div className="section-head"><div><h2>{subject ? `Danh sách version của ${subject.code}` : 'Danh sách version môn'}</h2><p className="helper">Tạo version mới trống hoặc clone 100% bản làm việc từ kỳ cũ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm version môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Tạo version môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject_version, stats }) => <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
@@ -707,7 +704,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
           <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
           <StatLine label="Bài" value={stats.chapter_count || 0} />
-          <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/100`} />
+          <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))}`} />
           <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
           <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
           <StatLine label="Release đã publish" value={`${stats.published_release_count || 0}/${stats.chapter_count || 0} bài`} />
@@ -769,11 +766,10 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
-    <Toolbar title={offering ? `Bài trong ${offering.code}` : 'Bài trong version môn'} helper="Mỗi bài hiển thị tài liệu, tổng câu, câu đã duyệt, câu chưa duyệt/lỗi và trạng thái Release." />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>Danh sách bài</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
+      <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ chapter, stats }) => <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
@@ -997,7 +993,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setRejectReason('')
     }, 'Đã bỏ câu hỏi', refreshCurrent)
   }
-  const generationPayload = { question_count: numericGenerateCount, target_question_count: 100, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) }
+  const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) }
 
   const openGenerateConfirm = async () => {
     if (!selectedBankVersion) return
@@ -1022,7 +1018,6 @@ ${chunk.content}`).join('\n\n')
   return <div className="page-stack bank-multipage">
     {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }, { label: chapterDisplayName(chapter) }]} />
-    <Toolbar title={chapter ? `${offering?.code || ''} / ${chapterDisplayName(chapter)}` : 'Workspace của bài'} helper={'Một màn hình để quản lý tài liệu, tạo câu hỏi, duyệt câu và chốt release cho bài.'} />
     {message ? <div className="alert info">{message}</div> : null}
     {diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
     {unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
@@ -1294,9 +1289,9 @@ export function BankHistoryPage() {
   useEffect(() => { load().catch(() => null) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: 'Lịch sử publish / quiz' }]} />
-    <Toolbar title="Lịch sử Quiz" helper="Xem Quiz đã tạo trên Open edX và rollback nếu tạo nhầm." action={<Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link>} />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
+      <div className="section-head"><div><h2>Lịch sử Quiz</h2><p className="helper">Xem Quiz đã tạo trên Open edX và rollback nếu tạo nhầm.</p></div><Link className="btn secondary" href="/bank/quiz">Tạo Quiz Open edX</Link></div>
       <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Course</th><th>Trạng thái</th><th>Unit Open edX</th><th>Thời gian</th><th></th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td><b>{item.openedx_course_id}</b><small>{item.metadata_json?.quiz_title || item.bank_release_id}</small></td><td><span className={statusClass(item.status)}>{statusLabel(item.status)}</span></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td>{new Date(item.created_at).toLocaleString('vi-VN')}</td><td><button className="btn small secondary" disabled={busy || !can('publish_questions') || item.status === 'rolled_back'} onClick={() => run(async () => { await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Rollback từ trang lịch sử Quiz' }) }, 'Đã gửi yêu cầu rollback Quiz', load)}>Rollback</button></td></tr>)}</tbody></table></div>
       {!history.length ? <div className="empty-state">Chưa có Quiz nào được tạo.</div> : null}
     </section>

@@ -211,7 +211,7 @@ export default function SettingsPage() {
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <ActionMessage message={testMessage} onClose={() => setTestMessage(null)} />
 
-    <CoursePolicyPanel courseId={courseId} headers={authHeaders()} writeHeaders={authHeaders(true)} canEdit={can('manage_settings')} />
+    <CoursePolicyPanel courseId="__bank_chapter_default__" headers={authHeaders()} writeHeaders={authHeaders(true)} canEdit={can('manage_settings')} />
 
 
     <section className="grid grid-2">

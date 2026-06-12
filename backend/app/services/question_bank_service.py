@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.course import CourseSyncState
 from app.models.question import Question, QuestionReviewLog
+from app.models.cost import BudgetPolicy
 from app.models.question_bank import (
     BankQuestionFamily,
     BankReleaseQuestion,
@@ -277,7 +278,29 @@ class VersionedQuestionBankService:
             'status': 'ready' if bool(approved) and not unresolved else ('needs_fix' if draft_error else ('needs_review' if pending else ('empty' if not active else 'not_ready'))),
         }
 
+    def _chapter_question_limit_default(self) -> int:
+        # Bank-first quota: one global limit per Bài/Chapter. Reuse the legacy
+        # BudgetPolicy table without migration by storing it as scope='chapter'.
+        policy = self.db.query(BudgetPolicy).filter(
+            BudgetPolicy.scope == 'chapter',
+            BudgetPolicy.scope_id == 'default',
+            BudgetPolicy.is_active == True,
+        ).first()
+        if not policy:
+            # Compatibility fallback for older installs that only had one global
+            # course policy from the old course-first UI. Treat the global/default
+            # course policy as the chapter policy; do not pick arbitrary course IDs.
+            policy = self.db.query(BudgetPolicy).filter(
+                BudgetPolicy.scope == 'course',
+                BudgetPolicy.scope_id.in_(['__bank_chapter_default__', 'default']),
+                BudgetPolicy.is_active == True,
+            ).first()
+        if policy:
+            return max(1, int(policy.max_questions_per_course or 100))
+        return 100
+
     def _chapter_stats_map(self) -> dict[str, dict]:
+        chapter_question_limit = self._chapter_question_limit_default()
         chapters = self.db.query(SubjectChapter).all()
         bank_versions = self.db.query(QuestionBankVersion).all()
         releases = self.db.query(QuestionBankRelease).all()
@@ -317,8 +340,8 @@ class VersionedQuestionBankService:
                 'published_release_count': len(published),
                 'release_status': 'published' if published else ('ready_to_release' if qstats['is_review_done'] else ('has_release' if rels else 'none')),
                 'ready_to_release': qstats['is_review_done'] and not published,
-                'question_limit': 100,
-                'remaining_quota': max(0, 100 - qstats['total_questions']),
+                'question_limit': chapter_question_limit,
+                'remaining_quota': max(0, chapter_question_limit - qstats['total_questions']),
             }
         return out
 
@@ -339,6 +362,8 @@ class VersionedQuestionBankService:
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
             published_releases = sum(int(s.get('published_release_count') or 0) for s in stats)
             ready_to_release = sum(1 for s in stats if s.get('ready_to_release'))
+            chapter_question_limit = self._chapter_question_limit_default()
+            question_capacity = sum(int(s.get('question_limit') or chapter_question_limit) for s in stats)
             is_done = chapter_count > 0 and done == chapter_count
             out[offering.id] = {
                 'subject_offering_id': offering.id,
@@ -355,6 +380,8 @@ class VersionedQuestionBankService:
                 'unresolved_count': unresolved,
                 'published_release_count': published_releases,
                 'ready_to_release_chapter_count': ready_to_release,
+                'chapter_question_limit': chapter_question_limit,
+                'question_capacity': question_capacity,
                 'is_review_done': is_done,
                 'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if chapter_count == 0 else 'not_ready'))),
             }
@@ -376,6 +403,7 @@ class VersionedQuestionBankService:
             approved = sum(int(s.get('approved_count') or 0) for s in stats)
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
             ready_to_release = sum(int(s.get('ready_to_release_chapter_count') or 0) for s in stats)
+            question_capacity = sum(int(s.get('question_capacity') or 0) for s in stats)
             is_done = version_count > 0 and done == version_count
             out[subject.id] = {
                 'subject_id': subject.id,
@@ -391,6 +419,7 @@ class VersionedQuestionBankService:
                 'draft_error_count': draft_error,
                 'unresolved_count': unresolved,
                 'ready_to_release_chapter_count': ready_to_release,
+                'question_capacity': question_capacity,
                 'is_review_done': is_done,
                 'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if version_count == 0 else 'not_ready'))),
             }
@@ -412,6 +441,7 @@ class VersionedQuestionBankService:
             approved = sum(int(s.get('approved_count') or 0) for s in stats)
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
             ready_to_release = sum(int(s.get('ready_to_release_chapter_count') or 0) for s in stats)
+            question_capacity = sum(int(s.get('question_capacity') or 0) for s in stats)
             is_done = subject_count > 0 and done == subject_count
             out[department.id] = {
                 'department_id': department.id,
@@ -426,6 +456,7 @@ class VersionedQuestionBankService:
                 'draft_error_count': draft_error,
                 'unresolved_count': unresolved,
                 'ready_to_release_chapter_count': ready_to_release,
+                'question_capacity': question_capacity,
                 'is_review_done': is_done,
                 'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if subject_count == 0 else 'not_ready'))),
             }
@@ -1974,7 +2005,7 @@ class VersionedQuestionBankService:
             raise ValueError('Số câu tạo thêm phải trong khoảng 1-100')
         if int(difficulty_easy or 0) + int(difficulty_medium or 0) + int(difficulty_hard or 0) != 100:
             raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%')
-        effective_target = min(100, int(target_question_count or 100))
+        effective_target = max(1, int(target_question_count or self._chapter_question_limit_default()))
         chapter_total = self._chapter_question_count(chapter_id=version.chapter_id)
         remaining = max(0, effective_target - chapter_total)
         if question_count > remaining:
@@ -2058,7 +2089,7 @@ class VersionedQuestionBankService:
         if int(difficulty_easy or 0) + int(difficulty_medium or 0) + int(difficulty_hard or 0) != 100:
             raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%')
         meta = dict(version.metadata_json or {})
-        effective_target = min(100, int(target_question_count or meta.get('target_question_count') or 100))
+        effective_target = max(1, int(target_question_count or meta.get('target_question_count') or self._chapter_question_limit_default()))
         if target_question_count:
             meta['target_question_count'] = int(target_question_count)
             version.metadata_json = meta
@@ -2490,9 +2521,9 @@ class VersionedQuestionBankService:
                 'unresolved_count': len(unresolved),
                 'rejected_count': len(rejected),
                 'retired_count': len([q for q in questions if bool(q.is_retired)]),
-                'chapter_question_limit': 100,
+                'chapter_question_limit': self._chapter_question_limit_default(),
                 'chapter_total_count': self._chapter_question_count(chapter_id=version.chapter_id),
-                'chapter_remaining_quota': max(0, 100 - self._chapter_question_count(chapter_id=version.chapter_id)),
+                'chapter_remaining_quota': max(0, self._chapter_question_limit_default() - self._chapter_question_count(chapter_id=version.chapter_id)),
                 'difficulty_counts': {
                     'easy': len([q for q in approved if (q.difficulty or '').lower() == 'easy']),
                     'medium': len([q for q in approved if (q.difficulty or '').lower() == 'medium']),
