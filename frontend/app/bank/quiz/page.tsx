@@ -65,8 +65,7 @@ function buildQuizConfirmText(kind: 'one' | 'all', args: {
     'Section Bài 1 → Subsection Quiz 1 → Unit Quiz → Grade as Quiz.',
     '',
     'Xác nhận tạo Quiz?'
-  ].join('
-')
+  ].join('\n')
 }
 
 export default function BankQuizPage() {
