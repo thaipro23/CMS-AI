@@ -8,7 +8,7 @@ Create Date: 2026-06-15
 from collections.abc import Sequence
 
 revision: str = "0024_v25_9_15_6_38_2_3"
-down_revision: str | None = "0023_v25_9_15_6_38_2_1"
+down_revision: str | None = "0024_v25_9_15_6_38_2_2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
