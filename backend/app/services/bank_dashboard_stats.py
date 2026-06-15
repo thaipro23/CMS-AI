@@ -104,6 +104,41 @@ class BankDashboardStatsService:
             return max(1, int(policy.max_questions_per_course or 100))
         return 100
 
+    def ensure_chapter_stats(self, chapter_ids: list[str] | tuple[str, ...], *, max_rebuild: int = 500) -> dict[str, Any]:
+        """Auto-heal missing summary rows for the currently viewed Bank scope.
+
+        This keeps UI cards accurate after upgrading from pre-summary versions or
+        after old data imports. It is bounded so a production system with a large
+        missing stats set will not accidentally rebuild 15k chapters from a page
+        load; admins can still run /admin/stats/rebuild for full repair.
+        """
+        unique_ids = sorted({str(cid) for cid in chapter_ids if cid})
+        if not unique_ids:
+            return {'ok': True, 'checked_count': 0, 'rebuilt_count': 0, 'skipped': False}
+        existing = {
+            row.chapter_id: row
+            for row in self.db.query(BankChapterStats).filter(BankChapterStats.chapter_id.in_(unique_ids)).all()
+        }
+        missing_or_stale = [cid for cid in unique_ids if cid not in existing or existing[cid].updated_at is None]
+        if not missing_or_stale:
+            return {'ok': True, 'checked_count': len(unique_ids), 'rebuilt_count': 0, 'skipped': False}
+        if len(missing_or_stale) > max_rebuild:
+            return {
+                'ok': False,
+                'checked_count': len(unique_ids),
+                'rebuilt_count': 0,
+                'missing_or_stale_count': len(missing_or_stale),
+                'skipped': True,
+                'message': 'Scope có quá nhiều stats thiếu/stale; hãy chạy admin stats rebuild.',
+            }
+        rebuilt = 0
+        for cid in missing_or_stale:
+            self.rebuild_chapter_stats(chapter_id=cid, commit=False)
+            rebuilt += 1
+        self.db.commit()
+        self.invalidate_cache()
+        return {'ok': True, 'checked_count': len(unique_ids), 'rebuilt_count': rebuilt, 'skipped': False}
+
     def _zero_stat(self, chapter: SubjectChapter, *, question_limit: int) -> dict[str, Any]:
         return {
             'chapter_id': chapter.id,
@@ -127,6 +162,8 @@ class BankDashboardStatsService:
             'release_count': 0,
             'published_release_count': 0,
             'release_status': 'none',
+            'is_published': False,
+            'published_chapter_count': 0,
             'ready_to_release': False,
             'unresolved_count': 0,
             'is_review_done': False,
@@ -146,9 +183,10 @@ class BankDashboardStatsService:
         pending = int(stat.pending_review_count or 0)
         approved = int(stat.approved_count or 0)
         published = int(stat.published_release_count or 0)
-        is_done = bool(approved and not unresolved and total > 0)
         release_status = 'published' if published else ('ready_to_release' if bool(stat.ready_to_release) else ('has_release' if int(stat.release_count or 0) else 'none'))
-        status = 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if pending else ('empty' if not total else 'not_ready')))
+        is_published = published > 0
+        is_done = bool((approved and not unresolved and total > 0) or is_published)
+        status = 'published' if is_published else ('ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if pending else ('empty' if not total else 'not_ready'))))
         return {
             'chapter_id': chapter.id,
             'subject_id': chapter.subject_id,
@@ -171,7 +209,9 @@ class BankDashboardStatsService:
             'release_count': int(stat.release_count or 0),
             'published_release_count': published,
             'release_status': release_status,
-            'ready_to_release': bool(stat.ready_to_release),
+            'is_published': is_published,
+            'published_chapter_count': 1 if is_published else 0,
+            'ready_to_release': bool(stat.ready_to_release) and not is_published,
             'unresolved_count': unresolved,
             'is_review_done': is_done,
             'has_questions': bool(total),
@@ -211,9 +251,11 @@ class BankDashboardStatsService:
             total = sum(int(s.get('total_questions') or 0) for s in stats)
             approved = sum(int(s.get('approved_count') or 0) for s in stats)
             published_releases = sum(int(s.get('published_release_count') or 0) for s in stats)
+            published_chapters = sum(1 for s in stats if s.get('release_status') == 'published' or s.get('is_published'))
             ready_to_release = sum(1 for s in stats if s.get('ready_to_release'))
             capacity = sum(int(s.get('question_limit') or chapter_limit) for s in stats)
-            is_done = chapter_count > 0 and done == chapter_count
+            is_published = chapter_count > 0 and published_chapters == chapter_count
+            is_done = is_published or (chapter_count > 0 and done == chapter_count)
             out[offering.id] = {
                 'subject_offering_id': offering.id,
                 'subject_id': offering.subject_id,
@@ -228,11 +270,13 @@ class BankDashboardStatsService:
                 'draft_error_count': draft_error,
                 'unresolved_count': unresolved,
                 'published_release_count': published_releases,
-                'ready_to_release_chapter_count': ready_to_release,
+                'published_chapter_count': published_chapters,
+                'is_published': is_published,
+                'ready_to_release_chapter_count': 0 if is_published else ready_to_release,
                 'chapter_question_limit': chapter_limit,
                 'question_capacity': capacity,
                 'is_review_done': is_done,
-                'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if chapter_count == 0 else 'not_ready'))),
+                'status': 'published' if is_published else ('ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if chapter_count == 0 else 'not_ready')))),
             }
         return out
 
@@ -251,9 +295,12 @@ class BankDashboardStatsService:
             total = sum(int(s.get('total_questions') or 0) for s in stats)
             approved = sum(int(s.get('approved_count') or 0) for s in stats)
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
+            published_releases = sum(int(s.get('published_release_count') or 0) for s in stats)
+            published_versions = sum(1 for s in stats if s.get('is_published') or s.get('status') == 'published')
             ready_to_release = sum(int(s.get('ready_to_release_chapter_count') or 0) for s in stats)
             capacity = sum(int(s.get('question_capacity') or 0) for s in stats)
-            is_done = version_count > 0 and done == version_count
+            is_published = version_count > 0 and published_versions == version_count
+            is_done = is_published or (version_count > 0 and done == version_count)
             out[subject.id] = {
                 'subject_id': subject.id,
                 'department_id': subject.department_id,
@@ -267,10 +314,13 @@ class BankDashboardStatsService:
                 'pending_review_count': pending,
                 'draft_error_count': draft_error,
                 'unresolved_count': unresolved,
-                'ready_to_release_chapter_count': ready_to_release,
+                'published_release_count': published_releases,
+                'published_version_count': published_versions,
+                'is_published': is_published,
+                'ready_to_release_chapter_count': 0 if is_published else ready_to_release,
                 'question_capacity': capacity,
                 'is_review_done': is_done,
-                'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if version_count == 0 else 'not_ready'))),
+                'status': 'published' if is_published else ('ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if version_count == 0 else 'not_ready')))),
             }
         return out
 
@@ -289,9 +339,12 @@ class BankDashboardStatsService:
             total = sum(int(s.get('total_questions') or 0) for s in stats)
             approved = sum(int(s.get('approved_count') or 0) for s in stats)
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
+            published_releases = sum(int(s.get('published_release_count') or 0) for s in stats)
+            published_subjects = sum(1 for s in stats if s.get('is_published') or s.get('status') == 'published')
             ready_to_release = sum(int(s.get('ready_to_release_chapter_count') or 0) for s in stats)
             capacity = sum(int(s.get('question_capacity') or 0) for s in stats)
-            is_done = subject_count > 0 and done == subject_count
+            is_published = subject_count > 0 and published_subjects == subject_count
+            is_done = is_published or (subject_count > 0 and done == subject_count)
             out[department.id] = {
                 'department_id': department.id,
                 'code': department.code,
@@ -304,10 +357,13 @@ class BankDashboardStatsService:
                 'pending_review_count': pending,
                 'draft_error_count': draft_error,
                 'unresolved_count': unresolved,
-                'ready_to_release_chapter_count': ready_to_release,
+                'published_release_count': published_releases,
+                'published_version_count': published_versions,
+                'is_published': is_published,
+                'ready_to_release_chapter_count': 0 if is_published else ready_to_release,
                 'question_capacity': capacity,
                 'is_review_done': is_done,
-                'status': 'ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if subject_count == 0 else 'not_ready'))),
+                'status': 'published' if is_published else ('ready' if is_done else ('needs_fix' if draft_error else ('needs_review' if unresolved else ('empty' if subject_count == 0 else 'not_ready')))),
             }
         return out
 

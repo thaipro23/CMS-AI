@@ -154,16 +154,20 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
       <div className="section-head"><div><h2>{subject ? `Danh sách version của ${subject.code}` : 'Danh sách version môn'}</h2><p className="helper">Tạo version mới trống hoặc clone 100% bản làm việc từ kỳ cũ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm version môn" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Tạo version môn</button>} />
       <div className="entity-list horizontal multipage-list">
-        {visible.map(({ subject_version, stats }) => <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('subject.update')} onEdit={() => editSubjectVersion(subject_version)} onDelete={() => removeSubjectVersion(subject_version)} />
-          <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
-          <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
-          <StatLine label="Bài" value={stats.chapter_count || 0} />
-          <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))}`} />
-          <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
-          <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
-          <StatLine label="Release đã publish" value={`${stats.published_release_count || 0}/${stats.chapter_count || 0} bài`} />
-        </Link>)}
+        {visible.map(({ subject_version, stats }) => {
+          const hasPublished = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published')
+          return <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => editSubjectVersion(subject_version)} onDelete={() => removeSubjectVersion(subject_version)} />
+            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã publish' : reviewStatusText(stats.status)}</span></div>
+            <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
+            <StatLine label="Bài" value={stats.chapter_count || 0} />
+            <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))}`} />
+            <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
+            <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
+            <StatLine label="Release đã publish" value={`${stats.published_release_count || 0}/${stats.chapter_count || 0} bài`} />
+            {hasPublished ? <span className="status success">Đã khóa chỉnh sửa</span> : null}
+          </Link>
+        })}
       </div>
       {!visible.length ? <div className="empty-state">Chưa có version phù hợp.</div> : null}
     </section>

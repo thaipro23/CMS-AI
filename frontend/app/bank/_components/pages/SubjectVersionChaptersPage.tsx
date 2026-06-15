@@ -152,16 +152,19 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
       <div className="entity-list horizontal multipage-list">
-        {visible.map(({ chapter, stats }) => <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('subject.update')} onEdit={() => editChapter(chapter)} onDelete={() => removeChapter(chapter)} />
-          <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
-          <StatLine label="Tài liệu" value={stats.material_count || 0} />
-          <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
-          <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
-          <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
-          <StatLine label="Release" value={stats.release_status === 'published' ? 'Đã publish' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
-          {stats.ready_to_release ? <span className="status success">Sẵn sàng chốt bộ đề</span> : null}
-        </Link>)}
+        {visible.map(({ chapter, stats }) => {
+          const hasPublished = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0)
+          return <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
+            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => editChapter(chapter)} onDelete={() => removeChapter(chapter)} />
+            <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{hasPublished ? 'Đã publish' : reviewStatusText(stats.status)}</span></div>
+            <StatLine label="Tài liệu" value={stats.material_count || 0} />
+            <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
+            <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
+            <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
+            <StatLine label="Release" value={hasPublished ? 'Đã publish' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
+            {hasPublished ? <span className="status success">Đã khóa chỉnh sửa</span> : stats.ready_to_release ? <span className="status success">Sẵn sàng chốt bộ đề</span> : null}
+          </Link>
+        })}
       </div>
       {!visible.length ? <div className="empty-state">Chưa có bài phù hợp.</div> : null}
     </section>

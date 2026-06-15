@@ -244,6 +244,7 @@ export function matchesSearch(text: string, search: string) {
 
 export function reviewStatusText(status?: string | null) {
   const labels: Record<string, string> = {
+    published: 'Đã publish',
     ready: 'Đã xử lý xong',
     needs_review: 'Còn câu cần duyệt',
     needs_fix: 'Có câu lỗi',
@@ -254,6 +255,7 @@ export function reviewStatusText(status?: string | null) {
 }
 
 export function reviewStatusClass(status?: string | null) {
+  if (status === 'published') return 'bank-status-card status-ready'
   if (status === 'ready') return 'bank-status-card status-ready'
   if (status === 'needs_fix') return 'bank-status-card status-danger'
   if (status === 'needs_review') return 'bank-status-card status-warning'

@@ -336,6 +336,18 @@ class VersionedQuestionBankService:
             except Exception:
                 pass
 
+    def _bank_version_is_published_locked(self, version: QuestionBankVersion) -> bool:
+        if (version.status or '').lower() == 'published' or version.published_at is not None:
+            return True
+        return self.db.query(QuestionBankRelease.id).filter(
+            QuestionBankRelease.bank_version_id == version.id,
+            QuestionBankRelease.status == 'published',
+        ).first() is not None
+
+    def _raise_if_published_locked(self, version: QuestionBankVersion, *, action: str = 'thao tác này') -> None:
+        if self._bank_version_is_published_locked(version):
+            raise ValueError(f'Bài này đã publish sang Open edX Library; {action} đã bị khóa. Hãy clone/tạo version mới nếu cần chỉnh sửa.')
+
     @staticmethod
     def _summary_entity(item) -> dict:
         data = {}
@@ -376,8 +388,10 @@ class VersionedQuestionBankService:
 
     def department_summaries(self) -> list[dict]:
         cache_key = 'bank_department_summary:v1'
+        chapters = self.db.query(SubjectChapter.id).all()
+        heal = self._dashboard_stats().ensure_chapter_stats([row[0] for row in chapters], max_rebuild=500)
         cached = self._dashboard_stats()._cache_get(cache_key)
-        if cached is not None:
+        if cached is not None and not heal.get('rebuilt_count'):
             return cached
         stats = self._department_summary_map()
         departments = self.db.query(Department).order_by(Department.code.asc()).all()
@@ -387,8 +401,11 @@ class VersionedQuestionBankService:
 
     def subject_summaries(self, *, department_id: str) -> list[dict]:
         cache_key = f'bank_subject_summary:{department_id}'
+        subject_ids = [row[0] for row in self.db.query(Subject.id).filter(Subject.department_id == department_id).all()]
+        chapter_ids = [row[0] for row in self.db.query(SubjectChapter.id).filter(SubjectChapter.subject_id.in_(subject_ids)).all()] if subject_ids else []
+        heal = self._dashboard_stats().ensure_chapter_stats(chapter_ids, max_rebuild=500)
         cached = self._dashboard_stats()._cache_get(cache_key)
-        if cached is not None:
+        if cached is not None and not heal.get('rebuilt_count'):
             return cached
         stats = self._subject_summary_map()
         subjects = self.db.query(Subject).filter(Subject.department_id == department_id).order_by(Subject.code.asc()).all()
@@ -398,8 +415,10 @@ class VersionedQuestionBankService:
 
     def subject_version_summaries(self, *, subject_id: str) -> list[dict]:
         cache_key = f'bank_offering_summary:{subject_id}'
+        chapter_ids = [row[0] for row in self.db.query(SubjectChapter.id).filter(SubjectChapter.subject_id == subject_id).all()]
+        heal = self._dashboard_stats().ensure_chapter_stats(chapter_ids, max_rebuild=500)
         cached = self._dashboard_stats()._cache_get(cache_key)
-        if cached is not None:
+        if cached is not None and not heal.get('rebuilt_count'):
             return cached
         stats = self._offering_summary_map()
         offerings = self.db.query(SubjectOffering).filter(SubjectOffering.subject_id == subject_id).order_by(SubjectOffering.code.asc()).all()
@@ -409,11 +428,12 @@ class VersionedQuestionBankService:
 
     def chapter_summaries(self, *, subject_offering_id: str) -> list[dict]:
         cache_key = f'bank_chapter_summary:{subject_offering_id}'
+        chapters = self.db.query(SubjectChapter).filter(SubjectChapter.subject_offering_id == subject_offering_id).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
+        heal = self._dashboard_stats().ensure_chapter_stats([c.id for c in chapters], max_rebuild=500)
         cached = self._dashboard_stats()._cache_get(cache_key)
-        if cached is not None:
+        if cached is not None and not heal.get('rebuilt_count'):
             return cached
         stats = self._chapter_stats_map()
-        chapters = self.db.query(SubjectChapter).filter(SubjectChapter.subject_offering_id == subject_offering_id).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
         payload = [{'chapter': self._summary_entity(c), 'stats': stats.get(c.id, {})} for c in chapters]
         self._dashboard_stats()._cache_set(cache_key, payload)
         return payload
@@ -1454,14 +1474,16 @@ class VersionedQuestionBankService:
         version = self.db.get(QuestionBankVersion, bank_version_id)
         if not version:
             raise ValueError('Không tìm thấy Bank Version')
-        if version.status in {'published', 'archived'}:
+        if version.status in {'archived'}:
             raise ValueError(f'Bank Version đang ở trạng thái {version.status}; hãy tạo version mới nếu tài liệu thay đổi.')
         return version
 
     def _require_mutable_bank_version(self, bank_version_id: str) -> QuestionBankVersion:
         # Alias rõ nghĩa dùng cho upload/xóa tài liệu. Giữ riêng tên này để các luồng UI
         # gọi xóa tài liệu không bị lỗi AttributeError khi service được refactor.
-        return self._require_bank_version(bank_version_id)
+        version = self._require_bank_version(bank_version_id)
+        self._raise_if_published_locked(version, action='không thể thay đổi tài liệu/câu hỏi của bài')
+        return version
 
     def upload_material_bytes(
         self,
@@ -1475,7 +1497,7 @@ class VersionedQuestionBankService:
         actor: str | None = None,
         replace_existing: bool = False,
     ) -> dict:
-        version = self._require_bank_version(bank_version_id)
+        version = self._require_mutable_bank_version(bank_version_id)
         subject = self.db.get(Subject, version.subject_id)
         chapter = self.db.get(SubjectChapter, version.chapter_id)
         if not subject or not chapter:
@@ -1856,6 +1878,7 @@ class VersionedQuestionBankService:
         material_version_ids: list[str] | None = None,
     ) -> dict:
         version = self._require_bank_version(bank_version_id)
+        self._raise_if_published_locked(version, action='không thể tạo thêm câu hỏi')
         subject = self.db.get(Subject, version.subject_id)
         chapter = self.db.get(SubjectChapter, version.chapter_id)
         if not subject or not chapter:
@@ -1939,6 +1962,7 @@ class VersionedQuestionBankService:
         approve_after_generate: bool = False,
     ) -> dict:
         version = self._require_bank_version(bank_version_id)
+        self._raise_if_published_locked(version, action='không thể tạo thêm câu hỏi')
         subject = self.db.get(Subject, version.subject_id)
         chapter = self.db.get(SubjectChapter, version.chapter_id)
         if not subject or not chapter:
@@ -2180,6 +2204,7 @@ class VersionedQuestionBankService:
 
     def update_bank_question(self, *, bank_version_id: str, question_id: str, payload, actor: str | None = None):
         version = self._require_bank_version(bank_version_id)
+        self._raise_if_published_locked(version, action='không thể sửa câu hỏi')
         question = self._require_bank_question(question_id, bank_version_id=version.id)
         if question.status == 'published':
             raise ValueError('Câu hỏi đã nằm trong Release published, không sửa trực tiếp ở đây')
@@ -2242,6 +2267,7 @@ class VersionedQuestionBankService:
 
     def review_bank_question(self, *, bank_version_id: str, question_id: str, action: str = 'approve', note: str = '', actor: str | None = None) -> dict:
         version = self._require_bank_version(bank_version_id)
+        self._raise_if_published_locked(version, action='không thể đổi trạng thái câu hỏi')
         question = self._require_bank_question(question_id, bank_version_id=version.id)
         action = (action or '').strip().lower()
         target_status = {'approve': 'approved', 'reject': 'rejected', 'back_to_review': 'pending_review'}.get(action)
@@ -2279,6 +2305,7 @@ class VersionedQuestionBankService:
 
     def bulk_review_bank_questions(self, *, bank_version_id: str, action: str = 'approve', question_ids: list[str] | None = None, approve_all_pending: bool = False, note: str = '', actor: str | None = None) -> dict:
         version = self._require_bank_version(bank_version_id)
+        self._raise_if_published_locked(version, action='không thể duyệt/bỏ hàng loạt câu hỏi')
         action = (action or '').strip().lower()
         if action not in {'approve', 'reject', 'back_to_review'}:
             raise ValueError('Hành động duyệt không hợp lệ')
@@ -2313,6 +2340,7 @@ class VersionedQuestionBankService:
 
     def mark_document_diff_resolved(self, *, bank_version_id: str, note: str = '', actor: str | None = None) -> dict:
         version = self._require_bank_version(bank_version_id)
+        self._raise_if_published_locked(version, action='không thể xử lý diff tài liệu')
         meta = dict(version.metadata_json or {})
         meta.update({
             'diff_required': False,
@@ -2336,6 +2364,10 @@ class VersionedQuestionBankService:
     def release_readiness(self, *, bank_version_id: str) -> dict:
         version = self._require_bank_version(bank_version_id)
         meta = version.metadata_json or {}
+        published_release_count = int(self.db.query(func.count(QuestionBankRelease.id)).filter(
+            QuestionBankRelease.bank_version_id == version.id,
+            QuestionBankRelease.status == 'published',
+        ).scalar() or 0)
         questions = self.db.query(Question).filter(Question.bank_version_id == version.id).all()
         active = [q for q in questions if not bool(q.is_retired)]
         approved = [q for q in active if q.status in {'approved', 'published'} and not bool(q.is_duplicate)]
@@ -2368,7 +2400,12 @@ class VersionedQuestionBankService:
             actions.append('Tạo hoặc duyệt thêm câu hỏi trước khi chốt.')
         if duplicate_lineage_roots:
             actions.append('Loại bớt câu trùng gốc để tránh một bộ đề có nhiều câu quá giống nhau.')
-        status = 'ready' if can_create else 'blocked'
+        if published_release_count > 0 or self._bank_version_is_published_locked(version):
+            can_create = False
+            status = 'published'
+            actions = ['Bài đã publish; các thao tác chỉnh sửa/tạo câu hỏi/chốt lại đã khóa. Hãy clone/tạo version mới nếu cần thay đổi.']
+        else:
+            status = 'ready' if can_create else 'blocked'
         return {
             'ok': True,
             'bank_version_id': version.id,
@@ -2384,6 +2421,8 @@ class VersionedQuestionBankService:
                 'unresolved_count': len(unresolved),
                 'rejected_count': len(rejected),
                 'retired_count': len([q for q in questions if bool(q.is_retired)]),
+                'published_release_count': published_release_count,
+                'is_published': published_release_count > 0 or self._bank_version_is_published_locked(version),
                 'chapter_question_limit': self._chapter_question_limit_default(),
                 'chapter_total_count': self._chapter_question_count(chapter_id=version.chapter_id),
                 'chapter_remaining_quota': max(0, self._chapter_question_limit_default() - self._chapter_question_count(chapter_id=version.chapter_id)),
@@ -2394,7 +2433,7 @@ class VersionedQuestionBankService:
                 },
             },
             'recommended_actions': actions,
-            'message': 'Đủ điều kiện chốt bộ đề.' if can_create else 'Chưa thể chốt bộ đề. Phải duyệt hoặc bỏ hết tất cả câu hỏi trước.',
+            'message': 'Bài đã publish; các thao tác chỉnh sửa đã khóa.' if status == 'published' else ('Đủ điều kiện chốt bộ đề.' if can_create else 'Chưa thể chốt bộ đề. Phải duyệt hoặc bỏ hết tất cả câu hỏi trước.'),
         }
 
     def list_course_quiz_instances(self, *, openedx_course_id: str | None = None, bank_release_id: str | None = None, limit: int = 100) -> list[CourseQuizInstance]:
@@ -2586,6 +2625,8 @@ class VersionedQuestionBankService:
         version = self.db.get(QuestionBankVersion, bank_version_id)
         if not version:
             raise ValueError('Không tìm thấy Bank Version')
+        if self._bank_version_is_published_locked(version):
+            raise ValueError('Bài này đã publish. Không tạo Release mới trên cùng Bank Version; hãy clone/tạo version mới nếu cần chỉnh sửa.')
         subject = self.db.get(Subject, version.subject_id)
         chapter = self.db.get(SubjectChapter, version.chapter_id)
         if not subject or not chapter:

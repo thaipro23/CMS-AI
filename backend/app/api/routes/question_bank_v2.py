@@ -181,6 +181,10 @@ def _require_release(db: Session, user: UserContext, permission: str, release_id
     _require_business(db, user, permission, 'RELEASE', release_id)
 
 
+def _require_visible(db: Session, user: UserContext, scope_type: str, scope_id: str | None = '*') -> None:
+    _biz(db).require_visible_scope(user, scope_type, scope_id)
+
+
 
 def _job_out(job: BankOperationJob) -> dict:
     return serialize_job(job)
@@ -195,6 +199,116 @@ def _enqueue_task(task, job_id: str) -> None:
 
 def _queued_response(job: BankOperationJob, message: str) -> dict:
     return {'ok': True, 'job': _job_out(job), 'message': message}
+
+
+
+def _scoped_dashboard_overview(db: Session, user: UserContext) -> dict:
+    biz = _biz(db)
+    if biz.is_system_admin(user):
+        return VersionedQuestionBankService(db).dashboard_overview()
+    chapter_ids = biz.accessible_chapter_ids(user)
+    if chapter_ids is None:
+        return VersionedQuestionBankService(db).dashboard_overview()
+    stats_service = BankDashboardStatsService(db)
+    all_stats = stats_service.chapter_stats_map()
+    chapter_stats = {cid: data for cid, data in all_stats.items() if cid in chapter_ids}
+    offering_stats = stats_service.offering_summary_map(chapter_stats)
+    subject_stats = stats_service.subject_summary_map(offering_stats)
+    department_stats = stats_service.department_summary_map(subject_stats)
+    visible_offerings = biz.accessible_subject_offering_ids(user) or set()
+    visible_subjects = biz.accessible_subject_ids(user) or set()
+    visible_departments = biz.accessible_department_ids(user) or set()
+    offering_stats = {key: value for key, value in offering_stats.items() if key in visible_offerings}
+    subject_stats = {key: value for key, value in subject_stats.items() if key in visible_subjects}
+    department_stats = {key: value for key, value in department_stats.items() if key in visible_departments}
+    chapters_needing_work = [row for row in chapter_stats.values() if int(row.get('unresolved_count') or 0) > 0]
+    chapters_ready = [row for row in chapter_stats.values() if row.get('ready_to_release')]
+    departments_with_work = len([row for row in department_stats.values() if int(row.get('unresolved_count') or 0) > 0])
+    subjects_with_work = len([row for row in subject_stats.values() if int(row.get('unresolved_count') or 0) > 0])
+    versions_with_work = len([row for row in offering_stats.values() if int(row.get('unresolved_count') or 0) > 0])
+    return {
+        'ok': True,
+        'summary_source': 'ai_bank_chapter_stats:scope_filtered',
+        'cache_ttl_seconds': 0,
+        'departments_total': len(department_stats),
+        'departments_done': max(0, len(department_stats) - departments_with_work),
+        'departments_not_done': departments_with_work,
+        'subjects_total': len(subject_stats),
+        'subjects_done': max(0, len(subject_stats) - subjects_with_work),
+        'subjects_not_done': subjects_with_work,
+        'subject_versions_total': len(offering_stats),
+        'subject_versions_done': max(0, len(offering_stats) - versions_with_work),
+        'subject_versions_not_done': versions_with_work,
+        'chapters_total': len(chapter_stats),
+        'chapters_needing_review': len(chapters_needing_work),
+        'chapters_ready_to_release': len(chapters_ready),
+        'total_questions': sum(int(row.get('total_questions') or 0) for row in chapter_stats.values()),
+        'approved_count': sum(int(row.get('approved_count') or 0) for row in chapter_stats.values()),
+        'pending_review_count': sum(int(row.get('pending_review_count') or 0) for row in chapter_stats.values()),
+        'draft_error_count': sum(int(row.get('draft_error_count') or 0) for row in chapter_stats.values()),
+        'next_actions': stats_service.build_dashboard_next_actions(chapter_stats),
+    }
+
+
+
+def _scoped_summary_maps(db: Session, user: UserContext) -> dict[str, dict]:
+    biz = _biz(db)
+    stats_service = BankDashboardStatsService(db)
+    if biz.is_system_admin(user):
+        chapter_stats = stats_service.chapter_stats_map()
+        offering_stats = stats_service.offering_summary_map(chapter_stats)
+        subject_stats = stats_service.subject_summary_map(offering_stats)
+        department_stats = stats_service.department_summary_map(subject_stats)
+        return {'chapters': chapter_stats, 'offerings': offering_stats, 'subjects': subject_stats, 'departments': department_stats}
+    chapter_ids = biz.accessible_chapter_ids(user) or set()
+    visible_offerings = biz.accessible_subject_offering_ids(user) or set()
+    visible_subjects = biz.accessible_subject_ids(user) or set()
+    visible_departments = biz.accessible_department_ids(user) or set()
+    all_chapter_stats = stats_service.chapter_stats_map()
+    chapter_stats = {cid: data for cid, data in all_chapter_stats.items() if cid in chapter_ids}
+    offering_stats = stats_service.offering_summary_map(chapter_stats)
+    subject_stats = stats_service.subject_summary_map(offering_stats)
+    department_stats = stats_service.department_summary_map(subject_stats)
+    return {
+        'chapters': {key: value for key, value in chapter_stats.items() if key in chapter_ids},
+        'offerings': {key: value for key, value in offering_stats.items() if key in visible_offerings},
+        'subjects': {key: value for key, value in subject_stats.items() if key in visible_subjects},
+        'departments': {key: value for key, value in department_stats.items() if key in visible_departments},
+    }
+
+
+def _scoped_bank_summary(db: Session, user: UserContext) -> dict:
+    biz = _biz(db)
+    if biz.is_system_admin(user):
+        return VersionedQuestionBankService(db).summary()
+    department_ids = biz.accessible_department_ids(user) or set()
+    subject_ids = biz.accessible_subject_ids(user) or set()
+    offering_ids = biz.accessible_subject_offering_ids(user) or set()
+    chapter_ids = biz.accessible_chapter_ids(user) or set()
+    bank_query = biz.apply_hierarchy_filter(db.query(QuestionBankVersion), QuestionBankVersion, user)
+    release_query = biz.apply_hierarchy_filter(db.query(QuestionBankRelease), QuestionBankRelease, user)
+    material_query = biz.apply_hierarchy_filter(db.query(LearningMaterialVersion), LearningMaterialVersion, user)
+    chunk_query = biz.apply_hierarchy_filter(db.query(MaterialChunk), MaterialChunk, user)
+    question_query = biz.apply_hierarchy_filter(db.query(Question), Question, user).filter(Question.bank_version_id.isnot(None))
+    mapping_query = biz.apply_hierarchy_filter(db.query(EdxCourseMapping), EdxCourseMapping, user)
+    quiz_query = biz.apply_hierarchy_filter(db.query(QuizBlueprint), QuizBlueprint, user)
+    return {
+        'departments': len(department_ids),
+        'subjects': len(subject_ids),
+        'subject_offerings': len(offering_ids),
+        'chapters': len(chapter_ids),
+        'bank_versions': bank_query.count(),
+        'releases': release_query.count(),
+        'published_releases': release_query.filter(QuestionBankRelease.status == 'published').count(),
+        'course_mappings': mapping_query.count(),
+        'quiz_blueprints': quiz_query.count(),
+        'material_versions': material_query.count(),
+        'material_chunks': chunk_query.count(),
+        'bank_questions': question_query.count(),
+        'bank_diffs': 0,
+        'carry_over_questions': question_query.filter(Question.is_carry_over.is_(True)).count(),
+        'retired_questions': question_query.filter(Question.is_retired.is_(True)).count(),
+    }
 
 
 def _create_bank_operation_job(
@@ -276,12 +390,12 @@ def cancel_bank_operation_job(job_id: str, db: Session = Depends(get_db), user: 
 
 @router.get('/summary', response_model=BankSummaryOut)
 def summary(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).summary()
+    return _scoped_bank_summary(db, user)
 
 
 @router.get('/dashboard/overview')
 def dashboard_overview(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).dashboard_overview()
+    return _scoped_dashboard_overview(db, user)
 
 
 @router.get('/dashboard/search')
@@ -332,22 +446,53 @@ def rebuild_bank_search_index(bank_version_id: str | None = Query(None), chapter
 
 @router.get('/departments/summary')
 def department_summaries(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).department_summaries()
+    if _biz(db).is_system_admin(user):
+        return VersionedQuestionBankService(db).department_summaries()
+    ids = _biz(db).accessible_department_ids(user) or set()
+    if not ids:
+        return []
+    maps = _scoped_summary_maps(db, user)
+    departments = db.query(Department).filter(Department.id.in_(ids)).order_by(Department.code.asc()).all()
+    return [{'department': VersionedQuestionBankService(db)._summary_entity(item), 'stats': maps['departments'].get(item.id, {})} for item in departments]
 
 
 @router.get('/departments/{department_id}/subjects/summary')
 def subject_summaries(department_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).subject_summaries(department_id=department_id)
+    _require_visible(db, user, 'DEPARTMENT', department_id)
+    if _biz(db).is_system_admin(user):
+        return VersionedQuestionBankService(db).subject_summaries(department_id=department_id)
+    ids = _biz(db).accessible_subject_ids(user) or set()
+    if not ids:
+        return []
+    maps = _scoped_summary_maps(db, user)
+    subjects = db.query(Subject).filter(Subject.department_id == department_id, Subject.id.in_(ids)).order_by(Subject.code.asc()).all()
+    return [{'subject': VersionedQuestionBankService(db)._summary_entity(item), 'stats': maps['subjects'].get(item.id, {})} for item in subjects]
 
 
 @router.get('/subjects/{subject_id}/versions/summary')
 def subject_version_summaries(subject_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).subject_version_summaries(subject_id=subject_id)
+    _require_visible(db, user, 'SUBJECT', subject_id)
+    if _biz(db).is_system_admin(user):
+        return VersionedQuestionBankService(db).subject_version_summaries(subject_id=subject_id)
+    ids = _biz(db).accessible_subject_offering_ids(user) or set()
+    if not ids:
+        return []
+    maps = _scoped_summary_maps(db, user)
+    offerings = db.query(SubjectOffering).filter(SubjectOffering.subject_id == subject_id, SubjectOffering.id.in_(ids)).order_by(SubjectOffering.code.asc()).all()
+    return [{'subject_version': VersionedQuestionBankService(db)._summary_entity(item), 'stats': maps['offerings'].get(item.id, {})} for item in offerings]
 
 
 @router.get('/subject-versions/{subject_offering_id}/chapters/summary')
 def chapter_summaries(subject_offering_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).chapter_summaries(subject_offering_id=subject_offering_id)
+    _require_visible(db, user, 'SUBJECT_VERSION', subject_offering_id)
+    if _biz(db).is_system_admin(user):
+        return VersionedQuestionBankService(db).chapter_summaries(subject_offering_id=subject_offering_id)
+    ids = _biz(db).accessible_chapter_ids(user) or set()
+    if not ids:
+        return []
+    maps = _scoped_summary_maps(db, user)
+    chapters = db.query(SubjectChapter).filter(SubjectChapter.subject_offering_id == subject_offering_id, SubjectChapter.id.in_(ids)).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
+    return [{'chapter': VersionedQuestionBankService(db)._summary_entity(item), 'stats': maps['chapters'].get(item.id, {})} for item in chapters]
 
 
 @router.get('/departments', response_model=PaginatedOut[DepartmentOut])
@@ -396,7 +541,7 @@ def delete_department(department_id: str, db: Session = Depends(get_db), user: U
 def list_subjects(department_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_subject_filter(db.query(Subject), user)
     if department_id:
-        _require_business(db, user, 'bank.view', 'DEPARTMENT', department_id)
+        _require_visible(db, user, 'DEPARTMENT', department_id)
         query = query.filter(Subject.department_id == department_id)
     return _paginate(query.order_by(Subject.code.asc()), page=page, page_size=page_size, max_page_size=100)
 
@@ -440,14 +585,9 @@ def delete_subject(subject_id: str, db: Session = Depends(get_db), user: UserCon
 @router.get('/subject-offerings', response_model=PaginatedOut[SubjectOfferingOut])
 @router.get('/subject-versions', response_model=PaginatedOut[SubjectOfferingOut])
 def list_subject_offerings(subject_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(SubjectOffering)
-    subject_ids = _biz(db).accessible_subject_ids(user)
-    if subject_ids is not None:
-        if not subject_ids:
-            return _empty_page(page, page_size, max_page_size=100)
-        query = query.filter(SubjectOffering.subject_id.in_(subject_ids))
+    query = _biz(db).apply_subject_offering_filter(db.query(SubjectOffering), user)
     if subject_id:
-        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
+        _require_visible(db, user, 'SUBJECT', subject_id)
         query = query.filter(SubjectOffering.subject_id == subject_id)
     return _paginate(query.order_by(SubjectOffering.code.asc()), page=page, page_size=page_size, max_page_size=100)
 
@@ -493,17 +633,12 @@ def delete_subject_offering(subject_offering_id: str, db: Session = Depends(get_
 
 @router.get('/chapters', response_model=PaginatedOut[ChapterOut])
 def list_chapters(subject_id: str | None = None, subject_offering_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(SubjectChapter)
-    subject_ids = _biz(db).accessible_subject_ids(user)
-    if subject_ids is not None:
-        if not subject_ids:
-            return _empty_page(page, page_size, max_page_size=100)
-        query = query.filter(SubjectChapter.subject_id.in_(subject_ids))
+    query = _biz(db).apply_chapter_filter(db.query(SubjectChapter), user)
     if subject_id:
-        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
+        _require_visible(db, user, 'SUBJECT', subject_id)
         query = query.filter(SubjectChapter.subject_id == subject_id)
     if subject_offering_id:
-        _require_business(db, user, 'bank.view', 'SUBJECT_VERSION', subject_offering_id)
+        _require_visible(db, user, 'SUBJECT_VERSION', subject_offering_id)
         query = query.filter(SubjectChapter.subject_offering_id == subject_offering_id)
     return _paginate(query.order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc(), SubjectChapter.id.asc()), page=page, page_size=page_size, max_page_size=100)
 
@@ -549,20 +684,15 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserCon
 
 @router.get('/bank-versions', response_model=PaginatedOut[BankVersionOut])
 def list_bank_versions(chapter_id: str | None = None, subject_id: str | None = None, subject_offering_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(QuestionBankVersion)
-    subject_ids = _biz(db).accessible_subject_ids(user)
-    if subject_ids is not None:
-        if not subject_ids:
-            return _empty_page(page, page_size, max_page_size=100)
-        query = query.filter(QuestionBankVersion.subject_id.in_(subject_ids))
+    query = _biz(db).apply_hierarchy_filter(db.query(QuestionBankVersion), QuestionBankVersion, user)
     if chapter_id:
-        _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
+        _require_visible(db, user, 'CHAPTER', chapter_id)
         query = query.filter(QuestionBankVersion.chapter_id == chapter_id)
     if subject_id:
-        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
+        _require_visible(db, user, 'SUBJECT', subject_id)
         query = query.filter(QuestionBankVersion.subject_id == subject_id)
     if subject_offering_id:
-        _require_business(db, user, 'bank.view', 'SUBJECT_VERSION', subject_offering_id)
+        _require_visible(db, user, 'SUBJECT_VERSION', subject_offering_id)
         query = query.filter(QuestionBankVersion.subject_offering_id == subject_offering_id)
     return _paginate(query.order_by(QuestionBankVersion.created_at.desc(), QuestionBankVersion.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
@@ -581,16 +711,10 @@ def create_bank_version(payload: BankVersionCreate, db: Session = Depends(get_db
 
 @router.get('/material-versions', response_model=PaginatedOut[MaterialVersionOut])
 def list_material_versions(bank_version_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(LearningMaterialVersion)
+    query = _biz(db).apply_hierarchy_filter(db.query(LearningMaterialVersion), LearningMaterialVersion, user)
     if bank_version_id:
         _require_bank_version(db, user, 'bank.view', bank_version_id)
         query = query.filter(LearningMaterialVersion.bank_version_id == bank_version_id)
-    else:
-        subject_ids = _biz(db).accessible_subject_ids(user)
-        if subject_ids is not None:
-            if not subject_ids:
-                return _empty_page(page, page_size, max_page_size=100)
-            query = query.filter(LearningMaterialVersion.subject_id.in_(subject_ids))
     return _paginate(query.order_by(LearningMaterialVersion.created_at.desc(), LearningMaterialVersion.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
@@ -1047,17 +1171,12 @@ def bank_release_readiness(bank_version_id: str, db: Session = Depends(get_db), 
 
 @router.get('/releases', response_model=PaginatedOut[BankReleaseOut])
 def list_releases(bank_version_id: str | None = None, chapter_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(QuestionBankRelease)
-    subject_ids = _biz(db).accessible_subject_ids(user)
-    if subject_ids is not None:
-        if not subject_ids:
-            return _empty_page(page, page_size, max_page_size=100)
-        query = query.filter(QuestionBankRelease.subject_id.in_(subject_ids))
+    query = _biz(db).apply_hierarchy_filter(db.query(QuestionBankRelease), QuestionBankRelease, user)
     if bank_version_id:
         _require_bank_version(db, user, 'bank.view', bank_version_id)
         query = query.filter(QuestionBankRelease.bank_version_id == bank_version_id)
     if chapter_id:
-        _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
+        _require_visible(db, user, 'CHAPTER', chapter_id)
         query = query.filter(QuestionBankRelease.chapter_id == chapter_id)
     return _paginate(query.order_by(QuestionBankRelease.created_at.desc(), QuestionBankRelease.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
@@ -1231,14 +1350,9 @@ async def apply_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends
 
 @router.get('/course-mappings', response_model=PaginatedOut[CourseMappingOut])
 def list_course_mappings(subject_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(EdxCourseMapping)
-    subject_ids = _biz(db).accessible_subject_ids(user)
-    if subject_ids is not None:
-        if not subject_ids:
-            return _empty_page(page, page_size, max_page_size=100)
-        query = query.filter(EdxCourseMapping.subject_id.in_(subject_ids))
+    query = _biz(db).apply_hierarchy_filter(db.query(EdxCourseMapping), EdxCourseMapping, user)
     if subject_id:
-        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
+        _require_visible(db, user, 'SUBJECT', subject_id)
         query = query.filter(EdxCourseMapping.subject_id == subject_id)
     return _paginate(query.order_by(EdxCourseMapping.created_at.desc(), EdxCourseMapping.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
@@ -1270,14 +1384,19 @@ def list_course_chapter_mappings(course_mapping_id: str | None = None, page: int
         mapping = db.get(EdxCourseMapping, course_mapping_id)
         if not mapping:
             return _empty_page(page, page_size, max_page_size=100)
-        _require_business(db, user, 'bank.view', 'SUBJECT', mapping.subject_id)
+        _require_visible(db, user, 'SUBJECT', mapping.subject_id)
         query = query.filter(EdxCourseChapterMapping.course_mapping_id == course_mapping_id)
-    else:
-        subject_ids = _biz(db).accessible_subject_ids(user)
-        if subject_ids is not None:
-            if not subject_ids:
+        chapter_ids = _biz(db).accessible_chapter_ids(user)
+        if chapter_ids is not None:
+            if not chapter_ids:
                 return _empty_page(page, page_size, max_page_size=100)
-            query = query.join(EdxCourseMapping, EdxCourseMapping.id == EdxCourseChapterMapping.course_mapping_id).filter(EdxCourseMapping.subject_id.in_(subject_ids))
+            query = query.filter(EdxCourseChapterMapping.subject_chapter_id.in_(chapter_ids))
+    else:
+        chapter_ids = _biz(db).accessible_chapter_ids(user)
+        if chapter_ids is not None:
+            if not chapter_ids:
+                return _empty_page(page, page_size, max_page_size=100)
+            query = query.filter(EdxCourseChapterMapping.subject_chapter_id.in_(chapter_ids))
     return _paginate(query.order_by(EdxCourseChapterMapping.created_at.desc(), EdxCourseChapterMapping.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
@@ -1309,12 +1428,7 @@ def list_course_quiz_instances(openedx_course_id: str | None = None, bank_releas
     # limit is kept for frontend/backward query compatibility; page_size is the real contract.
     if limit is not None:
         page_size = limit
-    query = db.query(CourseQuizInstance)
-    subject_ids = _biz(db).accessible_subject_ids(user)
-    if subject_ids is not None:
-        if not subject_ids:
-            return _empty_page(page, page_size, max_page_size=100)
-        query = query.filter(CourseQuizInstance.subject_id.in_(subject_ids))
+    query = _biz(db).apply_hierarchy_filter(db.query(CourseQuizInstance), CourseQuizInstance, user)
     if openedx_course_id:
         query = query.filter(CourseQuizInstance.openedx_course_id == openedx_course_id)
     if bank_release_id:
@@ -1340,14 +1454,9 @@ async def rollback_course_quiz_instance(instance_id: str, payload: CourseQuizRol
 
 @router.get('/quiz-blueprints', response_model=PaginatedOut[QuizBlueprintOut])
 def list_quiz_blueprints(chapter_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    query = db.query(QuizBlueprint)
-    subject_ids = _biz(db).accessible_subject_ids(user)
-    if subject_ids is not None:
-        if not subject_ids:
-            return _empty_page(page, page_size, max_page_size=100)
-        query = query.filter(QuizBlueprint.subject_id.in_(subject_ids))
+    query = _biz(db).apply_hierarchy_filter(db.query(QuizBlueprint), QuizBlueprint, user)
     if chapter_id:
-        _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
+        _require_visible(db, user, 'CHAPTER', chapter_id)
         query = query.filter(QuizBlueprint.chapter_id == chapter_id)
     return _paginate(query.order_by(QuizBlueprint.created_at.desc(), QuizBlueprint.id.desc()), page=page, page_size=page_size, max_page_size=100)
 

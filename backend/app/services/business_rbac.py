@@ -89,6 +89,18 @@ class EntityScope:
     course_id: str | None = None
 
 
+@dataclass(frozen=True)
+class ScopeVisibility:
+    unrestricted: bool
+    parent_department_ids: set[str]
+    parent_subject_ids: set[str]
+    parent_offering_ids: set[str]
+    broad_department_ids: set[str]
+    broad_subject_ids: set[str]
+    broad_offering_ids: set[str]
+    exact_chapter_ids: set[str]
+
+
 class BusinessRBACService:
     def __init__(self, db: Session):
         self.db = db
@@ -455,35 +467,193 @@ class BusinessRBACService:
             'updated_at': item.updated_at,
         }
 
-    def accessible_department_ids(self, user: Any) -> set[str] | None:
+    def _scope_covers_scope(self, parent: EntityScope, child: EntityScope) -> bool:
+        """Return True when parent scope covers child scope in the Bank hierarchy.
+
+        This is used for both write permission checks and read/navigation checks.
+        A child-scoped role must not become a full parent permission, but it may
+        see the parent node so the UI can render the path to the assigned leaf.
+        """
+        if parent.scope_type == 'SYSTEM':
+            return True
+        if child.scope_type == 'SYSTEM':
+            return False
+        if parent.scope_type == child.scope_type and parent.scope_id == child.scope_id:
+            return True
+        if parent.scope_type == 'DEPARTMENT':
+            return bool(child.department_id and child.department_id == parent.department_id)
+        if parent.scope_type == 'SUBJECT':
+            return bool(child.subject_id and child.subject_id == parent.subject_id)
+        if parent.scope_type == 'SUBJECT_VERSION':
+            return bool(child.subject_offering_id and child.subject_offering_id == parent.subject_offering_id)
+        if parent.scope_type == 'CHAPTER':
+            return bool(child.chapter_id and child.chapter_id == parent.chapter_id)
+        if parent.scope_type == 'COURSE':
+            return bool(child.course_id and child.course_id == parent.course_id)
+        return False
+
+    def is_visible_scope(self, user: Any, scope_type: str, scope_id: str | None = '*') -> bool:
+        """Navigation/read visibility for parent-or-child nodes.
+
+        DEPARTMENT_HEAD/SUBJECT_OWNER/QUESTION_REVIEWER may see parent nodes and
+        owned child nodes, but this does not grant mutating permissions on the
+        parent. Mutations must still call require_permission(...).
+        """
         if self.is_system_admin(user):
-            return None
-        departments: set[str] = set()
+            return True
+        target = self.entity_scope(scope_type, scope_id)
+        for assignment in self.active_assignments_for_actor(user):
+            assigned = self.entity_scope(assignment.scope_type, assignment.scope_id)
+            if self._scope_covers_scope(assigned, target) or self._scope_covers_scope(target, assigned):
+                return True
+        return False
+
+    def require_visible_scope(self, user: Any, scope_type: str, scope_id: str | None = '*') -> None:
+        if not self.is_visible_scope(user, scope_type, scope_id):
+            target = self.entity_scope(scope_type, scope_id)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f'Bạn không được xem scope {target.scope_type}:{target.scope_id}',
+            )
+
+    def _empty_visibility(self) -> ScopeVisibility:
+        return ScopeVisibility(
+            unrestricted=False,
+            parent_department_ids=set(),
+            parent_subject_ids=set(),
+            parent_offering_ids=set(),
+            broad_department_ids=set(),
+            broad_subject_ids=set(),
+            broad_offering_ids=set(),
+            exact_chapter_ids=set(),
+        )
+
+    def visibility_for_user(self, user: Any) -> ScopeVisibility:
+        if self.is_system_admin(user):
+            return ScopeVisibility(
+                unrestricted=True,
+                parent_department_ids=set(),
+                parent_subject_ids=set(),
+                parent_offering_ids=set(),
+                broad_department_ids=set(),
+                broad_subject_ids=set(),
+                broad_offering_ids=set(),
+                exact_chapter_ids=set(),
+            )
+        visibility = self._empty_visibility()
         for assignment in self.active_assignments_for_actor(user):
             scope = self.entity_scope(assignment.scope_type, assignment.scope_id)
+            if assignment.role_code == SYSTEM_ADMIN or scope.scope_type == 'SYSTEM':
+                return ScopeVisibility(
+                    unrestricted=True,
+                    parent_department_ids=set(),
+                    parent_subject_ids=set(),
+                    parent_offering_ids=set(),
+                    broad_department_ids=set(),
+                    broad_subject_ids=set(),
+                    broad_offering_ids=set(),
+                    exact_chapter_ids=set(),
+                )
             if scope.department_id:
-                departments.add(scope.department_id)
-            elif scope.subject_id:
-                dep = self._subject_department_id(scope.subject_id)
-                if dep:
-                    departments.add(dep)
-        return departments
+                visibility.parent_department_ids.add(scope.department_id)
+            if scope.subject_id:
+                visibility.parent_subject_ids.add(scope.subject_id)
+            if scope.subject_offering_id:
+                visibility.parent_offering_ids.add(scope.subject_offering_id)
+            if scope.scope_type == 'DEPARTMENT' and scope.department_id:
+                visibility.broad_department_ids.add(scope.department_id)
+            elif scope.scope_type == 'SUBJECT' and scope.subject_id:
+                visibility.broad_subject_ids.add(scope.subject_id)
+            elif scope.scope_type == 'SUBJECT_VERSION' and scope.subject_offering_id:
+                visibility.broad_offering_ids.add(scope.subject_offering_id)
+            elif scope.scope_type == 'CHAPTER' and scope.chapter_id:
+                visibility.exact_chapter_ids.add(scope.chapter_id)
+        return visibility
+
+    def _subject_ids_for_departments(self, department_ids: set[str]) -> set[str]:
+        if not department_ids:
+            return set()
+        rows = self.db.query(Subject.id).filter(Subject.department_id.in_(department_ids)).all()
+        return {row[0] for row in rows}
+
+    def accessible_department_ids(self, user: Any) -> set[str] | None:
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
+            return None
+        return set(visibility.parent_department_ids)
 
     def accessible_subject_ids(self, user: Any) -> set[str] | None:
-        if self.is_system_admin(user):
+        """Subjects visible in the hierarchy, including parents of child grants."""
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
             return None
-        subjects: set[str] = set()
-        department_ids: set[str] = set()
-        for assignment in self.active_assignments_for_actor(user):
-            scope = self.entity_scope(assignment.scope_type, assignment.scope_id)
-            if scope.department_id and assignment.scope_type == 'DEPARTMENT':
-                department_ids.add(scope.department_id)
-            if scope.subject_id:
-                subjects.add(scope.subject_id)
-        if department_ids:
-            rows = self.db.query(Subject.id).filter(Subject.department_id.in_(department_ids)).all()
-            subjects.update(row[0] for row in rows)
+        subjects = set(visibility.parent_subject_ids)
+        subjects.update(self._subject_ids_for_departments(visibility.broad_department_ids))
         return subjects
+
+    def accessible_subject_offering_ids(self, user: Any) -> set[str] | None:
+        """Subject versions visible in the hierarchy.
+
+        Important: a CHAPTER-scoped reviewer only sees the parent version of that
+        chapter, not every version of the parent subject.
+        """
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
+            return None
+        subject_ids = set(visibility.broad_subject_ids)
+        subject_ids.update(self._subject_ids_for_departments(visibility.broad_department_ids))
+        offerings = set(visibility.parent_offering_ids)
+        if subject_ids:
+            rows = self.db.query(SubjectOffering.id).filter(SubjectOffering.subject_id.in_(subject_ids)).all()
+            offerings.update(row[0] for row in rows)
+        return offerings
+
+    def accessible_chapter_ids(self, user: Any) -> set[str] | None:
+        """Chapters visible in the hierarchy.
+
+        Department/subject/subject-version grants expand downward. Chapter grants
+        stay exact so reviewers do not see sibling chapters.
+        """
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
+            return None
+        subject_ids = set(visibility.broad_subject_ids)
+        subject_ids.update(self._subject_ids_for_departments(visibility.broad_department_ids))
+        query_filters = []
+        if subject_ids:
+            query_filters.append(SubjectChapter.subject_id.in_(subject_ids))
+        if visibility.broad_offering_ids:
+            query_filters.append(SubjectChapter.subject_offering_id.in_(visibility.broad_offering_ids))
+        if visibility.exact_chapter_ids:
+            query_filters.append(SubjectChapter.id.in_(visibility.exact_chapter_ids))
+        if not query_filters:
+            return set()
+        rows = self.db.query(SubjectChapter.id).filter(or_(*query_filters)).all()
+        return {row[0] for row in rows}
+
+    def _hierarchy_conditions(self, model: Any, user: Any):
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
+            return None
+        conditions = []
+        department_subject_ids = self._subject_ids_for_departments(visibility.broad_department_ids)
+        department_col = getattr(model, 'department_id', None)
+        subject_col = getattr(model, 'subject_id', None)
+        offering_col = getattr(model, 'subject_offering_id', None)
+        chapter_col = getattr(model, 'chapter_id', None)
+        if chapter_col is None:
+            chapter_col = getattr(model, 'subject_chapter_id', None)
+        if department_col is not None and visibility.broad_department_ids:
+            conditions.append(department_col.in_(visibility.broad_department_ids))
+        if subject_col is not None:
+            subject_ids = set(visibility.broad_subject_ids) | department_subject_ids
+            if subject_ids:
+                conditions.append(subject_col.in_(subject_ids))
+        if offering_col is not None and visibility.broad_offering_ids:
+            conditions.append(offering_col.in_(visibility.broad_offering_ids))
+        if chapter_col is not None and visibility.exact_chapter_ids:
+            conditions.append(chapter_col.in_(visibility.exact_chapter_ids))
+        return conditions
 
     def apply_department_filter(self, query, user: Any):
         ids = self.accessible_department_ids(user)
@@ -494,9 +664,54 @@ class BusinessRBACService:
         return query.filter(Department.id.in_(ids))
 
     def apply_subject_filter(self, query, user: Any):
-        ids = self.accessible_subject_ids(user)
-        if ids is None:
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
             return query
-        if not ids:
+        conditions = []
+        if visibility.broad_department_ids:
+            conditions.append(Subject.department_id.in_(visibility.broad_department_ids))
+        if visibility.parent_subject_ids:
+            conditions.append(Subject.id.in_(visibility.parent_subject_ids))
+        if not conditions:
             return query.filter(False)
-        return query.filter(Subject.id.in_(ids))
+        return query.filter(or_(*conditions))
+
+    def apply_subject_offering_filter(self, query, user: Any):
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
+            return query
+        conditions = []
+        department_subject_ids = self._subject_ids_for_departments(visibility.broad_department_ids)
+        subject_ids = set(visibility.broad_subject_ids) | department_subject_ids
+        if subject_ids:
+            conditions.append(SubjectOffering.subject_id.in_(subject_ids))
+        if visibility.parent_offering_ids:
+            conditions.append(SubjectOffering.id.in_(visibility.parent_offering_ids))
+        if not conditions:
+            return query.filter(False)
+        return query.filter(or_(*conditions))
+
+    def apply_chapter_filter(self, query, user: Any):
+        visibility = self.visibility_for_user(user)
+        if visibility.unrestricted:
+            return query
+        conditions = []
+        department_subject_ids = self._subject_ids_for_departments(visibility.broad_department_ids)
+        subject_ids = set(visibility.broad_subject_ids) | department_subject_ids
+        if subject_ids:
+            conditions.append(SubjectChapter.subject_id.in_(subject_ids))
+        if visibility.broad_offering_ids:
+            conditions.append(SubjectChapter.subject_offering_id.in_(visibility.broad_offering_ids))
+        if visibility.exact_chapter_ids:
+            conditions.append(SubjectChapter.id.in_(visibility.exact_chapter_ids))
+        if not conditions:
+            return query.filter(False)
+        return query.filter(or_(*conditions))
+
+    def apply_hierarchy_filter(self, query, model: Any, user: Any):
+        conditions = self._hierarchy_conditions(model, user)
+        if conditions is None:
+            return query
+        if not conditions:
+            return query.filter(False)
+        return query.filter(or_(*conditions))

@@ -64,21 +64,20 @@ class BankSearchService:
     def _search_text_filters(self, column):
         return [column.like(f'%{token}%') for token in self._current_tokens]
 
-    def _apply_subject_scope(self, query, user: Any, subject_column):
-        subject_ids = BusinessRBACService(self.db).accessible_subject_ids(user)
-        if subject_ids is None:
-            return query
-        if not subject_ids:
-            return query.filter(False)
-        return query.filter(subject_column.in_(subject_ids))
+    def _apply_department_scope(self, query, user: Any):
+        return BusinessRBACService(self.db).apply_department_filter(query, user)
 
-    def _apply_department_scope(self, query, user: Any, department_column):
-        department_ids = BusinessRBACService(self.db).accessible_department_ids(user)
-        if department_ids is None:
-            return query
-        if not department_ids:
-            return query.filter(False)
-        return query.filter(department_column.in_(department_ids))
+    def _apply_subject_scope(self, query, user: Any):
+        return BusinessRBACService(self.db).apply_subject_filter(query, user)
+
+    def _apply_offering_scope(self, query, user: Any):
+        return BusinessRBACService(self.db).apply_subject_offering_filter(query, user)
+
+    def _apply_chapter_scope(self, query, user: Any):
+        return BusinessRBACService(self.db).apply_chapter_filter(query, user)
+
+    def _apply_document_scope(self, query, user: Any):
+        return BusinessRBACService(self.db).apply_hierarchy_filter(query, QuestionSearchDocument, user)
 
     def build_document_from_question(self, question: Question) -> QuestionSearchDocument:
         search_parts = [
@@ -260,21 +259,21 @@ class BankSearchService:
             return {'q': query_text, 'limit': safe_limit, 'total': 0, 'items': [], 'groups': {'departments': [], 'subjects': [], 'subject_versions': [], 'chapters': [], 'questions': []}}
 
         departments_query = self.db.query(Department).filter(*self._like_all_tokens(Department.code, Department.name))
-        departments_query = self._apply_department_scope(departments_query, user, Department.id)
+        departments_query = self._apply_department_scope(departments_query, user)
         departments = departments_query.order_by(Department.code.asc()).limit(safe_limit).all()
 
         subjects_query = self.db.query(Subject).filter(*self._like_all_tokens(Subject.code, Subject.name, Subject.description))
-        subjects_query = self._apply_subject_scope(subjects_query, user, Subject.id)
+        subjects_query = self._apply_subject_scope(subjects_query, user)
         subjects = subjects_query.order_by(Subject.code.asc()).limit(safe_limit).all()
         dep_by_id = {d.id: d for d in self.db.query(Department).filter(Department.id.in_([s.department_id for s in subjects])).all()} if subjects else {}
 
         offerings_query = self.db.query(SubjectOffering).filter(*self._like_all_tokens(SubjectOffering.code, SubjectOffering.name, SubjectOffering.term))
-        offerings_query = self._apply_subject_scope(offerings_query, user, SubjectOffering.subject_id)
+        offerings_query = self._apply_offering_scope(offerings_query, user)
         offerings = offerings_query.order_by(SubjectOffering.code.asc()).limit(safe_limit).all()
         subj_by_id = {s.id: s for s in self.db.query(Subject).filter(Subject.id.in_([o.subject_id for o in offerings])).all()} if offerings else {}
 
         chapters_query = self.db.query(SubjectChapter).filter(*self._like_all_tokens(SubjectChapter.title, SubjectChapter.description))
-        chapters_query = self._apply_subject_scope(chapters_query, user, SubjectChapter.subject_id)
+        chapters_query = self._apply_chapter_scope(chapters_query, user)
         chapters = chapters_query.order_by(SubjectChapter.sort_order.asc(), SubjectChapter.title.asc()).limit(safe_limit).all()
         chapter_subjects = {s.id: s for s in self.db.query(Subject).filter(Subject.id.in_([c.subject_id for c in chapters])).all()} if chapters else {}
         chapter_offerings = {o.id: o for o in self.db.query(SubjectOffering).filter(SubjectOffering.id.in_([c.subject_offering_id for c in chapters if c.subject_offering_id])).all()} if chapters else {}
@@ -282,7 +281,7 @@ class BankSearchService:
         questions: list[QuestionSearchDocument] = []
         if include_questions:
             question_query = self.db.query(QuestionSearchDocument).filter(*self._search_text_filters(QuestionSearchDocument.search_text))
-            question_query = self._apply_subject_scope(question_query, user, QuestionSearchDocument.subject_id)
+            question_query = self._apply_document_scope(question_query, user)
             questions = question_query.order_by(QuestionSearchDocument.updated_at.desc(), QuestionSearchDocument.question_id.asc()).limit(safe_limit).all()
 
         groups = {
