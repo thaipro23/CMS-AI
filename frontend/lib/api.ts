@@ -13,6 +13,7 @@ import {
   RuntimeSettingsUpdate,
   PricingResponse,
   PaginatedResponse,
+  CursorPaginatedResponse,
   CoursePolicy,
   CoursePolicyUpdate,
   AuditLogRow,
@@ -112,6 +113,25 @@ async function parseResponse<T>(response: Response): Promise<T> {
     );
   }
   return data as T;
+}
+
+
+function unwrapPage<T>(data: T[] | PaginatedResponse<T>): T[] {
+  if (Array.isArray(data)) return data;
+  return data?.items || [];
+}
+
+function unwrapCursorPage<T>(data: T[] | CursorPaginatedResponse<T>): T[] {
+  if (Array.isArray(data)) return data;
+  return data?.items || [];
+}
+
+async function parsePageItems<T>(response: Response): Promise<T[]> {
+  return unwrapPage<T>(await parseResponse<T[] | PaginatedResponse<T>>(response));
+}
+
+async function parseCursorPageItems<T>(response: Response): Promise<T[]> {
+  return unwrapCursorPage<T>(await parseResponse<T[] | CursorPaginatedResponse<T>>(response));
 }
 
 export async function getAnalytics(
@@ -961,8 +981,8 @@ export async function getBankSummary(headers: HeadersInit) {
 }
 
 export async function getDepartments(headers: HeadersInit) {
-  return parseResponse<Department[]>(
-    await fetch(`${API}/question-bank-v2/departments`, { headers }),
+  return parsePageItems<Department>(
+    await fetch(`${API}/question-bank-v2/departments?page_size=50`, { headers }),
   );
 }
 
@@ -988,7 +1008,8 @@ export async function deleteDepartment(headers: HeadersInit, id: string) {
 export async function getSubjects(headers: HeadersInit, departmentId?: string) {
   const params = new URLSearchParams();
   if (departmentId) params.set('department_id', departmentId);
-  return parseResponse<Subject[]>(
+  params.set('page_size', '100');
+  return parsePageItems<Subject>(
     await fetch(`${API}/question-bank-v2/subjects?${params.toString()}`, { headers }),
   );
 }
@@ -1015,7 +1036,8 @@ export async function deleteSubject(headers: HeadersInit, id: string) {
 export async function getSubjectOfferings(headers: HeadersInit, subjectId?: string) {
   const params = new URLSearchParams();
   if (subjectId) params.set('subject_id', subjectId);
-  return parseResponse<SubjectOffering[]>(
+  params.set('page_size', '100');
+  return parsePageItems<SubjectOffering>(
     await fetch(`${API}/question-bank-v2/subject-versions?${params.toString()}`, { headers }),
   );
 }
@@ -1043,7 +1065,8 @@ export async function getSubjectChapters(headers: HeadersInit, subjectId?: strin
   const params = new URLSearchParams();
   if (subjectId) params.set('subject_id', subjectId);
   if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
-  return parseResponse<SubjectChapter[]>(
+  params.set('page_size', '100');
+  return parsePageItems<SubjectChapter>(
     await fetch(`${API}/question-bank-v2/chapters?${params.toString()}`, { headers }),
   );
 }
@@ -1072,7 +1095,8 @@ export async function getBankVersions(headers: HeadersInit, chapterId?: string, 
   if (chapterId) params.set('chapter_id', chapterId);
   if (subjectId) params.set('subject_id', subjectId);
   if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
-  return parseResponse<BankVersion[]>(
+  params.set('page_size', '100');
+  return parsePageItems<BankVersion>(
     await fetch(`${API}/question-bank-v2/bank-versions?${params.toString()}`, { headers }),
   );
 }
@@ -1087,7 +1111,8 @@ export async function getBankReleases(headers: HeadersInit, bankVersionId?: stri
   const params = new URLSearchParams();
   if (bankVersionId) params.set('bank_version_id', bankVersionId);
   if (chapterId) params.set('chapter_id', chapterId);
-  return parseResponse<BankRelease[]>(
+  params.set('page_size', '100');
+  return parsePageItems<BankRelease>(
     await fetch(`${API}/question-bank-v2/releases?${params.toString()}`, { headers }),
   );
 }
@@ -1107,7 +1132,8 @@ export async function publishBankRelease(headers: HeadersInit, releaseId: string
 export async function getCourseMappings(headers: HeadersInit, subjectId?: string) {
   const params = new URLSearchParams();
   if (subjectId) params.set('subject_id', subjectId);
-  return parseResponse<EdxCourseMapping[]>(
+  params.set('page_size', '100');
+  return parsePageItems<EdxCourseMapping>(
     await fetch(`${API}/question-bank-v2/course-mappings?${params.toString()}`, { headers }),
   );
 }
@@ -1139,7 +1165,8 @@ export async function createCourseChapterMapping(headers: HeadersInit, payload: 
 export async function getQuizBlueprints(headers: HeadersInit, chapterId?: string) {
   const params = new URLSearchParams();
   if (chapterId) params.set('chapter_id', chapterId);
-  return parseResponse<QuizBlueprint[]>(
+  params.set('page_size', '100');
+  return parsePageItems<QuizBlueprint>(
     await fetch(`${API}/question-bank-v2/quiz-blueprints?${params.toString()}`, { headers }),
   );
 }
@@ -1155,7 +1182,8 @@ export async function createQuizBlueprint(headers: HeadersInit, payload: { subje
 export async function getMaterialVersions(headers: HeadersInit, bankVersionId?: string) {
   const params = new URLSearchParams();
   if (bankVersionId) params.set('bank_version_id', bankVersionId);
-  return parseResponse<MaterialVersion[]>(
+  params.set('page_size', '100');
+  return parsePageItems<MaterialVersion>(
     await fetch(`${API}/question-bank-v2/material-versions?${params.toString()}`, { headers }),
   );
 }
@@ -1193,7 +1221,8 @@ export async function uploadBankMaterial(
 export async function getBankMaterialChunks(headers: HeadersInit, bankVersionId: string, materialVersionId?: string) {
   const params = new URLSearchParams();
   if (materialVersionId) params.set('material_version_id', materialVersionId);
-  return parseResponse<MaterialChunk[]>(
+  params.set('page_size', '100');
+  return parsePageItems<MaterialChunk>(
     await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/material-chunks?${params.toString()}`, { headers }),
   );
 }
@@ -1246,7 +1275,7 @@ export async function getBankVersionQuestions(headers: HeadersInit, bankVersionI
   const params = new URLSearchParams();
   if (statusFilter) params.set('status_filter', statusFilter);
   params.set('limit', String(limit));
-  return parseResponse<BankVersionQuestion[]>(
+  return parseCursorPageItems<BankVersionQuestion>(
     await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions?${params.toString()}`, { headers }),
   );
 }
@@ -1444,7 +1473,7 @@ export async function getCourseQuizInstances(
   if (params.bank_release_id) search.set('bank_release_id', params.bank_release_id);
   if (params.limit) search.set('limit', String(params.limit));
   const suffix = search.toString() ? `?${search.toString()}` : '';
-  return parseResponse<CourseQuizInstance[]>(
+  return parsePageItems<CourseQuizInstance>(
     await fetch(`${API}/question-bank-v2/course-quiz-instances${suffix}`, { headers }),
   );
 }

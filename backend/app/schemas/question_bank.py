@@ -1,5 +1,26 @@
 from datetime import datetime
+from typing import Generic, TypeVar
 from pydantic import BaseModel, Field
+
+T = TypeVar('T')
+
+
+class PaginatedOut(BaseModel, Generic[T]):
+    items: list[T]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool = False
+
+
+class CursorPaginatedOut(BaseModel, Generic[T]):
+    items: list[T]
+    limit: int
+    has_next: bool = False
+    next_cursor: dict | None = None
+    total: int | None = None
+
 
 
 class DepartmentCreate(BaseModel):

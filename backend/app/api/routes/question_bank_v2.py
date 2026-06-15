@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from datetime import datetime, timezone
+from math import ceil
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext, get_user_context, require_permission
@@ -80,16 +84,53 @@ from app.schemas.question_bank import (
     SubjectOfferingCreate,
     SubjectOfferingUpdate,
     SubjectOfferingOut,
+    CursorPaginatedOut,
+    PaginatedOut,
 )
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.question_bank_service import VersionedQuestionBankService
 from app.services.business_rbac import BusinessRBACService
+from app.services.bank_dashboard_stats import BankDashboardStatsService
 
 router = APIRouter()
 
 
 _BANK_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
 
+
+
+
+def _clamp_page(page: int, page_size: int, *, max_page_size: int = 100) -> tuple[int, int]:
+    safe_page = max(1, int(page or 1))
+    safe_page_size = max(1, min(int(page_size or 50), max_page_size))
+    return safe_page, safe_page_size
+
+
+def _empty_page(page: int, page_size: int, *, max_page_size: int = 100) -> dict:
+    page, page_size = _clamp_page(page, page_size, max_page_size=max_page_size)
+    return {
+        'items': [],
+        'total': 0,
+        'page': page,
+        'page_size': page_size,
+        'total_pages': 0,
+        'has_next': False,
+    }
+
+
+def _paginate(query, *, page: int = 1, page_size: int = 50, max_page_size: int = 100) -> dict:
+    page, page_size = _clamp_page(page, page_size, max_page_size=max_page_size)
+    total = int(query.order_by(None).count())
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    total_pages = int(ceil(total / page_size)) if total else 0
+    return {
+        'items': items,
+        'total': total,
+        'page': page,
+        'page_size': page_size,
+        'total_pages': total_pages,
+        'has_next': page * page_size < total,
+    }
 
 async def _read_bank_upload_limited(file: UploadFile, *, max_bytes: int = _BANK_UPLOAD_MAX_BYTES) -> bytes:
     content_length = None
@@ -143,6 +184,24 @@ def dashboard_search(q: str = '', limit: int = 20, db: Session = Depends(get_db)
     return VersionedQuestionBankService(db).dashboard_search(q=q, limit=limit)
 
 
+@router.get('/admin/stats/health')
+def bank_stats_health(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _biz(db).require_system_admin(user)
+    return BankDashboardStatsService(db).stats_health()
+
+
+@router.post('/admin/stats/rebuild')
+def rebuild_bank_stats(chapter_id: str | None = Query(None), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _biz(db).require_system_admin(user)
+    try:
+        result = BankDashboardStatsService(db).rebuild_chapter_stats(chapter_id=chapter_id, commit=True)
+        log_audit(db, action='question_bank.stats.rebuild', status='success', message='Rebuild Bank Dashboard stats thành công', user=user, target_type='chapter' if chapter_id else 'bank_dashboard_stats', target_id=chapter_id)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.stats.rebuild', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter' if chapter_id else 'bank_dashboard_stats', target_id=chapter_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get('/departments/summary')
 def department_summaries(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     return VersionedQuestionBankService(db).department_summaries()
@@ -163,10 +222,10 @@ def chapter_summaries(subject_offering_id: str, db: Session = Depends(get_db), u
     return VersionedQuestionBankService(db).chapter_summaries(subject_offering_id=subject_offering_id)
 
 
-@router.get('/departments', response_model=list[DepartmentOut])
-def list_departments(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/departments', response_model=PaginatedOut[DepartmentOut])
+def list_departments(page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=50), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_department_filter(db.query(Department), user)
-    return query.order_by(Department.code.asc()).all()
+    return _paginate(query.order_by(Department.code.asc()), page=page, page_size=page_size, max_page_size=50)
 
 
 @router.post('/departments', response_model=DepartmentOut)
@@ -205,13 +264,13 @@ def delete_department(department_id: str, db: Session = Depends(get_db), user: U
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/subjects', response_model=list[SubjectOut])
-def list_subjects(department_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/subjects', response_model=PaginatedOut[SubjectOut])
+def list_subjects(department_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_subject_filter(db.query(Subject), user)
     if department_id:
         _require_business(db, user, 'bank.view', 'DEPARTMENT', department_id)
         query = query.filter(Subject.department_id == department_id)
-    return query.order_by(Subject.code.asc()).all()
+    return _paginate(query.order_by(Subject.code.asc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/subjects', response_model=SubjectOut)
@@ -250,19 +309,19 @@ def delete_subject(subject_id: str, db: Session = Depends(get_db), user: UserCon
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/subject-offerings', response_model=list[SubjectOfferingOut])
-@router.get('/subject-versions', response_model=list[SubjectOfferingOut])
-def list_subject_offerings(subject_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/subject-offerings', response_model=PaginatedOut[SubjectOfferingOut])
+@router.get('/subject-versions', response_model=PaginatedOut[SubjectOfferingOut])
+def list_subject_offerings(subject_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(SubjectOffering)
     subject_ids = _biz(db).accessible_subject_ids(user)
     if subject_ids is not None:
         if not subject_ids:
-            return []
+            return _empty_page(page, page_size, max_page_size=100)
         query = query.filter(SubjectOffering.subject_id.in_(subject_ids))
     if subject_id:
         _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
         query = query.filter(SubjectOffering.subject_id == subject_id)
-    return query.order_by(SubjectOffering.code.asc()).all()
+    return _paginate(query.order_by(SubjectOffering.code.asc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/subject-offerings', response_model=SubjectOfferingOut)
@@ -304,13 +363,13 @@ def delete_subject_offering(subject_offering_id: str, db: Session = Depends(get_
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/chapters', response_model=list[ChapterOut])
-def list_chapters(subject_id: str | None = None, subject_offering_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/chapters', response_model=PaginatedOut[ChapterOut])
+def list_chapters(subject_id: str | None = None, subject_offering_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(SubjectChapter)
     subject_ids = _biz(db).accessible_subject_ids(user)
     if subject_ids is not None:
         if not subject_ids:
-            return []
+            return _empty_page(page, page_size, max_page_size=100)
         query = query.filter(SubjectChapter.subject_id.in_(subject_ids))
     if subject_id:
         _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
@@ -318,7 +377,7 @@ def list_chapters(subject_id: str | None = None, subject_offering_id: str | None
     if subject_offering_id:
         _require_business(db, user, 'bank.view', 'SUBJECT_VERSION', subject_offering_id)
         query = query.filter(SubjectChapter.subject_offering_id == subject_offering_id)
-    return query.order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
+    return _paginate(query.order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc(), SubjectChapter.id.asc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/chapters', response_model=ChapterOut)
@@ -360,13 +419,13 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserCon
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/bank-versions', response_model=list[BankVersionOut])
-def list_bank_versions(chapter_id: str | None = None, subject_id: str | None = None, subject_offering_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/bank-versions', response_model=PaginatedOut[BankVersionOut])
+def list_bank_versions(chapter_id: str | None = None, subject_id: str | None = None, subject_offering_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(QuestionBankVersion)
     subject_ids = _biz(db).accessible_subject_ids(user)
     if subject_ids is not None:
         if not subject_ids:
-            return []
+            return _empty_page(page, page_size, max_page_size=100)
         query = query.filter(QuestionBankVersion.subject_id.in_(subject_ids))
     if chapter_id:
         _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
@@ -377,7 +436,7 @@ def list_bank_versions(chapter_id: str | None = None, subject_id: str | None = N
     if subject_offering_id:
         _require_business(db, user, 'bank.view', 'SUBJECT_VERSION', subject_offering_id)
         query = query.filter(QuestionBankVersion.subject_offering_id == subject_offering_id)
-    return query.order_by(QuestionBankVersion.created_at.desc()).all()
+    return _paginate(query.order_by(QuestionBankVersion.created_at.desc(), QuestionBankVersion.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/bank-versions', response_model=BankVersionOut)
@@ -392,8 +451,8 @@ def create_bank_version(payload: BankVersionCreate, db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/material-versions', response_model=list[MaterialVersionOut])
-def list_material_versions(bank_version_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/material-versions', response_model=PaginatedOut[MaterialVersionOut])
+def list_material_versions(bank_version_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(LearningMaterialVersion)
     if bank_version_id:
         _require_bank_version(db, user, 'bank.view', bank_version_id)
@@ -402,9 +461,9 @@ def list_material_versions(bank_version_id: str | None = None, db: Session = Dep
         subject_ids = _biz(db).accessible_subject_ids(user)
         if subject_ids is not None:
             if not subject_ids:
-                return []
+                return _empty_page(page, page_size, max_page_size=100)
             query = query.filter(LearningMaterialVersion.subject_id.in_(subject_ids))
-    return query.order_by(LearningMaterialVersion.created_at.desc()).all()
+    return _paginate(query.order_by(LearningMaterialVersion.created_at.desc(), LearningMaterialVersion.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/material-versions', response_model=MaterialVersionOut)
@@ -483,13 +542,13 @@ async def upload_material_to_bank_version(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/bank-versions/{bank_version_id}/material-chunks', response_model=list[MaterialChunkOut])
-def list_bank_material_chunks(bank_version_id: str, material_version_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/bank-versions/{bank_version_id}/material-chunks', response_model=PaginatedOut[MaterialChunkOut])
+def list_bank_material_chunks(bank_version_id: str, material_version_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     _require_bank_version(db, user, 'bank.view', bank_version_id)
     query = db.query(MaterialChunk).filter(MaterialChunk.bank_version_id == bank_version_id)
     if material_version_id:
         query = query.filter(MaterialChunk.material_version_id == material_version_id)
-    return query.order_by(MaterialChunk.material_version_id.asc(), MaterialChunk.chunk_index.asc()).all()
+    return _paginate(query.order_by(MaterialChunk.material_version_id.asc(), MaterialChunk.chunk_index.asc(), MaterialChunk.id.asc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/bank-versions/{bank_version_id}/generate/preview', response_model=BankGeneratePreviewOut)
@@ -545,13 +604,42 @@ async def generate_questions_from_bank_version(bank_version_id: str, payload: Ba
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.get('/bank-versions/{bank_version_id}/questions', response_model=list[BankVersionQuestionOut])
-def list_bank_version_questions(bank_version_id: str, status_filter: str | None = None, limit: int = 100, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/bank-versions/{bank_version_id}/questions', response_model=CursorPaginatedOut[BankVersionQuestionOut])
+def list_bank_version_questions(
+    bank_version_id: str,
+    status_filter: str | None = None,
+    difficulty: str | None = None,
+    search: str | None = None,
+    cursor_created_at: datetime | None = None,
+    cursor_id: str | None = None,
+    limit: int = Query(50, ge=1, le=100),
+    include_total: bool = False,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
     _require_bank_version(db, user, 'bank.view', bank_version_id)
+    safe_limit = max(1, min(int(limit or 50), 100))
     query = db.query(Question).filter(Question.bank_version_id == bank_version_id)
     if status_filter:
         query = query.filter(Question.status == status_filter)
-    return query.order_by(Question.created_at.desc()).limit(min(max(limit, 1), 500)).all()
+    if difficulty:
+        query = query.filter(Question.difficulty == difficulty)
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        query = query.filter(or_(Question.question_text.ilike(pattern), Question.concept_title.ilike(pattern), Question.question_family_id.ilike(pattern)))
+    total = int(query.order_by(None).count()) if include_total else None
+    if cursor_created_at and cursor_created_at.tzinfo is not None:
+        cursor_created_at = cursor_created_at.astimezone(timezone.utc).replace(tzinfo=None)
+    if cursor_created_at and cursor_id:
+        query = query.filter(or_(Question.created_at < cursor_created_at, and_(Question.created_at == cursor_created_at, Question.id < cursor_id)))
+    rows = query.order_by(Question.created_at.desc(), Question.id.desc()).limit(safe_limit + 1).all()
+    has_next = len(rows) > safe_limit
+    items = rows[:safe_limit]
+    next_cursor = None
+    if has_next and items:
+        last = items[-1]
+        next_cursor = {'created_at': last.created_at.isoformat() if last.created_at else None, 'id': last.id}
+    return {'items': items, 'limit': safe_limit, 'has_next': has_next, 'next_cursor': next_cursor, 'total': total}
 
 
 
@@ -687,14 +775,21 @@ def bank_release_readiness(bank_version_id: str, db: Session = Depends(get_db), 
     return VersionedQuestionBankService(db).release_readiness(bank_version_id=bank_version_id)
 
 
-@router.get('/releases', response_model=list[BankReleaseOut])
-def list_releases(bank_version_id: str | None = None, chapter_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/releases', response_model=PaginatedOut[BankReleaseOut])
+def list_releases(bank_version_id: str | None = None, chapter_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(QuestionBankRelease)
+    subject_ids = _biz(db).accessible_subject_ids(user)
+    if subject_ids is not None:
+        if not subject_ids:
+            return _empty_page(page, page_size, max_page_size=100)
+        query = query.filter(QuestionBankRelease.subject_id.in_(subject_ids))
     if bank_version_id:
+        _require_bank_version(db, user, 'bank.view', bank_version_id)
         query = query.filter(QuestionBankRelease.bank_version_id == bank_version_id)
     if chapter_id:
+        _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
         query = query.filter(QuestionBankRelease.chapter_id == chapter_id)
-    return query.order_by(QuestionBankRelease.created_at.desc()).all()
+    return _paginate(query.order_by(QuestionBankRelease.created_at.desc(), QuestionBankRelease.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/releases', response_model=BankReleaseOut)
@@ -820,12 +915,18 @@ async def apply_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.get('/course-mappings', response_model=list[CourseMappingOut])
-def list_course_mappings(subject_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/course-mappings', response_model=PaginatedOut[CourseMappingOut])
+def list_course_mappings(subject_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(EdxCourseMapping)
+    subject_ids = _biz(db).accessible_subject_ids(user)
+    if subject_ids is not None:
+        if not subject_ids:
+            return _empty_page(page, page_size, max_page_size=100)
+        query = query.filter(EdxCourseMapping.subject_id.in_(subject_ids))
     if subject_id:
+        _require_business(db, user, 'bank.view', 'SUBJECT', subject_id)
         query = query.filter(EdxCourseMapping.subject_id == subject_id)
-    return query.order_by(EdxCourseMapping.created_at.desc()).all()
+    return _paginate(query.order_by(EdxCourseMapping.created_at.desc(), EdxCourseMapping.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/course-mappings/validate', response_model=MappingValidationOut)
@@ -848,12 +949,22 @@ def create_course_mapping(payload: CourseMappingCreate, db: Session = Depends(ge
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/course-chapter-mappings', response_model=list[CourseChapterMappingOut])
-def list_course_chapter_mappings(course_mapping_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/course-chapter-mappings', response_model=PaginatedOut[CourseChapterMappingOut])
+def list_course_chapter_mappings(course_mapping_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(EdxCourseChapterMapping)
     if course_mapping_id:
+        mapping = db.get(EdxCourseMapping, course_mapping_id)
+        if not mapping:
+            return _empty_page(page, page_size, max_page_size=100)
+        _require_business(db, user, 'bank.view', 'SUBJECT', mapping.subject_id)
         query = query.filter(EdxCourseChapterMapping.course_mapping_id == course_mapping_id)
-    return query.order_by(EdxCourseChapterMapping.created_at.desc()).all()
+    else:
+        subject_ids = _biz(db).accessible_subject_ids(user)
+        if subject_ids is not None:
+            if not subject_ids:
+                return _empty_page(page, page_size, max_page_size=100)
+            query = query.join(EdxCourseMapping, EdxCourseMapping.id == EdxCourseChapterMapping.course_mapping_id).filter(EdxCourseMapping.subject_id.in_(subject_ids))
+    return _paginate(query.order_by(EdxCourseChapterMapping.created_at.desc(), EdxCourseChapterMapping.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/course-chapter-mappings/validate', response_model=MappingValidationOut)
@@ -879,9 +990,23 @@ def create_course_chapter_mapping(payload: CourseChapterMappingCreate, db: Sessi
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/course-quiz-instances', response_model=list[CourseQuizInstanceOut])
-def list_course_quiz_instances(openedx_course_id: str | None = None, bank_release_id: str | None = None, limit: int = 100, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).list_course_quiz_instances(openedx_course_id=openedx_course_id, bank_release_id=bank_release_id, limit=limit)
+@router.get('/course-quiz-instances', response_model=PaginatedOut[CourseQuizInstanceOut])
+def list_course_quiz_instances(openedx_course_id: str | None = None, bank_release_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), limit: int | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    # limit is kept for frontend/backward query compatibility; page_size is the real contract.
+    if limit is not None:
+        page_size = limit
+    query = db.query(CourseQuizInstance)
+    subject_ids = _biz(db).accessible_subject_ids(user)
+    if subject_ids is not None:
+        if not subject_ids:
+            return _empty_page(page, page_size, max_page_size=100)
+        query = query.filter(CourseQuizInstance.subject_id.in_(subject_ids))
+    if openedx_course_id:
+        query = query.filter(CourseQuizInstance.openedx_course_id == openedx_course_id)
+    if bank_release_id:
+        _require_release(db, user, 'bank.view', bank_release_id)
+        query = query.filter(CourseQuizInstance.bank_release_id == bank_release_id)
+    return _paginate(query.order_by(CourseQuizInstance.created_at.desc(), CourseQuizInstance.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/course-quiz-instances/{instance_id}/rollback', response_model=CourseQuizRollbackOut)
@@ -899,18 +1024,18 @@ async def rollback_course_quiz_instance(instance_id: str, payload: CourseQuizRol
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/quiz-blueprints', response_model=list[QuizBlueprintOut])
-def list_quiz_blueprints(chapter_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+@router.get('/quiz-blueprints', response_model=PaginatedOut[QuizBlueprintOut])
+def list_quiz_blueprints(chapter_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = db.query(QuizBlueprint)
     subject_ids = _biz(db).accessible_subject_ids(user)
     if subject_ids is not None:
         if not subject_ids:
-            return []
+            return _empty_page(page, page_size, max_page_size=100)
         query = query.filter(QuizBlueprint.subject_id.in_(subject_ids))
     if chapter_id:
         _require_business(db, user, 'bank.view', 'CHAPTER', chapter_id)
         query = query.filter(QuizBlueprint.chapter_id == chapter_id)
-    return query.order_by(QuizBlueprint.created_at.desc()).all()
+    return _paginate(query.order_by(QuizBlueprint.created_at.desc(), QuizBlueprint.id.desc()), page=page, page_size=page_size, max_page_size=100)
 
 
 @router.post('/quiz-blueprints', response_model=QuizBlueprintOut)

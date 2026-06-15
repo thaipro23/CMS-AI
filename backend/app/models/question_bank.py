@@ -388,3 +388,42 @@ class CourseQuizInstance(Base):
         Index('ix_ai_course_quiz_instances_release_status_created', 'bank_release_id', 'status', 'created_at'),
         Index('ix_ai_course_quiz_instances_course_status_created', 'openedx_course_id', 'status', 'created_at'),
     )
+
+class BankChapterStats(Base):
+    """Pre-aggregated Bank Dashboard statistics per chapter.
+
+    v25.9.15.6.34 keeps dashboards off the 1.5M-row ai_questions table.
+    Request-time dashboard code reads this 15k-row table and small hierarchy
+    tables only; rebuild/refresh jobs are the only code paths allowed to
+    aggregate ai_questions directly.
+    """
+    __tablename__ = 'ai_bank_chapter_stats'
+
+    chapter_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), primary_key=True)
+    subject_id: Mapped[str] = mapped_column(String, ForeignKey('ai_subjects.id'), nullable=False, index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
+    latest_bank_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), nullable=True, index=True)
+    total_questions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    approved_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pending_review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    draft_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retired_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duplicate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    easy_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    medium_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    hard_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    family_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    material_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    release_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    published_release_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ready_to_release: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index('ix_ai_bank_chapter_stats_subject_unresolved', 'subject_id', 'unresolved_count'),
+        Index('ix_ai_bank_chapter_stats_offering_ready', 'subject_offering_id', 'ready_to_release'),
+        Index('ix_ai_bank_chapter_stats_updated', 'updated_at'),
+    )
+

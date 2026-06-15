@@ -38,6 +38,15 @@ export type PaginatedResponse<T> = {
   page: number
   page_size: number
   total_pages: number
+  has_next?: boolean
+}
+
+export type CursorPaginatedResponse<T> = {
+  items: T[]
+  limit: number
+  has_next: boolean
+  next_cursor?: { created_at?: string | null; id?: string | null } | null
+  total?: number | null
 }
 
 export type QuestionStatus = 'pending_review' | 'approved' | 'rejected' | 'published' | 'draft_error' | string

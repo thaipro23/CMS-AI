@@ -1,3 +1,21 @@
+## v25.9.15.6.34 - Dashboard Summary Engine
+
+- Added `ai_bank_chapter_stats` summary table and SQLAlchemy model `BankChapterStats`.
+- Added `BankDashboardStatsService` so Bank Dashboard reads per-chapter summary rows plus small hierarchy tables instead of aggregating `ai_questions` at request time.
+- Added admin endpoints `GET /api/question-bank-v2/admin/stats/health` and `POST /api/question-bank-v2/admin/stats/rebuild[?chapter_id=...]`.
+- Added Redis cache for dashboard overview and hierarchy summaries with `BANK_DASHBOARD_CACHE_TTL_SECONDS` defaulting to 45 seconds.
+- Added best-effort stats refresh after material, question review/generate, release and chapter/bank-version mutations.
+- Kept full search engine work for the next planned `.35`; interim dashboard search does not touch `ai_questions`.
+
+## v25.9.15.6.33 - Pagination Contract toàn hệ thống Bank
+
+- Changed Bank Manager list APIs from unbounded arrays to explicit `items/total/page/page_size/total_pages/has_next` contracts.
+- Added cursor/keyset pagination for `GET /question-bank-v2/bank-versions/{bank_version_id}/questions` using `(created_at, id)` instead of deep offset.
+- Added Pydantic generic schemas `PaginatedOut[T]` and `CursorPaginatedOut[T]`.
+- Removed direct `.all()` list returns from `backend/app/api/routes/question_bank_v2.py`; list reads now pass through pagination helpers.
+- Kept frontend compatibility by unwrapping paginated backend responses in `frontend/lib/api.ts`, so existing screens still receive arrays until the later frontend scale redesign.
+- Added no-op Alembic marker `0016_v25_9_15_6_33_pagination_contract.py` for deployment-order verification.
+
 ## v25.9.15.6.32 - Database Scale Foundation
 
 - Added PostgreSQL-safe composite indexes required before scaling Bank Manager to 6 departments, 300 subjects, 1,500 subject versions, 15,000 chapters and 1,500,000 questions.
