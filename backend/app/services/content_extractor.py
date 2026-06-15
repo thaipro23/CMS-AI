@@ -177,6 +177,7 @@ class ContentExtractor:
 
         items: list[ExtractedContent] = []
         for page, text in pages:
+            text = self._cap_extracted_text(text, label=filename)
             if not text.strip():
                 continue
             page_block_id = f"{asset_id}#page={page}" if page else asset_id
@@ -201,11 +202,15 @@ class ContentExtractor:
         if ext == "pdf" or "pdf" in mime:
             return self.extract_pdf_pages(raw)
         if ext in {"pptx", "ppt"} or "presentation" in mime:
+            if ext == "pptx" or "presentation" in mime:
+                self._validate_zip_safety(raw, filename=filename)
             return self.extract_pptx_pages(raw)
         if ext == "docx" or "wordprocessingml" in mime:
+            self._validate_zip_safety(raw, filename=filename)
             text = self.extract_docx_text(raw)
             return [(None, text)] if text else []
         if ext in {"xlsx", "xlsm"} or "spreadsheetml" in mime:
+            self._validate_zip_safety(raw, filename=filename)
             return self.extract_xlsx_sheets(raw)
         if ext in {"csv", "tsv"} or "csv" in mime or "tab-separated" in mime:
             text = self.extract_csv_text(raw, delimiter='\t' if ext == 'tsv' else None)
@@ -219,8 +224,33 @@ class ContentExtractor:
         text = self.extract_text_file(raw, ext=ext, mime_type=mime)
         return [(None, text)] if text else []
 
+    def _validate_zip_safety(self, raw: bytes, *, filename: str = '') -> None:
+        try:
+            archive = zipfile.ZipFile(BytesIO(raw))
+        except zipfile.BadZipFile:
+            raise ValueError(f'File {filename or "upload"} không phải zip/Office OpenXML hợp lệ.')
+        infos = archive.infolist()
+        max_members = max(1, int(settings.max_zip_members or 5000))
+        if len(infos) > max_members:
+            raise ValueError(f'File {filename or "upload"} có quá nhiều entry nén ({len(infos)} > {max_members}).')
+        total_uncompressed = sum(int(info.file_size or 0) for info in infos)
+        max_uncompressed = max(1, int(settings.max_zip_uncompressed_bytes or 200 * 1024 * 1024))
+        if total_uncompressed > max_uncompressed:
+            raise ValueError(f'File {filename or "upload"} giải nén quá lớn ({total_uncompressed} bytes > {max_uncompressed} bytes).')
+        archive.close()
+
+    def _cap_extracted_text(self, text: str, *, label: str = 'file') -> str:
+        max_chars = max(1, int(settings.max_extracted_chars or 2_000_000))
+        if len(text or '') > max_chars:
+            raise ValueError(f'Nội dung tách từ {label} quá lớn ({len(text)} ký tự > {max_chars} ký tự). Hãy chia nhỏ tài liệu trước khi upload.')
+        return text
+
+
     def extract_pdf_pages(self, raw: bytes) -> list[tuple[int, str]]:
         reader = PdfReader(BytesIO(raw))
+        max_pages = max(1, int(settings.max_pdf_pages or 300))
+        if len(reader.pages) > max_pages:
+            raise ValueError(f'PDF có quá nhiều trang ({len(reader.pages)} > {max_pages}). Hãy chia nhỏ tài liệu trước khi upload.')
         page_texts: dict[int, str] = {}
         empty_pages: list[int] = []
         for index, page in enumerate(reader.pages, start=1):
@@ -239,6 +269,9 @@ class ContentExtractor:
 
     def extract_pptx_pages(self, raw: bytes) -> list[tuple[int, str]]:
         pres = Presentation(BytesIO(raw))
+        max_slides = max(1, int(settings.max_pptx_slides or 300))
+        if len(pres.slides) > max_slides:
+            raise ValueError(f'PowerPoint có quá nhiều slide ({len(pres.slides)} > {max_slides}). Hãy chia nhỏ tài liệu trước khi upload.')
         notes_by_slide = self._extract_pptx_notes(raw) if settings.pptx_extract_speaker_notes else {}
         slides = []
         for index, slide in enumerate(pres.slides, start=1):
@@ -252,7 +285,7 @@ class ContentExtractor:
             notes = notes_by_slide.get(index)
             if notes:
                 parts.append(f"Ghi chú diễn giả: {notes}")
-            text = self.normalize_text("\n".join(parts))
+            text = self._cap_extracted_text(self.normalize_text("\n".join(parts)), label=f'slide {index}')
             if text:
                 slides.append((index, text))
         return slides
@@ -404,6 +437,12 @@ class ContentExtractor:
         if Document is None:
             raise ValueError('Thiếu package python-docx trong backend. Cài lại image bằng docker compose up --build.')
         doc = Document(BytesIO(raw))
+        max_paragraphs = max(1, int(settings.max_docx_paragraphs or 10000))
+        max_tables = max(1, int(settings.max_docx_tables or 500))
+        if len(doc.paragraphs) > max_paragraphs:
+            raise ValueError(f'DOCX có quá nhiều đoạn văn ({len(doc.paragraphs)} > {max_paragraphs}). Hãy chia nhỏ tài liệu trước khi upload.')
+        if len(doc.tables) > max_tables:
+            raise ValueError(f'DOCX có quá nhiều bảng ({len(doc.tables)} > {max_tables}). Hãy chia nhỏ tài liệu trước khi upload.')
         parts: list[str] = []
         for paragraph in doc.paragraphs:
             text = paragraph.text.strip()
@@ -414,25 +453,36 @@ class ContentExtractor:
                 cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
                 if cells:
                     parts.append(' | '.join(cells))
-        return self.normalize_text('\n'.join(parts))
+        return self._cap_extracted_text(self.normalize_text('\n'.join(parts)), label='DOCX')
 
     def extract_xlsx_sheets(self, raw: bytes) -> list[tuple[int | None, str]]:
         if load_workbook is None:
             raise ValueError('Thiếu package openpyxl trong backend. Cài lại image bằng docker compose up --build.')
         workbook = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+        max_sheets = max(1, int(settings.max_xlsx_sheets or 20))
+        if len(workbook.worksheets) > max_sheets:
+            workbook.close()
+            raise ValueError(f'Excel có quá nhiều sheet ({len(workbook.worksheets)} > {max_sheets}). Hãy chia nhỏ file trước khi upload.')
+        max_rows = max(1, int(settings.max_xlsx_rows_per_sheet or 5000))
         sheets: list[tuple[int | None, str]] = []
         for index, sheet in enumerate(workbook.worksheets, start=1):
             lines: list[str] = [f'Sheet: {sheet.title}']
+            row_count = 0
             for row in sheet.iter_rows(values_only=True):
+                row_count += 1
+                if row_count > max_rows:
+                    workbook.close()
+                    raise ValueError(f'Sheet {sheet.title} có quá nhiều dòng ({row_count} > {max_rows}). Hãy chia nhỏ file trước khi upload.')
                 cells = [self._cell_to_text(cell) for cell in row]
                 # trim trailing empty cells
                 while cells and not cells[-1]:
                     cells.pop()
                 if any(cells):
                     lines.append(' | '.join(cells))
-            text = self.normalize_text('\n'.join(lines))
+            text = self._cap_extracted_text(self.normalize_text('\n'.join(lines)), label=f'sheet {sheet.title}')
             if text and text != f'Sheet: {sheet.title}':
                 sheets.append((index, text))
+        workbook.close()
         return sheets
 
     def extract_csv_text(self, raw: bytes, delimiter: str | None = None) -> str:
@@ -445,12 +495,15 @@ class ContentExtractor:
             except Exception:
                 delimiter = ','
         reader = csv.reader(StringIO(text), delimiter=delimiter)
+        max_rows = max(1, int(settings.max_csv_rows or 50000))
         lines: list[str] = []
-        for row in reader:
+        for row_index, row in enumerate(reader, start=1):
+            if row_index > max_rows:
+                raise ValueError(f'CSV/TSV có quá nhiều dòng ({row_index} > {max_rows}). Hãy chia nhỏ file trước khi upload.')
             cells = [self.normalize_text(str(cell)) for cell in row]
             if any(cells):
                 lines.append(' | '.join(cells))
-        return self.normalize_text('\n'.join(lines))
+        return self._cap_extracted_text(self.normalize_text('\n'.join(lines)), label='CSV/TSV')
 
     def extract_text_file(self, raw: bytes, *, ext: str = '', mime_type: str = '') -> str:
         text = self._decode_text_bytes(raw)

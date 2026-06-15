@@ -458,3 +458,44 @@ class QuestionSearchDocument(Base):
         Index('ix_ai_question_search_chapter_difficulty', 'chapter_id', 'difficulty'),
         Index('ix_ai_question_search_updated', 'updated_at'),
     )
+
+
+class BankOperationJob(Base):
+    """Long-running Bank Manager operation tracked outside request/response.
+
+    v25.9.15.6.37 keeps heavy work out of Uvicorn workers: material extraction,
+    GPT generation, Open edX publish, and Quiz creation run in Celery while this
+    table stores progress/result/error for the UI and admins.
+    """
+
+    __tablename__ = 'ai_bank_operation_jobs'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    operation_type: Mapped[str] = mapped_column(String(80), index=True)  # material_extract | bank_generate | release_publish | quiz_create
+    status: Mapped[str] = mapped_column(String(50), default='queued', index=True)  # queued | running | completed | failed | canceled
+    target_type: Mapped[str] = mapped_column(String(80), default='', index=True)
+    target_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    bank_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), nullable=True, index=True)
+    release_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_releases.id'), nullable=True, index=True)
+    material_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_learning_material_versions.id'), nullable=True, index=True)
+    course_quiz_instance_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_course_quiz_instances.id'), nullable=True, index=True)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    course_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, default=1)
+    progress_label: Mapped[str] = mapped_column(String(255), default='Đang chờ xử lý')
+    request_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_ai_bank_operation_jobs_status_created', 'status', 'created_at'),
+        Index('ix_ai_bank_operation_jobs_target_status_created', 'target_type', 'target_id', 'status', 'created_at'),
+        Index('ix_ai_bank_operation_jobs_actor_created', 'requested_by', 'created_at'),
+        Index('ix_ai_bank_operation_jobs_bank_status_created', 'bank_version_id', 'status', 'created_at'),
+        Index('ix_ai_bank_operation_jobs_release_status_created', 'release_id', 'status', 'created_at'),
+    )

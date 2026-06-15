@@ -155,6 +155,38 @@ export type Job = {
   error_message?: string | null
 }
 
+
+export type BankOperationJob = {
+  id: string
+  operation_type: string
+  status: string
+  target_type: string
+  target_id?: string | null
+  bank_version_id?: string | null
+  release_id?: string | null
+  material_version_id?: string | null
+  course_quiz_instance_id?: string | null
+  requested_by?: string | null
+  course_id?: string | null
+  progress_current: number
+  progress_total: number
+  progress_percent: number
+  progress_label: string
+  request?: Record<string, unknown>
+  result?: Record<string, unknown>
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+}
+
+export type BankOperationJobQueued = {
+  ok: boolean
+  job: BankOperationJob
+  message: string
+}
+
 export type QuestionStats = {
   total: number
   pending_review: number

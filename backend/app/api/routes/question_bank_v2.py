@@ -1,11 +1,15 @@
 from datetime import datetime, timezone
 from math import ceil
+from pathlib import Path
+import uuid
+
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext, get_user_context, require_permission
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.question import Question
 from app.models.question_bank import (
@@ -21,6 +25,7 @@ from app.models.question_bank import (
     Subject,
     SubjectOffering,
     SubjectChapter,
+    BankOperationJob,
 )
 from app.schemas.question_bank import (
     BankReleaseCreate,
@@ -88,17 +93,21 @@ from app.schemas.question_bank import (
     SubjectOfferingOut,
     CursorPaginatedOut,
     PaginatedOut,
+    BankOperationJobOut,
+    BankOperationJobQueuedOut,
 )
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.question_bank_service import VersionedQuestionBankService
 from app.services.business_rbac import BusinessRBACService
 from app.services.bank_dashboard_stats import BankDashboardStatsService
 from app.services.bank_search import BankSearchService
+from app.services.bank_operation_jobs import BankOperationJobService, operation_pending_dir, serialize_job
+from app.worker import bank_material_extract_task, bank_generate_questions_task, bank_release_publish_task, bank_quiz_create_task
 
 router = APIRouter()
 
 
-_BANK_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+_BANK_UPLOAD_MAX_BYTES = int(settings.max_upload_bytes or 50 * 1024 * 1024)
 
 
 
@@ -170,6 +179,99 @@ def _require_bank_version(db: Session, user: UserContext, permission: str, bank_
 
 def _require_release(db: Session, user: UserContext, permission: str, release_id: str) -> None:
     _require_business(db, user, permission, 'RELEASE', release_id)
+
+
+
+def _job_out(job: BankOperationJob) -> dict:
+    return serialize_job(job)
+
+
+def _enqueue_task(task, job_id: str) -> None:
+    if settings.task_always_eager:
+        task.apply(args=[job_id])
+    else:
+        task.delay(job_id)
+
+
+def _queued_response(job: BankOperationJob, message: str) -> dict:
+    return {'ok': True, 'job': _job_out(job), 'message': message}
+
+
+def _create_bank_operation_job(
+    db: Session,
+    *,
+    operation_type: str,
+    target_type: str,
+    target_id: str | None,
+    user: UserContext,
+    bank_version_id: str | None = None,
+    release_id: str | None = None,
+    course_id: str | None = None,
+    request_json: dict | None = None,
+    progress_total: int = 1,
+    progress_label: str = 'Đang chờ xử lý',
+) -> BankOperationJob:
+    return BankOperationJobService(db).create_job(
+        operation_type=operation_type,
+        target_type=target_type,
+        target_id=target_id,
+        requested_by=user.user_id,
+        bank_version_id=bank_version_id,
+        release_id=release_id,
+        course_id=course_id,
+        request_json=request_json or {},
+        progress_total=progress_total,
+        progress_label=progress_label,
+        commit=True,
+    )
+
+
+
+@router.get('/operation-jobs', response_model=PaginatedOut[BankOperationJobOut])
+def list_bank_operation_jobs(
+    operation_type: str | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    status_filter: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_jobs')),
+):
+    query = db.query(BankOperationJob)
+    if not _biz(db).is_system_admin(user):
+        query = query.filter(BankOperationJob.requested_by == user.user_id)
+    if operation_type:
+        query = query.filter(BankOperationJob.operation_type == operation_type)
+    if target_type:
+        query = query.filter(BankOperationJob.target_type == target_type)
+    if target_id:
+        query = query.filter(BankOperationJob.target_id == target_id)
+    if status_filter:
+        query = query.filter(BankOperationJob.status == status_filter)
+    page_data = _paginate(query.order_by(BankOperationJob.created_at.desc(), BankOperationJob.id.desc()), page=page, page_size=page_size, max_page_size=100)
+    page_data['items'] = [_job_out(item) for item in page_data['items']]
+    return page_data
+
+
+@router.get('/operation-jobs/{job_id}', response_model=BankOperationJobOut)
+def get_bank_operation_job(job_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_jobs'))):
+    job = db.get(BankOperationJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy operation job')
+    if not _biz(db).is_system_admin(user) and job.requested_by != user.user_id:
+        raise HTTPException(status_code=403, detail='Bạn không có quyền xem job này')
+    return _job_out(job)
+
+
+@router.post('/operation-jobs/{job_id}/cancel', response_model=BankOperationJobOut)
+def cancel_bank_operation_job(job_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_jobs'))):
+    job = db.get(BankOperationJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy operation job')
+    if not _biz(db).is_system_admin(user) and job.requested_by != user.user_id:
+        raise HTTPException(status_code=403, detail='Bạn không có quyền hủy job này')
+    return _job_out(BankOperationJobService(db).cancel(job, reason='Người dùng yêu cầu hủy. Nếu worker đã chạy tới bước Open edX thì thao tác có thể vẫn hoàn tất.'))
 
 
 @router.get('/summary', response_model=BankSummaryOut)
@@ -568,6 +670,50 @@ async def upload_material_to_bank_version(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+@router.post('/bank-versions/{bank_version_id}/materials/upload-job', response_model=BankOperationJobQueuedOut)
+async def upload_material_to_bank_version_job(
+    bank_version_id: str,
+    file: UploadFile = File(...),
+    title: str = Form(''),
+    change_type: str = Form('initial'),
+    replace_existing: bool = Form(False),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('edit_questions')),
+):
+    _require_bank_version(db, user, 'document.manage', bank_version_id)
+    raw = await _read_bank_upload_limited(file)
+    pending_dir = operation_pending_dir()
+    safe_name = (file.filename or 'uploaded-file').replace('/', '_').replace('\\', '_')
+    pending_name = f'{uuid.uuid4()}-{safe_name}'
+    pending_path = pending_dir / pending_name
+    pending_path.write_bytes(raw)
+    request_json = {
+        'bank_version_id': bank_version_id,
+        'pending_file_path': str(pending_path),
+        'filename': file.filename or 'uploaded-file',
+        'content_type': file.content_type or '',
+        'title': title or file.filename or 'uploaded-file',
+        'change_type': change_type or 'initial',
+        'replace_existing': bool(replace_existing),
+        'file_size': len(raw),
+    }
+    job = _create_bank_operation_job(
+        db,
+        operation_type='material_extract',
+        target_type='bank_version',
+        target_id=bank_version_id,
+        user=user,
+        bank_version_id=bank_version_id,
+        request_json=request_json,
+        progress_total=5,
+        progress_label='Đã nhận file, đang chờ worker tách nội dung',
+    )
+    _enqueue_task(bank_material_extract_task, job.id)
+    log_audit(db, action='question_bank.material.upload.job', status='success', message='Đã tạo job tách tài liệu', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'file_name': file.filename, 'file_size': len(raw)})
+    return _queued_response(job, 'Đã đưa tài liệu vào hàng đợi tách nội dung.')
+
+
 @router.get('/bank-versions/{bank_version_id}/material-chunks', response_model=PaginatedOut[MaterialChunkOut])
 def list_bank_material_chunks(bank_version_id: str, material_version_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     _require_bank_version(db, user, 'bank.view', bank_version_id)
@@ -595,6 +741,28 @@ async def preview_generate_questions_from_bank_version(bank_version_id: str, pay
     except Exception as exc:
         log_audit(db, action='question_bank.bank_version.generate.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+
+@router.post('/bank-versions/{bank_version_id}/generate-job', response_model=BankOperationJobQueuedOut)
+def generate_questions_from_bank_version_job(bank_version_id: str, payload: BankGenerateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('generate_questions'))):
+    _require_bank_version(db, user, 'question.generate', bank_version_id)
+    request_json = payload.model_dump()
+    request_json['bank_version_id'] = bank_version_id
+    job = _create_bank_operation_job(
+        db,
+        operation_type='bank_generate',
+        target_type='bank_version',
+        target_id=bank_version_id,
+        user=user,
+        bank_version_id=bank_version_id,
+        request_json=request_json,
+        progress_total=max(3, int(payload.question_count or 1) + 2),
+        progress_label='Đã đưa yêu cầu tạo câu hỏi vào hàng đợi',
+    )
+    _enqueue_task(bank_generate_questions_task, job.id)
+    log_audit(db, action='question_bank.bank_version.generate.job', status='success', message='Đã tạo job generate câu hỏi', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'question_count': payload.question_count})
+    return _queued_response(job, 'Đã đưa yêu cầu tạo câu hỏi vào hàng đợi.')
 
 
 @router.post('/bank-versions/{bank_version_id}/generate', response_model=BankGenerateOut)
@@ -918,6 +1086,28 @@ def cancel_failed_release(release_id: str, db: Session = Depends(get_db), user: 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+@router.post('/releases/{release_id}/publish-openedx-job', response_model=BankOperationJobQueuedOut)
+def publish_release_to_openedx_job(release_id: str, payload: BankReleasePublishRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_release(db, user, 'bank.release.publish', release_id)
+    request_json = payload.model_dump()
+    request_json['release_id'] = release_id
+    job = _create_bank_operation_job(
+        db,
+        operation_type='release_publish',
+        target_type='bank_release',
+        target_id=release_id,
+        user=user,
+        release_id=release_id,
+        request_json=request_json,
+        progress_total=5,
+        progress_label='Đã đưa Release vào hàng đợi publish Open edX',
+    )
+    _enqueue_task(bank_release_publish_task, job.id)
+    log_audit(db, action='question_bank.release.publish_openedx.job', status='success', message='Đã tạo job publish Release', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'release_id': release_id})
+    return _queued_response(job, 'Đã đưa Release vào hàng đợi publish sang Open edX.')
+
+
 @router.post('/releases/{release_id}/publish-openedx', response_model=BankReleasePublishOut)
 async def publish_release_to_openedx(release_id: str, payload: BankReleasePublishRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
     _require_release(db, user, 'bank.release.publish', release_id)
@@ -952,6 +1142,28 @@ def preview_quiz_from_release(release_id: str, payload: BankReleaseQuizPreviewRe
     except Exception as exc:
         log_audit(db, action='question_bank.release.quiz.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+
+@router.post('/releases/{release_id}/quiz/create-job', response_model=BankOperationJobQueuedOut)
+def create_quiz_from_release_job(release_id: str, payload: BankReleaseQuizCreateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
+    _require_release(db, user, 'quiz.create_openedx', release_id)
+    request_json = payload.model_dump()
+    request_json['release_id'] = release_id
+    job = _create_bank_operation_job(
+        db,
+        operation_type='quiz_create',
+        target_type='bank_release',
+        target_id=release_id,
+        user=user,
+        release_id=release_id,
+        request_json=request_json,
+        progress_total=7,
+        progress_label='Đã đưa Quiz vào hàng đợi tạo trên Open edX',
+    )
+    _enqueue_task(bank_quiz_create_task, job.id)
+    log_audit(db, action='question_bank.release.quiz.create.job', status='success', message='Đã tạo job tạo Quiz Open edX', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'release_id': release_id, 'course_chapter_mapping_id': payload.course_chapter_mapping_id})
+    return _queued_response(job, 'Đã đưa Quiz vào hàng đợi tạo trên Open edX.')
 
 
 @router.post('/releases/{release_id}/quiz/create', response_model=BankReleaseQuizCreateOut)

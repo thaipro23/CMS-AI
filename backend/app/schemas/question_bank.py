@@ -801,3 +801,34 @@ class QuizAutoMapOut(BaseModel):
     blocking_errors: list[str] = Field(default_factory=list)
     can_apply: bool = False
     message: str
+
+
+class BankOperationJobOut(BaseModel):
+    id: str
+    operation_type: str
+    status: str
+    target_type: str
+    target_id: str | None = None
+    bank_version_id: str | None = None
+    release_id: str | None = None
+    material_version_id: str | None = None
+    course_quiz_instance_id: str | None = None
+    requested_by: str | None = None
+    course_id: str | None = None
+    progress_current: int = 0
+    progress_total: int = 1
+    progress_percent: float = 0
+    progress_label: str = ''
+    request: dict = Field(default_factory=dict)
+    result: dict = Field(default_factory=dict)
+    error_message: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class BankOperationJobQueuedOut(BaseModel):
+    ok: bool = True
+    job: BankOperationJobOut
+    message: str

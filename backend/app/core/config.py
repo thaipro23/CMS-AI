@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.15.6.36-lightweight-question-dto-keyset-browser'
+    app_version: str = '25.9.15.6.37-async-material-generate-publish-quiz'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -160,6 +160,20 @@ class Settings(BaseSettings):
     # Worker behavior
     task_always_eager: bool = False
     generation_batch_size: int = 50
+    bank_operation_job_ttl_days: int = 30
+
+    # v25.9.15.6.37 async material/generate/publish/quiz safety limits.
+    max_upload_bytes: int = 50 * 1024 * 1024
+    max_pdf_pages: int = 300
+    max_pptx_slides: int = 300
+    max_docx_paragraphs: int = 10000
+    max_docx_tables: int = 500
+    max_xlsx_sheets: int = 20
+    max_xlsx_rows_per_sheet: int = 5000
+    max_csv_rows: int = 50000
+    max_zip_uncompressed_bytes: int = 200 * 1024 * 1024
+    max_zip_members: int = 5000
+    max_extracted_chars: int = 2_000_000
 
     # Advanced file extraction. Keep OCR disabled by default because it needs
     # Tesseract/Poppler system packages and can be slow on large scanned files.

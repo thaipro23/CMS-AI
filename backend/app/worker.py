@@ -729,3 +729,228 @@ async def _generate_questions(job_id: str, content_override: str | None = None, 
         return {'error': str(exc)}
     finally:
         db.close()
+
+
+@celery_app.task(name='bank_material_extract_task')
+def bank_material_extract_task(job_id: str):
+    from pathlib import Path
+    from app.services.bank_operation_jobs import BankOperationJobService
+    from app.services.question_bank_service import VersionedQuestionBankService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    ops = BankOperationJobService(db)
+    job = ops.get_job(job_id)
+    if not job:
+        db.close()
+        return {'ok': False, 'error': 'job_not_found'}
+    try:
+        request = job.request_json or {}
+        ops.start(job, label='Đang đọc file và tách nội dung', total=5)
+        pending_file = Path(str(request.get('pending_file_path') or ''))
+        if not pending_file.exists() or not pending_file.is_file():
+            raise ValueError('Không tìm thấy file tạm của job upload. Hãy upload lại tài liệu.')
+        raw = pending_file.read_bytes()
+        ops.progress(job, current=2, label='Đang chạy extractor/chunker')
+        result = VersionedQuestionBankService(db).upload_material_bytes(
+            bank_version_id=str(job.bank_version_id or request.get('bank_version_id')),
+            filename=str(request.get('filename') or pending_file.name),
+            raw=raw,
+            content_type=str(request.get('content_type') or ''),
+            title=str(request.get('title') or request.get('filename') or pending_file.name),
+            change_type=str(request.get('change_type') or 'initial'),
+            actor=job.requested_by,
+            replace_existing=bool(request.get('replace_existing')),
+        )
+        ops.progress(job, current=4, label='Đang cập nhật dashboard/search index')
+        material = result.get('material_version')
+        result_json = {
+            'ok': bool(result.get('ok')),
+            'bank_version_id': job.bank_version_id,
+            'material_version_id': getattr(material, 'id', None),
+            'chunks_created': result.get('chunks_created'),
+            'tokens_indexed': result.get('tokens_indexed'),
+            'diff_required': result.get('diff_required'),
+            'diff_base_bank_version_id': result.get('diff_base_bank_version_id'),
+            'document_change_state': result.get('document_change_state'),
+            'message': result.get('message'),
+        }
+        try:
+            pending_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        log_audit(db, action='question_bank.material.upload.async', status='success', message='Tách tài liệu bất đồng bộ thành công', user=None, target_type='bank_operation_job', target_id=job.id, metadata=result_json)
+        return ops.complete(job, result=result_json, label='Đã tách và gắn tài liệu').result_json
+    except Exception as exc:
+        try:
+            log_audit(db, action='question_bank.material.upload.async', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=None, target_type='bank_operation_job', target_id=job.id)
+        except Exception:
+            pass
+        return ops.fail(job, error=exc).result_json
+    finally:
+        db.close()
+
+
+@celery_app.task(name='bank_generate_questions_task')
+def bank_generate_questions_task(job_id: str):
+    from app.services.bank_operation_jobs import BankOperationJobService
+    from app.services.question_bank_service import VersionedQuestionBankService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    async def _run():
+        db = SessionLocal()
+        ops = BankOperationJobService(db)
+        job = ops.get_job(job_id)
+        if not job:
+            db.close()
+            return {'ok': False, 'error': 'job_not_found'}
+        try:
+            payload = job.request_json or {}
+            total_questions = int(payload.get('question_count') or 1)
+            ops.start(job, label='Đang chuẩn bị prompt và gọi GPT', total=max(3, total_questions + 2))
+            result = await VersionedQuestionBankService(db).generate_from_bank_version(
+                bank_version_id=str(job.bank_version_id or payload.get('bank_version_id')),
+                question_count=total_questions,
+                target_question_count=payload.get('target_question_count'),
+                difficulty_easy=int(payload.get('difficulty_easy') or 50),
+                difficulty_medium=int(payload.get('difficulty_medium') or 30),
+                difficulty_hard=int(payload.get('difficulty_hard') or 20),
+                material_version_ids=payload.get('material_version_ids'),
+                provider=str(payload.get('provider') or 'openai'),
+                actor=job.requested_by,
+                approve_after_generate=bool(payload.get('approve_after_generate')),
+            )
+            result_json = {
+                'ok': bool(result.get('ok')),
+                'bank_version_id': result.get('bank_version_id') or job.bank_version_id,
+                'requested_questions': result.get('requested_questions'),
+                'created_questions': result.get('created_questions'),
+                'pending_review_count': result.get('pending_review_count'),
+                'approved_count': result.get('approved_count'),
+                'draft_error_count': result.get('draft_error_count'),
+                'input_chunks': result.get('input_chunks'),
+                'input_tokens': result.get('input_tokens'),
+                'difficulty_counts': result.get('difficulty_counts'),
+                'errors': result.get('errors') or [],
+                'message': result.get('message'),
+            }
+            log_audit(db, action='question_bank.bank_version.generate.async', status='success' if result_json.get('created_questions') else 'failed', error_type=None if result_json.get('created_questions') else AuditErrorType.EXTERNAL_SERVICE_ERROR, message=result_json.get('message') or '', user=None, target_type='bank_operation_job', target_id=job.id, metadata=result_json)
+            return ops.complete(job, result=result_json, label='Đã tạo câu hỏi').result_json
+        except Exception as exc:
+            try:
+                log_audit(db, action='question_bank.bank_version.generate.async', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=None, target_type='bank_operation_job', target_id=job.id)
+            except Exception:
+                pass
+            return ops.fail(job, error=exc).result_json
+        finally:
+            db.close()
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(name='bank_release_publish_task')
+def bank_release_publish_task(job_id: str):
+    from app.services.bank_operation_jobs import BankOperationJobService
+    from app.services.question_bank_service import VersionedQuestionBankService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    async def _run():
+        db = SessionLocal()
+        ops = BankOperationJobService(db)
+        job = ops.get_job(job_id)
+        if not job:
+            db.close()
+            return {'ok': False, 'error': 'job_not_found'}
+        try:
+            payload = job.request_json or {}
+            ops.start(job, label='Đang publish Bank Release sang Open edX Library', total=5)
+            result = await VersionedQuestionBankService(db).publish_release_to_openedx(
+                release_id=str(job.release_id or payload.get('release_id')),
+                actor=job.requested_by,
+                course_id_for_org=payload.get('openedx_course_id_for_org'),
+                force_reimport=bool(payload.get('force_reimport')),
+            )
+            ops.progress(job, current=4, label='Đang verify kết quả publish')
+            result_json = {
+                'ok': bool(result.get('ok')),
+                'release_id': result.get('release_id') or job.release_id,
+                'release_code': result.get('release_code'),
+                'status': result.get('status'),
+                'openedx_library_key': result.get('openedx_library_key'),
+                'question_count': result.get('question_count'),
+                'imported_now_count': result.get('imported_now_count'),
+                'skipped_existing_count': result.get('skipped_existing_count'),
+                'errors': result.get('errors') or [],
+                'message': 'Publish Bank Release sang Open edX Library thành công' if result.get('ok') else 'Publish Bank Release hoàn tất nhưng có lỗi',
+            }
+            log_audit(db, action='question_bank.release.publish_openedx.async', status='success', message=result_json['message'], user=None, target_type='bank_operation_job', target_id=job.id, metadata=result_json)
+            return ops.complete(job, result=result_json, label='Đã publish Library').result_json
+        except Exception as exc:
+            try:
+                log_audit(db, action='question_bank.release.publish_openedx.async', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=None, target_type='bank_operation_job', target_id=job.id)
+            except Exception:
+                pass
+            return ops.fail(job, error=exc).result_json
+        finally:
+            db.close()
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(name='bank_quiz_create_task')
+def bank_quiz_create_task(job_id: str):
+    from app.services.bank_operation_jobs import BankOperationJobService
+    from app.services.question_bank_service import VersionedQuestionBankService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    async def _run():
+        db = SessionLocal()
+        ops = BankOperationJobService(db)
+        job = ops.get_job(job_id)
+        if not job:
+            db.close()
+            return {'ok': False, 'error': 'job_not_found'}
+        try:
+            payload = job.request_json or {}
+            ops.start(job, label='Đang tạo Quiz node và ItemBank slots trên Open edX', total=7)
+            result = await VersionedQuestionBankService(db).create_quiz_from_release(
+                course_chapter_mapping_id=str(payload.get('course_chapter_mapping_id')),
+                quiz_title=str(payload.get('quiz_title') or ''),
+                unit_title=str(payload.get('unit_title') or 'Quiz'),
+                total_questions=int(payload.get('total_questions') or 15),
+                difficulty_easy=int(payload.get('difficulty_easy') or 50),
+                difficulty_medium=int(payload.get('difficulty_medium') or 30),
+                difficulty_hard=int(payload.get('difficulty_hard') or 20),
+                max_families_per_bank=int(payload.get('max_families_per_bank') or 2),
+                custom_timer_enabled=bool(payload.get('custom_timer_enabled', True)),
+                time_limit_minutes=int(payload.get('time_limit_minutes') or 15),
+                retake_cooldown_minutes=int(payload.get('retake_cooldown_minutes') or 5),
+                auto_submit_on_timeout=bool(payload.get('auto_submit_on_timeout', True)),
+                lock_after_timeout=bool(payload.get('lock_after_timeout', True)),
+                native_timed_exam=bool(payload.get('native_timed_exam', False)),
+                actor=job.requested_by,
+                expected_bank_release_id=str(job.release_id or payload.get('release_id')),
+            )
+            result_json = {
+                'ok': bool(result.get('ok')),
+                'status': result.get('status'),
+                'course_quiz_instance_id': result.get('course_quiz_instance_id'),
+                'openedx_course_id': result.get('openedx_course_id'),
+                'openedx_quiz_node_id': result.get('openedx_quiz_node_id'),
+                'openedx_unit_node_id': result.get('openedx_unit_node_id'),
+                'bank_release_id': result.get('bank_release_id') or job.release_id,
+                'release_code': result.get('release_code'),
+                'message': result.get('message'),
+            }
+            log_audit(db, action='question_bank.release.quiz.create.async', status='success', message=result_json.get('message') or 'Tạo Quiz thành công', user=None, course_id=result_json.get('openedx_course_id'), target_type='bank_operation_job', target_id=job.id, metadata=result_json)
+            return ops.complete(job, result=result_json, label='Đã tạo Quiz Open edX').result_json
+        except Exception as exc:
+            try:
+                log_audit(db, action='question_bank.release.quiz.create.async', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=None, target_type='bank_operation_job', target_id=job.id)
+            except Exception:
+                pass
+            return ops.fail(job, error=exc).result_json
+        finally:
+            db.close()
+
+    return asyncio.run(_run())

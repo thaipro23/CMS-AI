@@ -68,6 +68,8 @@ import {
   RoleAssignmentCreate,
   RoleAssignmentListResponse,
   EffectiveRBAC,
+  BankOperationJob,
+  BankOperationJobQueued,
 } from "../types";
 
 const rawApiBase =
@@ -115,6 +117,37 @@ async function parseResponse<T>(response: Response): Promise<T> {
     );
   }
   return data as T;
+}
+
+
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function getBankOperationJob(headers: HeadersInit, jobId: string) {
+  return parseResponse<BankOperationJob>(
+    await fetch(`${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}`, { headers }),
+  );
+}
+
+export async function waitForBankOperationJob(headers: HeadersInit, jobId: string, options: { timeoutMs?: number; intervalMs?: number } = {}) {
+  const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
+  const intervalMs = options.intervalMs ?? 1200;
+  const start = Date.now();
+  let last: BankOperationJob | null = null;
+  while (Date.now() - start < timeoutMs) {
+    last = await getBankOperationJob(headers, jobId);
+    if (['completed', 'failed', 'canceled'].includes(last.status)) {
+      if (last.status === 'completed') return last;
+      throw new Error(last.error_message || last.progress_label || `Job ${last.status}`);
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(last?.progress_label ? `Job vẫn đang chạy: ${last.progress_label}` : 'Job quá thời gian chờ. Vào Tiến trình job để kiểm tra tiếp.');
+}
+
+async function enqueueAndWait<T>(headers: HeadersInit, queued: BankOperationJobQueued, timeoutMs?: number): Promise<T> {
+  const job = await waitForBankOperationJob(headers, queued.job.id, { timeoutMs });
+  return (job.result || {}) as T;
 }
 
 
@@ -1137,9 +1170,10 @@ export async function createBankRelease(headers: HeadersInit, payload: { bank_ve
 }
 
 export async function publishBankRelease(headers: HeadersInit, releaseId: string, payload: { openedx_course_id_for_org?: string | null; force_reimport?: boolean } = {}) {
-  return parseResponse<BankReleasePublishResult>(
-    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/publish-openedx`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+  const queued = await parseResponse<BankOperationJobQueued>(
+    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/publish-openedx-job`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
+  return enqueueAndWait<BankReleasePublishResult>(headers, queued, 20 * 60 * 1000);
 }
 
 export async function getCourseMappings(headers: HeadersInit, subjectId?: string) {
@@ -1222,13 +1256,14 @@ export async function uploadBankMaterial(
   form.append('title', payload.title || file.name);
   form.append('change_type', payload.change_type || 'initial');
   form.append('replace_existing', String(Boolean(payload.replace_existing)));
-  return parseResponse<MaterialUploadResult>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/upload`, {
+  const queued = await parseResponse<BankOperationJobQueued>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/upload-job`, {
       method: 'POST',
       headers: withoutContentType(headers),
       body: form,
     }),
   );
+  return enqueueAndWait<MaterialUploadResult>(headers, queued, 10 * 60 * 1000);
 }
 
 export async function getBankMaterialChunks(headers: HeadersInit, bankVersionId: string, materialVersionId?: string) {
@@ -1275,13 +1310,14 @@ export async function generateFromBankVersion(
     approve_after_generate?: boolean;
   },
 ) {
-  return parseResponse<BankGenerateResult>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate`, {
+  const queued = await parseResponse<BankOperationJobQueued>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate-job`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
     }),
   );
+  return enqueueAndWait<BankGenerateResult>(headers, queued, 20 * 60 * 1000);
 }
 
 function bankQuestionListItemToQuestion(item: BankQuestionListItem): BankVersionQuestion {
@@ -1453,13 +1489,14 @@ export async function createQuizFromBankRelease(
   releaseId: string,
   payload: { course_chapter_mapping_id: string; quiz_title?: string; unit_title?: string; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number; custom_timer_enabled?: boolean; time_limit_minutes?: number; retake_cooldown_minutes?: number; auto_submit_on_timeout?: boolean; lock_after_timeout?: boolean; native_timed_exam?: boolean },
 ) {
-  return parseResponse<BankReleaseQuizCreateResult>(
-    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/create`, {
+  const queued = await parseResponse<BankOperationJobQueued>(
+    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/create-job`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
     }),
   );
+  return enqueueAndWait<BankReleaseQuizCreateResult>(headers, queued, 20 * 60 * 1000);
 }
 
 
