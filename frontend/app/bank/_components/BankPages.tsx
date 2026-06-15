@@ -52,7 +52,8 @@ import {
   getBankMaterialChunks,
   getBankReleaseReadiness,
   getBankReleases,
-  getBankVersionQuestions,
+  getBankVersionQuestion,
+  getBankVersionQuestionPage,
   getBankVersions,
   getCourseQuizInstances,
   getDepartments,
@@ -279,7 +280,7 @@ function QuickSearchBox({ compact = false }: { compact?: boolean }) {
     return () => window.clearTimeout(timer)
   }, [q, headers])
   return <div className={compact ? 'quick-search quick-search-compact' : 'quick-search'}>
-    <input className="input" value={q} onChange={(event) => setQ(event.target.value)} placeholder="Tìm nhanh bộ môn / môn / version / bài..." />
+    <input className="input" value={q} onChange={(event) => setQ(event.target.value)} placeholder="Tìm nhanh bộ môn / môn / version / bài / câu hỏi..." />
     {q.trim().length >= 2 ? <div className="quick-search-results">
       {loading ? <div className="quick-search-row muted">Đang tìm...</div> : null}
       {!loading && results.map((item) => <Link key={`${item.type}-${item.href}`} className="quick-search-row" href={item.href}>
@@ -532,7 +533,7 @@ export function BankDashboardPage() {
     </section>
 
     <section className="card bank-search-card">
-      <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Gõ mã môn, version, bài hoặc keyword để đi thẳng tới nơi cần xử lý.</p></div></div>
+      <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Gõ mã môn, version, bài hoặc keyword câu hỏi để đi thẳng tới nơi cần xử lý.</p></div></div>
       <QuickSearchBox />
     </section>
 
@@ -687,10 +688,10 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
+      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('subject.create')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject, stats }) => <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('manage_settings')} onEdit={() => editSubject(subject)} onDelete={() => removeSubject(subject)} />
+          <EntityActions canManage={can('subject.update')} onEdit={() => editSubject(subject)} onDelete={() => removeSubject(subject)} />
           <div className="entity-card-head"><b>{subject.code} - {subject.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <StatLine label="Phiên bản môn" value={stats.subject_version_count || 0} />
           <StatLine label="Đã duyệt xong" value={`${stats.review_done_version_count || 0} version`} />
@@ -759,10 +760,10 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{subject ? `Danh sách version của ${subject.code}` : 'Danh sách version môn'}</h2><p className="helper">Tạo version mới trống hoặc clone 100% bản làm việc từ kỳ cũ.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm version môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Tạo version môn</button>} />
+      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm version môn" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Tạo version môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject_version, stats }) => <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('manage_settings')} onEdit={() => editSubjectVersion(subject_version)} onDelete={() => removeSubjectVersion(subject_version)} />
+          <EntityActions canManage={can('subject.update')} onEdit={() => editSubjectVersion(subject_version)} onDelete={() => removeSubjectVersion(subject_version)} />
           <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
           <StatLine label="Bài" value={stats.chapter_count || 0} />
@@ -832,10 +833,10 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
+      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ chapter, stats }) => <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('manage_settings')} onEdit={() => editChapter(chapter)} onDelete={() => removeChapter(chapter)} />
+          <EntityActions canManage={can('subject.update')} onEdit={() => editChapter(chapter)} onDelete={() => removeChapter(chapter)} />
           <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <StatLine label="Tài liệu" value={stats.material_count || 0} />
           <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
@@ -881,6 +882,9 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [releases, setReleases] = useState<BankRelease[]>([])
   const [materials, setMaterials] = useState<MaterialVersion[]>([])
   const [questions, setQuestions] = useState<BankVersionQuestion[]>([])
+  const [questionCursor, setQuestionCursor] = useState<{ created_at: string; id: string } | null>(null)
+  const [questionHasNext, setQuestionHasNext] = useState(false)
+  const [questionLoadingMore, setQuestionLoadingMore] = useState(false)
   const [readiness, setReadiness] = useState<BankReleaseReadiness | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [generateCount, setGenerateCount] = useState('10')
@@ -910,15 +914,45 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 
   const selectedBankVersion = bankVersions[0] || null
   const loadDetail = async (bankVersionId?: string | null) => {
-    if (!bankVersionId) { setMaterials([]); setQuestions([]); setReadiness(null); return }
-    const [nextMaterials, nextQuestions, nextReadiness] = await Promise.all([
+    if (!bankVersionId) {
+      setMaterials([])
+      setQuestions([])
+      setQuestionCursor(null)
+      setQuestionHasNext(false)
+      setReadiness(null)
+      return
+    }
+    const [nextMaterials, questionPage, nextReadiness] = await Promise.all([
       getMaterialVersions(headers, bankVersionId).catch(() => []),
-      getBankVersionQuestions(headers, bankVersionId, undefined, 300).catch(() => []),
+      getBankVersionQuestionPage(headers, bankVersionId, { limit: 100 }).catch(() => ({ items: [], has_next: false, next_cursor: null } as any)),
       getBankReleaseReadiness(headers, bankVersionId).catch(() => null),
     ])
     setMaterials(nextMaterials.filter((item) => item.status !== 'deleted'))
-    setQuestions(nextQuestions)
+    setQuestions(questionPage.items || [])
+    setQuestionCursor(questionPage.next_cursor?.created_at && questionPage.next_cursor?.id ? { created_at: questionPage.next_cursor.created_at, id: questionPage.next_cursor.id } : null)
+    setQuestionHasNext(Boolean(questionPage.has_next))
     setReadiness(nextReadiness)
+  }
+
+  const loadMoreQuestions = async () => {
+    if (!selectedBankVersion || !questionCursor || questionLoadingMore) return
+    setQuestionLoadingMore(true)
+    try {
+      const page = await getBankVersionQuestionPage(headers, selectedBankVersion.id, {
+        limit: 100,
+        cursorCreatedAt: questionCursor.created_at,
+        cursorId: questionCursor.id,
+      })
+      setQuestions((current) => {
+        const seen = new Set(current.map((item) => item.id))
+        const extra = (page.items || []).filter((item) => !seen.has(item.id))
+        return [...current, ...extra]
+      })
+      setQuestionCursor(page.next_cursor?.created_at && page.next_cursor?.id ? { created_at: page.next_cursor.created_at, id: page.next_cursor.id } : null)
+      setQuestionHasNext(Boolean(page.has_next))
+    } finally {
+      setQuestionLoadingMore(false)
+    }
   }
 
   useEffect(() => { load().catch(() => null) }, [chapterId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1022,9 +1056,11 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     await refreshCurrent()
   }
 
-  const startEditQuestion = (question: BankVersionQuestion) => {
-    setEditingQuestion(question)
-    setEditForm(toBankQuestionEditForm(question))
+  const startEditQuestion = async (question: BankVersionQuestion) => {
+    if (!selectedBankVersion) return
+    const detail = await getBankVersionQuestion(headers, selectedBankVersion.id, question.id).catch(() => question)
+    setEditingQuestion(detail)
+    setEditForm(toBankQuestionEditForm(detail))
   }
 
   const updateEditForm = <K extends keyof BankQuestionEditForm>(key: K, value: BankQuestionEditForm[K]) => {
@@ -1042,9 +1078,10 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 
 
 
-  const openRejectQuestion = (question: BankVersionQuestion) => {
-    setRejectingQuestion(question)
-    setRejectReason(question.status === 'draft_error' ? 'Bỏ câu lỗi: ' : '')
+  const openRejectQuestion = async (question: BankVersionQuestion) => {
+    const detail = selectedBankVersion ? await getBankVersionQuestion(headers, selectedBankVersion.id, question.id).catch(() => question) : question
+    setRejectingQuestion(detail)
+    setRejectReason(detail.status === 'draft_error' ? 'Bỏ câu lỗi: ' : '')
   }
 
   const confirmRejectQuestion = async () => {
@@ -1136,7 +1173,7 @@ ${chunk.content}`).join('\n\n')
           <span className="filter-result-count">Hiện {filteredQuestions.length}/{questions.length} câu</span>
         </div>
         <div className="question-card-list bank-review-list">
-          {filteredQuestions.slice(0, 160).map((item, index) => {
+          {filteredQuestions.map((item, index) => {
             const draftReason = item.status === 'draft_error' ? bankQuestionErrorMessage(item) : null
             const waitingForReview = isQuestionWaitingForReview(item)
             return <article className="question-review-card" key={item.id}>
@@ -1184,6 +1221,7 @@ ${chunk.content}`).join('\n\n')
             </article>
           })}
         </div>
+        {questionHasNext ? <div className="load-more-row"><button className="btn secondary" type="button" disabled={questionLoadingMore || busy} onClick={loadMoreQuestions}>{questionLoadingMore ? 'Đang tải thêm...' : 'Tải thêm 100 câu'}</button><span className="helper">Đang hiển thị {questions.length} câu đầu. Danh sách dùng cursor/keyset nên không kéo toàn bộ bank vào trình duyệt.</span></div> : null}
         {!filteredQuestions.length ? <div className="empty-state">Không có câu hỏi phù hợp bộ lọc.</div> : null}
       </div>
     </section>}

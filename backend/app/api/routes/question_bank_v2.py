@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from math import ceil
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext, get_user_context, require_permission
@@ -57,6 +57,8 @@ from app.schemas.question_bank import (
     BankGeneratePreviewOut,
     BankGenerateOut,
     BankVersionQuestionOut,
+    BankQuestionListItemOut,
+    BankQuestionDetailOut,
     BankVersionDiffPreviewRequest,
     BankVersionDiffPreviewOut,
     BankCarryOverRequest,
@@ -91,6 +93,7 @@ from app.services.audit_log import AuditErrorType, log_audit
 from app.services.question_bank_service import VersionedQuestionBankService
 from app.services.business_rbac import BusinessRBACService
 from app.services.bank_dashboard_stats import BankDashboardStatsService
+from app.services.bank_search import BankSearchService
 
 router = APIRouter()
 
@@ -181,7 +184,12 @@ def dashboard_overview(db: Session = Depends(get_db), user: UserContext = Depend
 
 @router.get('/dashboard/search')
 def dashboard_search(q: str = '', limit: int = 20, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
-    return VersionedQuestionBankService(db).dashboard_search(q=q, limit=limit)
+    return VersionedQuestionBankService(db).dashboard_search(q=q, limit=limit, user=user)
+
+
+@router.get('/search')
+def bank_search(q: str = Query('', min_length=0), limit: int = Query(20, ge=1, le=100), include_questions: bool = True, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    return BankSearchService(db).search_grouped(q=q, user=user, limit=limit, include_questions=include_questions)
 
 
 @router.get('/admin/stats/health')
@@ -199,6 +207,24 @@ def rebuild_bank_stats(chapter_id: str | None = Query(None), db: Session = Depen
         return result
     except Exception as exc:
         log_audit(db, action='question_bank.stats.rebuild', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter' if chapter_id else 'bank_dashboard_stats', target_id=chapter_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get('/admin/search/health')
+def bank_search_health(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _biz(db).require_system_admin(user)
+    return BankSearchService(db).health()
+
+
+@router.post('/admin/search/rebuild')
+def rebuild_bank_search_index(bank_version_id: str | None = Query(None), chapter_id: str | None = Query(None), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _biz(db).require_system_admin(user)
+    try:
+        result = BankSearchService(db).rebuild(bank_version_id=bank_version_id, chapter_id=chapter_id, commit=True)
+        log_audit(db, action='question_bank.search.rebuild', status='success', message='Rebuild Bank Search index thành công', user=user, target_type='bank_search_index', target_id=bank_version_id or chapter_id)
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.search.rebuild', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_search_index', target_id=bank_version_id or chapter_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -604,7 +630,43 @@ async def generate_questions_from_bank_version(bank_version_id: str, payload: Ba
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.get('/bank-versions/{bank_version_id}/questions', response_model=CursorPaginatedOut[BankVersionQuestionOut])
+def _preview_text(value: str | None, *, limit: int = 500) -> str:
+    text = str(value or '').strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + '…'
+
+
+def _question_list_item(row) -> dict:
+    return {
+        'id': row.id,
+        'bank_version_id': row.bank_version_id,
+        'subject_id': row.subject_id,
+        'subject_chapter_id': row.subject_chapter_id,
+        'difficulty': row.difficulty,
+        'status': row.status,
+        'question_text_preview': _preview_text(row.question_text_preview, limit=500),
+        'option_a_preview': _preview_text(row.option_a_preview, limit=240),
+        'option_b_preview': _preview_text(row.option_b_preview, limit=240),
+        'option_c_preview': _preview_text(row.option_c_preview, limit=240),
+        'option_d_preview': _preview_text(row.option_d_preview, limit=240),
+        'correct_answer': row.correct_answer,
+        'concept_title': row.concept_title,
+        'question_family_id': row.question_family_id,
+        'variant_no': row.variant_no,
+        'quality_score': row.quality_score,
+        'draft_error_reason': row.draft_error_reason,
+        'is_duplicate': row.is_duplicate,
+        'is_retired': row.is_retired,
+        'previous_question_id': row.previous_question_id,
+        'lineage_root_question_id': row.lineage_root_question_id,
+        'question_revision_no': row.question_revision_no,
+        'is_carry_over': row.is_carry_over,
+        'created_at': row.created_at,
+    }
+
+
+@router.get('/bank-versions/{bank_version_id}/questions', response_model=CursorPaginatedOut[BankQuestionListItemOut])
 def list_bank_version_questions(
     bank_version_id: str,
     status_filter: str | None = None,
@@ -619,28 +681,68 @@ def list_bank_version_questions(
 ):
     _require_bank_version(db, user, 'bank.view', bank_version_id)
     safe_limit = max(1, min(int(limit or 50), 100))
-    query = db.query(Question).filter(Question.bank_version_id == bank_version_id)
+    base_filters = [Question.bank_version_id == bank_version_id]
     if status_filter:
-        query = query.filter(Question.status == status_filter)
+        base_filters.append(Question.status == status_filter)
     if difficulty:
-        query = query.filter(Question.difficulty == difficulty)
+        base_filters.append(Question.difficulty == difficulty)
     if search and search.strip():
         pattern = f"%{search.strip()}%"
-        query = query.filter(or_(Question.question_text.ilike(pattern), Question.concept_title.ilike(pattern), Question.question_family_id.ilike(pattern)))
-    total = int(query.order_by(None).count()) if include_total else None
+        base_filters.append(or_(Question.question_text.ilike(pattern), Question.concept_title.ilike(pattern), Question.question_family_id.ilike(pattern)))
+    total = int(db.query(func.count(Question.id)).filter(*base_filters).scalar() or 0) if include_total else None
     if cursor_created_at and cursor_created_at.tzinfo is not None:
         cursor_created_at = cursor_created_at.astimezone(timezone.utc).replace(tzinfo=None)
     if cursor_created_at and cursor_id:
-        query = query.filter(or_(Question.created_at < cursor_created_at, and_(Question.created_at == cursor_created_at, Question.id < cursor_id)))
+        base_filters.append(or_(Question.created_at < cursor_created_at, and_(Question.created_at == cursor_created_at, Question.id < cursor_id)))
+    query = db.query(
+        Question.id,
+        Question.bank_version_id,
+        Question.subject_id,
+        Question.subject_chapter_id,
+        Question.difficulty,
+        Question.status,
+        func.substr(Question.question_text, 1, 520).label('question_text_preview'),
+        func.substr(Question.option_a, 1, 260).label('option_a_preview'),
+        func.substr(Question.option_b, 1, 260).label('option_b_preview'),
+        func.substr(Question.option_c, 1, 260).label('option_c_preview'),
+        func.substr(Question.option_d, 1, 260).label('option_d_preview'),
+        Question.correct_answer,
+        Question.concept_title,
+        Question.question_family_id,
+        Question.variant_no,
+        Question.quality_score,
+        Question.draft_error_reason,
+        Question.is_duplicate,
+        Question.is_retired,
+        Question.previous_question_id,
+        Question.lineage_root_question_id,
+        Question.question_revision_no,
+        Question.is_carry_over,
+        Question.created_at,
+    ).filter(*base_filters)
     rows = query.order_by(Question.created_at.desc(), Question.id.desc()).limit(safe_limit + 1).all()
     has_next = len(rows) > safe_limit
-    items = rows[:safe_limit]
+    page_rows = rows[:safe_limit]
+    items = [_question_list_item(row) for row in page_rows]
     next_cursor = None
-    if has_next and items:
-        last = items[-1]
+    if has_next and page_rows:
+        last = page_rows[-1]
         next_cursor = {'created_at': last.created_at.isoformat() if last.created_at else None, 'id': last.id}
     return {'items': items, 'limit': safe_limit, 'has_next': has_next, 'next_cursor': next_cursor, 'total': total}
 
+
+@router.get('/bank-versions/{bank_version_id}/questions/{question_id}', response_model=BankQuestionDetailOut)
+def get_bank_version_question_detail(
+    bank_version_id: str,
+    question_id: str,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
+    question = db.query(Question).filter(Question.bank_version_id == bank_version_id, Question.id == question_id).first()
+    if not question:
+        raise HTTPException(status_code=404, detail='Không tìm thấy câu hỏi trong bank version này.')
+    return question
 
 
 @router.post('/bank-versions/{bank_version_id}/diff/preview', response_model=BankVersionDiffPreviewOut)

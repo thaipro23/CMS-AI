@@ -1091,6 +1091,34 @@ export type BankGenerateResult = {
   message: string
 }
 
+
+export type BankQuestionListItem = {
+  id: string
+  bank_version_id?: string | null
+  subject_id?: string | null
+  subject_chapter_id?: string | null
+  difficulty: string
+  status: string
+  question_text_preview: string
+  option_a_preview?: string | null
+  option_b_preview?: string | null
+  option_c_preview?: string | null
+  option_d_preview?: string | null
+  correct_answer: string
+  concept_title?: string | null
+  question_family_id?: string | null
+  variant_no?: number | null
+  quality_score: number
+  draft_error_reason?: string | null
+  is_duplicate?: boolean | null
+  is_retired?: boolean | null
+  previous_question_id?: string | null
+  lineage_root_question_id?: string | null
+  question_revision_no?: number | null
+  is_carry_over?: boolean | null
+  created_at: string
+}
+
 export type BankVersionQuestion = {
   id: string
   bank_version_id?: string | null
@@ -1389,11 +1417,31 @@ export type BankDashboardOverview = {
 }
 
 export type BankSearchResult = {
-  type: 'department' | 'subject' | 'subject_version' | 'chapter' | string
+  type: 'department' | 'subject' | 'subject_version' | 'chapter' | 'question' | string
+  id?: string
   title: string
   subtitle: string
   href: string
-  stats: BankReviewStatusStats
+  stats?: BankReviewStatusStats
+  question_id?: string
+  bank_version_id?: string | null
+  chapter_id?: string | null
+  status?: string
+  difficulty?: string
+}
+
+export type BankSearchGroupedResponse = {
+  q: string
+  limit: number
+  total: number
+  items: BankSearchResult[]
+  groups?: {
+    departments?: BankSearchResult[]
+    subjects?: BankSearchResult[]
+    subject_versions?: BankSearchResult[]
+    chapters?: BankSearchResult[]
+    questions?: BankSearchResult[]
+  }
 }
 
 export type DepartmentSummary = { department: Department; stats: BankReviewStatusStats }

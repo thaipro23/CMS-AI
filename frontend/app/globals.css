@@ -3024,3 +3024,12 @@ body { background: #ffffff !important; }
 }
 .mini-card b { display: block; margin-bottom: 6px; }
 .mini-card p { margin: 0 0 10px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+.load-more-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+  padding: 18px 0 4px;
+  flex-wrap: wrap;
+}

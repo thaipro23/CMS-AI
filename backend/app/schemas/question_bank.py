@@ -464,6 +464,33 @@ class BankGenerateOut(BaseModel):
     message: str
 
 
+class BankQuestionListItemOut(BaseModel):
+    id: str
+    bank_version_id: str | None = None
+    subject_id: str | None = None
+    subject_chapter_id: str | None = None
+    difficulty: str
+    status: str
+    question_text_preview: str
+    option_a_preview: str | None = None
+    option_b_preview: str | None = None
+    option_c_preview: str | None = None
+    option_d_preview: str | None = None
+    correct_answer: str
+    concept_title: str | None = None
+    question_family_id: str | None = None
+    variant_no: int | None = None
+    quality_score: float
+    draft_error_reason: str | None = None
+    is_duplicate: bool | None = None
+    is_retired: bool | None = None
+    previous_question_id: str | None = None
+    lineage_root_question_id: str | None = None
+    question_revision_no: int | None = None
+    is_carry_over: bool | None = None
+    created_at: datetime
+
+
 class BankVersionQuestionOut(BaseModel):
     id: str
     bank_version_id: str | None = None
@@ -509,6 +536,10 @@ class BankVersionQuestionOut(BaseModel):
     created_at: datetime
     class Config:
         from_attributes = True
+
+
+class BankQuestionDetailOut(BankVersionQuestionOut):
+    pass
 
 
 class BankVersionDiffPreviewRequest(BaseModel):

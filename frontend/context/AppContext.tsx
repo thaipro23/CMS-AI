@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { Permission, Role, ROLE_PERMISSIONS } from '../types'
+import { API } from '../lib/api'
 
 type AppContextValue = {
   authReady: boolean
@@ -14,6 +15,7 @@ type AppContextValue = {
   setUserId: (value: string) => void
   accessToken: string
   setAccessToken: (value: string) => void
+  businessPermissions: string[]
   applyAuthSession: (session: { access_token: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => void
   can: (permission: Permission | string) => boolean
   authHeaders: (json?: boolean) => HeadersInit
@@ -29,6 +31,29 @@ const STORAGE_KEYS = {
 }
 
 const IS_PRODUCTION = process.env.NEXT_PUBLIC_APP_ENV === 'production' || process.env.NODE_ENV === 'production'
+
+const LEGACY_PERMISSION_BRIDGE: Record<string, string[]> = {
+  view_dashboard: ['bank.view', 'audit.view'],
+  view_questions: ['bank.view', 'question.edit', 'question.approve', 'question.reject'],
+  view_jobs: ['bank.view', 'audit.view'],
+  sync_course: ['course.sync'],
+  estimate_cost: ['question.generate', 'document.manage', 'bank.view'],
+  generate_questions: ['question.generate'],
+  edit_questions: ['subject.update', 'document.manage', 'question.edit'],
+  delete_questions: ['question.edit'],
+  review_questions: ['question.approve', 'question.reject'],
+  publish_questions: ['bank.release.create', 'bank.release.publish', 'quiz.preview', 'quiz.create_openedx'],
+  export_questions: ['bank.release.create', 'bank.release.publish'],
+  publish_to_openedx: ['bank.release.publish', 'quiz.create_openedx'],
+  manage_settings: ['user.manage_all', 'department.manage_all', 'department.assign_head'],
+  view_user_analytics: ['user.manage_all'],
+}
+
+function hasBusinessPermission(permission: Permission | string, businessPermissions: string[]) {
+  if (businessPermissions.includes(permission)) return true
+  const mapped = LEGACY_PERMISSION_BRIDGE[permission] || [permission]
+  return mapped.some((item) => businessPermissions.includes(item))
+}
 
 function getStoredSession(): StoredSession | null {
   if (typeof window === 'undefined') return null
@@ -65,6 +90,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   })
   const [userId, setUserIdState] = useState(() => getStoredSession()?.user_id || getStoredString(STORAGE_KEYS.userId, 'demo-teacher'))
   const [accessToken, setAccessTokenState] = useState(() => getStoredSession()?.access_token || '')
+  const [businessPermissions, setBusinessPermissions] = useState<string[]>([])
   const [authReady, setAuthReady] = useState(() => typeof window !== 'undefined')
 
   useEffect(() => {
@@ -82,6 +108,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     setAuthReady(true)
   }, [])
+
+
+  useEffect(() => {
+    if (!authReady) return
+    const token = accessToken.trim() || getStoredSession()?.access_token || ''
+    if (!token) {
+      setBusinessPermissions([])
+      return
+    }
+    let cancelled = false
+    fetch(`${API}/rbac/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(response.statusText)
+        return response.json() as Promise<{ effective_legacy_role?: Role | string; permissions?: string[] }>
+      })
+      .then((data) => {
+        if (cancelled) return
+        setBusinessPermissions(Array.isArray(data.permissions) ? data.permissions : [])
+        const effectiveRole = data.effective_legacy_role as Role | undefined
+        if (effectiveRole && ROLE_PERMISSIONS[effectiveRole]) setRoleState(effectiveRole)
+      })
+      .catch(() => {
+        if (!cancelled) setBusinessPermissions([])
+      })
+    return () => { cancelled = true }
+  }, [authReady, accessToken])
 
   const setCourseId = (value: string) => {
     setCourseIdState(value)
@@ -140,8 +192,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setUserId,
     accessToken,
     setAccessToken,
+    businessPermissions,
     applyAuthSession,
-    can: (permission: Permission | string) => ROLE_PERMISSIONS[role].includes(permission as Permission),
+    can: (permission: Permission | string) => ROLE_PERMISSIONS[role].includes(permission as Permission) || hasBusinessPermission(permission, businessPermissions),
     authHeaders: (json = false) => {
       const headers: Record<string, string> = {}
       const sessionToken = accessToken.trim() || getStoredSession()?.access_token || ''
@@ -154,7 +207,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (json) headers['Content-Type'] = 'application/json'
       return headers
     },
-  }), [authReady, courseId, role, userId, accessToken])
+  }), [authReady, courseId, role, userId, accessToken, businessPermissions])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

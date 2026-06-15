@@ -50,6 +50,7 @@ from app.services.question_family import build_question_family_id, normalize_dif
 from app.services.token_counter import count_tokens
 from app.services.source_chunk_refs import join_source_chunk_ids, split_source_chunk_ids
 from app.services.bank_dashboard_stats import BankDashboardStatsService
+from app.services.bank_search import BankSearchService
 
 
 def slugify(value: str, fallback: str = 'item') -> str:
@@ -303,15 +304,21 @@ class VersionedQuestionBankService:
     def _dashboard_stats(self) -> BankDashboardStatsService:
         return BankDashboardStatsService(self.db)
 
+    def _search_index(self) -> BankSearchService:
+        return BankSearchService(self.db)
+
     def _safe_refresh_chapter_stats(self, chapter_id: str | None) -> None:
         if not chapter_id:
             return
         try:
             self._dashboard_stats().rebuild_chapter_stats(chapter_id=chapter_id, commit=True)
+            # v25.9.15.6.35: keep question search docs current for the same
+            # chapter. This path is best-effort and bounded by chapter size.
+            self._search_index().refresh_for_chapter(chapter_id, commit=True)
         except Exception:
-            # Stats refresh must not break teacher workflows after the main
+            # Stats/search refresh must not break teacher workflows after the main
             # transaction has already succeeded. Admin can repair via
-            # /admin/stats/rebuild and health endpoint exposes missing/stale rows.
+            # /admin/stats/rebuild and /admin/search/rebuild.
             try:
                 self.db.rollback()
             except Exception:
@@ -322,6 +329,7 @@ class VersionedQuestionBankService:
             return
         try:
             self._dashboard_stats().refresh_for_bank_version(bank_version_id, commit=True)
+            self._search_index().refresh_for_bank_version(bank_version_id, commit=True)
         except Exception:
             try:
                 self.db.rollback()
@@ -410,65 +418,12 @@ class VersionedQuestionBankService:
         self._dashboard_stats()._cache_set(cache_key, payload)
         return payload
 
-    def dashboard_search(self, *, q: str, limit: int = 20) -> list[dict]:
-        # v25.9.15.6.34: keep dashboard search off ai_questions.
-        # v25.9.15.6.35 will replace this with FTS/trigram search; this interim
-        # version avoids loading all hierarchy rows into Python on every search.
-        query_text = (q or '').strip()
-        if not query_text:
-            return []
-        safe_limit = max(1, min(int(limit or 20), 50))
-        tokens = [t for t in normalize_text(query_text).split(' ') if t]
-        def like_filters(*columns):
-            filters = []
-            for token in tokens:
-                pattern = f'%{token}%'
-                filters.append(or_(*[col.ilike(pattern) for col in columns]))
-            return filters
-
-        chapter_stats = self._chapter_stats_map()
-        offering_stats = self._offering_summary_map(chapter_stats)
-        subject_stats = self._subject_summary_map(offering_stats)
-        department_stats = self._department_summary_map(subject_stats)
-
-        results: list[dict] = []
-        departments = self.db.query(Department).filter(*like_filters(Department.code, Department.name)).order_by(Department.code.asc()).limit(safe_limit).all()
-        for d in departments:
-            st = department_stats.get(d.id, {})
-            results.append({'type': 'department', 'title': d.name, 'subtitle': f"{d.code} · {st.get('subject_count', 0)} môn · {st.get('unresolved_count', 0)} câu chưa xử lý", 'href': f"/bank/departments/{d.id}/subjects", 'stats': st})
-        if len(results) >= safe_limit:
-            return results[:safe_limit]
-
-        subjects = self.db.query(Subject).filter(*like_filters(Subject.code, Subject.name)).order_by(Subject.code.asc()).limit(safe_limit).all()
-        departments_by_id = {d.id: d for d in self.db.query(Department).filter(Department.id.in_([s.department_id for s in subjects])).all()} if subjects else {}
-        for s in subjects:
-            st = subject_stats.get(s.id, {})
-            results.append({'type': 'subject', 'title': f"{s.code} - {s.name}", 'subtitle': f"{st.get('subject_version_count', 0)} phiên bản · {st.get('unresolved_count', 0)} câu chưa xử lý", 'href': f"/bank/subjects/{s.id}/versions", 'stats': st})
-        if len(results) >= safe_limit:
-            return results[:safe_limit]
-
-        offerings = self.db.query(SubjectOffering).filter(*like_filters(SubjectOffering.code, SubjectOffering.name, SubjectOffering.term)).order_by(SubjectOffering.code.asc()).limit(safe_limit).all()
-        subjects_by_id = {s.id: s for s in self.db.query(Subject).filter(Subject.id.in_([o.subject_id for o in offerings])).all()} if offerings else {}
-        for o in offerings:
-            subj = subjects_by_id.get(o.subject_id)
-            st = offering_stats.get(o.id, {})
-            results.append({'type': 'subject_version', 'title': o.code, 'subtitle': f"{subj.code if subj else ''} · {st.get('chapter_count', 0)} bài · {st.get('unresolved_count', 0)} câu chưa xử lý", 'href': f"/bank/subject-versions/{o.id}/chapters", 'stats': st})
-        if len(results) >= safe_limit:
-            return results[:safe_limit]
-
-        chapters = self.db.query(SubjectChapter).filter(*like_filters(SubjectChapter.title, SubjectChapter.description)).order_by(SubjectChapter.sort_order.asc()).limit(safe_limit).all()
-        if chapters:
-            offering_by_id = {o.id: o for o in self.db.query(SubjectOffering).filter(SubjectOffering.id.in_([c.subject_offering_id for c in chapters if c.subject_offering_id])).all()}
-            subject_by_id = {s.id: s for s in self.db.query(Subject).filter(Subject.id.in_([c.subject_id for c in chapters])).all()}
-        else:
-            offering_by_id = {}
-            subject_by_id = {}
-        for c in chapters:
-            off = offering_by_id.get(c.subject_offering_id or '')
-            subj = subject_by_id.get(c.subject_id)
-            st = chapter_stats.get(c.id, {})
-            results.append({'type': 'chapter', 'title': f"{subj.code if subj else ''} > {off.code if off else ''} > {c.title}", 'subtitle': f"{st.get('total_questions', 0)} câu | {st.get('approved_count', 0)} đã duyệt | {st.get('unresolved_count', 0)} chưa xử lý", 'href': f"/bank/chapters/{c.id}", 'stats': st})
-        return results[:safe_limit]
+    def dashboard_search(self, *, q: str, limit: int = 20, user: Any | None = None) -> list[dict]:
+        # v25.9.15.6.35: dashboard quick search now delegates to the Bank
+        # Search Engine. It returns the legacy flat list so existing UI keeps
+        # working while /api/question-bank-v2/search exposes grouped results.
+        result = self._search_index().search_grouped(q=q, user=user, limit=limit, include_questions=True)
+        return list(result.get('items') or [])
 
     def create_department(self, *, code: str, name: str, description: str = '') -> Department:
         item = Department(id=str(uuid.uuid4()), code=code.strip().upper(), name=name.strip(), description=description or '')

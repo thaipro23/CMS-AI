@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.15.6.34-dashboard-summary-engine'
+    app_version: str = '25.9.15.6.36-lightweight-question-dto-keyset-browser'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # v25.9.15.6.34 dashboard summary cache. Dashboard reads ai_bank_chapter_stats
     # and small hierarchy tables only; Redis cache reduces repeated aggregates.
     bank_dashboard_cache_ttl_seconds: int = 45
+    # v25.9.15.6.35 Bank Search Engine. Limit per group/result set.
+    bank_search_max_results: int = 50
 
     # Object storage adapter. MinIO is dev/demo only unless your organization approves AGPL/commercial terms.
     storage_provider: str = 'local'  # local | s3 | azure | gcs | minio

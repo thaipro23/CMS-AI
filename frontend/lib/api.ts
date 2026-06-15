@@ -42,6 +42,7 @@ import {
   BankGeneratePreview,
   BankGenerateResult,
   BankVersionQuestion,
+  BankQuestionListItem,
   BankVersionDiffPreview,
   BankCarryOverResult,
   BankRetireResult,
@@ -56,6 +57,7 @@ import {
   QuizAutoMapResult,
   BankDashboardOverview,
   BankSearchResult,
+  BankSearchGroupedResponse,
   DepartmentSummary,
   SubjectSummary,
   SubjectVersionSummary,
@@ -945,9 +947,20 @@ export async function searchBankDashboard(headers: HeadersInit, q: string, limit
   const params = new URLSearchParams();
   params.set('q', q);
   params.set('limit', String(limit));
-  return parseResponse<BankSearchResult[]>(
-    await fetch(`${API}/question-bank-v2/dashboard/search?${params.toString()}`, { headers }),
+  params.set('include_questions', 'true');
+  const payload = await parseResponse<BankSearchResult[] | BankSearchGroupedResponse>(
+    await fetch(`${API}/question-bank-v2/search?${params.toString()}`, { headers }),
   );
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.items) && payload.items.length) return payload.items;
+  const groups = payload.groups || {};
+  return [
+    ...(groups.departments || []),
+    ...(groups.subjects || []),
+    ...(groups.subject_versions || []),
+    ...(groups.chapters || []),
+    ...(groups.questions || []),
+  ].slice(0, limit);
 }
 
 export async function getDepartmentSummaries(headers: HeadersInit) {
@@ -1271,12 +1284,82 @@ export async function generateFromBankVersion(
   );
 }
 
-export async function getBankVersionQuestions(headers: HeadersInit, bankVersionId: string, statusFilter?: string, limit = 100) {
+function bankQuestionListItemToQuestion(item: BankQuestionListItem): BankVersionQuestion {
+  return {
+    id: item.id,
+    bank_version_id: item.bank_version_id,
+    subject_id: item.subject_id,
+    subject_chapter_id: item.subject_chapter_id,
+    concept_title: item.concept_title,
+    question_family_id: item.question_family_id,
+    variant_no: item.variant_no,
+    difficulty: item.difficulty,
+    question_text: item.question_text_preview || '',
+    option_a: item.option_a_preview || '',
+    option_b: item.option_b_preview || '',
+    option_c: item.option_c_preview || '',
+    option_d: item.option_d_preview || '',
+    correct_answer: item.correct_answer,
+    status: item.status,
+    quality_score: Number(item.quality_score || 0),
+    draft_error_reason: item.draft_error_reason,
+    is_duplicate: item.is_duplicate,
+    previous_question_id: item.previous_question_id,
+    lineage_root_question_id: item.lineage_root_question_id,
+    question_revision_no: item.question_revision_no ?? undefined,
+    is_carry_over: Boolean(item.is_carry_over),
+    is_retired: Boolean(item.is_retired),
+    created_at: item.created_at,
+  };
+}
+
+export async function getBankVersionQuestionPage(
+  headers: HeadersInit,
+  bankVersionId: string,
+  options: { statusFilter?: string; difficulty?: string; search?: string; limit?: number; cursorCreatedAt?: string | null; cursorId?: string | null; includeTotal?: boolean } = {},
+) {
   const params = new URLSearchParams();
-  if (statusFilter) params.set('status_filter', statusFilter);
-  params.set('limit', String(limit));
-  return parseCursorPageItems<BankVersionQuestion>(
+  if (options.statusFilter) params.set('status_filter', options.statusFilter);
+  if (options.difficulty) params.set('difficulty', options.difficulty);
+  if (options.search) params.set('search', options.search);
+  params.set('limit', String(Math.max(1, Math.min(Number(options.limit || 100), 100))));
+  if (options.cursorCreatedAt && options.cursorId) {
+    params.set('cursor_created_at', options.cursorCreatedAt);
+    params.set('cursor_id', options.cursorId);
+  }
+  if (options.includeTotal) params.set('include_total', 'true');
+  const page = await parseResponse<CursorPaginatedResponse<BankQuestionListItem>>(
     await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions?${params.toString()}`, { headers }),
+  );
+  return {
+    ...page,
+    items: (page.items || []).map(bankQuestionListItemToQuestion),
+  } as CursorPaginatedResponse<BankVersionQuestion>;
+}
+
+export async function getBankVersionQuestions(headers: HeadersInit, bankVersionId: string, statusFilter?: string, limit = 100) {
+  const requestedLimit = Math.max(1, Math.min(Number(limit || 100), 1000));
+  const items: BankVersionQuestion[] = [];
+  let cursorCreatedAt: string | null | undefined;
+  let cursorId: string | null | undefined;
+  while (items.length < requestedLimit) {
+    const page = await getBankVersionQuestionPage(headers, bankVersionId, {
+      statusFilter,
+      limit: Math.min(100, requestedLimit - items.length),
+      cursorCreatedAt,
+      cursorId,
+    });
+    items.push(...(page.items || []));
+    if (!page.has_next || !page.next_cursor?.created_at || !page.next_cursor?.id) break;
+    cursorCreatedAt = page.next_cursor.created_at;
+    cursorId = page.next_cursor.id;
+  }
+  return items;
+}
+
+export async function getBankVersionQuestion(headers: HeadersInit, bankVersionId: string, questionId: string) {
+  return parseResponse<BankVersionQuestion>(
+    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}`, { headers }),
   );
 }
 

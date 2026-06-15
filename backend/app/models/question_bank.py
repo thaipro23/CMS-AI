@@ -427,3 +427,34 @@ class BankChapterStats(Base):
         Index('ix_ai_bank_chapter_stats_updated', 'updated_at'),
     )
 
+
+
+class QuestionSearchDocument(Base):
+    """Lightweight search document for Bank Question search.
+
+    v25.9.15.6.35 keeps quick/global search off the heavy ai_questions table.
+    The document stores normalized, accent-stripped text built by the app; API
+    search reads this compact table and only opens full Question rows when a
+    user navigates to a question/chapter.
+    """
+    __tablename__ = 'ai_question_search_documents'
+
+    question_id: Mapped[str] = mapped_column(String, ForeignKey('ai_questions.id'), primary_key=True)
+    bank_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), nullable=True, index=True)
+    subject_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subjects.id'), nullable=True, index=True)
+    subject_offering_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_offerings.id'), nullable=True, index=True)
+    chapter_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_subject_chapters.id'), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), default='draft', index=True)
+    difficulty: Mapped[str] = mapped_column(String(50), default='easy', index=True)
+    question_text_preview: Mapped[str] = mapped_column(String(500), default='')
+    concept_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    question_family_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    search_text: Mapped[str] = mapped_column(Text, default='')
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index('ix_ai_question_search_bank_status', 'bank_version_id', 'status'),
+        Index('ix_ai_question_search_subject_chapter_status', 'subject_id', 'chapter_id', 'status'),
+        Index('ix_ai_question_search_chapter_difficulty', 'chapter_id', 'difficulty'),
+        Index('ix_ai_question_search_updated', 'updated_at'),
+    )
