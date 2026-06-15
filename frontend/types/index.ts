@@ -1427,6 +1427,79 @@ export type BankReviewStatusStats = {
   [key: string]: any
 }
 
+
+export type DashboardDrilldown = { route: string; query?: Record<string, string | number | boolean | null | undefined> }
+export type DashboardKpi = { key: string; label: string; value: number; delta?: number; delta_label?: string; percent?: number; overdue?: number; drilldown?: DashboardDrilldown }
+export type DashboardChartItem = {
+  key?: string
+  label?: string
+  value?: number
+  percent?: number
+  date?: string
+  current?: number
+  previous?: number
+  delta?: number
+  approved?: number
+  pending?: number
+  rejected?: number
+  subject_id?: string
+  drilldown?: DashboardDrilldown
+  [key: string]: any
+}
+export type DashboardChart = {
+  key: string
+  title: string
+  type: 'donut' | 'line' | 'horizontal_bar' | 'grouped_bar' | string
+  current_term?: string
+  previous_term?: string
+  items: DashboardChartItem[]
+}
+export type DashboardAlert = {
+  id: string
+  severity: 'critical' | 'warning' | 'info' | 'success' | string
+  type: string
+  title: string
+  description?: string
+  age_days?: number
+  drilldown?: DashboardDrilldown
+}
+export type DashboardActivity = {
+  id: string
+  actor?: { id?: string | null; name?: string | null }
+  action: string
+  message: string
+  status?: string
+  created_at?: string | null
+  relative_time?: string
+  target?: { type?: string | null; id?: string | null; label?: string | null }
+  drilldown?: DashboardDrilldown | null
+}
+export type DashboardAnalytics = {
+  scope: { role: string; label: string; scope_type: string; scope_id: string }
+  filters: { date_range: string; from_date: string; to_date: string }
+  kpis: {
+    total_questions: DashboardKpi
+    pending_review: DashboardKpi
+    approved: DashboardKpi
+    rejected: DashboardKpi
+    [key: string]: DashboardKpi
+  }
+  charts: {
+    question_status: DashboardChart
+    new_questions_by_day: DashboardChart
+    questions_by_subject: DashboardChart
+    difficulty_distribution: DashboardChart
+    question_type_distribution: DashboardChart
+    term_comparison: DashboardChart
+    [key: string]: DashboardChart
+  }
+  alerts: DashboardAlert[]
+  activity_feed: DashboardActivity[]
+  meta?: Record<string, number | string | boolean | null | undefined>
+  generated_at?: string
+  cache?: { hit: boolean; ttl_seconds: number }
+}
+
 export type BankDashboardOverview = {
   ok: boolean
   departments_total: number

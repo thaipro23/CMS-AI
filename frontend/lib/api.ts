@@ -56,6 +56,7 @@ import {
   CourseQuizRollbackResult,
   QuizAutoMapResult,
   BankDashboardOverview,
+  DashboardAnalytics,
   BankSearchResult,
   BankSearchGroupedResponse,
   DepartmentSummary,
@@ -969,6 +970,17 @@ export async function insertCmsProblemBanks(
   );
 }
 
+
+
+export async function getBankDashboardAnalytics(headers: HeadersInit, filters: { dateRange?: string; fromDate?: string; toDate?: string } = {}) {
+  const params = new URLSearchParams();
+  params.set('date_range', filters.dateRange || '30d');
+  if (filters.fromDate) params.set('from_date', filters.fromDate);
+  if (filters.toDate) params.set('to_date', filters.toDate);
+  return parseResponse<DashboardAnalytics>(
+    await fetch(`${API}/question-bank-v2/dashboard/analytics?${params.toString()}`, { headers }),
+  );
+}
 
 export async function getBankDashboardOverview(headers: HeadersInit) {
   return parseResponse<BankDashboardOverview>(

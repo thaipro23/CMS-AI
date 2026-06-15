@@ -100,6 +100,7 @@ from app.services.audit_log import AuditErrorType, log_audit
 from app.services.question_bank_service import VersionedQuestionBankService
 from app.services.business_rbac import BusinessRBACService
 from app.services.bank_dashboard_stats import BankDashboardStatsService
+from app.services.dashboard_analytics import DashboardAnalyticsService
 from app.services.bank_search import BankSearchService
 from app.services.bank_operation_jobs import BankOperationJobService, operation_pending_dir, serialize_job
 from app.worker import bank_material_extract_task, bank_generate_questions_task, bank_release_publish_task, bank_quiz_create_task
@@ -391,6 +392,42 @@ def cancel_bank_operation_job(job_id: str, db: Session = Depends(get_db), user: 
 @router.get('/summary', response_model=BankSummaryOut)
 def summary(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     return _scoped_bank_summary(db, user)
+
+
+
+
+@router.get('/dashboard/analytics')
+def dashboard_analytics(
+    date_range: str = Query('30d'),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    return DashboardAnalyticsService(db).get_analytics(user, date_range=date_range, from_date=from_date, to_date=to_date)
+
+
+@router.get('/dashboard/alerts')
+def dashboard_alerts(
+    date_range: str = Query('30d'),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+    limit: int = Query(12, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    service = DashboardAnalyticsService(db)
+    filters = service._filters(date_range, from_date, to_date)
+    return {'items': service.get_alerts(user, filters, limit=limit), 'limit': limit}
+
+
+@router.get('/dashboard/activity-feed')
+def dashboard_activity_feed(
+    limit: int = Query(10, ge=1, le=30),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    return DashboardAnalyticsService(db).get_activity_feed(user, limit=limit)
 
 
 @router.get('/dashboard/overview')

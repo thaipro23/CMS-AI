@@ -1,257 +1,333 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAppContext } from '../../../../context/AppContext'
-import {
-  BankRelease,
-  BankDashboardOverview,
-  BankSearchResult,
-  DepartmentSummary,
-  SubjectSummary,
-  SubjectVersionSummary,
-  ChapterSummary,
-  BankGeneratePreview,
-  BankReleaseReadiness,
-  BankVersion,
-  BankVersionDiffPreview,
-  BankVersionQuestion,
-  CourseQuizInstance,
-  AuditLogRow,
-  Job,
-  Department,
-  MaterialChunk,
-  MaterialVersion,
-  Subject,
-  SubjectChapter,
-  SubjectOffering,
-} from '../../../../types'
-import {
-  bulkReviewBankQuestions,
-  createBankRelease,
-  createBankVersion,
-  createDepartment,
-  createSubject,
-  createSubjectChapter,
-  createSubjectOffering,
-  deleteDepartment,
-  deleteSubject,
-  deleteSubjectChapter,
-  deleteSubjectOffering,
-  deleteMaterialVersion,
-  generateFromBankVersion,
-  getBankDashboardOverview,
-  getAuditLogs,
-  getJobs,
-  searchBankDashboard,
-  getDepartmentSummaries,
-  getSubjectSummaries,
-  getSubjectVersionSummaries,
-  getChapterSummaries,
-  getBankMaterialChunks,
-  getBankReleaseReadiness,
-  getBankReleases,
-  getBankVersionQuestion,
-  getBankVersionQuestionPage,
-  getBankVersions,
-  getCourseQuizInstances,
-  getDepartments,
-  getMaterialVersions,
-  getSubjectChapters,
-  getSubjectOfferings,
-  getSubjects,
-  markBankDiffResolved,
-  previewBankVersionDiff,
-  previewGenerateFromBankVersion,
-  publishBankRelease,
-  reviewBankQuestion,
-  rollbackCourseQuizInstance,
-  uploadBankMaterial,
-  updateBankQuestion,
-  updateDepartment,
-  updateSubject,
-  updateSubjectChapter,
-  updateSubjectOffering,
-} from '../../../../lib/api'
-import {
-  TERMS,
-  chapterDisplayName,
-  normalizeLessonInput,
-  buildChapterTitle,
-  statusLabel,
-  statusClass,
-  useBankData,
-  useAsyncMessage,
-  Breadcrumb,
-  Toolbar,
-  SearchActionBar,
-  Modal,
-  EntityActions,
-  promptText,
-  matchesSearch,
-  reviewStatusText,
-  reviewStatusClass,
-  StatLine,
-  QuickSearchBox,
-  questionStats,
-  nextReleaseText,
-  bankAnswerRows,
-  bankQuestionErrorMessage,
-  isQuestionWaitingForReview,
-  BankQuestionEditForm,
-  BankChartRow,
-  toBankQuestionEditForm,
-  BankBarChart,
-  BankStackedChart,
-  countRows,
-  auditActionText,
-} from '../shared'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useEffect, useMemo, useState } from 'react'
+import { useBankData, Breadcrumb, QuickSearchBox } from '../shared'
+import { getBankDashboardAnalytics } from '../../../../lib/api'
+import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
-export function BankDashboardPage() {
-  const { headers, authReady } = useBankData()
-  const [overview, setOverview] = useState<BankDashboardOverview | null>(null)
-  const [quizInstances, setQuizInstances] = useState<CourseQuizInstance[]>([])
-  const [auditRows, setAuditRows] = useState<AuditLogRow[]>([])
-  const [jobs, setJobs] = useState<Job[]>([])
-  const overviewLoadKey = useRef('')
+const STATUS_COLORS: Record<string, string> = {
+  draft: '#64748b',
+  pending_review: '#f59e0b',
+  approved: '#10b981',
+  rejected: '#ef4444',
+  draft_error: '#dc2626',
+  easy: '#22c55e',
+  medium: '#f59e0b',
+  hard: '#ef4444',
+  single_choice: '#2563eb',
+  multiple_choice: '#0891b2',
+  essay: '#7c3aed',
+  short_answer: '#0f766e',
+  unknown: '#64748b',
+}
 
-  const load = async () => {
-    const [nextOverview, nextQuizInstances, nextAudit, nextJobs] = await Promise.all([
-      getBankDashboardOverview(headers),
-      getCourseQuizInstances(headers, { limit: 50 }),
-      getAuditLogs('', { page: 1, pageSize: 10 }, headers),
-      getJobs('', headers),
-    ])
-    setOverview(nextOverview)
-    setQuizInstances(nextQuizInstances)
-    setAuditRows(nextAudit.items || [])
-    setJobs(nextJobs)
-  }
+function formatNumber(value?: number | null) {
+  return new Intl.NumberFormat('vi-VN').format(Number(value || 0))
+}
 
-  useEffect(() => {
-    if (!authReady) return
-    const key = JSON.stringify(headers)
-    if (overviewLoadKey.current === key) return
-    overviewLoadKey.current = key
-    let cancelled = false
-    load().catch(() => { if (!cancelled) overviewLoadKey.current = '' })
-    return () => { cancelled = true }
-  }, [authReady, headers]) // eslint-disable-line react-hooks/exhaustive-deps
+function todayIso() {
+  return new Date().toISOString().slice(0, 10)
+}
 
-  const totalQuestions = overview?.total_questions || 0
-  const approvedQuestions = overview?.approved_count || 0
-  const pendingQuestions = overview?.pending_review_count || 0
-  const errorQuestions = overview?.draft_error_count || 0
-  const readyChapters = overview?.chapters_ready_to_release || 0
-  const reviewProgress = totalQuestions > 0 ? Math.round((approvedQuestions / totalQuestions) * 100) : 0
-  const failedQuizCount = quizInstances.filter((item) => item.status === 'failed').length
-  const createdQuizCount = quizInstances.filter((item) => item.status === 'created').length
-  const failedJobCount = jobs.filter((item) => item.status === 'failed').length
-  const activeJobCount = jobs.filter((item) => ['queued', 'running', 'processing'].includes(item.status)).length
-  const needsAttention = pendingQuestions + errorQuestions + readyChapters + failedQuizCount + failedJobCount
+function buildDateRange(days: number) {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - days + 1)
+  return { fromDate: start.toISOString().slice(0, 10), toDate: end.toISOString().slice(0, 10) }
+}
 
-  const questionRows: BankChartRow[] = [
-    { label: 'Đã duyệt', value: approvedQuestions, tone: 'green' },
-    { label: 'Chờ duyệt', value: pendingQuestions, tone: 'amber' },
-    { label: 'Câu lỗi', value: errorQuestions, tone: 'red' },
-  ]
-  const hierarchyRows: BankChartRow[] = [
-    { label: 'Bộ môn', value: overview?.departments_total || 0, tone: 'blue' },
-    { label: 'Môn', value: overview?.subjects_total || 0, tone: 'green' },
-    { label: 'Version', value: overview?.subject_versions_total || 0, tone: 'amber' },
-    { label: 'Bài', value: overview?.chapters_total || 0, tone: 'slate' },
-  ]
-  const quizRows = countRows(quizInstances, (row) => row.status, { created: 'green', failed: 'red', rolled_back: 'amber' })
-  const jobRows = countRows(jobs, (row) => row.status, { completed: 'green', failed: 'red', running: 'blue', queued: 'amber' })
-  const recentQuizzes = quizInstances.slice(0, 6)
-  const recentJobs = jobs.slice(0, 6)
-  const nextActions = overview?.next_actions || []
+function drilldownUrl(drilldown?: DashboardDrilldown | null) {
+  if (!drilldown?.route) return '/bank'
+  const params = new URLSearchParams()
+  Object.entries(drilldown.query || {}).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === '') return
+    params.set(key, String(value))
+  })
+  const qs = params.toString()
+  return qs ? `${drilldown.route}?${qs}` : drilldown.route
+}
 
-  return <div className="page-stack bank-multipage bank-dashboard-modern">
-    <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
+function SkeletonBlock({ height = 120 }: { height?: number }) {
+  return <div className="dashboard-skeleton" style={{ minHeight: height }} />
+}
 
-    <section className="bank-command-center card">
-      <div className="bank-command-copy">
-        <span className="eyebrow">Trung tâm vận hành ngân hàng đề</span>
-        <h1>Dashboard Bank</h1>
-        <p>Nhìn nhanh việc cần làm, chất lượng câu hỏi, Quiz Open edX, job và hoạt động gần đây. Trang này thay cho dashboard course-first cũ.</p>
-        <div className="button-row no-margin">
-          <button className="btn secondary" type="button" onClick={load}>Tải lại</button>
-          <Link className="btn secondary" href="/bank/departments">Quản lý bộ môn</Link>
-          <Link className="btn" href="/bank/quiz">Tạo Quiz Open edX</Link>
-        </div>
-      </div>
-      <div className="bank-command-score">
-        <span>Tiến độ duyệt câu hỏi</span>
-        <b>{reviewProgress}%</b>
-        <small>{approvedQuestions}/{totalQuestions} câu đã duyệt</small>
-        <div className="bank-progress"><i style={{ width: `${Math.min(100, reviewProgress)}%` }} /></div>
-      </div>
-    </section>
-
-    <section className="bank-kpi-grid">
-      <div className={needsAttention > 0 ? 'bank-kpi-card danger' : 'bank-kpi-card success'}><span>Cần xử lý</span><b>{needsAttention}</b><small>{pendingQuestions} chờ duyệt · {errorQuestions} lỗi · {readyChapters} bài sẵn sàng</small></div>
-      <div className="bank-kpi-card"><span>Tổng câu hỏi</span><b>{totalQuestions}</b><small>{approvedQuestions} đã duyệt · {pendingQuestions} chờ duyệt</small></div>
-      <div className="bank-kpi-card"><span>Quiz Open edX</span><b>{quizInstances.length}</b><small>{createdQuizCount} đã tạo · {failedQuizCount} lỗi</small></div>
-      <div className="bank-kpi-card"><span>Job</span><b>{jobs.length}</b><small>{activeJobCount} đang chạy · {failedJobCount} lỗi</small></div>
-    </section>
-
-    <section className="card bank-search-card">
-      <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Gõ mã môn, version, bài hoặc keyword câu hỏi để đi thẳng tới nơi cần xử lý.</p></div></div>
-      <QuickSearchBox />
-    </section>
-
-    <section className="bank-dashboard-layout">
-      <div className="bank-dashboard-main">
-        <section className="card bank-focus-card">
-          <div className="section-head"><div><h2>Việc cần làm ngay</h2><p className="helper">Ưu tiên xử lý câu lỗi, câu chờ duyệt và bài đã đủ điều kiện chốt release.</p></div></div>
-          <div className="dashboard-task-list modern-task-list">
-            {nextActions.slice(0, 6).map((item) => <Link href={item.href} className={`task-row ${item.type === 'fix_errors' ? 'danger' : item.type === 'review_questions' ? 'warning' : 'success'}`} key={`${item.type}-${item.href}`}>
-              <span>{item.type === 'create_release' ? '✅' : item.type === 'fix_errors' ? '⚠️' : '📝'}</span>
-              <div><b>{item.title}</b><small>{item.message}</small></div>
-              <em>{item.type === 'create_release' ? 'Chốt' : item.type === 'fix_errors' ? 'Sửa lỗi' : 'Duyệt'}</em>
-            </Link>)}
-            {overview && !nextActions.length ? <div className="empty-state">Chưa có việc gấp. Có thể tạo thêm câu hỏi hoặc tạo Quiz Open edX.</div> : null}
-            {!overview ? <div className="empty-state">Đang tải tổng quan...</div> : null}
-          </div>
-        </section>
-
-        <section className="bank-chart-grid strong-chart-grid">
-          <BankStackedChart title="Tình trạng câu hỏi" helper="Chất lượng bank theo trạng thái review." rows={questionRows} />
-          <BankBarChart title="Quy mô ngân hàng" helper="Bộ môn, môn, version và bài trong hệ thống." rows={hierarchyRows} />
-          <BankBarChart title="Quiz Open edX" helper="Theo dõi trạng thái các Quiz đã tạo." rows={quizRows} empty="Chưa có Quiz Open edX." />
-          <BankBarChart title="Job generate" helper="Generate/publish/quiz jobs gần đây." rows={jobRows} empty="Chưa có job." />
-        </section>
-      </div>
-
-      <aside className="bank-dashboard-side">
-        <section className="card mini-feed-card">
-          <div className="section-head compact-section-head"><div><h2>Quiz gần đây</h2><p className="helper">Theo dõi tạo Quiz và lỗi tạo Quiz.</p></div><Link href="/bank/history" className="btn secondary small">Xem tất cả</Link></div>
-          <div className="mini-feed-list">
-            {recentQuizzes.length ? recentQuizzes.map((row) => <div className="mini-feed-row" key={row.id}>
-              <div><b>{row.openedx_course_id}</b><small>{row.id.slice(0, 8)} · {row.created_at ? new Date(row.created_at).toLocaleString('vi-VN') : '—'}</small></div>
-              <span className={row.status === 'failed' ? 'status danger' : row.status === 'created' ? 'status success' : 'status warning'}>{statusLabel(row.status)}</span>
-            </div>) : <div className="empty-state small-empty">Chưa có Quiz.</div>}
-          </div>
-        </section>
-
-        <section className="card mini-feed-card">
-          <div className="section-head compact-section-head"><div><h2>Job gần đây</h2><p className="helper">Generate, publish và tạo quiz.</p></div><Link href="/jobs" className="btn secondary small">Mở job</Link></div>
-          <div className="mini-feed-list">
-            {recentJobs.length ? recentJobs.map((row) => <div className="mini-feed-row" key={row.id}>
-              <div><b>{row.course_id || 'Bank job'}</b><small>{row.question_count || 0} câu · {row.error_message || 'Không có lỗi'}</small></div>
-              <span className={row.status === 'failed' ? 'status danger' : row.status === 'completed' ? 'status success' : 'status warning'}>{statusLabel(row.status)}</span>
-            </div>) : <div className="empty-state small-empty">Chưa có job.</div>}
-          </div>
-        </section>
-      </aside>
-    </section>
-
-    <section className="card">
-      <div className="section-head"><div><h2>Nhật ký gần đây</h2><p className="helper">Ai làm gì, lỗi gì, thao tác nào vừa xảy ra trong luồng Bank/Quiz.</p></div><Link className="btn secondary" href="/audit">Xem nhật ký</Link></div>
-      <div className="table-wrap"><table className="table"><thead><tr><th>Thời điểm</th><th>Người</th><th>Hành động</th><th>Kết quả</th><th>Nội dung</th></tr></thead><tbody>{auditRows.length ? auditRows.map((row) => <tr key={row.id}><td>{row.created_at ? new Date(row.created_at).toLocaleString('vi-VN') : '—'}</td><td><b>{row.actor_id}</b><br /><span className="helper">{row.actor_role || '—'}</span></td><td>{auditActionText(row.action)}</td><td><span className={row.status === 'failed' ? 'status danger' : 'status success'}>{row.status}</span></td><td>{row.message || '—'}</td></tr>) : <tr><td colSpan={5}><div className="empty-state">Chưa có hoạt động.</div></td></tr>}</tbody></table></div>
-    </section>
+function DashboardEmptyState({ role }: { role?: string }) {
+  return <div className="dashboard-empty-state">
+    <b>Chưa có dữ liệu trong phạm vi này.</b>
+    <p>{role === 'QUESTION_REVIEWER' ? 'Bạn chưa được giao câu hỏi hoặc chapter nào để duyệt, hoặc chapter được giao chưa có dữ liệu.' : 'Hãy upload tài liệu hoặc tạo câu hỏi đầu tiên trong phạm vi được phân quyền.'}</p>
+    <Link className="btn secondary small" href="/bank/departments">Đi tới Ngân hàng đề</Link>
   </div>
 }
 
+function DashboardErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <div className="dashboard-error-state">
+    <b>Không tải được dashboard.</b>
+    <p>{message || 'API trả về lỗi. Vui lòng thử lại hoặc kiểm tra backend logs.'}</p>
+    <button className="btn small" type="button" onClick={onRetry}>Thử lại</button>
+  </div>
+}
+
+function KpiCard({ item, tone }: { item: DashboardKpi; tone?: string }) {
+  return <Link className={`dashboard-kpi-card ${tone || ''}`} href={drilldownUrl(item.drilldown)}>
+    <span>{item.label}</span>
+    <b>{formatNumber(item.value)}</b>
+    <small>{item.overdue ? `${formatNumber(item.overdue)} quá hạn · ` : ''}{item.percent !== undefined ? `${item.percent}% trong tổng số` : item.delta_label}</small>
+  </Link>
+}
+
+function ChartCard({ title, children, empty }: { title: string; children: React.ReactNode; empty?: boolean }) {
+  return <section className="card dashboard-chart-card">
+    <div className="section-head compact-section-head"><div><h2>{title}</h2></div></div>
+    {empty ? <div className="dashboard-chart-empty">Chưa có dữ liệu phù hợp.</div> : children}
+  </section>
+}
+
+function DonutChart({ chart }: { chart: DashboardChart }) {
+  const router = useRouter()
+  const items = (chart.items || []).filter((item) => Number(item.value || 0) > 0)
+  const total = items.reduce((sum, item) => sum + Number(item.value || 0), 0)
+  let offset = (2 * Math.PI * 34) * 0.25
+  const radius = 34
+  const circumference = 2 * Math.PI * radius
+  return <ChartCard title={chart.title} empty={!items.length}>
+    <div className="dashboard-donut-layout">
+      <svg className="dashboard-donut" viewBox="0 0 100 100" role="img" aria-label={chart.title}>
+        <circle cx="50" cy="50" r={radius} fill="none" stroke="#e5e7eb" strokeWidth="14" />
+        {items.map((item, index) => {
+          const value = Number(item.value || 0)
+          const dash = total ? (value / total) * circumference : 0
+          const segmentOffset = offset
+          offset -= dash
+          return <circle
+            key={`${item.key || item.label}-${index}`}
+            cx="50"
+            cy="50"
+            r={radius}
+            fill="none"
+            stroke={STATUS_COLORS[String(item.key)] || `hsl(${(index * 67) % 360} 70% 45%)`}
+            strokeWidth="14"
+            strokeDasharray={`${dash} ${circumference - dash}`}
+            strokeDashoffset={segmentOffset}
+            className="dashboard-clickable-segment"
+            onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))}
+          />
+        })}
+        <text x="50" y="49" textAnchor="middle" className="dashboard-donut-value">{formatNumber(total)}</text>
+        <text x="50" y="61" textAnchor="middle" className="dashboard-donut-label">tổng</text>
+      </svg>
+      <div className="dashboard-legend-list">
+        {items.map((item, index) => <button key={`${item.key || item.label}-${index}`} type="button" className="dashboard-legend-row" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))} title={`${item.label}: ${formatNumber(item.value)} (${item.percent || 0}%)`}>
+          <i style={{ background: STATUS_COLORS[String(item.key)] || `hsl(${(index * 67) % 360} 70% 45%)` }} />
+          <span>{item.label}</span>
+          <b>{formatNumber(item.value)}</b>
+          <em>{item.percent || 0}%</em>
+        </button>)}
+      </div>
+    </div>
+  </ChartCard>
+}
+
+function LineChart({ chart }: { chart: DashboardChart }) {
+  const router = useRouter()
+  const items = chart.items || []
+  const max = Math.max(1, ...items.map((item) => Number(item.value || 0)))
+  const width = 520
+  const height = 190
+  const padX = 28
+  const padY = 24
+  const points = items.map((item, index) => {
+    const x = items.length <= 1 ? width / 2 : padX + (index * (width - padX * 2)) / (items.length - 1)
+    const y = height - padY - (Number(item.value || 0) / max) * (height - padY * 2)
+    return { x, y, item }
+  })
+  const path = points.map((p, index) => `${index === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+  return <ChartCard title={chart.title} empty={!items.length}>
+    <div className="dashboard-line-wrap">
+      <svg className="dashboard-line" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title}>
+        {[0, .25, .5, .75, 1].map((ratio) => <line key={ratio} x1={padX} x2={width - padX} y1={padY + ratio * (height - padY * 2)} y2={padY + ratio * (height - padY * 2)} stroke="#e5e7eb" strokeWidth="1" />)}
+        <path d={path} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((point, index) => <g key={`${point.item.date || index}-${index}`} className="dashboard-line-point" onClick={() => point.item.drilldown && router.push(drilldownUrl(point.item.drilldown))}>
+          <circle cx={point.x} cy={point.y} r="5" fill="#2563eb" />
+          <title>{point.item.label || point.item.date}: {formatNumber(point.item.value)}</title>
+        </g>)}
+      </svg>
+      <div className="dashboard-line-axis"><span>{items[0]?.label || items[0]?.date}</span><span>{items[items.length - 1]?.label || items[items.length - 1]?.date}</span></div>
+    </div>
+  </ChartCard>
+}
+
+function HorizontalBarChart({ chart }: { chart: DashboardChart }) {
+  const router = useRouter()
+  const items = chart.items || []
+  const max = Math.max(1, ...items.map((item) => Number(item.value || 0)))
+  return <ChartCard title={chart.title} empty={!items.length}>
+    <div className="dashboard-bar-list">
+      {items.map((item, index) => <button key={`${item.subject_id || item.label}-${index}`} type="button" className="dashboard-horizontal-bar" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))} title={`${item.label}: ${formatNumber(item.value)}`}>
+        <span>{item.label}</span>
+        <div><i style={{ width: `${Math.max(4, (Number(item.value || 0) / max) * 100)}%` }} /></div>
+        <b>{formatNumber(item.value)}</b>
+      </button>)}
+    </div>
+  </ChartCard>
+}
+
+function GroupedBarChart({ chart }: { chart: DashboardChart }) {
+  const router = useRouter()
+  const items = chart.items || []
+  const max = Math.max(1, ...items.flatMap((item) => [Number(item.current || 0), Number(item.previous || 0)]))
+  return <ChartCard title={chart.title} empty={!items.length}>
+    <div className="dashboard-grouped-legend"><span><i className="current" />{chart.current_term || 'Kỳ này'}</span><span><i className="previous" />{chart.previous_term || 'Kỳ trước'}</span></div>
+    <div className="dashboard-grouped-list">
+      {items.map((item, index) => <button key={`${item.subject_id || item.label}-${index}`} type="button" className="dashboard-grouped-row" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))}>
+        <span>{item.label}</span>
+        <div className="dashboard-group-pair">
+          <i className="current" style={{ width: `${Math.max(3, (Number(item.current || 0) / max) * 100)}%` }} />
+          <i className="previous" style={{ width: `${Math.max(3, (Number(item.previous || 0) / max) * 100)}%` }} />
+        </div>
+        <b>{formatNumber(item.current)} / {formatNumber(item.previous)}</b>
+      </button>)}
+    </div>
+  </ChartCard>
+}
+
+function AlertPanel({ alerts }: { alerts: DashboardAnalytics['alerts'] }) {
+  const router = useRouter()
+  return <section className="card dashboard-alert-panel">
+    <div className="section-head compact-section-head"><div><h2>Cảnh báo cần xử lý</h2><p className="helper">Ưu tiên các việc đang chậm hoặc có nguy cơ thiếu dữ liệu.</p></div></div>
+    <div className="dashboard-alert-list">
+      {alerts.length ? alerts.map((alert) => <button key={alert.id} type="button" className={`dashboard-alert-item ${alert.severity}`} onClick={() => alert.drilldown && router.push(drilldownUrl(alert.drilldown))}>
+        <span>{alert.severity === 'critical' ? '🔴' : alert.severity === 'warning' ? '🟡' : '🔵'}</span>
+        <div><b>{alert.title}</b>{alert.description ? <small>{alert.description}</small> : null}</div>
+      </button>) : <div className="dashboard-chart-empty">Chưa có cảnh báo trong scope này.</div>}
+    </div>
+  </section>
+}
+
+function ActivityFeed({ items }: { items: DashboardAnalytics['activity_feed'] }) {
+  const router = useRouter()
+  return <section className="card dashboard-activity-panel">
+    <div className="section-head compact-section-head"><div><h2>Hoạt động gần đây</h2><p className="helper">10 thao tác mới nhất trong phạm vi bạn được xem.</p></div></div>
+    <div className="dashboard-activity-list">
+      {items.length ? items.map((item) => <button key={item.id} type="button" className="dashboard-activity-item" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))}>
+        <span>{item.status === 'failed' ? '⚠️' : '•'}</span>
+        <div><b>{item.message}</b><small>{item.relative_time || item.created_at || ''}</small></div>
+      </button>) : <div className="dashboard-chart-empty">Chưa có hoạt động gần đây.</div>}
+    </div>
+  </section>
+}
+
+function DateFilters({ dateRange, fromDate, toDate, onPreset, onCustom }: { dateRange: string; fromDate: string; toDate: string; onPreset: (preset: string) => void; onCustom: (from: string, to: string) => void }) {
+  const [from, setFrom] = useState(fromDate)
+  const [to, setTo] = useState(toDate)
+  useEffect(() => { setFrom(fromDate); setTo(toDate) }, [fromDate, toDate])
+  return <div className="dashboard-filter-row">
+    {['today', '7d', '30d'].map((preset) => <button key={preset} className={`btn small ${dateRange === preset ? '' : 'secondary'}`} type="button" onClick={() => onPreset(preset)}>{preset === 'today' ? 'Hôm nay' : preset === '7d' ? '7 ngày' : '30 ngày'}</button>)}
+    <input className="input dashboard-date-input" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+    <input className="input dashboard-date-input" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+    <button className={`btn small ${dateRange === 'custom' ? '' : 'secondary'}`} type="button" onClick={() => onCustom(from, to)}>Áp dụng</button>
+  </div>
+}
+
+export function BankDashboardPage() {
+  const { headers, authReady } = useBankData()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const initialRange = searchParams.get('range') || '30d'
+  const initialFrom = searchParams.get('from') || buildDateRange(30).fromDate
+  const initialTo = searchParams.get('to') || todayIso()
+  const [dateRange, setDateRange] = useState(initialRange)
+  const [fromDate, setFromDate] = useState(initialFrom)
+  const [toDate, setToDate] = useState(initialTo)
+  const [data, setData] = useState<DashboardAnalytics | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const updateUrl = (range: string, from?: string, to?: string) => {
+    const params = new URLSearchParams()
+    params.set('range', range)
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    router.replace(`/bank?${params.toString()}`, { scroll: false })
+  }
+
+  const load = async () => {
+    if (!authReady) return
+    setLoading(true)
+    setError('')
+    try {
+      const payload = await getBankDashboardAnalytics(headers, { dateRange, fromDate, toDate })
+      setData(payload)
+    } catch (err: any) {
+      setError(err?.message || 'Không tải được dashboard')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [authReady, headers, dateRange, fromDate, toDate]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const hasData = useMemo(() => data ? Object.values(data.kpis || {}).some((item) => Number(item.value || 0) > 0) : false, [data])
+
+  const onPreset = (preset: string) => {
+    const range = preset === 'today' ? { fromDate: todayIso(), toDate: todayIso() } : preset === '7d' ? buildDateRange(7) : buildDateRange(30)
+    setDateRange(preset)
+    setFromDate(range.fromDate)
+    setToDate(range.toDate)
+    updateUrl(preset, range.fromDate, range.toDate)
+  }
+  const onCustom = (from: string, to: string) => {
+    setDateRange('custom')
+    setFromDate(from)
+    setToDate(to)
+    updateUrl('custom', from, to)
+  }
+
+  return <div className="page-stack bank-multipage dashboard-analytics-page">
+    <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
+
+    <section className="card dashboard-analytics-header">
+      <div>
+        <span className="eyebrow">Dashboard Bank</span>
+        <h1>Việc cần làm trong scope của bạn</h1>
+        <p>Scope: <b>{data?.scope?.label || 'Đang xác định...'}</b></p>
+        <p className="helper">Dashboard chỉ dùng dữ liệu server đã lọc theo RBAC; các số liệu/chart đều click được để đi tới nơi xử lý.</p>
+      </div>
+      <DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />
+    </section>
+
+    {loading ? <>
+      <section className="dashboard-kpi-grid"><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /></section>
+      <section className="dashboard-chart-grid"><SkeletonBlock height={260} /><SkeletonBlock height={260} /><SkeletonBlock height={260} /><SkeletonBlock height={260} /></section>
+    </> : error ? <DashboardErrorState message={error} onRetry={load} /> : data ? <>
+      {!hasData ? <DashboardEmptyState role={data.scope?.role} /> : null}
+
+      <section className="dashboard-kpi-grid">
+        <KpiCard item={data.kpis.total_questions} />
+        <KpiCard item={data.kpis.pending_review} tone={Number(data.kpis.pending_review.value || 0) > 0 ? 'warning' : 'success'} />
+        <KpiCard item={data.kpis.approved} tone="success" />
+        <KpiCard item={data.kpis.rejected} tone={Number(data.kpis.rejected.value || 0) > 0 ? 'danger' : ''} />
+      </section>
+
+      <section className="card bank-search-card">
+        <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, version, bài hoặc câu hỏi trong scope được giao.</p></div></div>
+        <QuickSearchBox />
+      </section>
+
+      <section className="dashboard-chart-grid">
+        <DonutChart chart={data.charts.question_status} />
+        <LineChart chart={data.charts.new_questions_by_day} />
+        <HorizontalBarChart chart={data.charts.questions_by_subject} />
+        <DonutChart chart={data.charts.difficulty_distribution} />
+        <DonutChart chart={data.charts.question_type_distribution} />
+        <GroupedBarChart chart={data.charts.term_comparison} />
+      </section>
+
+      <section className="dashboard-bottom-grid">
+        <AlertPanel alerts={data.alerts || []} />
+        <ActivityFeed items={data.activity_feed || []} />
+      </section>
+    </> : null}
+  </div>
+}
