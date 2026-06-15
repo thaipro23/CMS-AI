@@ -340,6 +340,7 @@ class BankDashboardStatsService:
             approved = sum(int(s.get('approved_count') or 0) for s in stats)
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
             published_releases = sum(int(s.get('published_release_count') or 0) for s in stats)
+            published_versions = sum(int(s.get('published_version_count') or 0) for s in stats)
             published_subjects = sum(1 for s in stats if s.get('is_published') or s.get('status') == 'published')
             ready_to_release = sum(int(s.get('ready_to_release_chapter_count') or 0) for s in stats)
             capacity = sum(int(s.get('question_capacity') or 0) for s in stats)
