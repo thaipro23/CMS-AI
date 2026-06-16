@@ -48,7 +48,7 @@ function AppFooter({ compact = false }: { compact?: boolean }) {
       <Link href="/bank">Dashboard Bank</Link>
       <Link href="/bank/quiz">Tạo Quiz</Link>
       <Link href="/audit">Nhật ký</Link>
-      <span>v25.9.15.6.38.5</span>
+      <span>v25.9.15.6.38.5.1</span>
     </div>
   </footer>
 }
