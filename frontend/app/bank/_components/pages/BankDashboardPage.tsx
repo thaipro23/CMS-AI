@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { useBankData, Breadcrumb, QuickSearchBox } from '../shared'
+import { useBankData, Breadcrumb, QuickSearchBox, Modal } from '../shared'
 import { getBankDashboardAnalytics } from '../../../../lib/api'
 import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
@@ -250,6 +250,8 @@ export function BankDashboardPage() {
   const [data, setData] = useState<DashboardAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [alertsOpen, setAlertsOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(false)
 
   const updateUrl = (range: string, from?: string, to?: string) => {
     const params = new URLSearchParams()
@@ -332,7 +334,13 @@ export function BankDashboardPage() {
       </section>
 
       <section className="card bank-search-card">
-        <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, version, bài hoặc câu hỏi trong scope được giao.</p></div></div>
+        <div className="section-head">
+          <div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, version, bài hoặc câu hỏi trong scope được giao.</p></div>
+          <div className="button-row compact">
+            <button className="btn small secondary" type="button" onClick={() => setAlertsOpen(true)}>Cảnh báo ({formatNumber((data.alerts || []).length)})</button>
+            <button className="btn small secondary" type="button" onClick={() => setActivityOpen(true)}>Hoạt động ({formatNumber((data.activity_feed || []).length)})</button>
+          </div>
+        </div>
         <QuickSearchBox />
       </section>
 
@@ -345,10 +353,12 @@ export function BankDashboardPage() {
         <GroupedBarChart chart={data.charts.term_comparison} />
       </section>
 
-      <section className="dashboard-bottom-grid">
+      <Modal open={alertsOpen} title="Cảnh báo cần xử lý" wide onClose={() => setAlertsOpen(false)}>
         <AlertPanel alerts={data.alerts || []} />
+      </Modal>
+      <Modal open={activityOpen} title="Hoạt động gần đây" wide onClose={() => setActivityOpen(false)}>
         <ActivityFeed items={data.activity_feed || []} />
-      </section>
+      </Modal>
     </> : null}
   </div>
 }
