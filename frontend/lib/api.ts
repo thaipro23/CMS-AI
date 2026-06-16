@@ -141,7 +141,11 @@ export async function waitForBankOperationJob(headers: HeadersInit, jobId: strin
     last = await getBankOperationJob(headers, jobId);
     if (['completed', 'failed', 'canceled'].includes(last.status)) {
       if (last.status === 'completed') return last;
-      throw new Error(last.error_message || last.progress_label || `Job ${last.status}`);
+      const result = (last.result || {}) as Record<string, unknown>;
+      const userMessage = typeof result.user_message === 'string' ? result.user_message : '';
+      const suggestion = typeof result.suggestion === 'string' ? result.suggestion : '';
+      const baseMessage = userMessage || last.error_message || last.progress_label || `Job ${last.status}`;
+      throw new Error(suggestion ? `${baseMessage} ${suggestion}` : baseMessage);
     }
     await sleep(intervalMs);
   }

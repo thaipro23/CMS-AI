@@ -337,6 +337,49 @@ class ContentExtractor:
         except Exception:
             return ''
 
+    def _docx_image_count(self, raw: bytes) -> int:
+        try:
+            with zipfile.ZipFile(BytesIO(raw)) as archive:
+                return len([
+                    name for name in archive.namelist()
+                    if name.startswith('word/media/') and re.search(r'\.(png|jpe?g|webp|bmp|tiff?)$', name, re.IGNORECASE)
+                ])
+        except Exception:
+            return 0
+
+    def _ocr_docx_images(self, raw: bytes) -> list[str]:
+        if not settings.file_ocr_enabled or not settings.docx_ocr_images_enabled:
+            return []
+        if pytesseract is None or Image is None:
+            return []
+        max_images = int(settings.docx_ocr_max_images or settings.file_ocr_max_pages or 0)
+        if max_images <= 0:
+            return []
+        try:
+            archive = zipfile.ZipFile(BytesIO(raw))
+        except Exception:
+            return []
+        media_names = sorted(
+            [
+                name for name in archive.namelist()
+                if name.startswith('word/media/') and re.search(r'\.(png|jpe?g|webp|bmp|tiff?)$', name, re.IGNORECASE)
+            ],
+            key=lambda value: value.lower(),
+        )[:max_images]
+        texts: list[str] = []
+        try:
+            for index, name in enumerate(media_names, start=1):
+                try:
+                    image = Image.open(BytesIO(archive.read(name)))
+                    text = self._ocr_image(image)
+                    if text:
+                        texts.append(f'OCR ảnh DOCX {index}: {text}')
+                except Exception:
+                    continue
+        finally:
+            archive.close()
+        return texts
+
     def _ocr_image(self, image: Any) -> str:
         if pytesseract is None:
             return ''
@@ -443,17 +486,59 @@ class ContentExtractor:
             raise ValueError(f'DOCX có quá nhiều đoạn văn ({len(doc.paragraphs)} > {max_paragraphs}). Hãy chia nhỏ tài liệu trước khi upload.')
         if len(doc.tables) > max_tables:
             raise ValueError(f'DOCX có quá nhiều bảng ({len(doc.tables)} > {max_tables}). Hãy chia nhỏ tài liệu trước khi upload.')
+
         parts: list[str] = []
         for paragraph in doc.paragraphs:
             text = paragraph.text.strip()
             if text:
                 parts.append(text)
+
+        # Many teaching documents keep important text in headers/footers. Include
+        # them so preflight does not incorrectly reject a valid DOCX.
+        for section in doc.sections:
+            for part in (section.header, section.footer, section.first_page_header, section.first_page_footer):
+                for paragraph in getattr(part, 'paragraphs', []) or []:
+                    text = paragraph.text.strip()
+                    if text:
+                        parts.append(text)
+
         for table in doc.tables:
             for row in table.rows:
                 cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
                 if cells:
                     parts.append(' | '.join(cells))
-        return self._cap_extracted_text(self.normalize_text('\n'.join(parts)), label='DOCX')
+
+        normal_text = self._cap_extracted_text(self.normalize_text('\n'.join(parts)), label='DOCX')
+        if normal_text:
+            return normal_text
+
+        image_count = self._docx_image_count(raw)
+        if image_count <= 0:
+            return ''
+
+        if not settings.file_ocr_enabled:
+            raise ValueError(
+                'DOCX không có chữ máy đọc được; file có ảnh/scan nhưng OCR đang tắt. '
+                'Bật FILE_OCR_ENABLED=true hoặc chuyển file sang DOCX/PDF có text rồi upload lại.'
+            )
+        if not settings.docx_ocr_images_enabled:
+            raise ValueError(
+                'DOCX không có chữ máy đọc được; file có ảnh/scan nhưng OCR ảnh trong DOCX đang tắt. '
+                'Bật DOCX_OCR_IMAGES_ENABLED=true hoặc upload PDF/transcript.'
+            )
+
+        ocr_texts = self._ocr_docx_images(raw)
+        if not ocr_texts:
+            raise ValueError(
+                f'DOCX có {image_count} ảnh nhưng OCR không đọc được chữ. '
+                'Hãy kiểm tra ảnh có đủ rõ không, tăng FILE_OCR_MAX_PAGES/DOCX_OCR_MAX_IMAGES nếu tài liệu dài, '
+                'hoặc upload bản DOCX/PDF có text.'
+            )
+        limit = int(settings.docx_ocr_max_images or settings.file_ocr_max_pages or 0)
+        note = ''
+        if limit and image_count > limit:
+            note = f'\nGhi chú: OCR {min(image_count, limit)}/{image_count} ảnh đầu tiên theo giới hạn cấu hình.'
+        return self._cap_extracted_text(self.normalize_text('\n'.join(ocr_texts) + note), label='DOCX OCR')
 
     def extract_xlsx_sheets(self, raw: bytes) -> list[tuple[int | None, str]]:
         if load_workbook is None:

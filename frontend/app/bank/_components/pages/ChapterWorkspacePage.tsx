@@ -495,7 +495,8 @@ ${chunk.content}`).join('\n\n')
               if (result.diff_required && result.diff_base_bank_version_id) {
                 await runDiffNow(selectedBankVersion.id, result.diff_base_bank_version_id)
               }
-            }, 'Đã gắn tài liệu', refreshCurrent)}>+ Gắn tài liệu</button>
+              return result
+            }, 'Đã gắn tài liệu', refreshCurrent, 'Đang kiểm tra file, OCR nếu cần và tách nội dung...')}>+ Gắn tài liệu</button>
           </div>
         </div> : <div className="popup-action-panel"><h3>Đã publish</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo Release.</p></div>}
         <div className="popup-list-panel">

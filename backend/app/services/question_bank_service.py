@@ -1556,7 +1556,11 @@ class VersionedQuestionBankService:
         except Exception as exc:
             raise ValueError(f'Không đọc được file {filename}: {exc}') from exc
         if not items:
-            raise ValueError(f'File {filename} không tách được text. Nếu là scan/ảnh, cần bật OCR hoặc upload transcript.')
+            raise ValueError(
+                f'File {filename} không tách được text. Nếu là scan/ảnh, hãy bật OCR cho đúng loại file '
+                '(PDF/PPTX/DOCX), tăng FILE_OCR_MAX_PAGES hoặc DOCX_OCR_MAX_IMAGES nếu tài liệu dài, '
+                'hoặc upload bản DOCX/PDF có text/transcript.'
+            )
 
         next_version_no = int((self.db.query(func.max(LearningMaterialVersion.version_no)).filter(LearningMaterialVersion.bank_version_id == version.id).scalar() or 0) + 1)
         material = LearningMaterialVersion(

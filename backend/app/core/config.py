@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.15.6.38.5.2-shared-runtime-upload-job-hotfix'
+    app_version: str = '25.9.15.6.38.5.3-docx-ocr-upload-preflight-feedback-hotfix'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -185,6 +185,11 @@ class Settings(BaseSettings):
     file_ocr_tesseract_config: str = '--oem 3 --psm 6'
     pptx_extract_speaker_notes: bool = True
     pptx_ocr_images_enabled: bool = False
+    # v25.9.15.6.38.5.3: Word files created from scans often contain one image per page.
+    # When FILE_OCR_ENABLED=true, OCR those embedded images before accepting/rejecting the upload.
+    docx_ocr_images_enabled: bool = True
+    docx_ocr_max_images: int = 0  # 0 = use FILE_OCR_MAX_PAGES
+    material_upload_preflight_enabled: bool = True
 
 
 PRODUCTION_ENVS = {'prod', 'production'}
