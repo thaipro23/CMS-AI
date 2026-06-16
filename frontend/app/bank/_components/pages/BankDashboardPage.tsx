@@ -146,7 +146,14 @@ function LineChart({ chart }: { chart: DashboardChart }) {
   return <ChartCard title={chart.title} empty={!items.length}>
     <div className="dashboard-line-wrap">
       <svg className="dashboard-line" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title}>
-        {[0, .25, .5, .75, 1].map((ratio) => <line key={ratio} x1={padX} x2={width - padX} y1={padY + ratio * (height - padY * 2)} y2={padY + ratio * (height - padY * 2)} stroke="#e5e7eb" strokeWidth="1" />)}
+        {[0, .25, .5, .75, 1].map((ratio) => {
+          const y = padY + ratio * (height - padY * 2)
+          const value = Math.round(max * (1 - ratio))
+          return <g key={ratio}>
+            <line x1={padX + 20} x2={width - padX} y1={y} y2={y} stroke="#e5e7eb" strokeWidth="1" />
+            <text x={padX + 14} y={y + 4} textAnchor="end" className="dashboard-y-axis-label">{formatNumber(value)}</text>
+          </g>
+        })}
         <path d={path} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
         {points.map((point, index) => <g key={`${point.item.date || index}-${index}`} className="dashboard-line-point" onClick={() => point.item.drilldown && router.push(drilldownUrl(point.item.drilldown))}>
           <circle cx={point.x} cy={point.y} r="5" fill="#2563eb" />

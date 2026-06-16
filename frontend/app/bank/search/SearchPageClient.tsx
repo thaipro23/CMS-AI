@@ -49,6 +49,9 @@ function SearchResultCard({ item }: { item: BankSearchResult }) {
       {item.type === 'question' ? <div className="result-tags">
         {item.status ? <small className="status warning">{labelStatus(item.status)}</small> : null}
         {item.difficulty ? <small>{labelDifficulty(item.difficulty)}</small> : null}
+        {item.reviewed_by ? <small>Người duyệt: {item.reviewed_by}</small> : null}
+        {item.reviewed_at ? <small>Thời điểm duyệt: {new Date(item.reviewed_at).toLocaleString('vi-VN')}</small> : null}
+        {item.reject_reason ? <small>Lý do từ chối: {item.reject_reason}</small> : null}
         {item.question_id ? <small>ID: {item.question_id}</small> : null}
       </div> : null}
     </div>

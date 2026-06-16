@@ -9,7 +9,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.question import Question
+from app.models.question import Question, QuestionReviewLog
 from app.models.question_bank import (
     Department,
     QuestionSearchDocument,
@@ -237,18 +237,34 @@ class BankSearchService:
         bits = [part for part in [subject.code if subject else None, offering.code if offering else None] if part]
         return {'type': 'chapter', 'id': item.id, 'title': item.title, 'subtitle': ' · '.join(bits) or 'Bài/Chapter', 'href': f'/bank/chapters/{item.id}'}
 
-    def _serialize_question_doc(self, item: QuestionSearchDocument) -> dict[str, Any]:
+    def _serialize_question_doc(self, item: QuestionSearchDocument, question: Question | None = None, review_log: QuestionReviewLog | None = None) -> dict[str, Any]:
+        reviewer = question.reviewed_by if question else None
+        reviewed_at = question.reviewed_at.isoformat() if question and question.reviewed_at else None
+        note = (review_log.note or '').strip() if review_log else ''
+        reject_reason = note if (item.status == 'rejected' and note and not note.lower().startswith('bank review:')) else None
+        subtitle_bits = [
+            (item.difficulty or '').upper(),
+            item.status or 'draft',
+            item.concept_title or item.question_family_id or 'Câu hỏi',
+        ]
+        if reviewer:
+            subtitle_bits.append(f'Người duyệt: {reviewer}')
         return {
             'type': 'question',
             'id': item.question_id,
             'title': item.question_text_preview or item.question_id,
-            'subtitle': f'{(item.difficulty or "").upper()} · {item.status or "draft"} · {item.concept_title or item.question_family_id or "Câu hỏi"}',
+            'subtitle': ' · '.join([str(x) for x in subtitle_bits if x]),
             'href': f'/bank/chapters/{item.chapter_id}?question_id={item.question_id}' if item.chapter_id else f'/bank/questions/{item.question_id}',
             'question_id': item.question_id,
             'bank_version_id': item.bank_version_id,
             'chapter_id': item.chapter_id,
             'status': item.status,
             'difficulty': item.difficulty,
+            'reviewed_by': reviewer,
+            'reviewer_name': reviewer,
+            'reviewed_at': reviewed_at,
+            'review_note': note or None,
+            'reject_reason': reject_reason,
         }
 
     def drilldown_questions(
@@ -310,7 +326,13 @@ class BankSearchService:
             except Exception:
                 pass
         rows = query.order_by(QuestionSearchDocument.updated_at.desc(), QuestionSearchDocument.question_id.asc()).limit(safe_limit).all()
-        items = [self._serialize_question_doc(item) for item in rows]
+        question_ids = [item.question_id for item in rows]
+        questions_by_id = {q.id: q for q in self.db.query(Question).filter(Question.id.in_(question_ids)).all()} if question_ids else {}
+        review_logs: dict[str, QuestionReviewLog] = {}
+        if question_ids:
+            for log in self.db.query(QuestionReviewLog).filter(QuestionReviewLog.question_id.in_(question_ids)).order_by(QuestionReviewLog.created_at.desc()).all():
+                review_logs.setdefault(log.question_id, log)
+        items = [self._serialize_question_doc(item, questions_by_id.get(item.question_id), review_logs.get(item.question_id)) for item in rows]
         filters = {
             'q': query_text,
             'status': status,

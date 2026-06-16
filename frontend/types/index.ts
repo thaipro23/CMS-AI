@@ -1533,6 +1533,11 @@ export type BankSearchResult = {
   chapter_id?: string | null
   status?: string
   difficulty?: string
+  reviewed_by?: string | null
+  reviewed_at?: string | null
+  reject_reason?: string | null
+  review_note?: string | null
+  reviewer_name?: string | null
 }
 
 export type BankSearchGroupedResponse = {

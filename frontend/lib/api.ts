@@ -126,6 +126,21 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+
+export async function getBankOperationJobs(
+  headers: HeadersInit,
+  filters: { status?: string; operationType?: string; page?: number; pageSize?: number } = {},
+): Promise<PaginatedResponse<BankOperationJob>> {
+  const params = new URLSearchParams();
+  if (filters.status && filters.status !== 'all') params.set('status_filter', filters.status);
+  if (filters.operationType && filters.operationType !== 'all') params.set('operation_type', filters.operationType);
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 30));
+  return parseResponse<PaginatedResponse<BankOperationJob>>(
+    await fetch(`${API}/question-bank-v2/operation-jobs?${params.toString()}`, { headers }),
+  );
+}
+
 export async function getBankOperationJob(headers: HeadersInit, jobId: string) {
   return parseResponse<BankOperationJob>(
     await fetch(`${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}`, { headers }),

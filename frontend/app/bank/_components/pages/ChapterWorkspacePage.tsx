@@ -346,7 +346,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setRejectReason('')
     }, 'Đã bỏ câu hỏi', refreshCurrent)
   }
-  const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) }
+  const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: difficultyEasy === '' ? 50 : Number(difficultyEasy), difficulty_medium: difficultyMedium === '' ? 30 : Number(difficultyMedium), difficulty_hard: difficultyHard === '' ? 20 : Number(difficultyHard) }
 
   const openGenerateConfirm = async () => {
     if (!selectedBankVersion || chapterPublished) return

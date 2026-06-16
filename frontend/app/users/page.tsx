@@ -104,6 +104,7 @@ export default function UsersPage() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [dryRun, setDryRun] = useState(true)
   const [importResult, setImportResult] = useState<RoleAssignmentImportResponse | null>(null)
+  const [scopeSearch, setScopeSearch] = useState('')
   const [form, setForm] = useState({
     user_id: '',
     email: '',
@@ -124,13 +125,17 @@ export default function UsersPage() {
   const availableScopes = allowedScopesByRole[form.role_code] || ['SYSTEM']
 
   const scopeOptions = useMemo(() => {
+    const needle = scopeSearch.trim().toLowerCase()
+    const filter = (rows: Array<{ id: string; label: string; path: string }>) => needle
+      ? rows.filter((item) => `${item.label} ${item.path} ${item.id}`.toLowerCase().includes(needle))
+      : rows
     if (form.scope_type === 'SYSTEM') return [{ id: '*', label: 'Toàn hệ thống', path: 'SYSTEM' }]
-    if (form.scope_type === 'DEPARTMENT') return departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}` }))
-    if (form.scope_type === 'SUBJECT') return subjects.map((s) => ({ id: s.id, label: `${s.code} · ${s.name}`, path: `Môn / ${s.code}` }))
-    if (form.scope_type === 'SUBJECT_VERSION') return offerings.map((o) => ({ id: o.id, label: `${o.code} · ${o.name || o.version_code}`, path: `Version / ${o.code}` }))
-    if (form.scope_type === 'CHAPTER') return chapters.map((c) => ({ id: c.id, label: c.title, path: `Bài / ${c.title}` }))
+    if (form.scope_type === 'DEPARTMENT') return filter(departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}` })))
+    if (form.scope_type === 'SUBJECT') return filter(subjects.map((s) => ({ id: s.id, label: `${s.code} · ${s.name}`, path: `Môn / ${s.code}` })))
+    if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((o) => ({ id: o.id, label: `${o.code} · ${o.name || o.version_code}`, path: `Version / ${o.code}` })))
+    if (form.scope_type === 'CHAPTER') return filter(chapters.map((c) => ({ id: c.id, label: c.title, path: `Bài / ${c.title}` })))
     return []
-  }, [chapters, departments, form.scope_type, offerings, subjects])
+  }, [chapters, departments, form.scope_type, offerings, scopeSearch, subjects])
 
   const filteredAssignments = useMemo(() => {
     const needle = filterText.trim().toLowerCase()
@@ -259,11 +264,11 @@ export default function UsersPage() {
     <section className="access-hero">
       <div className="access-hero-grid">
         <div>
-          <div className="eyebrow">AI Question Bank · RBAC Control Center</div>
-          <h2>Trung tâm phân quyền nghiệp vụ</h2>
-          <p>Giao diện mới theo luồng dễ hiểu: chọn người → chọn vai trò → chọn phạm vi → kiểm tra → lưu. Người dùng chỉ thấy đúng nhánh được giao; Open edX chỉ giữ quyền kỹ thuật tối thiểu.</p>
+          <div className="eyebrow">AI Question Bank · Access Console</div>
+          <h2>Quản lý quyền truy cập</h2>
+          <p>Cấp quyền theo đúng nhánh công việc: bộ môn, môn, version môn hoặc bài/chapter. Mỗi lựa chọn đều được kiểm tra server-side trước khi lưu.</p>
           <div className="access-flow">
-            <span>Admin gán Trưởng bộ môn</span><span>Trưởng bộ môn gán Chủ môn</span><span>Chủ môn gán Người duyệt</span>
+            <span>Chọn người dùng</span><span>Chọn vai trò</span><span>Chọn phạm vi</span><span>Lưu quyền</span>
           </div>
         </div>
         <div className="access-session-card">
@@ -301,13 +306,13 @@ export default function UsersPage() {
           <div><label>Email</label><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user@fpt.edu.vn" /></div>
         </div>
         <div className="grid grid-3">
-          <div><label>Loại phạm vi</label><select className="input" value={form.scope_type} onChange={(e) => setForm({ ...form, scope_type: e.target.value as BusinessScopeType, scope_id: e.target.value === 'SYSTEM' ? '*' : '' })}>
+          <div><label>Loại phạm vi</label><select className="input" value={form.scope_type} onChange={(e) => { setScopeSearch(''); setForm({ ...form, scope_type: e.target.value as BusinessScopeType, scope_id: e.target.value === 'SYSTEM' ? '*' : '' }) }}>
             {availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]} · {scope}</option>)}
           </select></div>
-          <div><label>Phạm vi cụ thể</label><select className="input" value={form.scope_id} onChange={(e) => setForm({ ...form, scope_id: e.target.value })} disabled={form.scope_type === 'SYSTEM'}>
+          <div><label>Phạm vi cụ thể</label><input className="input scope-search-input" value={scopeSearch} onChange={(e) => setScopeSearch(e.target.value)} placeholder="Gõ mã môn, tên bộ môn, bài..." disabled={form.scope_type === 'SYSTEM'} /><select className="input" value={form.scope_id} onChange={(e) => setForm({ ...form, scope_id: e.target.value })} disabled={form.scope_type === 'SYSTEM'}>
             {form.scope_type === 'SYSTEM' ? <option value="*">Toàn hệ thống</option> : <option value="">-- chọn phạm vi --</option>}
             {scopeOptions.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}
-          </select></div>
+          </select><small className="helper">Danh sách scope đã lọc theo quyền của bạn. Gõ để tìm nhanh.</small></div>
           <div><label>Lý do cấp quyền</label><input className="input" value={form.grant_reason} onChange={(e) => setForm({ ...form, grant_reason: e.target.value })} placeholder="Phụ trách WEB107 SU26" /></div>
         </div>
         {form.scope_id && <div className="scope-preview">
