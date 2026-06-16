@@ -3901,3 +3901,17 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+
+/* v25.9.15.6.38.8.1 - header copy simplification */
+.workspace-topbar-minimal {
+  min-height: 64px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+.workspace-topbar-minimal h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.dashboard-command-hero .dashboard-hero-copy h1 {
+  margin-bottom: 0;
+}

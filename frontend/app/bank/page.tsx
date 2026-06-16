@@ -5,9 +5,7 @@ function BankDashboardFallback() {
   return <div className="page-stack bank-multipage dashboard-modern-page">
     <div className="dashboard-hero card">
       <div>
-        <span className="eyebrow">AI Question Bank · Open edX</span>
-        <h1>Đang tải Dashboard...</h1>
-        <p>Hệ thống đang chuẩn bị số liệu theo phạm vi quyền của bạn.</p>
+        <h1>Đang tải Tổng quan Ngân hàng đề...</h1>
       </div>
     </div>
     <div className="dashboard-kpi-grid">

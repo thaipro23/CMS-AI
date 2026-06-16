@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAppContext } from '../../context/AppContext'
-import { ROLE_LABELS, Role } from '../../types'
+import { ROLE_LABELS } from '../../types'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
 
 type NavItem = {
@@ -17,7 +17,7 @@ type NavItem = {
 }
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', desc: 'Việc cần xử lý', icon: '⌁', group: 'work' },
+  { href: '/bank', label: 'Tổng quan', desc: 'Dashboard', icon: '⌁', group: 'work' },
   { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, bài', icon: '▦', group: 'work' },
   { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Map Open edX', icon: '◈', group: 'work' },
   { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Release & rollback', icon: '◷', group: 'work' },
@@ -42,17 +42,10 @@ function pageTitle(pathname: string) {
   return nested ? nested.label : 'AI Server'
 }
 
-function pageDescription(pathname: string) {
-  if (pathname.startsWith('/bank/chapters/')) return 'Duyệt, sửa và kiểm tra chất lượng câu hỏi trong chapter.'
-  if (pathname.startsWith('/bank/search')) return 'Danh sách xử lý được mở từ dashboard và đã lọc theo phân quyền.'
-  const item = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
-  return item?.desc || 'Quản lý ngân hàng đề và tích hợp Open edX.'
-}
-
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Phân quyền · Quiz Open edX</span></div>
-    <div className="footer-links"><span>v25.9.15.6.38.8</span></div>
+    <div className="footer-links"><span>v25.9.15.6.38.8.1</span></div>
   </footer>
 }
 
@@ -60,23 +53,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const {
     courseId,
-    setCourseId,
     role,
-    setRole,
     userId,
-    setUserId,
     accessToken,
-    setAccessToken,
     can,
     isAuthenticated,
     authReady,
   } = useAppContext()
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
-  const [sessionOpen, setSessionOpen] = useState(false)
 
   const visibleItems = useMemo(() => navItems.filter((item) => !item.permission || can(item.permission)), [can])
   const currentTitle = pageTitle(pathname)
-  const currentDesc = pageDescription(pathname)
 
   const loginWithCms = () => {
     try {
@@ -147,33 +134,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </aside>
 
     <div className="main-area product-main">
-      <header className="workspace-topbar">
+      <header className="workspace-topbar workspace-topbar-minimal">
         <div>
-          <span className="eyebrow">Không gian làm việc</span>
           <h1>{currentTitle}</h1>
-          <p>{currentDesc}</p>
-        </div>
-        <div className="workspace-actions">
-          <span className="workspace-chip">Scope theo phân quyền</span>
-          <button className="btn secondary small" type="button" onClick={() => setSessionOpen(true)}>Phiên làm việc</button>
         </div>
       </header>
 
       <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{children}</main>
       <AppFooter />
     </div>
-
-    {sessionOpen ? <div className="modal-backdrop" onMouseDown={() => setSessionOpen(false)}>
-      <section className="modal-card session-modal" role="dialog" aria-modal="true" aria-labelledby="session-title" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="section-head"><div><h2 id="session-title">Phiên làm việc</h2><p className="helper">Chỉ dùng khi cần kiểm tra course, token hoặc tài khoản demo.</p></div><button className="btn small secondary" type="button" onClick={() => setSessionOpen(false)}>Đóng</button></div>
-        <div className="grid grid-2">
-          <label>Mã khóa học<input className="input" value={courseId} onChange={(event) => setCourseId(event.target.value)} /></label>
-          <label>Người dùng demo<input className="input" value={userId} onChange={(event) => setUserId(event.target.value)} disabled={!!accessToken.trim()} /></label>
-          <label>Vai trò demo<select className="input" value={role} onChange={(event) => setRole(event.target.value as Role)} disabled={!!accessToken.trim()}><option value="admin">admin</option><option value="teacher">teacher</option><option value="reviewer">reviewer</option><option value="viewer">viewer</option></select></label>
-          <label>Token JWT/SSO<input className="input" type="password" placeholder="Bearer token production/SSO" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} /></label>
-        </div>
-        <div className="button-row"><button className="btn" type="button" onClick={loginWithCms}>Lấy phiên CMS</button><span className="helper">{accessToken.trim() ? 'Đang dùng Bearer token trong memory.' : ROLE_LABELS[role]}</span></div>
-      </section>
-    </div> : null}
   </div>
 }

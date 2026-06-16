@@ -299,11 +299,9 @@ export function BankDashboardPage() {
     <section className="dashboard-command-hero">
       <div className="dashboard-hero-glow" />
       <div className="dashboard-hero-copy">
-        <span className="eyebrow">AI Question Bank · Open edX</span>
-        <h1>Trung tâm điều hành ngân hàng câu hỏi</h1>
-        <p>Nhìn nhanh việc cần xử lý, chất lượng câu hỏi và tiến độ nội dung trong phạm vi được giao.</p>
+        <h1>Tổng quan Ngân hàng đề</h1>
         <div className="dashboard-scope-strip">
-          <span className="dashboard-scope-chip">Scope: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
+          <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
           {data?.cache ? <span className="dashboard-scope-chip subtle">Cache: {data.cache.hit ? 'hit' : 'fresh'} · TTL {data.cache.ttl_seconds}s</span> : null}
           {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {new Date(data.generated_at).toLocaleString('vi-VN')}</span> : null}
         </div>
