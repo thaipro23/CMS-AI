@@ -749,7 +749,11 @@ def bank_material_extract_task(job_id: str):
         ops.start(job, label='Đang đọc file và tách nội dung', total=5)
         pending_file = Path(str(request.get('pending_file_path') or ''))
         if not pending_file.exists() or not pending_file.is_file():
-            raise ValueError('Không tìm thấy file tạm của job upload. Hãy upload lại tài liệu.')
+            raise ValueError(
+                'Không tìm thấy file tạm của job upload. ' 
+                'Nguyên nhân thường gặp: backend và worker không dùng chung LOCAL_STORAGE_PATH. ' 
+                'Hãy cấu hình LOCAL_STORAGE_PATH=/app/.runtime cho cả backend và worker, deploy lại, rồi upload lại tài liệu.'
+            )
         raw = pending_file.read_bytes()
         ops.progress(job, current=2, label='Đang chạy extractor/chunker')
         result = VersionedQuestionBankService(db).upload_material_bytes(

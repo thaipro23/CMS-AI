@@ -16,7 +16,7 @@ TERMINAL_STATUSES = {'completed', 'failed', 'canceled'}
 
 
 def operation_pending_dir() -> Path:
-    root = Path(settings.local_storage_path or '/tmp/ai-openedx-storage')
+    root = Path(settings.local_storage_path or '/app/.runtime')
     path = root / 'question-bank' / '_pending-operation-files'
     path.mkdir(parents=True, exist_ok=True)
     return path

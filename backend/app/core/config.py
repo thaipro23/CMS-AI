@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.15.6.38.5.1-next-suspense-build-hotfix'
+    app_version: str = '25.9.15.6.38.5.2-shared-runtime-upload-job-hotfix'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # Object storage adapter. MinIO is dev/demo only unless your organization approves AGPL/commercial terms.
     storage_provider: str = 'local'  # local | s3 | azure | gcs | minio
-    local_storage_path: str = '/tmp/ai-openedx-storage'
+    local_storage_path: str = '/app/.runtime'
     minio_endpoint: str = 'minio:9000'
     minio_access_key: str = 'minioadmin'
     minio_secret_key: str = 'minioadmin'

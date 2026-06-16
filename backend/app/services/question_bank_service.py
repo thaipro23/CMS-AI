@@ -190,7 +190,7 @@ def chunk_policy_for_material_source(source_type: str) -> tuple[int, int]:
 
 
 def bank_material_storage_dir(bank_version_id: str) -> Path:
-    root = Path(settings.local_storage_path or '/tmp/ai-openedx-storage')
+    root = Path(settings.local_storage_path or '/app/.runtime')
     return root / 'question-bank' / str(bank_version_id)
 
 
