@@ -59,6 +59,7 @@ import {
   DashboardAnalytics,
   BankSearchResult,
   BankSearchGroupedResponse,
+  BankDashboardDrilldownResponse,
   DepartmentSummary,
   SubjectSummary,
   SubjectVersionSummary,
@@ -67,6 +68,7 @@ import {
   RBACPermission,
   RoleAssignment,
   RoleAssignmentCreate,
+  RoleAssignmentImportResponse,
   RoleAssignmentListResponse,
   EffectiveRBAC,
   BankOperationJob,
@@ -982,6 +984,40 @@ export async function getBankDashboardAnalytics(headers: HeadersInit, filters: {
   );
 }
 
+
+export async function getBankDashboardDrilldown(
+  headers: HeadersInit,
+  filters: {
+    entity?: string
+    q?: string
+    status?: string
+    difficulty?: string
+    questionType?: string
+    createdFrom?: string
+    createdTo?: string
+    questionId?: string
+    chapterId?: string
+    subjectId?: string
+    limit?: number
+  } = {},
+) {
+  const params = new URLSearchParams();
+  params.set('entity', filters.entity || 'questions');
+  if (filters.q) params.set('q', filters.q);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.difficulty) params.set('difficulty', filters.difficulty);
+  if (filters.questionType) params.set('question_type', filters.questionType);
+  if (filters.createdFrom) params.set('created_from', filters.createdFrom);
+  if (filters.createdTo) params.set('created_to', filters.createdTo);
+  if (filters.questionId) params.set('question_id', filters.questionId);
+  if (filters.chapterId) params.set('chapter_id', filters.chapterId);
+  if (filters.subjectId) params.set('subject_id', filters.subjectId);
+  params.set('limit', String(filters.limit || 100));
+  return parseResponse<BankDashboardDrilldownResponse>(
+    await fetch(`${API}/question-bank-v2/dashboard/drilldown?${params.toString()}`, { headers }),
+  );
+}
+
 export async function getBankDashboardOverview(headers: HeadersInit) {
   return parseResponse<BankDashboardOverview>(
     await fetch(`${API}/question-bank-v2/dashboard/overview`, { headers }),
@@ -1653,6 +1689,28 @@ export async function getRoleAssignments(
 
 export async function createRoleAssignment(payload: RoleAssignmentCreate, headers: HeadersInit): Promise<RoleAssignment> {
   return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments`, { method: 'POST', headers, body: JSON.stringify(payload) }))
+}
+
+
+
+export async function downloadRBACImportTemplate(headers: HeadersInit): Promise<Blob> {
+  const response = await fetch(`${API}/rbac/assignments/import-template`, { headers });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || response.statusText);
+  }
+  return response.blob();
+}
+
+export async function importRoleAssignmentsFromExcel(headers: HeadersInit, file: File, dryRun = false): Promise<RoleAssignmentImportResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  const cleanHeaders = withoutContentType(headers);
+  return parseResponse<RoleAssignmentImportResponse>(await fetch(`${API}/rbac/assignments/import?dry_run=${dryRun ? 'true' : 'false'}`, {
+    method: 'POST',
+    headers: cleanHeaders,
+    body: form,
+  }));
 }
 
 export async function revokeRoleAssignment(assignmentId: string, headers: HeadersInit, revokeReason = ''): Promise<RoleAssignment> {

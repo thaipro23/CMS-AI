@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import {
@@ -110,6 +110,7 @@ import {
 
 export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const { headers, can } = useBankData()
+  const searchParams = useSearchParams()
   const { message, busy, busyLabel, run } = useAsyncMessage()
   const [departments, setDepartments] = useState<Department[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
@@ -138,8 +139,8 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [rejectReason, setRejectReason] = useState('')
   const [materialManagerOpen, setMaterialManagerOpen] = useState(false)
   const [generateManagerOpen, setGenerateManagerOpen] = useState(false)
-  const [questionStatusFilter, setQuestionStatusFilter] = useState('all')
-  const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState('all')
+  const [questionStatusFilter, setQuestionStatusFilter] = useState(() => searchParams.get('status') || 'all')
+  const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState(() => searchParams.get('difficulty') || 'all')
   const [questionSort, setQuestionSort] = useState('needs_review')
 
   const load = async () => {
@@ -194,6 +195,13 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 
   useEffect(() => { load().catch(() => null) }, [chapterId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadDetail(selectedBankVersion?.id).catch(() => null) }, [selectedBankVersion?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const nextStatus = searchParams.get('status') || 'all'
+    const nextDifficulty = searchParams.get('difficulty') || 'all'
+    setQuestionStatusFilter(nextStatus === 'overdue' ? 'pending_review' : nextStatus)
+    setQuestionDifficultyFilter(nextDifficulty)
+  }, [searchParams])
+
 
   const chapter = chapters.find((item) => item.id === chapterId)
   const offering = offerings.find((item) => item.id === chapter?.subject_offering_id)

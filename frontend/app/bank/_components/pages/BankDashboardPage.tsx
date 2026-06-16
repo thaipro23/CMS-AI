@@ -287,14 +287,21 @@ export function BankDashboardPage() {
   return <div className="page-stack bank-multipage dashboard-analytics-page">
     <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
 
-    <section className="card dashboard-analytics-header">
-      <div>
-        <span className="eyebrow">Dashboard Bank</span>
-        <h1>Việc cần làm trong scope của bạn</h1>
-        <p>Scope: <b>{data?.scope?.label || 'Đang xác định...'}</b></p>
-        <p className="helper">Dashboard chỉ dùng dữ liệu server đã lọc theo RBAC; các số liệu/chart đều click được để đi tới nơi xử lý.</p>
+    <section className="dashboard-command-hero">
+      <div className="dashboard-hero-glow" />
+      <div className="dashboard-hero-copy">
+        <span className="eyebrow">AI Question Bank · Open edX</span>
+        <h1>Trung tâm điều hành ngân hàng câu hỏi</h1>
+        <p>Nhìn nhanh việc cần xử lý, chất lượng câu hỏi và tiến độ nội dung trong phạm vi được giao.</p>
+        <div className="dashboard-scope-strip">
+          <span className="dashboard-scope-chip">Scope: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
+          {data?.cache ? <span className="dashboard-scope-chip subtle">Cache: {data.cache.hit ? 'hit' : 'fresh'} · TTL {data.cache.ttl_seconds}s</span> : null}
+          {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {new Date(data.generated_at).toLocaleString('vi-VN')}</span> : null}
+        </div>
       </div>
-      <DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />
+      <div className="dashboard-hero-actions">
+        <DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />
+      </div>
     </section>
 
     {loading ? <>
@@ -308,6 +315,13 @@ export function BankDashboardPage() {
         <KpiCard item={data.kpis.pending_review} tone={Number(data.kpis.pending_review.value || 0) > 0 ? 'warning' : 'success'} />
         <KpiCard item={data.kpis.approved} tone="success" />
         <KpiCard item={data.kpis.rejected} tone={Number(data.kpis.rejected.value || 0) > 0 ? 'danger' : ''} />
+      </section>
+
+      <section className="dashboard-tech-strip">
+        <span><b>{formatNumber(Number(data.meta?.departments_total || 0))}</b> bộ môn</span>
+        <span><b>{formatNumber(Number(data.meta?.subjects_total || 0))}</b> môn</span>
+        <span><b>{formatNumber(Number(data.meta?.subject_versions_total || 0))}</b> version</span>
+        <span><b>{formatNumber(Number(data.meta?.chapters_total || 0))}</b> bài/chapter</span>
       </section>
 
       <section className="card bank-search-card">

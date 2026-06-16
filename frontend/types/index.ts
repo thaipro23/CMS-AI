@@ -1549,6 +1549,16 @@ export type BankSearchGroupedResponse = {
   }
 }
 
+
+export type BankDashboardDrilldownResponse = {
+  entity: string
+  filters?: Record<string, string | number | boolean | null | undefined>
+  limit: number
+  total: number
+  items: BankSearchResult[]
+  generated_at?: string
+}
+
 export type DepartmentSummary = { department: Department; stats: BankReviewStatusStats }
 export type SubjectSummary = { subject: Subject; stats: BankReviewStatusStats }
 export type SubjectVersionSummary = { subject_version: SubjectOffering; stats: BankReviewStatusStats }
@@ -1611,4 +1621,29 @@ export type EffectiveRBAC = {
   effective_legacy_role: string
   permissions: string[]
   assignments: RoleAssignment[]
+}
+
+
+export type RoleAssignmentImportRow = {
+  row_index: number
+  status: 'valid' | 'created' | 'skipped' | 'failed' | string
+  message: string
+  user_id: string
+  email?: string | null
+  role_code: BusinessRoleCode | string
+  scope_type: BusinessScopeType | string
+  scope_id: string
+  scope_label?: string | null
+  assignment?: RoleAssignment | null
+}
+
+export type RoleAssignmentImportResponse = {
+  ok: boolean
+  dry_run: boolean
+  total_rows: number
+  valid_rows: number
+  created_count: number
+  skipped_count: number
+  failed_count: number
+  rows: RoleAssignmentImportRow[]
 }

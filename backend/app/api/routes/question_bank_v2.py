@@ -430,6 +430,41 @@ def dashboard_activity_feed(
     return DashboardAnalyticsService(db).get_activity_feed(user, limit=limit)
 
 
+@router.get('/dashboard/drilldown')
+def dashboard_drilldown(
+    entity: str = Query('questions'),
+    q: str = Query('', min_length=0),
+    status_filter: str | None = Query(None, alias='status'),
+    difficulty: str | None = Query(None),
+    question_type: str | None = Query(None),
+    created_from: str | None = Query(None),
+    created_to: str | None = Query(None),
+    question_id: str | None = Query(None),
+    chapter_id: str | None = Query(None),
+    subject_id: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    if entity and entity != 'questions':
+        # Hierarchy drill-down is represented by concrete routes already; only
+        # question lists need this scope-safe filtered result endpoint.
+        return {'entity': entity, 'filters': {'q': q}, 'limit': limit, 'total': 0, 'items': []}
+    return BankSearchService(db).drilldown_questions(
+        user=user,
+        q=q,
+        status=status_filter,
+        difficulty=difficulty,
+        question_type=question_type,
+        created_from=created_from,
+        created_to=created_to,
+        question_id=question_id,
+        chapter_id=chapter_id,
+        subject_id=subject_id,
+        limit=limit,
+    )
+
+
 @router.get('/dashboard/overview')
 def dashboard_overview(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     return _scoped_dashboard_overview(db, user)

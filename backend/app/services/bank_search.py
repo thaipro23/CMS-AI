@@ -251,6 +251,86 @@ class BankSearchService:
             'difficulty': item.difficulty,
         }
 
+    def drilldown_questions(
+        self,
+        *,
+        user: Any,
+        q: str = '',
+        status: str | None = None,
+        difficulty: str | None = None,
+        question_type: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        question_id: str | None = None,
+        chapter_id: str | None = None,
+        subject_id: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Scope-safe question drilldown used by actionable dashboard cards/charts.
+
+        The dashboard sends users to /bank/search with filters such as status,
+        difficulty, created date, or exact question id. This method reads the
+        compact search-document table, joins ai_questions only for filters not
+        stored in the search document, and always applies RBAC scope server-side.
+        """
+        safe_limit = max(1, min(int(limit or 100), 100))
+        query_text = (q or '').strip()
+        self._current_tokens = self._tokens(query_text)
+        query = self.db.query(QuestionSearchDocument).outerjoin(Question, Question.id == QuestionSearchDocument.question_id)
+        query = self._apply_document_scope(query, user)
+        if query_text:
+            query = query.filter(*self._search_text_filters(QuestionSearchDocument.search_text))
+        if question_id:
+            query = query.filter(QuestionSearchDocument.question_id == question_id)
+        if chapter_id:
+            query = query.filter(QuestionSearchDocument.chapter_id == chapter_id)
+        if subject_id:
+            query = query.filter(QuestionSearchDocument.subject_id == subject_id)
+        if status and status not in {'all', '*'}:
+            normalized_status = 'pending_review' if status == 'needs_review' else status
+            if normalized_status == 'needs_action':
+                query = query.filter(QuestionSearchDocument.status.in_(['pending_review', 'needs_review', 'draft_error']))
+            else:
+                query = query.filter(QuestionSearchDocument.status == normalized_status)
+        if difficulty and difficulty not in {'all', '*'}:
+            query = query.filter(func.lower(QuestionSearchDocument.difficulty) == str(difficulty).lower())
+        if question_type and question_type not in {'all', '*'}:
+            query = query.filter(func.coalesce(Question.question_type, 'unknown') == question_type)
+        if created_from:
+            try:
+                query = query.filter(Question.created_at >= datetime.fromisoformat(created_from))
+            except Exception:
+                pass
+        if created_to:
+            try:
+                end = datetime.fromisoformat(created_to)
+                if len(created_to) <= 10:
+                    end = end.replace(hour=23, minute=59, second=59)
+                query = query.filter(Question.created_at <= end)
+            except Exception:
+                pass
+        rows = query.order_by(QuestionSearchDocument.updated_at.desc(), QuestionSearchDocument.question_id.asc()).limit(safe_limit).all()
+        items = [self._serialize_question_doc(item) for item in rows]
+        filters = {
+            'q': query_text,
+            'status': status,
+            'difficulty': difficulty,
+            'question_type': question_type,
+            'created_from': created_from,
+            'created_to': created_to,
+            'question_id': question_id,
+            'chapter_id': chapter_id,
+            'subject_id': subject_id,
+        }
+        return {
+            'entity': 'questions',
+            'filters': {k: v for k, v in filters.items() if v not in (None, '')},
+            'limit': safe_limit,
+            'total': len(items),
+            'items': items,
+            'generated_at': datetime.utcnow().isoformat(),
+        }
+
     def search_grouped(self, *, q: str, user: Any, limit: int = 20, include_questions: bool = True) -> dict[str, Any]:
         query_text = (q or '').strip()
         self._current_tokens = self._tokens(query_text)

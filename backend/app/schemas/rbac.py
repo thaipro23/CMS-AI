@@ -102,3 +102,27 @@ class RBACBootstrapOut(BaseModel):
     created: bool
     message: str
     assignment: RoleAssignmentOut | None = None
+
+
+class RoleAssignmentImportRowOut(BaseModel):
+    row_index: int
+    status: str
+    message: str
+    user_id: str = ''
+    email: str | None = None
+    role_code: str = ''
+    scope_type: str = ''
+    scope_id: str = ''
+    scope_label: str | None = None
+    assignment: RoleAssignmentOut | None = None
+
+
+class RoleAssignmentImportOut(BaseModel):
+    ok: bool
+    dry_run: bool
+    total_rows: int
+    valid_rows: int
+    created_count: int
+    skipped_count: int
+    failed_count: int
+    rows: list[RoleAssignmentImportRowOut]
