@@ -115,6 +115,7 @@ export default function UsersPage() {
   const [scopeSearch, setScopeSearch] = useState('')
   const [importOpen, setImportOpen] = useState(false)
   const [assignmentsOpen, setAssignmentsOpen] = useState(false)
+  const [scopeDropdownOpen, setScopeDropdownOpen] = useState(false)
   const [form, setForm] = useState({
     user_id: '',
     email: '',
@@ -143,6 +144,13 @@ export default function UsersPage() {
     if (form.scope_type === 'CHAPTER') return filter(chapters.map((c) => ({ id: c.id, label: c.title, path: `Bài / ${c.title}` })))
     return []
   }, [chapters, departments, form.scope_type, offerings, scopeSearch, subjects])
+
+  const selectedScopeOption = useMemo(() => scopeOptions.find((item) => item.id === form.scope_id), [form.scope_id, scopeOptions])
+
+  function chooseScopeOption(id: string) {
+    setForm({ ...form, scope_id: id })
+    setScopeDropdownOpen(false)
+  }
 
   const filteredAssignments = useMemo(() => {
     const needle = filterText.trim().toLowerCase()
@@ -311,10 +319,21 @@ export default function UsersPage() {
           <div><label>Loại phạm vi</label><select className="input" value={form.scope_type} onChange={(e) => { setScopeSearch(''); setForm({ ...form, scope_type: e.target.value as BusinessScopeType, scope_id: e.target.value === 'SYSTEM' ? '*' : '' }) }}>
             {availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]} · {scope}</option>)}
           </select></div>
-          <div><label>Phạm vi cụ thể</label><input className="input scope-search-input" value={scopeSearch} onChange={(e) => setScopeSearch(e.target.value)} placeholder="Gõ mã môn, tên bộ môn, bài..." disabled={form.scope_type === 'SYSTEM'} /><select className="input" value={form.scope_id} onChange={(e) => setForm({ ...form, scope_id: e.target.value })} disabled={form.scope_type === 'SYSTEM'}>
-            {form.scope_type === 'SYSTEM' ? <option value="*">Toàn hệ thống</option> : <option value="">-- chọn phạm vi --</option>}
-            {scopeOptions.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}
-          </select><small className="helper">Danh sách đã lọc theo quyền của bạn. Gõ để tìm nhanh.</small></div>
+          <div className="searchable-scope-field"><label>Phạm vi cụ thể</label><div className={`searchable-select ${scopeDropdownOpen ? 'open' : ''} ${form.scope_type === 'SYSTEM' ? 'disabled' : ''}`}>
+            <button className="input searchable-select-trigger" type="button" disabled={form.scope_type === 'SYSTEM'} onClick={() => setScopeDropdownOpen((value) => !value)}>
+              <span>{form.scope_type === 'SYSTEM' ? 'Toàn hệ thống' : selectedScopeOption?.label || 'Chọn phạm vi'}</span>
+              <b>⌄</b>
+            </button>
+            {scopeDropdownOpen && form.scope_type !== 'SYSTEM' ? <div className="searchable-select-menu">
+              <input className="input scope-search-input" value={scopeSearch} onChange={(e) => setScopeSearch(e.target.value)} placeholder="Gõ mã môn, tên bộ môn, bài..." autoFocus />
+              <div className="searchable-select-list">
+                {scopeOptions.map((item) => <button type="button" className={`searchable-select-option ${form.scope_id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => chooseScopeOption(item.id)}>
+                  <b>{item.label}</b><small>{item.path}</small>
+                </button>)}
+                {!scopeOptions.length ? <div className="empty-state small-empty">Không tìm thấy phạm vi phù hợp.</div> : null}
+              </div>
+            </div> : null}
+          </div><small className="helper">Mở dropdown rồi gõ để tìm nhanh trong phạm vi bạn được phép quản lý.</small></div>
           <div><label>Lý do cấp quyền</label><input className="input" value={form.grant_reason} onChange={(e) => setForm({ ...form, grant_reason: e.target.value })} placeholder="Phụ trách WEB107 SU26" /></div>
         </div>
         {form.scope_id && <div className="scope-preview"><span>Quyền sẽ được cấp</span><b>{roleLabels[form.role_code]} · {scopeLabel[form.scope_type]}</b><small>{scopeOptions.find((s) => s.id === form.scope_id)?.path || form.scope_id}</small></div>}

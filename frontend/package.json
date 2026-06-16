@@ -1,6 +1,6 @@
 {
   "name": "ai-openedx-dashboard",
-  "version": "25.9.15.6-38.8.1",
+  "version": "25.9.15.6-38.8.4",
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",

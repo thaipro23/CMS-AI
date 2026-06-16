@@ -485,7 +485,7 @@ def dashboard_drilldown(
     question_id: str | None = Query(None),
     chapter_id: str | None = Query(None),
     subject_id: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=100),
+    limit: int = Query(500, ge=1, le=500),
     db: Session = Depends(get_db),
     user: UserContext = Depends(require_permission('view_questions')),
 ):

@@ -1538,6 +1538,14 @@ export type BankSearchResult = {
   reject_reason?: string | null
   review_note?: string | null
   reviewer_name?: string | null
+  action_by?: string | null
+  action_by_name?: string | null
+  question_type?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  subject_id?: string | null
+  subject_label?: string | null
+  chapter_title?: string | null
 }
 
 export type BankSearchGroupedResponse = {
@@ -1560,6 +1568,8 @@ export type BankDashboardDrilldownResponse = {
   filters?: Record<string, string | number | boolean | null | undefined>
   limit: number
   total: number
+  returned?: number
+  source?: string
   items: BankSearchResult[]
   generated_at?: string
 }

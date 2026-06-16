@@ -45,7 +45,7 @@ function pageTitle(pathname: string) {
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Phân quyền · Quiz Open edX</span></div>
-    <div className="footer-links"><span>v25.9.15.6.38.8.1</span></div>
+    <div className="footer-links"><span>v25.9.15.6.38.8.4</span></div>
   </footer>
 }
 

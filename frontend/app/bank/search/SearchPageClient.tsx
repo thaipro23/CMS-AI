@@ -13,11 +13,20 @@ function labelStatus(value?: string | null) {
     pending_review: 'Chờ duyệt',
     needs_review: 'Chờ duyệt',
     approved: 'Đã duyệt',
-    rejected: 'Đã bỏ',
+    rejected: 'Bị từ chối',
     draft_error: 'Câu lỗi',
     published: 'Đã publish',
   }
   return labels[String(value || '')] || value || 'Tất cả'
+}
+
+function statusClass(value?: string | null) {
+  const normalized = String(value || '').toLowerCase()
+  if (normalized === 'approved') return 'success'
+  if (normalized === 'rejected' || normalized === 'draft_error') return 'danger'
+  if (normalized === 'pending_review' || normalized === 'needs_review') return 'warning'
+  if (normalized === 'published') return 'published'
+  return 'neutral'
 }
 
 function labelDifficulty(value?: string | null) {
@@ -36,26 +45,81 @@ function resultTypeLabel(type?: string | null) {
   return labels[String(type || '')] || type || 'Kết quả'
 }
 
+function formatDate(value?: string | null) {
+  if (!value) return '—'
+  try { return new Date(value).toLocaleString('vi-VN') } catch { return value }
+}
+
+function truncate(value?: string | null, max = 180) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) return '—'
+  return text.length > max ? `${text.slice(0, max - 1).trim()}…` : text
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return <span className="dashboard-filter-chip">{children}</span>
 }
 
-function SearchResultCard({ item }: { item: BankSearchResult }) {
-  return <Link href={item.href || '/bank'} className="dashboard-search-result-card">
-    <div className="result-icon">{resultTypeLabel(item.type).slice(0, 1)}</div>
-    <div className="result-body">
-      <div className="result-head"><b>{item.title}</b><span>{resultTypeLabel(item.type)}</span></div>
-      <p>{item.subtitle}</p>
-      {item.type === 'question' ? <div className="result-tags">
-        {item.status ? <small className="status warning">{labelStatus(item.status)}</small> : null}
-        {item.difficulty ? <small>{labelDifficulty(item.difficulty)}</small> : null}
-        {item.reviewed_by ? <small>Người duyệt: {item.reviewed_by}</small> : null}
-        {item.reviewed_at ? <small>Thời điểm duyệt: {new Date(item.reviewed_at).toLocaleString('vi-VN')}</small> : null}
-        {item.reject_reason ? <small>Lý do từ chối: {item.reject_reason}</small> : null}
-        {item.question_id ? <small>ID: {item.question_id}</small> : null}
-      </div> : null}
-    </div>
-  </Link>
+function SearchResultTable({ items }: { items: BankSearchResult[] }) {
+  return <div className="responsive-table-wrap drilldown-table-wrap">
+    <table className="ops-data-table drilldown-question-table">
+      <thead>
+        <tr>
+          <th>Câu hỏi</th>
+          <th>Trạng thái</th>
+          <th>Độ khó</th>
+          <th>Người xử lý</th>
+          <th>Lý do / ghi chú</th>
+          <th>Phạm vi</th>
+          <th>Thời điểm</th>
+          <th>Thao tác</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item, index) => {
+          const actionName = item.action_by_name || item.reviewer_name || item.reviewed_by || item.action_by || '—'
+          const isRejected = item.status === 'rejected'
+          const note = isRejected ? (item.reject_reason || item.review_note) : item.review_note
+          return <tr key={`${item.type}-${item.id || item.question_id || index}`} className={`row-${item.status || 'draft'}`}>
+            <td className="question-cell">
+              <b>{truncate(item.title, 220)}</b>
+              <small>ID: {item.question_id || item.id || '—'}</small>
+            </td>
+            <td><span className={`status ${statusClass(item.status)}`}>{labelStatus(item.status)}</span></td>
+            <td><span className="pill-soft">{labelDifficulty(item.difficulty)}</span></td>
+            <td>
+              <b>{actionName}</b>
+              <small>{isRejected ? 'Người từ chối' : item.status === 'approved' ? 'Người duyệt' : 'Người xử lý gần nhất'}</small>
+            </td>
+            <td className="note-cell">
+              {note ? <span>{truncate(note, 180)}</span> : <span className="muted-text">Không có ghi chú</span>}
+            </td>
+            <td>
+              <b>{item.subject_label || item.subtitle?.split(' · ')[2] || '—'}</b>
+              <small>{item.chapter_title || (item.chapter_id ? `Chapter: ${item.chapter_id}` : '—')}</small>
+            </td>
+            <td>
+              <b>{formatDate(item.reviewed_at)}</b>
+              <small>Tạo: {formatDate(item.created_at)}</small>
+            </td>
+            <td><Link className="btn secondary small" href={item.href || '/bank'}>Mở</Link></td>
+          </tr>
+        })}
+      </tbody>
+    </table>
+  </div>
+}
+
+function SearchResultCards({ items }: { items: BankSearchResult[] }) {
+  return <div className="dashboard-search-list">
+    {items.map((item, index) => <Link key={`${item.type}-${item.id || index}`} href={item.href || '/bank'} className="dashboard-search-result-card">
+      <div className="result-icon">{resultTypeLabel(item.type).slice(0, 1)}</div>
+      <div className="result-body">
+        <div className="result-head"><b>{item.title}</b><span>{resultTypeLabel(item.type)}</span></div>
+        <p>{item.subtitle}</p>
+      </div>
+    </Link>)}
+  </div>
 }
 
 export default function SearchPageClient() {
@@ -73,6 +137,9 @@ export default function SearchPageClient() {
   const chapterId = params.get('chapter_id') || ''
   const subjectId = params.get('subject_id') || ''
   const [items, setItems] = useState<BankSearchResult[]>([])
+  const [total, setTotal] = useState(0)
+  const [returned, setReturned] = useState(0)
+  const [source, setSource] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -95,14 +162,21 @@ export default function SearchPageClient() {
           questionId,
           chapterId,
           subjectId,
-          limit: 100,
+          limit: 500,
         })
         setItems(payload.items || [])
+        setTotal(Number(payload.total || 0))
+        setReturned(Number(payload.returned || payload.items?.length || 0))
+        setSource(String(payload.source || ''))
       } else {
-        setItems(await searchBankDashboard(headers, q, 50))
+        const results = await searchBankDashboard(headers, q, 50)
+        setItems(results)
+        setTotal(results.length)
+        setReturned(results.length)
+        setSource('search')
       }
     } catch (err: any) {
-      setError(err?.message || 'Không tải được danh sách drill-down')
+      setError(err?.message || 'Không tải được danh sách')
     } finally {
       setLoading(false)
     }
@@ -110,12 +184,14 @@ export default function SearchPageClient() {
 
   useEffect(() => { load() }, [authReady, q, entity, status, difficulty, questionType, createdFrom, createdTo, questionId, chapterId, subjectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const isQuestionTable = hasQuestionFilters && items.every((item) => item.type === 'question')
+
   return <div className="page-stack bank-multipage dashboard-search-page">
     <div className="dashboard-search-hero card">
       <div>
-        <span className="eyebrow">Drill-down</span>
-        <h1>Danh sách xử lý từ Dashboard</h1>
-        <p>Toàn bộ kết quả đã được backend lọc theo scope RBAC của tài khoản hiện tại.</p>
+        <span className="eyebrow">Danh sách</span>
+        <h1>Câu hỏi trong phạm vi được giao</h1>
+        <p>Kết quả lấy theo quyền hiện tại của tài khoản, dùng để kiểm tra nhanh các chỉ số trên Dashboard.</p>
         <div className="dashboard-filter-row">
           {q ? <Chip>Từ khóa: {q}</Chip> : null}
           {status ? <Chip>Trạng thái: {labelStatus(status)}</Chip> : null}
@@ -139,13 +215,14 @@ export default function SearchPageClient() {
       <p>{error}</p>
       <button className="btn small" onClick={load} type="button">Thử lại</button>
     </div> : items.length ? <>
-      <div className="dashboard-search-count">Tìm thấy <b>{items.length}</b> kết quả phù hợp</div>
-      <div className="dashboard-search-list">
-        {items.map((item, index) => <SearchResultCard key={`${item.type}-${item.id || item.question_id || index}`} item={item} />)}
+      <div className="dashboard-search-count">
+        Đang hiển thị <b>{returned || items.length}</b>{total ? <> / <b>{total}</b></> : null} kết quả phù hợp
+        {source === 'search_index' ? <small> · Dữ liệu lấy từ chỉ mục tìm kiếm</small> : null}
       </div>
+      {isQuestionTable ? <SearchResultTable items={items} /> : <SearchResultCards items={items} />}
     </> : <div className="dashboard-empty-state">
       <b>Không có kết quả trong phạm vi của bạn.</b>
-      <p>Dữ liệu có thể chưa được tạo, chưa rebuild search index, hoặc bạn không có quyền trong scope đó.</p>
+      <p>Dữ liệu có thể chưa được tạo hoặc bạn không có quyền trong phạm vi đó.</p>
       <Link className="btn secondary small" href="/bank">Quay lại Dashboard</Link>
     </div>}
   </div>
