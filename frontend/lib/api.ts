@@ -78,6 +78,13 @@ import {
   AcademicClassListResponse,
   AcademicStudentListResponse,
   AcademicSyncResult,
+  AcademicMappingResolveResult,
+  AcademicManualMappingImportResult,
+  AcademicCourseMappingValidation,
+  AcademicCourseMapping,
+  AcademicClassCourseMapping,
+  AcademicClassCourseMappingProposal,
+  AcademicCourseMappingListResponse,
 } from "../types";
 
 const rawApiBase =
@@ -1744,4 +1751,53 @@ export async function getAcademicClassStudents(headers: HeadersInit, classId: st
 
 export async function syncAcademicFromAp(headers: HeadersInit, payload: { term_name: string; campus: string; branch?: string; subject_codes?: string[]; max_subjects?: number; dry_run?: boolean }): Promise<AcademicSyncResult> {
   return parseResponse(await fetch(`${API}/academic/sync/ap`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function resolveAcademicClassOpenEdxUsers(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicMappingResolveResult> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/resolve-openedx-users`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 1000 }),
+  }));
+}
+
+export async function importAcademicOpenEdxUserMappings(headers: HeadersInit, records: Array<Record<string, unknown>>): Promise<AcademicManualMappingImportResult> {
+  return parseResponse(await fetch(`${API}/academic/openedx-user-mappings/import`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ records }),
+  }));
+}
+
+
+
+export async function getAcademicCourseMappings(headers: HeadersInit, filters: { termId?: string; blockId?: string; subjectId?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicCourseMappingListResponse> {
+  const params = new URLSearchParams();
+  if (filters.termId) params.set('term_id', filters.termId);
+  if (filters.blockId) params.set('block_id', filters.blockId);
+  if (filters.subjectId) params.set('subject_id', filters.subjectId);
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 50));
+  return parseResponse(await fetch(`${API}/academic/course-mappings?${params.toString()}`, { headers }));
+}
+
+export async function validateAcademicCourseMapping(headers: HeadersInit, payload: { term_id: string; subject_id: string; openedx_course_id: string; block_id?: string | null; campus?: string | null; branch?: string | null; openedx_course_title?: string | null }): Promise<AcademicCourseMappingValidation> {
+  return parseResponse(await fetch(`${API}/academic/course-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function saveAcademicCourseMapping(headers: HeadersInit, payload: { term_id: string; subject_id: string; openedx_course_id: string; block_id?: string | null; campus?: string | null; branch?: string | null; openedx_course_title?: string | null; allow_warnings?: boolean; note?: string | null }): Promise<AcademicCourseMapping> {
+  return parseResponse(await fetch(`${API}/academic/course-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function getAcademicClassCourseMappingProposal(headers: HeadersInit, classId: string): Promise<AcademicClassCourseMappingProposal> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping/proposal`, { headers }));
+}
+
+export async function validateAcademicClassCourseMapping(headers: HeadersInit, classId: string, payload: { openedx_course_id: string; openedx_cohort_name?: string | null; openedx_course_title?: string | null }): Promise<AcademicCourseMappingValidation> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function saveAcademicClassCourseMapping(headers: HeadersInit, classId: string, payload: { openedx_course_id: string; openedx_cohort_name?: string | null; openedx_course_title?: string | null; allow_warnings?: boolean; note?: string | null }): Promise<AcademicClassCourseMapping> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }

@@ -10,6 +10,7 @@ import httpx
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.academic import (
     AcademicBlock,
     AcademicClass,
@@ -23,11 +24,8 @@ from app.models.academic import (
     AcademicTerm,
 )
 
-# v25.9.16.0: the AP token is intentionally kept as a code constant because the
-# current deployment account cannot change the upstream AP API configuration.
-# Do not log this value and do not return it in any API response.
-AP_API_TOKEN = 'VXXbKr5ERSdxZhHkM6'
-AP_API_BASE_URL = 'https://api_v2.poly.edu.vn'
+# v25.9.16.2.1: AP credentials are read from environment settings.
+# Never hardcode or log the AP API key.
 
 
 @dataclass
@@ -100,12 +98,20 @@ def _safe_payload(value: Any) -> Any:
 
 
 class APAcademicClient:
-    def __init__(self, *, timeout_seconds: int = 60):
-        self.timeout_seconds = timeout_seconds
+    def __init__(self, *, timeout_seconds: int | None = None, base_url: str | None = None, api_key: str | None = None):
+        self.timeout_seconds = timeout_seconds or settings.academic_ap_request_timeout_seconds
+        self.base_url = (base_url or settings.academic_ap_api_base_url or '').rstrip('/')
+        self.api_key = (api_key or settings.academic_ap_api_key or '').strip()
+        if not settings.academic_ap_sync_enabled:
+            raise RuntimeError('AP sync đang bị tắt. Bật ACADEMIC_AP_SYNC_ENABLED=true nếu muốn đồng bộ AP.')
+        if not self.base_url:
+            raise RuntimeError('Thiếu ACADEMIC_AP_API_BASE_URL cho đồng bộ AP.')
+        if not self.api_key:
+            raise RuntimeError('Thiếu ACADEMIC_AP_API_KEY trong env. Không hardcode API key AP trong source.')
 
     def _headers(self, campus: str | None = None) -> dict[str, str]:
         headers = {
-            'Authorization': f'Bearer {AP_API_TOKEN}',
+            'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json',
         }
         if campus:
@@ -115,7 +121,7 @@ class APAcademicClient:
     def get_subjects(self, *, branch: str, term_name: str) -> list[dict[str, Any]]:
         with httpx.Client(timeout=self.timeout_seconds) as client:
             response = client.get(
-                f'{AP_API_BASE_URL}/get-course',
+                f'{self.base_url}/get-course',
                 params={'branch': branch or 'poly', 'term_name': term_name},
                 headers=self._headers(),
             )
@@ -131,7 +137,7 @@ class APAcademicClient:
         body = {'campus': campus, 'term_name': term_name, 'subject_code': subject_code}
         with httpx.Client(timeout=self.timeout_seconds) as client:
             response = client.post(
-                f'{AP_API_BASE_URL}/get-data-cms',
+                f'{self.base_url}/get-data-cms',
                 headers=self._headers(campus=campus),
                 json=body,
             )

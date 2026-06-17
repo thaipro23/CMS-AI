@@ -19,9 +19,23 @@ from app.schemas.academic import (
     AcademicBlockOut,
     AcademicClassListOut,
     AcademicClassOut,
+    AcademicClassCourseMappingCreateIn,
+    AcademicClassCourseMappingOut,
+    AcademicClassCourseMappingProposalOut,
+    AcademicClassCourseMappingValidateIn,
+    AcademicCourseMappingCreateIn,
+    AcademicCourseMappingListOut,
+    AcademicCourseMappingOut,
+    AcademicCourseMappingValidateIn,
+    AcademicCourseMappingValidationOut,
     AcademicHealthOut,
     AcademicImportFromJsonIn,
     AcademicImportResultOut,
+    AcademicMappingResolveOut,
+    AcademicMappingSummaryOut,
+    AcademicManualMappingImportIn,
+    AcademicManualMappingImportOut,
+    AcademicResolveClassUsersIn,
     AcademicStudentListOut,
     AcademicSubjectOut,
     AcademicSyncCounters,
@@ -110,6 +124,130 @@ def list_teacher_classes(
     )
 
 
+
+@router.get('/course-mappings', response_model=AcademicCourseMappingListOut)
+def list_academic_course_mappings(
+    term_id: str | None = None,
+    block_id: str | None = None,
+    subject_id: str | None = None,
+    search: str | None = None,
+    active: bool | None = True,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    return AcademicService(db).list_course_mappings(user, term_id=term_id, block_id=block_id, subject_id=subject_id, search=search, active=active, page=page, page_size=page_size)
+
+
+@router.post('/course-mappings/validate', response_model=AcademicCourseMappingValidationOut)
+def validate_academic_course_mapping(
+    payload: AcademicCourseMappingValidateIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    result = AcademicService(db).validate_course_mapping_payload(**payload.model_dump())
+    log_audit(
+        db,
+        action='academic.course_mapping.validate',
+        status='success' if result.get('ok') else 'failed',
+        error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR,
+        message=result.get('message', ''),
+        user=user,
+        course_id=payload.openedx_course_id,
+        target_type='academic_course_mapping',
+        metadata=result,
+    )
+    return result
+
+
+@router.post('/course-mappings', response_model=AcademicCourseMappingOut)
+def create_academic_course_mapping(
+    payload: AcademicCourseMappingCreateIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    try:
+        item = AcademicService(db).create_or_update_course_mapping(user, payload.model_dump())
+        log_audit(db, action='academic.course_mapping.save', status='success', message='Lưu mapping AP ↔ Open edX course thành công', user=user, course_id=item.get('openedx_course_id'), target_type='academic_course_mapping', target_id=item.get('id'), metadata={'validation_status': item.get('validation_status')})
+        return item
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        log_audit(db, action='academic.course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='academic_course_mapping')
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete('/course-mappings/{mapping_id}', response_model=AcademicCourseMappingOut)
+def deactivate_academic_course_mapping(
+    mapping_id: str,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    item = AcademicService(db).deactivate_course_mapping(user, mapping_id)
+    log_audit(db, action='academic.course_mapping.deactivate', status='success', message='Đã tắt mapping course cấp môn/kỳ/block', user=user, course_id=item.get('openedx_course_id'), target_type='academic_course_mapping', target_id=mapping_id)
+    return item
+
+
+@router.get('/classes/{class_id}/course-mapping/proposal', response_model=AcademicClassCourseMappingProposalOut)
+def get_class_course_mapping_proposal(
+    class_id: str,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    return AcademicService(db).class_course_mapping_proposal(user, class_id)
+
+
+@router.post('/classes/{class_id}/course-mapping/validate', response_model=AcademicCourseMappingValidationOut)
+def validate_class_course_mapping(
+    class_id: str,
+    payload: AcademicClassCourseMappingValidateIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    result = AcademicService(db).validate_class_course_mapping(user, class_id, payload.model_dump())
+    log_audit(db, action='academic.class_course_mapping.validate', status='success' if result.get('ok') else 'failed', error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR, message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='academic_class', target_id=class_id, metadata=result)
+    return result
+
+
+@router.post('/classes/{class_id}/course-mapping', response_model=AcademicClassCourseMappingOut)
+def save_class_course_mapping(
+    class_id: str,
+    payload: AcademicClassCourseMappingCreateIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    try:
+        item = AcademicService(db).create_or_update_class_course_mapping(user, class_id, payload.model_dump())
+        log_audit(db, action='academic.class_course_mapping.save', status='success', message='Lưu mapping lớp AP sang Open edX course thành công', user=user, course_id=item.get('openedx_course_id'), target_type='academic_class', target_id=class_id, metadata={'validation_status': item.get('validation_status'), 'cohort': item.get('openedx_cohort_name')})
+        return item
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        log_audit(db, action='academic.class_course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='academic_class', target_id=class_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete('/classes/{class_id}/course-mapping', response_model=AcademicClassCourseMappingOut)
+def deactivate_class_course_mapping(
+    class_id: str,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    item = AcademicService(db).deactivate_class_course_mapping(user, class_id)
+    log_audit(db, action='academic.class_course_mapping.deactivate', status='success', message='Đã tắt mapping course riêng của lớp', user=user, course_id=item.get('openedx_course_id'), target_type='academic_class', target_id=class_id)
+    return item
+
+
 @router.get('/classes/{class_id}', response_model=AcademicClassOut)
 def get_class_detail(
     class_id: str,
@@ -129,6 +267,74 @@ def list_class_students(
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_class_students(user, class_id, search=search, page=page, page_size=page_size)
+
+
+@router.get('/classes/{class_id}/mapping-summary', response_model=AcademicMappingSummaryOut)
+def get_class_mapping_summary(
+    class_id: str,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    return AcademicService(db).mapping_summary_for_class(user, class_id)
+
+
+@router.post('/classes/{class_id}/resolve-openedx-users', response_model=AcademicMappingResolveOut)
+def resolve_class_openedx_users(
+    class_id: str,
+    payload: AcademicResolveClassUsersIn,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    service = AcademicService(db)
+    try:
+        result = service.resolve_class_openedx_users(user, class_id, force=payload.force, limit=payload.limit)
+        log_audit(
+            db,
+            action='academic.openedx_user_mapping.resolve_class',
+            status='success',
+            message='Resolve Open edX user mapping theo AP username thành công',
+            user=user,
+            target_type='academic_class',
+            target_id=class_id,
+            metadata={'counts': result.get('counts', {}), 'updated': result.get('updated', 0)},
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        log_audit(
+            db,
+            action='academic.openedx_user_mapping.resolve_class',
+            status='failed',
+            error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
+            message=str(exc),
+            user=user,
+            target_type='academic_class',
+            target_id=class_id,
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post('/openedx-user-mappings/import', response_model=AcademicManualMappingImportOut)
+def import_openedx_user_mappings(
+    payload: AcademicManualMappingImportIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    result = AcademicService(db).import_openedx_user_mappings([item.model_dump() for item in payload.records], requested_by=user.user_id)
+    log_audit(
+        db,
+        action='academic.openedx_user_mapping.import',
+        status='success',
+        message='Import mapping AP username sang Open edX user thành công',
+        user=user,
+        target_type='openedx_user_mappings',
+        target_id='bulk',
+        metadata={'counters': result.get('counters', {}), 'total': result.get('total', 0)},
+    )
+    return result
 
 
 @router.post('/sync/from-json', response_model=AcademicImportResultOut)

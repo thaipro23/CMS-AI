@@ -1679,6 +1679,8 @@ export type AcademicClass = {
   student_count: number
   openedx_course_id?: string | null
   openedx_cohort_name?: string | null
+  openedx_mapping_source?: string | null
+  openedx_mapping_validation_status?: string | null
 }
 
 export type AcademicStudent = {
@@ -1693,6 +1695,38 @@ export type AcademicStudent = {
   branch?: string | null
   active: boolean
   synced_at?: string | null
+  mapping_id?: string | null
+  openedx_user_id?: string | null
+  openedx_username?: string | null
+  openedx_email?: string | null
+  openedx_is_active?: boolean | null
+  match_status?: string
+  match_method?: string
+  mapping_confidence?: number
+  mapping_note?: string
+  last_resolved_at?: string | null
+}
+
+export type AcademicMappingSummary = {
+  class_id: string
+  total: number
+  counts: Record<string, number>
+}
+
+export type AcademicMappingResolveResult = {
+  ok: boolean
+  class_id: string
+  total: number
+  updated: number
+  counts: Record<string, number>
+  message: string
+}
+
+export type AcademicManualMappingImportResult = {
+  ok: boolean
+  total: number
+  counters: Record<string, number>
+  errors: Array<Record<string, any>>
 }
 
 export type AcademicClassListResponse = PaginatedResponse<AcademicClass>
@@ -1720,3 +1754,67 @@ export type AcademicSyncResult = {
   sync_run: AcademicSyncRun
   counters: Record<string, number>
 }
+
+
+export type AcademicCourseMappingValidation = {
+  ok: boolean
+  can_save: boolean
+  risk_level: 'low' | 'medium' | 'high' | string
+  message: string
+  checks: Array<Record<string, any>>
+  suggested_openedx_course_id?: string | null
+  parsed_course?: Record<string, any> | null
+}
+
+export type AcademicCourseMapping = {
+  id: string
+  term_id: string
+  term_name?: string | null
+  block_id?: string | null
+  block_name?: string | null
+  subject_id: string
+  subject_code?: string | null
+  subject_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  openedx_course_id: string
+  openedx_course_title?: string | null
+  validation_status: string
+  validation_json?: Record<string, any> | null
+  validated_at?: string | null
+  note?: string
+  active: boolean
+  created_by?: string | null
+  updated_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicClassCourseMapping = {
+  id: string
+  class_id: string
+  class_code?: string | null
+  openedx_course_id: string
+  openedx_cohort_name?: string | null
+  openedx_course_title?: string | null
+  mapping_source: string
+  validation_status: string
+  validation_json?: Record<string, any> | null
+  validated_at?: string | null
+  note?: string
+  active: boolean
+}
+
+export type AcademicClassCourseMappingProposal = {
+  class_id: string
+  class_code: string
+  suggested_openedx_course_id: string
+  suggested_cohort_name: string
+  inherited_course_mapping?: AcademicCourseMapping | null
+  effective_openedx_course_id?: string | null
+  effective_openedx_cohort_name?: string | null
+  effective_mapping_source: string
+  checks: Array<Record<string, any>>
+}
+
+export type AcademicCourseMappingListResponse = PaginatedResponse<AcademicCourseMapping>

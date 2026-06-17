@@ -3303,3 +3303,10 @@ body { background: #ffffff !important; }
 .data-table tr.row-selected td { background: #fff7ed; }
 .empty-state { padding: 18px; color: #64748b; text-align: center; }
 @media (max-width: 980px) { .academic-filter-grid { grid-template-columns: 1fr; } .compact-input { width: 100%; } }
+
+/* v25.9.16.1 Academic AP Username Mapping */
+.status-pill.success { background: #dcfce7; color: #166534; }
+.status-pill.warning { background: #fef3c7; color: #92400e; }
+.status-pill.danger { background: #fee2e2; color: #991b1b; }
+.status-pill.neutral { background: #f1f5f9; color: #475569; }
+.student-management-page .data-table td small { display: block; color: #64748b; margin-top: 4px; word-break: break-word; }

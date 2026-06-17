@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -118,6 +118,33 @@ class AcademicStudent(Base):
     )
 
 
+class OpenEdXUserMapping(Base):
+    __tablename__ = 'openedx_user_mappings'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    student_id: Mapped[str] = mapped_column(String, ForeignKey('academic_students.id'), unique=True, index=True)
+    ap_student_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    ap_username: Mapped[str] = mapped_column(String(255), index=True)
+    ap_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    openedx_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    openedx_username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    openedx_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    openedx_is_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    match_method: Mapped[str] = mapped_column(String(50), default='not_checked', index=True)
+    match_status: Mapped[str] = mapped_column(String(50), default='not_checked', index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    note: Mapped[str] = mapped_column(Text, default='')
+    raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    last_resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_openedx_user_mappings_ap_username_status', 'ap_username', 'match_status'),
+        Index('ix_openedx_user_mappings_student_status', 'student_id', 'match_status'),
+    )
+
+
 class AcademicClass(Base):
     __tablename__ = 'academic_classes'
 
@@ -192,6 +219,13 @@ class AcademicCourseMapping(Base):
     campus: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     branch: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     openedx_course_id: Mapped[str] = mapped_column(String(255), index=True)
+    openedx_course_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    validation_status: Mapped[str] = mapped_column(String(50), default='not_validated', index=True)
+    validation_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    note: Mapped[str] = mapped_column(Text, default='')
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -199,6 +233,7 @@ class AcademicCourseMapping(Base):
     __table_args__ = (
         UniqueConstraint('term_id', 'block_id', 'subject_id', 'campus', 'branch', name='uq_academic_course_mapping_scope'),
         Index('ix_academic_course_mappings_subject_term', 'subject_id', 'term_id', 'block_id'),
+        Index('ix_academic_course_mappings_course_active', 'openedx_course_id', 'active'),
     )
 
 
@@ -209,9 +244,22 @@ class AcademicClassCourseMapping(Base):
     class_id: Mapped[str] = mapped_column(String, ForeignKey('academic_classes.id'), unique=True, index=True)
     openedx_course_id: Mapped[str] = mapped_column(String(255), index=True)
     openedx_cohort_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    openedx_course_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mapping_source: Mapped[str] = mapped_column(String(50), default='class_override', index=True)
+    validation_status: Mapped[str] = mapped_column(String(50), default='not_validated', index=True)
+    validation_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    note: Mapped[str] = mapped_column(Text, default='')
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_academic_class_course_mappings_course_active', 'openedx_course_id', 'active'),
+        Index('ix_academic_class_course_mappings_cohort_active', 'openedx_cohort_name', 'active'),
+    )
 
 
 class AcademicSyncRun(Base):

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.15.6.38.4-dashboard-drilldown-filter-polish'
+    app_version: str = '25.9.16.2.1-academic-core-safety-hotfix'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -137,6 +137,24 @@ class Settings(BaseSettings):
     # Force-save custom timed-practice config after Quiz node creation.
     # This endpoint lives in the LMS unit-reset plugin and accepts the same HMAC headers.
     openedx_quiz_timer_config_upsert_endpoint: str = '/api/unit-reset/v1/quiz-config/upsert'
+
+    # v25.9.16.1 AP Username Mapping. This points to the LMS plugin that reads
+    # Open edX users by Django ORM. It is optional until the plugin is deployed;
+    # manual/import mapping endpoints still work without it.
+    openedx_student_insight_base_url: str | None = None
+    openedx_student_insight_users_resolve_endpoint: str = '/api/ai-student-insight/v1/users/resolve'
+    openedx_student_insight_client_id: str = 'ai-server'
+    openedx_student_insight_shared_secret: str | None = None
+    openedx_student_insight_timeout_seconds: int = 30
+    openedx_student_insight_max_batch_size: int = 100
+
+    # v25.9.16.2.1 Academic AP Core Safety Hotfix. AP credentials are
+    # deployment secrets and must come from env, never from source.
+    academic_ap_sync_enabled: bool = True
+    academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'
+    academic_ap_api_key: str | None = None
+    academic_ap_request_timeout_seconds: int = 60
+
     openedx_request_timeout_seconds: int = 30
     # Server-to-server HMAC used by the AI Server when calling the CMS connector plugin.
     # The same value must be set in the CMS container as AI_CONNECTOR_HMAC_SECRET.
@@ -263,6 +281,13 @@ def validate_security_settings() -> None:
         bridge_secret = settings.openedx_session_bridge_secret or settings.openedx_connector_hmac_secret
         if not bridge_secret or str(bridge_secret).startswith('CHANGE_ME') or len(str(bridge_secret)) < 32:
             errors.append('OPENEDX_SESSION_BRIDGE_SECRET or OPENEDX_CONNECTOR_HMAC_SECRET is required for AUTH_MODE=openedx_sso')
+    if settings.academic_ap_sync_enabled:
+        if not settings.academic_ap_api_base_url or 'CHANGE_ME' in settings.academic_ap_api_base_url:
+            errors.append('ACADEMIC_AP_API_BASE_URL is required when ACADEMIC_AP_SYNC_ENABLED=true')
+        if not settings.academic_ap_api_key or settings.academic_ap_api_key.startswith('CHANGE_ME') or len(settings.academic_ap_api_key) < 12:
+            errors.append('ACADEMIC_AP_API_KEY is required when ACADEMIC_AP_SYNC_ENABLED=true')
+        if settings.academic_ap_request_timeout_seconds < 5:
+            errors.append('ACADEMIC_AP_REQUEST_TIMEOUT_SECONDS must be at least 5 seconds')
     if errors:
         raise RuntimeError('Unsafe production configuration: ' + '; '.join(errors))
 
