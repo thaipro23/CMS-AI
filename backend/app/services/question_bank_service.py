@@ -190,7 +190,7 @@ def chunk_policy_for_material_source(source_type: str) -> tuple[int, int]:
 
 
 def bank_material_storage_dir(bank_version_id: str) -> Path:
-    root = Path(settings.local_storage_path or '/app/.runtime')
+    root = Path(settings.local_storage_path or '/tmp/ai-openedx-storage')
     return root / 'question-bank' / str(bank_version_id)
 
 
@@ -1556,11 +1556,7 @@ class VersionedQuestionBankService:
         except Exception as exc:
             raise ValueError(f'Không đọc được file {filename}: {exc}') from exc
         if not items:
-            raise ValueError(
-                f'File {filename} không tách được text. Nếu là scan/ảnh, hãy bật OCR cho đúng loại file '
-                '(PDF/PPTX/DOCX), tăng FILE_OCR_MAX_PAGES hoặc DOCX_OCR_MAX_IMAGES nếu tài liệu dài, '
-                'hoặc upload bản DOCX/PDF có text/transcript.'
-            )
+            raise ValueError(f'File {filename} không tách được text. Nếu là scan/ảnh, cần bật OCR hoặc upload transcript.')
 
         next_version_no = int((self.db.query(func.max(LearningMaterialVersion.version_no)).filter(LearningMaterialVersion.bank_version_id == version.id).scalar() or 0) + 1)
         material = LearningMaterialVersion(

@@ -16,7 +16,7 @@ TERMINAL_STATUSES = {'completed', 'failed', 'canceled'}
 
 
 def operation_pending_dir() -> Path:
-    root = Path(settings.local_storage_path or '/app/.runtime')
+    root = Path(settings.local_storage_path or '/tmp/ai-openedx-storage')
     path = root / 'question-bank' / '_pending-operation-files'
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -141,7 +141,7 @@ class BankOperationJobService:
         job.status = 'failed'
         job.error_message = message[:4000]
         job.progress_label = 'Thất bại'
-        job.result_json = result or {'error': message, 'user_message': message, 'traceback_tail': traceback.format_exc(limit=8)}
+        job.result_json = result or {'error': message, 'traceback_tail': traceback.format_exc(limit=8)}
         job.finished_at = datetime.utcnow()
         job.updated_at = datetime.utcnow()
         self.db.commit()

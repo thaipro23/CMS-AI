@@ -1,6 +1,6 @@
 from app.core.config import settings
 from app.db.session import Base, engine, SessionLocal
-from app.models import course, question, cost, job, generation_cache, token_calibration, generation_batch, audit, publish, concept, question_bank, rbac  # noqa: F401 - import models for metadata
+from app.models import course, question, cost, job, generation_cache, token_calibration, generation_batch, audit, publish, concept, question_bank, rbac, academic  # noqa: F401 - import models for metadata
 
 
 def init_db() -> None:

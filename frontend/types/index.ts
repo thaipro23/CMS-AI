@@ -1533,19 +1533,6 @@ export type BankSearchResult = {
   chapter_id?: string | null
   status?: string
   difficulty?: string
-  reviewed_by?: string | null
-  reviewed_at?: string | null
-  reject_reason?: string | null
-  review_note?: string | null
-  reviewer_name?: string | null
-  action_by?: string | null
-  action_by_name?: string | null
-  question_type?: string | null
-  created_at?: string | null
-  updated_at?: string | null
-  subject_id?: string | null
-  subject_label?: string | null
-  chapter_title?: string | null
 }
 
 export type BankSearchGroupedResponse = {
@@ -1568,8 +1555,6 @@ export type BankDashboardDrilldownResponse = {
   filters?: Record<string, string | number | boolean | null | undefined>
   limit: number
   total: number
-  returned?: number
-  source?: string
   items: BankSearchResult[]
   generated_at?: string
 }
@@ -1638,27 +1623,100 @@ export type EffectiveRBAC = {
   assignments: RoleAssignment[]
 }
 
-
-export type RoleAssignmentImportRow = {
-  row_index: number
-  status: 'valid' | 'created' | 'skipped' | 'failed' | string
-  message: string
-  user_id: string
-  email?: string | null
-  role_code: BusinessRoleCode | string
-  scope_type: BusinessScopeType | string
-  scope_id: string
-  scope_label?: string | null
-  assignment?: RoleAssignment | null
+export type AcademicTerm = {
+  id: string
+  ap_term_id?: string | null
+  term_code: string
+  term_name: string
+  branch?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  active: boolean
 }
 
-export type RoleAssignmentImportResponse = {
+export type AcademicBlock = {
+  id: string
+  term_id: string
+  ap_block_id?: string | null
+  block_code: string
+  block_name: string
+  start_date?: string | null
+  end_date?: string | null
+  sort_order: number
+  active: boolean
+}
+
+export type AcademicSubject = {
+  id: string
+  ap_subject_id?: string | null
+  subject_code: string
+  subject_name: string
+  subject_name_en?: string | null
+  skill_code?: string | null
+  branch?: string | null
+  active: boolean
+}
+
+export type AcademicClass = {
+  id: string
+  ap_class_id?: string | null
+  term_id: string
+  term_name?: string | null
+  block_id?: string | null
+  block_name?: string | null
+  subject_id: string
+  subject_code?: string | null
+  subject_name?: string | null
+  class_code: string
+  class_name: string
+  campus?: string | null
+  branch?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  active: boolean
+  teacher_username?: string | null
+  teacher_name?: string | null
+  student_count: number
+  openedx_course_id?: string | null
+  openedx_cohort_name?: string | null
+}
+
+export type AcademicStudent = {
+  id: string
+  class_id?: string
+  student_code?: string | null
+  username: string
+  email?: string | null
+  full_name: string
+  phone?: string | null
+  campus?: string | null
+  branch?: string | null
+  active: boolean
+  synced_at?: string | null
+}
+
+export type AcademicClassListResponse = PaginatedResponse<AcademicClass>
+export type AcademicStudentListResponse = PaginatedResponse<AcademicStudent>
+
+export type AcademicSyncRun = {
+  id: string
+  source: string
+  mode: string
+  status: string
+  requested_by?: string | null
+  term_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  counters_json?: Record<string, number> | null
+  error_message?: string | null
+  started_at: string
+  finished_at?: string | null
+  created_at: string
+}
+
+export type AcademicSyncResult = {
   ok: boolean
-  dry_run: boolean
-  total_rows: number
-  valid_rows: number
-  created_count: number
-  skipped_count: number
-  failed_count: number
-  rows: RoleAssignmentImportRow[]
+  message: string
+  sync_run: AcademicSyncRun
+  counters: Record<string, number>
 }

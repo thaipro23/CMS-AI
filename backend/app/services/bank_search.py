@@ -9,10 +9,9 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.question import Question, QuestionReviewLog
+from app.models.question import Question
 from app.models.question_bank import (
     Department,
-    QuestionBankVersion,
     QuestionSearchDocument,
     Subject,
     SubjectChapter,
@@ -238,89 +237,18 @@ class BankSearchService:
         bits = [part for part in [subject.code if subject else None, offering.code if offering else None] if part]
         return {'type': 'chapter', 'id': item.id, 'title': item.title, 'subtitle': ' · '.join(bits) or 'Bài/Chapter', 'href': f'/bank/chapters/{item.id}'}
 
-    def _actor_label_map(self, actors: list[str | None]) -> dict[str, str]:
-        """Resolve internal actor ids to a readable label when RBAC metadata exists.
-
-        Historical review rows often store only a numeric/string actor id.  The
-        search/drill-down table is used by office users, so prefer the email
-        attached to an RBAC assignment when available.  If no metadata exists,
-        fall back to the original actor value instead of hiding it.
-        """
-        from app.models.rbac import UserRoleAssignment
-
-        values = sorted({str(a).strip() for a in actors if str(a or '').strip()})
-        if not values:
-            return {}
-        rows = self.db.query(UserRoleAssignment).filter(UserRoleAssignment.user_id.in_(values)).all()
-        mapping: dict[str, str] = {}
-        for row in rows:
-            label = row.email or row.user_id
-            if row.user_id and label:
-                mapping.setdefault(str(row.user_id), str(label))
-        return mapping
-
-    def _serialize_question_doc(
-        self,
-        item: QuestionSearchDocument,
-        question: Question | None = None,
-        review_log: QuestionReviewLog | None = None,
-        *,
-        actor_labels: dict[str, str] | None = None,
-        chapter_labels: dict[str, str] | None = None,
-        subject_labels: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Serialize one indexed question row for quick search/drill-down.
-
-        Keep dashboard drill-down on ai_question_search_documents for scale.  The
-        optional ai_questions/review rows are loaded only for the returned page so
-        the table can show reviewer/rejection metadata without scanning the full
-        question table.
-        """
-        actor_labels = actor_labels or {}
-        chapter_labels = chapter_labels or {}
-        subject_labels = subject_labels or {}
-        latest_actor = (review_log.actor if review_log and review_log.actor else None) or (question.reviewed_by if question else None) or ''
-        reviewer = (question.reviewed_by if question else None) or latest_actor or None
-        reviewer_name = actor_labels.get(str(reviewer), reviewer) if reviewer else None
-        action_actor = latest_actor or reviewer or None
-        action_actor_name = actor_labels.get(str(action_actor), action_actor) if action_actor else None
-        reviewed_at = question.reviewed_at.isoformat() if question and question.reviewed_at else (review_log.created_at.isoformat() if review_log else None)
-        note = (review_log.note or '').strip() if review_log else ''
-        reject_reason = note if (item.status == 'rejected' and note and not note.lower().startswith('bank review:')) else None
-        chapter_label = chapter_labels.get(item.chapter_id or '', item.chapter_id or '')
-        subject_label = subject_labels.get(item.subject_id or '', item.subject_id or '')
-        subtitle_bits = [
-            (item.difficulty or '').upper(),
-            item.status or 'draft',
-            subject_label or item.concept_title or item.question_family_id or 'Câu hỏi',
-            chapter_label,
-        ]
-        if reviewer_name:
-            subtitle_bits.append(f'Người duyệt: {reviewer_name}')
+    def _serialize_question_doc(self, item: QuestionSearchDocument) -> dict[str, Any]:
         return {
             'type': 'question',
             'id': item.question_id,
             'title': item.question_text_preview or item.question_id,
-            'subtitle': ' · '.join([str(x) for x in subtitle_bits if x]),
+            'subtitle': f'{(item.difficulty or "").upper()} · {item.status or "draft"} · {item.concept_title or item.question_family_id or "Câu hỏi"}',
             'href': f'/bank/chapters/{item.chapter_id}?question_id={item.question_id}' if item.chapter_id else f'/bank/questions/{item.question_id}',
             'question_id': item.question_id,
             'bank_version_id': item.bank_version_id,
             'chapter_id': item.chapter_id,
-            'chapter_title': chapter_label or None,
-            'subject_id': item.subject_id,
-            'subject_label': subject_label or None,
             'status': item.status,
             'difficulty': item.difficulty,
-            'question_type': getattr(question, 'question_type', None) if question else None,
-            'created_at': question.created_at.isoformat() if question and question.created_at else None,
-            'updated_at': question.updated_at.isoformat() if question and question.updated_at else item.updated_at.isoformat() if item.updated_at else None,
-            'reviewed_by': reviewer,
-            'reviewer_name': reviewer_name,
-            'action_by': action_actor,
-            'action_by_name': action_actor_name,
-            'reviewed_at': reviewed_at,
-            'review_note': note or None,
-            'reject_reason': reject_reason,
         }
 
     def drilldown_questions(
@@ -336,17 +264,16 @@ class BankSearchService:
         question_id: str | None = None,
         chapter_id: str | None = None,
         subject_id: str | None = None,
-        limit: int = 500,
+        limit: int = 100,
     ) -> dict[str, Any]:
-        """Scope-safe question drill-down backed by the search index.
+        """Scope-safe question drilldown used by actionable dashboard cards/charts.
 
-        Dashboard KPI cards may be based on aggregate question stats, while this
-        drill-down is a fast browser over ai_question_search_documents.  If old
-        data has not been indexed yet, the drill-down can show fewer rows until
-        the search index is rebuilt.  Do not fall back to scanning ai_questions
-        here; that can regress performance at large scale.
+        The dashboard sends users to /bank/search with filters such as status,
+        difficulty, created date, or exact question id. This method reads the
+        compact search-document table, joins ai_questions only for filters not
+        stored in the search document, and always applies RBAC scope server-side.
         """
-        safe_limit = max(1, min(int(limit or 500), 500))
+        safe_limit = max(1, min(int(limit or 100), 100))
         query_text = (q or '').strip()
         self._current_tokens = self._tokens(query_text)
         query = self.db.query(QuestionSearchDocument).outerjoin(Question, Question.id == QuestionSearchDocument.question_id)
@@ -383,39 +310,7 @@ class BankSearchService:
             except Exception:
                 pass
         rows = query.order_by(QuestionSearchDocument.updated_at.desc(), QuestionSearchDocument.question_id.asc()).limit(safe_limit).all()
-        question_ids = [item.question_id for item in rows]
-        questions_by_id = {q.id: q for q in self.db.query(Question).filter(Question.id.in_(question_ids)).all()} if question_ids else {}
-        review_logs: dict[str, QuestionReviewLog] = {}
-        if question_ids:
-            for log in self.db.query(QuestionReviewLog).filter(QuestionReviewLog.question_id.in_(question_ids)).order_by(QuestionReviewLog.created_at.desc()).all():
-                review_logs.setdefault(log.question_id, log)
-        actor_values = []
-        for question in questions_by_id.values():
-            actor_values.append(question.reviewed_by)
-        for log in review_logs.values():
-            actor_values.append(log.actor)
-        actor_labels = self._actor_label_map(actor_values)
-        chapter_ids = sorted({item.chapter_id for item in rows if item.chapter_id})
-        subject_ids = sorted({item.subject_id for item in rows if item.subject_id})
-        chapter_labels = {}
-        if chapter_ids:
-            for chapter in self.db.query(SubjectChapter).filter(SubjectChapter.id.in_(chapter_ids)).all():
-                chapter_labels[chapter.id] = chapter.title or chapter.id
-        subject_labels = {}
-        if subject_ids:
-            for subject in self.db.query(Subject).filter(Subject.id.in_(subject_ids)).all():
-                subject_labels[subject.id] = f'{subject.code} · {subject.name}' if subject.name else subject.code
-        items = [
-            self._serialize_question_doc(
-                item,
-                questions_by_id.get(item.question_id),
-                review_logs.get(item.question_id),
-                actor_labels=actor_labels,
-                chapter_labels=chapter_labels,
-                subject_labels=subject_labels,
-            )
-            for item in rows
-        ]
+        items = [self._serialize_question_doc(item) for item in rows]
         filters = {
             'q': query_text,
             'status': status,
@@ -432,10 +327,7 @@ class BankSearchService:
             'filters': {k: v for k, v in filters.items() if v not in (None, '')},
             'limit': safe_limit,
             'total': len(items),
-            'returned': len(items),
             'items': items,
-            'source': 'search_index',
-            'message': 'Danh sách này lấy từ chỉ mục tìm kiếm. Nếu thiếu dữ liệu cũ, hãy rebuild search index thay vì quét trực tiếp bảng câu hỏi.',
             'generated_at': datetime.utcnow().isoformat(),
         }
 

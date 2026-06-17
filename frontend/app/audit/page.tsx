@@ -1,81 +1,21 @@
 'use client'
-
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getAuditLogs } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
 import { AuditLogRow } from '../../types'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
+import { LoadingButton } from '../../components/ui/LoadingButton'
 import { PaginationControls } from '../../components/ui/PaginationControls'
 import { StatusBadge } from '../../components/ui/StatusBadge'
-
-const actionLabel: Record<string, string> = {
-  'question_bank.material.upload.async': 'Tách tài liệu',
-  'question_bank.material.upload.job': 'Tạo job upload tài liệu',
-  'question_bank.bank_version.generate.async': 'Tạo câu hỏi bằng AI',
-  'question_bank.bank_version.generate.job': 'Tạo job generate',
-  'question_bank.release.publish_openedx': 'Publish release',
-  'question_bank.release.quiz.create': 'Tạo Quiz Open edX',
-  'question_bank.version.question.review': 'Duyệt/Từ chối câu hỏi',
-  'question_bank.version.question.update': 'Sửa câu hỏi',
-  'rbac.assignment.create': 'Gán quyền',
-  'rbac.assignment.revoke': 'Thu hồi quyền',
+const actionLabel:Record<string,string>={
+'generation.enqueue':'Tạo câu hỏi: đưa vào hàng đợi','generation.hard_stop':'Tạo câu hỏi: bị chặn','generation.request':'Tạo câu hỏi: yêu cầu lỗi','generation.batch.start':'Batch GPT: bắt đầu','generation.batch.finish':'Batch GPT: kết thúc','generation.job.finish':'Job tạo câu hỏi: kết thúc','cost.estimate':'Ước tính chi phí','course.sync':'Đồng bộ học liệu','settings.update':'Cập nhật cấu hình','settings.test_model':'Kiểm tra GPT','settings.test_openedx':'Kiểm tra Open edX','course_policy.update':'Cập nhật giới hạn','question.approve':'Duyệt câu hỏi','question.reject':'Từ chối câu hỏi','question.delete':'Xóa câu hỏi','question.repair':'Sửa lỗi draft_error','question.keep_anyway':'Giữ câu draft_error','question.status_change':'Đổi trạng thái câu hỏi','question.bulk_approve':'Duyệt hàng loạt','question.publish_local':'Đánh dấu publish local','openedx.publish_dry_run.question':'Dry-run publish câu hỏi','openedx.publish.question':'Publish câu hỏi sang Open edX','openedx.publish_dry_run.course':'Dry-run publish khóa học','openedx.publish.course':'Publish khóa học sang Open edX',
+'question_bank.department.create':'Tạo bộ môn','question_bank.department.update':'Sửa bộ môn','question_bank.department.delete':'Xóa bộ môn','question_bank.subject.create':'Tạo môn','question_bank.subject.update':'Sửa môn','question_bank.subject.delete':'Xóa môn','question_bank.subject_offering.create':'Tạo version môn','question_bank.subject_offering.update':'Sửa version môn','question_bank.subject_offering.delete':'Xóa version môn','question_bank.chapter.create':'Tạo bài','question_bank.chapter.update':'Sửa bài','question_bank.chapter.delete':'Xóa bài','question_bank.material.upload':'Upload tài liệu','question_bank.material.delete':'Xóa tài liệu','question_bank.bank_version.generate.preview':'Xem trước tạo câu hỏi','question_bank.bank_version.generate':'Tạo câu hỏi từ tài liệu','question_bank.version.question.review':'Duyệt/Bỏ câu hỏi','question_bank.version.question.bulk_review':'Duyệt hàng loạt','question_bank.version.question.update':'Sửa câu hỏi','question_bank.release.create':'Chốt bộ đề','question_bank.release.publish_openedx':'Publish Release sang Open edX','question_bank.release.cancel_failed':'Xóa release lỗi','question_bank.release.quiz.preview':'Xem kế hoạch Quiz','question_bank.release.quiz.create':'Tạo Quiz Open edX','question_bank.course_quiz.rollback':'Rollback Quiz','question_bank.quiz.auto_map.preview':'Tự map Course ID','question_bank.quiz.auto_map.apply':'Lưu cấu hình map Quiz','question_bank.course_mapping.create':'Lưu course mapping','question_bank.course_chapter_mapping.create':'Lưu chapter mapping'
 }
-function actionText(value: string) { return actionLabel[value] || value.replace('question_bank.', 'Bank · ').replace('rbac.', 'Phân quyền · ') }
-function errorText(v?: string | null) {
-  return v === 'USER_ERROR' ? 'Do người dùng/cấu hình' : v === 'SYSTEM_ERROR' ? 'Do hệ thống' : v === 'EXTERNAL_SERVICE_ERROR' ? 'Dịch vụ ngoài' : v === 'VALIDATION_ERROR' ? 'Dữ liệu đầu vào' : v === 'AUTH_ERROR' ? 'Phân quyền' : '—'
-}
-function formatDate(value?: string | null) { try { return value ? new Date(value).toLocaleString('vi-VN') : '—' } catch { return value || '—' } }
-function actorLabel(row: AuditLogRow) { return row.actor_id === 'system' ? 'Hệ thống' : row.actor_id || '—' }
-function targetLabel(row: AuditLogRow) { return [row.target_type, row.target_id].filter(Boolean).join(' ') || '—' }
-
-export default function AuditPage() {
-  const { authHeaders, can } = useAppContext()
-  const [rows, setRows] = useState<AuditLogRow[]>([])
-  const [status, setStatus] = useState('all')
-  const [errorType, setErrorType] = useState('all')
-  const [actorId, setActorId] = useState('')
-  const [query, setQuery] = useState('')
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
-  const [total, setTotal] = useState(0)
-  const [totalPages, setTotalPages] = useState(1)
-  const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState<ActionMessageData | null>(null)
-
-  async function load(nextPage = page, nextPageSize = pageSize) {
-    setLoading(true)
-    try {
-      const d = await getAuditLogs('', { status, errorType, actorId, page: nextPage, pageSize: nextPageSize }, authHeaders())
-      setRows(d.items || [])
-      setTotal(d.total || 0)
-      setPage(d.page || nextPage)
-      setPageSize(d.page_size || nextPageSize)
-      setTotalPages(d.total_pages || 1)
-      setMessage(null)
-    } catch (e) { setMessage(toUserError(e)) } finally { setLoading(false) }
-  }
-  useEffect(() => { setPage(1) }, [status, errorType, actorId])
-  useEffect(() => { const t = window.setTimeout(() => load(page, pageSize), 250); return () => window.clearTimeout(t) }, [status, errorType, actorId, page, pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const filteredRows = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    if (!needle) return rows
-    return rows.filter((row) => [row.action, row.actor_id, row.actor_role, row.target_type, row.target_id, row.message, row.error_type, row.status].filter(Boolean).some((v) => String(v).toLowerCase().includes(needle)))
-  }, [query, rows])
-  const failedCount = rows.filter((r) => r.status === 'failed').length
-  const successCount = rows.filter((r) => r.status === 'success').length
-
-  if (!can('view_jobs')) return <div className="card empty-state">Bạn không có quyền xem nhật ký hoạt động.</div>
-  return <div className="page-stack ops-console audit-console">
-    <section className="ops-hero card">
-      <div><span className="eyebrow">Audit scope</span><h1>Nhật ký hoạt động</h1><p>Nhật ký được trình bày dạng bảng để dễ lọc, dễ đọc và dễ đối soát. Backend đã lọc dữ liệu theo quyền.</p></div>
-      <button className="btn secondary" onClick={() => load(1, pageSize)} disabled={loading}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
-    </section>
-    <ActionMessage message={message} onClose={() => setMessage(null)} />
-    <section className="ops-kpi-grid"><div><span>Tổng log trang này</span><b>{rows.length}</b></div><div><span>Thành công</span><b>{successCount}</b></div><div><span>Thất bại</span><b>{failedCount}</b></div><div><span>Đang xem</span><b>{total}</b></div></section>
-    <section className="card ops-filter-card"><div className="grid grid-4"><label>Tìm nhanh<input className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="hành động, người, nội dung..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">Tất cả</option><option value="success">Thành công</option><option value="failed">Thất bại</option></select></label><label>Nguồn lỗi<select className="input" value={errorType} onChange={(e) => setErrorType(e.target.value)}><option value="all">Tất cả</option><option value="USER_ERROR">Do người dùng/cấu hình</option><option value="SYSTEM_ERROR">Do hệ thống</option><option value="EXTERNAL_SERVICE_ERROR">Dịch vụ ngoài</option><option value="VALIDATION_ERROR">Dữ liệu đầu vào</option><option value="AUTH_ERROR">Phân quyền</option></select></label><label>Người thực hiện<input className="input" value={actorId} onChange={(e) => setActorId(e.target.value)} placeholder="admin, system..." /></label></div></section>
-    <section className="card"><PaginationControls page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={(s) => { setPageSize(s); setPage(1) }} loading={loading} label="log" />
-      <div className="responsive-table-wrap"><table className="ops-data-table audit-data-table"><thead><tr><th>Thời điểm</th><th>Người thực hiện</th><th>Hành động</th><th>Kết quả</th><th>Nguồn lỗi</th><th>Đối tượng</th><th>Nội dung</th></tr></thead><tbody>{filteredRows.length ? filteredRows.map((row) => <tr key={row.id} className={`row-${row.status}`}><td><small>{formatDate(row.created_at)}</small></td><td><b>{actorLabel(row)}</b><small>{row.actor_role || '—'}</small></td><td><b>{actionText(row.action)}</b><small>{row.action}</small></td><td><StatusBadge status={row.status} /></td><td>{errorText(row.error_type)}</td><td><small>{targetLabel(row)}</small></td><td><span className={row.status === 'failed' ? 'table-error-text' : ''}>{row.message || 'Không có nội dung mô tả.'}</span></td></tr>) : <tr><td colSpan={7}><div className="empty-state">Không có log phù hợp với bộ lọc.</div></td></tr>}</tbody></table></div>
-    </section>
-  </div>
+function errorLabel(v?:string|null){return v==='USER_ERROR'?'Do người dùng/cấu hình':v==='SYSTEM_ERROR'?'Do hệ thống':v==='EXTERNAL_SERVICE_ERROR'?'Do dịch vụ ngoài':v==='VALIDATION_ERROR'?'Lỗi dữ liệu đầu vào':v==='AUTH_ERROR'?'Lỗi phân quyền':'—'}
+export default function AuditPage(){
+ const {courseId,authHeaders,can}=useAppContext(); const [rows,setRows]=useState<AuditLogRow[]>([]); const [status,setStatus]=useState('all'); const [errorType,setErrorType]=useState('all'); const [actorId,setActorId]=useState(''); const [page,setPage]=useState(1); const [pageSize,setPageSize]=useState(20); const [total,setTotal]=useState(0); const [totalPages,setTotalPages]=useState(1); const [loading,setLoading]=useState(false); const [message,setMessage]=useState<ActionMessageData|null>(null)
+ async function load(nextPage=page,nextPageSize=pageSize){setLoading(true);try{const d=await getAuditLogs('',{status,errorType,actorId,page:nextPage,pageSize:nextPageSize},authHeaders());setRows(d.items);setTotal(d.total);setPage(d.page);setPageSize(d.page_size);setTotalPages(d.total_pages)}catch(e){setMessage(toUserError(e))}finally{setLoading(false)}}
+ useEffect(()=>{setPage(1)},[status,errorType,actorId]); useEffect(()=>{const t=window.setTimeout(()=>load(page,pageSize),actorId?350:0);return()=>window.clearTimeout(t)},[status,errorType,actorId,page,pageSize])
+ if(!can('view_jobs')) return <div className="card empty-state">Bạn không có quyền xem nhật ký hệ thống.</div>
+ return <div className="page-stack"><section className="card page-intro"><div><div className="eyebrow">Nhật ký hệ thống</div><h2>Nhật ký thao tác</h2><p className="helper">Ghi nhận ai đã làm gì trong luồng ngân hàng đề, publish, tạo Quiz, rollback và lỗi thuộc nguồn nào. Trang này xem toàn hệ thống, không lọc cứng theo Course ID.</p></div><LoadingButton className="btn secondary" loading={loading} onClick={()=>load(1,pageSize)}>Tải lại</LoadingButton></section><ActionMessage message={message} onClose={()=>setMessage(null)}/><section className="card"><div className="grid grid-4"><div><label>Trạng thái</label><select className="input" value={status} onChange={e=>setStatus(e.target.value)}><option value="all">Tất cả</option><option value="success">Thành công</option><option value="failed">Thất bại</option></select></div><div><label>Nguồn lỗi</label><select className="input" value={errorType} onChange={e=>setErrorType(e.target.value)}><option value="all">Tất cả</option><option value="USER_ERROR">Do người dùng/cấu hình</option><option value="SYSTEM_ERROR">Do hệ thống</option><option value="EXTERNAL_SERVICE_ERROR">Do dịch vụ ngoài</option><option value="VALIDATION_ERROR">Dữ liệu đầu vào không hợp lệ</option><option value="AUTH_ERROR">Không có quyền/token lỗi</option></select></div><div><label>Người thực hiện</label><input className="input" value={actorId} onChange={e=>setActorId(e.target.value)} /></div><div className="button-column"><button className="btn secondary" onClick={()=>{setStatus('all');setErrorType('all');setActorId('');setPage(1)}}>Đặt lại bộ lọc</button></div></div></section><section className="card"><PaginationControls page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={s=>{setPageSize(s);setPage(1)}} loading={loading} label="log"/><div className="table-wrap"><table className="table"><thead><tr><th>Thời điểm</th><th>Người thực hiện</th><th>Hành động</th><th>Kết quả</th><th>Nguồn lỗi</th><th>Nội dung</th></tr></thead><tbody>{rows.length?rows.map(r=><tr key={r.id}><td>{r.created_at?new Date(r.created_at).toLocaleString('vi-VN'):'—'}</td><td>{r.actor_id}<br/><span className="helper">{r.actor_role||'—'}</span></td><td>{actionLabel[r.action]||r.action}<br/><span className="helper">{r.target_type||'—'} {r.target_id||''}</span></td><td><StatusBadge status={r.status}/></td><td>{errorLabel(r.error_type)}</td><td>{r.message||'—'}</td></tr>):<tr><td colSpan={6}><div className="empty-state">Chưa có log phù hợp.</div></td></tr>}</tbody></table></div></section></div>
 }

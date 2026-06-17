@@ -68,11 +68,16 @@ import {
   RBACPermission,
   RoleAssignment,
   RoleAssignmentCreate,
-  RoleAssignmentImportResponse,
   RoleAssignmentListResponse,
   EffectiveRBAC,
   BankOperationJob,
   BankOperationJobQueued,
+  AcademicTerm,
+  AcademicBlock,
+  AcademicSubject,
+  AcademicClassListResponse,
+  AcademicStudentListResponse,
+  AcademicSyncResult,
 } from "../types";
 
 const rawApiBase =
@@ -126,21 +131,6 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-
-export async function getBankOperationJobs(
-  headers: HeadersInit,
-  filters: { status?: string; operationType?: string; page?: number; pageSize?: number } = {},
-): Promise<PaginatedResponse<BankOperationJob>> {
-  const params = new URLSearchParams();
-  if (filters.status && filters.status !== 'all') params.set('status_filter', filters.status);
-  if (filters.operationType && filters.operationType !== 'all') params.set('operation_type', filters.operationType);
-  params.set('page', String(filters.page || 1));
-  params.set('page_size', String(filters.pageSize || 30));
-  return parseResponse<PaginatedResponse<BankOperationJob>>(
-    await fetch(`${API}/question-bank-v2/operation-jobs?${params.toString()}`, { headers }),
-  );
-}
-
 export async function getBankOperationJob(headers: HeadersInit, jobId: string) {
   return parseResponse<BankOperationJob>(
     await fetch(`${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}`, { headers }),
@@ -156,11 +146,7 @@ export async function waitForBankOperationJob(headers: HeadersInit, jobId: strin
     last = await getBankOperationJob(headers, jobId);
     if (['completed', 'failed', 'canceled'].includes(last.status)) {
       if (last.status === 'completed') return last;
-      const result = (last.result || {}) as Record<string, unknown>;
-      const userMessage = typeof result.user_message === 'string' ? result.user_message : '';
-      const suggestion = typeof result.suggestion === 'string' ? result.suggestion : '';
-      const baseMessage = userMessage || last.error_message || last.progress_label || `Job ${last.status}`;
-      throw new Error(suggestion ? `${baseMessage} ${suggestion}` : baseMessage);
+      throw new Error(last.error_message || last.progress_label || `Job ${last.status}`);
     }
     await sleep(intervalMs);
   }
@@ -1710,32 +1696,52 @@ export async function createRoleAssignment(payload: RoleAssignmentCreate, header
   return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments`, { method: 'POST', headers, body: JSON.stringify(payload) }))
 }
 
-
-
-export async function downloadRBACImportTemplate(headers: HeadersInit): Promise<Blob> {
-  const response = await fetch(`${API}/rbac/assignments/import-template`, { headers });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || response.statusText);
-  }
-  return response.blob();
-}
-
-export async function importRoleAssignmentsFromExcel(headers: HeadersInit, file: File, dryRun = false): Promise<RoleAssignmentImportResponse> {
-  const form = new FormData();
-  form.append('file', file);
-  const cleanHeaders = withoutContentType(headers);
-  return parseResponse<RoleAssignmentImportResponse>(await fetch(`${API}/rbac/assignments/import?dry_run=${dryRun ? 'true' : 'false'}`, {
-    method: 'POST',
-    headers: cleanHeaders,
-    body: form,
-  }));
-}
-
 export async function revokeRoleAssignment(assignmentId: string, headers: HeadersInit, revokeReason = ''): Promise<RoleAssignment> {
   return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments/${encodeURIComponent(assignmentId)}`, {
     method: 'DELETE',
     headers,
     body: JSON.stringify({ revoke_reason: revokeReason }),
   }))
+}
+
+export async function getAcademicTerms(headers: HeadersInit, branch = ''): Promise<AcademicTerm[]> {
+  const params = new URLSearchParams();
+  if (branch.trim()) params.set('branch', branch.trim());
+  return parseResponse(await fetch(`${API}/academic/terms?${params.toString()}`, { headers }));
+}
+
+export async function getAcademicBlocks(headers: HeadersInit, termId: string): Promise<AcademicBlock[]> {
+  if (!termId) return [];
+  return parseResponse(await fetch(`${API}/academic/blocks?term_id=${encodeURIComponent(termId)}`, { headers }));
+}
+
+export async function getAcademicSubjects(headers: HeadersInit, filters: { termId?: string; blockId?: string; search?: string } = {}): Promise<AcademicSubject[]> {
+  const params = new URLSearchParams();
+  if (filters.termId) params.set('term_id', filters.termId);
+  if (filters.blockId) params.set('block_id', filters.blockId);
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  return parseResponse(await fetch(`${API}/academic/subjects?${params.toString()}`, { headers }));
+}
+
+export async function getAcademicTeacherClasses(headers: HeadersInit, filters: { termId?: string; blockId?: string; subjectId?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
+  const params = new URLSearchParams();
+  if (filters.termId) params.set('term_id', filters.termId);
+  if (filters.blockId) params.set('block_id', filters.blockId);
+  if (filters.subjectId) params.set('subject_id', filters.subjectId);
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 50));
+  return parseResponse(await fetch(`${API}/academic/teacher/classes?${params.toString()}`, { headers }));
+}
+
+export async function getAcademicClassStudents(headers: HeadersInit, classId: string, filters: { search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicStudentListResponse> {
+  const params = new URLSearchParams();
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 50));
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/students?${params.toString()}`, { headers }));
+}
+
+export async function syncAcademicFromAp(headers: HeadersInit, payload: { term_name: string; campus: string; branch?: string; subject_codes?: string[]; max_subjects?: number; dry_run?: boolean }): Promise<AcademicSyncResult> {
+  return parseResponse(await fetch(`${API}/academic/sync/ap`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
