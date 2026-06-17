@@ -1729,16 +1729,21 @@ export async function getAcademicTermWithBlocks(headers: HeadersInit, termId: st
   return parseResponse(await fetch(`${API}/academic/terms/${encodeURIComponent(termId)}/with-blocks`, { headers }));
 }
 
+export async function deleteAcademicTerm(headers: HeadersInit, termId: string): Promise<any> {
+  return parseResponse(await fetch(`${API}/academic/terms/${encodeURIComponent(termId)}`, { method: 'DELETE', headers }));
+}
+
 export async function getAcademicBlocks(headers: HeadersInit, termId: string): Promise<AcademicBlock[]> {
   if (!termId) return [];
   return parseResponse(await fetch(`${API}/academic/blocks?term_id=${encodeURIComponent(termId)}`, { headers }));
 }
 
-export async function getAcademicSubjects(headers: HeadersInit, filters: { termId?: string; blockId?: string; search?: string } = {}): Promise<AcademicSubject[]> {
+export async function getAcademicSubjects(headers: HeadersInit, filters: { termId?: string; blockId?: string; search?: string; branch?: string } = {}): Promise<AcademicSubject[]> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
   if (filters.blockId) params.set('block_id', filters.blockId);
   if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   return parseResponse(await fetch(`${API}/academic/subjects?${params.toString()}`, { headers }));
 }
 
@@ -1772,6 +1777,10 @@ export async function getAcademicCampuses(headers: HeadersInit, filters: { branc
 
 export async function saveAcademicCampus(headers: HeadersInit, payload: { campus_code: string; campus_name: string; branch?: string; active?: boolean; sort_order?: number }): Promise<AcademicCampus> {
   return parseResponse(await fetch(`${API}/academic/campuses`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function deleteAcademicCampus(headers: HeadersInit, campusId: string): Promise<AcademicCampus> {
+  return parseResponse(await fetch(`${API}/academic/campuses/${encodeURIComponent(campusId)}`, { method: 'DELETE', headers }));
 }
 
 export async function getAcademicApSyncOptions(headers: HeadersInit, filters: { termName?: string; branch?: string; includeSubjects?: boolean } = {}): Promise<AcademicAPSyncOptions> {

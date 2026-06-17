@@ -121,6 +121,32 @@ def save_academic_term(
     return data
 
 
+@router.delete('/terms/{term_id}', response_model=AcademicTermWithBlocksOut)
+def delete_academic_term(
+    term_id: str,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    service = AcademicService(db)
+    term = db.query(AcademicTerm).filter(AcademicTerm.id == term_id).first()
+    if not term:
+        raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ')
+    term.active = False
+    meta = dict(term.metadata_json or {})
+    meta.update({'deleted_from_ui': True})
+    term.metadata_json = meta
+    blocks = service.list_blocks(term_id=term.id, active=None)
+    for block in blocks:
+        block.active = False
+    db.commit()
+    db.refresh(term)
+    log_audit(db, action='academic.term.delete', status='success', message='Đã xóa/ẩn học kỳ và block', user=user, target_type='academic_term', target_id=term.id, metadata={'term_code': term.term_code, 'branch': term.branch})
+    data = AcademicTermOut.model_validate(term).model_dump()
+    data['blocks'] = [AcademicBlockOut.model_validate(item).model_dump() for item in blocks]
+    return data
+
+
 @router.get('/blocks', response_model=list[AcademicBlockOut])
 def list_blocks(
     term_id: str,
@@ -432,6 +458,26 @@ def seed_academic_campuses_from_env(
     return items
 
 
+@router.delete('/campuses/{campus_id}', response_model=AcademicCampusOut)
+def delete_academic_campus(
+    campus_id: str,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    campus = db.query(AcademicCampus).filter(AcademicCampus.id == campus_id).first()
+    if not campus:
+        raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
+    campus.active = False
+    meta = dict(campus.metadata_json or {})
+    meta.update({'deleted_from_ui': True})
+    campus.metadata_json = meta
+    db.commit()
+    db.refresh(campus)
+    log_audit(db, action='academic.campus.delete', status='success', message='Đã xóa/ẩn cơ sở AP', user=user, target_type='academic_campus', target_id=campus.id, metadata={'campus_code': campus.campus_code, 'branch': campus.branch})
+    return campus
+
+
 @router.get('/sync/ap/options', response_model=AcademicAPSyncOptionsOut)
 def get_ap_sync_options(
     term_name: str = Query('', description='Tên kỳ AP, ví dụ Summer 2026. Có term_name thì backend gọi AP /get-course để lấy môn.'),
@@ -440,7 +486,6 @@ def get_ap_sync_options(
     user: UserContext = Depends(require_permission('manage_settings')),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     return AcademicImportService(db).get_ap_sync_options(term_name=term_name or None, branch=branch, include_subjects=include_subjects)
 
 

@@ -98,6 +98,7 @@ export default function StudentManagementPage() {
   const [message, setMessage] = useState('')
   const [syncOpen, setSyncOpen] = useState(false)
   const [syncTermName, setSyncTermName] = useState('Summer 2026')
+  const [syncBranch, setSyncBranch] = useState<'poly' | 'ptcd'>('poly')
   const [syncScope, setSyncScope] = useState<'all' | 'campus' | 'subject'>('campus')
   const [syncOptions, setSyncOptions] = useState<AcademicAPSyncOptions>(EMPTY_AP_OPTIONS)
   const [syncOptionsLoading, setSyncOptionsLoading] = useState(false)
@@ -120,7 +121,11 @@ export default function StudentManagementPage() {
       .then((items) => {
         if (cancelled) return
         setTerms(items)
-        if (!selectedTermId && items[0]) setSelectedTermId(items[0].id)
+        if (!selectedTermId && items.length) {
+          const preferred = items.find((item) => item.term_name === 'Summer 2026') || items[0]
+          setSelectedTermId(preferred.id)
+          setSyncTermName(preferred.term_name || 'Summer 2026')
+        }
       })
       .catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được kỳ học'))
     return () => { cancelled = true }
@@ -187,28 +192,30 @@ export default function StudentManagementPage() {
     if (!syncOpen) return
     let cancelled = false
     setSyncOptionsLoading(true)
-    getAcademicApSyncOptions(headers, { termName: syncTermName, branch: 'poly', includeSubjects: true })
+    getAcademicApSyncOptions(headers, { termName: syncTermName, branch: syncBranch, includeSubjects: true })
       .then((options) => {
         if (cancelled) return
-        setSyncOptions(options)
-        const campusValues = optionValues(options.campuses)
-        const subjectValues = optionValues(options.subjects)
+        const normalizedTerms = options.terms?.length ? options.terms : [{ value: syncTermName || 'Summer 2026', label: syncTermName || 'Summer 2026', description: 'Nhập thủ công', meta: { source: 'manual_default' } }]
+        const normalizedOptions = { ...options, terms: normalizedTerms, branches: options.branches?.length ? options.branches : [{ value: 'poly', label: 'Poly' }, { value: 'ptcd', label: 'PTCĐ' }] }
+        setSyncOptions(normalizedOptions)
+        const campusValues = optionValues(normalizedOptions.campuses)
+        const subjectValues = optionValues(normalizedOptions.subjects)
         setSyncSelectedCampuses((current) => current.filter((item) => campusValues.includes(item)))
         setSyncSelectedSubjects((current) => current.filter((item) => subjectValues.includes(item)))
-        if (!syncTermName && options.terms[0]?.value) setSyncTermName(options.terms[0].value)
+        if (!syncTermName && normalizedTerms[0]?.value) setSyncTermName(normalizedTerms[0].value)
       })
       .catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được dropdown AP'))
       .finally(() => { if (!cancelled) setSyncOptionsLoading(false) })
     return () => { cancelled = true }
-  }, [headers, syncOpen, syncTermName])
+  }, [headers, syncOpen, syncTermName, syncBranch])
 
 
   const seedCampusesFromEnv = async () => {
     setSyncOptionsLoading(true)
     setMessage('')
     try {
-      const seeded = await seedAcademicCampusesFromEnv(jsonHeaders, 'poly')
-      const options = await getAcademicApSyncOptions(headers, { termName: syncTermName, branch: 'poly', includeSubjects: true })
+      const seeded = await seedAcademicCampusesFromEnv(jsonHeaders, syncBranch)
+      const options = await getAcademicApSyncOptions(headers, { termName: syncTermName, branch: syncBranch, includeSubjects: true })
       setSyncOptions(options)
       setMessage(`Đã seed ${seeded.length} cơ sở từ env ACADEMIC_AP_CAMPUSES vào bảng academic_campuses`)
     } catch (error) {
@@ -232,7 +239,7 @@ export default function StudentManagementPage() {
         sync_scope: syncScope,
         campus: syncScope === 'all' ? undefined : singleCampus,
         campuses: campusList,
-        branch: 'poly',
+        branch: syncBranch,
         subject_codes: subjectList,
         max_subjects: 0,
         dry_run: dryRun,
@@ -477,6 +484,9 @@ export default function StudentManagementPage() {
             {!syncOptions.terms.some((item) => item.value === syncTermName) ? <option value={syncTermName}>{syncTermName}</option> : null}
           </select></label>
           <label><span>Nhập kỳ nếu chưa có trong dropdown</span><input className="input" value={syncTermName} onChange={(event) => setSyncTermName(event.target.value)} placeholder="Summer 2026" /></label>
+          <label><span>Hệ</span><select className="input" value={syncBranch} onChange={(event) => { setSyncBranch(event.target.value as 'poly' | 'ptcd'); setSyncSelectedCampuses([]); setSyncSelectedSubjects([]) }}>
+            {(syncOptions.branches?.length ? syncOptions.branches : [{ value: 'poly', label: 'Poly' }, { value: 'ptcd', label: 'PTCĐ' }]).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select></label>
           <label><span>Phạm vi đồng bộ</span><select className="input" value={syncScope} onChange={(event) => setSyncScope(event.target.value as 'all' | 'campus' | 'subject')}>
             <option value="all">Tất cả cơ sở, tất cả môn</option>
             <option value="campus">Theo cơ sở</option>
@@ -487,8 +497,8 @@ export default function StudentManagementPage() {
             <label className="check-row"><input type="checkbox" checked={syncAllCampuses} onChange={(event) => setSyncAllCampuses(event.target.checked)} /> Tích tất cả cơ sở</label>
             {!syncAllCampuses ? <div className="compact-list">
               {syncOptions.campuses.map((item) => <label key={item.value} className="check-row"><input type="checkbox" checked={syncSelectedCampuses.includes(item.value)} onChange={() => setSyncSelectedCampuses((current) => toggleValue(current, item.value))} /> {item.label}</label>)}
-              {!syncOptions.campuses.length ? <p className="helper">Chưa có dropdown cơ sở. ACMS cũ lấy từ premises; AI Server cần seed cơ sở một lần.</p> : null}
-            </div> : <p className="helper">Sẽ dùng {syncOptions.campuses.length} cơ sở từ cấu hình/dữ liệu hiện có.</p>}
+              {!syncOptions.campuses.length ? <p className="helper">Chưa lấy được cơ sở. Kiểm tra bảng Premises/Cơ sở hoặc chạy migration seed cơ sở.</p> : null}
+            </div> : <p className="helper">Sẽ dùng {syncOptions.campuses.length} cơ sở từ trang Premises/Cơ sở.</p>}
           </div>
           {syncScope === 'subject' ? <div className="alert soft-alert">
             <b>Môn</b>
@@ -498,7 +508,7 @@ export default function StudentManagementPage() {
               {!syncOptions.subjects.length ? <p className="helper">Chưa có môn. Kiểm tra AP /get-course hoặc chọn kỳ khác.</p> : null}
             </div> : <p className="helper">Sẽ đồng bộ {syncOptions.subjects.length} môn lấy từ AP /get-course hoặc dữ liệu local.</p>}
           </div> : <p className="helper">Chế độ này tự lấy danh sách môn bằng AP /get-course rồi gọi /get-data-cms từng cơ sở × từng môn.</p>}
-          {syncOptionsLoading ? <p className="helper">Đang tải dropdown AP...</p> : null}
+          {syncOptionsLoading ? <p className="helper">Đang tải học kỳ, hệ, cơ sở, môn học...</p> : null}
           {can('manage_settings') ? <button type="button" className="btn small secondary" disabled={syncOptionsLoading || syncRunning} onClick={seedCampusesFromEnv}>Seed cơ sở từ env</button> : null}
           {syncOptions.warnings.length ? <div className="alert soft-alert"><b>Cảnh báo dropdown</b><ul className="compact-list">{syncOptions.warnings.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
         </div>
@@ -507,7 +517,7 @@ export default function StudentManagementPage() {
         </div>
         <div className="modal-actions">
           <button className="btn secondary" disabled={syncRunning || !syncTermName.trim()} onClick={() => runSync(true)}>Kiểm tra AP</button>
-          <button className="btn" disabled={syncRunning || !syncTermName.trim() || (!syncAllCampuses && !syncSelectedCampuses.length) || (syncScope === 'subject' && !syncAllSubjects && !syncSelectedSubjects.length)} onClick={() => runSync(false)}>{syncRunning ? 'Đang đồng bộ...' : 'Đồng bộ vào AI Server'}</button>
+          <button className="btn" disabled={syncRunning || !syncTermName.trim() || (syncAllCampuses ? !syncOptions.campuses.length : !syncSelectedCampuses.length) || (syncScope === 'subject' && (syncAllSubjects ? !syncOptions.subjects.length : !syncSelectedSubjects.length))} onClick={() => runSync(false)}>{syncRunning ? 'Đang đồng bộ...' : 'Đồng bộ vào AI Server'}</button>
         </div>
       </div>
     </div> : null}
