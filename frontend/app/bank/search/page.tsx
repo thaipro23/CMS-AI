@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { getBankDashboardDrilldown, searchBankDashboard } from '../../../lib/api'
 import type { BankSearchResult } from '../../../types'
@@ -55,7 +55,7 @@ function SearchResultCard({ item }: { item: BankSearchResult }) {
   </Link>
 }
 
-export default function BankSearchPage() {
+function BankSearchPageContent() {
   const params = useSearchParams()
   const { authReady, authHeaders } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
@@ -146,4 +146,29 @@ export default function BankSearchPage() {
       <Link className="btn secondary small" href="/bank">Quay lại Dashboard</Link>
     </div>}
   </div>
+}
+
+
+function BankSearchFallback() {
+  return <div className="page-stack bank-multipage dashboard-search-page">
+    <div className="dashboard-search-hero card">
+      <div>
+        <span className="eyebrow">Drill-down</span>
+        <h1>Đang tải danh sách...</h1>
+        <p>Hệ thống đang đọc bộ lọc từ đường dẫn và chuẩn bị dữ liệu.</p>
+      </div>
+      <Link className="btn secondary" href="/bank">Về Dashboard</Link>
+    </div>
+    <div className="dashboard-search-list">
+      <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
+      <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
+      <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
+    </div>
+  </div>
+}
+
+export default function BankSearchPage() {
+  return <Suspense fallback={<BankSearchFallback />}>
+    <BankSearchPageContent />
+  </Suspense>
 }
