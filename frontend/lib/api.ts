@@ -68,6 +68,7 @@ import {
   RBACPermission,
   RoleAssignment,
   RoleAssignmentCreate,
+  RoleAssignmentImportResponse,
   RoleAssignmentListResponse,
   EffectiveRBAC,
   BankOperationJob,
@@ -140,6 +141,21 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+
+export async function getBankOperationJobs(
+  headers: HeadersInit,
+  filters: { status?: string; operationType?: string; page?: number; pageSize?: number } = {},
+): Promise<PaginatedResponse<BankOperationJob>> {
+  const params = new URLSearchParams();
+  if (filters.status && filters.status !== 'all') params.set('status_filter', filters.status);
+  if (filters.operationType && filters.operationType !== 'all') params.set('operation_type', filters.operationType);
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 30));
+  return parseResponse<PaginatedResponse<BankOperationJob>>(
+    await fetch(`${API}/question-bank-v2/operation-jobs?${params.toString()}`, { headers }),
+  );
+}
+
 export async function getBankOperationJob(headers: HeadersInit, jobId: string) {
   return parseResponse<BankOperationJob>(
     await fetch(`${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}`, { headers }),
@@ -155,7 +171,11 @@ export async function waitForBankOperationJob(headers: HeadersInit, jobId: strin
     last = await getBankOperationJob(headers, jobId);
     if (['completed', 'failed', 'canceled'].includes(last.status)) {
       if (last.status === 'completed') return last;
-      throw new Error(last.error_message || last.progress_label || `Job ${last.status}`);
+      const result = (last.result || {}) as Record<string, unknown>;
+      const userMessage = typeof result.user_message === 'string' ? result.user_message : '';
+      const suggestion = typeof result.suggestion === 'string' ? result.suggestion : '';
+      const baseMessage = userMessage || last.error_message || last.progress_label || `Job ${last.status}`;
+      throw new Error(suggestion ? `${baseMessage} ${suggestion}` : baseMessage);
     }
     await sleep(intervalMs);
   }
@@ -1705,6 +1725,28 @@ export async function createRoleAssignment(payload: RoleAssignmentCreate, header
   return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments`, { method: 'POST', headers, body: JSON.stringify(payload) }))
 }
 
+
+
+export async function downloadRBACImportTemplate(headers: HeadersInit): Promise<Blob> {
+  const response = await fetch(`${API}/rbac/assignments/import-template`, { headers });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || response.statusText);
+  }
+  return response.blob();
+}
+
+export async function importRoleAssignmentsFromExcel(headers: HeadersInit, file: File, dryRun = false): Promise<RoleAssignmentImportResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  const cleanHeaders = withoutContentType(headers);
+  return parseResponse<RoleAssignmentImportResponse>(await fetch(`${API}/rbac/assignments/import?dry_run=${dryRun ? 'true' : 'false'}`, {
+    method: 'POST',
+    headers: cleanHeaders,
+    body: form,
+  }));
+}
+
 export async function revokeRoleAssignment(assignmentId: string, headers: HeadersInit, revokeReason = ''): Promise<RoleAssignment> {
   return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments/${encodeURIComponent(assignmentId)}`, {
     method: 'DELETE',
@@ -1713,6 +1755,7 @@ export async function revokeRoleAssignment(assignmentId: string, headers: Header
   }))
 }
 
+// v25.9.16 Academic AP / Student Management API
 export async function getAcademicTerms(headers: HeadersInit, filters: string | { branch?: string; active?: boolean | null } = ''): Promise<AcademicTerm[]> {
   const params = new URLSearchParams();
   const branch = typeof filters === 'string' ? filters : filters.branch || '';
@@ -1850,3 +1893,4 @@ export async function validateAcademicClassCourseMapping(headers: HeadersInit, c
 export async function saveAcademicClassCourseMapping(headers: HeadersInit, classId: string, payload: { openedx_course_id: string; openedx_cohort_name?: string | null; openedx_course_title?: string | null; allow_warnings?: boolean; note?: string | null }): Promise<AcademicClassCourseMapping> {
   return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
+

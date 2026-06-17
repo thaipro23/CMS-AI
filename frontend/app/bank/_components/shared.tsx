@@ -131,9 +131,11 @@ export function useAsyncMessage() {
     setBusyLabel(loadingText)
     setMessage('')
     try {
-      await work()
+      const result = await work()
       if (after) await after()
-      setMessage(ok)
+      const record = result && typeof result === 'object' ? result as Record<string, unknown> : null
+      const userMessage = typeof record?.user_message === 'string' ? record.user_message : typeof record?.message === 'string' ? record.message : ''
+      setMessage(userMessage || ok)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Thao tác thất bại')
     } finally {

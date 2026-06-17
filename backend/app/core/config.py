@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.2.8-ap-acms-compatible-sync-planner'
+    app_version: str = '25.9.16.2.17-rebased-academic-ap-sync-latest-ui'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # Object storage adapter. MinIO is dev/demo only unless your organization approves AGPL/commercial terms.
     storage_provider: str = 'local'  # local | s3 | azure | gcs | minio
-    local_storage_path: str = '/tmp/ai-openedx-storage'
+    local_storage_path: str = '/app/.runtime'
     minio_endpoint: str = 'minio:9000'
     minio_access_key: str = 'minioadmin'
     minio_secret_key: str = 'minioadmin'
@@ -138,9 +138,8 @@ class Settings(BaseSettings):
     # This endpoint lives in the LMS unit-reset plugin and accepts the same HMAC headers.
     openedx_quiz_timer_config_upsert_endpoint: str = '/api/unit-reset/v1/quiz-config/upsert'
 
-    # v25.9.16.1 AP Username Mapping. This points to the LMS plugin that reads
-    # Open edX users by Django ORM. It is optional until the plugin is deployed;
-    # manual/import mapping endpoints still work without it.
+    # v25.9.16 Academic AP / Student Management integration.
+    # AP credentials are deployment secrets and must come from env, never from source.
     openedx_student_insight_base_url: str | None = None
     openedx_student_insight_users_resolve_endpoint: str = '/api/ai-student-insight/v1/users/resolve'
     openedx_student_insight_client_id: str = 'ai-server'
@@ -148,17 +147,11 @@ class Settings(BaseSettings):
     openedx_student_insight_timeout_seconds: int = 30
     openedx_student_insight_max_batch_size: int = 100
 
-    # v25.9.16.2.1 Academic AP Core Safety Hotfix. AP credentials are
-    # deployment secrets and must come from env, never from source.
     academic_ap_sync_enabled: bool = True
     academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'
     academic_ap_api_key: str | None = None
     academic_ap_request_timeout_seconds: int = 60
-    # Comma-separated AP campus codes used by sync_scope='all'. Example: pt,hn,hcm,dn
-    # Keep empty by default so production admins choose the exact campus set intentionally.
     academic_ap_campuses: str = ''
-    # Optional comma-separated AP subject codes fallback/debug only. Normal production
-    # sync_scope='all' and sync_scope='campus' use AP /get-course by branch + term.
     academic_ap_subject_codes: str = ''
 
     openedx_request_timeout_seconds: int = 30
@@ -209,6 +202,11 @@ class Settings(BaseSettings):
     file_ocr_tesseract_config: str = '--oem 3 --psm 6'
     pptx_extract_speaker_notes: bool = True
     pptx_ocr_images_enabled: bool = False
+    # v25.9.15.6.38.5.3: Word files created from scans often contain one image per page.
+    # When FILE_OCR_ENABLED=true, OCR those embedded images before accepting/rejecting the upload.
+    docx_ocr_images_enabled: bool = True
+    docx_ocr_max_images: int = 0  # 0 = use FILE_OCR_MAX_PAGES
+    material_upload_preflight_enabled: bool = True
 
 
 PRODUCTION_ENVS = {'prod', 'production'}
@@ -287,6 +285,7 @@ def validate_security_settings() -> None:
         bridge_secret = settings.openedx_session_bridge_secret or settings.openedx_connector_hmac_secret
         if not bridge_secret or str(bridge_secret).startswith('CHANGE_ME') or len(str(bridge_secret)) < 32:
             errors.append('OPENEDX_SESSION_BRIDGE_SECRET or OPENEDX_CONNECTOR_HMAC_SECRET is required for AUTH_MODE=openedx_sso')
+
     if settings.academic_ap_sync_enabled:
         if not settings.academic_ap_api_base_url or 'CHANGE_ME' in settings.academic_ap_api_base_url:
             errors.append('ACADEMIC_AP_API_BASE_URL is required when ACADEMIC_AP_SYNC_ENABLED=true')

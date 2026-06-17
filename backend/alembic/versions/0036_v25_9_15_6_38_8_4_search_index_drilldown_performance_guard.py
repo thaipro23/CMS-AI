@@ -1,8 +1,8 @@
-"""v25.9.15.6.38.8.4 search index drilldown performance guard marker
+"""v25.9.15.6.38.8.4 search index drilldown performance guard
 
 Revision ID: 0036_v25_9_15_6_38_8_4
 Revises: 0035_v25_9_15_6_38_8_3
-Create Date: 2026-06-17
+Create Date: 2026-06-16
 """
 
 from alembic import op  # noqa: F401
@@ -15,8 +15,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Compatibility marker. The corresponding release was frontend/service-only
-    # for this deployment path and does not require schema changes.
     pass
 
 

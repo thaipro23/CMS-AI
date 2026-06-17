@@ -103,6 +103,7 @@ from app.services.bank_dashboard_stats import BankDashboardStatsService
 from app.services.dashboard_analytics import DashboardAnalyticsService
 from app.services.bank_search import BankSearchService
 from app.services.bank_operation_jobs import BankOperationJobService, operation_pending_dir, serialize_job
+from app.services.content_extractor import ContentExtractor
 from app.worker import bank_material_extract_task, bank_generate_questions_task, bank_release_publish_task, bank_quiz_create_task
 
 router = APIRouter()
@@ -164,6 +165,48 @@ async def _read_bank_upload_limited(file: UploadFile, *, max_bytes: int = _BANK_
             raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail='File quá lớn. Giới hạn hiện tại là 50MB/file.')
         chunks.append(chunk)
     return b''.join(chunks)
+
+
+def _preflight_bank_material_upload(*, raw: bytes, filename: str, content_type: str) -> dict:
+    """Fail fast if an uploaded material cannot be extracted.
+
+    Teachers must see invalid-file errors in the upload popup, not only later in
+    audit logs after the async worker fails. The worker still performs the real
+    extract/chunk/index step; this preflight only validates readability and gives
+    a user-facing message early.
+    """
+    if not settings.material_upload_preflight_enabled:
+        return {'skipped': True, 'reason': 'material_upload_preflight_disabled'}
+    try:
+        items = ContentExtractor().extract_asset({
+            'asset_id': 'bank-material-preflight',
+            'filename': filename or 'uploaded-file',
+            'display_name': filename or 'uploaded-file',
+            'mime_type': content_type or '',
+            'bytes': raw,
+            'strict': True,
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f'Không thể đọc tài liệu ngay lúc upload: {exc}') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f'Không thể đọc tài liệu ngay lúc upload: {exc}') from exc
+
+    total_chars = sum(len(item.content or '') for item in items)
+    if not items or total_chars < 30:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'File {filename or "upload"} không tách được đủ text ngay lúc upload. '
+                'Nếu tài liệu là scan/ảnh, hãy bật OCR cho đúng loại file, tăng giới hạn OCR nếu tài liệu dài, '
+                'hoặc upload bản DOCX/PDF có text.'
+            ),
+        )
+    return {
+        'skipped': False,
+        'page_or_item_count': len(items),
+        'extracted_chars': total_chars,
+        'source_types': sorted({item.source_type for item in items if item.source_type}),
+    }
 
 
 def _biz(db: Session) -> BusinessRBACService:
@@ -442,7 +485,7 @@ def dashboard_drilldown(
     question_id: str | None = Query(None),
     chapter_id: str | None = Query(None),
     subject_id: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=100),
+    limit: int = Query(500, ge=1, le=500),
     db: Session = Depends(get_db),
     user: UserContext = Depends(require_permission('view_questions')),
 ):
@@ -879,6 +922,11 @@ async def upload_material_to_bank_version_job(
 ):
     _require_bank_version(db, user, 'document.manage', bank_version_id)
     raw = await _read_bank_upload_limited(file)
+    preflight = _preflight_bank_material_upload(
+        raw=raw,
+        filename=file.filename or 'uploaded-file',
+        content_type=file.content_type or '',
+    )
     pending_dir = operation_pending_dir()
     safe_name = (file.filename or 'uploaded-file').replace('/', '_').replace('\\', '_')
     pending_name = f'{uuid.uuid4()}-{safe_name}'
@@ -893,6 +941,7 @@ async def upload_material_to_bank_version_job(
         'change_type': change_type or 'initial',
         'replace_existing': bool(replace_existing),
         'file_size': len(raw),
+        'preflight': preflight,
     }
     job = _create_bank_operation_job(
         db,
@@ -906,8 +955,8 @@ async def upload_material_to_bank_version_job(
         progress_label='Đã nhận file, đang chờ worker tách nội dung',
     )
     _enqueue_task(bank_material_extract_task, job.id)
-    log_audit(db, action='question_bank.material.upload.job', status='success', message='Đã tạo job tách tài liệu', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'file_name': file.filename, 'file_size': len(raw)})
-    return _queued_response(job, 'Đã đưa tài liệu vào hàng đợi tách nội dung.')
+    log_audit(db, action='question_bank.material.upload.job', status='success', message='Đã kiểm tra file và tạo job tách tài liệu', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'file_name': file.filename, 'file_size': len(raw), 'preflight': preflight})
+    return _queued_response(job, 'File đọc được. Đã đưa tài liệu vào hàng đợi tách nội dung.')
 
 
 @router.get('/bank-versions/{bank_version_id}/material-chunks', response_model=PaginatedOut[MaterialChunkOut])

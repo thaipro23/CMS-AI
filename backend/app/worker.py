@@ -749,7 +749,11 @@ def bank_material_extract_task(job_id: str):
         ops.start(job, label='Đang đọc file và tách nội dung', total=5)
         pending_file = Path(str(request.get('pending_file_path') or ''))
         if not pending_file.exists() or not pending_file.is_file():
-            raise ValueError('Không tìm thấy file tạm của job upload. Hãy upload lại tài liệu.')
+            raise ValueError(
+                'Không tìm thấy file tạm của job upload. ' 
+                'Nguyên nhân thường gặp: backend và worker không dùng chung LOCAL_STORAGE_PATH. ' 
+                'Hãy cấu hình LOCAL_STORAGE_PATH=/app/.runtime cho cả backend và worker, deploy lại, rồi upload lại tài liệu.'
+            )
         raw = pending_file.read_bytes()
         ops.progress(job, current=2, label='Đang chạy extractor/chunker')
         result = VersionedQuestionBankService(db).upload_material_bytes(
@@ -774,6 +778,7 @@ def bank_material_extract_task(job_id: str):
             'diff_base_bank_version_id': result.get('diff_base_bank_version_id'),
             'document_change_state': result.get('document_change_state'),
             'message': result.get('message'),
+            'user_message': result.get('message') or f'Đã tách tài liệu thành công: tạo {result.get("chunks_created") or 0} đoạn nội dung.',
         }
         try:
             pending_file.unlink(missing_ok=True)
@@ -786,7 +791,12 @@ def bank_material_extract_task(job_id: str):
             log_audit(db, action='question_bank.material.upload.async', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=None, target_type='bank_operation_job', target_id=job.id)
         except Exception:
             pass
-        return ops.fail(job, error=exc).result_json
+        friendly = str(exc)
+        return ops.fail(job, error=exc, result={
+            'error': friendly,
+            'user_message': friendly,
+            'suggestion': 'Kiểm tra lại định dạng file, bật OCR nếu là scan/ảnh, hoặc upload bản DOCX/PDF có text rồi thử lại.',
+        }).result_json
     finally:
         db.close()
 

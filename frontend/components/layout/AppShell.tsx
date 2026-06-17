@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAppContext } from '../../context/AppContext'
-import { ROLE_LABELS, Role } from '../../types'
+import { ROLE_LABELS } from '../../types'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
 
 type NavItem = {
@@ -12,55 +12,63 @@ type NavItem = {
   label: string
   desc: string
   icon: string
-  group: 'bank' | 'ops' | 'admin'
+  group: 'work' | 'operations' | 'admin'
   permission?: string
 }
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Dashboard Bank', desc: 'Việc cần làm', icon: '🏦', group: 'bank' },
-  { href: '/bank/departments', label: 'Bộ môn', desc: 'Môn, version, bài', icon: '📚', group: 'bank' },
-  { href: '/bank/quiz', label: 'Tạo Quiz Open edX', desc: 'Map course & timer', icon: '🧩', group: 'bank' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Theo dõi & rollback', icon: '🕘', group: 'bank' },
-  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '🏢', group: 'ops', permission: 'manage_settings' },
-  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '🗓️', group: 'ops', permission: 'manage_settings' },
-  { href: '/student-management', label: 'Lớp & sinh viên', desc: 'AP roster, phân công', icon: '🎓', group: 'ops' },
-  { href: '/jobs', label: 'Tiến trình job', desc: 'Generate, publish, tạo quiz', icon: '⚙️', group: 'ops' },
-  { href: '/audit', label: 'Nhật ký thao tác', desc: 'Ai làm gì, lỗi gì', icon: '🧾', group: 'ops' },
-  { href: '/users', label: 'Người dùng & quyền', desc: 'RBAC Bank-first', icon: '👥', group: 'admin', permission: 'view_questions' },
-  { href: '/settings', label: 'Cấu hình', desc: 'Quyền & hệ thống', icon: '🔐', group: 'admin', permission: 'manage_settings' },
+  { href: '/bank', label: 'Tổng quan', desc: 'Dashboard', icon: '⌁', group: 'work' },
+  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, bài', icon: '▦', group: 'work' },
+  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Map Open edX', icon: '◈', group: 'work' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Release & rollback', icon: '◷', group: 'work' },
+  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_settings' },
+  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'operations', permission: 'manage_settings' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_settings' },
+  { href: '/student-management', label: 'Lớp & sinh viên', desc: 'AP roster, phân công', icon: '◎', group: 'operations' },
+  { href: '/jobs', label: 'Tiến trình', desc: 'Job đang chạy', icon: '⚙', group: 'operations' },
+  { href: '/audit', label: 'Nhật ký', desc: 'Theo dõi thao tác', icon: '☷', group: 'operations' },
+  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo scope', icon: '◎', group: 'admin', permission: 'view_questions' },
+  { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'admin', permission: 'manage_settings' },
 ]
 
 const navGroups: Array<{ key: NavItem['group']; label: string }> = [
-  { key: 'bank', label: 'Ngân hàng đề' },
-  { key: 'ops', label: 'Vận hành' },
+  { key: 'work', label: 'Công việc chính' },
+  { key: 'operations', label: 'Vận hành' },
   { key: 'admin', label: 'Quản trị' },
 ]
 
 function pageTitle(pathname: string) {
-  const item = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
-  return item ? item.label : 'Máy chủ AI học liệu'
+  const exact = navItems.find((item) => pathname === item.href)
+  if (exact) return exact.label
+  const nested = navItems
+    .filter((item) => pathname.startsWith(`${item.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0]
+  return nested ? nested.label : 'AI Server'
 }
 
-function AppFooter({ compact = false }: { compact?: boolean }) {
-  return <footer className={compact ? 'app-footer app-footer-compact' : 'app-footer'}>
-    <div>
-      <b>Open edX AI Server</b>
-      <span>Ngân hàng đề · Tạo Quiz Open edX · Theo dõi giáo viên</span>
-    </div>
-    <div className="footer-links">
-      <Link href="/bank">Dashboard Bank</Link>
-      <Link href="/bank/quiz">Tạo Quiz</Link>
-      <Link href="/audit">Nhật ký</Link>
-      <span>v25.9.16.2.13</span>
-    </div>
+function AppFooter() {
+  return <footer className="app-footer app-footer-compact product-footer">
+    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz Open edX</span></div>
+    <div className="footer-links"><span>v25.9.16.2.17</span></div>
   </footer>
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const { courseId, setCourseId, role, setRole, userId, setUserId, accessToken, setAccessToken, can, isAuthenticated, authReady } = useAppContext()
+  const {
+    courseId,
+    role,
+    userId,
+    accessToken,
+    can,
+    isAuthenticated,
+    authReady,
+  } = useAppContext()
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
-  const visibleItems = navItems.filter((item) => !item.permission || can(item.permission))
+
+  const visibleItems = useMemo(() => navItems.filter((item) => !item.permission || can(item.permission)), [can])
+  const currentTitle = pageTitle(pathname)
+
   const loginWithCms = () => {
     try {
       window.location.href = buildCmsSessionBridgeUrl(courseId)
@@ -68,6 +76,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       alert(error instanceof Error ? error.message : 'Không tạo được CMS login URL')
     }
   }
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (!authReady) return
@@ -94,54 +103,48 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [authReady, courseId, isAuthenticated, pathname])
 
-  const hideTopbar = true
-  return <div className="app-layout">
-    <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark">AI</div>
-        <div><b>Open edX AI</b><small>Máy chủ học liệu</small></div>
-      </div>
-      <nav className="side-nav grouped-side-nav">
+  return <div className="app-layout product-shell">
+    <a className="skip-link" href="#main-content">Bỏ qua menu, tới nội dung chính</a>
+    <aside className="sidebar product-sidebar" aria-label="Điều hướng chính">
+      <Link href="/bank" className="brand product-brand" aria-label="Open edX AI Server">
+        <div className="brand-mark product-brand-mark">AI</div>
+        <div><b>AI Server</b><small>Question Bank · Open edX</small></div>
+      </Link>
+
+      <nav className="side-nav grouped-side-nav product-nav">
         {navGroups.map((group) => {
           const items = visibleItems.filter((item) => item.group === group.key)
           if (!items.length) return null
           return <div className="nav-group" key={group.key}>
             <div className="nav-group-title">{group.label}</div>
             <div className="nav-group-items">
-              {items.map((item) => <Link key={item.href} href={item.href} className={pathname === item.href || pathname.startsWith(`${item.href}/`) ? 'nav-link active' : 'nav-link'}>
-                <span className="nav-icon" aria-hidden="true">{item.icon}</span>
-                <span className="nav-text"><b>{item.label}</b><small>{item.desc}</small></span>
-              </Link>)}
+              {items.map((item) => {
+                const active = pathname === item.href || pathname.startsWith(`${item.href}/`)
+                return <Link key={item.href} href={item.href} className={active ? 'nav-link active' : 'nav-link'} aria-current={active ? 'page' : undefined}>
+                  <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="nav-text"><b>{item.label}</b><small>{item.desc}</small></span>
+                </Link>
+              })}
             </div>
           </div>
         })}
       </nav>
-      <div className="sidebar-note">
-        <b>{accessToken.trim() ? 'Đã có phiên AI' : 'Đang lấy phiên CMS'}</b>
-        <span>{accessToken.trim() ? `User ${userId} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'Nếu đã đăng nhập CMS/Open edX, AI Server sẽ tự nhận phiên.')} </span>
-        <button className="btn small secondary" onClick={loginWithCms}>{accessToken.trim() ? 'Làm mới phiên CMS' : 'Lấy phiên CMS ngay'}</button>
+
+      <div className="sidebar-note product-session-card">
+        <span className={accessToken.trim() ? 'session-dot ok' : 'session-dot wait'} />
+        <div><b>{accessToken.trim() ? 'Đã đăng nhập' : 'Đang lấy phiên CMS'}</b><span>{accessToken.trim() ? `${userId || 'user'} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'AI Server sẽ tự nhận phiên từ CMS khi có thể.')}</span></div>
+        <button className="btn small secondary" type="button" onClick={loginWithCms}>{accessToken.trim() ? 'Làm mới' : 'Đăng nhập CMS'}</button>
       </div>
     </aside>
-    <div className="main-area">
-      {!hideTopbar ? <header className="topbar">
+
+    <div className="main-area product-main">
+      <header className="workspace-topbar workspace-topbar-minimal">
         <div>
-          <div className="eyebrow">Máy chủ AI / {pageTitle(pathname)}</div>
-          <h1>{pageTitle(pathname)}</h1>
-          <p>Khóa học: <b>{courseId}</b></p>
+          <h1>{currentTitle}</h1>
         </div>
-        <div className="topbar-controls">
-          <label>Mã khóa học</label>
-          <input className="input" value={courseId} onChange={(event) => setCourseId(event.target.value)} />
-          <div className="topbar-grid">
-            <div><label>Người dùng demo</label><input className="input" value={userId} onChange={(event) => setUserId(event.target.value)} disabled={!!accessToken.trim()} /></div>
-            <div><label>Vai trò demo</label><select className="input" value={role} onChange={(event) => setRole(event.target.value as Role)} disabled={!!accessToken.trim()}><option value="admin">admin</option><option value="teacher">teacher</option><option value="reviewer">reviewer</option><option value="viewer">viewer</option></select></div>
-          </div>
-          <label>Token JWT/SSO</label>
-          <input className="input" type="password" placeholder="Bearer token production/SSO, để trống khi demo" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} />
-          <small>{accessToken.trim() ? 'Đang dùng Authorization Bearer token trong memory; reload trang sẽ mất token, role demo không gửi lên backend.' : ROLE_LABELS[role]}</small>
-        </div>
-      </header> : null}
-      <main className="content-shell compact-content-shell">{children}</main>
+      </header>
+
+      <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{children}</main>
       <AppFooter />
     </div>
   </div>

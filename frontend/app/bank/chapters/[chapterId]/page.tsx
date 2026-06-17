@@ -3,18 +3,11 @@ import { ChapterWorkspacePage } from '../../_components/BankPages'
 
 function ChapterWorkspaceFallback() {
   return <div className="page-stack bank-multipage">
-    <section className="card page-intro">
-      <div>
-        <div className="eyebrow">Ngân hàng đề</div>
-        <h2>Đang tải bài học...</h2>
-        <p className="helper">Hệ thống đang chuẩn bị workspace câu hỏi.</p>
-      </div>
-    </section>
+    <div className="card"><b>Đang tải workspace...</b><p>Hệ thống đang áp dụng bộ lọc và quyền truy cập.</p></div>
+    <div className="dashboard-skeleton" style={{ minHeight: 180 }} />
   </div>
 }
 
 export default function Page({ params }: { params: { chapterId: string } }) {
-  return <Suspense fallback={<ChapterWorkspaceFallback />}>
-    <ChapterWorkspacePage chapterId={params.chapterId} />
-  </Suspense>
+  return <Suspense fallback={<ChapterWorkspaceFallback />}><ChapterWorkspacePage chapterId={params.chapterId} /></Suspense>
 }

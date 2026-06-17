@@ -1533,6 +1533,19 @@ export type BankSearchResult = {
   chapter_id?: string | null
   status?: string
   difficulty?: string
+  reviewed_by?: string | null
+  reviewed_at?: string | null
+  reject_reason?: string | null
+  review_note?: string | null
+  reviewer_name?: string | null
+  action_by?: string | null
+  action_by_name?: string | null
+  question_type?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  subject_id?: string | null
+  subject_label?: string | null
+  chapter_title?: string | null
 }
 
 export type BankSearchGroupedResponse = {
@@ -1555,6 +1568,8 @@ export type BankDashboardDrilldownResponse = {
   filters?: Record<string, string | number | boolean | null | undefined>
   limit: number
   total: number
+  returned?: number
+  source?: string
   items: BankSearchResult[]
   generated_at?: string
 }
@@ -1623,6 +1638,32 @@ export type EffectiveRBAC = {
   assignments: RoleAssignment[]
 }
 
+
+export type RoleAssignmentImportRow = {
+  row_index: number
+  status: 'valid' | 'created' | 'skipped' | 'failed' | string
+  message: string
+  user_id: string
+  email?: string | null
+  role_code: BusinessRoleCode | string
+  scope_type: BusinessScopeType | string
+  scope_id: string
+  scope_label?: string | null
+  assignment?: RoleAssignment | null
+}
+
+export type RoleAssignmentImportResponse = {
+  ok: boolean
+  dry_run: boolean
+  total_rows: number
+  valid_rows: number
+  created_count: number
+  skipped_count: number
+  failed_count: number
+  rows: RoleAssignmentImportRow[]
+}
+
+// v25.9.16 Academic AP / Student Management types
 export type AcademicTerm = {
   id: string
   ap_term_id?: string | null
@@ -1847,3 +1888,4 @@ export type AcademicClassCourseMappingProposal = {
 }
 
 export type AcademicCourseMappingListResponse = PaginatedResponse<AcademicCourseMapping>
+

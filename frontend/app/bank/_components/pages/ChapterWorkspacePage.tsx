@@ -346,7 +346,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setRejectReason('')
     }, 'Đã bỏ câu hỏi', refreshCurrent)
   }
-  const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: Number(difficultyEasy || 50), difficulty_medium: Number(difficultyMedium || 30), difficulty_hard: Number(difficultyHard || 20) }
+  const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: difficultyEasy === '' ? 50 : Number(difficultyEasy), difficulty_medium: difficultyMedium === '' ? 30 : Number(difficultyMedium), difficulty_hard: difficultyHard === '' ? 20 : Number(difficultyHard) }
 
   const openGenerateConfirm = async () => {
     if (!selectedBankVersion || chapterPublished) return
@@ -495,7 +495,8 @@ ${chunk.content}`).join('\n\n')
               if (result.diff_required && result.diff_base_bank_version_id) {
                 await runDiffNow(selectedBankVersion.id, result.diff_base_bank_version_id)
               }
-            }, 'Đã gắn tài liệu', refreshCurrent)}>+ Gắn tài liệu</button>
+              return result
+            }, 'Đã gắn tài liệu', refreshCurrent, 'Đang kiểm tra file, OCR nếu cần và tách nội dung...')}>+ Gắn tài liệu</button>
           </div>
         </div> : <div className="popup-action-panel"><h3>Đã publish</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo Release.</p></div>}
         <div className="popup-list-panel">

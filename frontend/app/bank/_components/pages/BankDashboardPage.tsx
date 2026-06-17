@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { useBankData, Breadcrumb, QuickSearchBox } from '../shared'
+import { useBankData, Breadcrumb, QuickSearchBox, Modal } from '../shared'
 import { getBankDashboardAnalytics } from '../../../../lib/api'
 import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
@@ -146,7 +146,14 @@ function LineChart({ chart }: { chart: DashboardChart }) {
   return <ChartCard title={chart.title} empty={!items.length}>
     <div className="dashboard-line-wrap">
       <svg className="dashboard-line" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title}>
-        {[0, .25, .5, .75, 1].map((ratio) => <line key={ratio} x1={padX} x2={width - padX} y1={padY + ratio * (height - padY * 2)} y2={padY + ratio * (height - padY * 2)} stroke="#e5e7eb" strokeWidth="1" />)}
+        {[0, .25, .5, .75, 1].map((ratio) => {
+          const y = padY + ratio * (height - padY * 2)
+          const value = Math.round(max * (1 - ratio))
+          return <g key={ratio}>
+            <line x1={padX + 20} x2={width - padX} y1={y} y2={y} stroke="#e5e7eb" strokeWidth="1" />
+            <text x={padX + 14} y={y + 4} textAnchor="end" className="dashboard-y-axis-label">{formatNumber(value)}</text>
+          </g>
+        })}
         <path d={path} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
         {points.map((point, index) => <g key={`${point.item.date || index}-${index}`} className="dashboard-line-point" onClick={() => point.item.drilldown && router.push(drilldownUrl(point.item.drilldown))}>
           <circle cx={point.x} cy={point.y} r="5" fill="#2563eb" />
@@ -243,6 +250,8 @@ export function BankDashboardPage() {
   const [data, setData] = useState<DashboardAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [alertsOpen, setAlertsOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(false)
 
   const updateUrl = (range: string, from?: string, to?: string) => {
     const params = new URLSearchParams()
@@ -290,11 +299,9 @@ export function BankDashboardPage() {
     <section className="dashboard-command-hero">
       <div className="dashboard-hero-glow" />
       <div className="dashboard-hero-copy">
-        <span className="eyebrow">AI Question Bank · Open edX</span>
-        <h1>Trung tâm điều hành ngân hàng câu hỏi</h1>
-        <p>Nhìn nhanh việc cần xử lý, chất lượng câu hỏi và tiến độ nội dung trong phạm vi được giao.</p>
+        <h1>Tổng quan Ngân hàng đề</h1>
         <div className="dashboard-scope-strip">
-          <span className="dashboard-scope-chip">Scope: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
+          <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
           {data?.cache ? <span className="dashboard-scope-chip subtle">Cache: {data.cache.hit ? 'hit' : 'fresh'} · TTL {data.cache.ttl_seconds}s</span> : null}
           {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {new Date(data.generated_at).toLocaleString('vi-VN')}</span> : null}
         </div>
@@ -325,7 +332,13 @@ export function BankDashboardPage() {
       </section>
 
       <section className="card bank-search-card">
-        <div className="section-head"><div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, version, bài hoặc câu hỏi trong scope được giao.</p></div></div>
+        <div className="section-head">
+          <div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, version, bài hoặc câu hỏi trong scope được giao.</p></div>
+          <div className="button-row compact">
+            <button className="btn small secondary" type="button" onClick={() => setAlertsOpen(true)}>Cảnh báo ({formatNumber((data.alerts || []).length)})</button>
+            <button className="btn small secondary" type="button" onClick={() => setActivityOpen(true)}>Hoạt động ({formatNumber((data.activity_feed || []).length)})</button>
+          </div>
+        </div>
         <QuickSearchBox />
       </section>
 
@@ -338,10 +351,12 @@ export function BankDashboardPage() {
         <GroupedBarChart chart={data.charts.term_comparison} />
       </section>
 
-      <section className="dashboard-bottom-grid">
+      <Modal open={alertsOpen} title="Cảnh báo cần xử lý" wide onClose={() => setAlertsOpen(false)}>
         <AlertPanel alerts={data.alerts || []} />
+      </Modal>
+      <Modal open={activityOpen} title="Hoạt động gần đây" wide onClose={() => setActivityOpen(false)}>
         <ActivityFeed items={data.activity_feed || []} />
-      </section>
+      </Modal>
     </> : null}
   </div>
 }

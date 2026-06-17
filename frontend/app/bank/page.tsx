@@ -2,19 +2,21 @@ import { Suspense } from 'react'
 import { BankDashboardPage } from './_components/BankPages'
 
 function BankDashboardFallback() {
-  return <div className="page-stack bank-multipage">
-    <section className="card page-intro">
+  return <div className="page-stack bank-multipage dashboard-modern-page">
+    <div className="dashboard-hero card">
       <div>
-        <div className="eyebrow">Ngân hàng đề</div>
-        <h2>Đang tải tổng quan...</h2>
-        <p className="helper">Hệ thống đang chuẩn bị dữ liệu dashboard.</p>
+        <h1>Đang tải Tổng quan Ngân hàng đề...</h1>
       </div>
-    </section>
+    </div>
+    <div className="dashboard-kpi-grid">
+      <div className="dashboard-skeleton" style={{ minHeight: 124 }} />
+      <div className="dashboard-skeleton" style={{ minHeight: 124 }} />
+      <div className="dashboard-skeleton" style={{ minHeight: 124 }} />
+      <div className="dashboard-skeleton" style={{ minHeight: 124 }} />
+    </div>
   </div>
 }
 
 export default function BankHome() {
-  return <Suspense fallback={<BankDashboardFallback />}>
-    <BankDashboardPage />
-  </Suspense>
+  return <Suspense fallback={<BankDashboardFallback />}><BankDashboardPage /></Suspense>
 }
