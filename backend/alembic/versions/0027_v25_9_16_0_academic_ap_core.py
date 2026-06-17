@@ -1,7 +1,7 @@
 """v25.9.16.0 academic AP core migration
 
 Revision ID: 0027_v25_9_16_0_academic_ap_core
-Revises: 0026_v25_9_15_6_38_4
+Revises: 0036_v25_9_15_6_38_8_4
 Create Date: 2026-06-16
 """
 from __future__ import annotations
@@ -15,7 +15,22 @@ branch_labels = None
 depends_on = None
 
 
+def _ensure_alembic_version_length() -> None:
+    """Widen Alembic version storage before introducing long revision IDs.
+
+    Older deployments have alembic_version.version_num as VARCHAR(32).
+    The Academic migration chain contains revision identifiers longer than 32
+    characters, so PostgreSQL must be widened before Alembic updates the
+    version table from 0027 to 0028. This is idempotent and safe to re-run.
+    """
+    bind = op.get_bind()
+    if bind.dialect.name == 'postgresql':
+        op.execute("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)")
+
+
 def upgrade() -> None:
+    _ensure_alembic_version_length()
+
     op.create_table(
         'academic_terms',
         sa.Column('id', sa.String(), primary_key=True),
