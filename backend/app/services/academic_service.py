@@ -240,6 +240,69 @@ class AcademicService:
             query = query.filter(AcademicBlock.active.is_(active))
         return query.order_by(AcademicBlock.sort_order.asc(), AcademicBlock.block_name.asc()).all()
 
+    def save_term_with_blocks(self, payload: dict[str, Any]) -> AcademicTerm:
+        term_code = str(payload.get('term_code') or '').strip()
+        term_name = str(payload.get('term_name') or '').strip()
+        branch = str(payload.get('branch') or 'poly').strip().lower()
+        if not term_code:
+            raise HTTPException(status_code=400, detail='Thiếu mã học kỳ')
+        if not term_name:
+            raise HTTPException(status_code=400, detail='Thiếu tên học kỳ')
+        term_id = str(payload.get('id') or '').strip()
+        query = self.db.query(AcademicTerm)
+        term = query.filter(AcademicTerm.id == term_id).first() if term_id else None
+        if not term:
+            term = self.db.query(AcademicTerm).filter(AcademicTerm.term_code == term_code, AcademicTerm.branch == branch).first()
+        if not term:
+            term = AcademicTerm(term_code=term_code, term_name=term_name, branch=branch)
+            self.db.add(term)
+        term.ap_term_id = str(payload.get('ap_term_id') or '').strip() or term.ap_term_id
+        term.term_code = term_code
+        term.term_name = term_name
+        term.branch = branch
+        term.start_date = payload.get('start_date')
+        term.end_date = payload.get('end_date')
+        term.active = _boolish(payload.get('active')) is not False
+        meta = dict(term.metadata_json or {})
+        meta.update({'source': meta.get('source') or 'manual_ui', 'updated_from': 'terms_page'})
+        term.metadata_json = meta
+        self.db.flush()
+
+        seen_block_ids: set[str] = set()
+        for index, raw_block in enumerate(payload.get('blocks') or [], start=1):
+            block_code = str(raw_block.get('block_code') or raw_block.get('block_name') or f'Block {index}').strip()
+            block_name = str(raw_block.get('block_name') or block_code).strip()
+            block_id = str(raw_block.get('id') or '').strip()
+            block = self.db.query(AcademicBlock).filter(AcademicBlock.id == block_id, AcademicBlock.term_id == term.id).first() if block_id else None
+            if not block:
+                block = self.db.query(AcademicBlock).filter(AcademicBlock.term_id == term.id, AcademicBlock.block_code == block_code).first()
+            if not block:
+                block = AcademicBlock(term_id=term.id, block_code=block_code, block_name=block_name)
+                self.db.add(block)
+            block.ap_block_id = str(raw_block.get('ap_block_id') or '').strip() or block.ap_block_id
+            block.block_code = block_code
+            block.block_name = block_name
+            block.start_date = raw_block.get('start_date')
+            block.end_date = raw_block.get('end_date')
+            block.sort_order = int(raw_block.get('sort_order') or index)
+            block.active = _boolish(raw_block.get('active')) is not False
+            block_meta = dict(block.metadata_json or {})
+            block_meta.update({'source': block_meta.get('source') or 'manual_ui', 'updated_from': 'terms_page'})
+            block.metadata_json = block_meta
+            self.db.flush()
+            seen_block_ids.add(block.id)
+
+        # Do not hard-delete old blocks; hide blocks removed from the popup so historical classes stay valid.
+        if payload.get('blocks'):
+            old_blocks = self.db.query(AcademicBlock).filter(AcademicBlock.term_id == term.id).all()
+            for block in old_blocks:
+                if block.id not in seen_block_ids:
+                    block.active = False
+
+        self.db.commit()
+        self.db.refresh(term)
+        return term
+
     def list_subjects(self, term_id: str | None = None, block_id: str | None = None, search: str | None = None, branch: str | None = None) -> list[AcademicSubject]:
         query = self.db.query(AcademicSubject)
         if term_id or block_id:

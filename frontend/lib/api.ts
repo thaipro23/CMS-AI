@@ -1713,10 +1713,20 @@ export async function revokeRoleAssignment(assignmentId: string, headers: Header
   }))
 }
 
-export async function getAcademicTerms(headers: HeadersInit, branch = ''): Promise<AcademicTerm[]> {
+export async function getAcademicTerms(headers: HeadersInit, filters: string | { branch?: string; active?: boolean | null } = ''): Promise<AcademicTerm[]> {
   const params = new URLSearchParams();
+  const branch = typeof filters === 'string' ? filters : filters.branch || '';
   if (branch.trim()) params.set('branch', branch.trim());
+  if (typeof filters !== 'string' && typeof filters.active === 'boolean') params.set('active', String(filters.active));
   return parseResponse(await fetch(`${API}/academic/terms?${params.toString()}`, { headers }));
+}
+
+export async function saveAcademicTerm(headers: HeadersInit, payload: { id?: string | null; ap_term_id?: string | null; term_code: string; term_name: string; branch?: string; start_date?: string | null; end_date?: string | null; active?: boolean; blocks?: Array<{ id?: string | null; block_code: string; block_name: string; start_date?: string | null; end_date?: string | null; sort_order?: number; active?: boolean }> }): Promise<any> {
+  return parseResponse(await fetch(`${API}/academic/terms`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function getAcademicTermWithBlocks(headers: HeadersInit, termId: string): Promise<any> {
+  return parseResponse(await fetch(`${API}/academic/terms/${encodeURIComponent(termId)}/with-blocks`, { headers }));
 }
 
 export async function getAcademicBlocks(headers: HeadersInit, termId: string): Promise<AcademicBlock[]> {

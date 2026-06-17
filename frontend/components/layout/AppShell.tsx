@@ -22,6 +22,7 @@ const navItems: NavItem[] = [
   { href: '/bank/quiz', label: 'Tạo Quiz Open edX', desc: 'Map course & timer', icon: '🧩', group: 'bank' },
   { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Theo dõi & rollback', icon: '🕘', group: 'bank' },
   { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '🏢', group: 'ops', permission: 'manage_settings' },
+  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '🗓️', group: 'ops', permission: 'manage_settings' },
   { href: '/student-management', label: 'Lớp & sinh viên', desc: 'AP roster, phân công', icon: '🎓', group: 'ops' },
   { href: '/jobs', label: 'Tiến trình job', desc: 'Generate, publish, tạo quiz', icon: '⚙️', group: 'ops' },
   { href: '/audit', label: 'Nhật ký thao tác', desc: 'Ai làm gì, lỗi gì', icon: '🧾', group: 'ops' },
@@ -50,7 +51,7 @@ function AppFooter({ compact = false }: { compact?: boolean }) {
       <Link href="/bank">Dashboard Bank</Link>
       <Link href="/bank/quiz">Tạo Quiz</Link>
       <Link href="/audit">Nhật ký</Link>
-      <span>v25.9.16.2.12</span>
+      <span>v25.9.16.2.13</span>
     </div>
   </footer>
 }

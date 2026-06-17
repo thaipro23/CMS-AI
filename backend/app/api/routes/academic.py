@@ -45,6 +45,8 @@ from app.schemas.academic import (
     AcademicSyncCounters,
     AcademicSyncRunOut,
     AcademicTermOut,
+    AcademicTermUpsertIn,
+    AcademicTermWithBlocksOut,
 )
 from app.services.academic_service import AcademicService
 from app.services.ap_academic_sync import AcademicImportService
@@ -82,6 +84,41 @@ def list_terms(
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_terms(branch=branch, active=active)
+
+
+
+
+@router.get('/terms/{term_id}/with-blocks', response_model=AcademicTermWithBlocksOut)
+def get_term_with_blocks(
+    term_id: str,
+    active_blocks: bool | None = None,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    service = AcademicService(db)
+    term = db.query(AcademicTerm).filter(AcademicTerm.id == term_id).first()
+    if not term:
+        raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ')
+    blocks = service.list_blocks(term_id=term_id, active=active_blocks)
+    data = AcademicTermOut.model_validate(term).model_dump()
+    data['blocks'] = [AcademicBlockOut.model_validate(item).model_dump() for item in blocks]
+    return data
+
+
+@router.post('/terms', response_model=AcademicTermWithBlocksOut)
+def save_academic_term(
+    payload: AcademicTermUpsertIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    term = AcademicService(db).save_term_with_blocks(payload.model_dump())
+    blocks = AcademicService(db).list_blocks(term_id=term.id, active=None)
+    log_audit(db, action='academic.term.upsert', status='success', message='Lưu học kỳ/block thành công', user=user, target_type='academic_term', target_id=term.id, metadata={'term_code': term.term_code, 'branch': term.branch, 'block_count': len(blocks)})
+    data = AcademicTermOut.model_validate(term).model_dump()
+    data['blocks'] = [AcademicBlockOut.model_validate(item).model_dump() for item in blocks]
+    return data
 
 
 @router.get('/blocks', response_model=list[AcademicBlockOut])

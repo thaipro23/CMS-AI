@@ -32,6 +32,34 @@ class AcademicBlockOut(BaseModel):
     model_config = {'from_attributes': True}
 
 
+
+
+class AcademicBlockUpsertIn(BaseModel):
+    id: str | None = None
+    block_code: str = Field(..., min_length=1, max_length=128, description='Mã block, ví dụ Block 1 hoặc block1-Summer 2026')
+    block_name: str = Field(..., min_length=1, max_length=255, description='Tên block hiển thị')
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    sort_order: int = Field(0, ge=0, le=100)
+    active: bool = True
+
+
+class AcademicTermUpsertIn(BaseModel):
+    id: str | None = None
+    ap_term_id: str | None = Field(None, max_length=64)
+    term_code: str = Field(..., min_length=1, max_length=128, description='Mã học kỳ AP, ví dụ Summer 2026')
+    term_name: str = Field(..., min_length=1, max_length=255, description='Tên học kỳ hiển thị')
+    branch: str = Field('poly', max_length=64)
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    active: bool = True
+    blocks: list[AcademicBlockUpsertIn] = Field(default_factory=list, max_length=8)
+
+
+class AcademicTermWithBlocksOut(AcademicTermOut):
+    blocks: list[AcademicBlockOut] = Field(default_factory=list)
+
+
 class AcademicSubjectOut(BaseModel):
     id: str
     ap_subject_id: str | None = None

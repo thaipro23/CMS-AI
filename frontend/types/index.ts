@@ -1632,6 +1632,7 @@ export type AcademicTerm = {
   start_date?: string | null
   end_date?: string | null
   active: boolean
+  metadata_json?: Record<string, any> | null
 }
 
 export type AcademicBlock = {
@@ -1644,6 +1645,7 @@ export type AcademicBlock = {
   end_date?: string | null
   sort_order: number
   active: boolean
+  metadata_json?: Record<string, any> | null
 }
 
 export type AcademicSubject = {
