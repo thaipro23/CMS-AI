@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.academic import (
+    AcademicCampus,
     AcademicBlock,
     AcademicClass,
     AcademicClassStudent,
@@ -80,6 +81,30 @@ def _term_code(term_name: str, branch: str) -> str:
     return f'{base}:{branch or "poly"}'
 
 
+def _parse_csv_codes(value: str | None) -> list[str]:
+    if not value:
+        return []
+    seen: set[str] = set()
+    items: list[str] = []
+    for raw in re.split(r'[\n,;\s]+', value):
+        item = _clean(raw).lower()
+        if item and item not in seen:
+            seen.add(item)
+            items.append(item)
+    return items
+
+
+def _unique_upper(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values or []:
+        item = _clean(value).upper()
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
 def _safe_payload(value: Any) -> Any:
     """Return small debug payload without PII-heavy student rosters."""
     if isinstance(value, dict):
@@ -118,20 +143,41 @@ class APAcademicClient:
             headers['campus'] = campus
         return headers
 
-    def get_subjects(self, *, branch: str, term_name: str) -> list[dict[str, Any]]:
+    def get_subjects(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]]:
+        # ACMS legacy contract: discover subjects by branch + term first, then call
+        # /get-data-cms per campus x subject_code. Do not require operators to
+        # maintain a full subject catalog in env for normal production sync.
+        params = {'branch': _lower(branch) or 'poly', 'term_name': term_name}
         with httpx.Client(timeout=self.timeout_seconds) as client:
             response = client.get(
                 f'{self.base_url}/get-course',
-                params={'branch': branch or 'poly', 'term_name': term_name},
                 headers=self._headers(),
+                params=params,
             )
             response.raise_for_status()
             data = response.json()
-        if data.get('status') != 'success':
+        if isinstance(data, dict) and data.get('status') not in (None, 'success'):
             raise RuntimeError(f'AP get-course failed: {data.get("message") or data.get("status")}')
-        payload = data.get('data') or {}
-        courses = payload.get('course') if isinstance(payload, dict) else None
-        return courses or []
+        root = data.get('data') if isinstance(data, dict) and isinstance(data.get('data'), (dict, list)) else data
+        if isinstance(root, dict):
+            items = root.get('course') or root.get('courses') or root.get('data') or []
+        elif isinstance(root, list):
+            items = root
+        else:
+            items = []
+        if not isinstance(items, list):
+            raise RuntimeError('AP get-course trả dữ liệu môn không đúng định dạng list.')
+        subjects: list[dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict):
+                code = _clean(item.get('psubject_code') or item.get('subject_code') or item.get('id'))
+                if code:
+                    normalized = dict(item)
+                    normalized.setdefault('subject_code', code)
+                    subjects.append(normalized)
+        if not subjects:
+            raise RuntimeError(f'AP get-course không trả môn nào cho branch={branch}, term={term_name}.')
+        return subjects
 
     def get_division(self, *, campus: str, term_name: str, subject_code: str) -> dict[str, Any]:
         body = {'campus': campus, 'term_name': term_name, 'subject_code': subject_code}
@@ -389,7 +435,11 @@ class AcademicImportService:
     def finish_run(self, run: AcademicSyncRun, counters: SyncCounters | None = None, error: str | None = None) -> AcademicSyncRun:
         run.finished_at = _now()
         if counters:
-            run.counters_json = counters.as_dict()
+            current = run.counters_json if isinstance(run.counters_json, dict) else {}
+            # Preserve sync planning metadata (campus/subject plan, warnings) that
+            # sync_from_ap stored before finishing the run. Older code overwrote it
+            # with plain counters only, making dry-run hard to inspect.
+            run.counters_json = {**current, **counters.as_dict()} if current else counters.as_dict()
         if error:
             run.status = 'failed'
             run.error_message = error[:4000]
@@ -400,38 +450,324 @@ class AcademicImportService:
         self.db.refresh(run)
         return run
 
-    def sync_from_ap(self, *, requested_by: str | None, term_name: str, campus: str, branch: str, subject_codes: list[str], max_subjects: int, dry_run: bool = False) -> tuple[AcademicSyncRun, SyncCounters]:
-        run = self.create_run(source='ap', mode='api_dry_run' if dry_run else 'api', requested_by=requested_by, term_name=term_name, campus=campus, branch=branch)
+
+    def seed_campuses_from_settings(self, *, branch: str = 'poly') -> list[AcademicCampus]:
+        """Seed/update campus master data from ACADEMIC_AP_CAMPUSES once.
+
+        AP does not expose a campus listing endpoint. ACMS legacy solved this with
+        admin_cms.premises. AI Server stores the same concept in academic_campuses
+        so operators do not have to type campus codes for every sync.
+        """
+        normalized_branch = _lower(branch) or 'poly'
+        rows: list[AcademicCampus] = []
+        for index, code in enumerate(_parse_csv_codes(settings.academic_ap_campuses), start=1):
+            item = self.db.query(AcademicCampus).filter(AcademicCampus.campus_code == code, AcademicCampus.branch == normalized_branch).first()
+            if not item:
+                item = AcademicCampus(
+                    id=str(uuid.uuid4()),
+                    campus_code=code,
+                    branch=normalized_branch,
+                    created_at=_now(),
+                )
+                self.db.add(item)
+            item.campus_name = item.campus_name or code.upper()
+            item.active = True
+            item.sort_order = item.sort_order or index
+            item.metadata_json = {'source': 'env.ACADEMIC_AP_CAMPUSES'}
+            item.updated_at = _now()
+            rows.append(item)
+        self.db.commit()
+        for item in rows:
+            self.db.refresh(item)
+        return rows
+
+    def _campus_master_values(self, *, branch: str = 'poly', include_env: bool = True, include_seen_classes: bool = True) -> list[dict[str, Any]]:
+        normalized_branch = _lower(branch) or 'poly'
+        values: dict[str, dict[str, Any]] = {}
+        for item in (
+            self.db.query(AcademicCampus)
+            .filter(AcademicCampus.active.is_(True), AcademicCampus.branch == normalized_branch)
+            .order_by(AcademicCampus.sort_order.asc(), AcademicCampus.campus_code.asc())
+            .all()
+        ):
+            code = _lower(item.campus_code)
+            if code:
+                values[code] = {
+                    'value': code,
+                    'label': item.campus_name or code.upper(),
+                    'description': f'Cơ sở AP {code} · nguồn: academic_campuses',
+                    'meta': {'source': 'academic_campuses', 'id': item.id, 'branch': item.branch, 'sort_order': item.sort_order},
+                }
+        if include_env:
+            for index, code in enumerate(_parse_csv_codes(settings.academic_ap_campuses), start=1):
+                if code and code not in values:
+                    values[code] = {
+                        'value': code,
+                        'label': code.upper(),
+                        'description': 'Cơ sở AP từ env ACADEMIC_AP_CAMPUSES; có thể seed vào bảng academic_campuses',
+                        'meta': {'source': 'env', 'sort_order': 10000 + index},
+                    }
+        if include_seen_classes:
+            db_campuses = (
+                self.db.query(AcademicClass.campus)
+                .filter(AcademicClass.campus.isnot(None), AcademicClass.campus != '')
+                .distinct()
+                .order_by(AcademicClass.campus.asc())
+                .all()
+            )
+            for (item,) in db_campuses:
+                code = _lower(item)
+                if code and code not in values:
+                    values[code] = {
+                        'value': code,
+                        'label': code.upper(),
+                        'description': 'Cơ sở đã từng xuất hiện trong academic_classes',
+                        'meta': {'source': 'academic_classes'},
+                    }
+        return sorted(values.values(), key=lambda item: (item.get('meta', {}).get('sort_order', 99999), item['value']))
+
+    def _resolve_campuses(self, *, sync_scope: str, campus: str | None, campuses: list[str] | None, branch: str = 'poly') -> list[str]:
+        scope = _lower(sync_scope or 'campus')
+        requested = [_lower(item) for item in (campuses or []) if _lower(item)]
+        if campus and _lower(campus) and _lower(campus) not in requested:
+            requested.insert(0, _lower(campus))
+        if scope == 'all':
+            configured = requested or [item['value'] for item in self._campus_master_values(branch=branch)]
+            if not configured:
+                raise RuntimeError('sync_scope=all cần danh sách cơ sở. ACMS cũ lấy từ admin_cms.premises; AI Server lấy từ academic_campuses hoặc ACADEMIC_AP_CAMPUSES. Hãy seed cơ sở một lần trước khi dùng Tích tất cả.')
+            return configured
+        if scope in {'campus', 'subject'}:
+            if not requested:
+                raise RuntimeError('Đồng bộ theo cơ sở/môn cần chọn ít nhất một cơ sở từ dropdown.')
+            return requested
+        raise RuntimeError("sync_scope không hợp lệ. Dùng một trong: all, campus, subject.")
+
+
+    def _configured_subject_codes(self) -> list[str]:
+        # Optional fallback/debug catalog only. Normal production flow uses AP get-course.
+        return _unique_upper(_parse_csv_codes(settings.academic_ap_subject_codes))
+
+    def _subject_code_from_item(self, item: dict[str, Any]) -> str:
+        return _clean(item.get('psubject_code') or item.get('subject_code') or item.get('id')).upper()
+
+    def import_subject_catalog(self, items: list[dict[str, Any]], *, branch: str, counters: SyncCounters) -> None:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                self._get_or_create_subject(item, branch, counters)
+            except Exception:
+                # Bad catalog rows should not stop class/student sync; get-data-cms rows will
+                # still create subjects from psubject_code when they are valid.
+                continue
+        self.db.commit()
+
+    def _resolve_subject_codes_for_campus(
+        self,
+        client: APAcademicClient,
+        *,
+        branch: str,
+        term_name: str,
+        campus: str,
+        subject_codes: list[str],
+        max_subjects: int,
+        catalog_cache: dict[str, list[dict[str, Any]]],
+    ) -> tuple[list[str], list[dict[str, Any]], str, str | None]:
+        explicit = _unique_upper(subject_codes)
+        if explicit:
+            codes = explicit
+            source = 'request.subject_codes'
+            catalog: list[dict[str, Any]] = []
+            warning = None
+        else:
+            cache_key = f'{_lower(branch) or "poly"}:{term_name}'
+            warning = None
+            try:
+                if cache_key not in catalog_cache:
+                    catalog_cache[cache_key] = client.get_subjects(branch=branch, term_name=term_name, campus=campus)
+                catalog = catalog_cache[cache_key]
+                codes = _unique_upper([self._subject_code_from_item(item) for item in catalog if isinstance(item, dict)])
+                source = 'ap.get-course'
+            except Exception as exc:
+                fallback = self._configured_subject_codes()
+                if not fallback:
+                    raise RuntimeError(
+                        f'Không lấy được danh sách môn từ AP get-course ({exc}). '
+                        'Có thể dùng sync_scope=subject để truyền subject_codes, hoặc cấu hình '
+                        'ACADEMIC_AP_SUBJECT_CODES làm fallback tạm thời.'
+                    ) from exc
+                catalog = []
+                codes = fallback
+                source = 'ACADEMIC_AP_SUBJECT_CODES_fallback'
+                warning = f'AP get-course lỗi, dùng fallback env: {exc}'
+        if max_subjects and max_subjects > 0:
+            codes = codes[:max_subjects]
+        return codes, catalog, source, warning
+
+
+    def get_ap_sync_options(self, *, term_name: str | None = None, branch: str = 'poly', include_subjects: bool = True) -> dict[str, Any]:
+        """Return safe dropdown options for AP sync.
+
+        ACMS legacy stores campuses in admin_cms.premises and subjects in AP get-course.
+        AI Server does not own the old premises table, so campuses are resolved from
+        ACADEMIC_AP_CAMPUSES plus campuses already seen in academic_classes. Subjects
+        are resolved from AP /get-course when a term is selected, with local DB/env as
+        fallback to keep the UI usable when AP is temporarily unavailable.
+        """
+        normalized_branch = _lower(branch) or 'poly'
+        warnings: list[str] = []
+
+        branches = [
+            {'value': 'poly', 'label': 'Poly', 'description': 'Branch ACMS cũ: poly', 'meta': {}},
+            {'value': 'ptcd', 'label': 'PTCĐ', 'description': 'Branch ACMS cũ: ptcd', 'meta': {}},
+        ]
+
+        campuses = self._campus_master_values(branch=normalized_branch)
+        if not campuses:
+            warnings.append('Chưa có danh sách cơ sở. ACMS cũ lấy từ admin_cms.premises; AI Server cần seed một lần vào academic_campuses hoặc cấu hình ACADEMIC_AP_CAMPUSES=pt,hn,hcm,...')
+
+        term_query = self.db.query(AcademicTerm).filter(AcademicTerm.active.is_(True))
+        if normalized_branch:
+            term_query = term_query.filter(AcademicTerm.branch == normalized_branch)
+        term_rows = term_query.order_by(AcademicTerm.start_date.desc().nullslast(), AcademicTerm.term_name.desc()).limit(80).all()
+        terms = [
+            {
+                'value': item.term_name,
+                'label': item.term_name,
+                'description': item.term_code or item.ap_term_id,
+                'meta': {'id': item.id, 'branch': item.branch, 'start_date': item.start_date.isoformat() if item.start_date else None, 'end_date': item.end_date.isoformat() if item.end_date else None},
+            }
+            for item in term_rows
+        ]
+        if not terms:
+            warnings.append('Chưa có kỳ trong AI Server. Lần đầu vẫn có thể nhập kỳ thủ công đúng như AP, ví dụ Summer 2026.')
+
+        subjects: list[dict[str, Any]] = []
+        if include_subjects:
+            catalog: list[dict[str, Any]] = []
+            if term_name and _clean(term_name):
+                try:
+                    catalog = APAcademicClient().get_subjects(branch=normalized_branch, term_name=_clean(term_name))
+                except Exception as exc:
+                    warnings.append(f'Không lấy được môn từ AP /get-course: {exc}. Đang dùng dữ liệu môn local/env nếu có.')
+            if catalog:
+                seen: set[str] = set()
+                for item in catalog:
+                    code = self._subject_code_from_item(item)
+                    if not code or code in seen:
+                        continue
+                    seen.add(code)
+                    name = _clean(item.get('subject_name') or item.get('psubject_name') or item.get('name'))
+                    skill = _clean(item.get('skill_code'))
+                    subjects.append({
+                        'value': code,
+                        'label': f'{code} — {name}' if name else code,
+                        'description': skill or None,
+                        'meta': {'source': 'ap.get-course', 'subject_name': name, 'skill_code': skill},
+                    })
+            else:
+                q = self.db.query(AcademicSubject).filter(AcademicSubject.active.is_(True))
+                if normalized_branch:
+                    q = q.filter(AcademicSubject.branch == normalized_branch)
+                local_rows = q.order_by(AcademicSubject.subject_code.asc()).limit(2000).all()
+                seen: set[str] = set()
+                for item in local_rows:
+                    code = _clean(item.subject_code).upper()
+                    if not code or code in seen:
+                        continue
+                    seen.add(code)
+                    subjects.append({
+                        'value': code,
+                        'label': f'{code} — {item.subject_name}' if item.subject_name else code,
+                        'description': item.skill_code,
+                        'meta': {'source': 'local.academic_subjects', 'subject_id': item.id},
+                    })
+                for code in self._configured_subject_codes():
+                    if code not in seen:
+                        seen.add(code)
+                        subjects.append({'value': code, 'label': code, 'description': 'Fallback env ACADEMIC_AP_SUBJECT_CODES', 'meta': {'source': 'env'}})
+        return {'branches': branches, 'campuses': campuses, 'terms': terms, 'subjects': subjects, 'warnings': warnings}
+
+    def sync_from_ap(
+        self,
+        *,
+        requested_by: str | None,
+        term_name: str,
+        campus: str | None,
+        branch: str,
+        subject_codes: list[str],
+        max_subjects: int,
+        dry_run: bool = False,
+        sync_scope: str = 'campus',
+        campuses: list[str] | None = None,
+    ) -> tuple[AcademicSyncRun, SyncCounters]:
+        scope = _lower(sync_scope or 'campus')
+        resolved_campuses = self._resolve_campuses(sync_scope=scope, campus=campus, campuses=campuses, branch=branch)
+        run_campus = ','.join(resolved_campuses[:10]) + ('...' if len(resolved_campuses) > 10 else '')
+        run = self.create_run(
+            source='ap',
+            mode=f'api_{scope}_dry_run' if dry_run else f'api_{scope}',
+            requested_by=requested_by,
+            term_name=term_name,
+            campus=run_campus,
+            branch=branch,
+        )
         client = APAcademicClient()
         counters = SyncCounters()
+        planned: dict[str, Any] = {
+            'sync_scope': scope,
+            'campuses': resolved_campuses,
+            'campus_count': len(resolved_campuses),
+            'max_subjects_per_campus': max_subjects or 0,
+            'subject_source': None,
+            'ap_subject_endpoint': '/get-course',
+            'ap_division_endpoint': '/get-data-cms',
+            'subjects_by_campus': {},
+            'warnings': [],
+        }
+        catalog_cache: dict[str, list[dict[str, Any]]] = {}
+        imported_catalog_keys: set[str] = set()
         try:
-            codes = [code.strip().upper() for code in subject_codes if code.strip()]
-            if not codes:
-                courses = client.get_subjects(branch=branch, term_name=term_name)
-                codes = [_clean(item.get('subject_code') or item.get('psubject_code')).upper() for item in courses]
-                codes = [code for code in codes if code]
-            codes = codes[:max_subjects]
+            for campus_code in resolved_campuses:
+                codes, catalog, source, warning = self._resolve_subject_codes_for_campus(
+                    client,
+                    branch=branch,
+                    term_name=term_name,
+                    campus=campus_code,
+                    subject_codes=subject_codes,
+                    max_subjects=max_subjects,
+                    catalog_cache=catalog_cache,
+                )
+                if not planned['subject_source']:
+                    planned['subject_source'] = source
+                if warning:
+                    planned['warnings'].append({'campus': campus_code, 'message': warning})
+                planned['subjects_by_campus'][campus_code] = {'count': len(codes), 'preview': codes[:20], 'source': source}
+                if dry_run:
+                    continue
+                catalog_key = f'{_lower(branch) or "poly"}:{term_name}:{source}'
+                if catalog and catalog_key not in imported_catalog_keys:
+                    self.import_subject_catalog(catalog, branch=branch, counters=counters)
+                    imported_catalog_keys.add(catalog_key)
+                for code in codes:
+                    try:
+                        payload = client.get_division(campus=campus_code, term_name=term_name, subject_code=code)
+                        if not payload:
+                            self._error(run, counters, 'ap_subject', f'{campus_code}:{code}', 'AP trả payload rỗng', {'campus': campus_code, 'subject_code': code})
+                            continue
+                        imported = self.import_payload(payload, run=run, campus=campus_code, branch=branch)
+                        for key, value in imported.as_dict().items():
+                            setattr(counters, key, getattr(counters, key) + value)
+                    except Exception as exc:
+                        self._error(run, counters, 'ap_subject', f'{campus_code}:{code}', str(exc), {'campus': campus_code, 'subject_code': code})
             if dry_run:
-                run.counters_json = {'subject_codes_found': len(codes), 'subject_codes_preview': codes[:20]}
+                counters.subjects = sum(item['count'] for item in planned['subjects_by_campus'].values())
+                run.counters_json = {**counters.as_dict(), 'plan': planned}
                 return self.finish_run(run, counters), counters
-            merged: dict[str, Any] | None = None
-            all_classes: list[dict[str, Any]] = []
-            for code in codes:
-                try:
-                    payload = client.get_division(campus=campus, term_name=term_name, subject_code=code)
-                    if not merged:
-                        merged = {'term': payload.get('term') or {'term_name': term_name}, 'class': []}
-                    all_classes.extend(payload.get('class') or [])
-                except Exception as exc:
-                    self._error(run, counters, 'ap_subject', code, str(exc), {'subject_code': code})
-            if merged is None:
-                merged = {'term': {'term_name': term_name}, 'class': []}
-            merged['class'] = all_classes
-            imported = self.import_payload(merged, run=run, campus=campus, branch=branch)
-            # Preserve AP fetch errors and add imported counters.
-            for key, value in imported.as_dict().items():
-                setattr(counters, key, getattr(counters, key) + value)
+            current = run.counters_json or {}
+            run.counters_json = {**current, **counters.as_dict(), 'plan': planned}
             return self.finish_run(run, counters), counters
         except Exception as exc:
             self.db.rollback()
             return self.finish_run(run, counters, error=str(exc)), counters
+

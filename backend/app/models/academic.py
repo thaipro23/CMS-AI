@@ -12,6 +12,27 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
+
+
+class AcademicCampus(Base):
+    __tablename__ = 'academic_campuses'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    campus_code: Mapped[str] = mapped_column(String(64), index=True)
+    campus_name: Mapped[str] = mapped_column(String(255), default='')
+    branch: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('campus_code', 'branch', name='uq_academic_campuses_code_branch'),
+        Index('ix_academic_campuses_branch_active_order', 'branch', 'active', 'sort_order'),
+    )
+
+
 class AcademicTerm(Base):
     __tablename__ = 'academic_terms'
 

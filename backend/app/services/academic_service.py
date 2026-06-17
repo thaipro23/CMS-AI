@@ -273,22 +273,33 @@ class AcademicService:
             func.count(AcademicClassStudent.student_id).label('student_count'),
         ).group_by(AcademicClassStudent.class_id).subquery()
 
+        # PostgreSQL requires SELECT DISTINCT ON columns to be the first ORDER BY columns.
+        # The previous implementation joined teacher assignments directly, then used
+        # query.distinct(AcademicClass.id, AcademicTeacher.id) with a business ORDER BY,
+        # which fails in production. Aggregate teacher display fields per class instead
+        # so the main query remains one row per class and can be sorted naturally.
+        teacher_summary_sq = self.db.query(
+            AcademicTeacherAssignment.class_id.label('class_id'),
+            func.min(AcademicTeacher.username).label('teacher_username'),
+            func.min(AcademicTeacher.full_name).label('teacher_name'),
+        ).join(AcademicTeacher, AcademicTeacher.id == AcademicTeacherAssignment.teacher_id)
+        teacher_summary_sq = teacher_summary_sq.group_by(AcademicTeacherAssignment.class_id).subquery()
+
         query = self.db.query(
             AcademicClass,
             AcademicTerm.term_name,
             AcademicBlock.block_name,
             AcademicSubject.subject_code,
             AcademicSubject.subject_name,
-            AcademicTeacher.username.label('teacher_username'),
-            AcademicTeacher.full_name.label('teacher_name'),
+            teacher_summary_sq.c.teacher_username.label('teacher_username'),
+            teacher_summary_sq.c.teacher_name.label('teacher_name'),
             func.coalesce(student_count_sq.c.student_count, 0).label('student_count'),
             AcademicClassCourseMapping.openedx_course_id,
             AcademicClassCourseMapping.openedx_cohort_name,
         ).join(AcademicTerm, AcademicTerm.id == AcademicClass.term_id)
         query = query.outerjoin(AcademicBlock, AcademicBlock.id == AcademicClass.block_id)
         query = query.join(AcademicSubject, AcademicSubject.id == AcademicClass.subject_id)
-        query = query.join(AcademicTeacherAssignment, AcademicTeacherAssignment.class_id == AcademicClass.id)
-        query = query.join(AcademicTeacher, AcademicTeacher.id == AcademicTeacherAssignment.teacher_id)
+        query = query.outerjoin(teacher_summary_sq, teacher_summary_sq.c.class_id == AcademicClass.id)
         query = query.outerjoin(student_count_sq, student_count_sq.c.class_id == AcademicClass.id)
         query = query.outerjoin(
             AcademicClassCourseMapping,
@@ -297,7 +308,10 @@ class AcademicService:
         if not decision.unrestricted:
             if not decision.teacher_ids:
                 return {'items': [], 'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0, 'has_next': False}
-            query = query.filter(AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids))
+            allowed_class_ids = self.db.query(AcademicTeacherAssignment.class_id).filter(
+                AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids)
+            )
+            query = query.filter(AcademicClass.id.in_(allowed_class_ids))
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
         if block_id:
@@ -306,14 +320,16 @@ class AcademicService:
             query = query.filter(AcademicClass.subject_id == subject_id)
         if search and search.strip():
             like = f"%{search.strip()}%"
+            teacher_match_class_ids = self.db.query(AcademicTeacherAssignment.class_id).join(
+                AcademicTeacher, AcademicTeacher.id == AcademicTeacherAssignment.teacher_id
+            ).filter(or_(AcademicTeacher.username.ilike(like), AcademicTeacher.full_name.ilike(like)))
             query = query.filter(or_(
                 AcademicClass.class_code.ilike(like),
                 AcademicClass.class_name.ilike(like),
                 AcademicSubject.subject_code.ilike(like),
                 AcademicSubject.subject_name.ilike(like),
-                AcademicTeacher.username.ilike(like),
+                AcademicClass.id.in_(teacher_match_class_ids),
             ))
-        query = query.distinct(AcademicClass.id, AcademicTeacher.id) if self.db.bind and self.db.bind.dialect.name == 'postgresql' else query
         total = query.count()
         rows = query.order_by(AcademicTerm.start_date.desc().nullslast(), AcademicBlock.sort_order.asc().nullslast(), AcademicSubject.subject_code.asc(), AcademicClass.class_code.asc()).offset((page - 1) * page_size).limit(page_size).all()
         items = []

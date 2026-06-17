@@ -162,14 +162,54 @@ class AcademicImportResultOut(BaseModel):
     counters: AcademicSyncCounters
 
 
+
+
+class AcademicCampusOut(BaseModel):
+    id: str
+    campus_code: str
+    campus_name: str = ''
+    branch: str | None = None
+    active: bool = True
+    sort_order: int = 0
+    metadata_json: dict[str, Any] | None = None
+
+    model_config = {'from_attributes': True}
+
+
+class AcademicCampusUpsertIn(BaseModel):
+    campus_code: str = Field(..., min_length=1, max_length=64, description='Mã cơ sở AP, ví dụ pt/hn/hcm')
+    campus_name: str = Field('', max_length=255, description='Tên cơ sở để hiển thị dropdown')
+    branch: str = Field('poly', max_length=64)
+    active: bool = True
+    sort_order: int = 0
+
+
 class AcademicAPSyncIn(BaseModel):
-    term_name: str = Field(..., description='Ví dụ: Spring 2026')
-    campus: str = Field(..., description='Mã cơ sở AP dạng pc/pt/hn/hcm...')
+    term_name: str = Field(..., description='Ví dụ: Summer 2026')
+    sync_scope: str = Field('campus', description='all = tất cả cơ sở/tất cả môn; campus = một hoặc nhiều cơ sở; subject = cơ sở + danh sách môn')
+    campus: str | None = Field(None, description='Mã cơ sở AP dạng pc/pt/hn/hcm...; giữ để tương thích bản cũ')
+    campuses: list[str] = Field(default_factory=list, description='Danh sách cơ sở khi sync_scope=all/campus')
     branch: str = 'poly'
-    subject_codes: list[str] = Field(default_factory=list, description='Rỗng = lấy danh sách môn từ AP trước rồi sync toàn bộ, có thể rất lâu')
-    max_subjects: int = Field(50, ge=1, le=500)
+    subject_codes: list[str] = Field(default_factory=list, description='Danh sách mã môn AP psubject_code. Rỗng ở sync_scope=all/campus = backend lấy từ AP /get-course; env ACADEMIC_AP_SUBJECT_CODES chỉ là fallback')
+    max_subjects: int = Field(0, ge=0, le=5000, description='0 = không giới hạn; >0 = giới hạn số môn mỗi cơ sở để chia batch an toàn')
     dry_run: bool = False
 
+
+
+
+class AcademicAPOptionOut(BaseModel):
+    value: str
+    label: str
+    description: str | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AcademicAPSyncOptionsOut(BaseModel):
+    branches: list[AcademicAPOptionOut] = Field(default_factory=list)
+    campuses: list[AcademicAPOptionOut] = Field(default_factory=list)
+    terms: list[AcademicAPOptionOut] = Field(default_factory=list)
+    subjects: list[AcademicAPOptionOut] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 class AcademicHealthOut(BaseModel):
     ok: bool

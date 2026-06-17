@@ -7,6 +7,7 @@ from sqlalchemy import func
 from app.core.rbac import UserContext, get_user_context, require_permission
 from app.db.session import get_db
 from app.models.academic import (
+    AcademicCampus,
     AcademicClass,
     AcademicClassStudent,
     AcademicStudent,
@@ -16,6 +17,9 @@ from app.models.academic import (
 )
 from app.schemas.academic import (
     AcademicAPSyncIn,
+    AcademicAPSyncOptionsOut,
+    AcademicCampusOut,
+    AcademicCampusUpsertIn,
     AcademicBlockOut,
     AcademicClassListOut,
     AcademicClassOut,
@@ -337,6 +341,72 @@ def import_openedx_user_mappings(
     return result
 
 
+
+@router.get('/campuses', response_model=list[AcademicCampusOut])
+def list_academic_campuses(
+    branch: str | None = Query('poly'),
+    active: bool | None = True,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    query = db.query(AcademicCampus)
+    if branch:
+        query = query.filter(AcademicCampus.branch == branch)
+    if active is not None:
+        query = query.filter(AcademicCampus.active.is_(active))
+    return query.order_by(AcademicCampus.sort_order.asc(), AcademicCampus.campus_code.asc()).all()
+
+
+@router.post('/campuses', response_model=AcademicCampusOut)
+def upsert_academic_campus(
+    payload: AcademicCampusUpsertIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    code = (payload.campus_code or '').strip().lower()
+    branch = (payload.branch or 'poly').strip().lower()
+    if not code:
+        raise HTTPException(status_code=400, detail='Thiếu mã cơ sở AP')
+    campus = db.query(AcademicCampus).filter(AcademicCampus.campus_code == code, AcademicCampus.branch == branch).first()
+    if not campus:
+        campus = AcademicCampus(campus_code=code, branch=branch, created_at=func.now(), updated_at=func.now())
+        db.add(campus)
+    campus.campus_name = payload.campus_name.strip() or code.upper()
+    campus.active = payload.active
+    campus.sort_order = payload.sort_order
+    campus.metadata_json = {'source': 'manual_ui'}
+    db.commit()
+    db.refresh(campus)
+    log_audit(db, action='academic.campus.upsert', status='success', message='Lưu cơ sở AP thành công', user=user, target_type='academic_campus', target_id=campus.id, metadata={'campus_code': code, 'branch': branch})
+    return campus
+
+
+@router.post('/campuses/seed-from-env', response_model=list[AcademicCampusOut])
+def seed_academic_campuses_from_env(
+    branch: str = Query('poly'),
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    items = AcademicImportService(db).seed_campuses_from_settings(branch=branch)
+    log_audit(db, action='academic.campus.seed_from_env', status='success', message='Seed cơ sở AP từ env thành công', user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch, 'count': len(items)})
+    return items
+
+
+@router.get('/sync/ap/options', response_model=AcademicAPSyncOptionsOut)
+def get_ap_sync_options(
+    term_name: str = Query('', description='Tên kỳ AP, ví dụ Summer 2026. Có term_name thì backend gọi AP /get-course để lấy môn.'),
+    branch: str = Query('poly'),
+    include_subjects: bool = Query(True),
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    return AcademicImportService(db).get_ap_sync_options(term_name=term_name or None, branch=branch, include_subjects=include_subjects)
+
+
 @router.post('/sync/from-json', response_model=AcademicImportResultOut)
 def sync_from_json(
     payload: AcademicImportFromJsonIn,
@@ -383,6 +453,8 @@ def sync_from_ap(
         subject_codes=payload.subject_codes,
         max_subjects=payload.max_subjects,
         dry_run=payload.dry_run,
+        sync_scope=payload.sync_scope,
+        campuses=payload.campuses,
     )
     status = 'success' if run.status == 'completed' else 'failed'
     log_audit(
@@ -396,7 +468,9 @@ def sync_from_ap(
         target_id=run.id,
         metadata={
             'term_name': payload.term_name,
+            'sync_scope': payload.sync_scope,
             'campus': payload.campus,
+            'campuses': payload.campuses,
             'branch': payload.branch,
             'subject_count': len(payload.subject_codes),
             'dry_run': payload.dry_run,

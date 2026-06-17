@@ -1732,6 +1732,33 @@ export type AcademicManualMappingImportResult = {
 export type AcademicClassListResponse = PaginatedResponse<AcademicClass>
 export type AcademicStudentListResponse = PaginatedResponse<AcademicStudent>
 
+
+
+export type AcademicCampus = {
+  id: string
+  campus_code: string
+  campus_name: string
+  branch?: string | null
+  active: boolean
+  sort_order: number
+  metadata_json?: Record<string, any> | null
+}
+
+export type AcademicAPOption = {
+  value: string
+  label: string
+  description?: string | null
+  meta?: Record<string, any>
+}
+
+export type AcademicAPSyncOptions = {
+  branches: AcademicAPOption[]
+  campuses: AcademicAPOption[]
+  terms: AcademicAPOption[]
+  subjects: AcademicAPOption[]
+  warnings: string[]
+}
+
 export type AcademicSyncRun = {
   id: string
   source: string
@@ -1741,7 +1768,7 @@ export type AcademicSyncRun = {
   term_name?: string | null
   campus?: string | null
   branch?: string | null
-  counters_json?: Record<string, number> | null
+  counters_json?: Record<string, any> | null
   error_message?: string | null
   started_at: string
   finished_at?: string | null

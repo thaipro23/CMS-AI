@@ -75,9 +75,11 @@ import {
   AcademicTerm,
   AcademicBlock,
   AcademicSubject,
+  AcademicCampus,
   AcademicClassListResponse,
   AcademicStudentListResponse,
   AcademicSyncResult,
+  AcademicAPSyncOptions,
   AcademicMappingResolveResult,
   AcademicManualMappingImportResult,
   AcademicCourseMappingValidation,
@@ -1749,7 +1751,35 @@ export async function getAcademicClassStudents(headers: HeadersInit, classId: st
   return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/students?${params.toString()}`, { headers }));
 }
 
-export async function syncAcademicFromAp(headers: HeadersInit, payload: { term_name: string; campus: string; branch?: string; subject_codes?: string[]; max_subjects?: number; dry_run?: boolean }): Promise<AcademicSyncResult> {
+
+
+export async function getAcademicCampuses(headers: HeadersInit, filters: { branch?: string; active?: boolean | null } = {}): Promise<AcademicCampus[]> {
+  const params = new URLSearchParams();
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (typeof filters.active === 'boolean') params.set('active', String(filters.active));
+  return parseResponse(await fetch(`${API}/academic/campuses?${params.toString()}`, { headers }));
+}
+
+export async function saveAcademicCampus(headers: HeadersInit, payload: { campus_code: string; campus_name: string; branch?: string; active?: boolean; sort_order?: number }): Promise<AcademicCampus> {
+  return parseResponse(await fetch(`${API}/academic/campuses`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function getAcademicApSyncOptions(headers: HeadersInit, filters: { termName?: string; branch?: string; includeSubjects?: boolean } = {}): Promise<AcademicAPSyncOptions> {
+  const params = new URLSearchParams();
+  if (filters.termName?.trim()) params.set('term_name', filters.termName.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.includeSubjects === false) params.set('include_subjects', 'false');
+  return parseResponse(await fetch(`${API}/academic/sync/ap/options?${params.toString()}`, { headers }));
+}
+
+
+export async function seedAcademicCampusesFromEnv(headers: HeadersInit, branch = 'poly'): Promise<any[]> {
+  const params = new URLSearchParams();
+  if (branch.trim()) params.set('branch', branch.trim());
+  return parseResponse(await fetch(`${API}/academic/campuses/seed-from-env?${params.toString()}`, { method: 'POST', headers }));
+}
+
+export async function syncAcademicFromAp(headers: HeadersInit, payload: { term_name: string; sync_scope?: 'all' | 'campus' | 'subject'; campus?: string; campuses?: string[]; branch?: string; subject_codes?: string[]; max_subjects?: number; dry_run?: boolean }): Promise<AcademicSyncResult> {
   return parseResponse(await fetch(`${API}/academic/sync/ap`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 

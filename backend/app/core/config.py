@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.2.1-academic-core-safety-hotfix'
+    app_version: str = '25.9.16.2.8-ap-acms-compatible-sync-planner'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'
     academic_ap_api_key: str | None = None
     academic_ap_request_timeout_seconds: int = 60
+    # Comma-separated AP campus codes used by sync_scope='all'. Example: pt,hn,hcm,dn
+    # Keep empty by default so production admins choose the exact campus set intentionally.
+    academic_ap_campuses: str = ''
+    # Optional comma-separated AP subject codes fallback/debug only. Normal production
+    # sync_scope='all' and sync_scope='campus' use AP /get-course by branch + term.
+    academic_ap_subject_codes: str = ''
 
     openedx_request_timeout_seconds: int = 30
     # Server-to-server HMAC used by the AI Server when calling the CMS connector plugin.
