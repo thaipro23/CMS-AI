@@ -304,19 +304,23 @@ class AcademicService:
         return term
 
     def list_subjects(self, term_id: str | None = None, block_id: str | None = None, search: str | None = None, branch: str | None = None) -> list[AcademicSubject]:
-        query = self.db.query(AcademicSubject)
+        query = self.db.query(AcademicSubject).filter(AcademicSubject.active.is_(True))
         if term_id or block_id:
-            query = query.join(AcademicClass, AcademicClass.subject_id == AcademicSubject.id)
+            # Do not call DISTINCT over the full AcademicSubject row because metadata_json is
+            # stored as PostgreSQL JSON, which has no equality operator. Select distinct IDs
+            # from academic_classes first, then load subjects normally.
+            subject_ids = self.db.query(AcademicClass.subject_id).filter(AcademicClass.subject_id.isnot(None))
             if term_id:
-                query = query.filter(AcademicClass.term_id == term_id)
+                subject_ids = subject_ids.filter(AcademicClass.term_id == term_id)
             if block_id:
-                query = query.filter(AcademicClass.block_id == block_id)
+                subject_ids = subject_ids.filter(AcademicClass.block_id == block_id)
+            query = query.filter(AcademicSubject.id.in_(subject_ids.distinct()))
         if branch:
             query = query.filter(AcademicSubject.branch == branch.strip().lower())
         if search and search.strip():
             like = f"%{search.strip()}%"
             query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
-        return query.distinct().order_by(AcademicSubject.subject_code.asc()).limit(500).all()
+        return query.order_by(AcademicSubject.subject_code.asc()).limit(500).all()
 
     def list_teacher_classes(
         self,

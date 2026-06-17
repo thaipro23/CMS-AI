@@ -12,7 +12,6 @@ import {
   getAcademicTerms,
   resolveAcademicClassOpenEdxUsers,
   saveAcademicClassCourseMapping,
-  seedAcademicCampusesFromEnv,
   syncAcademicFromAp,
   validateAcademicClassCourseMapping,
 } from '../../lib/api'
@@ -209,21 +208,6 @@ export default function StudentManagementPage() {
     return () => { cancelled = true }
   }, [headers, syncOpen, syncTermName, syncBranch])
 
-
-  const seedCampusesFromEnv = async () => {
-    setSyncOptionsLoading(true)
-    setMessage('')
-    try {
-      const seeded = await seedAcademicCampusesFromEnv(jsonHeaders, syncBranch)
-      const options = await getAcademicApSyncOptions(headers, { termName: syncTermName, branch: syncBranch, includeSubjects: true })
-      setSyncOptions(options)
-      setMessage(`Đã seed ${seeded.length} cơ sở từ env ACADEMIC_AP_CAMPUSES vào bảng academic_campuses`)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Seed cơ sở từ env thất bại')
-    } finally {
-      setSyncOptionsLoading(false)
-    }
-  }
 
   const runSync = async (dryRun = false) => {
     setSyncRunning(true)
@@ -475,7 +459,7 @@ export default function StudentManagementPage() {
     {syncOpen ? <div className="modal-backdrop" onClick={() => !syncRunning && setSyncOpen(false)}>
       <div className="card modal-card bank-modal" onClick={(event) => event.stopPropagation()}>
         <div className="section-head">
-          <div><h2>Đồng bộ dữ liệu AP</h2><p>API key AP lấy từ env backend. UI không nhận, không hiển thị và audit không ghi secret.</p></div>
+          <div><h2>Đồng bộ dữ liệu AP</h2><p>Chọn kỳ, hệ, cơ sở và môn cần đồng bộ từ AP.</p></div>
           <button className="btn small secondary" disabled={syncRunning} onClick={() => setSyncOpen(false)}>Đóng</button>
         </div>
         <div className="mini-form">
@@ -483,7 +467,6 @@ export default function StudentManagementPage() {
             {syncOptions.terms.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             {!syncOptions.terms.some((item) => item.value === syncTermName) ? <option value={syncTermName}>{syncTermName}</option> : null}
           </select></label>
-          <label><span>Nhập kỳ nếu chưa có trong dropdown</span><input className="input" value={syncTermName} onChange={(event) => setSyncTermName(event.target.value)} placeholder="Summer 2026" /></label>
           <label><span>Hệ</span><select className="input" value={syncBranch} onChange={(event) => { setSyncBranch(event.target.value as 'poly' | 'ptcd'); setSyncSelectedCampuses([]); setSyncSelectedSubjects([]) }}>
             {(syncOptions.branches?.length ? syncOptions.branches : [{ value: 'poly', label: 'Poly' }, { value: 'ptcd', label: 'PTCĐ' }]).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select></label>
@@ -495,25 +478,20 @@ export default function StudentManagementPage() {
           <div className="alert soft-alert">
             <b>Cơ sở</b>
             <label className="check-row"><input type="checkbox" checked={syncAllCampuses} onChange={(event) => setSyncAllCampuses(event.target.checked)} /> Tích tất cả cơ sở</label>
-            {!syncAllCampuses ? <div className="compact-list">
+            {!syncAllCampuses ? <div className="compact-list ap-check-list">
               {syncOptions.campuses.map((item) => <label key={item.value} className="check-row"><input type="checkbox" checked={syncSelectedCampuses.includes(item.value)} onChange={() => setSyncSelectedCampuses((current) => toggleValue(current, item.value))} /> {item.label}</label>)}
-              {!syncOptions.campuses.length ? <p className="helper">Chưa lấy được cơ sở. Kiểm tra bảng Premises/Cơ sở hoặc chạy migration seed cơ sở.</p> : null}
-            </div> : <p className="helper">Sẽ dùng {syncOptions.campuses.length} cơ sở từ trang Premises/Cơ sở.</p>}
+              {!syncOptions.campuses.length ? <p className="helper">Chưa có cơ sở. Vào trang Cơ sở để thêm trước khi đồng bộ.</p> : null}
+            </div> : <p className="helper">Đã chọn tất cả {syncOptions.campuses.length} cơ sở.</p>}
           </div>
           {syncScope === 'subject' ? <div className="alert soft-alert">
             <b>Môn</b>
             <label className="check-row"><input type="checkbox" checked={syncAllSubjects} onChange={(event) => setSyncAllSubjects(event.target.checked)} /> Tích tất cả môn của kỳ đã chọn</label>
-            {!syncAllSubjects ? <div className="compact-list">
+            {!syncAllSubjects ? <div className="compact-list ap-check-list">
               {syncOptions.subjects.map((item) => <label key={item.value} className="check-row"><input type="checkbox" checked={syncSelectedSubjects.includes(item.value)} onChange={() => setSyncSelectedSubjects((current) => toggleValue(current, item.value))} /> {item.label}</label>)}
-              {!syncOptions.subjects.length ? <p className="helper">Chưa có môn. Kiểm tra AP /get-course hoặc chọn kỳ khác.</p> : null}
-            </div> : <p className="helper">Sẽ đồng bộ {syncOptions.subjects.length} môn lấy từ AP /get-course hoặc dữ liệu local.</p>}
-          </div> : <p className="helper">Chế độ này tự lấy danh sách môn bằng AP /get-course rồi gọi /get-data-cms từng cơ sở × từng môn.</p>}
+              {!syncOptions.subjects.length ? <p className="helper">Chưa có môn cho kỳ/hệ đã chọn.</p> : null}
+            </div> : <p className="helper">Đã chọn tất cả {syncOptions.subjects.length} môn.</p>}
+          </div> : null}
           {syncOptionsLoading ? <p className="helper">Đang tải học kỳ, hệ, cơ sở, môn học...</p> : null}
-          {can('manage_settings') ? <button type="button" className="btn small secondary" disabled={syncOptionsLoading || syncRunning} onClick={seedCampusesFromEnv}>Seed cơ sở từ env</button> : null}
-          {syncOptions.warnings.length ? <div className="alert soft-alert"><b>Cảnh báo dropdown</b><ul className="compact-list">{syncOptions.warnings.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
-        </div>
-        <div className="alert soft-alert">
-          <b>Khuyến nghị production:</b> chạy thử Theo môn với 1 cơ sở/1 môn, sau đó Theo cơ sở, cuối cùng mới Tất cả. Danh sách môn lấy từ AP /get-course giống ACMS cũ.
         </div>
         <div className="modal-actions">
           <button className="btn secondary" disabled={syncRunning || !syncTermName.trim()} onClick={() => runSync(true)}>Kiểm tra AP</button>

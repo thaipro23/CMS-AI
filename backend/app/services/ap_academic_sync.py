@@ -495,7 +495,7 @@ class AcademicImportService:
                 values[code] = {
                     'value': code,
                     'label': item.campus_name or code.upper(),
-                    'description': f'Cơ sở AP {code} · nguồn: academic_campuses',
+                    'description': 'Cơ sở AP',
                     'meta': {'source': 'academic_campuses', 'id': item.id, 'branch': item.branch, 'sort_order': item.sort_order},
                 }
         if include_env:
@@ -504,7 +504,7 @@ class AcademicImportService:
                     values[code] = {
                         'value': code,
                         'label': code.upper(),
-                        'description': 'Cơ sở AP từ env ACADEMIC_AP_CAMPUSES; có thể seed vào bảng academic_campuses',
+                        'description': 'Cơ sở AP',
                         'meta': {'source': 'env', 'sort_order': 10000 + index},
                     }
         if include_seen_classes:
@@ -521,7 +521,7 @@ class AcademicImportService:
                     values[code] = {
                         'value': code,
                         'label': code.upper(),
-                        'description': 'Cơ sở đã từng xuất hiện trong academic_classes',
+                        'description': 'Cơ sở AP',
                         'meta': {'source': 'academic_classes'},
                     }
         return sorted(values.values(), key=lambda item: (item.get('meta', {}).get('sort_order', 99999), item['value']))
@@ -592,9 +592,9 @@ class AcademicImportService:
                 fallback = self._configured_subject_codes()
                 if not fallback:
                     raise RuntimeError(
-                        f'Không lấy được danh sách môn từ AP get-course ({exc}). '
-                        'Có thể dùng sync_scope=subject để truyền subject_codes, hoặc cấu hình '
-                        'ACADEMIC_AP_SUBJECT_CODES làm fallback tạm thời.'
+                        f'Không lấy được danh sách môn từ AP cho kỳ {term_name}. '
+                        'Hãy kiểm tra API key/kết nối AP hoặc chọn phạm vi Theo môn với mã môn cụ thể. '
+                        f'Chi tiết: {exc}'
                     ) from exc
                 catalog = []
                 codes = fallback
@@ -649,7 +649,7 @@ class AcademicImportService:
                 try:
                     catalog = APAcademicClient().get_subjects(branch=normalized_branch, term_name=_clean(term_name))
                 except Exception as exc:
-                    warnings.append(f'Không lấy được môn từ AP /get-course: {exc}. Đang dùng dữ liệu môn local/env nếu có.')
+                    warnings.append('Không tải được môn từ AP, đang dùng dữ liệu môn đã lưu nếu có.')
             if catalog:
                 seen: set[str] = set()
                 for item in catalog:

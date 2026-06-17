@@ -3310,3 +3310,31 @@ body { background: #ffffff !important; }
 .status-pill.danger { background: #fee2e2; color: #991b1b; }
 .status-pill.neutral { background: #f1f5f9; color: #475569; }
 .student-management-page .data-table td small { display: block; color: #64748b; margin-top: 4px; word-break: break-word; }
+
+
+/* v25.9.16.2.15: AP sync checkbox rows must stay inline inside mini-form modals. */
+.mini-form label.check-row,
+.bank-modal label.check-row,
+.ap-check-list label.check-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  line-height: 1.3;
+  margin: 4px 0;
+}
+.mini-form label.check-row input,
+.bank-modal label.check-row input,
+.ap-check-list label.check-row input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+.ap-check-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px 14px;
+  max-height: 260px;
+  overflow: auto;
+  padding-top: 8px;
+}
