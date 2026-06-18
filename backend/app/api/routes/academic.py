@@ -411,21 +411,15 @@ def get_class_mapping_summary(
     return AcademicService(db).mapping_summary_for_class(user, class_id)
 
 
-@router.post('/classes/{class_id}/resolve-openedx-users', response_model=AcademicMappingResolveOut)
-def resolve_class_openedx_users(
-    class_id: str,
-    payload: AcademicResolveClassUsersIn,
-    user: UserContext = Depends(require_permission('view_questions')),
-    db: Session = Depends(get_db),
-):
+def _run_class_cms_sync_check(class_id: str, payload: AcademicResolveClassUsersIn, user: UserContext, db: Session) -> dict:
     service = AcademicService(db)
     try:
         result = service.resolve_class_openedx_users(user, class_id, force=payload.force, limit=payload.limit)
         log_audit(
             db,
-            action='academic.openedx_user_mapping.resolve_class',
+            action='academic.cms_sync_check.class',
             status='success',
-            message='Resolve Open edX user mapping theo AP username thành công',
+            message='Kiểm tra đồng bộ CMS theo AP username thành công',
             user=user,
             target_type='academic_class',
             target_id=class_id,
@@ -438,7 +432,7 @@ def resolve_class_openedx_users(
         db.rollback()
         log_audit(
             db,
-            action='academic.openedx_user_mapping.resolve_class',
+            action='academic.cms_sync_check.class',
             status='failed',
             error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
             message=str(exc),
@@ -447,6 +441,27 @@ def resolve_class_openedx_users(
             target_id=class_id,
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post('/classes/{class_id}/cms-sync-check', response_model=AcademicMappingResolveOut)
+def check_class_cms_sync(
+    class_id: str,
+    payload: AcademicResolveClassUsersIn,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    return _run_class_cms_sync_check(class_id, payload, user, db)
+
+
+@router.post('/classes/{class_id}/resolve-openedx-users', response_model=AcademicMappingResolveOut)
+def resolve_class_openedx_users_legacy_alias(
+    class_id: str,
+    payload: AcademicResolveClassUsersIn,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    # Backward-compatible alias. UI and docs use /cms-sync-check from v25.9.16.2.23.
+    return _run_class_cms_sync_check(class_id, payload, user, db)
 
 
 @router.post('/openedx-user-mappings/import', response_model=AcademicManualMappingImportOut)

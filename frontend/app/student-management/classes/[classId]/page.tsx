@@ -8,7 +8,7 @@ import {
   getAcademicClass,
   getAcademicClassMappingSummary,
   getAcademicClassStudents,
-  resolveAcademicClassOpenEdxUsers,
+  checkAcademicClassCmsSync,
 } from '../../../../lib/api'
 import { AcademicClass, AcademicMappingSummary, AcademicStudent } from '../../../../types'
 
@@ -83,7 +83,7 @@ export default function ClassDetailPage() {
     setChecking(true)
     setMessage('')
     try {
-      const result = await resolveAcademicClassOpenEdxUsers(jsonHeaders, classId, { force: true, limit: 5000 })
+      const result = await checkAcademicClassCmsSync(jsonHeaders, classId, { force: true, limit: 5000 })
       setMessage(`Kiểm tra đồng bộ CMS hoàn tất: ${result.updated}/${result.total} sinh viên được cập nhật.`)
       await refreshStudents()
     } catch (error) {

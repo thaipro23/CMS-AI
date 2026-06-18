@@ -76,9 +76,20 @@ def _block_sort_order(name: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def _term_code(term_name: str, branch: str) -> str:
+def _legacy_term_code(term_name: str, branch: str) -> str:
     base = re.sub(r'\s+', '_', (term_name or '').strip().upper()) or 'UNKNOWN_TERM'
     return f'{base}:{branch or "poly"}'
+
+
+def _term_code(term_name: str, branch: str) -> str:
+    # Keep the code identical to the operator-visible AP term name. Earlier builds
+    # generated SUMMER_2026:poly, which created duplicate terms next to the
+    # /semesters-managed "Summer 2026" rows and made /student-management look empty.
+    return _clean(term_name) or _legacy_term_code(term_name, branch)
+
+
+def _text_key(value: Any) -> str:
+    return re.sub(r'[^a-z0-9]+', '', str(value or '').strip().lower())
 
 
 def _parse_csv_codes(value: str | None) -> list[str]:
@@ -234,17 +245,58 @@ class AcademicImportService:
         term_name = _clean(term_payload.get('term_name') or term_payload.get('pterm_name') or term_payload.get('name')) or 'Unknown Term'
         ap_term_id = _clean(term_payload.get('id') or term_payload.get('term_id') or term_payload.get('pterm_id')) or None
         branch = _lower(branch) or 'poly'
-        code = _term_code(term_name, branch)
-        term = self.db.query(AcademicTerm).filter(AcademicTerm.term_code == code, AcademicTerm.branch == branch).first()
+        canonical_code = _term_code(term_name, branch)
+        legacy_code = _legacy_term_code(term_name, branch)
+
+        term = self.db.query(AcademicTerm).filter(
+            AcademicTerm.term_code == canonical_code,
+            AcademicTerm.branch == branch,
+        ).first()
+
         if not term:
-            term = AcademicTerm(id=str(uuid.uuid4()), term_code=code, term_name=term_name, branch=branch, created_at=_now(), updated_at=_now())
+            # Reuse the /semesters term even when AP sends only term_name. This is the
+            # canonical path after v25.9.16.2.13, where operators must create terms first.
+            candidates = self.db.query(AcademicTerm).filter(AcademicTerm.branch == branch).all()
+            wanted = _text_key(term_name)
+            for candidate in candidates:
+                if _text_key(candidate.term_name) == wanted or _text_key(candidate.term_code) == wanted:
+                    term = candidate
+                    break
+
+        if not term and ap_term_id:
+            term = self.db.query(AcademicTerm).filter(
+                AcademicTerm.ap_term_id == ap_term_id,
+                AcademicTerm.branch == branch,
+            ).first()
+
+        if not term:
+            # Backward compatibility for rows created by older AP sync versions.
+            term = self.db.query(AcademicTerm).filter(
+                AcademicTerm.term_code == legacy_code,
+                AcademicTerm.branch == branch,
+            ).first()
+
+        if not term:
+            term = AcademicTerm(id=str(uuid.uuid4()), term_code=canonical_code, term_name=term_name, branch=branch, created_at=_now(), updated_at=_now())
             counters.terms += 1
+
         term.ap_term_id = ap_term_id or term.ap_term_id
+        # Do not overwrite the canonical /semesters code with the old normalized code.
+        if _text_key(term.term_code) in {_text_key(legacy_code), '', 'unknownterm'} and term.term_code != canonical_code:
+            existing = self.db.query(AcademicTerm).filter(
+                AcademicTerm.term_code == canonical_code,
+                AcademicTerm.branch == branch,
+                AcademicTerm.id != term.id,
+            ).first()
+            if not existing:
+                term.term_code = canonical_code
         term.term_name = term_name
         term.start_date = _parse_date(term_payload.get('startday') or term_payload.get('start_day') or term_payload.get('start_date')) or term.start_date
         term.end_date = _parse_date(term_payload.get('endday') or term_payload.get('end_day') or term_payload.get('end_date')) or term.end_date
         term.active = True
-        term.metadata_json = {'source': 'ap', 'raw_keys': sorted(term_payload.keys())}
+        meta = dict(term.metadata_json or {})
+        meta.update({'source': meta.get('source') or 'ap', 'last_sync_source': 'ap', 'raw_keys': sorted(term_payload.keys())})
+        term.metadata_json = meta
         term.updated_at = _now()
         self.db.add(term)
         self.db.flush()
@@ -253,18 +305,45 @@ class AcademicImportService:
     def _get_or_create_block(self, term: AcademicTerm, block_payload: dict[str, Any], counters: SyncCounters) -> AcademicBlock:
         name = _clean(block_payload.get('block_name') or block_payload.get('block') or block_payload.get('name')) or 'Block'
         ap_block_id = _clean(block_payload.get('id') or block_payload.get('block_id')) or None
-        code = ap_block_id or name.lower().replace(' ', '-')
-        block = self.db.query(AcademicBlock).filter(AcademicBlock.term_id == term.id, AcademicBlock.block_code == code).first()
+        canonical_code = name
+        legacy_code = ap_block_id or name.lower().replace(' ', '-')
+
+        block = None
+        if ap_block_id:
+            block = self.db.query(AcademicBlock).filter(AcademicBlock.term_id == term.id, AcademicBlock.ap_block_id == ap_block_id).first()
         if not block:
-            block = AcademicBlock(id=str(uuid.uuid4()), term_id=term.id, block_code=code, block_name=name, created_at=_now(), updated_at=_now())
+            block = self.db.query(AcademicBlock).filter(AcademicBlock.term_id == term.id, AcademicBlock.block_code == canonical_code).first()
+        if not block and legacy_code != canonical_code:
+            block = self.db.query(AcademicBlock).filter(AcademicBlock.term_id == term.id, AcademicBlock.block_code == legacy_code).first()
+        if not block:
+            wanted = _text_key(name)
+            for candidate in self.db.query(AcademicBlock).filter(AcademicBlock.term_id == term.id).all():
+                if _text_key(candidate.block_name) == wanted or _text_key(candidate.block_code) == wanted:
+                    block = candidate
+                    break
+        if not block:
+            block = AcademicBlock(id=str(uuid.uuid4()), term_id=term.id, block_code=canonical_code, block_name=name, created_at=_now(), updated_at=_now())
             counters.blocks += 1
+
         block.ap_block_id = ap_block_id or block.ap_block_id
         block.block_name = name
+        # Preserve the readable /semesters block code (Block 1/Block 2). Only normalize
+        # legacy AP-id block codes when it is safe and no canonical duplicate exists.
+        if block.block_code == legacy_code and block.block_code != canonical_code:
+            existing = self.db.query(AcademicBlock).filter(
+                AcademicBlock.term_id == term.id,
+                AcademicBlock.block_code == canonical_code,
+                AcademicBlock.id != block.id,
+            ).first()
+            if not existing:
+                block.block_code = canonical_code
         block.start_date = _parse_date(block_payload.get('start_day') or block_payload.get('start_date')) or block.start_date
         block.end_date = _parse_date(block_payload.get('end_day') or block_payload.get('end_date')) or block.end_date
-        block.sort_order = _block_sort_order(name)
+        block.sort_order = _block_sort_order(name) or block.sort_order or 0
         block.active = True
-        block.metadata_json = {'source': 'ap', 'raw_keys': sorted(block_payload.keys())}
+        meta = dict(block.metadata_json or {})
+        meta.update({'source': meta.get('source') or 'ap', 'last_sync_source': 'ap', 'raw_keys': sorted(block_payload.keys())})
+        block.metadata_json = meta
         block.updated_at = _now()
         self.db.add(block)
         self.db.flush()
@@ -359,18 +438,33 @@ class AcademicImportService:
                 if not class_code:
                     raise ValueError('Thiếu class/group_name')
                 ap_class_id = _clean(raw.get('id')) or None
+                target_block_id = block.id if block else None
+                target_cls = self.db.query(AcademicClass).filter(
+                    AcademicClass.term_id == term.id,
+                    AcademicClass.block_id == target_block_id,
+                    AcademicClass.subject_id == subject.id,
+                    AcademicClass.class_code == class_code,
+                ).first()
                 cls = None
+                ap_cls = None
                 if ap_class_id:
-                    cls = self.db.query(AcademicClass).filter(AcademicClass.ap_class_id == ap_class_id).first()
+                    ap_cls = self.db.query(AcademicClass).filter(AcademicClass.ap_class_id == ap_class_id).first()
+                if target_cls:
+                    cls = target_cls
+                    if ap_cls and ap_cls.id != target_cls.id:
+                        # Older builds could create the same AP class under a duplicate term.
+                        # Keep the canonical target row active and hide the stale duplicate.
+                        ap_cls.active = False
+                        ap_cls.metadata_json = {**(ap_cls.metadata_json or {}), 'superseded_by_class_id': target_cls.id}
+                        ap_cls.updated_at = _now()
+                        self.db.add(ap_cls)
+                elif ap_cls:
+                    cls = ap_cls
+                    cls.term_id = term.id
+                    cls.block_id = target_block_id
+                    cls.subject_id = subject.id
                 if not cls:
-                    cls = self.db.query(AcademicClass).filter(
-                        AcademicClass.term_id == term.id,
-                        AcademicClass.block_id == (block.id if block else None),
-                        AcademicClass.subject_id == subject.id,
-                        AcademicClass.class_code == class_code,
-                    ).first()
-                if not cls:
-                    cls = AcademicClass(id=str(uuid.uuid4()), term_id=term.id, block_id=block.id if block else None, subject_id=subject.id, class_code=class_code, created_at=_now(), updated_at=_now())
+                    cls = AcademicClass(id=str(uuid.uuid4()), term_id=term.id, block_id=target_block_id, subject_id=subject.id, class_code=class_code, created_at=_now(), updated_at=_now())
                     counters.classes += 1
                 cls.ap_class_id = ap_class_id or cls.ap_class_id
                 cls.class_name = _clean(raw.get('classname') or raw.get('class_name') or class_code) or class_code
@@ -640,7 +734,7 @@ class AcademicImportService:
             for item in term_rows
         ]
         if not terms:
-            warnings.append('Chưa có kỳ trong AI Server. Lần đầu vẫn có thể nhập kỳ thủ công đúng như AP, ví dụ Summer 2026.')
+            warnings.append('Chưa có kỳ trong AI Server. Hãy tạo kỳ tại /semesters trước khi đồng bộ AP.')
 
         subjects: list[dict[str, Any]] = []
         if include_subjects:

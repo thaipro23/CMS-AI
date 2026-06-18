@@ -1889,12 +1889,16 @@ export async function syncAcademicFromAp(headers: HeadersInit, payload: { term_n
   return parseResponse(await fetch(`${API}/academic/sync/ap`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
-export async function resolveAcademicClassOpenEdxUsers(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicMappingResolveResult> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/resolve-openedx-users`, {
+export async function checkAcademicClassCmsSync(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicMappingResolveResult> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-sync-check`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 1000 }),
   }));
+}
+
+export async function resolveAcademicClassOpenEdxUsers(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicMappingResolveResult> {
+  return checkAcademicClassCmsSync(headers, classId, payload);
 }
 
 export async function importAcademicOpenEdxUserMappings(headers: HeadersInit, records: Array<Record<string, unknown>>): Promise<AcademicManualMappingImportResult> {

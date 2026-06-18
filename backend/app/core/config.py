@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.2.17-rebased-academic-ap-sync-latest-ui'
+    app_version: str = '25.9.16.2.22-api-first-academic-autofill'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -142,6 +142,8 @@ class Settings(BaseSettings):
     # AP credentials are deployment secrets and must come from env, never from source.
     openedx_student_insight_base_url: str | None = None
     openedx_student_insight_users_resolve_endpoint: str = '/api/ai-student-insight/v1/users/resolve'
+    openedx_student_insight_course_search_endpoint: str = '/api/ai-student-insight/v1/courses/search'
+    openedx_courses_search_endpoint: str = '/api/courses/v1/courses/'
     openedx_student_insight_client_id: str = 'ai-server'
     openedx_student_insight_shared_secret: str | None = None
     openedx_student_insight_timeout_seconds: int = 30

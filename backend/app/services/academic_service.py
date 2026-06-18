@@ -416,6 +416,7 @@ class AcademicService:
         ).join(AcademicTerm, AcademicTerm.id == AcademicClass.term_id)
         query = query.outerjoin(AcademicBlock, AcademicBlock.id == AcademicClass.block_id)
         query = query.join(AcademicSubject, AcademicSubject.id == AcademicClass.subject_id)
+        query = query.filter(AcademicClass.active.is_(True), AcademicSubject.active.is_(True))
         query = query.outerjoin(teacher_summary_sq, teacher_summary_sq.c.class_id == AcademicClass.id)
         query = query.outerjoin(student_count_sq, student_count_sq.c.class_id == AcademicClass.id)
         query = query.outerjoin(
@@ -531,7 +532,7 @@ class AcademicService:
             AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id,
         ).outerjoin(
             OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
-        ).filter(AcademicClass.subject_id.in_(subject_ids))
+        ).filter(AcademicClass.subject_id.in_(subject_ids), AcademicClass.active.is_(True))
         query = self._apply_academic_access_filter(query, user, decision)
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
@@ -546,16 +547,104 @@ class AcademicService:
             bucket[str(match_status or 'not_checked')] = int(count or 0)
         return result
 
-    def _find_exact_openedx_course_candidate(self, openedx_course_id: str) -> tuple[str | None, int]:
+    def _find_exact_openedx_course_candidate(self, openedx_course_id: str) -> tuple[str | None, int, str | None, str]:
         raw = str(openedx_course_id or '').strip()
         if not raw:
-            return None, 0
-        rows = self.db.query(CourseSyncState.course_id).filter(
+            return None, 0, None, 'empty'
+        cache = getattr(self, '_openedx_course_candidate_cache', None)
+        if cache is None:
+            cache = {}
+            setattr(self, '_openedx_course_candidate_cache', cache)
+        cache_key = raw.lower()
+        if cache_key in cache:
+            return cache[cache_key]
+
+        rows = self.db.query(CourseSyncState.course_id, CourseSyncState.display_name).filter(
             func.lower(CourseSyncState.course_id) == raw.lower(),
         ).distinct().limit(2).all()
         if len(rows) == 1:
-            return str(rows[0][0]), 1
-        return None, len(rows)
+            result = (str(rows[0][0]), 1, str(rows[0][1] or '') or None, 'local_course_sync_state')
+            cache[cache_key] = result
+            return result
+
+        # API-first autofill fallback: if the course has not been synced into
+        # CourseSyncState yet, ask CMS/Open edX directly so users do not have to
+        # manually sync course content just to map a subject to a Course.
+        try:
+            candidate, title, count, source = OpenEdXStudentInsightClient().find_exact_course(raw)
+            if count == 1 and candidate:
+                result = (candidate, 1, title, source)
+                cache[cache_key] = result
+                return result
+            if count > 0:
+                result = (None, count, None, source)
+                cache[cache_key] = result
+                return result
+        except Exception:
+            pass
+
+        result = (None, len(rows), None, 'local_course_sync_state')
+        cache[cache_key] = result
+        return result
+
+    def _auto_create_subject_course_mapping_if_safe(
+        self,
+        user: UserContext,
+        *,
+        term_id: str,
+        subject_id: str,
+        branch_value: str | None,
+        candidate: str,
+        suggested: str,
+        openedx_course_title: str | None = None,
+        candidate_source: str = 'unknown',
+        commit: bool = False,
+    ) -> AcademicCourseMapping | None:
+        current = self._scope_filter_course_mapping(
+            term_id=term_id,
+            block_id=None,
+            subject_id=subject_id,
+            campus=None,
+            branch=branch_value,
+        ).first()
+        if current:
+            return current
+        validation = self.validate_course_mapping_payload(
+            term_id=term_id,
+            subject_id=subject_id,
+            openedx_course_id=candidate,
+            block_id=None,
+            campus=None,
+            branch=branch_value,
+            openedx_course_title=openedx_course_title,
+        )
+        if not validation.get('can_save'):
+            return None
+        now = datetime.utcnow()
+        mapping = AcademicCourseMapping(
+            term_id=term_id,
+            block_id=None,
+            subject_id=subject_id,
+            campus=None,
+            branch=branch_value,
+            openedx_course_id=candidate,
+            openedx_course_title=openedx_course_title,
+            validation_status='auto_mapped',
+            validation_json={**validation, 'auto_map': True, 'auto_map_rule': 'exact subject_code + term_run course_id', 'suggested_openedx_course_id': suggested, 'candidate_source': candidate_source},
+            validated_at=now,
+            created_by=user.user_id or user.username or 'system_auto',
+            updated_by=user.user_id or user.username or 'system_auto',
+            note=f'Auto map an toàn theo mã môn + kỳ; chỉ chạy khi tìm thấy đúng một Course CMS khớp. Nguồn: {candidate_source}.',
+            active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        self.db.add(mapping)
+        self.db.flush()
+        if commit:
+            self.db.commit()
+            self.db.refresh(mapping)
+        return mapping
 
     def auto_map_subject_course(self, user: UserContext, *, term_id: str, subject_id: str, branch: str | None = None) -> dict[str, Any]:
         self.assert_can_access_subject(user, subject_id)
@@ -580,47 +669,35 @@ class AcademicService:
                 'suggested_openedx_course_id': suggested,
                 'mapping': self._course_mapping_item(current),
             }
-        candidate, candidate_count = self._find_exact_openedx_course_candidate(suggested)
+        candidate, candidate_count, candidate_title, candidate_source = self._find_exact_openedx_course_candidate(suggested)
         if candidate_count != 1 or not candidate:
             status_value = 'not_found' if candidate_count == 0 else 'multiple_candidates'
             return {
                 'ok': False,
                 'status': status_value,
-                'message': 'Chưa tìm thấy đúng một course CMS khớp mã môn/kỳ đã đồng bộ về AI Server.',
+                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ từ dữ liệu local hoặc API CMS/Open edX.',
                 'suggested_openedx_course_id': suggested,
                 'mapping': None,
             }
-        validation = self.validate_course_mapping_payload(
+        mapping = self._auto_create_subject_course_mapping_if_safe(
+            user,
             term_id=term_id,
             subject_id=subject_id,
-            openedx_course_id=candidate,
-            block_id=None,
-            campus=None,
-            branch=branch_value,
-            openedx_course_title=None,
+            branch_value=branch_value,
+            candidate=candidate,
+            suggested=suggested,
+            openedx_course_title=candidate_title,
+            candidate_source=candidate_source,
+            commit=True,
         )
-        now = datetime.utcnow()
-        mapping = AcademicCourseMapping(
-            term_id=term_id,
-            block_id=None,
-            subject_id=subject_id,
-            campus=None,
-            branch=branch_value,
-            openedx_course_id=candidate,
-            openedx_course_title=None,
-            validation_status='auto_mapped' if validation.get('risk_level') in {'low', 'medium'} else validation.get('risk_level', 'auto_mapped'),
-            validation_json={**validation, 'auto_map': True, 'auto_map_rule': 'exact subject_code + term_run course_id'},
-            validated_at=now,
-            created_by=user.user_id,
-            updated_by=user.user_id,
-            note='Auto map theo mã môn + kỳ; course đã có trong dữ liệu course sync.',
-            active=True,
-            created_at=now,
-            updated_at=now,
-        )
-        self.db.add(mapping)
-        self.db.commit()
-        self.db.refresh(mapping)
+        if not mapping:
+            return {
+                'ok': False,
+                'status': 'validation_failed',
+                'message': 'Course tìm thấy nhưng không đạt điều kiện mapping an toàn.',
+                'suggested_openedx_course_id': suggested,
+                'mapping': None,
+            }
         return {
             'ok': True,
             'status': 'auto_mapped',
@@ -650,7 +727,7 @@ class AcademicService:
             func.count(func.distinct(AcademicClassStudent.id)).label('student_count'),
         ).join(AcademicClass, AcademicClass.subject_id == AcademicSubject.id).outerjoin(
             AcademicTeacherAssignment, AcademicTeacherAssignment.class_id == AcademicClass.id,
-        ).outerjoin(AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id).filter(AcademicSubject.active.is_(True))
+        ).outerjoin(AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id).filter(AcademicSubject.active.is_(True), AcademicClass.active.is_(True))
         query = self._apply_academic_access_filter(query, user, decision)
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
@@ -684,15 +761,32 @@ class AcademicService:
             subject = row[0]
             mapping = mapping_by_subject.get(subject.id)
             suggested = self.suggested_course_id_for_scope(term_id, subject.id) if term_id else None
-            candidate, candidate_count = self._find_exact_openedx_course_candidate(suggested or '')
+            candidate, candidate_count, candidate_title, candidate_source = self._find_exact_openedx_course_candidate(suggested or '')
             if mapping:
                 status_value = 'mapped'
                 status_label = 'Đã map Course CMS'
                 effective_course_id = mapping.openedx_course_id
-            elif candidate_count == 1:
-                status_value = 'auto_candidate'
-                status_label = 'Có thể auto map'
-                effective_course_id = candidate
+            elif candidate_count == 1 and candidate and term_id:
+                branch_value = (branch or subject.branch or '').strip().lower() or None
+                mapping = self._auto_create_subject_course_mapping_if_safe(
+                    user,
+                    term_id=term_id,
+                    subject_id=subject.id,
+                    branch_value=branch_value,
+                    candidate=candidate,
+                    suggested=suggested or candidate,
+                    openedx_course_title=candidate_title,
+                    candidate_source=candidate_source,
+                    commit=False,
+                )
+                if mapping:
+                    status_value = 'auto_mapped'
+                    status_label = 'Đã auto map Course CMS'
+                    effective_course_id = mapping.openedx_course_id
+                else:
+                    status_value = 'auto_candidate'
+                    status_label = 'Có thể auto map'
+                    effective_course_id = candidate
             elif candidate_count > 1:
                 status_value = 'multiple_candidates'
                 status_label = 'Nhiều course trùng'
@@ -720,31 +814,37 @@ class AcademicService:
                 'course_mapping_status': status_value,
                 'course_mapping_label': status_label,
                 'openedx_course_id': mapping.openedx_course_id if mapping else effective_course_id,
-                'openedx_course_title': mapping.openedx_course_title if mapping else None,
+                'openedx_course_title': mapping.openedx_course_title if mapping else candidate_title,
                 'openedx_mapping_id': mapping.id if mapping else None,
                 'suggested_openedx_course_id': suggested,
             })
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
 
     def get_class_detail(self, user: UserContext, class_id: str) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
-        data = self.list_teacher_classes(user, search=None, page=1, page_size=1)
-        # Avoid a second bespoke serializer drifting from the list contract.
-        query_result = self.list_teacher_classes(user, page=1, page_size=200)
-        for item in query_result['items']:
-            if item['id'] == class_id:
-                return item
-        # Fallback for admin/detail when the class is outside first page.
         cls = self.db.get(AcademicClass, class_id)
         if not cls:
             raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
         term = self.db.get(AcademicTerm, cls.term_id)
         block = self.db.get(AcademicBlock, cls.block_id) if cls.block_id else None
         subject = self.db.get(AcademicSubject, cls.subject_id)
-        mapping = self.db.query(AcademicClassCourseMapping).filter(AcademicClassCourseMapping.class_id == cls.id, AcademicClassCourseMapping.active.is_(True)).first()
+        class_mapping = self.db.query(AcademicClassCourseMapping).filter(
+            AcademicClassCourseMapping.class_id == cls.id,
+            AcademicClassCourseMapping.active.is_(True),
+        ).first()
+        inherited = None if class_mapping else self.inherited_course_mapping_for_class(cls)
         student_count = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == cls.id).scalar() or 0
-        teacher = self.db.query(AcademicTeacher).join(AcademicTeacherAssignment, AcademicTeacherAssignment.teacher_id == AcademicTeacher.id).filter(AcademicTeacherAssignment.class_id == cls.id).first()
+        teacher = self.db.query(AcademicTeacher).join(
+            AcademicTeacherAssignment, AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
+        ).filter(AcademicTeacherAssignment.class_id == cls.id).order_by(AcademicTeacher.username.asc()).first()
+
+        effective_mapping = class_mapping or inherited
         return {
             'id': cls.id,
             'ap_class_id': cls.ap_class_id,
@@ -765,10 +865,10 @@ class AcademicService:
             'teacher_username': teacher.username if teacher else None,
             'teacher_name': teacher.full_name if teacher else None,
             'student_count': int(student_count),
-            'openedx_course_id': mapping.openedx_course_id if mapping else (self.inherited_course_mapping_for_class(cls).openedx_course_id if self.inherited_course_mapping_for_class(cls) else None),
-            'openedx_cohort_name': mapping.openedx_cohort_name if mapping else (cls.class_code if self.inherited_course_mapping_for_class(cls) else None),
-            'openedx_mapping_source': 'class_override' if mapping else ('subject_term_mapping' if self.inherited_course_mapping_for_class(cls) else None),
-            'openedx_mapping_validation_status': mapping.validation_status if mapping else (self.inherited_course_mapping_for_class(cls).validation_status if self.inherited_course_mapping_for_class(cls) else None),
+            'openedx_course_id': effective_mapping.openedx_course_id if effective_mapping else None,
+            'openedx_cohort_name': class_mapping.openedx_cohort_name if class_mapping else (cls.class_code if inherited else None),
+            'openedx_mapping_source': 'class_override' if class_mapping else ('subject_term_mapping' if inherited else None),
+            'openedx_mapping_validation_status': effective_mapping.validation_status if effective_mapping else None,
         }
 
     def _student_mapping_item(self, class_id: str, student: AcademicStudent, synced_at: datetime | None, mapping: OpenEdXUserMapping | None) -> dict[str, Any]:
@@ -1238,7 +1338,7 @@ class AcademicService:
                 updated += 1
             self.db.flush()
         self.db.commit()
-        return {'ok': True, 'class_id': class_id, 'total': len(rows), 'updated': updated, 'counts': counts, 'message': 'Đã resolve mapping Open edX theo AP username'}
+        return {'ok': True, 'class_id': class_id, 'total': len(rows), 'updated': updated, 'counts': counts, 'message': 'Đã kiểm tra đồng bộ CMS theo AP username'}
 
     def import_openedx_user_mappings(self, records: list[dict[str, Any]], *, requested_by: str | None = None) -> dict[str, Any]:
         now = datetime.utcnow()
