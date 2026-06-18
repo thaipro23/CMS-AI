@@ -214,7 +214,6 @@ export default function BankQuizPage() {
   const difficultyTotal = difficultyEasy + difficultyMedium + difficultyHard
   const matchedCount = autoMap?.summary?.matched_count || 0
   const chapterCount = autoMap?.summary?.chapter_count || 0
-  const publishedCount = autoMap?.summary?.published_release_count || 0
 
   return <div className="page-stack bank-quiz-page quiz-workbench">
     <section className="card page-intro quiz-hero">
@@ -286,14 +285,6 @@ export default function BankQuizPage() {
       </aside>
 
       <main className="quiz-workspace-main">
-        <section className="quiz-summary-grid">
-          <div className="quiz-summary-card"><span>Course</span><b>{courseId.trim() || 'Chưa nhập'}</b><small>{autoMap?.subject ? `${autoMap.subject.code} · ${autoMap.subject.name}` : 'Dán Course ID ở panel cấu hình'}</small></div>
-          <div className="quiz-summary-card"><span>Version</span><b>{autoMap?.offering?.code || '—'}</b><small>{autoMap?.offering ? 'Version môn đã chọn' : 'Chưa preview'}</small></div>
-          <div className="quiz-summary-card"><span>Release</span><b>{publishedCount}/{chapterCount || '—'}</b><small>Bài đã có release publish</small></div>
-          <div className="quiz-summary-card"><span>Section khớp</span><b>{matchedCount}/{chapterCount || '—'}</b><small>Section Open edX trùng tên bài</small></div>
-          <div className="quiz-summary-card"><span>Sẵn sàng</span><b>{readyRows.length}</b><small>Có thể tạo Quiz ngay</small></div>
-        </section>
-
         {!autoMap ? <section className="card empty-state quiz-empty-guide">
           <b>Chưa có kết quả map.</b>
           <span>Nhập Course ID ở panel bên phải. Hệ thống tự tìm version môn và Section phù hợp, kết quả sẽ hiện tại đây.</span>

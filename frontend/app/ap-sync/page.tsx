@@ -20,7 +20,7 @@ function optionValues(items: AcademicAPOption[] = []) {
   return items.map((item) => String(item.value || '').trim().toLowerCase()).filter(Boolean)
 }
 
-function uniqueTermOptions(optionsByBranch: BranchState, currentTerm: string) {
+function uniqueTermOptions(optionsByBranch: BranchState) {
   const seen = new Set<string>()
   const out: AcademicAPOption[] = []
   for (const branch of BRANCHES) {
@@ -32,7 +32,6 @@ function uniqueTermOptions(optionsByBranch: BranchState, currentTerm: string) {
       }
     }
   }
-  if (currentTerm && !seen.has(currentTerm)) out.unshift({ value: currentTerm, label: currentTerm })
   return out
 }
 
@@ -61,7 +60,7 @@ export default function ApSyncPage() {
   const [message, setMessage] = useState('')
   const [lastResults, setLastResults] = useState<Array<{ branch: BranchCode; result: AcademicSyncResult }>>([])
 
-  const termOptions = useMemo(() => uniqueTermOptions(optionsByBranch, termName), [optionsByBranch, termName])
+  const termOptions = useMemo(() => uniqueTermOptions(optionsByBranch), [optionsByBranch])
   const currentBranchOptions = optionsByBranch[selectedBranch] || EMPTY_OPTIONS
   const totalCampuses = BRANCHES.reduce((sum, branch) => sum + (optionsByBranch[branch.value].campuses?.length || 0), 0)
 
@@ -74,6 +73,11 @@ export default function ApSyncPage() {
         getAcademicApSyncOptions(headers, { termName, branch: 'ptcd', includeSubjects: false }),
       ])
       setOptionsByBranch({ poly, ptcd })
+      const availableTerms = uniqueTermOptions({ poly, ptcd })
+      const availableValues = new Set(availableTerms.map((item) => String(item.value || '').trim()))
+      if (availableTerms.length && !availableValues.has(termName.trim())) {
+        setTermName(String(availableTerms[0].value || ''))
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Không tải được dữ liệu học kỳ/hệ/cơ sở')
     } finally {
@@ -157,12 +161,9 @@ export default function ApSyncPage() {
       </div>
       <div className="filter-grid academic-filter-grid">
         <label>Kỳ
-          <select className="input" value={termName} onChange={(event) => setTermName(event.target.value)}>
-            {termOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          <select className="input" value={termName} onChange={(event) => setTermName(event.target.value)} disabled={!termOptions.length}>
+            {termOptions.length ? termOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">Chưa có học kỳ. Tạo ở trang Học kỳ trước.</option>}
           </select>
-        </label>
-        <label>Nhập kỳ nếu chưa có trong danh sách
-          <input className="input" value={termName} onChange={(event) => setTermName(event.target.value)} placeholder="Summer 2026" />
         </label>
         <label>Hệ cần đồng bộ riêng
           <select className="input" value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value as BranchCode)}>
@@ -174,35 +175,7 @@ export default function ApSyncPage() {
           Chỉ kiểm tra kế hoạch, chưa ghi dữ liệu
         </label>
       </div>
-    </section>
-
-    <section className="card">
-      <div className="section-head">
-        <div>
-          <h2>Phạm vi sẽ chạy</h2>
-          <p>{loadingOptions ? 'Đang tải danh sách hệ và cơ sở...' : `Tổng ${totalCampuses} cơ sở đang bật`}</p>
-        </div>
-      </div>
-      <div className="grid-2">
-        {BRANCHES.map((branch) => {
-          const options = optionsByBranch[branch.value] || EMPTY_OPTIONS
-          return <div className="metric-card" key={branch.value}>
-            <span>{branch.label}</span>
-            <b>{options.campuses.length}</b>
-            <small>{options.campuses.map((item) => item.label).slice(0, 8).join(', ') || 'Chưa có cơ sở'}</small>
-          </div>
-        })}
-      </div>
-    </section>
-
-    <section className="card">
-      <div className="section-head">
-        <div>
-          <h2>Chạy đồng bộ</h2>
-          <p>Danh sách môn học được lấy tự động từ AP theo hệ và kỳ, sau đó backend tự chạy qua toàn bộ cơ sở của hệ đó.</p>
-        </div>
-      </div>
-      <div className="toolbar-actions ap-sync-actions">
+      <div className="toolbar-actions ap-sync-actions ap-sync-actions-primary">
         <button className="btn" disabled={running || loadingOptions || totalCampuses === 0 || !termName.trim()} onClick={() => runForBranches(['poly', 'ptcd'])}>
           {running ? 'Đang chạy...' : 'Đồng bộ tất cả'}
         </button>
