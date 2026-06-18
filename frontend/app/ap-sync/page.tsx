@@ -6,8 +6,8 @@ import { getAcademicApSyncOptions, syncAcademicFromAp } from '../../lib/api'
 import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult } from '../../types'
 
 type BranchCode = 'poly' | 'ptcd'
-
 type BranchState = Record<BranchCode, AcademicAPSyncOptions>
+type SyncConfirm = { branches: BranchCode[]; runnable: BranchCode[]; label: string; campusCount: number } | null
 
 const BRANCHES: Array<{ value: BranchCode; label: string }> = [
   { value: 'poly', label: 'Poly' },
@@ -59,6 +59,7 @@ export default function ApSyncPage() {
   const [dryRun, setDryRun] = useState(false)
   const [message, setMessage] = useState('')
   const [lastResults, setLastResults] = useState<Array<{ branch: BranchCode; result: AcademicSyncResult }>>([])
+  const [syncConfirm, setSyncConfirm] = useState<SyncConfirm>(null)
 
   const termOptions = useMemo(() => uniqueTermOptions(optionsByBranch), [optionsByBranch])
   const currentBranchOptions = optionsByBranch[selectedBranch] || EMPTY_OPTIONS
@@ -90,7 +91,7 @@ export default function ApSyncPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [headers, termName])
 
-  const runForBranches = async (branches: BranchCode[]) => {
+  const requestRunForBranches = (branches: BranchCode[]) => {
     if (!can('manage_settings')) {
       setMessage('Bạn không có quyền đồng bộ AP.')
       return
@@ -107,14 +108,19 @@ export default function ApSyncPage() {
     }
     const label = branches.length > 1 ? 'toàn bộ Poly và PTCĐ' : `hệ ${BRANCHES.find((item) => item.value === branches[0])?.label || branches[0]}`
     const campusCount = runnable.reduce((sum, branch) => sum + optionValues(optionsByBranch[branch].campuses).length, 0)
-    const ok = window.confirm(`${dryRun ? 'Kiểm tra kế hoạch' : 'Đồng bộ thật'} ${label} cho kỳ ${normalizedTerm}?\n\nSố hệ sẽ chạy: ${runnable.length}\nSố cơ sở: ${campusCount}\n\nDanh sách môn sẽ lấy tự động từ AP theo từng hệ/kỳ.`)
-    if (!ok) return
+    setSyncConfirm({ branches, runnable, label, campusCount })
+  }
 
+  const executeConfirmedSync = async () => {
+    if (!syncConfirm) return
+    const normalizedTerm = termName.trim()
+    const runnable = syncConfirm.runnable
     setRunning(true)
     setMessage('')
     setLastResults([])
     try {
       const results: Array<{ branch: BranchCode; result: AcademicSyncResult }> = []
+      setSyncConfirm(null)
       for (const branch of runnable) {
         const campuses = optionValues(optionsByBranch[branch].campuses)
         const result = await syncAcademicFromAp(jsonHeaders, {
@@ -176,10 +182,10 @@ export default function ApSyncPage() {
         </label>
       </div>
       <div className="toolbar-actions ap-sync-actions ap-sync-actions-primary">
-        <button className="btn" disabled={running || loadingOptions || totalCampuses === 0 || !termName.trim()} onClick={() => runForBranches(['poly', 'ptcd'])}>
+        <button className="btn" disabled={running || loadingOptions || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>
           {running ? 'Đang chạy...' : 'Đồng bộ tất cả'}
         </button>
-        <button className="btn secondary" disabled={running || loadingOptions || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => runForBranches([selectedBranch])}>
+        <button className="btn secondary" disabled={running || loadingOptions || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>
           {running ? 'Đang chạy...' : `Đồng bộ theo hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label || ''}`}
         </button>
       </div>
@@ -205,5 +211,7 @@ export default function ApSyncPage() {
         </table>
       </div>
     </section> : null}
+
+    {syncConfirm ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => !running && setSyncConfirm(null)}><div className="card bank-modal academic-confirm-modal" onMouseDown={(event) => event.stopPropagation()}><div className="bank-modal-head"><div><div className="eyebrow">Xác nhận đồng bộ</div><h2>{dryRun ? 'Kiểm tra kế hoạch AP' : 'Chạy đồng bộ AP'}</h2></div><button className="btn small secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Đóng</button></div><div className="bank-modal-body academic-confirm-body"><p>{dryRun ? 'Hệ thống sẽ chỉ kiểm tra kế hoạch, chưa ghi dữ liệu vào AI Server.' : 'Hệ thống sẽ gọi AP và ghi dữ liệu lớp, giảng viên, sinh viên vào AI Server.'}</p><div className="academic-confirm-summary"><span>Kỳ</span><b>{termName}</b><span>Phạm vi</span><b>{syncConfirm.label}</b><span>Số hệ</span><b>{syncConfirm.runnable.length}</b><span>Số cơ sở</span><b>{syncConfirm.campusCount}</b></div><div className="modal-actions"><button className="btn" disabled={running} onClick={executeConfirmedSync}>{dryRun ? 'Xác nhận kiểm tra' : 'Xác nhận đồng bộ'}</button><button className="btn secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Hủy</button></div></div></div></div> : null}
   </div>
 }

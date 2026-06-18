@@ -4010,3 +4010,53 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
 .premises-page .hero-actions,
 .semesters-page .hero-actions,
 .student-management-page .hero-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* v25.9.16.2.19 academic modal polish */
+.academic-modal-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+.academic-modal-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ds-muted, #64748b);
+}
+.academic-confirm-modal { width: min(560px, 94vw); }
+.academic-confirm-body {
+  display: grid;
+  gap: 14px;
+  color: var(--ds-text, #0f172a);
+}
+.academic-confirm-body p {
+  margin: 0;
+  color: var(--ds-muted, #475569);
+  line-height: 1.55;
+}
+.academic-confirm-summary {
+  display: grid;
+  grid-template-columns: minmax(92px, 140px) 1fr;
+  gap: 8px 12px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, .28);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, .92);
+}
+.academic-confirm-summary span {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ds-muted, #64748b);
+}
+.academic-confirm-summary b {
+  font-size: 13px;
+  color: var(--ds-text, #0f172a);
+  word-break: break-word;
+}
+.danger-text { color: #dc2626 !important; }
+.academic-confirm-modal .modal-actions,
+.academic-modal-form + .modal-actions { justify-content: flex-end; }
+@media (max-width: 640px) {
+  .academic-confirm-summary { grid-template-columns: 1fr; }
+}
