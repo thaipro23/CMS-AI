@@ -82,11 +82,11 @@ function SubjectClassesContent() {
     </section>
 
     <section className="card">
-      <div className="section-head">
-        <div><h2>Bộ lọc lớp</h2><p>Chỉ hiển thị lớp bạn có quyền hoặc được AP phân công.</p></div>
+      <div className="section-head list-card-head">
+        <div><h2>Danh sách lớp</h2><p>Chỉ hiển thị lớp bạn có quyền hoặc được AP phân công.</p></div>
         <span className="status-pill neutral">{total} lớp</span>
       </div>
-      <div className="academic-filter-grid">
+      <div className="academic-filter-grid academic-list-filter academic-list-filter-compact">
         <label>Block
           <select className="input" value={blockId} onChange={(event) => { setBlockId(event.target.value); setPage(1) }}>
             <option value="">Tất cả block</option>
@@ -98,9 +98,6 @@ function SubjectClassesContent() {
         </label>
       </div>
       {message && <p className="form-message">{message}</p>}
-    </section>
-
-    <section className="card">
       <div className="table-wrap">
         <table className="data-table">
           <thead><tr><th>Lớp</th><th>Cơ sở / Block</th><th>Giảng viên</th><th>Sinh viên</th><th>Course CMS</th><th>Thao tác</th></tr></thead>

@@ -19,6 +19,8 @@ from app.models.course import CourseSyncState
 from app.models.question import Question, QuestionReviewLog
 from app.models.cost import BudgetPolicy
 from app.models.question_bank import (
+    BankChapterStats,
+    BankOperationJob,
     BankQuestionFamily,
     BankReleaseQuestion,
     BankVersionDiff,
@@ -33,6 +35,7 @@ from app.models.question_bank import (
     QuestionBankVersion,
     QuizBlueprint,
     CourseQuizInstance,
+    QuestionSearchDocument,
     Subject,
     SubjectOffering,
     SubjectChapter,
@@ -1019,10 +1022,50 @@ class VersionedQuestionBankService:
         self._safe_refresh_chapter_stats(chapter_id)
         return item
 
+    def _bank_version_content_counts(self, bank_version_id: str) -> dict[str, int]:
+        return {
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.bank_version_id == bank_version_id).count(),
+            'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.bank_version_id == bank_version_id).count(),
+            'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.bank_version_id == bank_version_id).count(),
+            'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.bank_version_id == bank_version_id).count(),
+            'questions': self.db.query(Question).filter(Question.bank_version_id == bank_version_id).count(),
+            'releases': self.db.query(QuestionBankRelease).filter(QuestionBankRelease.bank_version_id == bank_version_id).count(),
+            'diffs': self.db.query(BankVersionDiff).filter(or_(BankVersionDiff.from_bank_version_id == bank_version_id, BankVersionDiff.to_bank_version_id == bank_version_id)).count(),
+            'jobs': self.db.query(BankOperationJob).filter(BankOperationJob.bank_version_id == bank_version_id).count(),
+            'derived_bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.based_on_version_id == bank_version_id).count(),
+        }
+
+    def _delete_empty_bank_versions_for_chapter(self, chapter_id: str) -> int:
+        """Remove shell bank versions that were auto-created by opening the workspace.
+
+        A newly-created chapter can get a draft v1.0 bank version before any
+        material/question/release exists. That shell is not user content and
+        must not block deleting the empty chapter. Real child content still
+        blocks deletion.
+        """
+        removed = 0
+        versions = self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).all()
+        for version in versions:
+            counts = self._bank_version_content_counts(version.id)
+            if any(int(value or 0) > 0 for value in counts.values()):
+                continue
+            self.db.query(QuestionSearchDocument).filter(QuestionSearchDocument.bank_version_id == version.id).delete(synchronize_session=False)
+            self.db.delete(version)
+            removed += 1
+        if removed:
+            self.db.flush()
+        return removed
+
     def delete_chapter(self, chapter_id: str) -> dict:
         item = self.db.get(SubjectChapter, chapter_id)
         if not item:
             raise ValueError('Không tìm thấy bài/chapter')
+
+        # Dashboard/search rows are derived cache. Clear them before checking
+        # real child content so a truly empty chapter can be deleted cleanly.
+        self.db.query(BankChapterStats).filter(BankChapterStats.chapter_id == chapter_id).delete(synchronize_session=False)
+        removed_empty_versions = self._delete_empty_bank_versions_for_chapter(chapter_id)
+
         msg = self._empty_block_message(entity_label='bài/chapter', counts={
             'bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).count(),
             'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id).count(),
@@ -1038,7 +1081,7 @@ class VersionedQuestionBankService:
         if msg:
             raise ValueError(msg)
         self.db.delete(item); self.db.commit()
-        return {'ok': True, 'deleted': True, 'entity_type': 'chapter', 'entity_id': chapter_id, 'message': 'Đã xóa bài/chapter'}
+        return {'ok': True, 'deleted': True, 'entity_type': 'chapter', 'entity_id': chapter_id, 'message': 'Đã xóa bài/chapter' + (f' và {removed_empty_versions} bank version rỗng' if removed_empty_versions else '')}
 
     def next_bank_version_no(self, subject_id: str, chapter_id: str) -> int:
         value = self.db.query(func.max(QuestionBankVersion.version_no)).filter(

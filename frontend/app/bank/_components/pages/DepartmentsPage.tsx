@@ -87,8 +87,8 @@ import {
   Toolbar,
   SearchActionBar,
   Modal,
+  ConfirmDialog,
   EntityActions,
-  promptText,
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
@@ -116,22 +116,34 @@ export function DepartmentsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
+  const [editing, setEditing] = useState<Department | null>(null)
+  const [editCode, setEditCode] = useState('')
+  const [editName, setEditName] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<Department | null>(null)
 
   const load = async () => { setSummaries(await getDepartmentSummaries(headers)) }
   useEffect(() => { load().catch(() => null) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = summaries.filter(({ department }) => matchesSearch(`${department.code} ${department.name}`, search))
 
-  const editDepartment = (department: Department) => {
-    const nextCode = promptText('Sửa mã bộ môn', department.code)
-    if (nextCode === null) return
-    const nextName = promptText('Sửa tên bộ môn', department.name)
-    if (nextName === null) return
-    run(async () => { await updateDepartment(headers, department.id, { code: nextCode, name: nextName }) }, 'Đã sửa bộ môn', load)
+  const openEditDepartment = (department: Department) => {
+    setEditing(department)
+    setEditCode(department.code || '')
+    setEditName(department.name || '')
   }
-  const removeDepartment = (department: Department) => {
-    if (!window.confirm(`Chỉ xóa được khi bộ môn chưa có môn bên trong. Xóa ${department.name}?`)) return
-    run(async () => { await deleteDepartment(headers, department.id) }, 'Đã xóa bộ môn', load)
+  const saveEditDepartment = () => {
+    if (!editing) return
+    run(async () => {
+      await updateDepartment(headers, editing.id, { code: editCode, name: editName })
+      setEditing(null)
+    }, 'Đã sửa bộ môn', load)
+  }
+  const confirmDeleteDepartment = () => {
+    if (!deleteTarget) return
+    run(async () => {
+      await deleteDepartment(headers, deleteTarget.id)
+      setDeleteTarget(null)
+    }, 'Đã xóa bộ môn', load)
   }
 
   return <div className="page-stack bank-multipage">
@@ -144,7 +156,7 @@ export function DepartmentsPage() {
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ department, stats }) => <Link key={department.id} href={`/bank/departments/${department.id}/subjects`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('manage_settings')} onEdit={() => editDepartment(department)} onDelete={() => removeDepartment(department)} />
+          <EntityActions canManage={can('manage_settings')} onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} />
           <div className="entity-card-head"><b>{department.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <small>{department.code}</small>
           <StatLine label="Môn" value={stats.subject_count || 0} />
@@ -156,6 +168,30 @@ export function DepartmentsPage() {
       </div>
       {!visible.length ? <div className="empty-state">Chưa có bộ môn phù hợp.</div> : null}
     </section>
+
+    <Modal open={Boolean(editing)} title="Sửa bộ môn" onClose={() => setEditing(null)}>
+      <div className="mini-form">
+        <label className="field-label">Mã bộ môn</label>
+        <input className="input" value={editCode} onChange={(event) => setEditCode(event.target.value)} placeholder="Mã bộ môn" />
+        <label className="field-label">Tên bộ môn</label>
+        <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên bộ môn" />
+        <div className="modal-actions">
+          <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
+          <button className="btn" type="button" disabled={busy || !editCode.trim() || !editName.trim()} onClick={saveEditDepartment}>Lưu thay đổi</button>
+        </div>
+      </div>
+    </Modal>
+    <ConfirmDialog
+      open={Boolean(deleteTarget)}
+      title={`Xóa bộ môn ${deleteTarget?.name || ''}?`}
+      description={<p>Chỉ xóa được khi bộ môn chưa có môn bên trong. Thao tác này dùng popup xác nhận của hệ thống, không dùng confirm của trình duyệt.</p>}
+      confirmLabel="Xác nhận xóa"
+      danger
+      busy={busy}
+      onClose={() => setDeleteTarget(null)}
+      onConfirm={confirmDeleteDepartment}
+    />
+
     <Modal open={createOpen} title="Thêm bộ môn" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
         <input className="input" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Mã bộ môn, ví dụ CNTT" />
