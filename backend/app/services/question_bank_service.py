@@ -1024,7 +1024,7 @@ class VersionedQuestionBankService:
 
     def _bank_version_content_counts(self, bank_version_id: str) -> dict[str, int]:
         return {
-            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.bank_version_id == bank_version_id).count(),
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.bank_version_id == bank_version_id, LearningMaterialVersion.status != 'deleted').count(),
             'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.bank_version_id == bank_version_id).count(),
             'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.bank_version_id == bank_version_id).count(),
             'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.bank_version_id == bank_version_id).count(),
@@ -1034,6 +1034,39 @@ class VersionedQuestionBankService:
             'jobs': self.db.query(BankOperationJob).filter(BankOperationJob.bank_version_id == bank_version_id).count(),
             'derived_bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.based_on_version_id == bank_version_id).count(),
         }
+
+
+    def _delete_nonblocking_material_versions_for_chapter(self, chapter_id: str) -> int:
+        """Hard-delete material rows that do not represent active user content.
+
+        Material deletion is intentionally soft for audit/version-diff flows, so a
+        chapter can contain ``status='deleted'`` rows while the UI correctly shows
+        ``Tài liệu = 0``. Those tombstones must not block deleting an otherwise
+        empty newly-created chapter. Also clean truly empty placeholder material
+        rows that may have been created before a failed upload finished.
+        """
+        removed = 0
+        rows = self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id).all()
+        for material in rows:
+            chunk_count = self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).count()
+            question_count = self.db.query(Question).filter(Question.material_version_id == material.id).count()
+            is_deleted_tombstone = material.status == 'deleted'
+            is_empty_placeholder = (
+                chunk_count == 0
+                and question_count == 0
+                and not (material.storage_path or '').strip()
+                and not (material.content_hash or '').strip()
+                and not (material.file_name or '').strip()
+                and material.status in {'active', 'draft', 'failed', 'indexed'}
+            )
+            if not (is_deleted_tombstone or is_empty_placeholder):
+                continue
+            self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).delete(synchronize_session=False)
+            self.db.delete(material)
+            removed += 1
+        if removed:
+            self.db.flush()
+        return removed
 
     def _delete_empty_bank_versions_for_chapter(self, chapter_id: str) -> int:
         """Remove shell bank versions that were auto-created by opening the workspace.
@@ -1064,11 +1097,12 @@ class VersionedQuestionBankService:
         # Dashboard/search rows are derived cache. Clear them before checking
         # real child content so a truly empty chapter can be deleted cleanly.
         self.db.query(BankChapterStats).filter(BankChapterStats.chapter_id == chapter_id).delete(synchronize_session=False)
+        removed_empty_materials = self._delete_nonblocking_material_versions_for_chapter(chapter_id)
         removed_empty_versions = self._delete_empty_bank_versions_for_chapter(chapter_id)
 
         msg = self._empty_block_message(entity_label='bài/chapter', counts={
             'bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).count(),
-            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id).count(),
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id, LearningMaterialVersion.status != 'deleted').count(),
             'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.chapter_id == chapter_id).count(),
             'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.chapter_id == chapter_id).count(),
             'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.chapter_id == chapter_id).count(),
@@ -1081,7 +1115,13 @@ class VersionedQuestionBankService:
         if msg:
             raise ValueError(msg)
         self.db.delete(item); self.db.commit()
-        return {'ok': True, 'deleted': True, 'entity_type': 'chapter', 'entity_id': chapter_id, 'message': 'Đã xóa bài/chapter' + (f' và {removed_empty_versions} bank version rỗng' if removed_empty_versions else '')}
+        cleanup_parts = []
+        if removed_empty_versions:
+            cleanup_parts.append(f'{removed_empty_versions} bank version rỗng')
+        if removed_empty_materials:
+            cleanup_parts.append(f'{removed_empty_materials} bản ghi tài liệu rỗng/đã xóa')
+        cleanup_note = f" và đã dọn {', '.join(cleanup_parts)}" if cleanup_parts else ''
+        return {'ok': True, 'deleted': True, 'entity_type': 'chapter', 'entity_id': chapter_id, 'message': 'Đã xóa bài/chapter' + cleanup_note}
 
     def next_bank_version_no(self, subject_id: str, chapter_id: str) -> int:
         value = self.db.query(func.max(QuestionBankVersion.version_no)).filter(

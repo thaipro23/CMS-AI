@@ -121,6 +121,8 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const [editing, setEditing] = useState<SubjectChapter | null>(null)
   const [editLesson, setEditLesson] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<SubjectChapter | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   const load = async () => {
     const [nextDepartments, nextSubjects, nextOfferings, nextSummaries] = await Promise.all([
@@ -147,12 +149,22 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       setEditing(null)
     }, 'Đã sửa bài', load)
   }
-  const confirmDeleteChapter = () => {
+  const confirmDeleteChapter = async () => {
     if (!deleteTarget) return
-    run(async () => {
+    setDeleteBusy(true)
+    setDeleteError('')
+    try {
       await deleteSubjectChapter(headers, deleteTarget.id)
       setDeleteTarget(null)
-    }, 'Đã xóa bài', load)
+      await load()
+      // One extra refresh avoids a stale summary/cache row right after delete.
+      window.setTimeout(() => { load().catch(() => null) }, 250)
+    } catch (error) {
+      setDeleteTarget(null)
+      setDeleteError(error instanceof Error ? error.message : 'Không thể xóa bài/chapter')
+    } finally {
+      setDeleteBusy(false)
+    }
   }
 
   return <div className="page-stack bank-multipage">
@@ -200,10 +212,20 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       description={<p>Chỉ xóa được khi bài chưa có tài liệu/câu hỏi/release/mapping. Nếu bài chỉ có bank version rỗng do vừa mở workspace, hệ thống sẽ tự dọn và vẫn cho xóa.</p>}
       confirmLabel="Xác nhận xóa"
       danger
-      busy={busy}
+      busy={busy || deleteBusy}
       onClose={() => setDeleteTarget(null)}
       onConfirm={confirmDeleteChapter}
     />
+
+    <Modal open={Boolean(deleteError)} title="Không thể xóa bài/chapter" onClose={() => setDeleteError('')}>
+      <div className="mini-form">
+        <div className="alert danger">{deleteError}</div>
+        <p className="helper">Bài chỉ xóa được khi không còn tài liệu thật, câu hỏi, release, mapping hoặc quiz. Các bản ghi rỗng/đã xóa sẽ được backend tự dọn.</p>
+        <div className="modal-actions">
+          <button className="btn" type="button" onClick={() => setDeleteError('')}>Đã hiểu</button>
+        </div>
+      </div>
+    </Modal>
 
     <Modal open={createOpen} title="Thêm bài" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
