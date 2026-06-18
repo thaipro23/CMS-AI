@@ -283,6 +283,37 @@ class AcademicClassCourseMapping(Base):
     )
 
 
+
+
+class AcademicStudentLearningSnapshot(Base):
+    __tablename__ = 'academic_student_learning_snapshots'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    class_id: Mapped[str] = mapped_column(String, ForeignKey('academic_classes.id'), index=True)
+    student_id: Mapped[str] = mapped_column(String, ForeignKey('academic_students.id'), index=True)
+    openedx_course_id: Mapped[str] = mapped_column(String(255), index=True)
+    openedx_username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    openedx_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    enrollment_status: Mapped[str] = mapped_column(String(50), default='unknown', index=True)
+    enrollment_mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    progress_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    grade_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    completed_blocks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_blocks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('class_id', 'student_id', 'openedx_course_id', name='uq_academic_learning_class_student_course'),
+        Index('ix_academic_learning_class_course_sync', 'class_id', 'openedx_course_id', 'last_synced_at'),
+        Index('ix_academic_learning_status_grade', 'enrollment_status', 'passed', 'grade_percent'),
+    )
+
+
 class AcademicSyncRun(Base):
     __tablename__ = 'academic_sync_runs'
 

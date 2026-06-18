@@ -35,6 +35,11 @@ from app.schemas.academic import (
     AcademicCourseMappingValidationOut,
     AcademicHealthOut,
     AcademicImportFromJsonIn,
+    AcademicEnrollmentSyncIn,
+    AcademicEnrollmentSyncOut,
+    AcademicLearningSyncIn,
+    AcademicLearningSyncOut,
+    AcademicLearningSummaryOut,
     AcademicImportResultOut,
     AcademicMappingResolveOut,
     AcademicMappingSummaryOut,
@@ -409,6 +414,91 @@ def get_class_mapping_summary(
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).mapping_summary_for_class(user, class_id)
+
+
+@router.get('/classes/{class_id}/learning-summary', response_model=AcademicLearningSummaryOut)
+def get_class_learning_summary(
+    class_id: str,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    return AcademicService(db).learning_summary_for_class(user, class_id)
+
+
+
+@router.post('/classes/{class_id}/cms-enrollment-sync', response_model=AcademicEnrollmentSyncOut)
+def sync_class_cms_enrollment(
+    class_id: str,
+    payload: AcademicEnrollmentSyncIn,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    service = AcademicService(db)
+    try:
+        result = service.sync_class_course_enrollment(user, class_id, force=payload.force, limit=payload.limit, mode=payload.mode)
+        log_audit(
+            db,
+            action='academic.cms_enrollment_sync.class',
+            status='success',
+            message='Tự enrollment sinh viên đã đồng bộ CMS vào Course CMS thành công',
+            user=user,
+            target_type='academic_class',
+            target_id=class_id,
+            metadata={'counts': result.get('counts', {}), 'updated': result.get('updated', 0), 'openedx_course_id': result.get('openedx_course_id')},
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        log_audit(
+            db,
+            action='academic.cms_enrollment_sync.class',
+            status='failed',
+            error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
+            message=str(exc),
+            user=user,
+            target_type='academic_class',
+            target_id=class_id,
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+@router.post('/classes/{class_id}/learning-sync', response_model=AcademicLearningSyncOut)
+def sync_class_learning_insight(
+    class_id: str,
+    payload: AcademicLearningSyncIn,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    service = AcademicService(db)
+    try:
+        result = service.sync_class_learning_insight(user, class_id, force=payload.force, limit=payload.limit)
+        log_audit(
+            db,
+            action='academic.learning_sync.class',
+            status='success',
+            message='Cập nhật tiến độ/điểm CMS cho lớp thành công',
+            user=user,
+            target_type='academic_class',
+            target_id=class_id,
+            metadata={'counts': result.get('counts', {}), 'updated': result.get('updated', 0), 'openedx_course_id': result.get('openedx_course_id')},
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        log_audit(
+            db,
+            action='academic.learning_sync.class',
+            status='failed',
+            error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
+            message=str(exc),
+            user=user,
+            target_type='academic_class',
+            target_id=class_id,
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 def _run_class_cms_sync_check(class_id: str, payload: AcademicResolveClassUsersIn, user: UserContext, db: Session) -> dict:

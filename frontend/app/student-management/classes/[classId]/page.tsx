@@ -7,10 +7,13 @@ import { useAppContext } from '../../../../context/AppContext'
 import {
   getAcademicClass,
   getAcademicClassMappingSummary,
+  getAcademicClassLearningSummary,
   getAcademicClassStudents,
   checkAcademicClassCmsSync,
+  syncAcademicClassEnrollment,
+  syncAcademicClassLearning,
 } from '../../../../lib/api'
-import { AcademicClass, AcademicMappingSummary, AcademicStudent } from '../../../../types'
+import { AcademicClass, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
 
 const PAGE_SIZE = 50
 
@@ -37,6 +40,25 @@ function mappingSourceLabel(source?: string | null) {
   return 'Chưa map'
 }
 
+function percentLabel(value?: number | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—'
+  return `${Math.round(value * 10) / 10}%`
+}
+function enrollmentLabel(value?: string | null) {
+  const status = (value || 'unknown').toLowerCase()
+  if (status === 'enrolled') return 'Đã enroll'
+  if (status === 'inactive') return 'Enroll inactive'
+  if (status === 'not_enrolled') return 'Chưa enroll'
+  if (status === 'missing_user') return 'Chưa có user CMS'
+  return 'Chưa cập nhật'
+}
+function enrollmentClass(value?: string | null) {
+  const status = (value || 'unknown').toLowerCase()
+  if (status === 'enrolled') return 'status-pill success'
+  if (['not_enrolled', 'missing_user', 'inactive'].includes(status)) return 'status-pill danger'
+  return 'status-pill neutral'
+}
+
 export default function ClassDetailPage() {
   const params = useParams<{ classId: string }>()
   const classId = decodeURIComponent(String(params.classId || ''))
@@ -46,33 +68,39 @@ export default function ClassDetailPage() {
   const [classInfo, setClassInfo] = useState<AcademicClass | null>(null)
   const [students, setStudents] = useState<AcademicStudent[]>([])
   const [summary, setSummary] = useState<AcademicMappingSummary | null>(null)
+  const [learningSummary, setLearningSummary] = useState<AcademicLearningSummary | null>(null)
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [syncingEnrollment, setSyncingEnrollment] = useState(false)
+  const [syncingLearning, setSyncingLearning] = useState(false)
   const [message, setMessage] = useState('')
 
   const refreshStudents = async () => {
-    const [studentPage, nextSummary] = await Promise.all([
+    const [studentPage, nextSummary, nextLearning] = await Promise.all([
       getAcademicClassStudents(headers, classId, { search, page, pageSize: PAGE_SIZE }),
       getAcademicClassMappingSummary(headers, classId),
+      getAcademicClassLearningSummary(headers, classId),
     ])
     setStudents(studentPage.items)
     setTotal(studentPage.total)
     setSummary(nextSummary)
+    setLearningSummary(nextLearning)
   }
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    Promise.all([getAcademicClass(headers, classId), getAcademicClassStudents(headers, classId, { search, page, pageSize: PAGE_SIZE }), getAcademicClassMappingSummary(headers, classId)])
-      .then(([detail, studentPage, nextSummary]) => {
+    Promise.all([getAcademicClass(headers, classId), getAcademicClassStudents(headers, classId, { search, page, pageSize: PAGE_SIZE }), getAcademicClassMappingSummary(headers, classId), getAcademicClassLearningSummary(headers, classId)])
+      .then(([detail, studentPage, nextSummary, nextLearning]) => {
         if (cancelled) return
         setClassInfo(detail)
         setStudents(studentPage.items)
         setTotal(studentPage.total)
         setSummary(nextSummary)
+        setLearningSummary(nextLearning)
       })
       .catch((error) => { if (!cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được chi tiết lớp') })
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -84,12 +112,43 @@ export default function ClassDetailPage() {
     setMessage('')
     try {
       const result = await checkAcademicClassCmsSync(jsonHeaders, classId, { force: true, limit: 5000 })
-      setMessage(`Kiểm tra đồng bộ CMS hoàn tất: ${result.updated}/${result.total} sinh viên được cập nhật.`)
+      const teacherMsg = result.teachers?.total ? ` Giảng viên: ${result.teachers.updated || 0}/${result.teachers.total} được kiểm tra/tạo tài khoản CMS.` : ''
+      const enrollMsg = result.enrollment?.ok ? ` Course CMS: ${result.enrollment.updated}/${result.enrollment.total} sinh viên đã enroll; ${result.enrollment.teachers?.updated || 0}/${result.enrollment.teachers?.total || 0} giảng viên được gán vào course.` : ''
+      setMessage(`Kiểm tra đồng bộ CMS hoàn tất: ${result.updated}/${result.total} sinh viên được cập nhật.${teacherMsg}${enrollMsg}`)
       await refreshStudents()
     } catch (error) {
       setMessage(error instanceof Error ? `${error.message}. Kiểm tra lại LMS Student Insight plugin/HMAC nếu API CMS chưa sẵn sàng.` : 'Kiểm tra đồng bộ CMS thất bại')
     } finally {
       setChecking(false)
+    }
+  }
+
+
+  const runEnrollmentSync = async () => {
+    setSyncingEnrollment(true)
+    setMessage('')
+    try {
+      const result = await syncAcademicClassEnrollment(jsonHeaders, classId, { force: true, limit: 5000 })
+      setMessage(`Course CMS hoàn tất: ${result.updated}/${result.total} sinh viên được enroll; ${result.teachers?.updated || 0}/${result.teachers?.total || 0} giảng viên được tạo/gán Course Staff.`)
+      await refreshStudents()
+    } catch (error) {
+      setMessage(error instanceof Error ? `${error.message}. Chỉ sinh viên đã đồng bộ CMS và lớp đã map Course CMS mới được enroll.` : 'Enrollment CMS thất bại')
+    } finally {
+      setSyncingEnrollment(false)
+    }
+  }
+
+  const runLearningSync = async () => {
+    setSyncingLearning(true)
+    setMessage('')
+    try {
+      const result = await syncAcademicClassLearning(jsonHeaders, classId, { force: true, limit: 5000 })
+      setMessage(`Cập nhật tiến độ/điểm CMS hoàn tất: ${result.updated}/${result.total} sinh viên được cập nhật.`)
+      await refreshStudents()
+    } catch (error) {
+      setMessage(error instanceof Error ? `${error.message}. Kiểm tra Course CMS mapping và Student Insight plugin/HMAC.` : 'Cập nhật tiến độ/điểm CMS thất bại')
+    } finally {
+      setSyncingLearning(false)
     }
   }
 
@@ -108,6 +167,8 @@ export default function ClassDetailPage() {
       </div>
       <div className="hero-actions">
         <button className="btn primary" type="button" disabled={checking} onClick={runCmsSyncCheck}>{checking ? 'Đang kiểm tra...' : 'Kiểm tra đồng bộ CMS'}</button>
+        <button className="btn secondary" type="button" disabled={syncingEnrollment || !classInfo?.openedx_course_id} onClick={runEnrollmentSync}>{syncingEnrollment ? 'Đang xử lý...' : 'Enroll SV + gán GV vào Course CMS'}</button>
+        <button className="btn secondary" type="button" disabled={syncingLearning || !classInfo?.openedx_course_id} onClick={runLearningSync}>{syncingLearning ? 'Đang cập nhật...' : 'Cập nhật tiến độ/điểm CMS'}</button>
         <Link className="btn secondary" href="/student-management">Về màn môn</Link>
       </div>
     </section>
@@ -119,9 +180,16 @@ export default function ClassDetailPage() {
       <div className="metric-card"><span>Course CMS</span><b>{classInfo?.openedx_course_id ? 'Đã map' : 'Chưa map'}</b><small>{mappingSourceLabel(classInfo?.openedx_mapping_source)}</small></div>
     </section>
 
+    <section className="summary-grid grid-4">
+      <div className="metric-card"><span>Đã enroll CMS</span><b>{learningSummary?.counts?.enrolled || 0}</b><small>Course: {learningSummary?.openedx_course_id || classInfo?.openedx_course_id || '—'}</small></div>
+      <div className="metric-card"><span>Chưa enroll/lỗi</span><b>{Math.max(0, (learningSummary?.total || 0) - (learningSummary?.counts?.enrolled || 0) - (learningSummary?.counts?.not_synced || 0))}</b><small>Inactive, missing user, not enrolled</small></div>
+      <div className="metric-card"><span>Tiến độ TB</span><b>{percentLabel(learningSummary?.avg_progress_percent)}</b><small>Dữ liệu từ CMS/Open edX</small></div>
+      <div className="metric-card"><span>Điểm TB</span><b>{percentLabel(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${new Date(learningSummary.last_synced_at).toLocaleString('vi-VN')}` : 'Chưa cập nhật'}</small></div>
+    </section>
+
     <section className="card">
       <div className="section-head">
-        <div><h2>Thông tin lớp</h2><p>Lớp kế thừa mapping course từ màn môn/kỳ/hệ, không map riêng ở đây.</p></div>
+        <div><h2>Thông tin lớp</h2><p>Lớp kế thừa mapping course từ màn môn/kỳ/hệ. Khi kiểm tra đồng bộ CMS xong, hệ thống tự tạo tài khoản CMS nếu thiếu, enroll sinh viên và gán giảng viên làm Course Staff.</p></div>
       </div>
       <div className="academic-detail-grid">
         <div><span>Mã lớp</span><b>{classInfo?.class_code || '—'}</b></div>
@@ -139,16 +207,18 @@ export default function ClassDetailPage() {
       </div>
       <div className="table-wrap">
         <table className="data-table">
-          <thead><tr><th>Sinh viên</th><th>Username AP</th><th>Email</th><th>Username CMS</th><th>Trạng thái</th></tr></thead>
+          <thead><tr><th>Sinh viên</th><th>Username AP</th><th>Email</th><th>Username CMS</th><th>Đồng bộ CMS</th><th>Học tập CMS</th><th>Điểm</th></tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={5}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={5}>Không có sinh viên phù hợp.</td></tr>}
+            {loading && <tr><td colSpan={7}>Đang tải sinh viên...</td></tr>}
+            {!loading && !students.length && <tr><td colSpan={7}>Không có sinh viên phù hợp.</td></tr>}
             {students.map((student) => <tr key={student.id}>
               <td><b>{student.student_code || '—'}</b><small>{student.full_name}</small></td>
               <td><b>{student.username}</b></td>
               <td>{student.email || '—'}</td>
               <td>{student.openedx_username || '—'}</td>
               <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${new Date(student.last_resolved_at).toLocaleString('vi-VN')}` : ''}</small></td>
+              <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>{student.learning_progress_percent != null ? `Tiến độ: ${percentLabel(student.learning_progress_percent)}` : ''}</small></td>
+              <td><b>{percentLabel(student.learning_grade_percent)}</b><small>{student.learning_last_synced_at ? `Cập nhật: ${new Date(student.learning_last_synced_at).toLocaleString('vi-VN')}` : ''}</small></td>
             </tr>)}
           </tbody>
         </table>

@@ -150,6 +150,16 @@ class AcademicClassStudentOut(AcademicStudentOut):
     mapping_confidence: float = 0.0
     mapping_note: str = ''
     last_resolved_at: datetime | None = None
+    learning_snapshot_id: str | None = None
+    learning_enrollment_status: str | None = None
+    learning_enrollment_mode: str | None = None
+    learning_progress_percent: float | None = None
+    learning_grade_percent: float | None = None
+    learning_passed: bool | None = None
+    learning_completed_blocks: int | None = None
+    learning_total_blocks: int | None = None
+    learning_last_activity_at: datetime | None = None
+    learning_last_synced_at: datetime | None = None
 
 
 class AcademicClassListOut(BaseModel):
@@ -288,6 +298,48 @@ class AcademicMappingResolveOut(BaseModel):
     total: int
     updated: int
     counts: dict[str, int]
+    message: str
+    enrollment: dict[str, Any] | None = None
+    teachers: dict[str, Any] | None = None
+
+
+
+class AcademicEnrollmentSyncIn(BaseModel):
+    force: bool = False
+    limit: int = Field(1000, ge=1, le=5000)
+    mode: str | None = Field(None, max_length=50, description='Enrollment mode CMS/Open edX, mặc định audit')
+
+
+class AcademicEnrollmentSyncOut(BaseModel):
+    ok: bool
+    class_id: str
+    openedx_course_id: str | None = None
+    total: int
+    updated: int
+    counts: dict[str, int] = Field(default_factory=dict)
+    message: str
+    learning_summary: dict[str, Any] | None = None
+    teachers: dict[str, Any] | None = None
+
+
+class AcademicLearningSyncIn(BaseModel):
+    force: bool = False
+    limit: int = Field(1000, ge=1, le=5000)
+
+
+class AcademicLearningSummaryOut(BaseModel):
+    class_id: str
+    openedx_course_id: str | None = None
+    total: int
+    counts: dict[str, int] = Field(default_factory=dict)
+    avg_progress_percent: float | None = None
+    avg_grade_percent: float | None = None
+    last_synced_at: datetime | None = None
+
+
+class AcademicLearningSyncOut(AcademicLearningSummaryOut):
+    ok: bool
+    updated: int
     message: str
 
 

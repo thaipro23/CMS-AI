@@ -46,6 +46,8 @@ class OpenEdXStudentInsightClient:
         base = (settings.openedx_student_insight_base_url or settings.openedx_lms_base_url or '').rstrip('/')
         self.base_url = base
         self.endpoint = settings.openedx_student_insight_users_resolve_endpoint or '/api/ai-student-insight/v1/users/resolve'
+        self.class_analytics_endpoint = getattr(settings, 'openedx_student_insight_class_analytics_endpoint', '/api/ai-student-insight/v1/class-analytics')
+        self.enrollment_enroll_endpoint = getattr(settings, 'openedx_student_insight_enrollment_enroll_endpoint', '/api/ai-student-insight/v1/course-enrollment/enroll')
         self.timeout_seconds = settings.openedx_student_insight_timeout_seconds
         self.client_id = settings.openedx_student_insight_client_id or 'ai-server'
         self.shared_secret = settings.openedx_student_insight_shared_secret or settings.openedx_connector_hmac_secret
@@ -226,11 +228,78 @@ class OpenEdXStudentInsightClient:
             return str(exact[0]['course_id']), exact[0].get('display_name'), 1, 'openedx_api'
         return None, None, len(exact), 'openedx_api' if results else 'unavailable'
 
-    def resolve_users(self, students: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> list[dict[str, Any]]:
+        """Fetch enrollment/progress/grade snapshots for a class from Open edX.
+
+        Contract:
+          POST /api/ai-student-insight/v1/class-analytics
+          {course_id, cohort_name, students:[{username, student_code, ...}]}
+
+        Returns a list aligned by username/student_code. The plugin is allowed to
+        return partial data; callers must keep the UI usable when fields are null.
+        """
+        if not self.configured():
+            raise RuntimeError('Chưa cấu hình Open edX Student Insight plugin/HMAC để lấy tiến độ/điểm CMS')
+        path = self.class_analytics_endpoint if self.class_analytics_endpoint.startswith('/') else f'/{self.class_analytics_endpoint}'
+        body = {'course_id': course_id, 'cohort_name': cohort_name, 'students': students}
+        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        url = urljoin(self.base_url + '/', path.lstrip('/'))
+        headers = self._headers('POST', path, raw)
+        with httpx.Client(timeout=max(self.timeout_seconds, 60)) as client:
+            response = client.post(url, content=raw, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+        if isinstance(data, dict):
+            rows = data.get('results') or data.get('items') or data.get('students') or []
+            return rows if isinstance(rows, list) else []
+        if isinstance(data, list):
+            return data
+        raise RuntimeError('Open edX Student Insight class analytics trả về dữ liệu không hợp lệ')
+
+
+
+    def enroll_users(self, *, course_id: str, students: list[dict[str, Any]], teachers: list[dict[str, Any]] | None = None, mode: str | None = None, force: bool = False, cohort_name: str | None = None, create_missing: bool = False) -> list[dict[str, Any]]:
+        """Enroll students and add teachers to a mapped Course CMS.
+
+        Contract:
+          POST /api/ai-student-insight/v1/course-enrollment/enroll
+          {course_id, mode, force, cohort_name, create_missing, students:[...], teachers:[...]}
+
+        v25.9.16.3.2 allows account creation from AP data only when explicitly
+        requested by AI Server. Students are enrolled as learners; teachers are
+        granted Course Staff role by the plugin.
+        """
+        if not self.configured():
+            raise RuntimeError('Chưa cấu hình Open edX Student Insight plugin/HMAC để enroll sinh viên vào Course CMS')
+        path = self.enrollment_enroll_endpoint if self.enrollment_enroll_endpoint.startswith('/') else f'/{self.enrollment_enroll_endpoint}'
+        body = {
+            'course_id': course_id,
+            'mode': mode or getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit') or 'audit',
+            'force': bool(force),
+            'cohort_name': cohort_name,
+            'create_missing': bool(create_missing),
+            'students': students,
+            'teachers': teachers or [],
+        }
+        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        url = urljoin(self.base_url + '/', path.lstrip('/'))
+        headers = self._headers('POST', path, raw)
+        with httpx.Client(timeout=max(self.timeout_seconds, 60)) as client:
+            response = client.post(url, content=raw, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+        if isinstance(data, dict):
+            rows = data.get('results') or data.get('items') or data.get('students') or []
+            return rows if isinstance(rows, list) else []
+        if isinstance(data, list):
+            return data
+        raise RuntimeError('Open edX Student Insight enrollment trả về dữ liệu không hợp lệ')
+
+    def resolve_users(self, students: list[dict[str, Any]], *, create_missing: bool = False) -> list[dict[str, Any]]:
         if not self.configured():
             raise RuntimeError('Chưa cấu hình Open edX Student Insight plugin/HMAC để resolve user')
         path = self.endpoint if self.endpoint.startswith('/') else f'/{self.endpoint}'
-        body = {'students': students}
+        body = {'students': students, 'create_missing': bool(create_missing)}
         raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         url = urljoin(self.base_url + '/', path.lstrip('/'))
         headers = self._headers('POST', path, raw)

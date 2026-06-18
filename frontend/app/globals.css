@@ -4086,3 +4086,12 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
 }
 .student-management-page .data-table td .toolbar-actions { justify-content: flex-start; }
 .student-management-page .form-message { margin-top: 14px; }
+
+/* v25.9.16.3.0 learning insight columns */
+.student-management-page .data-table td small {
+  display: block;
+  margin-top: 4px;
+}
+.student-management-page .data-table td .status-pill + small {
+  color: var(--text-muted, #64748b);
+}

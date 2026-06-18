@@ -1763,6 +1763,44 @@ export type AcademicStudent = {
   mapping_confidence?: number
   mapping_note?: string
   last_resolved_at?: string | null
+  learning_snapshot_id?: string | null
+  learning_enrollment_status?: string | null
+  learning_enrollment_mode?: string | null
+  learning_progress_percent?: number | null
+  learning_grade_percent?: number | null
+  learning_passed?: boolean | null
+  learning_completed_blocks?: number | null
+  learning_total_blocks?: number | null
+  learning_last_activity_at?: string | null
+  learning_last_synced_at?: string | null
+}
+
+export type AcademicLearningSummary = {
+  class_id: string
+  openedx_course_id?: string | null
+  total: number
+  counts: Record<string, number>
+  avg_progress_percent?: number | null
+  avg_grade_percent?: number | null
+  last_synced_at?: string | null
+}
+
+export type AcademicLearningSyncResult = AcademicLearningSummary & {
+  ok: boolean
+  updated: number
+  message: string
+}
+
+export type AcademicEnrollmentSyncResult = {
+  ok: boolean
+  class_id: string
+  openedx_course_id?: string | null
+  total: number
+  updated: number
+  counts: Record<string, number>
+  message: string
+  learning_summary?: AcademicLearningSummary | null
+  teachers?: { total?: number; updated?: number; counts?: Record<string, number> } | null
 }
 
 export type AcademicMappingSummary = {
@@ -1778,6 +1816,8 @@ export type AcademicMappingResolveResult = {
   updated: number
   counts: Record<string, number>
   message: string
+  enrollment?: AcademicEnrollmentSyncResult | null
+  teachers?: { total?: number; updated?: number; counts?: Record<string, number> } | null
 }
 
 export type AcademicManualMappingImportResult = {

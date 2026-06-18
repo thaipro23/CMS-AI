@@ -85,6 +85,9 @@ import {
   AcademicSyncResult,
   AcademicAPSyncOptions,
   AcademicMappingSummary,
+  AcademicLearningSummary,
+  AcademicEnrollmentSyncResult,
+  AcademicLearningSyncResult,
   AcademicMappingResolveResult,
   AcademicManualMappingImportResult,
   AcademicCourseMappingValidation,
@@ -1853,6 +1856,28 @@ export async function getAcademicClass(headers: HeadersInit, classId: string): P
 
 export async function getAcademicClassMappingSummary(headers: HeadersInit, classId: string): Promise<AcademicMappingSummary> {
   return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/mapping-summary`, { headers }));
+}
+
+
+export async function getAcademicClassLearningSummary(headers: HeadersInit, classId: string): Promise<AcademicLearningSummary> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/learning-summary`, { headers }));
+}
+
+
+export async function syncAcademicClassEnrollment(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number; mode?: string } = {}): Promise<AcademicEnrollmentSyncResult> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-enrollment-sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 1000, mode: payload.mode || null }),
+  }));
+}
+
+export async function syncAcademicClassLearning(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicLearningSyncResult> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/learning-sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 1000 }),
+  }));
 }
 
 export async function getAcademicCampuses(headers: HeadersInit, filters: { branch?: string; active?: boolean | null } = {}): Promise<AcademicCampus[]> {

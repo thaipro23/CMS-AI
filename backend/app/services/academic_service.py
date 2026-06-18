@@ -18,6 +18,7 @@ from app.models.academic import (
     AcademicCourseMapping,
     AcademicClassStudent,
     AcademicStudent,
+    AcademicStudentLearningSnapshot,
     AcademicSubject,
     AcademicTeacher,
     AcademicTeacherAssignment,
@@ -871,7 +872,7 @@ class AcademicService:
             'openedx_mapping_validation_status': effective_mapping.validation_status if effective_mapping else None,
         }
 
-    def _student_mapping_item(self, class_id: str, student: AcademicStudent, synced_at: datetime | None, mapping: OpenEdXUserMapping | None) -> dict[str, Any]:
+    def _student_mapping_item(self, class_id: str, student: AcademicStudent, synced_at: datetime | None, mapping: OpenEdXUserMapping | None, learning: AcademicStudentLearningSnapshot | None = None) -> dict[str, Any]:
         return {
             'class_id': class_id,
             'id': student.id,
@@ -894,17 +895,37 @@ class AcademicService:
             'mapping_confidence': mapping.confidence if mapping else 0.0,
             'mapping_note': mapping.note if mapping else '',
             'last_resolved_at': mapping.last_resolved_at if mapping else None,
+            'learning_snapshot_id': learning.id if learning else None,
+            'learning_enrollment_status': learning.enrollment_status if learning else None,
+            'learning_enrollment_mode': learning.enrollment_mode if learning else None,
+            'learning_progress_percent': learning.progress_percent if learning else None,
+            'learning_grade_percent': learning.grade_percent if learning else None,
+            'learning_passed': learning.passed if learning else None,
+            'learning_completed_blocks': learning.completed_blocks if learning else None,
+            'learning_total_blocks': learning.total_blocks if learning else None,
+            'learning_last_activity_at': learning.last_activity_at if learning else None,
+            'learning_last_synced_at': learning.last_synced_at if learning else None,
         }
 
     def list_class_students(self, user: UserContext, class_id: str, *, search: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
         page, page_size = _page(page, page_size)
-        query = self.db.query(AcademicStudent, AcademicClassStudent.synced_at, OpenEdXUserMapping).join(
+        cls = self.db.get(AcademicClass, class_id)
+        effective_mapping = self.inherited_course_mapping_for_class(cls) if cls else None
+        course_id = effective_mapping.openedx_course_id if effective_mapping else None
+        query = self.db.query(AcademicStudent, AcademicClassStudent.synced_at, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
         ).outerjoin(
             OpenEdXUserMapping,
             OpenEdXUserMapping.student_id == AcademicStudent.id,
+        ).outerjoin(
+            AcademicStudentLearningSnapshot,
+            and_(
+                AcademicStudentLearningSnapshot.student_id == AcademicStudent.id,
+                AcademicStudentLearningSnapshot.class_id == class_id,
+                AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+            ),
         ).filter(AcademicClassStudent.class_id == class_id)
         if search and search.strip():
             like = f"%{search.strip()}%"
@@ -917,7 +938,7 @@ class AcademicService:
             ))
         total = query.count()
         rows = query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).offset((page - 1) * page_size).limit(page_size).all()
-        items = [self._student_mapping_item(class_id, student, synced_at, mapping) for student, synced_at, mapping in rows]
+        items = [self._student_mapping_item(class_id, student, synced_at, mapping, learning) for student, synced_at, mapping, learning in rows]
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
     def _upsert_mapping(self, student: AcademicStudent, result: dict[str, Any] | None, *, source: str = 'plugin') -> OpenEdXUserMapping:
@@ -1290,6 +1311,57 @@ class AcademicService:
         counts['not_checked'] = max(0, int(total) - checked) + counts.get('not_checked', 0)
         return {'class_id': class_id, 'total': int(total), 'counts': counts}
 
+    def _teacher_payload_for_class(self, class_id: str) -> list[tuple[AcademicTeacher, dict[str, Any]]]:
+        rows = self.db.query(AcademicTeacher).join(
+            AcademicTeacherAssignment,
+            AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
+        ).filter(
+            AcademicTeacherAssignment.class_id == class_id,
+            AcademicTeacher.active.is_(True),
+        ).order_by(AcademicTeacher.username.asc()).all()
+        payload: list[tuple[AcademicTeacher, dict[str, Any]]] = []
+        seen: set[str] = set()
+        for teacher in rows:
+            username = normalize_username(teacher.username)
+            if not username or username in seen:
+                continue
+            seen.add(username)
+            payload.append((teacher, {
+                'username': username,
+                'teacher': username,
+                'person_type': 'teacher',
+                'role': 'teacher',
+                'email': teacher.email or f'{username}@fpt.edu.vn',
+                'full_name': teacher.full_name or username,
+                'first_name': username,
+                'last_name': username,
+                'create_missing': True,
+            }))
+        return payload
+
+    def _upsert_teacher_cms_metadata(self, teacher: AcademicTeacher, result: dict[str, Any] | None) -> str:
+        now = datetime.utcnow()
+        result = result or {}
+        status_value, _method, _confidence, _note = _derive_mapping_status(result)
+        existing = teacher.metadata_json if isinstance(teacher.metadata_json, dict) else {}
+        teacher.metadata_json = {
+            **existing,
+            'cms_user': {
+                'status': status_value,
+                'openedx_user_id': str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or None,
+                'openedx_username': str(result.get('openedx_username') or result.get('username') or '').strip() or None,
+                'openedx_email': str(result.get('openedx_email') or result.get('email') or '').strip() or None,
+                'openedx_is_active': _boolish(result.get('openedx_is_active', result.get('is_active'))),
+                'match_method': str(result.get('match_method') or '').strip() or None,
+                'created': _boolish(result.get('created')),
+                'note': str(result.get('note') or '')[:1000],
+                'last_resolved_at': now.isoformat(),
+            }
+        }
+        teacher.updated_at = now
+        self.db.add(teacher)
+        return status_value
+
     def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
         limit = max(1, min(5000, int(limit or 1000)))
@@ -1302,22 +1374,31 @@ class AcademicService:
         rows = query.all()
         if not force:
             rows = [(student, mapping) for student, mapping in rows if not mapping or mapping.match_status not in {'matched'}]
-        if not rows:
-            return {'ok': True, 'class_id': class_id, 'total': 0, 'updated': 0, 'counts': {}, 'message': 'Không có sinh viên cần resolve'}
+
+        teacher_payload = self._teacher_payload_for_class(class_id)
+        if not rows and not teacher_payload:
+            return {'ok': True, 'class_id': class_id, 'total': 0, 'updated': 0, 'counts': {}, 'message': 'Không có sinh viên/giảng viên cần kiểm tra đồng bộ CMS', 'teachers': {'total': 0, 'updated': 0, 'counts': {}}}
 
         client = OpenEdXStudentInsightClient()
         batch_size = max(1, min(settings.openedx_student_insight_max_batch_size, 100))
         updated = 0
         counts: dict[str, int] = {}
+        create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
+
+        # Students: AP username is the canonical key. Missing CMS users are created
+        # by the plugin using AP username/email/full_name when enabled.
         for start in range(0, len(rows), batch_size):
             chunk = rows[start:start + batch_size]
             payload = [{
                 'student_code': student.student_code,
                 'username': normalize_username(student.username),
-                'email': student.email,
+                'person_type': 'student',
+                'role': 'student',
+                'email': student.email or (f'{normalize_username(student.username)}@fpt.edu.vn' if student.username else None),
                 'full_name': student.full_name,
+                'create_missing': create_missing,
             } for student, _mapping in chunk]
-            results = client.resolve_users(payload)
+            results = client.resolve_users(payload, create_missing=create_missing)
             result_by_username = {normalize_username(item.get('ap_username') or item.get('username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username'))}
             result_by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
             for student, _mapping in chunk:
@@ -1335,10 +1416,428 @@ class AcademicService:
                     }
                 mapping = self._upsert_mapping(student, result, source='openedx_student_insight')
                 counts[mapping.match_status] = counts.get(mapping.match_status, 0) + 1
+                if result.get('created') is True:
+                    counts['created_user'] = counts.get('created_user', 0) + 1
+                updated += 1
+            self.db.flush()
+
+        # Teachers: AP only provides values such as teacher="ngocnb61". Create
+        # username/email/first_name/last_name deterministically in the plugin.
+        teacher_counts: dict[str, int] = {}
+        teacher_updated = 0
+        if teacher_payload:
+            for start in range(0, len(teacher_payload), batch_size):
+                chunk = teacher_payload[start:start + batch_size]
+                results = client.resolve_users([payload for _teacher, payload in chunk], create_missing=create_missing)
+                result_by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
+                for teacher, payload in chunk:
+                    username = normalize_username(payload.get('username'))
+                    result = result_by_username.get(username) or {
+                        'ap_username': username,
+                        'username': username,
+                        'person_type': 'teacher',
+                        'exists': False,
+                        'match_status': 'missing',
+                        'match_method': 'not_found',
+                        'note': 'Open edX plugin không trả user cho giảng viên này',
+                    }
+                    status_value = self._upsert_teacher_cms_metadata(teacher, result)
+                    teacher_counts[status_value] = teacher_counts.get(status_value, 0) + 1
+                    counts[f'teacher_{status_value}'] = counts.get(f'teacher_{status_value}', 0) + 1
+                    if result.get('created') is True:
+                        teacher_counts['created_user'] = teacher_counts.get('created_user', 0) + 1
+                        counts['teacher_created_user'] = counts.get('teacher_created_user', 0) + 1
+                    teacher_updated += 1
+                self.db.flush()
+
+        self.db.commit()
+        enrollment_result = None
+        if getattr(settings, 'academic_auto_enroll_after_cms_sync', True):
+            try:
+                # Auto-enroll mapped students and add mapped/created teachers to Course Staff.
+                enrollment_result = self.sync_class_course_enrollment(user, class_id, force=False, limit=limit)
+                for key, value in (enrollment_result.get('counts') or {}).items():
+                    counts[f'enrollment_{key}'] = int(value or 0)
+            except HTTPException as exc:
+                enrollment_result = {'ok': False, 'message': str(exc.detail)}
+                counts['enrollment_skipped'] = counts.get('enrollment_skipped', 0) + 1
+            except Exception as exc:
+                enrollment_result = {'ok': False, 'message': str(exc)}
+                counts['enrollment_failed'] = counts.get('enrollment_failed', 0) + 1
+        message = 'Đã kiểm tra đồng bộ CMS theo AP username; tự tạo tài khoản CMS nếu chưa có dữ liệu'
+        if enrollment_result:
+            if enrollment_result.get('ok'):
+                message += '; đã tự enroll sinh viên và gán giảng viên vào Course CMS nếu lớp đã map course'
+            else:
+                message += f"; chưa auto-enroll/gán giảng viên được: {enrollment_result.get('message')}"
+        return {
+            'ok': True,
+            'class_id': class_id,
+            'total': len(rows),
+            'updated': updated,
+            'counts': counts,
+            'message': message,
+            'enrollment': enrollment_result,
+            'teachers': {'total': len(teacher_payload), 'updated': teacher_updated, 'counts': teacher_counts},
+        }
+
+    @staticmethod
+    def _float_or_none(value: Any) -> float | None:
+        if value is None or value == '':
+            return None
+        try:
+            number = float(value)
+        except Exception:
+            return None
+        # Plugins may return 0..1 or 0..100. Store percent in 0..100.
+        if 0 <= number <= 1:
+            return round(number * 100.0, 2)
+        return round(number, 2)
+
+    @staticmethod
+    def _int_or_none(value: Any) -> int | None:
+        if value is None or value == '':
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _dt_or_none(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        raw = str(value or '').strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace('Z', '+00:00')).replace(tzinfo=None)
+        except Exception:
+            return None
+
+    def _learning_summary_for_class_course(self, class_id: str, course_id: str | None) -> dict[str, Any]:
+        total = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
+        if not course_id:
+            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None}
+        rows = self.db.query(AcademicStudentLearningSnapshot.enrollment_status, func.count(AcademicStudentLearningSnapshot.id)).filter(
+            AcademicStudentLearningSnapshot.class_id == class_id,
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+        ).group_by(AcademicStudentLearningSnapshot.enrollment_status).all()
+        counts = {str(status or 'unknown'): int(count or 0) for status, count in rows}
+        synced = sum(counts.values())
+        counts['not_synced'] = max(0, int(total) - synced)
+        avg_progress = self.db.query(func.avg(AcademicStudentLearningSnapshot.progress_percent)).filter(
+            AcademicStudentLearningSnapshot.class_id == class_id,
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+            AcademicStudentLearningSnapshot.progress_percent.isnot(None),
+        ).scalar()
+        avg_grade = self.db.query(func.avg(AcademicStudentLearningSnapshot.grade_percent)).filter(
+            AcademicStudentLearningSnapshot.class_id == class_id,
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+            AcademicStudentLearningSnapshot.grade_percent.isnot(None),
+        ).scalar()
+        last_synced = self.db.query(func.max(AcademicStudentLearningSnapshot.last_synced_at)).filter(
+            AcademicStudentLearningSnapshot.class_id == class_id,
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+        ).scalar()
+        return {
+            'class_id': class_id,
+            'openedx_course_id': course_id,
+            'total': int(total),
+            'counts': counts,
+            'avg_progress_percent': round(float(avg_progress), 2) if avg_progress is not None else None,
+            'avg_grade_percent': round(float(avg_grade), 2) if avg_grade is not None else None,
+            'last_synced_at': last_synced,
+        }
+
+    def learning_summary_for_class(self, user: UserContext, class_id: str) -> dict[str, Any]:
+        self.assert_can_access_class(user, class_id)
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls:
+            raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
+        mapping = self.inherited_course_mapping_for_class(cls)
+        return self._learning_summary_for_class_course(class_id, mapping.openedx_course_id if mapping else None)
+
+    def _upsert_learning_snapshot(self, *, class_id: str, student: AcademicStudent, course_id: str, result: dict[str, Any], source: str) -> AcademicStudentLearningSnapshot:
+        now = datetime.utcnow()
+        snapshot = self.db.query(AcademicStudentLearningSnapshot).filter(
+            AcademicStudentLearningSnapshot.class_id == class_id,
+            AcademicStudentLearningSnapshot.student_id == student.id,
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+        ).first()
+        if not snapshot:
+            snapshot = AcademicStudentLearningSnapshot(class_id=class_id, student_id=student.id, openedx_course_id=course_id, created_at=now)
+        enrollment = result.get('enrollment') if isinstance(result.get('enrollment'), dict) else {}
+        progress = result.get('progress') if isinstance(result.get('progress'), dict) else {}
+        grade = result.get('grade') if isinstance(result.get('grade'), dict) else {}
+        snapshot.openedx_username = str(result.get('openedx_username') or result.get('username') or student.username or '').strip() or None
+        snapshot.openedx_user_id = str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or None
+        snapshot.enrollment_status = str(
+            result.get('enrollment_status')
+            or enrollment.get('status')
+            or ('enrolled' if enrollment.get('is_enrolled') is True else ('not_enrolled' if enrollment.get('is_enrolled') is False else 'unknown'))
+        )[:50]
+        snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or None
+        snapshot.progress_percent = self._float_or_none(result.get('progress_percent', progress.get('percent')))
+        snapshot.grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
+        if 'passed' in result:
+            snapshot.passed = _boolish(result.get('passed'))
+        elif 'passed' in grade:
+            snapshot.passed = _boolish(grade.get('passed'))
+        snapshot.completed_blocks = self._int_or_none(result.get('completed_blocks', progress.get('completed_blocks')))
+        snapshot.total_blocks = self._int_or_none(result.get('total_blocks', progress.get('total_blocks')))
+        snapshot.last_activity_at = self._dt_or_none(result.get('last_activity_at') or progress.get('last_activity_at'))
+        snapshot.raw_json = {'source': source, 'payload': result}
+        snapshot.last_synced_at = now
+        snapshot.updated_at = now
+        self.db.add(snapshot)
+        return snapshot
+
+
+    def _upsert_enrollment_snapshot(self, *, class_id: str, student: AcademicStudent, course_id: str, result: dict[str, Any], source: str) -> AcademicStudentLearningSnapshot:
+        """Update only enrollment fields without wiping progress/grade snapshots."""
+        now = datetime.utcnow()
+        snapshot = self.db.query(AcademicStudentLearningSnapshot).filter(
+            AcademicStudentLearningSnapshot.class_id == class_id,
+            AcademicStudentLearningSnapshot.student_id == student.id,
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+        ).first()
+        if not snapshot:
+            snapshot = AcademicStudentLearningSnapshot(class_id=class_id, student_id=student.id, openedx_course_id=course_id, created_at=now)
+        enrollment = result.get('enrollment') if isinstance(result.get('enrollment'), dict) else {}
+        raw_status = str(result.get('enrollment_status') or enrollment.get('status') or result.get('status') or '').strip().lower()
+        is_enrolled = result.get('is_enrolled')
+        if is_enrolled is None:
+            is_enrolled = enrollment.get('is_enrolled')
+        if raw_status in {'enrolled', 'already_enrolled', 'created', 'reactivated'} or is_enrolled is True:
+            status_value = 'enrolled'
+        elif raw_status in {'missing_user', 'inactive_user', 'not_mapped', 'failed', 'skipped'}:
+            status_value = raw_status
+        elif raw_status:
+            status_value = raw_status
+        else:
+            status_value = 'unknown'
+        snapshot.openedx_username = str(result.get('openedx_username') or result.get('username') or student.username or '').strip() or snapshot.openedx_username
+        snapshot.openedx_user_id = str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or snapshot.openedx_user_id
+        snapshot.enrollment_status = status_value[:50]
+        snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or snapshot.enrollment_mode
+        existing_raw = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
+        snapshot.raw_json = {**existing_raw, 'enrollment_source': source, 'enrollment_payload': result}
+        snapshot.last_synced_at = now
+        snapshot.updated_at = now
+        self.db.add(snapshot)
+        return snapshot
+
+    def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, mode: str | None = None) -> dict[str, Any]:
+        """Enroll AP students and add AP teachers to the mapped CMS/Open edX course.
+
+        Students are enrolled only after exact AP username -> CMS user mapping.
+        Teachers are resolved/created from AP teacher username and granted Course
+        Staff in the course. No fuzzy matching is used.
+        """
+        self.assert_can_access_class(user, class_id)
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls:
+            raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
+        mapping = self.inherited_course_mapping_for_class(cls)
+        if not mapping or not mapping.openedx_course_id:
+            raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS kế thừa từ màn môn nên chưa thể tự enrollment/gán giảng viên')
+        course_id = mapping.openedx_course_id
+        limit = max(1, min(5000, int(limit or 1000)))
+        query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
+            AcademicClassStudent,
+            AcademicClassStudent.student_id == AcademicStudent.id,
+        ).join(OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicStudent.id).outerjoin(
+            AcademicStudentLearningSnapshot,
+            and_(
+                AcademicStudentLearningSnapshot.class_id == class_id,
+                AcademicStudentLearningSnapshot.student_id == AcademicStudent.id,
+                AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+            ),
+        ).filter(
+            AcademicClassStudent.class_id == class_id,
+            OpenEdXUserMapping.match_status == 'matched',
+            or_(OpenEdXUserMapping.openedx_is_active.is_(None), OpenEdXUserMapping.openedx_is_active.is_(True)),
+            or_(OpenEdXUserMapping.openedx_username.isnot(None), OpenEdXUserMapping.openedx_user_id.isnot(None)),
+        ).order_by(AcademicStudent.username.asc()).limit(limit)
+        rows = query.all()
+        if not force:
+            rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not snapshot or snapshot.enrollment_status not in {'enrolled'}]
+
+        teacher_payload = self._teacher_payload_for_class(class_id) if getattr(settings, 'academic_auto_add_teachers_to_course', True) else []
+        if not rows and not teacher_payload:
+            summary = self._learning_summary_for_class_course(class_id, course_id)
+            return {'ok': True, 'class_id': class_id, 'openedx_course_id': course_id, 'total': 0, 'updated': 0, 'counts': {}, 'message': 'Không có sinh viên/giảng viên cần xử lý Course CMS', 'learning_summary': summary, 'teachers': {'total': 0, 'updated': 0, 'counts': {}}}
+        client = OpenEdXStudentInsightClient()
+        batch_size = max(1, min(settings.openedx_student_insight_max_batch_size, 100))
+        counts: dict[str, int] = {}
+        updated = 0
+        teacher_counts: dict[str, int] = {}
+        teacher_updated = 0
+        enrollment_mode = (mode or getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit') or 'audit').strip() or 'audit'
+        create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
+
+        for start in range(0, len(rows), batch_size):
+            chunk = rows[start:start + batch_size]
+            payload = []
+            for student, mapping_row, _snapshot in chunk:
+                payload.append({
+                    'student_code': student.student_code,
+                    'ap_username': normalize_username(student.username),
+                    'username': normalize_username(mapping_row.openedx_username or student.username),
+                    'openedx_user_id': mapping_row.openedx_user_id,
+                    'person_type': 'student',
+                    'role': 'student',
+                    'email': student.email or (f'{normalize_username(student.username)}@fpt.edu.vn' if student.username else None),
+                    'full_name': student.full_name,
+                    'create_missing': create_missing,
+                })
+            results = client.enroll_users(course_id=course_id, cohort_name=cls.class_code, students=payload, mode=enrollment_mode, force=force, create_missing=create_missing)
+            by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
+            by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
+            for student, mapping_row, _snapshot in chunk:
+                key = normalize_username(mapping_row.openedx_username or student.username)
+                result = by_username.get(key) or by_username.get(normalize_username(student.username))
+                if result is None and student.student_code:
+                    result = by_code.get(str(student.student_code).strip().lower())
+                if result is None:
+                    result = {
+                        'student_code': student.student_code,
+                        'ap_username': normalize_username(student.username),
+                        'username': key,
+                        'enrollment_status': 'unknown',
+                        'message': 'Plugin không trả kết quả enrollment cho sinh viên này',
+                    }
+                snapshot = self._upsert_enrollment_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_student_insight_enrollment')
+                status_value = str(result.get('status') or result.get('enrollment_status') or snapshot.enrollment_status or 'unknown')
+                if status_value in {'already_enrolled', 'created', 'reactivated'}:
+                    status_value = 'enrolled'
+                counts[status_value] = counts.get(status_value, 0) + 1
+                updated += 1
+            self.db.flush()
+
+        # Add teachers to Course Staff. Teachers are not stored in student learning
+        # snapshots; their status is kept in academic_teachers.metadata_json.
+        if teacher_payload:
+            for start in range(0, len(teacher_payload), batch_size):
+                chunk = teacher_payload[start:start + batch_size]
+                teacher_items = [payload for _teacher, payload in chunk]
+                results = client.enroll_users(course_id=course_id, cohort_name=cls.class_code, students=[], teachers=teacher_items, mode=enrollment_mode, force=force, create_missing=create_missing)
+                result_by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
+                for teacher, payload in chunk:
+                    username = normalize_username(payload.get('username'))
+                    result = result_by_username.get(username) or {'username': username, 'status': 'unknown', 'message': 'Plugin không trả kết quả gán giảng viên'}
+                    existing = teacher.metadata_json if isinstance(teacher.metadata_json, dict) else {}
+                    teacher.metadata_json = {
+                        **existing,
+                        'course_staff': {
+                            'openedx_course_id': course_id,
+                            'status': str(result.get('status') or result.get('enrollment_status') or 'unknown'),
+                            'openedx_user_id': str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or None,
+                            'openedx_username': str(result.get('openedx_username') or result.get('username') or '').strip() or None,
+                            'openedx_email': str(result.get('openedx_email') or result.get('email') or '').strip() or None,
+                            'created_user': _boolish(result.get('created_user', result.get('created'))),
+                            'message': str(result.get('message') or '')[:1000],
+                            'last_synced_at': datetime.utcnow().isoformat(),
+                        }
+                    }
+                    teacher.updated_at = datetime.utcnow()
+                    self.db.add(teacher)
+                    status_value = str(result.get('status') or result.get('enrollment_status') or 'unknown')
+                    teacher_counts[status_value] = teacher_counts.get(status_value, 0) + 1
+                    counts[f'teacher_{status_value}'] = counts.get(f'teacher_{status_value}', 0) + 1
+                    teacher_updated += 1
+                self.db.flush()
+
+        self.db.commit()
+        summary = self._learning_summary_for_class_course(class_id, course_id)
+        return {
+            'ok': True,
+            'class_id': class_id,
+            'openedx_course_id': course_id,
+            'total': len(rows),
+            'updated': updated,
+            'counts': counts,
+            'message': 'Đã tự enrollment sinh viên đã đồng bộ CMS và gán giảng viên vào Course CMS',
+            'learning_summary': summary,
+            'teachers': {'total': len(teacher_payload), 'updated': teacher_updated, 'counts': teacher_counts},
+        }
+
+    def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000) -> dict[str, Any]:
+        self.assert_can_access_class(user, class_id)
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls:
+            raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
+        mapping = self.inherited_course_mapping_for_class(cls)
+        if not mapping or not mapping.openedx_course_id:
+            raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS kế thừa từ màn môn. Hãy để auto-map course cấp môn chạy trước.')
+        course_id = mapping.openedx_course_id
+        limit = max(1, min(5000, int(limit or 1000)))
+        if getattr(settings, 'academic_auto_enroll_after_cms_sync', True):
+            try:
+                self.sync_class_course_enrollment(user, class_id, force=False, limit=limit)
+            except HTTPException as exc:
+                # Missing course mapping is already handled above; enrollment plugin
+                # failures should not block a read-only progress/grade refresh.
+                if exc.status_code >= 500:
+                    raise
+            except Exception:
+                pass
+        query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
+            AcademicClassStudent,
+            AcademicClassStudent.student_id == AcademicStudent.id,
+        ).outerjoin(OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicStudent.id).outerjoin(
+            AcademicStudentLearningSnapshot,
+            and_(
+                AcademicStudentLearningSnapshot.class_id == class_id,
+                AcademicStudentLearningSnapshot.student_id == AcademicStudent.id,
+                AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+            ),
+        ).filter(AcademicClassStudent.class_id == class_id).order_by(AcademicStudent.username.asc()).limit(limit)
+        rows = query.all()
+        if not force:
+            rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not snapshot or not snapshot.last_synced_at]
+        if not rows:
+            summary = self._learning_summary_for_class_course(class_id, course_id)
+            return {'ok': True, 'updated': 0, 'message': 'Không có sinh viên cần cập nhật học tập CMS', **summary}
+        client = OpenEdXStudentInsightClient()
+        batch_size = max(1, min(settings.openedx_student_insight_max_batch_size, 100))
+        updated = 0
+        for start in range(0, len(rows), batch_size):
+            chunk = rows[start:start + batch_size]
+            payload = []
+            for student, mapping_row, _snapshot in chunk:
+                payload.append({
+                    'student_code': student.student_code,
+                    'username': normalize_username((mapping_row.openedx_username if mapping_row and mapping_row.openedx_username else student.username)),
+                    'ap_username': normalize_username(student.username),
+                    'openedx_user_id': mapping_row.openedx_user_id if mapping_row else None,
+                    'email': student.email,
+                    'full_name': student.full_name,
+                })
+            results = client.class_analytics(course_id=course_id, cohort_name=cls.class_code, students=payload)
+            by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
+            by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
+            for student, mapping_row, _snapshot in chunk:
+                key = normalize_username(mapping_row.openedx_username if mapping_row and mapping_row.openedx_username else student.username)
+                result = by_username.get(key) or by_username.get(normalize_username(student.username))
+                if result is None and student.student_code:
+                    result = by_code.get(str(student.student_code).strip().lower())
+                if result is None:
+                    result = {
+                        'student_code': student.student_code,
+                        'ap_username': normalize_username(student.username),
+                        'username': key,
+                        'enrollment_status': 'unknown',
+                        'note': 'Plugin không trả dữ liệu học tập cho sinh viên này',
+                    }
+                self._upsert_learning_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_student_insight')
                 updated += 1
             self.db.flush()
         self.db.commit()
-        return {'ok': True, 'class_id': class_id, 'total': len(rows), 'updated': updated, 'counts': counts, 'message': 'Đã kiểm tra đồng bộ CMS theo AP username'}
+        summary = self._learning_summary_for_class_course(class_id, course_id)
+        return {'ok': True, 'updated': updated, 'message': 'Đã cập nhật tiến độ/điểm CMS cho lớp', **summary}
+
 
     def import_openedx_user_mappings(self, records: list[dict[str, Any]], *, requested_by: str | None = None) -> dict[str, Any]:
         now = datetime.utcnow()

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.2.22-api-first-academic-autofill'
+    app_version: str = '25.9.16.3.1-auto-enroll-mapped-students'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -143,6 +143,12 @@ class Settings(BaseSettings):
     openedx_student_insight_base_url: str | None = None
     openedx_student_insight_users_resolve_endpoint: str = '/api/ai-student-insight/v1/users/resolve'
     openedx_student_insight_course_search_endpoint: str = '/api/ai-student-insight/v1/courses/search'
+    openedx_student_insight_class_analytics_endpoint: str = '/api/ai-student-insight/v1/class-analytics'
+    openedx_student_insight_enrollment_enroll_endpoint: str = '/api/ai-student-insight/v1/course-enrollment/enroll'
+    openedx_student_insight_default_enrollment_mode: str = 'audit'
+    academic_auto_enroll_after_cms_sync: bool = True
+    academic_auto_create_cms_users: bool = True
+    academic_auto_add_teachers_to_course: bool = True
     openedx_courses_search_endpoint: str = '/api/courses/v1/courses/'
     openedx_student_insight_client_id: str = 'ai-server'
     openedx_student_insight_shared_secret: str | None = None
