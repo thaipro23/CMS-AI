@@ -27,6 +27,8 @@ from app.models.academic import (
 from app.services.business_rbac import BusinessRBACService
 from app.services.openedx_student_insight import OpenEdXStudentInsightClient, normalize_username, mask_email
 from app.core.config import settings
+from app.models.course import CourseSyncState
+from app.models.question_bank import Subject as BankSubject
 
 
 def _actor_names(user: UserContext) -> set[str]:
@@ -197,6 +199,7 @@ def _derive_mapping_status(result: dict[str, Any] | None) -> tuple[str, str, flo
 class AccessDecision:
     unrestricted: bool
     teacher_ids: set[str]
+    subject_codes: set[str]
 
 
 class AcademicService:
@@ -206,25 +209,70 @@ class AcademicService:
 
     def access_decision(self, user: UserContext) -> AccessDecision:
         if self.rbac.is_system_admin(user):
-            return AccessDecision(unrestricted=True, teacher_ids=set())
+            return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set())
         names = _actor_names(user)
-        if not names:
-            return AccessDecision(unrestricted=False, teacher_ids=set())
-        teachers = self.db.query(AcademicTeacher).filter(func.lower(AcademicTeacher.username).in_(names)).all()
-        return AccessDecision(unrestricted=False, teacher_ids={item.id for item in teachers})
+        teachers = []
+        if names:
+            teachers = self.db.query(AcademicTeacher).filter(func.lower(AcademicTeacher.username).in_(names)).all()
+
+        # Bank RBAC is scoped by the internal Question Bank subject id. AP data is scoped by
+        # subject_code, so convert visible bank subjects to codes and combine it with AP
+        # teacher assignments. This lets Department Head / Subject Owner see the AP subjects
+        # they own, while normal teachers only see the classes AP assigned to them.
+        subject_codes: set[str] = set()
+        try:
+            visible_subject_ids = self.rbac.accessible_subject_ids(user)
+            if visible_subject_ids is None:
+                return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set())
+            if visible_subject_ids:
+                rows = self.db.query(BankSubject.code).filter(BankSubject.id.in_(visible_subject_ids)).all()
+                subject_codes = {str(row[0] or '').strip().lower() for row in rows if str(row[0] or '').strip()}
+        except Exception:
+            subject_codes = set()
+        return AccessDecision(unrestricted=False, teacher_ids={item.id for item in teachers}, subject_codes=subject_codes)
 
     def assert_can_access_class(self, user: UserContext, class_id: str) -> None:
         decision = self.access_decision(user)
         if decision.unrestricted:
             return
-        if not decision.teacher_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn chưa được AP phân công lớp nào trên AI Server')
-        exists = self.db.query(AcademicTeacherAssignment.id).filter(
-            AcademicTeacherAssignment.class_id == class_id,
-            AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids),
-        ).first()
-        if not exists:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được AP phân công lớp này')
+        if not decision.teacher_ids and not decision.subject_codes:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn chưa được phân quyền môn hoặc AP phân công lớp nào trên AI Server')
+        exists = None
+        if decision.teacher_ids:
+            exists = self.db.query(AcademicTeacherAssignment.id).filter(
+                AcademicTeacherAssignment.class_id == class_id,
+                AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids),
+            ).first()
+        if exists:
+            return
+        if decision.subject_codes:
+            subject_exists = self.db.query(AcademicClass.id).join(
+                AcademicSubject, AcademicSubject.id == AcademicClass.subject_id
+            ).filter(
+                AcademicClass.id == class_id,
+                func.lower(AcademicSubject.subject_code).in_(decision.subject_codes),
+            ).first()
+            if subject_exists:
+                return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được phân công hoặc phân quyền xem lớp này')
+
+    def assert_can_access_subject(self, user: UserContext, subject_id: str) -> None:
+        decision = self.access_decision(user)
+        if decision.unrestricted:
+            return
+        subject = self.db.get(AcademicSubject, subject_id)
+        if not subject:
+            raise HTTPException(status_code=404, detail='Không tìm thấy môn AP')
+        if subject.subject_code and subject.subject_code.strip().lower() in decision.subject_codes:
+            return
+        if decision.teacher_ids:
+            exists = self.db.query(AcademicTeacherAssignment.id).filter(
+                AcademicTeacherAssignment.subject_id == subject_id,
+                AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids),
+            ).first()
+            if exists:
+                return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được phân công hoặc phân quyền xem môn này')
 
     def list_terms(self, branch: str | None = None, active: bool | None = True) -> list[AcademicTerm]:
         query = self.db.query(AcademicTerm)
@@ -329,6 +377,8 @@ class AcademicService:
         term_id: str | None = None,
         block_id: str | None = None,
         subject_id: str | None = None,
+        campus: str | None = None,
+        branch: str | None = None,
         search: str | None = None,
         page: int = 1,
         page_size: int = 50,
@@ -373,18 +423,27 @@ class AcademicService:
             and_(AcademicClassCourseMapping.class_id == AcademicClass.id, AcademicClassCourseMapping.active.is_(True)),
         )
         if not decision.unrestricted:
-            if not decision.teacher_ids:
+            access_conditions = []
+            if decision.teacher_ids:
+                allowed_class_ids = self.db.query(AcademicTeacherAssignment.class_id).filter(
+                    AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids)
+                )
+                access_conditions.append(AcademicClass.id.in_(allowed_class_ids))
+            if decision.subject_codes:
+                access_conditions.append(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
+            if not access_conditions:
                 return {'items': [], 'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0, 'has_next': False}
-            allowed_class_ids = self.db.query(AcademicTeacherAssignment.class_id).filter(
-                AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids)
-            )
-            query = query.filter(AcademicClass.id.in_(allowed_class_ids))
+            query = query.filter(or_(*access_conditions))
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
         if block_id:
             query = query.filter(AcademicClass.block_id == block_id)
         if subject_id:
             query = query.filter(AcademicClass.subject_id == subject_id)
+        if branch:
+            query = query.filter(AcademicClass.branch == branch.strip().lower())
+        if campus:
+            query = query.filter(AcademicClass.campus == campus.strip().lower())
         if search and search.strip():
             like = f"%{search.strip()}%"
             teacher_match_class_ids = self.db.query(AcademicTeacherAssignment.class_id).join(
@@ -442,6 +501,229 @@ class AcademicService:
                 entry['openedx_cohort_name'] = entry['class_code']
                 entry['openedx_mapping_source'] = 'subject_term_mapping'
                 entry['openedx_mapping_validation_status'] = inherited.validation_status
+        total_pages = math.ceil(total / page_size) if total else 0
+        return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
+
+    def _apply_academic_access_filter(self, query, user: UserContext, decision: AccessDecision | None = None):
+        decision = decision or self.access_decision(user)
+        if decision.unrestricted:
+            return query
+        access_conditions = []
+        if decision.teacher_ids:
+            allowed_class_ids = self.db.query(AcademicTeacherAssignment.class_id).filter(
+                AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids)
+            )
+            access_conditions.append(AcademicClass.id.in_(allowed_class_ids))
+        if decision.subject_codes:
+            access_conditions.append(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
+        if not access_conditions:
+            return query.filter(False)
+        return query.filter(or_(*access_conditions))
+
+    def _student_sync_summary_for_subjects(self, user: UserContext, term_id: str | None, subject_ids: list[str], branch: str | None = None, campus: str | None = None, decision: AccessDecision | None = None) -> dict[str, dict[str, int]]:
+        if not subject_ids:
+            return {}
+        query = self.db.query(
+            AcademicClass.subject_id.label('subject_id'),
+            OpenEdXUserMapping.match_status.label('match_status'),
+            func.count(AcademicClassStudent.id).label('count'),
+        ).join(AcademicSubject, AcademicSubject.id == AcademicClass.subject_id).join(
+            AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id,
+        ).outerjoin(
+            OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
+        ).filter(AcademicClass.subject_id.in_(subject_ids))
+        query = self._apply_academic_access_filter(query, user, decision)
+        if term_id:
+            query = query.filter(AcademicClass.term_id == term_id)
+        if branch:
+            query = query.filter(AcademicClass.branch == branch.strip().lower())
+        if campus:
+            query = query.filter(AcademicClass.campus == campus.strip().lower())
+        rows = query.group_by(AcademicClass.subject_id, OpenEdXUserMapping.match_status).all()
+        result: dict[str, dict[str, int]] = {}
+        for subject_id, match_status, count in rows:
+            bucket = result.setdefault(str(subject_id), {})
+            bucket[str(match_status or 'not_checked')] = int(count or 0)
+        return result
+
+    def _find_exact_openedx_course_candidate(self, openedx_course_id: str) -> tuple[str | None, int]:
+        raw = str(openedx_course_id or '').strip()
+        if not raw:
+            return None, 0
+        rows = self.db.query(CourseSyncState.course_id).filter(
+            func.lower(CourseSyncState.course_id) == raw.lower(),
+        ).distinct().limit(2).all()
+        if len(rows) == 1:
+            return str(rows[0][0]), 1
+        return None, len(rows)
+
+    def auto_map_subject_course(self, user: UserContext, *, term_id: str, subject_id: str, branch: str | None = None) -> dict[str, Any]:
+        self.assert_can_access_subject(user, subject_id)
+        term = self.db.get(AcademicTerm, term_id)
+        subject = self.db.get(AcademicSubject, subject_id)
+        if not term or not subject:
+            raise HTTPException(status_code=404, detail='Không tìm thấy kỳ hoặc môn AP')
+        branch_value = (branch or subject.branch or term.branch or '').strip().lower() or None
+        current = self._scope_filter_course_mapping(
+            term_id=term_id,
+            block_id=None,
+            subject_id=subject_id,
+            campus=None,
+            branch=branch_value,
+        ).first()
+        suggested = self.suggested_course_id_for_scope(term_id, subject_id)
+        if current:
+            return {
+                'ok': True,
+                'status': 'already_mapped',
+                'message': 'Môn đã có mapping Course CMS.',
+                'suggested_openedx_course_id': suggested,
+                'mapping': self._course_mapping_item(current),
+            }
+        candidate, candidate_count = self._find_exact_openedx_course_candidate(suggested)
+        if candidate_count != 1 or not candidate:
+            status_value = 'not_found' if candidate_count == 0 else 'multiple_candidates'
+            return {
+                'ok': False,
+                'status': status_value,
+                'message': 'Chưa tìm thấy đúng một course CMS khớp mã môn/kỳ đã đồng bộ về AI Server.',
+                'suggested_openedx_course_id': suggested,
+                'mapping': None,
+            }
+        validation = self.validate_course_mapping_payload(
+            term_id=term_id,
+            subject_id=subject_id,
+            openedx_course_id=candidate,
+            block_id=None,
+            campus=None,
+            branch=branch_value,
+            openedx_course_title=None,
+        )
+        now = datetime.utcnow()
+        mapping = AcademicCourseMapping(
+            term_id=term_id,
+            block_id=None,
+            subject_id=subject_id,
+            campus=None,
+            branch=branch_value,
+            openedx_course_id=candidate,
+            openedx_course_title=None,
+            validation_status='auto_mapped' if validation.get('risk_level') in {'low', 'medium'} else validation.get('risk_level', 'auto_mapped'),
+            validation_json={**validation, 'auto_map': True, 'auto_map_rule': 'exact subject_code + term_run course_id'},
+            validated_at=now,
+            created_by=user.user_id,
+            updated_by=user.user_id,
+            note='Auto map theo mã môn + kỳ; course đã có trong dữ liệu course sync.',
+            active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        self.db.add(mapping)
+        self.db.commit()
+        self.db.refresh(mapping)
+        return {
+            'ok': True,
+            'status': 'auto_mapped',
+            'message': 'Đã tự động map môn với Course CMS.',
+            'suggested_openedx_course_id': suggested,
+            'mapping': self._course_mapping_item(mapping),
+        }
+
+    def list_teacher_subjects(
+        self,
+        user: UserContext,
+        *,
+        term_id: str | None = None,
+        branch: str | None = None,
+        campus: str | None = None,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        page, page_size = _page(page, page_size)
+        decision = self.access_decision(user)
+        query = self.db.query(
+            AcademicSubject,
+            func.count(func.distinct(AcademicClass.id)).label('class_count'),
+            func.count(func.distinct(AcademicClass.campus)).label('campus_count'),
+            func.count(func.distinct(AcademicTeacherAssignment.teacher_id)).label('teacher_count'),
+            func.count(func.distinct(AcademicClassStudent.id)).label('student_count'),
+        ).join(AcademicClass, AcademicClass.subject_id == AcademicSubject.id).outerjoin(
+            AcademicTeacherAssignment, AcademicTeacherAssignment.class_id == AcademicClass.id,
+        ).outerjoin(AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id).filter(AcademicSubject.active.is_(True))
+        query = self._apply_academic_access_filter(query, user, decision)
+        if term_id:
+            query = query.filter(AcademicClass.term_id == term_id)
+        if branch:
+            query = query.filter(AcademicClass.branch == branch.strip().lower())
+        if campus:
+            query = query.filter(AcademicClass.campus == campus.strip().lower())
+        if search and search.strip():
+            like = f"%{search.strip()}%"
+            query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
+        query = query.group_by(AcademicSubject.id)
+        total = query.count()
+        rows = query.order_by(AcademicSubject.subject_code.asc()).offset((page - 1) * page_size).limit(page_size).all()
+        subject_ids = [row[0].id for row in rows]
+        mapping_rows = []
+        if subject_ids and term_id:
+            mapping_query = self.db.query(AcademicCourseMapping).filter(
+                AcademicCourseMapping.term_id == term_id,
+                AcademicCourseMapping.subject_id.in_(subject_ids),
+                AcademicCourseMapping.active.is_(True),
+                AcademicCourseMapping.block_id.is_(None),
+                AcademicCourseMapping.campus.is_(None),
+            )
+            if branch:
+                mapping_query = mapping_query.filter(AcademicCourseMapping.branch == branch.strip().lower())
+            mapping_rows = mapping_query.all()
+        mapping_by_subject = {item.subject_id: item for item in mapping_rows}
+        sync_summary = self._student_sync_summary_for_subjects(user, term_id, subject_ids, branch=branch, campus=campus, decision=decision)
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            subject = row[0]
+            mapping = mapping_by_subject.get(subject.id)
+            suggested = self.suggested_course_id_for_scope(term_id, subject.id) if term_id else None
+            candidate, candidate_count = self._find_exact_openedx_course_candidate(suggested or '')
+            if mapping:
+                status_value = 'mapped'
+                status_label = 'Đã map Course CMS'
+                effective_course_id = mapping.openedx_course_id
+            elif candidate_count == 1:
+                status_value = 'auto_candidate'
+                status_label = 'Có thể auto map'
+                effective_course_id = candidate
+            elif candidate_count > 1:
+                status_value = 'multiple_candidates'
+                status_label = 'Nhiều course trùng'
+                effective_course_id = None
+            else:
+                status_value = 'not_found'
+                status_label = 'Chưa tìm thấy course'
+                effective_course_id = None
+            counts = sync_summary.get(subject.id, {})
+            items.append({
+                'id': subject.id,
+                'ap_subject_id': subject.ap_subject_id,
+                'subject_code': subject.subject_code,
+                'subject_name': subject.subject_name,
+                'subject_name_en': subject.subject_name_en,
+                'skill_code': subject.skill_code,
+                'branch': subject.branch,
+                'active': subject.active,
+                'class_count': int(row.class_count or 0),
+                'campus_count': int(row.campus_count or 0),
+                'teacher_count': int(row.teacher_count or 0),
+                'student_count': int(row.student_count or 0),
+                'cms_synced_count': int(counts.get('matched', 0)),
+                'cms_unsynced_count': int(sum(v for k, v in counts.items() if k not in {'matched'})),
+                'course_mapping_status': status_value,
+                'course_mapping_label': status_label,
+                'openedx_course_id': mapping.openedx_course_id if mapping else effective_course_id,
+                'openedx_course_title': mapping.openedx_course_title if mapping else None,
+                'openedx_mapping_id': mapping.id if mapping else None,
+                'suggested_openedx_course_id': suggested,
+            })
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
 

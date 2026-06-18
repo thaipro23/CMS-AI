@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.core.rbac import UserContext, get_user_context, require_permission
 from app.db.session import get_db
@@ -11,6 +11,7 @@ from app.models.academic import (
     AcademicClass,
     AcademicClassStudent,
     AcademicStudent,
+    AcademicSubject,
     AcademicSyncRun,
     AcademicTeacherAssignment,
     AcademicTerm,
@@ -42,6 +43,8 @@ from app.schemas.academic import (
     AcademicResolveClassUsersIn,
     AcademicStudentListOut,
     AcademicSubjectOut,
+    AcademicSubjectManagementListOut,
+    AcademicSubjectCourseAutoMapOut,
     AcademicSyncCounters,
     AcademicSyncRunOut,
     AcademicTermOut,
@@ -174,6 +177,8 @@ def list_teacher_classes(
     term_id: str | None = None,
     block_id: str | None = None,
     subject_id: str | None = None,
+    campus: str | None = None,
+    branch: str | None = None,
     search: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -185,11 +190,72 @@ def list_teacher_classes(
         term_id=term_id,
         block_id=block_id,
         subject_id=subject_id,
+        campus=campus,
+        branch=branch,
         search=search,
         page=page,
         page_size=page_size,
     )
 
+
+
+@router.get('/teacher/subjects', response_model=AcademicSubjectManagementListOut)
+def list_teacher_subjects(
+    term_id: str | None = None,
+    branch: str | None = None,
+    campus: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    return AcademicService(db).list_teacher_subjects(
+        user, term_id=term_id, branch=branch, campus=campus, search=search, page=page, page_size=page_size
+    )
+
+
+@router.get('/subjects/{subject_id}/classes', response_model=AcademicClassListOut)
+def list_subject_classes(
+    subject_id: str,
+    term_id: str | None = None,
+    block_id: str | None = None,
+    campus: str | None = None,
+    branch: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    service = AcademicService(db)
+    service.assert_can_access_subject(user, subject_id)
+    return service.list_teacher_classes(
+        user, term_id=term_id, block_id=block_id, subject_id=subject_id, campus=campus, branch=branch, search=search, page=page, page_size=page_size
+    )
+
+
+@router.post('/subjects/{subject_id}/course-mapping/auto', response_model=AcademicSubjectCourseAutoMapOut)
+def auto_map_subject_course(
+    subject_id: str,
+    term_id: str = Query(...),
+    branch: str | None = Query(None),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    result = AcademicService(db).auto_map_subject_course(user, term_id=term_id, subject_id=subject_id, branch=branch)
+    log_audit(
+        db,
+        action='academic.subject_course_mapping.auto',
+        status='success' if result.get('ok') else 'failed',
+        message=result.get('message', ''),
+        user=user,
+        course_id=(result.get('mapping') or {}).get('openedx_course_id') if isinstance(result.get('mapping'), dict) else None,
+        target_type='academic_subject',
+        target_id=subject_id,
+        metadata={'term_id': term_id, 'branch': branch, 'status': result.get('status')},
+    )
+    return result
 
 
 @router.get('/course-mappings', response_model=AcademicCourseMappingListOut)
@@ -409,15 +475,36 @@ def import_openedx_user_mappings(
 def list_academic_campuses(
     branch: str | None = Query('poly'),
     active: bool | None = True,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(require_permission('view_questions')),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
+    service = AcademicService(db)
+    decision = service.access_decision(user)
     query = db.query(AcademicCampus)
     if branch:
         query = query.filter(AcademicCampus.branch == branch)
     if active is not None:
         query = query.filter(AcademicCampus.active.is_(active))
+    if not decision.unrestricted:
+        access_conditions = []
+        if decision.teacher_ids:
+            teacher_campuses = db.query(AcademicClass.campus).join(
+                AcademicTeacherAssignment, AcademicTeacherAssignment.class_id == AcademicClass.id
+            ).filter(AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids))
+            if branch:
+                teacher_campuses = teacher_campuses.filter(AcademicClass.branch == branch)
+            access_conditions.append(AcademicCampus.campus_code.in_(teacher_campuses.distinct()))
+        if decision.subject_codes:
+            subject_campuses = db.query(AcademicClass.campus).join(
+                AcademicSubject, AcademicSubject.id == AcademicClass.subject_id
+            ).filter(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
+            if branch:
+                subject_campuses = subject_campuses.filter(AcademicClass.branch == branch)
+            access_conditions.append(AcademicCampus.campus_code.in_(subject_campuses.distinct()))
+        if not access_conditions:
+            query = query.filter(False)
+        else:
+            query = query.filter(or_(*access_conditions))
     return query.order_by(AcademicCampus.sort_order.asc(), AcademicCampus.campus_code.asc()).all()
 
 

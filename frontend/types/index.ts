@@ -1700,6 +1700,21 @@ export type AcademicSubject = {
   active: boolean
 }
 
+export type AcademicSubjectManagement = AcademicSubject & {
+  class_count: number
+  campus_count: number
+  teacher_count: number
+  student_count: number
+  cms_synced_count: number
+  cms_unsynced_count: number
+  course_mapping_status: string
+  course_mapping_label: string
+  openedx_course_id?: string | null
+  openedx_course_title?: string | null
+  openedx_mapping_id?: string | null
+  suggested_openedx_course_id?: string | null
+}
+
 export type AcademicClass = {
   id: string
   ap_class_id?: string | null
@@ -1888,4 +1903,13 @@ export type AcademicClassCourseMappingProposal = {
 }
 
 export type AcademicCourseMappingListResponse = PaginatedResponse<AcademicCourseMapping>
+export type AcademicSubjectManagementListResponse = PaginatedResponse<AcademicSubjectManagement>
+
+export type AcademicSubjectCourseAutoMapResult = {
+  ok: boolean
+  status: string
+  message: string
+  suggested_openedx_course_id?: string | null
+  mapping?: AcademicCourseMapping | null
+}
 

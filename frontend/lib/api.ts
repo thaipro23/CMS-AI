@@ -76,11 +76,15 @@ import {
   AcademicTerm,
   AcademicBlock,
   AcademicSubject,
+  AcademicSubjectManagementListResponse,
+  AcademicSubjectCourseAutoMapResult,
   AcademicCampus,
+  AcademicClass,
   AcademicClassListResponse,
   AcademicStudentListResponse,
   AcademicSyncResult,
   AcademicAPSyncOptions,
+  AcademicMappingSummary,
   AcademicMappingResolveResult,
   AcademicManualMappingImportResult,
   AcademicCourseMappingValidation,
@@ -1790,15 +1794,47 @@ export async function getAcademicSubjects(headers: HeadersInit, filters: { termI
   return parseResponse(await fetch(`${API}/academic/subjects?${params.toString()}`, { headers }));
 }
 
-export async function getAcademicTeacherClasses(headers: HeadersInit, filters: { termId?: string; blockId?: string; subjectId?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
+export async function getAcademicTeacherClasses(headers: HeadersInit, filters: { termId?: string; blockId?: string; subjectId?: string; campus?: string; branch?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
   if (filters.blockId) params.set('block_id', filters.blockId);
   if (filters.subjectId) params.set('subject_id', filters.subjectId);
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 50));
   return parseResponse(await fetch(`${API}/academic/teacher/classes?${params.toString()}`, { headers }));
+}
+
+export async function getAcademicTeacherSubjects(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicSubjectManagementListResponse> {
+  const params = new URLSearchParams();
+  if (filters.termId) params.set('term_id', filters.termId);
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 50));
+  return parseResponse(await fetch(`${API}/academic/teacher/subjects?${params.toString()}`, { headers }));
+}
+
+export async function getAcademicSubjectClasses(headers: HeadersInit, subjectId: string, filters: { termId?: string; blockId?: string; campus?: string; branch?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
+  const params = new URLSearchParams();
+  if (filters.termId) params.set('term_id', filters.termId);
+  if (filters.blockId) params.set('block_id', filters.blockId);
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 50));
+  return parseResponse(await fetch(`${API}/academic/subjects/${encodeURIComponent(subjectId)}/classes?${params.toString()}`, { headers }));
+}
+
+export async function autoMapAcademicSubjectCourse(headers: HeadersInit, subjectId: string, filters: { termId: string; branch?: string } ): Promise<AcademicSubjectCourseAutoMapResult> {
+  const params = new URLSearchParams();
+  params.set('term_id', filters.termId);
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  return parseResponse(await fetch(`${API}/academic/subjects/${encodeURIComponent(subjectId)}/course-mapping/auto?${params.toString()}`, { method: 'POST', headers }));
 }
 
 export async function getAcademicClassStudents(headers: HeadersInit, classId: string, filters: { search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicStudentListResponse> {
@@ -1810,6 +1846,14 @@ export async function getAcademicClassStudents(headers: HeadersInit, classId: st
 }
 
 
+
+export async function getAcademicClass(headers: HeadersInit, classId: string): Promise<AcademicClass> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}`, { headers }));
+}
+
+export async function getAcademicClassMappingSummary(headers: HeadersInit, classId: string): Promise<AcademicMappingSummary> {
+  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/mapping-summary`, { headers }));
+}
 
 export async function getAcademicCampuses(headers: HeadersInit, filters: { branch?: string; active?: boolean | null } = {}): Promise<AcademicCampus[]> {
   const params = new URLSearchParams();

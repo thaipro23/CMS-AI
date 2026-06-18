@@ -73,6 +73,30 @@ class AcademicSubjectOut(BaseModel):
     model_config = {'from_attributes': True}
 
 
+class AcademicSubjectManagementOut(AcademicSubjectOut):
+    class_count: int = 0
+    campus_count: int = 0
+    teacher_count: int = 0
+    student_count: int = 0
+    cms_synced_count: int = 0
+    cms_unsynced_count: int = 0
+    course_mapping_status: str = 'not_found'
+    course_mapping_label: str = ''
+    openedx_course_id: str | None = None
+    openedx_course_title: str | None = None
+    openedx_mapping_id: str | None = None
+    suggested_openedx_course_id: str | None = None
+
+
+class AcademicSubjectManagementListOut(BaseModel):
+    items: list[AcademicSubjectManagementOut]
+    total: int
+    page: int = 1
+    page_size: int = 50
+    total_pages: int = 1
+    has_next: bool = False
+
+
 class AcademicClassOut(BaseModel):
     id: str
     ap_class_id: str | None = None
@@ -348,6 +372,14 @@ class AcademicCourseMappingListOut(BaseModel):
     page_size: int = 50
     total_pages: int = 1
     has_next: bool = False
+
+
+class AcademicSubjectCourseAutoMapOut(BaseModel):
+    ok: bool
+    status: str
+    message: str
+    suggested_openedx_course_id: str | None = None
+    mapping: AcademicCourseMappingOut | None = None
 
 
 class AcademicClassCourseMappingListOut(BaseModel):

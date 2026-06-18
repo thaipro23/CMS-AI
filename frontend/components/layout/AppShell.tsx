@@ -24,7 +24,7 @@ const navItems: NavItem[] = [
   { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_settings' },
   { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'operations', permission: 'manage_settings' },
   { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_settings' },
-  { href: '/student-management', label: 'Lớp & sinh viên', desc: 'AP roster, phân công', icon: '◎', group: 'operations' },
+  { href: '/student-management', label: 'Môn · Lớp · SV', desc: 'AP roster, CMS sync', icon: '◎', group: 'operations' },
   { href: '/jobs', label: 'Tiến trình', desc: 'Job đang chạy', icon: '⚙', group: 'operations' },
   { href: '/audit', label: 'Nhật ký', desc: 'Theo dõi thao tác', icon: '☷', group: 'operations' },
   { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo scope', icon: '◎', group: 'admin', permission: 'view_questions' },
@@ -49,7 +49,7 @@ function pageTitle(pathname: string) {
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz Open edX</span></div>
-    <div className="footer-links"><span>v25.9.16.2.17</span></div>
+    <div className="footer-links"><span>v25.9.16.2.20</span></div>
   </footer>
 }
 

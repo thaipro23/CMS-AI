@@ -4060,3 +4060,29 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
 @media (max-width: 640px) {
   .academic-confirm-summary { grid-template-columns: 1fr; }
 }
+
+/* v25.9.16.2.20 Subject -> Class -> Class Detail Student Management */
+.academic-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.academic-detail-grid > div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, .24);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, .82);
+}
+.academic-detail-grid span {
+  color: var(--ds-muted, #64748b);
+  font-size: 12px;
+  font-weight: 800;
+}
+.academic-detail-grid b {
+  color: var(--ds-text, #0f172a);
+  word-break: break-word;
+}
+.student-management-page .data-table td .toolbar-actions { justify-content: flex-start; }
+.student-management-page .form-message { margin-top: 14px; }
