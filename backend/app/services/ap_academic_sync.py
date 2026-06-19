@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import ssl
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -138,12 +139,34 @@ class APAcademicClient:
         self.timeout_seconds = timeout_seconds or settings.academic_ap_request_timeout_seconds
         self.base_url = (base_url or settings.academic_ap_api_base_url or '').rstrip('/')
         self.api_key = (api_key or settings.academic_ap_api_key or '').strip()
+        self.tls_mode = (getattr(settings, 'academic_ap_tls_mode', 'strict') or 'strict').strip().lower()
         if not settings.academic_ap_sync_enabled:
             raise RuntimeError('AP sync đang bị tắt. Bật ACADEMIC_AP_SYNC_ENABLED=true nếu muốn đồng bộ AP.')
         if not self.base_url:
             raise RuntimeError('Thiếu ACADEMIC_AP_API_BASE_URL cho đồng bộ AP.')
         if not self.api_key:
             raise RuntimeError('Thiếu ACADEMIC_AP_API_KEY trong env. Không hardcode API key AP trong source.')
+
+
+    def _verify_config(self) -> bool | ssl.SSLContext:
+        """Return httpx TLS verify configuration for the legacy AP API.
+
+        strict     -> default httpx verification: CA chain + hostname.
+        chain_only -> verify CA chain but skip hostname validation. This is a
+                      controlled compatibility mode for legacy AP hostnames such
+                      as api_v2.poly.edu.vn where the certificate chain is valid
+                      but Python/OpenSSL rejects the underscore hostname.
+        off        -> disable all TLS verification. UAT emergency fallback only.
+        """
+        mode = self.tls_mode
+        if mode in {'off', 'false', '0', 'no', 'disabled'}:
+            return False
+        if mode in {'chain_only', 'chain-only', 'chainonly'}:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            return ctx
+        return True
 
     def _headers(self, campus: str | None = None) -> dict[str, str]:
         headers = {
@@ -155,11 +178,13 @@ class APAcademicClient:
         return headers
 
     def get_subjects(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]]:
-        # ACMS legacy contract: discover subjects by branch + term first, then call
-        # /get-data-cms per campus x subject_code. Do not require operators to
-        # maintain a full subject catalog in env for normal production sync.
-        params = {'branch': _lower(branch) or 'poly', 'term_name': term_name}
-        with httpx.Client(timeout=self.timeout_seconds) as client:
+        # ACMS legacy contract: /get-course must always use branch=poly to
+        # discover the canonical subject catalog. Some requested branches
+        # (notably ptcd) return noisy/incorrect subject lists. The requested
+        # branch is still preserved for downstream class/student sync.
+        discovery_branch = 'poly'
+        params = {'branch': discovery_branch, 'term_name': term_name}
+        with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
             response = client.get(
                 f'{self.base_url}/get-course',
                 headers=self._headers(),
@@ -185,14 +210,16 @@ class APAcademicClient:
                 if code:
                     normalized = dict(item)
                     normalized.setdefault('subject_code', code)
+                    normalized.setdefault('discovery_branch', 'poly')
+                    normalized.setdefault('requested_branch', _lower(branch) or 'poly')
                     subjects.append(normalized)
         if not subjects:
-            raise RuntimeError(f'AP get-course không trả môn nào cho branch={branch}, term={term_name}.')
+            raise RuntimeError(f'AP get-course không trả môn nào cho branch=poly, term={term_name}, requested_branch={branch}.')
         return subjects
 
     def get_division(self, *, campus: str, term_name: str, subject_code: str) -> dict[str, Any]:
         body = {'campus': campus, 'term_name': term_name, 'subject_code': subject_code}
-        with httpx.Client(timeout=self.timeout_seconds) as client:
+        with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
             response = client.post(
                 f'{self.base_url}/get-data-cms',
                 headers=self._headers(campus=campus),

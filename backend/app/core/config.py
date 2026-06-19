@@ -161,6 +161,13 @@ class Settings(BaseSettings):
     academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'
     academic_ap_api_key: str | None = None
     academic_ap_request_timeout_seconds: int = 60
+    # TLS verification mode for the legacy AP/ACMS API.
+    # strict: verify CA chain + hostname (production default).
+    # chain_only: verify CA chain but skip hostname check. Use only for legacy hosts
+    #             such as api_v2.poly.edu.vn where the certificate chain is valid
+    #             but Python rejects the underscore hostname.
+    # off: disable TLS verification entirely (UAT emergency fallback only).
+    academic_ap_tls_mode: str = 'strict'
     academic_ap_campuses: str = ''
     academic_ap_subject_codes: str = ''
 
