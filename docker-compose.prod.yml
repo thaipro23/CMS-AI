@@ -39,7 +39,7 @@ services:
       - "ai.cms-test.poly.edu.vn:host-gateway"
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
       - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
-      - "api_v2.poly.edu.vn:host-gateway"  
+      - "api_v2.poly.edu.vn:10.2.1.35"  
   backend:
     build:
       context: ./backend
@@ -84,7 +84,7 @@ services:
       - "ai.cms-test.poly.edu.vn:host-gateway"
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
       - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
-      - "api_v2.poly.edu.vn:host-gateway"  
+      - "api_v2.poly.edu.vn:10.2.1.35"  
   worker:
     build:
       context: ./backend
