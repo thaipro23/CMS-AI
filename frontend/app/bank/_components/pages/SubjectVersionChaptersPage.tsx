@@ -87,8 +87,8 @@ import {
   Toolbar,
   SearchActionBar,
   Modal,
-  ConfirmDialog,
   EntityActions,
+  promptText,
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
@@ -118,11 +118,6 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [chapterInput, setChapterInput] = useState('')
-  const [editing, setEditing] = useState<SubjectChapter | null>(null)
-  const [editLesson, setEditLesson] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<SubjectChapter | null>(null)
-  const [deleteBusy, setDeleteBusy] = useState(false)
-  const [deleteError, setDeleteError] = useState('')
 
   const load = async () => {
     const [nextDepartments, nextSubjects, nextOfferings, nextSummaries] = await Promise.all([
@@ -137,34 +132,16 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const department = departments.find((item) => item.id === subject?.department_id)
   const visible = summaries.filter(({ chapter }) => matchesSearch(chapterDisplayName(chapter), search))
 
-  const openEditChapter = (chapter: SubjectChapter) => {
-    setEditing(chapter)
-    setEditLesson(normalizeLessonInput(chapterDisplayName(chapter)))
+  const editChapter = (chapter: SubjectChapter) => {
+    const current = normalizeLessonInput(chapterDisplayName(chapter))
+    const nextLesson = promptText('Sửa bài, ví dụ 1, 2, 1.1, 1.2', current)
+    if (nextLesson === null) return
+    const nextTitle = buildChapterTitle(nextLesson) || nextLesson
+    run(async () => { await updateSubjectChapter(headers, chapter.id, { title: nextTitle }) }, 'Đã sửa bài', load)
   }
-  const saveEditChapter = () => {
-    if (!editing) return
-    const nextTitle = buildChapterTitle(editLesson) || editLesson.trim()
-    run(async () => {
-      await updateSubjectChapter(headers, editing.id, { title: nextTitle })
-      setEditing(null)
-    }, 'Đã sửa bài', load)
-  }
-  const confirmDeleteChapter = async () => {
-    if (!deleteTarget) return
-    setDeleteBusy(true)
-    setDeleteError('')
-    try {
-      await deleteSubjectChapter(headers, deleteTarget.id)
-      setDeleteTarget(null)
-      await load()
-      // One extra refresh avoids a stale summary/cache row right after delete.
-      window.setTimeout(() => { load().catch(() => null) }, 250)
-    } catch (error) {
-      setDeleteTarget(null)
-      setDeleteError(error instanceof Error ? error.message : 'Không thể xóa bài/chapter')
-    } finally {
-      setDeleteBusy(false)
-    }
+  const removeChapter = (chapter: SubjectChapter) => {
+    if (!window.confirm(`Chỉ xóa được khi bài chưa có tài liệu/câu hỏi/release/mapping. Xóa ${chapterDisplayName(chapter)}?`)) return
+    run(async () => { await deleteSubjectChapter(headers, chapter.id) }, 'Đã xóa bài', load)
   }
 
   return <div className="page-stack bank-multipage">
@@ -178,7 +155,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
         {visible.map(({ chapter, stats }) => {
           const hasPublished = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0)
           return <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
-            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} />
+            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => editChapter(chapter)} onDelete={() => removeChapter(chapter)} />
             <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{hasPublished ? 'Đã publish' : reviewStatusText(stats.status)}</span></div>
             <StatLine label="Tài liệu" value={stats.material_count || 0} />
             <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
@@ -191,42 +168,6 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       </div>
       {!visible.length ? <div className="empty-state">Chưa có bài phù hợp.</div> : null}
     </section>
-
-    <Modal open={Boolean(editing)} title="Sửa bài" onClose={() => setEditing(null)}>
-      <div className="mini-form">
-        <label className="field-label" htmlFor="chapter-edit-lesson-input">Bài:</label>
-        <div className="chapter-input-row">
-          <span className="input-prefix">Bài</span>
-          <input id="chapter-edit-lesson-input" className="input" value={editLesson} onChange={(event) => setEditLesson(event.target.value)} placeholder="1, 2, 1.1, 1.2..." />
-        </div>
-        <p className="helper">Ví dụ nhập 1.2, hệ thống tự lưu thành “Bài 1.2”.</p>
-        <div className="modal-actions">
-          <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !normalizeLessonInput(editLesson)} onClick={saveEditChapter}>Lưu thay đổi</button>
-        </div>
-      </div>
-    </Modal>
-    <ConfirmDialog
-      open={Boolean(deleteTarget)}
-      title={`Xóa ${deleteTarget ? chapterDisplayName(deleteTarget) : 'bài'}?`}
-      description={<p>Chỉ xóa được khi bài chưa có tài liệu/câu hỏi/release/mapping. Nếu bài chỉ có bank version rỗng do vừa mở workspace, hệ thống sẽ tự dọn và vẫn cho xóa.</p>}
-      confirmLabel="Xác nhận xóa"
-      danger
-      busy={busy || deleteBusy}
-      onClose={() => setDeleteTarget(null)}
-      onConfirm={confirmDeleteChapter}
-    />
-
-    <Modal open={Boolean(deleteError)} title="Không thể xóa bài/chapter" onClose={() => setDeleteError('')}>
-      <div className="mini-form">
-        <div className="alert danger">{deleteError}</div>
-        <p className="helper">Bài chỉ xóa được khi không còn tài liệu thật, câu hỏi, release, mapping hoặc quiz. Các bản ghi rỗng/đã xóa sẽ được backend tự dọn.</p>
-        <div className="modal-actions">
-          <button className="btn" type="button" onClick={() => setDeleteError('')}>Đã hiểu</button>
-        </div>
-      </div>
-    </Modal>
-
     <Modal open={createOpen} title="Thêm bài" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
         <label className="field-label" htmlFor="chapter-lesson-input">Bài:</label>

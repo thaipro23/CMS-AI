@@ -1,7 +1,6 @@
 'use client'
 
 import Link from 'next/link'
-import type { ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
@@ -199,30 +198,6 @@ export function Modal({ open, title, children, onClose, wide = false }: { open: 
     </div>
   </div>
 }
-
-
-export function ConfirmDialog({ open, title, description, confirmLabel = 'Xác nhận', cancelLabel = 'Hủy', danger = false, busy = false, onClose, onConfirm }: {
-  open: boolean
-  title: string
-  description?: ReactNode
-  confirmLabel?: string
-  cancelLabel?: string
-  danger?: boolean
-  busy?: boolean
-  onClose: () => void
-  onConfirm: () => void
-}) {
-  return <Modal open={open} title={title} onClose={onClose}>
-    <div className="mini-form">
-      {description ? <div className="helper">{description}</div> : null}
-      <div className="modal-actions">
-        <button className="btn secondary" type="button" disabled={busy} onClick={onClose}>{cancelLabel}</button>
-        <button className={`btn${danger ? ' danger' : ''}`} type="button" disabled={busy} onClick={onConfirm}>{busy ? 'Đang xử lý...' : confirmLabel}</button>
-      </div>
-    </div>
-  </Modal>
-}
-
 export function EntityActions({ canManage, onEdit, onDelete }: { canManage: boolean; onEdit: () => void; onDelete: () => void }) {
   const [open, setOpen] = useState(false)
   if (!canManage) return null
@@ -254,6 +229,11 @@ export function EntityActions({ canManage, onEdit, onDelete }: { canManage: bool
       <button type="button" role="menuitem" className="danger" onClick={(event) => runAction(event, onDelete)}>Xóa</button>
     </div> : null}
   </div>
+}
+
+export function promptText(label: string, current: string) {
+  const value = window.prompt(label, current || '')
+  return value === null ? null : value.trim()
 }
 
 

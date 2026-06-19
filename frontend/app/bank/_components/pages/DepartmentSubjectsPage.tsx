@@ -87,8 +87,8 @@ import {
   Toolbar,
   SearchActionBar,
   Modal,
-  ConfirmDialog,
   EntityActions,
+  promptText,
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
@@ -117,10 +117,6 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   const [createOpen, setCreateOpen] = useState(false)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
-  const [editing, setEditing] = useState<Subject | null>(null)
-  const [editCode, setEditCode] = useState('')
-  const [editName, setEditName] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<Subject | null>(null)
 
   const load = async () => {
     const [nextDepartments, nextSummaries] = await Promise.all([getDepartments(headers), getSubjectSummaries(headers, departmentId)])
@@ -131,24 +127,16 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   const department = departments.find((item) => item.id === departmentId)
   const visible = summaries.filter(({ subject }) => matchesSearch(`${subject.code} ${subject.name}`, search))
 
-  const openEditSubject = (subject: Subject) => {
-    setEditing(subject)
-    setEditCode(subject.code || '')
-    setEditName(subject.name || '')
+  const editSubject = (subject: Subject) => {
+    const nextCode = promptText('Sửa mã môn', subject.code)
+    if (nextCode === null) return
+    const nextName = promptText('Sửa tên môn', subject.name)
+    if (nextName === null) return
+    run(async () => { await updateSubject(headers, subject.id, { code: nextCode, name: nextName }) }, 'Đã sửa môn', load)
   }
-  const saveEditSubject = () => {
-    if (!editing) return
-    run(async () => {
-      await updateSubject(headers, editing.id, { code: editCode, name: editName })
-      setEditing(null)
-    }, 'Đã sửa môn', load)
-  }
-  const confirmDeleteSubject = () => {
-    if (!deleteTarget) return
-    run(async () => {
-      await deleteSubject(headers, deleteTarget.id)
-      setDeleteTarget(null)
-    }, 'Đã xóa môn', load)
+  const removeSubject = (subject: Subject) => {
+    if (!window.confirm(`Chỉ xóa được khi môn chưa có version/bài/câu hỏi bên trong. Xóa ${subject.code}?`)) return
+    run(async () => { await deleteSubject(headers, subject.id) }, 'Đã xóa môn', load)
   }
 
   return <div className="page-stack bank-multipage">
@@ -160,7 +148,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('subject.create')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject, stats }) => <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('subject.update')} onEdit={() => openEditSubject(subject)} onDelete={() => setDeleteTarget(subject)} />
+          <EntityActions canManage={can('subject.update')} onEdit={() => editSubject(subject)} onDelete={() => removeSubject(subject)} />
           <div className="entity-card-head"><b>{subject.code} - {subject.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <StatLine label="Phiên bản môn" value={stats.subject_version_count || 0} />
           <StatLine label="Đã duyệt xong" value={`${stats.review_done_version_count || 0} version`} />
@@ -172,30 +160,6 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
       </div>
       {!visible.length ? <div className="empty-state">Chưa có môn phù hợp.</div> : null}
     </section>
-
-    <Modal open={Boolean(editing)} title="Sửa môn" onClose={() => setEditing(null)}>
-      <div className="mini-form">
-        <label className="field-label">Mã môn</label>
-        <input className="input" value={editCode} onChange={(event) => setEditCode(event.target.value)} placeholder="Mã môn" />
-        <label className="field-label">Tên môn</label>
-        <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên môn" />
-        <div className="modal-actions">
-          <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !editCode.trim() || !editName.trim()} onClick={saveEditSubject}>Lưu thay đổi</button>
-        </div>
-      </div>
-    </Modal>
-    <ConfirmDialog
-      open={Boolean(deleteTarget)}
-      title={`Xóa môn ${deleteTarget?.code || ''}?`}
-      description={<p>Chỉ xóa được khi môn chưa có version/bài/câu hỏi bên trong.</p>}
-      confirmLabel="Xác nhận xóa"
-      danger
-      busy={busy}
-      onClose={() => setDeleteTarget(null)}
-      onConfirm={confirmDeleteSubject}
-    />
-
     <Modal open={createOpen} title="Thêm môn" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
         <input className="input" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Mã môn, ví dụ WEB107" />

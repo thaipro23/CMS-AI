@@ -129,11 +129,11 @@ export default function StudentManagementSubjectsPage() {
     </section>
 
     <section className="card">
-      <div className="section-head list-card-head">
-        <div><h2>Danh sách môn</h2><p>{selectedTerm ? `${selectedTerm.term_name} · ${branchLabel(branch)} · lọc theo quyền/phân công AP` : 'Chọn kỳ để xem dữ liệu.'}</p></div>
+      <div className="section-head">
+        <div><h2>Bộ lọc môn</h2><p>Danh sách môn chỉ hiển thị theo quyền ngân hàng đề hoặc phân công AP.</p></div>
         <div className="toolbar-actions"><span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span></div>
       </div>
-      <div className="academic-filter-grid academic-list-filter">
+      <div className="academic-filter-grid">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => { setBranch(event.target.value); setCampus(''); setPage(1) }}>
             <option value="poly">Poly</option>
@@ -157,6 +157,12 @@ export default function StudentManagementSubjectsPage() {
         </label>
       </div>
       {message && <p className="form-message">{message}</p>}
+    </section>
+
+    <section className="card">
+      <div className="section-head">
+        <div><h2>Danh sách môn</h2><p>{selectedTerm ? `${selectedTerm.term_name} · ${branchLabel(branch)}` : 'Chọn kỳ để xem dữ liệu.'}</p></div>
+      </div>
       <div className="table-wrap">
         <table className="data-table">
           <thead>

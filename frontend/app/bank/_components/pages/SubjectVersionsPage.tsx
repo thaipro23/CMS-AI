@@ -87,8 +87,8 @@ import {
   Toolbar,
   SearchActionBar,
   Modal,
-  ConfirmDialog,
   EntityActions,
+  promptText,
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
@@ -120,10 +120,6 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const [term, setTerm] = useState('SU25')
   const [mode, setMode] = useState<'blank' | 'clone'>('clone')
   const [cloneFromId, setCloneFromId] = useState('')
-  const [editing, setEditing] = useState<SubjectOffering | null>(null)
-  const [editCode, setEditCode] = useState('')
-  const [editName, setEditName] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<SubjectOffering | null>(null)
 
   const load = async () => {
     const [nextDepartments, nextSubjects, nextSummaries] = await Promise.all([
@@ -138,24 +134,16 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const department = departments.find((item) => item.id === subject?.department_id)
   const visible = summaries.filter(({ subject_version }) => matchesSearch(`${subject_version.code} ${subject_version.name} ${subject_version.term || ''}`, search))
 
-  const openEditSubjectVersion = (subjectVersion: SubjectOffering) => {
-    setEditing(subjectVersion)
-    setEditCode(subjectVersion.code || '')
-    setEditName(subjectVersion.name || '')
+  const editSubjectVersion = (subjectVersion: SubjectOffering) => {
+    const nextCode = promptText('Sửa mã version môn', subjectVersion.code)
+    if (nextCode === null) return
+    const nextName = promptText('Sửa tên version môn', subjectVersion.name || '')
+    if (nextName === null) return
+    run(async () => { await updateSubjectOffering(headers, subjectVersion.id, { code: nextCode, name: nextName }) }, 'Đã sửa version môn', load)
   }
-  const saveEditSubjectVersion = () => {
-    if (!editing) return
-    run(async () => {
-      await updateSubjectOffering(headers, editing.id, { code: editCode, name: editName })
-      setEditing(null)
-    }, 'Đã sửa version môn', load)
-  }
-  const confirmDeleteSubjectVersion = () => {
-    if (!deleteTarget) return
-    run(async () => {
-      await deleteSubjectOffering(headers, deleteTarget.id)
-      setDeleteTarget(null)
-    }, 'Đã xóa version môn', load)
+  const removeSubjectVersion = (subjectVersion: SubjectOffering) => {
+    if (!window.confirm(`Chỉ xóa được khi version môn chưa có bài/tài liệu/câu hỏi/release. Xóa ${subjectVersion.code}?`)) return
+    run(async () => { await deleteSubjectOffering(headers, subjectVersion.id) }, 'Đã xóa version môn', load)
   }
 
   return <div className="page-stack bank-multipage">
@@ -169,7 +157,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
         {visible.map(({ subject_version, stats }) => {
           const hasPublished = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published')
           return <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditSubjectVersion(subject_version)} onDelete={() => setDeleteTarget(subject_version)} />
+            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => editSubjectVersion(subject_version)} onDelete={() => removeSubjectVersion(subject_version)} />
             <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã publish' : reviewStatusText(stats.status)}</span></div>
             <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
             <StatLine label="Bài" value={stats.chapter_count || 0} />
@@ -183,30 +171,6 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
       </div>
       {!visible.length ? <div className="empty-state">Chưa có version phù hợp.</div> : null}
     </section>
-
-    <Modal open={Boolean(editing)} title="Sửa version môn" onClose={() => setEditing(null)}>
-      <div className="mini-form">
-        <label className="field-label">Mã version môn</label>
-        <input className="input" value={editCode} onChange={(event) => setEditCode(event.target.value)} placeholder="Mã version môn" />
-        <label className="field-label">Tên version môn</label>
-        <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên version môn" />
-        <div className="modal-actions">
-          <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !editCode.trim()} onClick={saveEditSubjectVersion}>Lưu thay đổi</button>
-        </div>
-      </div>
-    </Modal>
-    <ConfirmDialog
-      open={Boolean(deleteTarget)}
-      title={`Xóa version môn ${deleteTarget?.code || ''}?`}
-      description={<p>Chỉ xóa được khi version môn chưa có bài/tài liệu/câu hỏi/release.</p>}
-      confirmLabel="Xác nhận xóa"
-      danger
-      busy={busy}
-      onClose={() => setDeleteTarget(null)}
-      onConfirm={confirmDeleteSubjectVersion}
-    />
-
     <Modal open={createOpen} title="Tạo version môn" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
         <div className="button-row"><button className={mode === 'clone' ? 'btn' : 'btn secondary'} onClick={() => setMode('clone')}>Clone từ version khác</button><button className={mode === 'blank' ? 'btn' : 'btn secondary'} onClick={() => setMode('blank')}>Tạo mới trống</button></div>

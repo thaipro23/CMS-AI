@@ -1087,25 +1087,25 @@ export async function searchBankDashboard(headers: HeadersInit, q: string, limit
 
 export async function getDepartmentSummaries(headers: HeadersInit) {
   return parseResponse<DepartmentSummary[]>(
-    await fetch(`${API}/question-bank-v2/departments/summary?_=${Date.now()}`, { headers, cache: 'no-store' }),
+    await fetch(`${API}/question-bank-v2/departments/summary`, { headers }),
   );
 }
 
 export async function getSubjectSummaries(headers: HeadersInit, departmentId: string) {
   return parseResponse<SubjectSummary[]>(
-    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(departmentId)}/subjects/summary?_=${Date.now()}`, { headers, cache: 'no-store' }),
+    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(departmentId)}/subjects/summary`, { headers }),
   );
 }
 
 export async function getSubjectVersionSummaries(headers: HeadersInit, subjectId: string) {
   return parseResponse<SubjectVersionSummary[]>(
-    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(subjectId)}/versions/summary?_=${Date.now()}`, { headers, cache: 'no-store' }),
+    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(subjectId)}/versions/summary`, { headers }),
   );
 }
 
 export async function getChapterSummaries(headers: HeadersInit, subjectOfferingId: string) {
   return parseResponse<ChapterSummary[]>(
-    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(subjectOfferingId)}/chapters/summary?_=${Date.now()}`, { headers, cache: 'no-store' }),
+    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(subjectOfferingId)}/chapters/summary`, { headers }),
   );
 }
 
