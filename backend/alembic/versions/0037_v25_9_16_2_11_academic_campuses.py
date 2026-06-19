@@ -1,7 +1,7 @@
 """v25.9.16.2.11 academic campuses master data
 
 Revision ID: 0037_v25_9_16_2_11_campus
-Revises: 0030_v25_9_16_2_1_academic_core_safety_hotfix
+Revises: 0030_v25_9_16_2_1_safety
 Create Date: 2026-06-17
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = '0037_v25_9_16_2_11_campus'
-down_revision = '0030_v25_9_16_2_1_academic_core_safety_hotfix'
+down_revision = '0030_v25_9_16_2_1_safety'
 branch_labels = None
 depends_on = None
 

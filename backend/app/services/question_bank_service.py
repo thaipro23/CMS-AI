@@ -7,7 +7,7 @@ import uuid
 import re
 import unicodedata
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -19,6 +19,8 @@ from app.models.course import CourseSyncState
 from app.models.question import Question, QuestionReviewLog
 from app.models.cost import BudgetPolicy
 from app.models.question_bank import (
+    BankChapterStats,
+    BankOperationJob,
     BankQuestionFamily,
     BankReleaseQuestion,
     BankVersionDiff,
@@ -33,6 +35,7 @@ from app.models.question_bank import (
     QuestionBankVersion,
     QuizBlueprint,
     CourseQuizInstance,
+    QuestionSearchDocument,
     Subject,
     SubjectOffering,
     SubjectChapter,
@@ -1019,13 +1022,231 @@ class VersionedQuestionBankService:
         self._safe_refresh_chapter_stats(chapter_id)
         return item
 
+    def _bank_version_content_counts(self, bank_version_id: str) -> dict[str, int]:
+        return {
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.bank_version_id == bank_version_id, LearningMaterialVersion.status != 'deleted').count(),
+            'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.bank_version_id == bank_version_id).count(),
+            'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.bank_version_id == bank_version_id).count(),
+            'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.bank_version_id == bank_version_id).count(),
+            'questions': self.db.query(Question).filter(Question.bank_version_id == bank_version_id).count(),
+            'releases': self.db.query(QuestionBankRelease).filter(QuestionBankRelease.bank_version_id == bank_version_id).count(),
+            'diffs': self.db.query(BankVersionDiff).filter(or_(BankVersionDiff.from_bank_version_id == bank_version_id, BankVersionDiff.to_bank_version_id == bank_version_id)).count(),
+            'jobs': self.db.query(BankOperationJob).filter(BankOperationJob.bank_version_id == bank_version_id).count(),
+            'derived_bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.based_on_version_id == bank_version_id).count(),
+        }
+
+
+    def _safe_delete_material_file(self, material: LearningMaterialVersion) -> dict[str, Any]:
+        """Delete the local uploaded file for a material when it is safe.
+
+        Guardrails:
+        - only local storage is deleted here; object-store providers need their
+          own adapter implementation;
+        - the path must resolve under settings.local_storage_path;
+        - if another material row still references the same file path, skip it.
+        """
+        raw_path = (material.storage_path or '').strip()
+        if not raw_path:
+            return {'deleted': False, 'skipped': False, 'reason': 'empty_storage_path'}
+        if (settings.storage_provider or 'local').lower() != 'local':
+            return {'deleted': False, 'skipped': True, 'reason': 'non_local_storage_provider'}
+        try:
+            root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+            path = Path(raw_path).expanduser()
+            if not path.is_absolute():
+                path = root / path
+            path = path.resolve()
+            if root not in path.parents and path != root:
+                return {'deleted': False, 'skipped': True, 'reason': 'path_outside_local_storage', 'path': raw_path}
+            # Cloned bank versions may share the same storage_path. Do not delete
+            # the physical object while another material record still references it.
+            refs = self.db.query(LearningMaterialVersion).filter(
+                LearningMaterialVersion.id != material.id,
+                LearningMaterialVersion.storage_path == raw_path,
+            ).count()
+            if refs:
+                return {'deleted': False, 'skipped': True, 'reason': 'storage_path_still_referenced', 'references': int(refs)}
+            if not path.exists():
+                return {'deleted': False, 'skipped': False, 'reason': 'file_not_found', 'path': str(path)}
+            if path.is_file():
+                size = path.stat().st_size
+                path.unlink()
+                return {'deleted': True, 'skipped': False, 'bytes_deleted': int(size), 'path': str(path)}
+            return {'deleted': False, 'skipped': True, 'reason': 'not_a_file', 'path': str(path)}
+        except Exception as exc:
+            return {'deleted': False, 'skipped': True, 'reason': 'delete_error', 'error': str(exc), 'path': raw_path}
+
+    def _material_dependency_counts(self, material_id: str) -> dict[str, int]:
+        return {
+            'chunks': int(self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material_id).count() or 0),
+            'questions': int(self.db.query(Question).filter(Question.material_version_id == material_id).count() or 0),
+            'concepts': int(self.db.query(ConceptVersion).filter(ConceptVersion.material_version_id == material_id).count() or 0),
+            'diff_items': int(self.db.query(BankVersionDiffItem).filter(
+                BankVersionDiffItem.item_type == 'material',
+                or_(BankVersionDiffItem.source_id == material_id, BankVersionDiffItem.target_id == material_id),
+            ).count() or 0),
+            'jobs': int(self.db.query(BankOperationJob).filter(BankOperationJob.material_version_id == material_id).count() or 0),
+        }
+
+    def _material_requires_audit_tombstone(self, material: LearningMaterialVersion, counts: dict[str, int] | None = None) -> bool:
+        """Return True when deleting the row would lose meaningful lineage.
+
+        Chunks and upload jobs are reproducible/operational data, not audit lineage.
+        Questions, concepts and diff items mean the material has been used in bank
+        outputs or comparison history, so keep a lightweight tombstone row.
+        """
+        counts = counts or self._material_dependency_counts(material.id)
+        return any(int(counts.get(key) or 0) > 0 for key in ('questions', 'concepts', 'diff_items'))
+
+    def _hard_delete_material_version(self, material: LearningMaterialVersion, *, reason: str = 'unused_material') -> dict[str, Any]:
+        counts = self._material_dependency_counts(material.id)
+        if self._material_requires_audit_tombstone(material, counts):
+            raise ValueError('Không thể xóa cứng tài liệu vì đã được dùng trong câu hỏi/concept/diff. Hãy xóa mềm để giữ lịch sử.')
+        file_result = self._safe_delete_material_file(material)
+        chunks_deleted = self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).delete(synchronize_session=False)
+        jobs_detached = self.db.query(BankOperationJob).filter(BankOperationJob.material_version_id == material.id).update(
+            {BankOperationJob.material_version_id: None},
+            synchronize_session=False,
+        )
+        bank_version_id = material.bank_version_id
+        chapter_id = material.chapter_id
+        material_id = material.id
+        self.db.delete(material)
+        self.db.flush()
+        return {
+            'ok': True,
+            'material_version_id': material_id,
+            'bank_version_id': bank_version_id,
+            'chapter_id': chapter_id,
+            'deletion_mode': 'hard',
+            'reason': reason,
+            'chunks_deleted': int(chunks_deleted or 0),
+            'jobs_detached_count': int(jobs_detached or 0),
+            'file_deleted': bool(file_result.get('deleted')),
+            'file_delete_skipped': bool(file_result.get('skipped')),
+            'file_result': file_result,
+        }
+
+    def _soft_delete_material_version(self, material: LearningMaterialVersion, *, actor: str | None = None, reason: str = 'audit_required') -> dict[str, Any]:
+        version = self.db.get(QuestionBankVersion, material.bank_version_id)
+        file_result = self._safe_delete_material_file(material) if settings.bank_material_purge_deleted_files_enabled else {'deleted': False, 'skipped': True, 'reason': 'file_purge_disabled'}
+        chunk_count = self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).delete(synchronize_session=False)
+        jobs_detached = self.db.query(BankOperationJob).filter(BankOperationJob.material_version_id == material.id).update(
+            {BankOperationJob.material_version_id: None},
+            synchronize_session=False,
+        )
+        now = datetime.utcnow()
+        material.status = 'deleted'
+        material.deleted_at = now
+        material.deleted_by = actor or material.deleted_by
+        material.uploaded_by = actor or material.uploaded_by
+        if version:
+            meta = dict(version.metadata_json or {})
+            meta.update({
+                'latest_material_delete_at': now.isoformat(),
+                'latest_material_deleted_id': material.id,
+                'latest_material_deleted_file': material.file_name,
+                'latest_material_delete_mode': 'soft',
+                'latest_material_delete_reason': reason,
+                'latest_material_file_deleted': bool(file_result.get('deleted')),
+            })
+            if version.based_on_version_id:
+                meta.update({
+                    'document_change_state': 'changed_after_clone',
+                    'diff_required': True,
+                    'diff_base_bank_version_id': version.based_on_version_id,
+                    'diff_trigger': 'material_deleted_after_clone',
+                })
+            version.metadata_json = meta
+        self.db.flush()
+        counts = self._material_dependency_counts(material.id)
+        return {
+            'ok': True,
+            'material_version_id': material.id,
+            'bank_version_id': material.bank_version_id,
+            'chapter_id': material.chapter_id,
+            'deletion_mode': 'soft',
+            'reason': reason,
+            'chunks_deleted': int(chunk_count or 0),
+            'detached_question_count': 0,
+            'concepts_detached_count': 0,
+            'jobs_detached_count': int(jobs_detached or 0),
+            'file_deleted': bool(file_result.get('deleted')),
+            'file_delete_skipped': bool(file_result.get('skipped')),
+            'file_result': file_result,
+            'dependency_counts': counts,
+        }
+
+    def _delete_nonblocking_material_versions_for_chapter(self, chapter_id: str) -> int:
+        """Hard-delete material rows that do not represent active user content.
+
+        Material deletion is policy-based from v25.9.16.3.6 onward: unused
+        draft/failed/tombstone rows are physically removed so they do not block
+        chapter deletion and do not grow storage. Audit-sensitive rows stay as
+        lightweight tombstones and continue to block chapter deletion when they
+        still have real dependencies.
+        """
+        removed = 0
+        rows = self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id).all()
+        for material in rows:
+            counts = self._material_dependency_counts(material.id)
+            is_deleted_tombstone = material.status == 'deleted'
+            is_empty_placeholder = (
+                int(counts.get('chunks') or 0) == 0
+                and not (material.storage_path or '').strip()
+                and not (material.content_hash or '').strip()
+                and not (material.file_name or '').strip()
+                and material.status in {'active', 'draft', 'failed', 'indexed'}
+            )
+            is_unused_active = (
+                settings.bank_material_hard_delete_unused_enabled
+                and material.status in {'active', 'draft', 'failed', 'indexed'}
+                and not self._material_requires_audit_tombstone(material, counts)
+            )
+            is_safe_deleted = is_deleted_tombstone and not self._material_requires_audit_tombstone(material, counts)
+            if not (is_empty_placeholder or is_unused_active or is_safe_deleted):
+                continue
+            self._hard_delete_material_version(material, reason='chapter_delete_cleanup')
+            removed += 1
+        if removed:
+            self.db.flush()
+        return removed
+
+    def _delete_empty_bank_versions_for_chapter(self, chapter_id: str) -> int:
+        """Remove shell bank versions that were auto-created by opening the workspace.
+
+        A newly-created chapter can get a draft v1.0 bank version before any
+        material/question/release exists. That shell is not user content and
+        must not block deleting the empty chapter. Real child content still
+        blocks deletion.
+        """
+        removed = 0
+        versions = self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).all()
+        for version in versions:
+            counts = self._bank_version_content_counts(version.id)
+            if any(int(value or 0) > 0 for value in counts.values()):
+                continue
+            self.db.query(QuestionSearchDocument).filter(QuestionSearchDocument.bank_version_id == version.id).delete(synchronize_session=False)
+            self.db.delete(version)
+            removed += 1
+        if removed:
+            self.db.flush()
+        return removed
+
     def delete_chapter(self, chapter_id: str) -> dict:
         item = self.db.get(SubjectChapter, chapter_id)
         if not item:
             raise ValueError('Không tìm thấy bài/chapter')
+
+        # Dashboard/search rows are derived cache. Clear them before checking
+        # real child content so a truly empty chapter can be deleted cleanly.
+        self.db.query(BankChapterStats).filter(BankChapterStats.chapter_id == chapter_id).delete(synchronize_session=False)
+        removed_empty_materials = self._delete_nonblocking_material_versions_for_chapter(chapter_id)
+        removed_empty_versions = self._delete_empty_bank_versions_for_chapter(chapter_id)
+
         msg = self._empty_block_message(entity_label='bài/chapter', counts={
             'bank_versions': self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).count(),
-            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id).count(),
+            'materials': self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.chapter_id == chapter_id, LearningMaterialVersion.status != 'deleted').count(),
             'chunks': self.db.query(MaterialChunk).filter(MaterialChunk.chapter_id == chapter_id).count(),
             'concepts': self.db.query(ConceptVersion).filter(ConceptVersion.chapter_id == chapter_id).count(),
             'families': self.db.query(BankQuestionFamily).filter(BankQuestionFamily.chapter_id == chapter_id).count(),
@@ -1038,7 +1259,13 @@ class VersionedQuestionBankService:
         if msg:
             raise ValueError(msg)
         self.db.delete(item); self.db.commit()
-        return {'ok': True, 'deleted': True, 'entity_type': 'chapter', 'entity_id': chapter_id, 'message': 'Đã xóa bài/chapter'}
+        cleanup_parts = []
+        if removed_empty_versions:
+            cleanup_parts.append(f'{removed_empty_versions} bank version rỗng')
+        if removed_empty_materials:
+            cleanup_parts.append(f'{removed_empty_materials} bản ghi tài liệu rỗng/đã xóa')
+        cleanup_note = f" và đã dọn {', '.join(cleanup_parts)}" if cleanup_parts else ''
+        return {'ok': True, 'deleted': True, 'entity_type': 'chapter', 'entity_id': chapter_id, 'message': 'Đã xóa bài/chapter' + cleanup_note}
 
     def next_bank_version_no(self, subject_id: str, chapter_id: str) -> int:
         value = self.db.query(func.max(QuestionBankVersion.version_no)).filter(
@@ -1655,43 +1882,149 @@ class VersionedQuestionBankService:
         }
 
 
-    def delete_material_version(self, *, material_version_id: str, actor: str | None = None) -> dict:
+    def delete_material_version(self, *, material_version_id: str, actor: str | None = None, force_hard: bool = False) -> dict:
         material = self.db.get(LearningMaterialVersion, material_version_id)
         if not material or material.status == 'deleted':
             raise ValueError('Không tìm thấy tài liệu')
         version = self._require_mutable_bank_version(material.bank_version_id)
-        chunk_count = self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).count()
-        detached = self.db.query(Question).filter(Question.material_version_id == material.id).update(
-            {Question.material_version_id: None},
-            synchronize_session=False,
-        )
-        self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == material.id).delete(synchronize_session=False)
-        # Giữ audit nhẹ bằng trạng thái deleted thay vì xóa cứng record tài liệu.
-        material.status = 'deleted'
-        material.uploaded_by = actor or material.uploaded_by
-        meta = dict(version.metadata_json or {})
-        meta.update({
-            'latest_material_delete_at': datetime.utcnow().isoformat(),
-            'latest_material_deleted_id': material.id,
-            'latest_material_deleted_file': material.file_name,
-        })
-        if version.based_on_version_id:
-            meta.update({
-                'document_change_state': 'changed_after_clone',
-                'diff_required': True,
-                'diff_base_bank_version_id': version.based_on_version_id,
-                'diff_trigger': 'material_deleted_after_clone',
-            })
-        version.metadata_json = meta
+        counts = self._material_dependency_counts(material.id)
+
+        # Draft/failed/unused uploads should not become tombstones and should not
+        # consume disk. Keep tombstones only when the material has real lineage.
+        can_hard_delete = not self._material_requires_audit_tombstone(material, counts)
+        if force_hard and not can_hard_delete:
+            raise ValueError('Không thể xóa cứng tài liệu vì đã được dùng trong câu hỏi/concept/diff. Hãy giữ xóa mềm để bảo toàn lịch sử.')
+
+        if settings.bank_material_hard_delete_unused_enabled and can_hard_delete:
+            result = self._hard_delete_material_version(material, reason='unused_material_deleted_by_user')
+            self.db.commit()
+            self._safe_refresh_chapter_stats(version.chapter_id)
+            result['detached_question_count'] = 0
+            result['concepts_detached_count'] = 0
+            result['message'] = 'Đã xóa cứng tài liệu chưa dùng và dọn file/chunk liên quan.'
+            return result
+
+        result = self._soft_delete_material_version(material, actor=actor, reason='audit_lineage_required')
         self.db.commit()
         self._safe_refresh_chapter_stats(version.chapter_id)
+        result['message'] = 'Đã xóa tài liệu khỏi bài. File/chunk đã được dọn; metadata được giữ để bảo toàn lịch sử câu hỏi/release.'
+        return result
+
+    def bank_material_cleanup_health(self) -> dict[str, Any]:
+        deleted_query = self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.status == 'deleted')
+        active_query = self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.status != 'deleted')
+        deleted_count = int(deleted_query.count() or 0)
+        deleted_rows = deleted_query.order_by(LearningMaterialVersion.deleted_at.asc().nullsfirst(), LearningMaterialVersion.created_at.asc()).limit(2000).all()
+        deleted_files = 0
+        deleted_file_bytes = 0
+        skipped_shared_or_external = 0
+        for material in deleted_rows[:2000]:
+            path = (material.storage_path or '').strip()
+            if not path:
+                continue
+            if (settings.storage_provider or 'local').lower() != 'local':
+                skipped_shared_or_external += 1
+                continue
+            try:
+                root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+                p = Path(path).expanduser()
+                if not p.is_absolute():
+                    p = root / p
+                p = p.resolve()
+                if root not in p.parents and p != root:
+                    skipped_shared_or_external += 1
+                    continue
+                if p.is_file():
+                    deleted_files += 1
+                    deleted_file_bytes += int(p.stat().st_size)
+            except Exception:
+                skipped_shared_or_external += 1
+        orphan_chunks = self.db.query(MaterialChunk).outerjoin(
+            LearningMaterialVersion,
+            LearningMaterialVersion.id == MaterialChunk.material_version_id,
+        ).filter(LearningMaterialVersion.id.is_(None)).count()
         return {
             'ok': True,
-            'material_version_id': material.id,
-            'bank_version_id': version.id,
-            'chunks_deleted': int(chunk_count or 0),
-            'detached_question_count': int(detached or 0),
-            'message': 'Đã xóa tài liệu khỏi bài. Câu hỏi cũ được giữ lại để giáo viên quyết định duyệt/bỏ.',
+            'policy': {
+                'hard_delete_unused_enabled': bool(settings.bank_material_hard_delete_unused_enabled),
+                'retention_days': int(settings.bank_material_deleted_retention_days),
+                'file_purge_enabled': bool(settings.bank_material_purge_deleted_files_enabled),
+                'storage_provider': settings.storage_provider,
+            },
+            'active_materials': int(active_query.count() or 0),
+            'deleted_tombstones': int(deleted_count),
+            'deleted_tombstones_with_local_file': int(deleted_files),
+            'deleted_local_file_bytes_estimate': int(deleted_file_bytes),
+            'deleted_files_skipped_shared_or_external_sample': int(skipped_shared_or_external),
+            'sample_size': int(len(deleted_rows)),
+            'orphan_chunks': int(orphan_chunks or 0),
+        }
+
+    def purge_deleted_materials(self, *, retention_days: int | None = None, dry_run: bool = True, limit: int | None = None, bank_version_id: str | None = None, chapter_id: str | None = None) -> dict[str, Any]:
+        safe_limit = max(1, min(int(limit or settings.bank_material_cleanup_default_limit or 500), 5000))
+        days = settings.bank_material_deleted_retention_days if retention_days is None else int(retention_days)
+        cutoff = datetime.utcnow() if days <= 0 else datetime.utcnow() - timedelta(days=days)
+        query = self.db.query(LearningMaterialVersion).filter(LearningMaterialVersion.status == 'deleted')
+        query = query.filter(or_(LearningMaterialVersion.deleted_at.is_(None), LearningMaterialVersion.deleted_at <= cutoff))
+        if bank_version_id:
+            query = query.filter(LearningMaterialVersion.bank_version_id == bank_version_id)
+        if chapter_id:
+            query = query.filter(LearningMaterialVersion.chapter_id == chapter_id)
+        rows = query.order_by(LearningMaterialVersion.deleted_at.asc().nullsfirst(), LearningMaterialVersion.created_at.asc()).limit(safe_limit).all()
+        scanned = 0
+        purgable = []
+        blocked = []
+        totals = {'chunks_deleted': 0, 'jobs_detached_count': 0, 'files_deleted': 0, 'files_skipped': 0, 'bytes_deleted': 0}
+        for material in rows:
+            scanned += 1
+            counts = self._material_dependency_counts(material.id)
+            blocking_counts = {k: int(counts.get(k) or 0) for k in ('questions', 'concepts', 'diff_items') if int(counts.get(k) or 0) > 0}
+            if blocking_counts:
+                blocked.append({'material_version_id': material.id, 'file_name': material.file_name, 'blocking_counts': blocking_counts})
+                continue
+            if dry_run:
+                purgable.append({'material_version_id': material.id, 'file_name': material.file_name, 'bank_version_id': material.bank_version_id, 'chapter_id': material.chapter_id, 'counts': counts})
+                continue
+            result = self._hard_delete_material_version(material, reason='deleted_material_retention_purge')
+            purgable.append(result)
+            totals['chunks_deleted'] += int(result.get('chunks_deleted') or 0)
+            totals['jobs_detached_count'] += int(result.get('jobs_detached_count') or 0)
+            if result.get('file_deleted'):
+                totals['files_deleted'] += 1
+                totals['bytes_deleted'] += int(((result.get('file_result') or {}).get('bytes_deleted') or 0))
+            if result.get('file_delete_skipped'):
+                totals['files_skipped'] += 1
+        orphan_chunks = int(self.db.query(MaterialChunk).outerjoin(
+            LearningMaterialVersion,
+            LearningMaterialVersion.id == MaterialChunk.material_version_id,
+        ).filter(LearningMaterialVersion.id.is_(None)).count() or 0)
+        orphan_chunks_deleted = 0
+        if not dry_run and orphan_chunks:
+            orphan_rows = self.db.query(MaterialChunk).outerjoin(
+                LearningMaterialVersion,
+                LearningMaterialVersion.id == MaterialChunk.material_version_id,
+            ).filter(LearningMaterialVersion.id.is_(None)).limit(safe_limit).all()
+            for chunk in orphan_rows:
+                self.db.delete(chunk)
+                orphan_chunks_deleted += 1
+        if not dry_run:
+            self.db.commit()
+            if chapter_id:
+                self._safe_refresh_chapter_stats(chapter_id)
+        totals['orphan_chunks_found'] = int(orphan_chunks)
+        totals['orphan_chunks_deleted'] = int(orphan_chunks_deleted)
+        return {
+            'ok': True,
+            'dry_run': bool(dry_run),
+            'retention_days': int(days),
+            'cutoff': cutoff.isoformat(),
+            'scanned': int(scanned),
+            'purgable_count': int(len(purgable)),
+            'blocked_count': int(len(blocked)),
+            'purgable': purgable[:100],
+            'blocked': blocked[:100],
+            'totals': totals,
+            'message': 'Đã kiểm tra tài liệu đã xóa mềm.' if dry_run else 'Đã purge tài liệu đã xóa mềm đủ điều kiện.',
         }
 
     def _bank_generation_content(self, *, bank_version_id: str, material_version_ids: list[str] | None = None, max_input_tokens: int = 18000) -> tuple[str, list[MaterialChunk], int]:

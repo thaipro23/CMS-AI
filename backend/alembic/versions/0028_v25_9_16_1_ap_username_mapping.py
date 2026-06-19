@@ -1,6 +1,6 @@
 """v25.9.16.1 AP username mapping
 
-Revision ID: 0028_v25_9_16_1_ap_username_mapping
+Revision ID: 0028_v25_9_16_1_ap_user_map
 Revises: 0027_v25_9_16_0_academic_ap_core
 Create Date: 2026-06-16
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0028_v25_9_16_1_ap_username_mapping'
+revision = '0028_v25_9_16_1_ap_user_map'
 down_revision = '0027_v25_9_16_0_academic_ap_core'
 branch_labels = None
 depends_on = None

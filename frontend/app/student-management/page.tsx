@@ -25,6 +25,26 @@ function statusClass(status?: string | null) {
   return 'status-pill neutral'
 }
 
+function percentLabel(value?: number | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A'
+  return `${Math.round(value * 10) / 10}%`
+}
+
+function componentScoreText(score: { percent?: number | null; earned?: number | null; possible?: number | null }) {
+  if (typeof score.percent === 'number' && !Number.isNaN(score.percent)) return percentLabel(score.percent)
+  if (typeof score.earned === 'number' && typeof score.possible === 'number') return `${Math.round(score.earned * 100) / 100}/${Math.round(score.possible * 100) / 100}`
+  return 'N/A'
+}
+
+function componentSummaryLine(scores?: { name?: string | null; percent?: number | null; earned?: number | null; possible?: number | null }[]) {
+  if (!scores?.length) return 'N/A'
+  return scores.slice(0, 3).map((score) => `${score.name || 'TP'}: ${componentScoreText(score)}`).join(' · ')
+}
+
+function alertText(alerts?: string[]) {
+  return alerts && alerts.length ? alerts.slice(0, 2).join(', ') : 'Không có cảnh báo'
+}
+
 function counterText(total: number, page: number, pageSize: number) {
   if (!total) return '0 môn'
   const start = (page - 1) * pageSize + 1
@@ -43,6 +63,7 @@ export default function StudentManagementSubjectsPage() {
   const [branch, setBranch] = useState('poly')
   const [campus, setCampus] = useState('')
   const [search, setSearch] = useState('')
+  const [learningStatus, setLearningStatus] = useState('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -79,7 +100,7 @@ export default function StudentManagementSubjectsPage() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    getAcademicTeacherSubjects(headers, { termId, branch, campus, search, page, pageSize: PAGE_SIZE })
+    getAcademicTeacherSubjects(headers, { termId, branch, campus, search, learningStatus, page, pageSize: PAGE_SIZE })
       .then((result) => {
         if (cancelled) return
         setSubjects(result.items)
@@ -90,7 +111,7 @@ export default function StudentManagementSubjectsPage() {
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [headers, termId, branch, campus, search, page])
+  }, [headers, termId, branch, campus, search, learningStatus, page])
 
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -105,7 +126,7 @@ export default function StudentManagementSubjectsPage() {
     try {
       const result = await autoMapAcademicSubjectCourse(jsonHeaders, subject.id, { termId, branch })
       setMessage(result.message)
-      const refreshed = await getAcademicTeacherSubjects(headers, { termId, branch, campus, search, page, pageSize: PAGE_SIZE })
+      const refreshed = await getAcademicTeacherSubjects(headers, { termId, branch, campus, search, learningStatus, page, pageSize: PAGE_SIZE })
       setSubjects(refreshed.items)
       setTotal(refreshed.total)
     } catch (error) {
@@ -129,11 +150,11 @@ export default function StudentManagementSubjectsPage() {
     </section>
 
     <section className="card">
-      <div className="section-head">
-        <div><h2>Bộ lọc môn</h2><p>Danh sách môn chỉ hiển thị theo quyền ngân hàng đề hoặc phân công AP.</p></div>
+      <div className="section-head list-card-head">
+        <div><h2>Danh sách môn</h2><p>{selectedTerm ? `${selectedTerm.term_name} · ${branchLabel(branch)} · lọc theo quyền/phân công AP` : 'Chọn kỳ để xem dữ liệu.'}</p></div>
         <div className="toolbar-actions"><span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span></div>
       </div>
-      <div className="academic-filter-grid">
+      <div className="academic-filter-grid academic-list-filter">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => { setBranch(event.target.value); setCampus(''); setPage(1) }}>
             <option value="poly">Poly</option>
@@ -152,17 +173,20 @@ export default function StudentManagementSubjectsPage() {
             {campuses.map((item) => <option key={item.id} value={item.campus_code}>{item.campus_code.toUpperCase()} · {item.campus_name}</option>)}
           </select>
         </label>
+        <label>Trạng thái học tập
+          <select className="input" value={learningStatus} onChange={(event) => { setLearningStatus(event.target.value); setPage(1) }}>
+            <option value="all">Tất cả môn</option>
+            <option value="no_course_map">Chưa map course</option>
+            <option value="cms_not_synced">Chưa đồng bộ CMS</option>
+            <option value="no_learning_data">Chưa có progress</option>
+            <option value="has_alert">Có cảnh báo</option>
+          </select>
+        </label>
         <label>Tìm môn
           <input className="input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="WEB107, thiết kế..." />
         </label>
       </div>
       {message && <p className="form-message">{message}</p>}
-    </section>
-
-    <section className="card">
-      <div className="section-head">
-        <div><h2>Danh sách môn</h2><p>{selectedTerm ? `${selectedTerm.term_name} · ${branchLabel(branch)}` : 'Chọn kỳ để xem dữ liệu.'}</p></div>
-      </div>
       <div className="table-wrap">
         <table className="data-table">
           <thead>
@@ -171,12 +195,13 @@ export default function StudentManagementSubjectsPage() {
               <th>Quy mô</th>
               <th>Đồng bộ CMS</th>
               <th>Course CMS</th>
+              <th>Học tập CMS</th>
               <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>
-            {loading ? <tr><td colSpan={5}>Đang tải danh sách môn...</td></tr> : null}
-            {!loading && !subjects.length ? <tr><td colSpan={5}>Chưa có môn phù hợp hoặc bạn chưa được phân quyền/phân công.</td></tr> : null}
+            {loading ? <tr><td colSpan={6}>Đang tải danh sách môn...</td></tr> : null}
+            {!loading && !subjects.length ? <tr><td colSpan={6}>Chưa có môn phù hợp hoặc bạn chưa được phân quyền/phân công.</td></tr> : null}
             {subjects.map((subject) => <tr key={subject.id}>
               <td><b>{subject.subject_code}</b><small>{subject.subject_name}</small></td>
               <td>
@@ -189,7 +214,14 @@ export default function StudentManagementSubjectsPage() {
               </td>
               <td>
                 <span className={statusClass(subject.course_mapping_status)}>{subject.course_mapping_label || subject.course_mapping_status}</span>
-                <small>{subject.openedx_course_id || subject.suggested_openedx_course_id || '—'}</small>
+                <small>{subject.openedx_course_id || subject.suggested_openedx_course_id || 'N/A'}</small>
+              </td>
+              <td>
+                <b>{subject.learning_enrolled_count || 0}/{subject.student_count} enroll</b>
+                <small>Dữ liệu: {subject.learning_synced_count || 0}/{subject.student_count} · Đã học: {subject.learning_active_count || 0}/{subject.student_count}</small>
+                <small>Tiến độ: {percentLabel(subject.learning_avg_progress_percent)} · Điểm tổng: {percentLabel(subject.learning_avg_grade_percent)}</small>
+                <small>Điểm TP: {componentSummaryLine(subject.learning_component_summaries)}</small>
+                <small>{alertText(subject.learning_alerts)}</small>
               </td>
               <td>
                 <div className="toolbar-actions">

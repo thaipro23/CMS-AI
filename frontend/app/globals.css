@@ -4095,3 +4095,88 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
 .student-management-page .data-table td .status-pill + small {
   color: var(--text-muted, #64748b);
 }
+
+/* v25.9.16.3.3: compact student-management filters inside list cards */
+.student-management-page .list-card-head { margin-bottom: 12px; }
+.student-management-page .academic-list-filter {
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.72);
+}
+.student-management-page .academic-list-filter-compact { grid-template-columns: minmax(180px, 240px) minmax(260px, 1fr); }
+@media (max-width: 980px) { .student-management-page .academic-list-filter-compact { grid-template-columns: 1fr; } }
+
+/* v25.9.16.4.0 Student Progress Dashboard */
+.component-score-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.component-score-card {
+  border: 1px solid rgba(15, 23, 42, .12);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(248, 250, 252, .75);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.component-score-card span,
+.component-score-card small {
+  color: #64748b;
+}
+.component-score-card b {
+  font-size: 20px;
+}
+.component-score-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 360px;
+}
+.component-score-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(15, 23, 42, .12);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, .8);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.component-score-chip b {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.muted {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.sync-job-status {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+.sync-job-status b { display: block; margin-bottom: 4px; }
+.sync-job-status small { display: block; color: #475569; }
+.progress-track {
+  height: 8px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbeafe;
+}
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #22c55e);
+}

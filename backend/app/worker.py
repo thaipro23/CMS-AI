@@ -964,3 +964,115 @@ def bank_quiz_create_task(job_id: str):
             db.close()
 
     return asyncio.run(_run())
+
+
+@celery_app.task(name='bank_material_cleanup_task')
+def bank_material_cleanup_task(retention_days: int | None = None, limit: int | None = None, dry_run: bool = False):
+    """Admin/ops task for v25.9.16.3.6 material cleanup policy."""
+    from app.services.question_bank_service import VersionedQuestionBankService
+    db = SessionLocal()
+    try:
+        return VersionedQuestionBankService(db).purge_deleted_materials(
+            retention_days=retention_days,
+            dry_run=bool(dry_run),
+            limit=limit,
+        )
+    finally:
+        db.close()
+
+
+@celery_app.task(name='academic_class_sync_task')
+def academic_class_sync_task(job_id: str):
+    """Run class-level CMS/Open edX sync outside request/response."""
+    from app.core.rbac import UserContext
+    from app.models.academic import AcademicClassSyncJob
+    from app.services.academic_service import AcademicService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicClassSyncJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+
+        now = datetime.utcnow()
+        job.status = 'running'
+        job.started_at = job.started_at or now
+        job.updated_at = now
+        job.progress_current = max(job.progress_current or 0, 10)
+        labels = {
+            'cms_sync_check': 'Đang kiểm tra/tạo user CMS',
+            'cms_enrollment_sync': 'Đang enrollment sinh viên và gán Course Staff',
+            'learning_sync': 'Đang cập nhật tiến độ/điểm CMS',
+        }
+        job.progress_label = labels.get(job.job_type, 'Đang đồng bộ học vụ')
+        db.commit()
+
+        # Access was checked before enqueue. The worker runs with a synthetic admin
+        # context to avoid depending on stale browser/session credentials.
+        worker_user = UserContext(
+            user_id=job.requested_by or 'academic-sync-worker',
+            username=job.requested_by or 'academic-sync-worker',
+            email=None,
+            role='admin',
+            permissions={'view_questions', 'sync_course', 'manage_settings'},
+            course_ids=None,
+            raw_claims={'source': 'celery_academic_class_sync_job', 'job_id': job.id},
+        )
+        service = AcademicService(db)
+        force = bool(job.force)
+        limit = max(1, min(500, int(job.limit or 500)))
+
+        if job.job_type == 'cms_sync_check':
+            result = service.resolve_class_openedx_users(worker_user, job.class_id, force=force, limit=limit)
+            action = 'academic.cms_sync_check.class.async'
+            label = 'Đã kiểm tra đồng bộ CMS'
+        elif job.job_type == 'cms_enrollment_sync':
+            result = service.sync_class_course_enrollment(worker_user, job.class_id, force=force, limit=limit, mode=job.mode)
+            action = 'academic.cms_enrollment_sync.class.async'
+            label = 'Đã enrollment Course CMS'
+        elif job.job_type == 'learning_sync':
+            result = service.sync_class_learning_insight(worker_user, job.class_id, force=force, limit=limit)
+            action = 'academic.learning_sync.class.async'
+            label = 'Đã cập nhật tiến độ/điểm CMS'
+        else:
+            raise ValueError(f'Unsupported academic class sync job_type: {job.job_type}')
+
+        job.status = 'completed'
+        job.progress_current = 100
+        job.progress_total = 100
+        job.progress_label = label
+        job.result_json = result
+        job.error_message = None
+        job.finished_at = datetime.utcnow()
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+        try:
+            log_audit(db, action=action, status='success', message=label, user=None, target_type='academic_class_sync_job', target_id=job.id, metadata={'class_id': job.class_id, 'counts': result.get('counts', {}), 'updated': result.get('updated', 0)})
+        except Exception:
+            pass
+        return result
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicClassSyncJob, job_id)
+        if job:
+            job.status = 'failed'
+            job.progress_current = job.progress_current or 0
+            job.progress_total = 100
+            job.progress_label = 'Đồng bộ thất bại'
+            job.error_message = 'Không thể hoàn tất đồng bộ lớp. Vui lòng kiểm tra Course CMS mapping, plugin Open edX và HMAC.'
+            job.result_json = {'ok': False, 'message': job.error_message}
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(db, action='academic.class_sync.async', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=None, target_type='academic_class_sync_job', target_id=job.id, metadata={'class_id': job.class_id, 'job_type': job.job_type})
+            except Exception:
+                pass
+        return {'ok': False, 'error': 'academic_class_sync_failed'}
+    finally:
+        db.close()

@@ -81,6 +81,7 @@ import {
   AcademicCampus,
   AcademicClass,
   AcademicClassListResponse,
+  AcademicClassSyncJob,
   AcademicStudentListResponse,
   AcademicSyncResult,
   AcademicAPSyncOptions,
@@ -107,6 +108,11 @@ export const API = normalizedApiBase.endsWith("/api")
   : `${normalizedApiBase}/api`;
 
 
+function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  return fetch(input, { credentials: "include", ...init });
+}
+
+
 function withIdempotency(headers: HeadersInit, idempotencyKey?: string): HeadersInit {
   if (!idempotencyKey) return headers;
   const next = new Headers(headers);
@@ -123,23 +129,30 @@ function withoutContentType(headers: HeadersInit): HeadersInit {
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(
+      response.ok
+        ? 'Phản hồi máy chủ không đúng định dạng JSON.'
+        : `Máy chủ trả lỗi ${response.status}. Vui lòng thử lại hoặc kiểm tra backend/proxy.`,
+    );
+  }
   if (!response.ok) {
     const errorEnvelope = data?.error;
-    const message = errorEnvelope?.message || data?.detail || data?.message || response.statusText;
-    if (typeof message === "string") {
-      const detail = errorEnvelope?.code ? ` [${errorEnvelope.code}]` : "";
-      throw new Error(`${message}${detail}`);
+    const rawMessage = data?.detail?.message || errorEnvelope?.message || data?.detail || data?.message || response.statusText;
+    if (typeof rawMessage === "string") {
+      const detail = errorEnvelope?.code || data?.detail?.code ? ` [${errorEnvelope?.code || data?.detail?.code}]` : "";
+      throw new Error(`${rawMessage}${detail}`);
     }
-    if (Array.isArray(message))
+    if (Array.isArray(rawMessage))
       throw new Error(
-        message
+        rawMessage
           .map((item) => item?.msg || item?.message || "Dữ liệu không hợp lệ")
           .join("; "),
       );
-    throw new Error(
-      "Backend trả về lỗi không hợp lệ. Mở Docker logs/backend để xem chi tiết kỹ thuật.",
-    );
+    throw new Error("Có lỗi xảy ra từ máy chủ. Vui lòng thử lại.");
   }
   return data as T;
 }
@@ -159,13 +172,13 @@ export async function getBankOperationJobs(
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 30));
   return parseResponse<PaginatedResponse<BankOperationJob>>(
-    await fetch(`${API}/question-bank-v2/operation-jobs?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/operation-jobs?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function getBankOperationJob(headers: HeadersInit, jobId: string) {
   return parseResponse<BankOperationJob>(
-    await fetch(`${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}`, { credentials: "include", headers }),
   );
 }
 
@@ -218,7 +231,7 @@ export async function getAnalytics(
   headers: HeadersInit,
 ): Promise<AnalyticsOverview> {
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/analytics/overview?course_id=${encodeURIComponent(courseId)}`,
       { headers },
     ),
@@ -230,7 +243,7 @@ export async function getQuestionStats(
   headers: HeadersInit,
 ): Promise<QuestionStats> {
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/question-bank/stats?course_id=${encodeURIComponent(courseId)}`,
       { headers },
     ),
@@ -242,7 +255,7 @@ export async function getJobs(
   headers: HeadersInit,
 ): Promise<Job[]> {
   return parseResponse(
-    await fetch(`${API}/jobs?course_id=${encodeURIComponent(courseId)}`, {
+    await apiFetch(`${API}/jobs?course_id=${encodeURIComponent(courseId)}`, {
       headers,
     }),
   );
@@ -270,7 +283,7 @@ export async function getQuestions(
   headers: HeadersInit,
 ): Promise<Question[]> {
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/question-bank?${buildQuestionParams(courseId, filters).toString()}`,
       { headers },
     ),
@@ -288,7 +301,7 @@ export async function getQuestionsPage(
   params.set("page", String(page));
   params.set("page_size", String(pageSize));
   return parseResponse(
-    await fetch(`${API}/question-bank/page?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank/page?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
@@ -301,7 +314,7 @@ export async function getSyncedCourses(
   if (search.trim()) params.set("search", search.trim());
   params.set("limit", String(limit));
   return parseResponse(
-    await fetch(`${API}/courses?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/courses?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
@@ -314,7 +327,7 @@ export async function getCourseConcepts(
   const params = new URLSearchParams();
   if (nodeId && nodeId !== "all") params.set("node_id", nodeId);
   return parseResponse(
-    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/concepts?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/courses/${encodeURIComponent(courseId)}/concepts?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
@@ -326,7 +339,7 @@ export async function extractCourseConcepts(
   maxConcepts = 20,
 ): Promise<ConceptExtractResponse> {
   return parseResponse(
-    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/concepts/extract`, {
+    await apiFetch(`${API}/courses/${encodeURIComponent(courseId)}/concepts/extract`, {
       method: "POST",
       headers,
       body: JSON.stringify({ node_id: nodeId && nodeId !== "all" ? nodeId : null, force, max_concepts: maxConcepts }),
@@ -336,7 +349,7 @@ export async function extractCourseConcepts(
 
 export async function syncCourse(courseId: string, headers: HeadersInit) {
   return parseResponse(
-    await fetch(`${API}/courses/sync`, {
+    await apiFetch(`${API}/courses/sync`, {
       method: "POST",
       headers,
       body: JSON.stringify({ course_id: courseId, force: false }),
@@ -352,7 +365,7 @@ export async function cleanResyncCourse(
   const params = new URLSearchParams();
   params.set("confirm", confirm);
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/courses/${encodeURIComponent(courseId)}/clean-resync?${params.toString()}`,
       {
         method: "POST",
@@ -373,7 +386,7 @@ export async function uploadFileToNode(
   form.append("file", file);
   form.append("replace_existing", String(replaceExisting));
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/courses/${encodeURIComponent(courseId)}/nodes/${encodeURIComponent(nodeId)}/files`,
       {
         method: "POST",
@@ -393,7 +406,7 @@ export async function deleteCourseNode(
   const params = new URLSearchParams();
   params.set("confirm", confirm);
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/courses/${encodeURIComponent(courseId)}/nodes/${encodeURIComponent(nodeId)}?${params.toString()}`,
       {
         method: "DELETE",
@@ -408,7 +421,7 @@ export async function getCourseTree(
   headers: HeadersInit,
 ): Promise<CourseTreeNode[]> {
   return parseResponse(
-    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/tree`, {
+    await apiFetch(`${API}/courses/${encodeURIComponent(courseId)}/tree`, {
       headers,
     }),
   );
@@ -419,7 +432,7 @@ export async function getCourseNodes(
   headers: HeadersInit,
 ): Promise<CourseNodeOption[]> {
   return parseResponse(
-    await fetch(`${API}/courses/${encodeURIComponent(courseId)}/nodes`, {
+    await apiFetch(`${API}/courses/${encodeURIComponent(courseId)}/nodes`, {
       headers,
     }),
   );
@@ -443,7 +456,7 @@ export async function getChunks(
   const params = buildChunkParams(sourceType, search, nodeId);
   params.set("limit", "200");
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/courses/${encodeURIComponent(courseId)}/chunks?${params.toString()}`,
       { headers },
     ),
@@ -463,7 +476,7 @@ export async function getChunksPage(
   params.set("page", String(page));
   params.set("page_size", String(pageSize));
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/courses/${encodeURIComponent(courseId)}/chunks/page?${params.toString()}`,
       { headers },
     ),
@@ -487,7 +500,7 @@ export async function estimateCost(
   idempotencyKey?: string,
 ) {
   return parseResponse(
-    await fetch(`${API}/cost/estimate`, {
+    await apiFetch(`${API}/cost/estimate`, {
       method: "POST",
       headers: withIdempotency(headers, idempotencyKey),
       body: JSON.stringify(payload),
@@ -510,7 +523,7 @@ export async function generateQuestions(
   idempotencyKey?: string,
 ) {
   return parseResponse(
-    await fetch(`${API}/questions/generate`, {
+    await apiFetch(`${API}/questions/generate`, {
       method: "POST",
       headers: withIdempotency(headers, idempotencyKey),
       body: JSON.stringify(payload),
@@ -535,7 +548,7 @@ export async function updateQuestion(
       .filter(Boolean),
   };
   return parseResponse(
-    await fetch(`${API}/question-bank/${id}`, {
+    await apiFetch(`${API}/question-bank/${id}`, {
       method: "PATCH",
       headers,
       body: JSON.stringify(body),
@@ -549,7 +562,7 @@ export async function transitionQuestion(
   headers: HeadersInit,
 ): Promise<Question> {
   return parseResponse(
-    await fetch(`${API}/question-bank/${id}/${action}`, {
+    await apiFetch(`${API}/question-bank/${id}/${action}`, {
       method: "POST",
       headers,
       body: JSON.stringify({ note: `Manual transition ${action}` }),
@@ -564,7 +577,7 @@ export async function changeQuestionStatus(
   headers: HeadersInit,
 ): Promise<Question> {
   return parseResponse(
-    await fetch(`${API}/question-bank/${id}/status`, {
+    await apiFetch(`${API}/question-bank/${id}/status`, {
       method: "POST",
       headers,
       body: JSON.stringify({ target_status: status, note }),
@@ -577,7 +590,7 @@ export async function deleteQuestion(
   headers: HeadersInit,
 ): Promise<{ deleted: boolean; question_id: string }> {
   return parseResponse(
-    await fetch(`${API}/question-bank/${id}`, {
+    await apiFetch(`${API}/question-bank/${id}`, {
       method: "DELETE",
       headers,
     }),
@@ -589,7 +602,7 @@ export async function repairDraftError(
   headers: HeadersInit,
 ): Promise<Question> {
   return parseResponse(
-    await fetch(`${API}/question-bank/${id}/repair`, {
+    await apiFetch(`${API}/question-bank/${id}/repair`, {
       method: "POST",
       headers,
       body: JSON.stringify({ note: "Repair draft_error from UI" }),
@@ -602,7 +615,7 @@ export async function keepDraftErrorAnyway(
   headers: HeadersInit,
 ): Promise<Question> {
   return parseResponse(
-    await fetch(`${API}/question-bank/${id}/keep-anyway`, {
+    await apiFetch(`${API}/question-bank/${id}/keep-anyway`, {
       method: "POST",
       headers,
       body: JSON.stringify({ note: "Teacher reviewed and kept anyway" }),
@@ -615,7 +628,7 @@ export async function getQuestionDiversityReport(
   headers: HeadersInit,
 ) {
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/question-bank/diversity/report?course_id=${encodeURIComponent(courseId)}`,
       { headers },
     ),
@@ -627,7 +640,7 @@ export async function dryRunQuestionPublish(
   headers: HeadersInit,
 ) {
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/publish/questions/${encodeURIComponent(questionId)}/openedx/dry-run`,
       {
         method: "POST",
@@ -643,7 +656,7 @@ export async function testOpenEdxConnection(
 ) {
   const suffix = courseId ? `?course_id=${encodeURIComponent(courseId)}` : "";
   return parseResponse(
-    await fetch(`${API}/settings/openedx/test${suffix}`, {
+    await apiFetch(`${API}/settings/openedx/test${suffix}`, {
       method: "POST",
       headers,
     }),
@@ -660,7 +673,7 @@ export async function bulkApprove(
   headers: HeadersInit,
 ) {
   return parseResponse(
-    await fetch(`${API}/question-bank/bulk/approve`, {
+    await apiFetch(`${API}/question-bank/bulk/approve`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
@@ -670,7 +683,7 @@ export async function bulkApprove(
 
 export async function getQuestionOlx(id: string, headers: HeadersInit) {
   return parseResponse<{ question_id: string; olx: string }>(
-    await fetch(`${API}/question-bank/${id}/openedx-olx`, { headers }),
+    await apiFetch(`${API}/question-bank/${id}/openedx-olx`, { credentials: "include", headers }),
   );
 }
 
@@ -686,7 +699,7 @@ export async function exportApprovedOlx(
     olx?: string;
     olx_xml?: string;
   }>(
-    await fetch(
+    await apiFetch(
       `${API}/question-bank/export/openedx-olx?course_id=${encodeURIComponent(courseId)}&status=${status}`,
       { headers },
     ),
@@ -700,7 +713,7 @@ export async function downloadApprovedOlx(
   headers: HeadersInit,
   status = "approved",
 ) {
-  const response = await fetch(
+  const response = await apiFetch(
     `${API}/question-bank/export/openedx-olx.xml?course_id=${encodeURIComponent(courseId)}&status=${status}`,
     { headers },
   );
@@ -723,7 +736,7 @@ export async function publishApprovedToOpenEdx(
   const params = new URLSearchParams();
   params.set("mode", mode);
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/publish/courses/${encodeURIComponent(courseId)}/openedx?${params.toString()}`,
       {
         method: "POST",
@@ -742,7 +755,7 @@ export async function publishQuestionToOpenEdx(
   const params = new URLSearchParams();
   params.set("mode", mode);
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/publish/questions/${encodeURIComponent(questionId)}/openedx?${params.toString()}`,
       {
         method: "POST",
@@ -757,7 +770,7 @@ export async function getPublishHistory(
   headers: HeadersInit,
 ): Promise<{ course_id: string; batches: PublishBatchSummary[] }> {
   return parseResponse(
-    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/openedx/history`, { headers }),
+    await apiFetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/openedx/history`, { credentials: "include", headers }),
   );
 }
 
@@ -770,7 +783,7 @@ export async function rollbackPublishBatch(
   const params = new URLSearchParams();
   params.set("level", level);
   return parseResponse(
-    await fetch(`${API}/publish/batches/${encodeURIComponent(batchId)}/rollback?${params.toString()}`, {
+    await apiFetch(`${API}/publish/batches/${encodeURIComponent(batchId)}/rollback?${params.toString()}`, {
       method: "POST",
       headers: withIdempotency(headers, idempotencyKey),
     }),
@@ -782,7 +795,7 @@ export async function getQuestionSourceTrace(
   headers: HeadersInit,
 ): Promise<SourceTrace> {
   return parseResponse(
-    await fetch(`${API}/question-bank/${encodeURIComponent(questionId)}/source-trace`, { headers }),
+    await apiFetch(`${API}/question-bank/${encodeURIComponent(questionId)}/source-trace`, { credentials: "include", headers }),
   );
 }
 
@@ -803,14 +816,14 @@ export async function getUserAnalytics(
   params.set("sort_by", query.sortBy || "cost_usd");
   params.set("sort_dir", query.sortDir || "desc");
   return parseResponse(
-    await fetch(`${API}/users/analytics?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/users/analytics?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function getRuntimeSettings(
   headers: HeadersInit,
 ): Promise<RuntimeSettings> {
-  return parseResponse(await fetch(`${API}/settings/runtime`, { headers }));
+  return parseResponse(await apiFetch(`${API}/settings/runtime`, { credentials: "include", headers }));
 }
 
 export async function updateRuntimeSettings(
@@ -818,7 +831,7 @@ export async function updateRuntimeSettings(
   headers: HeadersInit,
 ): Promise<RuntimeSettings> {
   return parseResponse(
-    await fetch(`${API}/settings/runtime`, {
+    await apiFetch(`${API}/settings/runtime`, {
       method: "PATCH",
       headers,
       body: JSON.stringify(payload),
@@ -835,7 +848,7 @@ export async function getRealtimePricing(
   if (model.trim()) params.set("model", model.trim());
   params.set("refresh", refresh ? "true" : "false");
   return parseResponse(
-    await fetch(`${API}/cost/pricing/realtime?${params.toString()}`, {
+    await apiFetch(`${API}/cost/pricing/realtime?${params.toString()}`, {
       headers,
     }),
   );
@@ -855,7 +868,7 @@ export async function testModelGateway(
   first_question?: string | null;
 }> {
   return parseResponse(
-    await fetch(`${API}/settings/runtime/test-model`, {
+    await apiFetch(`${API}/settings/runtime/test-model`, {
       method: "POST",
       headers,
     }),
@@ -867,7 +880,7 @@ export async function getCoursePolicy(
   headers: HeadersInit,
 ): Promise<CoursePolicy> {
   return parseResponse(
-    await fetch(
+    await apiFetch(
       `${API}/cost/policy?course_id=${encodeURIComponent(courseId)}`,
       { headers },
     ),
@@ -879,7 +892,7 @@ export async function updateCoursePolicy(
   headers: HeadersInit,
 ): Promise<CoursePolicy> {
   return parseResponse(
-    await fetch(`${API}/cost/policy`, {
+    await apiFetch(`${API}/cost/policy`, {
       method: "PATCH",
       headers,
       body: JSON.stringify(payload),
@@ -908,7 +921,7 @@ export async function getAuditLogs(
   params.set("page", String(query.page || 1));
   params.set("page_size", String(query.pageSize || 20));
   return parseResponse(
-    await fetch(`${API}/audit?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/audit?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
@@ -926,7 +939,7 @@ export type OpenEdxSessionExchangeResponse = {
 
 export async function exchangeOpenEdxSessionTicket(ticket: string): Promise<OpenEdxSessionExchangeResponse> {
   return parseResponse(
-    await fetch(`${API}/auth/openedx-session/exchange`, {
+    await apiFetch(`${API}/auth/openedx-session/exchange`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
@@ -959,7 +972,7 @@ export async function previewFamilyBankPlan(
   headers: HeadersInit,
 ) {
   return parseResponse(
-    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/family-bank-plan/preview`, {
+    await apiFetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/family-bank-plan/preview`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
@@ -975,7 +988,7 @@ export async function publishFamilyBankPlan(
   idempotencyKey?: string,
 ) {
   return parseResponse(
-    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/family-bank-plan/publish`, {
+    await apiFetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/family-bank-plan/publish`, {
       method: "POST",
       headers: withIdempotency(headers, idempotencyKey),
       body: JSON.stringify({ plan, mode }),
@@ -990,7 +1003,7 @@ export async function createCmsQuizNode(
   idempotencyKey?: string,
 ) {
   return parseResponse(
-    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/cms-quiz-node/create`, {
+    await apiFetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/cms-quiz-node/create`, {
       method: "POST",
       headers: withIdempotency(headers, idempotencyKey),
       body: JSON.stringify(payload),
@@ -1005,7 +1018,7 @@ export async function insertCmsProblemBanks(
   idempotencyKey?: string,
 ) {
   return parseResponse(
-    await fetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/cms-problem-banks/insert`, {
+    await apiFetch(`${API}/publish/courses/${encodeURIComponent(courseId)}/cms-problem-banks/insert`, {
       method: "POST",
       headers: withIdempotency(headers, idempotencyKey),
       body: JSON.stringify(payload),
@@ -1021,7 +1034,7 @@ export async function getBankDashboardAnalytics(headers: HeadersInit, filters: {
   if (filters.fromDate) params.set('from_date', filters.fromDate);
   if (filters.toDate) params.set('to_date', filters.toDate);
   return parseResponse<DashboardAnalytics>(
-    await fetch(`${API}/question-bank-v2/dashboard/analytics?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/dashboard/analytics?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
@@ -1055,13 +1068,13 @@ export async function getBankDashboardDrilldown(
   if (filters.subjectId) params.set('subject_id', filters.subjectId);
   params.set('limit', String(filters.limit || 100));
   return parseResponse<BankDashboardDrilldownResponse>(
-    await fetch(`${API}/question-bank-v2/dashboard/drilldown?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/dashboard/drilldown?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function getBankDashboardOverview(headers: HeadersInit) {
   return parseResponse<BankDashboardOverview>(
-    await fetch(`${API}/question-bank-v2/dashboard/overview`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/dashboard/overview`, { credentials: "include", headers }),
   );
 }
 
@@ -1071,7 +1084,7 @@ export async function searchBankDashboard(headers: HeadersInit, q: string, limit
   params.set('limit', String(limit));
   params.set('include_questions', 'true');
   const payload = await parseResponse<BankSearchResult[] | BankSearchGroupedResponse>(
-    await fetch(`${API}/question-bank-v2/search?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/search?${params.toString()}`, { credentials: "include", headers }),
   );
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload.items) && payload.items.length) return payload.items;
@@ -1087,56 +1100,56 @@ export async function searchBankDashboard(headers: HeadersInit, q: string, limit
 
 export async function getDepartmentSummaries(headers: HeadersInit) {
   return parseResponse<DepartmentSummary[]>(
-    await fetch(`${API}/question-bank-v2/departments/summary`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/departments/summary?_=${Date.now()}`, { credentials: "include", headers, cache: 'no-store' }),
   );
 }
 
 export async function getSubjectSummaries(headers: HeadersInit, departmentId: string) {
   return parseResponse<SubjectSummary[]>(
-    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(departmentId)}/subjects/summary`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/departments/${encodeURIComponent(departmentId)}/subjects/summary?_=${Date.now()}`, { credentials: "include", headers, cache: 'no-store' }),
   );
 }
 
 export async function getSubjectVersionSummaries(headers: HeadersInit, subjectId: string) {
   return parseResponse<SubjectVersionSummary[]>(
-    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(subjectId)}/versions/summary`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(subjectId)}/versions/summary?_=${Date.now()}`, { credentials: "include", headers, cache: 'no-store' }),
   );
 }
 
 export async function getChapterSummaries(headers: HeadersInit, subjectOfferingId: string) {
   return parseResponse<ChapterSummary[]>(
-    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(subjectOfferingId)}/chapters/summary`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(subjectOfferingId)}/chapters/summary?_=${Date.now()}`, { credentials: "include", headers, cache: 'no-store' }),
   );
 }
 
 export async function getBankSummary(headers: HeadersInit) {
   return parseResponse<BankSummary>(
-    await fetch(`${API}/question-bank-v2/summary`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/summary`, { credentials: "include", headers }),
   );
 }
 
 export async function getDepartments(headers: HeadersInit) {
   return parsePageItems<Department>(
-    await fetch(`${API}/question-bank-v2/departments?page_size=50`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/departments?page_size=50`, { credentials: "include", headers }),
   );
 }
 
 export async function createDepartment(headers: HeadersInit, payload: { code: string; name: string; description?: string }) {
   return parseResponse<Department>(
-    await fetch(`${API}/question-bank-v2/departments`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/departments`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 
 export async function updateDepartment(headers: HeadersInit, id: string, payload: { code?: string; name?: string; description?: string }) {
   return parseResponse<Department>(
-    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/departments/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function deleteDepartment(headers: HeadersInit, id: string) {
   return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
-    await fetch(`${API}/question-bank-v2/departments/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
+    await apiFetch(`${API}/question-bank-v2/departments/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
   );
 }
 
@@ -1145,26 +1158,26 @@ export async function getSubjects(headers: HeadersInit, departmentId?: string) {
   if (departmentId) params.set('department_id', departmentId);
   params.set('page_size', '100');
   return parsePageItems<Subject>(
-    await fetch(`${API}/question-bank-v2/subjects?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/subjects?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function createSubject(headers: HeadersInit, payload: { department_id: string; code: string; name: string; description?: string }) {
   return parseResponse<Subject>(
-    await fetch(`${API}/question-bank-v2/subjects`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/subjects`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 
 export async function updateSubject(headers: HeadersInit, id: string, payload: { code?: string; name?: string; description?: string }) {
   return parseResponse<Subject>(
-    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function deleteSubject(headers: HeadersInit, id: string) {
   return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
-    await fetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
+    await apiFetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
   );
 }
 
@@ -1173,26 +1186,26 @@ export async function getSubjectOfferings(headers: HeadersInit, subjectId?: stri
   if (subjectId) params.set('subject_id', subjectId);
   params.set('page_size', '100');
   return parsePageItems<SubjectOffering>(
-    await fetch(`${API}/question-bank-v2/subject-versions?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/subject-versions?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function createSubjectOffering(headers: HeadersInit, payload: { subject_id: string; code?: string; name?: string; term?: string | null; season?: string | null; year?: number | string | null; version_code?: string; based_on_offering_id?: string | null; clone_from_offering_id?: string | null; clone_chapters?: boolean; clone_materials?: boolean; clone_questions?: boolean; description?: string }) {
   return parseResponse<SubjectOffering>(
-    await fetch(`${API}/question-bank-v2/subject-versions`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/subject-versions`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 
 export async function updateSubjectOffering(headers: HeadersInit, id: string, payload: { code?: string; name?: string; term?: string | null; version_code?: string; description?: string }) {
   return parseResponse<SubjectOffering>(
-    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function deleteSubjectOffering(headers: HeadersInit, id: string) {
   return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
-    await fetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
+    await apiFetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
   );
 }
 
@@ -1202,26 +1215,26 @@ export async function getSubjectChapters(headers: HeadersInit, subjectId?: strin
   if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
   params.set('page_size', '100');
   return parsePageItems<SubjectChapter>(
-    await fetch(`${API}/question-bank-v2/chapters?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/chapters?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function createSubjectChapter(headers: HeadersInit, payload: { subject_id: string; subject_offering_id?: string | null; chapter_no?: number; title: string; description?: string; sort_order?: number }) {
   return parseResponse<SubjectChapter>(
-    await fetch(`${API}/question-bank-v2/chapters`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/chapters`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 
 export async function updateSubjectChapter(headers: HeadersInit, id: string, payload: { title?: string; description?: string; sort_order?: number }) {
   return parseResponse<SubjectChapter>(
-    await fetch(`${API}/question-bank-v2/chapters/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/chapters/${encodeURIComponent(id)}`, { method: 'PATCH', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function deleteSubjectChapter(headers: HeadersInit, id: string) {
   return parseResponse<{ ok: boolean; deleted: boolean; message: string }>(
-    await fetch(`${API}/question-bank-v2/chapters/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
+    await apiFetch(`${API}/question-bank-v2/chapters/${encodeURIComponent(id)}`, { method: 'DELETE', headers }),
   );
 }
 
@@ -1232,13 +1245,13 @@ export async function getBankVersions(headers: HeadersInit, chapterId?: string, 
   if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
   params.set('page_size', '100');
   return parsePageItems<BankVersion>(
-    await fetch(`${API}/question-bank-v2/bank-versions?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/bank-versions?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function createBankVersion(headers: HeadersInit, payload: { subject_id: string; chapter_id: string; subject_offering_id?: string | null; version_code: string; title?: string; change_note?: string; based_on_version_id?: string | null }) {
   return parseResponse<BankVersion>(
-    await fetch(`${API}/question-bank-v2/bank-versions`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/bank-versions`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
@@ -1248,19 +1261,19 @@ export async function getBankReleases(headers: HeadersInit, bankVersionId?: stri
   if (chapterId) params.set('chapter_id', chapterId);
   params.set('page_size', '100');
   return parsePageItems<BankRelease>(
-    await fetch(`${API}/question-bank-v2/releases?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/releases?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function createBankRelease(headers: HeadersInit, payload: { bank_version_id: string; release_code?: string; title?: string; include_approved_questions?: boolean }) {
   return parseResponse<BankRelease>(
-    await fetch(`${API}/question-bank-v2/releases`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/releases`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function publishBankRelease(headers: HeadersInit, releaseId: string, payload: { openedx_course_id_for_org?: string | null; force_reimport?: boolean } = {}) {
   const queued = await parseResponse<BankOperationJobQueued>(
-    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/publish-openedx-job`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/publish-openedx-job`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
   return enqueueAndWait<BankReleasePublishResult>(headers, queued, 20 * 60 * 1000);
 }
@@ -1270,31 +1283,31 @@ export async function getCourseMappings(headers: HeadersInit, subjectId?: string
   if (subjectId) params.set('subject_id', subjectId);
   params.set('page_size', '100');
   return parsePageItems<EdxCourseMapping>(
-    await fetch(`${API}/question-bank-v2/course-mappings?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/course-mappings?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function validateCourseMapping(headers: HeadersInit, payload: { openedx_course_id: string; subject_id: string; department_id?: string | null; term?: string | null; openedx_course_title?: string | null }) {
   return parseResponse<MappingValidation>(
-    await fetch(`${API}/question-bank-v2/course-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/course-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function createCourseMapping(headers: HeadersInit, payload: { openedx_course_id: string; subject_id: string; department_id?: string | null; term?: string | null; openedx_course_title?: string | null; allow_warnings?: boolean }) {
   return parseResponse<EdxCourseMapping>(
-    await fetch(`${API}/question-bank-v2/course-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/course-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function validateCourseChapterMapping(headers: HeadersInit, payload: { course_mapping_id: string; subject_chapter_id: string; bank_release_id: string; openedx_parent_node_id: string; openedx_node_title?: string | null }) {
   return parseResponse<MappingValidation>(
-    await fetch(`${API}/question-bank-v2/course-chapter-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/course-chapter-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
 export async function createCourseChapterMapping(headers: HeadersInit, payload: { course_mapping_id: string; subject_chapter_id: string; bank_release_id?: string | null; openedx_parent_node_id?: string | null; openedx_node_title?: string | null; enabled?: boolean; allow_warnings?: boolean }) {
   return parseResponse<EdxCourseChapterMapping>(
-    await fetch(`${API}/question-bank-v2/course-chapter-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/course-chapter-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
@@ -1303,13 +1316,13 @@ export async function getQuizBlueprints(headers: HeadersInit, chapterId?: string
   if (chapterId) params.set('chapter_id', chapterId);
   params.set('page_size', '100');
   return parsePageItems<QuizBlueprint>(
-    await fetch(`${API}/question-bank-v2/quiz-blueprints?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/quiz-blueprints?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 export async function createQuizBlueprint(headers: HeadersInit, payload: { subject_id: string; chapter_id: string; title: string; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number; pick_count_per_slot?: number }) {
   return parseResponse<QuizBlueprint>(
-    await fetch(`${API}/question-bank-v2/quiz-blueprints`, { method: 'POST', headers, body: JSON.stringify(payload) }),
+    await apiFetch(`${API}/question-bank-v2/quiz-blueprints`, { method: 'POST', headers, body: JSON.stringify(payload) }),
   );
 }
 
@@ -1320,14 +1333,14 @@ export async function getMaterialVersions(headers: HeadersInit, bankVersionId?: 
   if (bankVersionId) params.set('bank_version_id', bankVersionId);
   params.set('page_size', '100');
   return parsePageItems<MaterialVersion>(
-    await fetch(`${API}/question-bank-v2/material-versions?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/material-versions?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
 
 export async function deleteMaterialVersion(headers: HeadersInit, materialVersionId: string) {
   return parseResponse<{ ok: boolean; material_version_id: string; bank_version_id: string; chunks_deleted: number; detached_question_count: number; message: string }>(
-    await fetch(`${API}/question-bank-v2/material-versions/${encodeURIComponent(materialVersionId)}`, {
+    await apiFetch(`${API}/question-bank-v2/material-versions/${encodeURIComponent(materialVersionId)}`, {
       method: 'DELETE',
       headers,
     }),
@@ -1346,7 +1359,7 @@ export async function uploadBankMaterial(
   form.append('change_type', payload.change_type || 'initial');
   form.append('replace_existing', String(Boolean(payload.replace_existing)));
   const queued = await parseResponse<BankOperationJobQueued>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/upload-job`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/upload-job`, {
       method: 'POST',
       headers: withoutContentType(headers),
       body: form,
@@ -1360,7 +1373,7 @@ export async function getBankMaterialChunks(headers: HeadersInit, bankVersionId:
   if (materialVersionId) params.set('material_version_id', materialVersionId);
   params.set('page_size', '100');
   return parsePageItems<MaterialChunk>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/material-chunks?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/material-chunks?${params.toString()}`, { credentials: "include", headers }),
   );
 }
 
@@ -1377,7 +1390,7 @@ export async function previewGenerateFromBankVersion(
   },
 ) {
   return parseResponse<BankGeneratePreview>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate/preview`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate/preview`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1400,7 +1413,7 @@ export async function generateFromBankVersion(
   },
 ) {
   const queued = await parseResponse<BankOperationJobQueued>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate-job`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate-job`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1454,7 +1467,7 @@ export async function getBankVersionQuestionPage(
   }
   if (options.includeTotal) params.set('include_total', 'true');
   const page = await parseResponse<CursorPaginatedResponse<BankQuestionListItem>>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions?${params.toString()}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions?${params.toString()}`, { credentials: "include", headers }),
   );
   return {
     ...page,
@@ -1484,7 +1497,7 @@ export async function getBankVersionQuestions(headers: HeadersInit, bankVersionI
 
 export async function getBankVersionQuestion(headers: HeadersInit, bankVersionId: string, questionId: string) {
   return parseResponse<BankVersionQuestion>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}`, { credentials: "include", headers }),
   );
 }
 
@@ -1494,7 +1507,7 @@ export async function previewBankVersionDiff(
   payload: { base_bank_version_id?: string | null; persist?: boolean } = {},
 ) {
   return parseResponse<BankVersionDiffPreview>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/diff/preview`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/diff/preview`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1508,7 +1521,7 @@ export async function carryOverBankQuestions(
   payload: { base_bank_version_id: string; question_ids?: string[] | null; require_review?: boolean; diff_id?: string | null },
 ) {
   return parseResponse<BankCarryOverResult>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/carry-over`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/carry-over`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1522,7 +1535,7 @@ export async function retireBankQuestions(
   payload: { question_ids: string[]; reason?: string },
 ) {
   return parseResponse<BankRetireResult>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/retire`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/retire`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1538,7 +1551,7 @@ export async function previewQuizAutoMap(
   payload: { openedx_course_id: string; selected_subject_offering_id?: string | null; total_questions?: number; difficulty_easy?: number; difficulty_medium?: number; difficulty_hard?: number; max_families_per_bank?: number },
 ) {
   return parseResponse<QuizAutoMapResult>(
-    await fetch(`${API}/question-bank-v2/quiz/auto-map/preview`, {
+    await apiFetch(`${API}/question-bank-v2/quiz/auto-map/preview`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1551,7 +1564,7 @@ export async function applyQuizAutoMap(
   payload: { openedx_course_id: string; selected_subject_offering_id?: string | null; total_questions?: number; difficulty_easy?: number; difficulty_medium?: number; difficulty_hard?: number; max_families_per_bank?: number },
 ) {
   return parseResponse<QuizAutoMapResult>(
-    await fetch(`${API}/question-bank-v2/quiz/auto-map/apply`, {
+    await apiFetch(`${API}/question-bank-v2/quiz/auto-map/apply`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1565,7 +1578,7 @@ export async function previewQuizFromBankRelease(
   payload: { total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number },
 ) {
   return parseResponse<BankReleaseQuizPlan>(
-    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/preview`, {
+    await apiFetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/preview`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1579,7 +1592,7 @@ export async function createQuizFromBankRelease(
   payload: { course_chapter_mapping_id: string; quiz_title?: string; unit_title?: string; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number; custom_timer_enabled?: boolean; time_limit_minutes?: number; retake_cooldown_minutes?: number; auto_submit_on_timeout?: boolean; lock_after_timeout?: boolean; native_timed_exam?: boolean },
 ) {
   const queued = await parseResponse<BankOperationJobQueued>(
-    await fetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/create-job`, {
+    await apiFetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/create-job`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1615,7 +1628,7 @@ export async function updateBankQuestion(
   },
 ) {
   return parseResponse<BankVersionQuestion>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}`, {
       method: 'PATCH',
       headers,
       body: JSON.stringify(payload),
@@ -1631,7 +1644,7 @@ export async function reviewBankQuestion(
   payload: { action: 'approve' | 'reject' | 'back_to_review'; note?: string },
 ) {
   return parseResponse<BankQuestionReviewResult>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}/review`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/${encodeURIComponent(questionId)}/review`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1645,7 +1658,7 @@ export async function bulkReviewBankQuestions(
   payload: { action: 'approve' | 'reject' | 'back_to_review'; question_ids?: string[]; approve_all_pending?: boolean; note?: string },
 ) {
   return parseResponse<BankQuestionBulkReviewResult>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/bulk-review`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/bulk-review`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1659,7 +1672,7 @@ export async function markBankDiffResolved(
   payload: { note?: string } = {},
 ) {
   return parseResponse<BankDocumentDiffResolveResult>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/diff/mark-resolved`, {
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/diff/mark-resolved`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1669,7 +1682,7 @@ export async function markBankDiffResolved(
 
 export async function getBankReleaseReadiness(headers: HeadersInit, bankVersionId: string) {
   return parseResponse<BankReleaseReadiness>(
-    await fetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/release/readiness`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/release/readiness`, { credentials: "include", headers }),
   );
 }
 
@@ -1683,7 +1696,7 @@ export async function getCourseQuizInstances(
   if (params.limit) search.set('limit', String(params.limit));
   const suffix = search.toString() ? `?${search.toString()}` : '';
   return parsePageItems<CourseQuizInstance>(
-    await fetch(`${API}/question-bank-v2/course-quiz-instances${suffix}`, { headers }),
+    await apiFetch(`${API}/question-bank-v2/course-quiz-instances${suffix}`, { credentials: "include", headers }),
   );
 }
 
@@ -1693,7 +1706,7 @@ export async function rollbackCourseQuizInstance(
   payload: { mode?: 'safe' | 'manual'; note?: string } = {},
 ) {
   return parseResponse<CourseQuizRollbackResult>(
-    await fetch(`${API}/question-bank-v2/course-quiz-instances/${encodeURIComponent(instanceId)}/rollback`, {
+    await apiFetch(`${API}/question-bank-v2/course-quiz-instances/${encodeURIComponent(instanceId)}/rollback`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -1703,15 +1716,15 @@ export async function rollbackCourseQuizInstance(
 
 
 export async function getEffectiveRBAC(headers: HeadersInit): Promise<EffectiveRBAC> {
-  return parseResponse<EffectiveRBAC>(await fetch(`${API}/rbac/me`, { headers }))
+  return parseResponse<EffectiveRBAC>(await apiFetch(`${API}/rbac/me`, { credentials: "include", headers }))
 }
 
 export async function getRBACRoles(headers: HeadersInit): Promise<RBACRole[]> {
-  return parseResponse<RBACRole[]>(await fetch(`${API}/rbac/roles`, { headers }))
+  return parseResponse<RBACRole[]>(await apiFetch(`${API}/rbac/roles`, { credentials: "include", headers }))
 }
 
 export async function getRBACPermissions(headers: HeadersInit): Promise<RBACPermission[]> {
-  return parseResponse<RBACPermission[]>(await fetch(`${API}/rbac/permissions`, { headers }))
+  return parseResponse<RBACPermission[]>(await apiFetch(`${API}/rbac/permissions`, { credentials: "include", headers }))
 }
 
 export async function getRoleAssignments(
@@ -1725,17 +1738,17 @@ export async function getRoleAssignments(
   if (filters.scopeId) params.set('scope_id', filters.scopeId)
   if (filters.includeRevoked) params.set('include_revoked', 'true')
   const suffix = params.toString() ? `?${params.toString()}` : ''
-  return parseResponse<RoleAssignmentListResponse>(await fetch(`${API}/rbac/assignments${suffix}`, { headers }))
+  return parseResponse<RoleAssignmentListResponse>(await apiFetch(`${API}/rbac/assignments${suffix}`, { credentials: "include", headers }))
 }
 
 export async function createRoleAssignment(payload: RoleAssignmentCreate, headers: HeadersInit): Promise<RoleAssignment> {
-  return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments`, { method: 'POST', headers, body: JSON.stringify(payload) }))
+  return parseResponse<RoleAssignment>(await apiFetch(`${API}/rbac/assignments`, { method: 'POST', headers, body: JSON.stringify(payload) }))
 }
 
 
 
 export async function downloadRBACImportTemplate(headers: HeadersInit): Promise<Blob> {
-  const response = await fetch(`${API}/rbac/assignments/import-template`, { headers });
+  const response = await apiFetch(`${API}/rbac/assignments/import-template`, { credentials: "include", headers });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || response.statusText);
@@ -1747,7 +1760,7 @@ export async function importRoleAssignmentsFromExcel(headers: HeadersInit, file:
   const form = new FormData();
   form.append('file', file);
   const cleanHeaders = withoutContentType(headers);
-  return parseResponse<RoleAssignmentImportResponse>(await fetch(`${API}/rbac/assignments/import?dry_run=${dryRun ? 'true' : 'false'}`, {
+  return parseResponse<RoleAssignmentImportResponse>(await apiFetch(`${API}/rbac/assignments/import?dry_run=${dryRun ? 'true' : 'false'}`, {
     method: 'POST',
     headers: cleanHeaders,
     body: form,
@@ -1755,7 +1768,7 @@ export async function importRoleAssignmentsFromExcel(headers: HeadersInit, file:
 }
 
 export async function revokeRoleAssignment(assignmentId: string, headers: HeadersInit, revokeReason = ''): Promise<RoleAssignment> {
-  return parseResponse<RoleAssignment>(await fetch(`${API}/rbac/assignments/${encodeURIComponent(assignmentId)}`, {
+  return parseResponse<RoleAssignment>(await apiFetch(`${API}/rbac/assignments/${encodeURIComponent(assignmentId)}`, {
     method: 'DELETE',
     headers,
     body: JSON.stringify({ revoke_reason: revokeReason }),
@@ -1768,24 +1781,24 @@ export async function getAcademicTerms(headers: HeadersInit, filters: string | {
   const branch = typeof filters === 'string' ? filters : filters.branch || '';
   if (branch.trim()) params.set('branch', branch.trim());
   if (typeof filters !== 'string' && typeof filters.active === 'boolean') params.set('active', String(filters.active));
-  return parseResponse(await fetch(`${API}/academic/terms?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/terms?${params.toString()}`, { credentials: "include", headers }));
 }
 
 export async function saveAcademicTerm(headers: HeadersInit, payload: { id?: string | null; ap_term_id?: string | null; term_code: string; term_name: string; branch?: string; start_date?: string | null; end_date?: string | null; active?: boolean; blocks?: Array<{ id?: string | null; block_code: string; block_name: string; start_date?: string | null; end_date?: string | null; sort_order?: number; active?: boolean }> }): Promise<any> {
-  return parseResponse(await fetch(`${API}/academic/terms`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  return parseResponse(await apiFetch(`${API}/academic/terms`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
 export async function getAcademicTermWithBlocks(headers: HeadersInit, termId: string): Promise<any> {
-  return parseResponse(await fetch(`${API}/academic/terms/${encodeURIComponent(termId)}/with-blocks`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/terms/${encodeURIComponent(termId)}/with-blocks`, { credentials: "include", headers }));
 }
 
 export async function deleteAcademicTerm(headers: HeadersInit, termId: string): Promise<any> {
-  return parseResponse(await fetch(`${API}/academic/terms/${encodeURIComponent(termId)}`, { method: 'DELETE', headers }));
+  return parseResponse(await apiFetch(`${API}/academic/terms/${encodeURIComponent(termId)}`, { method: 'DELETE', headers }));
 }
 
 export async function getAcademicBlocks(headers: HeadersInit, termId: string): Promise<AcademicBlock[]> {
   if (!termId) return [];
-  return parseResponse(await fetch(`${API}/academic/blocks?term_id=${encodeURIComponent(termId)}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/blocks?term_id=${encodeURIComponent(termId)}`, { credentials: "include", headers }));
 }
 
 export async function getAcademicSubjects(headers: HeadersInit, filters: { termId?: string; blockId?: string; search?: string; branch?: string } = {}): Promise<AcademicSubject[]> {
@@ -1794,10 +1807,10 @@ export async function getAcademicSubjects(headers: HeadersInit, filters: { termI
   if (filters.blockId) params.set('block_id', filters.blockId);
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
-  return parseResponse(await fetch(`${API}/academic/subjects?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/subjects?${params.toString()}`, { credentials: "include", headers }));
 }
 
-export async function getAcademicTeacherClasses(headers: HeadersInit, filters: { termId?: string; blockId?: string; subjectId?: string; campus?: string; branch?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
+export async function getAcademicTeacherClasses(headers: HeadersInit, filters: { termId?: string; blockId?: string; subjectId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
   if (filters.blockId) params.set('block_id', filters.blockId);
@@ -1805,94 +1818,128 @@ export async function getAcademicTeacherClasses(headers: HeadersInit, filters: {
   if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 50));
-  return parseResponse(await fetch(`${API}/academic/teacher/classes?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/teacher/classes?${params.toString()}`, { credentials: "include", headers }));
 }
 
-export async function getAcademicTeacherSubjects(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicSubjectManagementListResponse> {
+export async function getAcademicTeacherSubjects(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicSubjectManagementListResponse> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
   if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 50));
-  return parseResponse(await fetch(`${API}/academic/teacher/subjects?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/teacher/subjects?${params.toString()}`, { credentials: "include", headers }));
 }
 
-export async function getAcademicSubjectClasses(headers: HeadersInit, subjectId: string, filters: { termId?: string; blockId?: string; campus?: string; branch?: string; search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
+export async function getAcademicSubjectClasses(headers: HeadersInit, subjectId: string, filters: { termId?: string; blockId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
   if (filters.blockId) params.set('block_id', filters.blockId);
   if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 50));
-  return parseResponse(await fetch(`${API}/academic/subjects/${encodeURIComponent(subjectId)}/classes?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/subjects/${encodeURIComponent(subjectId)}/classes?${params.toString()}`, { credentials: "include", headers }));
 }
 
 export async function autoMapAcademicSubjectCourse(headers: HeadersInit, subjectId: string, filters: { termId: string; branch?: string } ): Promise<AcademicSubjectCourseAutoMapResult> {
   const params = new URLSearchParams();
   params.set('term_id', filters.termId);
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
-  return parseResponse(await fetch(`${API}/academic/subjects/${encodeURIComponent(subjectId)}/course-mapping/auto?${params.toString()}`, { method: 'POST', headers }));
+  return parseResponse(await apiFetch(`${API}/academic/subjects/${encodeURIComponent(subjectId)}/course-mapping/auto?${params.toString()}`, { method: 'POST', headers }));
 }
 
-export async function getAcademicClassStudents(headers: HeadersInit, classId: string, filters: { search?: string; page?: number; pageSize?: number } = {}): Promise<AcademicStudentListResponse> {
+export async function getAcademicClassStudents(headers: HeadersInit, classId: string, filters: { search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicStudentListResponse> {
   const params = new URLSearchParams();
   if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.learningStatus?.trim()) params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 50));
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/students?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/students?${params.toString()}`, { credentials: "include", headers }));
 }
 
 
 
 export async function getAcademicClass(headers: HeadersInit, classId: string): Promise<AcademicClass> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}`, { credentials: "include", headers }));
 }
 
 export async function getAcademicClassMappingSummary(headers: HeadersInit, classId: string): Promise<AcademicMappingSummary> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/mapping-summary`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/mapping-summary`, { credentials: "include", headers }));
 }
 
 
 export async function getAcademicClassLearningSummary(headers: HeadersInit, classId: string): Promise<AcademicLearningSummary> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/learning-summary`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/learning-summary`, { credentials: "include", headers }));
 }
 
 
 export async function syncAcademicClassEnrollment(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number; mode?: string } = {}): Promise<AcademicEnrollmentSyncResult> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-enrollment-sync`, {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-enrollment-sync`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 1000, mode: payload.mode || null }),
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 500, mode: payload.mode || null }),
   }));
 }
 
 export async function syncAcademicClassLearning(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicLearningSyncResult> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/learning-sync`, {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/learning-sync`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 1000 }),
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 500 }),
   }));
+}
+
+
+
+export async function enqueueAcademicClassCmsSyncJob(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicClassSyncJob> {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-sync-check/jobs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 500 }),
+  }));
+}
+
+export async function enqueueAcademicClassEnrollmentSyncJob(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number; mode?: string } = {}): Promise<AcademicClassSyncJob> {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-enrollment-sync/jobs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 500, mode: payload.mode || null }),
+  }));
+}
+
+export async function enqueueAcademicClassLearningSyncJob(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicClassSyncJob> {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/learning-sync/jobs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 500 }),
+  }));
+}
+
+export async function getAcademicClassSyncJob(headers: HeadersInit, classId: string, jobId: string): Promise<AcademicClassSyncJob> {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/sync-jobs/${encodeURIComponent(jobId)}`, { credentials: 'include', headers }));
 }
 
 export async function getAcademicCampuses(headers: HeadersInit, filters: { branch?: string; active?: boolean | null } = {}): Promise<AcademicCampus[]> {
   const params = new URLSearchParams();
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (typeof filters.active === 'boolean') params.set('active', String(filters.active));
-  return parseResponse(await fetch(`${API}/academic/campuses?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/campuses?${params.toString()}`, { credentials: "include", headers }));
 }
 
 export async function saveAcademicCampus(headers: HeadersInit, payload: { campus_code: string; campus_name: string; branch?: string; active?: boolean; sort_order?: number }): Promise<AcademicCampus> {
-  return parseResponse(await fetch(`${API}/academic/campuses`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  return parseResponse(await apiFetch(`${API}/academic/campuses`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
 export async function deleteAcademicCampus(headers: HeadersInit, campusId: string): Promise<AcademicCampus> {
-  return parseResponse(await fetch(`${API}/academic/campuses/${encodeURIComponent(campusId)}`, { method: 'DELETE', headers }));
+  return parseResponse(await apiFetch(`${API}/academic/campuses/${encodeURIComponent(campusId)}`, { method: 'DELETE', headers }));
 }
 
 export async function getAcademicApSyncOptions(headers: HeadersInit, filters: { termName?: string; branch?: string; includeSubjects?: boolean } = {}): Promise<AcademicAPSyncOptions> {
@@ -1900,25 +1947,25 @@ export async function getAcademicApSyncOptions(headers: HeadersInit, filters: { 
   if (filters.termName?.trim()) params.set('term_name', filters.termName.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (filters.includeSubjects === false) params.set('include_subjects', 'false');
-  return parseResponse(await fetch(`${API}/academic/sync/ap/options?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/sync/ap/options?${params.toString()}`, { credentials: "include", headers }));
 }
 
 
 export async function seedAcademicCampusesFromEnv(headers: HeadersInit, branch = 'poly'): Promise<any[]> {
   const params = new URLSearchParams();
   if (branch.trim()) params.set('branch', branch.trim());
-  return parseResponse(await fetch(`${API}/academic/campuses/seed-from-env?${params.toString()}`, { method: 'POST', headers }));
+  return parseResponse(await apiFetch(`${API}/academic/campuses/seed-from-env?${params.toString()}`, { method: 'POST', headers }));
 }
 
 export async function syncAcademicFromAp(headers: HeadersInit, payload: { term_name: string; sync_scope?: 'all' | 'campus' | 'subject'; campus?: string; campuses?: string[]; branch?: string; subject_codes?: string[]; max_subjects?: number; dry_run?: boolean }): Promise<AcademicSyncResult> {
-  return parseResponse(await fetch(`${API}/academic/sync/ap`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  return parseResponse(await apiFetch(`${API}/academic/sync/ap`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
 export async function checkAcademicClassCmsSync(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicMappingResolveResult> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-sync-check`, {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-sync-check`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 1000 }),
+    body: JSON.stringify({ force: Boolean(payload.force), limit: payload.limit || 500 }),
   }));
 }
 
@@ -1927,7 +1974,7 @@ export async function resolveAcademicClassOpenEdxUsers(headers: HeadersInit, cla
 }
 
 export async function importAcademicOpenEdxUserMappings(headers: HeadersInit, records: Array<Record<string, unknown>>): Promise<AcademicManualMappingImportResult> {
-  return parseResponse(await fetch(`${API}/academic/openedx-user-mappings/import`, {
+  return parseResponse(await apiFetch(`${API}/academic/openedx-user-mappings/import`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ records }),
@@ -1944,26 +1991,26 @@ export async function getAcademicCourseMappings(headers: HeadersInit, filters: {
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 50));
-  return parseResponse(await fetch(`${API}/academic/course-mappings?${params.toString()}`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/course-mappings?${params.toString()}`, { credentials: "include", headers }));
 }
 
 export async function validateAcademicCourseMapping(headers: HeadersInit, payload: { term_id: string; subject_id: string; openedx_course_id: string; block_id?: string | null; campus?: string | null; branch?: string | null; openedx_course_title?: string | null }): Promise<AcademicCourseMappingValidation> {
-  return parseResponse(await fetch(`${API}/academic/course-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  return parseResponse(await apiFetch(`${API}/academic/course-mappings/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
 export async function saveAcademicCourseMapping(headers: HeadersInit, payload: { term_id: string; subject_id: string; openedx_course_id: string; block_id?: string | null; campus?: string | null; branch?: string | null; openedx_course_title?: string | null; allow_warnings?: boolean; note?: string | null }): Promise<AcademicCourseMapping> {
-  return parseResponse(await fetch(`${API}/academic/course-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  return parseResponse(await apiFetch(`${API}/academic/course-mappings`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
 export async function getAcademicClassCourseMappingProposal(headers: HeadersInit, classId: string): Promise<AcademicClassCourseMappingProposal> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping/proposal`, { headers }));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping/proposal`, { credentials: "include", headers }));
 }
 
 export async function validateAcademicClassCourseMapping(headers: HeadersInit, classId: string, payload: { openedx_course_id: string; openedx_cohort_name?: string | null; openedx_course_title?: string | null }): Promise<AcademicCourseMappingValidation> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping/validate`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
 export async function saveAcademicClassCourseMapping(headers: HeadersInit, classId: string, payload: { openedx_course_id: string; openedx_cohort_name?: string | null; openedx_course_title?: string | null; allow_warnings?: boolean; note?: string | null }): Promise<AcademicClassCourseMapping> {
-  return parseResponse(await fetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 

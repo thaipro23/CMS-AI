@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.3.1-auto-enroll-mapped-students'
+    app_version: str = '25.9.16.4.4-academic-security-scale-hardening'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -149,6 +149,8 @@ class Settings(BaseSettings):
     academic_auto_enroll_after_cms_sync: bool = True
     academic_auto_create_cms_users: bool = True
     academic_auto_add_teachers_to_course: bool = True
+    academic_learning_low_progress_threshold_percent: float = 50.0
+    academic_learning_low_grade_threshold_percent: float = 50.0
     openedx_courses_search_endpoint: str = '/api/courses/v1/courses/'
     openedx_student_insight_client_id: str = 'ai-server'
     openedx_student_insight_shared_secret: str | None = None
@@ -215,6 +217,14 @@ class Settings(BaseSettings):
     docx_ocr_images_enabled: bool = True
     docx_ocr_max_images: int = 0  # 0 = use FILE_OCR_MAX_PAGES
     material_upload_preflight_enabled: bool = True
+
+    # v25.9.16.3.6 Bank material cleanup policy. Unused/draft/failed
+    # materials are hard-deleted immediately. Audit-sensitive deleted materials
+    # remain lightweight tombstones for this retention window before admin purge.
+    bank_material_deleted_retention_days: int = 30
+    bank_material_cleanup_default_limit: int = 500
+    bank_material_hard_delete_unused_enabled: bool = True
+    bank_material_purge_deleted_files_enabled: bool = True
 
 
 PRODUCTION_ENVS = {'prod', 'production'}

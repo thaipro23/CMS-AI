@@ -88,7 +88,6 @@ import {
   SearchActionBar,
   Modal,
   EntityActions,
-  promptText,
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,

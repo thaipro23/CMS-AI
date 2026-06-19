@@ -86,6 +86,16 @@ class AcademicSubjectManagementOut(AcademicSubjectOut):
     openedx_course_title: str | None = None
     openedx_mapping_id: str | None = None
     suggested_openedx_course_id: str | None = None
+    learning_enrolled_count: int = 0
+    learning_active_count: int = 0
+    learning_synced_count: int = 0
+    learning_not_enrolled_count: int = 0
+    learning_avg_progress_percent: float | None = None
+    learning_avg_grade_percent: float | None = None
+    learning_last_synced_at: datetime | None = None
+    learning_component_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    learning_alerts: list[str] = Field(default_factory=list)
+
 
 
 class AcademicSubjectManagementListOut(BaseModel):
@@ -117,10 +127,22 @@ class AcademicClassOut(BaseModel):
     teacher_username: str | None = None
     teacher_name: str | None = None
     student_count: int = 0
+    cms_synced_count: int = 0
+    cms_unsynced_count: int = 0
     openedx_course_id: str | None = None
     openedx_cohort_name: str | None = None
     openedx_mapping_source: str | None = None
     openedx_mapping_validation_status: str | None = None
+    learning_enrolled_count: int = 0
+    learning_active_count: int = 0
+    learning_synced_count: int = 0
+    learning_not_enrolled_count: int = 0
+    learning_avg_progress_percent: float | None = None
+    learning_avg_grade_percent: float | None = None
+    learning_last_synced_at: datetime | None = None
+    learning_component_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    learning_alerts: list[str] = Field(default_factory=list)
+
 
 
 class AcademicStudentOut(BaseModel):
@@ -160,6 +182,8 @@ class AcademicClassStudentOut(AcademicStudentOut):
     learning_total_blocks: int | None = None
     learning_last_activity_at: datetime | None = None
     learning_last_synced_at: datetime | None = None
+    learning_status: str = 'not_synced'
+    learning_component_scores: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AcademicClassListOut(BaseModel):
@@ -283,7 +307,7 @@ class AcademicHealthOut(BaseModel):
 
 class AcademicResolveClassUsersIn(BaseModel):
     force: bool = False
-    limit: int = Field(1000, ge=1, le=5000)
+    limit: int = Field(500, ge=1, le=500)
 
 
 class AcademicMappingSummaryOut(BaseModel):
@@ -306,7 +330,7 @@ class AcademicMappingResolveOut(BaseModel):
 
 class AcademicEnrollmentSyncIn(BaseModel):
     force: bool = False
-    limit: int = Field(1000, ge=1, le=5000)
+    limit: int = Field(500, ge=1, le=500)
     mode: str | None = Field(None, max_length=50, description='Enrollment mode CMS/Open edX, mặc định audit')
 
 
@@ -324,7 +348,7 @@ class AcademicEnrollmentSyncOut(BaseModel):
 
 class AcademicLearningSyncIn(BaseModel):
     force: bool = False
-    limit: int = Field(1000, ge=1, le=5000)
+    limit: int = Field(500, ge=1, le=500)
 
 
 class AcademicLearningSummaryOut(BaseModel):
@@ -332,15 +356,42 @@ class AcademicLearningSummaryOut(BaseModel):
     openedx_course_id: str | None = None
     total: int
     counts: dict[str, int] = Field(default_factory=dict)
+    active_count: int = 0
     avg_progress_percent: float | None = None
     avg_grade_percent: float | None = None
     last_synced_at: datetime | None = None
+    component_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    alert_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class AcademicLearningSyncOut(AcademicLearningSummaryOut):
     ok: bool
     updated: int
     message: str
+
+
+class AcademicClassSyncJobOut(BaseModel):
+    id: str
+    job_type: str
+    status: str
+    class_id: str
+    requested_by: str | None = None
+    force: bool = False
+    limit: int = 500
+    mode: str | None = None
+    progress_current: int = 0
+    progress_total: int = 100
+    progress_label: str = 'Đang chờ xử lý'
+    request_json: dict[str, Any] | None = None
+    result_json: dict[str, Any] | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {'from_attributes': True}
 
 
 class AcademicManualMappingRecordIn(BaseModel):

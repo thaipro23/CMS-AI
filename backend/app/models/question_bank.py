@@ -135,10 +135,17 @@ class LearningMaterialVersion(Base):
     change_type: Mapped[str] = mapped_column(String(50), default='initial')
     uploaded_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default='active', index=True)
+    # v25.9.16.3.6: material deletion is now policy-based. Draft/unused
+    # materials are hard-deleted immediately, while audit-sensitive materials are
+    # kept as lightweight tombstones with deleted_at/deleted_by so admins can
+    # purge them after the retention window.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         Index('ix_ai_material_versions_bank_hash', 'bank_version_id', 'content_hash'),
+        Index('ix_ai_material_versions_status_deleted', 'status', 'deleted_at'),
     )
 
 

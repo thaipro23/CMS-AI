@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext
@@ -381,21 +381,21 @@ class AcademicService:
         campus: str | None = None,
         branch: str | None = None,
         search: str | None = None,
+        learning_status: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
         decision = self.access_decision(user)
+        status_filter = self._normalize_learning_list_filter(learning_status)
+        needs_status_filter = status_filter != 'all'
         student_count_sq = self.db.query(
             AcademicClassStudent.class_id.label('class_id'),
             func.count(AcademicClassStudent.student_id).label('student_count'),
         ).group_by(AcademicClassStudent.class_id).subquery()
 
-        # PostgreSQL requires SELECT DISTINCT ON columns to be the first ORDER BY columns.
-        # The previous implementation joined teacher assignments directly, then used
-        # query.distinct(AcademicClass.id, AcademicTeacher.id) with a business ORDER BY,
-        # which fails in production. Aggregate teacher display fields per class instead
-        # so the main query remains one row per class and can be sorted naturally.
+        # Aggregate teacher display fields per class so the main query remains
+        # one row per class and avoids PostgreSQL DISTINCT ON ORDER BY traps.
         teacher_summary_sq = self.db.query(
             AcademicTeacherAssignment.class_id.label('class_id'),
             func.min(AcademicTeacher.username).label('teacher_username'),
@@ -458,16 +458,12 @@ class AcademicService:
                 AcademicSubject.subject_name.ilike(like),
                 AcademicClass.id.in_(teacher_match_class_ids),
             ))
-        total = query.count()
-        rows = query.order_by(AcademicTerm.start_date.desc().nullslast(), AcademicBlock.sort_order.asc().nullslast(), AcademicSubject.subject_code.asc(), AcademicClass.class_code.asc()).offset((page - 1) * page_size).limit(page_size).all()
-        items = []
-        seen: set[str] = set()
+        ordered = query.order_by(AcademicTerm.start_date.desc().nullslast(), AcademicBlock.sort_order.asc().nullslast(), AcademicSubject.subject_code.asc(), AcademicClass.class_code.asc())
+        base_total = query.count()
+        rows = ordered.all() if needs_status_filter else ordered.offset((page - 1) * page_size).limit(page_size).all()
+        items: list[dict[str, Any]] = []
         for row in rows:
             item = row[0]
-            # When a class has multiple teachers, keep the first row in this light DTO.
-            if item.id in seen:
-                continue
-            seen.add(item.id)
             items.append({
                 'id': item.id,
                 'ap_class_id': item.ap_class_id,
@@ -493,16 +489,32 @@ class AcademicService:
                 'openedx_mapping_source': 'class_override' if row.openedx_course_id else None,
                 'openedx_mapping_validation_status': None,
             })
+        classes_by_id = {row[0].id: row[0] for row in rows}
+        inherited_mappings = self.inherited_course_mappings_for_classes(list(classes_by_id.values()))
         for entry in items:
             if entry.get('openedx_course_id'):
                 continue
-            cls_for_mapping = self.db.get(AcademicClass, entry['id'])
-            inherited = self.inherited_course_mapping_for_class(cls_for_mapping) if cls_for_mapping else None
+            inherited = inherited_mappings.get(entry['id'])
             if inherited:
                 entry['openedx_course_id'] = inherited.openedx_course_id
                 entry['openedx_cohort_name'] = entry['class_code']
                 entry['openedx_mapping_source'] = 'subject_term_mapping'
                 entry['openedx_mapping_validation_status'] = inherited.validation_status
+        class_ids = [item['id'] for item in items]
+        sync_by_class = self._student_sync_summary_for_classes(class_ids)
+        for entry in items:
+            counts = sync_by_class.get(entry['id'], {})
+            entry['cms_synced_count'] = int(counts.get('matched', 0))
+            entry['cms_unsynced_count'] = int(sum(v for k, v in counts.items() if k != 'matched'))
+        learning_by_class = self._learning_summary_by_class_ids(class_ids, {item['id']: item.get('openedx_course_id') for item in items})
+        for entry in items:
+            entry.update(learning_by_class.get(entry['id'], {}))
+        if needs_status_filter:
+            items = [entry for entry in items if self._entry_matches_learning_list_filter(entry, status_filter)]
+            total = len(items)
+            items = items[(page - 1) * page_size:page * page_size]
+        else:
+            total = base_total
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
 
@@ -521,6 +533,27 @@ class AcademicService:
         if not access_conditions:
             return query.filter(False)
         return query.filter(or_(*access_conditions))
+
+
+    def _student_sync_summary_for_classes(self, class_ids: list[str]) -> dict[str, dict[str, int]]:
+        if not class_ids:
+            return {}
+        rows = self.db.query(
+            AcademicClassStudent.class_id.label('class_id'),
+            OpenEdXUserMapping.match_status.label('match_status'),
+            func.count(AcademicClassStudent.id).label('count'),
+        ).outerjoin(
+            OpenEdXUserMapping,
+            OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
+        ).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(
+            AcademicClassStudent.class_id,
+            OpenEdXUserMapping.match_status,
+        ).all()
+        result: dict[str, dict[str, int]] = {}
+        for class_id, match_status, count in rows:
+            bucket = result.setdefault(str(class_id), {})
+            bucket[str(match_status or 'not_checked')] = int(count or 0)
+        return result
 
     def _student_sync_summary_for_subjects(self, user: UserContext, term_id: str | None, subject_ids: list[str], branch: str | None = None, campus: str | None = None, decision: AccessDecision | None = None) -> dict[str, dict[str, int]]:
         if not subject_ids:
@@ -548,7 +581,382 @@ class AcademicService:
             bucket[str(match_status or 'not_checked')] = int(count or 0)
         return result
 
-    def _find_exact_openedx_course_candidate(self, openedx_course_id: str) -> tuple[str | None, int, str | None, str]:
+
+    @staticmethod
+    def _number_or_none(value: Any) -> float | None:
+        if value is None or value == '':
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _percent_display_value(value: Any) -> float | None:
+        if value is None or value == '':
+            return None
+        try:
+            number = float(value)
+        except Exception:
+            return None
+        if 0 <= number <= 1:
+            number *= 100.0
+        return round(number, 2)
+
+    def _normalize_component_score_item(self, item: Any) -> dict[str, Any] | None:
+        if not isinstance(item, dict):
+            return None
+        key = str(
+            item.get('key')
+            or item.get('usage_key')
+            or item.get('block_id')
+            or item.get('id')
+            or item.get('name')
+            or item.get('display_name')
+            or ''
+        ).strip()
+        name = str(
+            item.get('name')
+            or item.get('display_name')
+            or item.get('label')
+            or item.get('title')
+            or key
+            or 'Điểm thành phần'
+        ).strip()
+        earned = self._number_or_none(item.get('earned', item.get('earned_graded', item.get('score'))))
+        possible = self._number_or_none(item.get('possible', item.get('possible_graded', item.get('max_score'))))
+        percent = self._percent_display_value(item.get('percent', item.get('grade_percent', item.get('score_percent'))))
+        if percent is None and earned is not None and possible and possible > 0:
+            percent = round((earned / possible) * 100.0, 2)
+        if percent is None and earned is None and possible is None:
+            return None
+        return {
+            'key': key or name,
+            'name': name[:255],
+            'category': str(item.get('category') or item.get('type') or item.get('format') or item.get('block_type') or '').strip() or None,
+            'earned': round(earned, 2) if earned is not None else None,
+            'possible': round(possible, 2) if possible is not None else None,
+            'percent': percent,
+            'weight': self._number_or_none(item.get('weight')),
+            'source': str(item.get('source') or item.get('model') or '').strip() or None,
+        }
+
+    def _component_scores_from_payload(self, payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+        candidate_lists: list[Any] = []
+        for key in ('component_scores', 'component_grades', 'grade_components', 'subsection_grades', 'section_scores', 'scores'):
+            candidate_lists.append(payload.get(key))
+        grade = payload.get('grade') if isinstance(payload.get('grade'), dict) else {}
+        for key in ('components', 'component_scores', 'component_grades', 'subsection_grades', 'section_scores', 'breakdown'):
+            candidate_lists.append(grade.get(key))
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in candidate_lists:
+            if isinstance(candidate, dict):
+                iterable = []
+                for key, value in candidate.items():
+                    if isinstance(value, dict):
+                        iterable.append({'key': key, **value})
+                candidate = iterable
+            if not isinstance(candidate, list):
+                continue
+            for raw_item in candidate:
+                item = self._normalize_component_score_item(raw_item)
+                if not item:
+                    continue
+                dedupe = str(item.get('key') or item.get('name') or '').lower()
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                normalized.append(item)
+        normalized.sort(key=lambda item: str(item.get('name') or item.get('key') or ''))
+        return normalized[:30]
+
+    def _component_scores_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> list[dict[str, Any]]:
+        if not snapshot or not isinstance(snapshot.raw_json, dict):
+            return []
+        raw = snapshot.raw_json
+        payload = raw.get('payload') if isinstance(raw.get('payload'), dict) else raw
+        return self._component_scores_from_payload(payload)
+
+    def _low_progress_threshold(self) -> float:
+        try:
+            return float(getattr(settings, 'academic_learning_low_progress_threshold_percent', 50.0))
+        except Exception:
+            return 50.0
+
+    def _low_grade_threshold(self) -> float:
+        try:
+            return float(getattr(settings, 'academic_learning_low_grade_threshold_percent', 50.0))
+        except Exception:
+            return 50.0
+
+    @staticmethod
+    def _snapshot_has_learning_activity(snapshot: AcademicStudentLearningSnapshot | None) -> bool:
+        if not snapshot:
+            return False
+        if str(snapshot.enrollment_status or '').lower() != 'enrolled':
+            return False
+        progress = snapshot.progress_percent
+        grade = snapshot.grade_percent
+        completed = snapshot.completed_blocks or 0
+        if progress is not None and progress > 0:
+            return True
+        if grade is not None:
+            return True
+        if completed and completed > 0:
+            return True
+        if snapshot.last_activity_at is not None:
+            return True
+        return False
+
+    def _learning_status_for_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None, mapping: OpenEdXUserMapping | None = None) -> str:
+        if mapping is None or (mapping.match_status or '') != 'matched':
+            return 'cms_not_synced'
+        if not snapshot:
+            return 'not_synced'
+        enrollment_status = str(snapshot.enrollment_status or '').lower()
+        if enrollment_status in {'failed', 'missing_user', 'inactive_user', 'unknown'}:
+            return 'sync_error'
+        if enrollment_status != 'enrolled':
+            return 'not_enrolled'
+        progress = snapshot.progress_percent
+        grade = snapshot.grade_percent
+        if not self._snapshot_has_learning_activity(snapshot):
+            return 'no_activity'
+        if grade is not None and grade < self._low_grade_threshold():
+            return 'low_grade'
+        if progress is not None and progress < self._low_progress_threshold():
+            return 'low_progress'
+        if snapshot.passed is True or (grade is not None and grade >= 80) or (progress is not None and progress >= 80):
+            return 'good'
+        return 'in_progress'
+
+    def _component_summary_from_snapshots(self, snapshots: list[AcademicStudentLearningSnapshot]) -> list[dict[str, Any]]:
+        buckets: dict[str, dict[str, Any]] = {}
+        for snapshot in snapshots:
+            for item in self._component_scores_from_snapshot(snapshot):
+                key = str(item.get('key') or item.get('name') or '').strip()
+                if not key:
+                    continue
+                bucket = buckets.setdefault(key, {'key': key, 'name': item.get('name') or key, 'category': item.get('category'), 'percents': [], 'earned': 0.0, 'possible': 0.0, 'student_count': 0})
+                percent = self._percent_display_value(item.get('percent'))
+                if percent is not None:
+                    bucket['percents'].append(percent)
+                earned = self._number_or_none(item.get('earned'))
+                possible = self._number_or_none(item.get('possible'))
+                if earned is not None:
+                    bucket['earned'] += earned
+                if possible is not None:
+                    bucket['possible'] += possible
+                bucket['student_count'] += 1
+        results: list[dict[str, Any]] = []
+        for bucket in buckets.values():
+            percents = bucket.pop('percents')
+            if percents:
+                percent = round(sum(percents) / len(percents), 2)
+            elif bucket.get('possible'):
+                percent = round((bucket.get('earned', 0.0) / bucket['possible']) * 100.0, 2)
+            else:
+                percent = None
+            results.append({
+                'key': bucket['key'],
+                'name': bucket['name'],
+                'category': bucket.get('category'),
+                'earned': round(bucket.get('earned', 0.0), 2) if bucket.get('earned') else None,
+                'possible': round(bucket.get('possible', 0.0), 2) if bucket.get('possible') else None,
+                'percent': percent,
+                'weight': None,
+                'source': f"{bucket.get('student_count', 0)} SV",
+            })
+        results.sort(key=lambda item: (item.get('percent') is None, str(item.get('name') or '')))
+        return results[:20]
+
+    def _learning_alerts_from_summary(self, *, total: int, enrolled: int, synced: int, active: int = 0, avg_progress: float | None, avg_grade: float | None, course_id: str | None) -> list[str]:
+        alerts: list[str] = []
+        if not course_id:
+            alerts.append('Chưa map Course CMS')
+        if total and synced == 0:
+            alerts.append('Chưa có dữ liệu học tập')
+        if total and enrolled < total:
+            alerts.append(f'{total - enrolled} SV chưa enroll')
+        if synced and active == 0:
+            alerts.append('Chưa có sinh viên vào học')
+        if avg_progress is not None and avg_progress < self._low_progress_threshold():
+            alerts.append('Tiến độ thấp')
+        if avg_grade is not None and avg_grade < self._low_grade_threshold():
+            alerts.append('Điểm thấp')
+        return alerts
+
+    @staticmethod
+    def _normalize_learning_list_filter(value: str | None) -> str:
+        raw = str(value or '').strip().lower()
+        aliases = {
+            'all': 'all', 'tat_ca': 'all', '': 'all',
+            'no_course_map': 'no_course_map', 'not_mapped': 'no_course_map',
+            'cms_not_synced': 'cms_not_synced', 'not_cms_synced': 'cms_not_synced',
+            'not_fully_enrolled': 'not_fully_enrolled', 'not_enrolled': 'not_fully_enrolled',
+            'no_progress': 'no_learning_data', 'no_learning': 'no_learning_data', 'no_learning_data': 'no_learning_data',
+            'no_activity': 'no_activity',
+            'low_progress': 'low_progress', 'low_grade': 'low_grade',
+            'sync_error': 'sync_error', 'has_alert': 'has_alert', 'warning': 'has_alert',
+        }
+        return aliases.get(raw, raw or 'all')
+
+    def _entry_matches_learning_list_filter(self, entry: dict[str, Any], status_filter: str | None) -> bool:
+        status = self._normalize_learning_list_filter(status_filter)
+        if status == 'all':
+            return True
+        total = int(entry.get('student_count') or 0)
+        course_id = entry.get('openedx_course_id')
+        enrolled = int(entry.get('learning_enrolled_count') or 0)
+        synced = int(entry.get('learning_synced_count') or 0)
+        active = int(entry.get('learning_active_count') or 0)
+        cms_synced = int(entry.get('cms_synced_count') or 0)
+        cms_unsynced = int(entry.get('cms_unsynced_count') or 0)
+        avg_progress = entry.get('learning_avg_progress_percent')
+        avg_grade = entry.get('learning_avg_grade_percent')
+        alerts = entry.get('learning_alerts') or []
+        if status == 'no_course_map':
+            if 'course_mapping_status' in entry:
+                return str(entry.get('course_mapping_status') or '').lower() not in {'mapped', 'already_mapped', 'auto_mapped'}
+            return not bool(course_id)
+        if status == 'cms_not_synced':
+            return total > 0 and (cms_unsynced > 0 or cms_synced < total)
+        if status == 'not_fully_enrolled':
+            return total > 0 and enrolled < total
+        if status == 'no_learning_data':
+            return total > 0 and synced == 0
+        if status == 'no_activity':
+            return total > 0 and synced > 0 and active == 0
+        if status == 'low_progress':
+            return isinstance(avg_progress, (int, float)) and avg_progress < self._low_progress_threshold()
+        if status == 'low_grade':
+            return isinstance(avg_grade, (int, float)) and avg_grade < self._low_grade_threshold()
+        if status == 'sync_error':
+            return any('lỗi' in str(item).lower() for item in alerts)
+        if status == 'has_alert':
+            return bool(alerts)
+        return True
+
+    def _learning_summary_by_class_ids(self, class_ids: list[str], course_by_class: dict[str, str | None] | None = None) -> dict[str, dict[str, Any]]:
+        if not class_ids:
+            return {}
+        totals = dict(self.db.query(AcademicClassStudent.class_id, func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(AcademicClassStudent.class_id).all())
+        snapshot_query = self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
+        expected_courses = {course for course in (course_by_class or {}).values() if course}
+        if expected_courses:
+            snapshot_query = snapshot_query.filter(AcademicStudentLearningSnapshot.openedx_course_id.in_(sorted(expected_courses)))
+        snapshots = snapshot_query.all()
+        buckets: dict[str, dict[str, Any]] = {cid: {'snapshots': [], 'counts': {}, 'progress': [], 'grades': [], 'active': 0, 'last_synced_at': None} for cid in class_ids}
+        for snapshot in snapshots:
+            expected_course = (course_by_class or {}).get(snapshot.class_id)
+            if expected_course and snapshot.openedx_course_id != expected_course:
+                continue
+            bucket = buckets.setdefault(snapshot.class_id, {'snapshots': [], 'counts': {}, 'progress': [], 'grades': [], 'active': 0, 'last_synced_at': None})
+            bucket['snapshots'].append(snapshot)
+            status_value = str(snapshot.enrollment_status or 'unknown')
+            bucket['counts'][status_value] = bucket['counts'].get(status_value, 0) + 1
+            if snapshot.progress_percent is not None:
+                bucket['progress'].append(float(snapshot.progress_percent))
+            if snapshot.grade_percent is not None:
+                bucket['grades'].append(float(snapshot.grade_percent))
+            if self._snapshot_has_learning_activity(snapshot):
+                bucket['active'] = int(bucket.get('active', 0) or 0) + 1
+            sync_at = snapshot.learning_synced_at or snapshot.last_synced_at
+            if sync_at and (bucket['last_synced_at'] is None or sync_at > bucket['last_synced_at']):
+                bucket['last_synced_at'] = sync_at
+        result: dict[str, dict[str, Any]] = {}
+        for class_id, bucket in buckets.items():
+            total = int(totals.get(class_id, 0) or 0)
+            counts = dict(bucket['counts'])
+            synced = len(bucket['snapshots'])
+            enrolled = int(counts.get('enrolled', 0) or 0)
+            avg_progress = round(sum(bucket['progress']) / len(bucket['progress']), 2) if bucket['progress'] else None
+            avg_grade = round(sum(bucket['grades']) / len(bucket['grades']), 2) if bucket['grades'] else None
+            course_id = (course_by_class or {}).get(class_id)
+            result[class_id] = {
+                'learning_enrolled_count': enrolled,
+                'learning_active_count': int(bucket.get('active', 0) or 0),
+                'learning_synced_count': synced,
+                'learning_not_enrolled_count': max(0, total - enrolled),
+                'learning_avg_progress_percent': avg_progress,
+                'learning_avg_grade_percent': avg_grade,
+                'learning_last_synced_at': bucket['last_synced_at'],
+                'learning_component_summaries': self._component_summary_from_snapshots(bucket['snapshots']),
+                'learning_alerts': self._learning_alerts_from_summary(total=total, enrolled=enrolled, synced=synced, active=int(bucket.get('active', 0) or 0), avg_progress=avg_progress, avg_grade=avg_grade, course_id=course_id),
+            }
+        return result
+
+    def _learning_summary_by_subject_ids(self, subject_ids: list[str], *, term_id: str | None = None, branch: str | None = None, campus: str | None = None, course_by_subject: dict[str, str | None] | None = None, decision: AccessDecision | None = None, user: UserContext | None = None) -> dict[str, dict[str, Any]]:
+        if not subject_ids:
+            return {}
+        class_query = self.db.query(AcademicClass.id, AcademicClass.subject_id).join(AcademicSubject, AcademicSubject.id == AcademicClass.subject_id).filter(AcademicClass.subject_id.in_(subject_ids), AcademicClass.active.is_(True))
+        if user is not None:
+            class_query = self._apply_academic_access_filter(class_query, user, decision)
+        if term_id:
+            class_query = class_query.filter(AcademicClass.term_id == term_id)
+        if branch:
+            class_query = class_query.filter(AcademicClass.branch == branch.strip().lower())
+        if campus:
+            class_query = class_query.filter(AcademicClass.campus == campus.strip().lower())
+        pairs = class_query.all()
+        class_to_subject = {str(cid): str(sid) for cid, sid in pairs}
+        class_ids = list(class_to_subject.keys())
+        if not class_ids:
+            return {sid: {'learning_enrolled_count': 0, 'learning_active_count': 0, 'learning_synced_count': 0, 'learning_not_enrolled_count': 0, 'learning_avg_progress_percent': None, 'learning_avg_grade_percent': None, 'learning_last_synced_at': None, 'learning_component_summaries': [], 'learning_alerts': ['Chưa có lớp active']} for sid in subject_ids}
+        totals_rows = self.db.query(AcademicClass.subject_id, func.count(AcademicClassStudent.id)).join(AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id).filter(AcademicClass.id.in_(class_ids)).group_by(AcademicClass.subject_id).all()
+        totals = {str(subject_id): int(count or 0) for subject_id, count in totals_rows}
+        snapshot_query = self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
+        expected_courses = {course for course in (course_by_class or {}).values() if course}
+        if expected_courses:
+            snapshot_query = snapshot_query.filter(AcademicStudentLearningSnapshot.openedx_course_id.in_(sorted(expected_courses)))
+        snapshots = snapshot_query.all()
+        buckets: dict[str, dict[str, Any]] = {sid: {'snapshots': [], 'counts': {}, 'progress': [], 'grades': [], 'active': 0, 'last_synced_at': None} for sid in subject_ids}
+        for snapshot in snapshots:
+            subject_id = class_to_subject.get(snapshot.class_id)
+            if not subject_id:
+                continue
+            expected_course = (course_by_subject or {}).get(subject_id)
+            if expected_course and snapshot.openedx_course_id != expected_course:
+                continue
+            bucket = buckets.setdefault(subject_id, {'snapshots': [], 'counts': {}, 'progress': [], 'grades': [], 'active': 0, 'last_synced_at': None})
+            bucket['snapshots'].append(snapshot)
+            status_value = str(snapshot.enrollment_status or 'unknown')
+            bucket['counts'][status_value] = bucket['counts'].get(status_value, 0) + 1
+            if snapshot.progress_percent is not None:
+                bucket['progress'].append(float(snapshot.progress_percent))
+            if snapshot.grade_percent is not None:
+                bucket['grades'].append(float(snapshot.grade_percent))
+            if self._snapshot_has_learning_activity(snapshot):
+                bucket['active'] = int(bucket.get('active', 0) or 0) + 1
+            sync_at = snapshot.learning_synced_at or snapshot.last_synced_at
+            if sync_at and (bucket['last_synced_at'] is None or sync_at > bucket['last_synced_at']):
+                bucket['last_synced_at'] = sync_at
+        result: dict[str, dict[str, Any]] = {}
+        for subject_id, bucket in buckets.items():
+            total = int(totals.get(subject_id, 0) or 0)
+            counts = dict(bucket['counts'])
+            synced = len(bucket['snapshots'])
+            enrolled = int(counts.get('enrolled', 0) or 0)
+            avg_progress = round(sum(bucket['progress']) / len(bucket['progress']), 2) if bucket['progress'] else None
+            avg_grade = round(sum(bucket['grades']) / len(bucket['grades']), 2) if bucket['grades'] else None
+            course_id = (course_by_subject or {}).get(subject_id)
+            result[subject_id] = {
+                'learning_enrolled_count': enrolled,
+                'learning_active_count': int(bucket.get('active', 0) or 0),
+                'learning_synced_count': synced,
+                'learning_not_enrolled_count': max(0, total - enrolled),
+                'learning_avg_progress_percent': avg_progress,
+                'learning_avg_grade_percent': avg_grade,
+                'learning_last_synced_at': bucket['last_synced_at'],
+                'learning_component_summaries': self._component_summary_from_snapshots(bucket['snapshots']),
+                'learning_alerts': self._learning_alerts_from_summary(total=total, enrolled=enrolled, synced=synced, active=int(bucket.get('active', 0) or 0), avg_progress=avg_progress, avg_grade=avg_grade, course_id=course_id),
+            }
+        return result
+
+    def _find_exact_openedx_course_candidate(self, openedx_course_id: str, *, allow_external: bool = False) -> tuple[str | None, int, str | None, str]:
         raw = str(openedx_course_id or '').strip()
         if not raw:
             return None, 0, None, 'empty'
@@ -568,9 +976,18 @@ class AcademicService:
             cache[cache_key] = result
             return result
 
-        # API-first autofill fallback: if the course has not been synced into
-        # CourseSyncState yet, ask CMS/Open edX directly so users do not have to
-        # manually sync course content just to map a subject to a Course.
+        # Do not call CMS/Open edX from normal read/list APIs. Student
+        # Management pages refresh often, and a GET/F5 must stay local-db only.
+        # External lookup is allowed only from explicit actions such as
+        # /course-mapping/auto or validation/save flows.
+        if not allow_external:
+            result = (None, len(rows), None, 'local_course_sync_state')
+            cache[cache_key] = result
+            return result
+
+        # Explicit API-first autofill fallback: if the course has not been synced
+        # into CourseSyncState yet, ask CMS/Open edX directly only after the user
+        # triggers auto-map/validate.
         try:
             candidate, title, count, source = OpenEdXStudentInsightClient().find_exact_course(raw)
             if count == 1 and candidate:
@@ -670,7 +1087,7 @@ class AcademicService:
                 'suggested_openedx_course_id': suggested,
                 'mapping': self._course_mapping_item(current),
             }
-        candidate, candidate_count, candidate_title, candidate_source = self._find_exact_openedx_course_candidate(suggested)
+        candidate, candidate_count, candidate_title, candidate_source = self._find_exact_openedx_course_candidate(suggested, allow_external=True)
         if candidate_count != 1 or not candidate:
             status_value = 'not_found' if candidate_count == 0 else 'multiple_candidates'
             return {
@@ -715,11 +1132,14 @@ class AcademicService:
         branch: str | None = None,
         campus: str | None = None,
         search: str | None = None,
+        learning_status: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
         decision = self.access_decision(user)
+        status_filter = self._normalize_learning_list_filter(learning_status)
+        needs_status_filter = status_filter != 'all'
         query = self.db.query(
             AcademicSubject,
             func.count(func.distinct(AcademicClass.id)).label('class_count'),
@@ -740,8 +1160,9 @@ class AcademicService:
             like = f"%{search.strip()}%"
             query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
         query = query.group_by(AcademicSubject.id)
-        total = query.count()
-        rows = query.order_by(AcademicSubject.subject_code.asc()).offset((page - 1) * page_size).limit(page_size).all()
+        ordered = query.order_by(AcademicSubject.subject_code.asc())
+        base_total = query.count()
+        rows = ordered.all() if needs_status_filter else ordered.offset((page - 1) * page_size).limit(page_size).all()
         subject_ids = [row[0].id for row in rows]
         mapping_rows = []
         if subject_ids and term_id:
@@ -762,32 +1183,17 @@ class AcademicService:
             subject = row[0]
             mapping = mapping_by_subject.get(subject.id)
             suggested = self.suggested_course_id_for_scope(term_id, subject.id) if term_id else None
-            candidate, candidate_count, candidate_title, candidate_source = self._find_exact_openedx_course_candidate(suggested or '')
+            candidate, candidate_count, candidate_title, _candidate_source = self._find_exact_openedx_course_candidate(suggested or '', allow_external=False)
             if mapping:
                 status_value = 'mapped'
                 status_label = 'Đã map Course CMS'
                 effective_course_id = mapping.openedx_course_id
             elif candidate_count == 1 and candidate and term_id:
-                branch_value = (branch or subject.branch or '').strip().lower() or None
-                mapping = self._auto_create_subject_course_mapping_if_safe(
-                    user,
-                    term_id=term_id,
-                    subject_id=subject.id,
-                    branch_value=branch_value,
-                    candidate=candidate,
-                    suggested=suggested or candidate,
-                    openedx_course_title=candidate_title,
-                    candidate_source=candidate_source,
-                    commit=False,
-                )
-                if mapping:
-                    status_value = 'auto_mapped'
-                    status_label = 'Đã auto map Course CMS'
-                    effective_course_id = mapping.openedx_course_id
-                else:
-                    status_value = 'auto_candidate'
-                    status_label = 'Có thể auto map'
-                    effective_course_id = candidate
+                # GET/list APIs must not create or commit mappings. They only show a safe candidate;
+                # the actual mapping is created by the explicit Auto map button.
+                status_value = 'auto_candidate'
+                status_label = 'Có thể auto map'
+                effective_course_id = candidate
             elif candidate_count > 1:
                 status_value = 'multiple_candidates'
                 status_label = 'Nhiều course trùng'
@@ -819,11 +1225,23 @@ class AcademicService:
                 'openedx_mapping_id': mapping.id if mapping else None,
                 'suggested_openedx_course_id': suggested,
             })
-        try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise
+        learning_by_subject = self._learning_summary_by_subject_ids(
+            subject_ids,
+            term_id=term_id,
+            branch=branch,
+            campus=campus,
+            course_by_subject={item['id']: item.get('openedx_course_id') for item in items},
+            decision=decision,
+            user=user,
+        )
+        for entry in items:
+            entry.update(learning_by_subject.get(entry['id'], {}))
+        if needs_status_filter:
+            items = [entry for entry in items if self._entry_matches_learning_list_filter(entry, status_filter)]
+            total = len(items)
+            items = items[(page - 1) * page_size:page * page_size]
+        else:
+            total = base_total
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
 
@@ -838,9 +1256,10 @@ class AcademicService:
         class_mapping = self.db.query(AcademicClassCourseMapping).filter(
             AcademicClassCourseMapping.class_id == cls.id,
             AcademicClassCourseMapping.active.is_(True),
-        ).first()
+        ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast()).first()
         inherited = None if class_mapping else self.inherited_course_mapping_for_class(cls)
         student_count = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == cls.id).scalar() or 0
+        class_sync_counts = self._student_sync_summary_for_classes([cls.id]).get(cls.id, {})
         teacher = self.db.query(AcademicTeacher).join(
             AcademicTeacherAssignment, AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
         ).filter(AcademicTeacherAssignment.class_id == cls.id).order_by(AcademicTeacher.username.asc()).first()
@@ -866,6 +1285,8 @@ class AcademicService:
             'teacher_username': teacher.username if teacher else None,
             'teacher_name': teacher.full_name if teacher else None,
             'student_count': int(student_count),
+            'cms_synced_count': int(class_sync_counts.get('matched', 0)),
+            'cms_unsynced_count': int(sum(v for k, v in class_sync_counts.items() if k != 'matched')),
             'openedx_course_id': effective_mapping.openedx_course_id if effective_mapping else None,
             'openedx_cohort_name': class_mapping.openedx_cohort_name if class_mapping else (cls.class_code if inherited else None),
             'openedx_mapping_source': 'class_override' if class_mapping else ('subject_term_mapping' if inherited else None),
@@ -904,14 +1325,17 @@ class AcademicService:
             'learning_completed_blocks': learning.completed_blocks if learning else None,
             'learning_total_blocks': learning.total_blocks if learning else None,
             'learning_last_activity_at': learning.last_activity_at if learning else None,
-            'learning_last_synced_at': learning.last_synced_at if learning else None,
+            'learning_last_synced_at': (learning.learning_synced_at or learning.last_synced_at) if learning else None,
+            'learning_enrollment_synced_at': learning.enrollment_synced_at if learning else None,
+            'learning_status': self._learning_status_for_snapshot(learning, mapping),
+            'learning_component_scores': self._component_scores_from_snapshot(learning),
         }
 
-    def list_class_students(self, user: UserContext, class_id: str, *, search: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    def list_class_students(self, user: UserContext, class_id: str, *, search: str | None = None, learning_status: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
         page, page_size = _page(page, page_size)
         cls = self.db.get(AcademicClass, class_id)
-        effective_mapping = self.inherited_course_mapping_for_class(cls) if cls else None
+        effective_mapping = self.effective_course_mapping_for_class(cls) if cls else None
         course_id = effective_mapping.openedx_course_id if effective_mapping else None
         query = self.db.query(AcademicStudent, AcademicClassStudent.synced_at, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
@@ -936,6 +1360,27 @@ class AcademicService:
                 AcademicStudent.email.ilike(like),
                 OpenEdXUserMapping.openedx_username.ilike(like),
             ))
+        status_filter = str(learning_status or '').strip().lower()
+        if status_filter and status_filter not in {'all', 'tat_ca'}:
+            if status_filter == 'cms_not_synced':
+                query = query.filter(or_(OpenEdXUserMapping.id.is_(None), OpenEdXUserMapping.match_status != 'matched'))
+            elif status_filter == 'not_enrolled':
+                query = query.filter(or_(AcademicStudentLearningSnapshot.id.is_(None), AcademicStudentLearningSnapshot.enrollment_status != 'enrolled'))
+            elif status_filter == 'no_activity':
+                query = query.filter(or_(
+                    AcademicStudentLearningSnapshot.id.is_(None),
+                    and_(AcademicStudentLearningSnapshot.enrollment_status == 'enrolled', AcademicStudentLearningSnapshot.progress_percent.is_(None), AcademicStudentLearningSnapshot.grade_percent.is_(None)),
+                    and_(AcademicStudentLearningSnapshot.enrollment_status == 'enrolled', AcademicStudentLearningSnapshot.progress_percent <= 0, AcademicStudentLearningSnapshot.grade_percent.is_(None)),
+                ))
+            elif status_filter == 'low_progress':
+                query = query.filter(AcademicStudentLearningSnapshot.progress_percent.isnot(None), AcademicStudentLearningSnapshot.progress_percent < self._low_progress_threshold())
+            elif status_filter == 'low_grade':
+                query = query.filter(AcademicStudentLearningSnapshot.grade_percent.isnot(None), AcademicStudentLearningSnapshot.grade_percent < self._low_grade_threshold())
+            elif status_filter == 'sync_error':
+                query = query.filter(or_(
+                    AcademicStudentLearningSnapshot.enrollment_status.in_(['failed', 'unknown', 'missing_user', 'inactive_user']),
+                    OpenEdXUserMapping.match_status.in_(['inactive', 'ambiguous', 'manual_required']),
+                ))
         total = query.count()
         rows = query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).offset((page - 1) * page_size).limit(page_size).all()
         items = [self._student_mapping_item(class_id, student, synced_at, mapping, learning) for student, synced_at, mapping, learning in rows]
@@ -1199,22 +1644,92 @@ class AcademicService:
         return self._course_mapping_item(mapping)
 
     def inherited_course_mapping_for_class(self, cls: AcademicClass) -> AcademicCourseMapping | None:
-        # Prefer exact block mapping, then term+subject mapping without block.
-        filters = [
-            (cls.block_id, cls.campus, cls.branch),
-            (cls.block_id, None, cls.branch),
-            (cls.block_id, cls.campus, None),
-            (cls.block_id, None, None),
-            (None, cls.campus, cls.branch),
-            (None, None, cls.branch),
-            (None, cls.campus, None),
-            (None, None, None),
-        ]
-        for block_id, campus, branch in filters:
-            found = self._scope_filter_course_mapping(term_id=cls.term_id, block_id=block_id, subject_id=cls.subject_id, campus=campus, branch=branch).first()
-            if found:
-                return found
-        return None
+        return self.inherited_course_mappings_for_classes([cls]).get(cls.id) if cls else None
+
+    def inherited_course_mappings_for_classes(self, classes: list[AcademicClass]) -> dict[str, AcademicCourseMapping]:
+        """Resolve inherited subject/term mappings for many classes without N+1 queries."""
+        valid_classes = [cls for cls in classes if cls and cls.id and cls.term_id and cls.subject_id]
+        if not valid_classes:
+            return {}
+        term_ids = {cls.term_id for cls in valid_classes}
+        subject_ids = {cls.subject_id for cls in valid_classes}
+        mappings = self.db.query(AcademicCourseMapping).filter(
+            AcademicCourseMapping.term_id.in_(term_ids),
+            AcademicCourseMapping.subject_id.in_(subject_ids),
+            AcademicCourseMapping.active.is_(True),
+        ).order_by(AcademicCourseMapping.updated_at.desc().nullslast(), AcademicCourseMapping.created_at.desc().nullslast()).all()
+
+        def matches(value: str | None, expected: str | None) -> bool:
+            return value == expected
+
+        def priority(cls: AcademicClass, mapping: AcademicCourseMapping) -> int | None:
+            if mapping.term_id != cls.term_id or mapping.subject_id != cls.subject_id:
+                return None
+            order = [
+                (cls.block_id, cls.campus, cls.branch),
+                (cls.block_id, None, cls.branch),
+                (cls.block_id, cls.campus, None),
+                (cls.block_id, None, None),
+                (None, cls.campus, cls.branch),
+                (None, None, cls.branch),
+                (None, cls.campus, None),
+                (None, None, None),
+            ]
+            candidate = (mapping.block_id, mapping.campus, mapping.branch)
+            for index, expected in enumerate(order):
+                if all(matches(candidate[i], expected[i]) for i in range(3)):
+                    return index
+            return None
+
+        result: dict[str, AcademicCourseMapping] = {}
+        best_rank: dict[str, int] = {}
+        for cls in valid_classes:
+            for mapping in mappings:
+                rank = priority(cls, mapping)
+                if rank is None:
+                    continue
+                if cls.id not in best_rank or rank < best_rank[cls.id]:
+                    result[cls.id] = mapping
+                    best_rank[cls.id] = rank
+                    if rank == 0:
+                        break
+        return result
+
+    def effective_course_mapping_for_class(self, cls: AcademicClass | None) -> AcademicClassCourseMapping | AcademicCourseMapping | None:
+        """Return the exact course mapping used by every class-level operation.
+
+        Class override wins over subject/term inherited mapping. All enrollment,
+        learning sync, detail, and student list flows must use this helper so a
+        class-specific Open edX course/cohort cannot be displayed in one screen
+        while another syncs against the inherited course.
+        """
+        if not cls:
+            return None
+        class_mapping = self.db.query(AcademicClassCourseMapping).filter(
+            AcademicClassCourseMapping.class_id == cls.id,
+            AcademicClassCourseMapping.active.is_(True),
+        ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast()).first()
+        if class_mapping:
+            return class_mapping
+        return self.inherited_course_mapping_for_class(cls)
+
+    def _cohort_for_class_mapping(self, cls: AcademicClass, mapping: AcademicClassCourseMapping | AcademicCourseMapping | None) -> str | None:
+        if isinstance(mapping, AcademicClassCourseMapping):
+            return mapping.openedx_cohort_name or cls.class_code
+        return cls.class_code if mapping else None
+
+    @staticmethod
+    def _snapshot_has_learning_payload(snapshot: AcademicStudentLearningSnapshot | None) -> bool:
+        if not snapshot:
+            return False
+        if snapshot.progress_percent is not None or snapshot.grade_percent is not None:
+            return True
+        if snapshot.completed_blocks is not None or snapshot.total_blocks is not None:
+            return True
+        raw = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
+        payload = raw.get('payload') if isinstance(raw.get('payload'), dict) else {}
+        component_scores = payload.get('component_scores') or payload.get('component_grades')
+        return bool(component_scores)
 
     def class_course_mapping_proposal(self, user: UserContext, class_id: str) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
@@ -1364,7 +1879,7 @@ class AcademicService:
 
     def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
-        limit = max(1, min(5000, int(limit or 1000)))
+        limit = max(1, min(500, int(limit or 500)))
         query = self.db.query(AcademicStudent, OpenEdXUserMapping).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
@@ -1518,7 +2033,7 @@ class AcademicService:
     def _learning_summary_for_class_course(self, class_id: str, course_id: str | None) -> dict[str, Any]:
         total = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
         if not course_id:
-            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None}
+            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'active_count': 0, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None, 'component_summaries': [], 'status_counts': {'not_synced': int(total)}, 'alert_counts': {'not_synced': int(total)}}
         rows = self.db.query(AcademicStudentLearningSnapshot.enrollment_status, func.count(AcademicStudentLearningSnapshot.id)).filter(
             AcademicStudentLearningSnapshot.class_id == class_id,
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
@@ -1536,18 +2051,38 @@ class AcademicService:
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
             AcademicStudentLearningSnapshot.grade_percent.isnot(None),
         ).scalar()
-        last_synced = self.db.query(func.max(AcademicStudentLearningSnapshot.last_synced_at)).filter(
+        last_synced = self.db.query(func.max(func.coalesce(AcademicStudentLearningSnapshot.learning_synced_at, AcademicStudentLearningSnapshot.last_synced_at))).filter(
             AcademicStudentLearningSnapshot.class_id == class_id,
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
         ).scalar()
+        snapshots = self.db.query(AcademicStudentLearningSnapshot).filter(
+            AcademicStudentLearningSnapshot.class_id == class_id,
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+        ).all()
+        status_counts: dict[str, int] = {}
+        alert_counts = {'cms_not_synced': 0, 'not_enrolled': 0, 'no_activity': 0, 'low_progress': 0, 'low_grade': 0, 'sync_error': 0, 'good': 0, 'in_progress': 0}
+        active_count = sum(1 for snapshot in snapshots if self._snapshot_has_learning_activity(snapshot))
+        snapshot_by_student = {snapshot.student_id: snapshot for snapshot in snapshots}
+        mapping_rows = self.db.query(AcademicClassStudent.student_id, OpenEdXUserMapping).outerjoin(
+            OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
+        ).filter(AcademicClassStudent.class_id == class_id).all()
+        for student_id, mapping in mapping_rows:
+            status_name = self._learning_status_for_snapshot(snapshot_by_student.get(student_id), mapping)
+            status_counts[status_name] = status_counts.get(status_name, 0) + 1
+            if status_name in alert_counts:
+                alert_counts[status_name] += 1
         return {
             'class_id': class_id,
             'openedx_course_id': course_id,
             'total': int(total),
             'counts': counts,
+            'active_count': active_count,
             'avg_progress_percent': round(float(avg_progress), 2) if avg_progress is not None else None,
             'avg_grade_percent': round(float(avg_grade), 2) if avg_grade is not None else None,
             'last_synced_at': last_synced,
+            'component_summaries': self._component_summary_from_snapshots(snapshots),
+            'status_counts': status_counts,
+            'alert_counts': alert_counts,
         }
 
     def learning_summary_for_class(self, user: UserContext, class_id: str) -> dict[str, Any]:
@@ -1555,7 +2090,7 @@ class AcademicService:
         cls = self.db.get(AcademicClass, class_id)
         if not cls:
             raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
-        mapping = self.inherited_course_mapping_for_class(cls)
+        mapping = self.effective_course_mapping_for_class(cls)
         return self._learning_summary_for_class_course(class_id, mapping.openedx_course_id if mapping else None)
 
     def _upsert_learning_snapshot(self, *, class_id: str, student: AcademicStudent, course_id: str, result: dict[str, Any], source: str) -> AcademicStudentLearningSnapshot:
@@ -1588,6 +2123,7 @@ class AcademicService:
         snapshot.total_blocks = self._int_or_none(result.get('total_blocks', progress.get('total_blocks')))
         snapshot.last_activity_at = self._dt_or_none(result.get('last_activity_at') or progress.get('last_activity_at'))
         snapshot.raw_json = {'source': source, 'payload': result}
+        snapshot.learning_synced_at = now
         snapshot.last_synced_at = now
         snapshot.updated_at = now
         self.db.add(snapshot)
@@ -1623,7 +2159,9 @@ class AcademicService:
         snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or snapshot.enrollment_mode
         existing_raw = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
         snapshot.raw_json = {**existing_raw, 'enrollment_source': source, 'enrollment_payload': result}
-        snapshot.last_synced_at = now
+        snapshot.enrollment_synced_at = now
+        if snapshot.last_synced_at is None:
+            snapshot.last_synced_at = now
         snapshot.updated_at = now
         self.db.add(snapshot)
         return snapshot
@@ -1639,11 +2177,12 @@ class AcademicService:
         cls = self.db.get(AcademicClass, class_id)
         if not cls:
             raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
-        mapping = self.inherited_course_mapping_for_class(cls)
+        mapping = self.effective_course_mapping_for_class(cls)
         if not mapping or not mapping.openedx_course_id:
-            raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS kế thừa từ màn môn nên chưa thể tự enrollment/gán giảng viên')
+            raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS nên chưa thể tự enrollment/gán giảng viên')
         course_id = mapping.openedx_course_id
-        limit = max(1, min(5000, int(limit or 1000)))
+        cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
+        limit = max(1, min(500, int(limit or 500)))
         query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
@@ -1692,7 +2231,7 @@ class AcademicService:
                     'full_name': student.full_name,
                     'create_missing': create_missing,
                 })
-            results = client.enroll_users(course_id=course_id, cohort_name=cls.class_code, students=payload, mode=enrollment_mode, force=force, create_missing=create_missing)
+            results = client.enroll_users(course_id=course_id, cohort_name=cohort_name, students=payload, mode=enrollment_mode, force=force, create_missing=create_missing)
             by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
             by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
             for student, mapping_row, _snapshot in chunk:
@@ -1722,7 +2261,7 @@ class AcademicService:
             for start in range(0, len(teacher_payload), batch_size):
                 chunk = teacher_payload[start:start + batch_size]
                 teacher_items = [payload for _teacher, payload in chunk]
-                results = client.enroll_users(course_id=course_id, cohort_name=cls.class_code, students=[], teachers=teacher_items, mode=enrollment_mode, force=force, create_missing=create_missing)
+                results = client.enroll_users(course_id=course_id, cohort_name=cohort_name, students=[], teachers=teacher_items, mode=enrollment_mode, force=force, create_missing=create_missing)
                 result_by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
                 for teacher, payload in chunk:
                     username = normalize_username(payload.get('username'))
@@ -1768,11 +2307,12 @@ class AcademicService:
         cls = self.db.get(AcademicClass, class_id)
         if not cls:
             raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
-        mapping = self.inherited_course_mapping_for_class(cls)
+        mapping = self.effective_course_mapping_for_class(cls)
         if not mapping or not mapping.openedx_course_id:
-            raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS kế thừa từ màn môn. Hãy để auto-map course cấp môn chạy trước.')
+            raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS. Hãy map Course CMS trước khi cập nhật tiến độ/điểm.')
         course_id = mapping.openedx_course_id
-        limit = max(1, min(5000, int(limit or 1000)))
+        cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
+        limit = max(1, min(500, int(limit or 500)))
         if getattr(settings, 'academic_auto_enroll_after_cms_sync', True):
             try:
                 self.sync_class_course_enrollment(user, class_id, force=False, limit=limit)
@@ -1796,7 +2336,7 @@ class AcademicService:
         ).filter(AcademicClassStudent.class_id == class_id).order_by(AcademicStudent.username.asc()).limit(limit)
         rows = query.all()
         if not force:
-            rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not snapshot or not snapshot.last_synced_at]
+            rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not self._snapshot_has_learning_payload(snapshot)]
         if not rows:
             summary = self._learning_summary_for_class_course(class_id, course_id)
             return {'ok': True, 'updated': 0, 'message': 'Không có sinh viên cần cập nhật học tập CMS', **summary}
@@ -1815,7 +2355,7 @@ class AcademicService:
                     'email': student.email,
                     'full_name': student.full_name,
                 })
-            results = client.class_analytics(course_id=course_id, cohort_name=cls.class_code, students=payload)
+            results = client.class_analytics(course_id=course_id, cohort_name=cohort_name, students=payload)
             by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
             by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
             for student, mapping_row, _snapshot in chunk:

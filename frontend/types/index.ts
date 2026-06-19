@@ -1700,6 +1700,17 @@ export type AcademicSubject = {
   active: boolean
 }
 
+export type AcademicLearningComponentScore = {
+  key?: string | null
+  name: string
+  category?: string | null
+  earned?: number | null
+  possible?: number | null
+  percent?: number | null
+  weight?: number | null
+  source?: string | null
+}
+
 export type AcademicSubjectManagement = AcademicSubject & {
   class_count: number
   campus_count: number
@@ -1713,6 +1724,15 @@ export type AcademicSubjectManagement = AcademicSubject & {
   openedx_course_title?: string | null
   openedx_mapping_id?: string | null
   suggested_openedx_course_id?: string | null
+  learning_enrolled_count?: number
+  learning_active_count?: number
+  learning_synced_count?: number
+  learning_not_enrolled_count?: number
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_last_synced_at?: string | null
+  learning_component_summaries?: AcademicLearningComponentScore[]
+  learning_alerts?: string[]
 }
 
 export type AcademicClass = {
@@ -1735,10 +1755,21 @@ export type AcademicClass = {
   teacher_username?: string | null
   teacher_name?: string | null
   student_count: number
+  cms_synced_count?: number
+  cms_unsynced_count?: number
   openedx_course_id?: string | null
   openedx_cohort_name?: string | null
   openedx_mapping_source?: string | null
   openedx_mapping_validation_status?: string | null
+  learning_enrolled_count?: number
+  learning_active_count?: number
+  learning_synced_count?: number
+  learning_not_enrolled_count?: number
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_last_synced_at?: string | null
+  learning_component_summaries?: AcademicLearningComponentScore[]
+  learning_alerts?: string[]
 }
 
 export type AcademicStudent = {
@@ -1773,6 +1804,9 @@ export type AcademicStudent = {
   learning_total_blocks?: number | null
   learning_last_activity_at?: string | null
   learning_last_synced_at?: string | null
+  learning_enrollment_synced_at?: string | null
+  learning_status?: string
+  learning_component_scores?: AcademicLearningComponentScore[]
 }
 
 export type AcademicLearningSummary = {
@@ -1780,9 +1814,13 @@ export type AcademicLearningSummary = {
   openedx_course_id?: string | null
   total: number
   counts: Record<string, number>
+  active_count?: number
   avg_progress_percent?: number | null
   avg_grade_percent?: number | null
   last_synced_at?: string | null
+  component_summaries?: AcademicLearningComponentScore[]
+  status_counts?: Record<string, number>
+  alert_counts?: Record<string, number>
 }
 
 export type AcademicLearningSyncResult = AcademicLearningSummary & {
@@ -1818,6 +1856,27 @@ export type AcademicMappingResolveResult = {
   message: string
   enrollment?: AcademicEnrollmentSyncResult | null
   teachers?: { total?: number; updated?: number; counts?: Record<string, number> } | null
+}
+
+export type AcademicClassSyncJob = {
+  id: string
+  job_type: 'cms_sync_check' | 'cms_enrollment_sync' | 'learning_sync' | string
+  status: 'queued' | 'running' | 'completed' | 'failed' | string
+  class_id: string
+  requested_by?: string | null
+  force?: boolean
+  limit?: number
+  mode?: string | null
+  progress_current?: number
+  progress_total?: number
+  progress_label?: string
+  request_json?: Record<string, any> | null
+  result_json?: Record<string, any> | null
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
 }
 
 export type AcademicManualMappingImportResult = {

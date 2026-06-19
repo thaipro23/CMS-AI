@@ -1,7 +1,7 @@
 """v25.9.16.2 Academic AP to Open edX course mapping
 
-Revision ID: 0029_v25_9_16_2_academic_course_mapping
-Revises: 0028_v25_9_16_1_ap_username_mapping
+Revision ID: 0029_v25_9_16_2_course_map
+Revises: 0028_v25_9_16_1_ap_user_map
 Create Date: 2026-06-17
 """
 from __future__ import annotations
@@ -9,8 +9,8 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0029_v25_9_16_2_academic_course_mapping'
-down_revision = '0028_v25_9_16_1_ap_username_mapping'
+revision = '0029_v25_9_16_2_course_map'
+down_revision = '0028_v25_9_16_1_ap_user_map'
 branch_labels = None
 depends_on = None
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
@@ -10,6 +10,7 @@ from app.models.academic import (
     AcademicCampus,
     AcademicClass,
     AcademicClassStudent,
+    AcademicClassSyncJob,
     AcademicStudent,
     AcademicSubject,
     AcademicSyncRun,
@@ -23,6 +24,7 @@ from app.schemas.academic import (
     AcademicCampusUpsertIn,
     AcademicBlockOut,
     AcademicClassListOut,
+    AcademicClassSyncJobOut,
     AcademicClassOut,
     AcademicClassCourseMappingCreateIn,
     AcademicClassCourseMappingOut,
@@ -61,8 +63,72 @@ from app.services.ap_academic_sync import AcademicImportService
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
 
+
+def _safe_error_message(message: str = 'academic_operation_failed') -> dict[str, str]:
+    return {
+        'code': message,
+        'message': 'Không thể hoàn tất thao tác học vụ. Vui lòng thử lại hoặc liên hệ quản trị.',
+    }
+
 router = APIRouter()
 
+
+def _enqueue_class_sync_job(
+    *,
+    db: Session,
+    user: UserContext,
+    class_id: str,
+    job_type: str,
+    force: bool,
+    limit: int,
+    mode: str | None = None,
+) -> AcademicClassSyncJob:
+    service = AcademicService(db)
+    service.assert_can_access_class(user, class_id)
+    clean_limit = max(1, min(500, int(limit or 500)))
+    job = AcademicClassSyncJob(
+        job_type=job_type,
+        status='queued',
+        class_id=class_id,
+        requested_by=user.user_id,
+        force=bool(force),
+        limit=clean_limit,
+        mode=mode,
+        progress_current=0,
+        progress_total=100,
+        progress_label='Đang chờ xử lý',
+        request_json={'force': bool(force), 'limit': clean_limit, 'mode': mode},
+        result_json={},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    from app.worker import academic_class_sync_task
+    academic_class_sync_task.delay(job.id)
+    return job
+
+
+
+
+def _require_academic_sync_permission(
+    user: UserContext = Depends(get_user_context),
+    db: Session = Depends(get_db),
+) -> UserContext:
+    """Allow academic CMS/Open edX mutations only for sync-capable users."""
+    if 'sync_course' in user.permissions or 'manage_settings' in user.permissions:
+        return user
+    try:
+        service = BusinessRBACService(db)
+        if service.has_any_business_permission(user, 'sync_course') or service.has_any_business_permission(user, 'manage_settings'):
+            return user
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail='Bạn không có quyền đồng bộ/thao tác học vụ CMS/Open edX.',
+    )
 
 def _require_academic_admin(db: Session, user: UserContext) -> None:
     service = BusinessRBACService(db)
@@ -185,6 +251,7 @@ def list_teacher_classes(
     campus: str | None = None,
     branch: str | None = None,
     search: str | None = None,
+    learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(require_permission('view_questions')),
@@ -198,6 +265,7 @@ def list_teacher_classes(
         campus=campus,
         branch=branch,
         search=search,
+        learning_status=learning_status,
         page=page,
         page_size=page_size,
     )
@@ -210,13 +278,14 @@ def list_teacher_subjects(
     branch: str | None = None,
     campus: str | None = None,
     search: str | None = None,
+    learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(require_permission('view_questions')),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_teacher_subjects(
-        user, term_id=term_id, branch=branch, campus=campus, search=search, page=page, page_size=page_size
+        user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, page=page, page_size=page_size
     )
 
 
@@ -228,6 +297,7 @@ def list_subject_classes(
     campus: str | None = None,
     branch: str | None = None,
     search: str | None = None,
+    learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(require_permission('view_questions')),
@@ -236,7 +306,7 @@ def list_subject_classes(
     service = AcademicService(db)
     service.assert_can_access_subject(user, subject_id)
     return service.list_teacher_classes(
-        user, term_id=term_id, block_id=block_id, subject_id=subject_id, campus=campus, branch=branch, search=search, page=page, page_size=page_size
+        user, term_id=term_id, block_id=block_id, subject_id=subject_id, campus=campus, branch=branch, search=search, learning_status=learning_status, page=page, page_size=page_size
     )
 
 
@@ -245,7 +315,7 @@ def auto_map_subject_course(
     subject_id: str,
     term_id: str = Query(...),
     branch: str | None = Query(None),
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_sync_permission),
     db: Session = Depends(get_db),
 ):
     result = AcademicService(db).auto_map_subject_course(user, term_id=term_id, subject_id=subject_id, branch=branch)
@@ -317,7 +387,7 @@ def create_academic_course_mapping(
     except Exception as exc:
         db.rollback()
         log_audit(db, action='academic.course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='academic_course_mapping')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
 
 
 @router.delete('/course-mappings/{mapping_id}', response_model=AcademicCourseMappingOut)
@@ -371,7 +441,7 @@ def save_class_course_mapping(
     except Exception as exc:
         db.rollback()
         log_audit(db, action='academic.class_course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='academic_class', target_id=class_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
 
 
 @router.delete('/classes/{class_id}/course-mapping', response_model=AcademicClassCourseMappingOut)
@@ -399,12 +469,13 @@ def get_class_detail(
 def list_class_students(
     class_id: str,
     search: str | None = None,
+    learning_status: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(require_permission('view_questions')),
     db: Session = Depends(get_db),
 ):
-    return AcademicService(db).list_class_students(user, class_id, search=search, page=page, page_size=page_size)
+    return AcademicService(db).list_class_students(user, class_id, search=search, learning_status=learning_status, page=page, page_size=page_size)
 
 
 @router.get('/classes/{class_id}/mapping-summary', response_model=AcademicMappingSummaryOut)
@@ -426,11 +497,66 @@ def get_class_learning_summary(
 
 
 
+
+@router.post('/classes/{class_id}/cms-sync-check/jobs', response_model=AcademicClassSyncJobOut)
+def enqueue_class_cms_sync_check(
+    class_id: str,
+    payload: AcademicResolveClassUsersIn,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    return _enqueue_class_sync_job(db=db, user=user, class_id=class_id, job_type='cms_sync_check', force=payload.force, limit=payload.limit)
+
+
+@router.post('/classes/{class_id}/cms-enrollment-sync/jobs', response_model=AcademicClassSyncJobOut)
+def enqueue_class_cms_enrollment_sync(
+    class_id: str,
+    payload: AcademicEnrollmentSyncIn,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    return _enqueue_class_sync_job(db=db, user=user, class_id=class_id, job_type='cms_enrollment_sync', force=payload.force, limit=payload.limit, mode=payload.mode)
+
+
+@router.post('/classes/{class_id}/learning-sync/jobs', response_model=AcademicClassSyncJobOut)
+def enqueue_class_learning_sync(
+    class_id: str,
+    payload: AcademicLearningSyncIn,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    return _enqueue_class_sync_job(db=db, user=user, class_id=class_id, job_type='learning_sync', force=payload.force, limit=payload.limit)
+
+
+@router.get('/classes/{class_id}/sync-jobs/{job_id}', response_model=AcademicClassSyncJobOut)
+def get_class_sync_job(
+    class_id: str,
+    job_id: str,
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    AcademicService(db).assert_can_access_class(user, class_id)
+    job = db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.id == job_id, AcademicClassSyncJob.class_id == class_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy job đồng bộ lớp')
+    return job
+
+
+@router.get('/classes/{class_id}/sync-jobs', response_model=list[AcademicClassSyncJobOut])
+def list_class_sync_jobs(
+    class_id: str,
+    limit: int = Query(10, ge=1, le=50),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    AcademicService(db).assert_can_access_class(user, class_id)
+    return db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.class_id == class_id).order_by(AcademicClassSyncJob.created_at.desc()).limit(limit).all()
+
 @router.post('/classes/{class_id}/cms-enrollment-sync', response_model=AcademicEnrollmentSyncOut)
 def sync_class_cms_enrollment(
     class_id: str,
     payload: AcademicEnrollmentSyncIn,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_sync_permission),
     db: Session = Depends(get_db),
 ):
     service = AcademicService(db)
@@ -461,13 +587,13 @@ def sync_class_cms_enrollment(
             target_type='academic_class',
             target_id=class_id,
         )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_safe_error_message('academic_external_sync_failed')) from exc
 
 @router.post('/classes/{class_id}/learning-sync', response_model=AcademicLearningSyncOut)
 def sync_class_learning_insight(
     class_id: str,
     payload: AcademicLearningSyncIn,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_sync_permission),
     db: Session = Depends(get_db),
 ):
     service = AcademicService(db)
@@ -498,7 +624,7 @@ def sync_class_learning_insight(
             target_type='academic_class',
             target_id=class_id,
         )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_safe_error_message('academic_external_sync_failed')) from exc
 
 
 def _run_class_cms_sync_check(class_id: str, payload: AcademicResolveClassUsersIn, user: UserContext, db: Session) -> dict:
@@ -530,14 +656,14 @@ def _run_class_cms_sync_check(class_id: str, payload: AcademicResolveClassUsersI
             target_type='academic_class',
             target_id=class_id,
         )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_safe_error_message('academic_external_sync_failed')) from exc
 
 
 @router.post('/classes/{class_id}/cms-sync-check', response_model=AcademicMappingResolveOut)
 def check_class_cms_sync(
     class_id: str,
     payload: AcademicResolveClassUsersIn,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_sync_permission),
     db: Session = Depends(get_db),
 ):
     return _run_class_cms_sync_check(class_id, payload, user, db)
@@ -547,7 +673,7 @@ def check_class_cms_sync(
 def resolve_class_openedx_users_legacy_alias(
     class_id: str,
     payload: AcademicResolveClassUsersIn,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_sync_permission),
     db: Session = Depends(get_db),
 ):
     # Backward-compatible alias. UI and docs use /cms-sync-check from v25.9.16.2.23.
@@ -708,7 +834,7 @@ def sync_from_json(
         db.rollback()
         run = importer.finish_run(run, error=str(exc))
         log_audit(db, action='academic.ap.import_json', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=user, target_type='academic_sync_run', target_id=run.id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
 
 
 @router.post('/sync/ap', response_model=AcademicImportResultOut)

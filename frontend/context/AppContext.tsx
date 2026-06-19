@@ -56,6 +56,7 @@ function hasBusinessPermission(permission: Permission | string, businessPermissi
 }
 
 function getStoredSession(): StoredSession | null {
+  if (IS_PRODUCTION) return null
   if (typeof window === 'undefined') return null
   const raw = window.sessionStorage.getItem(STORAGE_KEYS.sessionToken)
   if (!raw) return null
@@ -113,12 +114,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authReady) return
     const token = accessToken.trim() || getStoredSession()?.access_token || ''
-    if (!token) {
+    if (!token && !IS_PRODUCTION) {
       setBusinessPermissions([])
       return
     }
     let cancelled = false
-    fetch(`${API}/rbac/me`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API}/rbac/me`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: 'include' })
       .then(async (response) => {
         if (!response.ok) throw new Error(response.statusText)
         return response.json() as Promise<{ effective_legacy_role?: Role | string; permissions?: string[] }>
@@ -157,7 +158,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // the same tab keeps working while closing the browser clears it.
     const token = value.trim()
     setAccessTokenState(token)
-    if (token) {
+    if (token && !IS_PRODUCTION) {
       window.sessionStorage.setItem(STORAGE_KEYS.sessionToken, JSON.stringify({ access_token: token, user_id: userId, role }))
     } else {
       window.sessionStorage.removeItem(STORAGE_KEYS.sessionToken)
@@ -167,8 +168,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const applyAuthSession = (session: { access_token: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => {
     const token = session.access_token || ''
     setAccessTokenState(token)
-    if (token) {
+    if (token && !IS_PRODUCTION) {
       window.sessionStorage.setItem(STORAGE_KEYS.sessionToken, JSON.stringify(session))
+      window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
+    } else if (IS_PRODUCTION) {
+      window.sessionStorage.removeItem(STORAGE_KEYS.sessionToken)
       window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
     }
     if (session.role && ROLE_PERMISSIONS[session.role]) {

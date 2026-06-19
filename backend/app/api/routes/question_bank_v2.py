@@ -559,6 +559,32 @@ def rebuild_bank_search_index(bank_version_id: str | None = Query(None), chapter
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get('/admin/material-cleanup/health')
+def bank_material_cleanup_health(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
+    _biz(db).require_system_admin(user)
+    return VersionedQuestionBankService(db).bank_material_cleanup_health()
+
+
+@router.post('/admin/material-cleanup/purge')
+def purge_deleted_bank_materials(
+    retention_days: int | None = Query(None, description='Số ngày giữ tombstone. 0 = purge ngay các bản đủ điều kiện.'),
+    dry_run: bool = Query(True),
+    limit: int | None = Query(None, ge=1, le=5000),
+    bank_version_id: str | None = Query(None),
+    chapter_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('manage_settings')),
+):
+    _biz(db).require_system_admin(user)
+    try:
+        result = VersionedQuestionBankService(db).purge_deleted_materials(retention_days=retention_days, dry_run=dry_run, limit=limit, bank_version_id=bank_version_id, chapter_id=chapter_id)
+        log_audit(db, action='question_bank.material.cleanup.purge', status='success', message=result.get('message', 'Purge tài liệu đã xóa mềm'), user=user, target_type='bank_material_cleanup', target_id=bank_version_id or chapter_id, metadata={k: v for k, v in result.items() if k not in {'purgable', 'blocked'}})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.material.cleanup.purge', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_material_cleanup', target_id=bank_version_id or chapter_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get('/departments/summary')
 def department_summaries(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     if _biz(db).is_system_admin(user):
@@ -825,8 +851,10 @@ def create_bank_version(payload: BankVersionCreate, db: Session = Depends(get_db
 
 
 @router.get('/material-versions', response_model=PaginatedOut[MaterialVersionOut])
-def list_material_versions(bank_version_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+def list_material_versions(bank_version_id: str | None = None, include_deleted: bool = Query(False), page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_hierarchy_filter(db.query(LearningMaterialVersion), LearningMaterialVersion, user)
+    if not include_deleted:
+        query = query.filter(LearningMaterialVersion.status != 'deleted')
     if bank_version_id:
         _require_bank_version(db, user, 'bank.view', bank_version_id)
         query = query.filter(LearningMaterialVersion.bank_version_id == bank_version_id)
@@ -850,13 +878,13 @@ def create_material_version(payload: MaterialVersionCreate, db: Session = Depend
 
 
 @router.delete('/material-versions/{material_version_id}', response_model=MaterialDeleteOut)
-def delete_material_version(material_version_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
+def delete_material_version(material_version_id: str, force_hard: bool = Query(False), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
     material = db.get(LearningMaterialVersion, material_version_id)
     if not material:
         raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu')
     _require_bank_version(db, user, 'document.manage', material.bank_version_id)
     try:
-        result = VersionedQuestionBankService(db).delete_material_version(material_version_id=material_version_id, actor=user.user_id)
+        result = VersionedQuestionBankService(db).delete_material_version(material_version_id=material_version_id, actor=user.user_id, force_hard=force_hard)
         log_audit(db, action='question_bank.material.delete', status='success', message=result.get('message', ''), user=user, target_type='material_version', target_id=material_version_id, metadata=result)
         return result
     except Exception as exc:

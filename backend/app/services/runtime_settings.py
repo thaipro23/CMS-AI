@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.core.config import settings
+from app.core.config import settings, is_production, validate_security_settings
 
 RUNTIME_CONFIG_PATH = Path(os.getenv('RUNTIME_CONFIG_PATH', '/app/.runtime/runtime-settings.json'))
 
@@ -41,6 +41,13 @@ MANAGED_FIELDS: dict[str, type] = {
 # Secrets are environment-only. They may be displayed as masked env-backed values,
 # but PATCH /settings/runtime must never persist them to runtime-settings.json.
 SECRET_FIELDS = {'openai_api_key', 'openedx_client_secret', 'openedx_access_token', 'jwt_secret'}
+
+# Runtime writes must never be able to weaken a production deployment after boot.
+PRODUCTION_LOCKED_FIELDS = {
+    'auth_mode', 'allow_demo_role_header', 'use_mock_openedx', 'mock_llm',
+    'openedx_client_id', 'openedx_oauth_token_url', 'openedx_base_url',
+    'openedx_cms_base_url', 'openedx_lms_base_url', 'openedx_oauth_base_url',
+}
 
 ALLOWED_MODEL_PROVIDERS = {'openai', 'local', 'auto'}
 ALLOWED_OPENAI_API_MODES = {'responses', 'chat_legacy'}
@@ -196,6 +203,14 @@ def update_runtime_settings(payload: dict[str, Any]) -> dict[str, Any]:
     if supplied_secrets:
         raise ValueError('Secrets are environment-only and were not saved to runtime-settings.json: ' + ', '.join(sorted(set(supplied_secrets))))
 
+    if is_production():
+        locked = sorted(key for key in updates if key in PRODUCTION_LOCKED_FIELDS)
+        if locked:
+            raise ValueError('Production không cho phép đổi runtime security settings: ' + ', '.join(locked))
+
+    old_values = {key: getattr(settings, key, None) for key in updates if key in MANAGED_FIELDS}
+    staged_current = dict(current)
+
     for key, raw_value in updates.items():
         if key not in MANAGED_FIELDS:
             continue
@@ -214,8 +229,15 @@ def update_runtime_settings(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError('openai_max_parallel_calls must be between 1 and 8')
         if key == 'openai_retry_max_attempts' and not (1 <= int(value) <= 8):
             raise ValueError('openai_retry_max_attempts must be between 1 and 8')
-        current[key] = value
+        staged_current[key] = value
         setattr(settings, key, value)
 
-    _write_runtime_file(current)
+    try:
+        validate_security_settings()
+    except Exception:
+        for key, value in old_values.items():
+            setattr(settings, key, value)
+        raise
+
+    _write_runtime_file(staged_current)
     return public_runtime_settings()

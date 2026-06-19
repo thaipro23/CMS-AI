@@ -396,8 +396,13 @@ class MaterialDeleteOut(BaseModel):
     ok: bool
     material_version_id: str
     bank_version_id: str
+    deletion_mode: str = 'soft'  # hard | soft
     chunks_deleted: int = 0
     detached_question_count: int = 0
+    concepts_detached_count: int = 0
+    jobs_detached_count: int = 0
+    file_deleted: bool = False
+    file_delete_skipped: bool = False
     message: str
 
 class MaterialUploadOut(BaseModel):

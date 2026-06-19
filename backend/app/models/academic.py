@@ -303,6 +303,8 @@ class AcademicStudentLearningSnapshot(Base):
     total_blocks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    enrollment_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    learning_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -311,6 +313,42 @@ class AcademicStudentLearningSnapshot(Base):
         UniqueConstraint('class_id', 'student_id', 'openedx_course_id', name='uq_academic_learning_class_student_course'),
         Index('ix_academic_learning_class_course_sync', 'class_id', 'openedx_course_id', 'last_synced_at'),
         Index('ix_academic_learning_status_grade', 'enrollment_status', 'passed', 'grade_percent'),
+    )
+
+
+class AcademicClassSyncJob(Base):
+    """Async class-level CMS/Open edX sync job tracked for UI polling.
+
+    Heavy class operations call the Open edX Student Insight plugin and can take
+    longer than a normal HTTP request. Keep them in Celery and let the frontend
+    poll this table instead of blocking a Uvicorn worker.
+    """
+
+    __tablename__ = 'academic_class_sync_jobs'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    job_type: Mapped[str] = mapped_column(String(80), index=True)  # cms_sync_check | cms_enrollment_sync | learning_sync
+    status: Mapped[str] = mapped_column(String(50), default='queued', index=True)  # queued | running | completed | failed
+    class_id: Mapped[str] = mapped_column(String, ForeignKey('academic_classes.id'), index=True)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    force: Mapped[bool] = mapped_column(Boolean, default=False)
+    limit: Mapped[int] = mapped_column(Integer, default=500)
+    mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, default=100)
+    progress_label: Mapped[str] = mapped_column(String(255), default='Đang chờ xử lý')
+    request_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_academic_class_sync_jobs_class_status_created', 'class_id', 'status', 'created_at'),
+        Index('ix_academic_class_sync_jobs_actor_created', 'requested_by', 'created_at'),
+        Index('ix_academic_class_sync_jobs_type_status_created', 'job_type', 'status', 'created_at'),
     )
 
 
