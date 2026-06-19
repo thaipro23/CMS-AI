@@ -32,12 +32,21 @@ services:
       retries: 20
     networks:
       - ai_internal
-
+    extra_hosts:
+      - "cms-test.poly.edu.vn:host-gateway"
+      - "scms-test.poly.edu.vn:host-gateway"
+      - "app.cms-test.poly.edu.vn:host-gateway"
+      - "ai.cms-test.poly.edu.vn:host-gateway"
+      - "api-ai.cms-test.poly.edu.vn:host-gateway"
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
+      - "api_v2.poly.edu.vn:host-gateway"  
   backend:
     build:
       context: ./backend
     container_name: ai-backend
     env_file: .env.production
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     restart: unless-stopped
     command: >
       sh -c "alembic -c alembic.ini upgrade head &&
@@ -74,12 +83,15 @@ services:
       - "app.cms-test.poly.edu.vn:host-gateway"
       - "ai.cms-test.poly.edu.vn:host-gateway"
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
-      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
+      - "api_v2.poly.edu.vn:host-gateway"  
   worker:
     build:
       context: ./backend
     container_name: ai-worker
     env_file: .env.production
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     restart: unless-stopped
     command: celery -A app.worker.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-4}
     depends_on:
@@ -94,13 +106,7 @@ services:
     networks:
       - ai_internal
       - openedx_shared
-    extra_hosts:
-      - "cms-test.poly.edu.vn:host-gateway"
-      - "scms-test.poly.edu.vn:host-gateway"
-      - "app.cms-test.poly.edu.vn:host-gateway"
-      - "ai.cms-test.poly.edu.vn:host-gateway"
-      - "api-ai.cms-test.poly.edu.vn:host-gateway"
-      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+
   frontend:
     build:
       context: ./frontend
