@@ -92,7 +92,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [userId, setUserIdState] = useState(() => getStoredSession()?.user_id || getStoredString(STORAGE_KEYS.userId, 'demo-teacher'))
   const [accessToken, setAccessTokenState] = useState(() => getStoredSession()?.access_token || '')
   const [businessPermissions, setBusinessPermissions] = useState<string[]>([])
-  const [authReady, setAuthReady] = useState(() => typeof window !== 'undefined')
+  const [cookieAuthenticated, setCookieAuthenticated] = useState(false)
+  const [clientReady, setClientReady] = useState(() => typeof window !== 'undefined')
+  const [authReady, setAuthReady] = useState(() => !IS_PRODUCTION && typeof window !== 'undefined')
 
   useEffect(() => {
     const savedCourseId = window.localStorage.getItem(STORAGE_KEYS.courseId)
@@ -107,34 +109,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (savedSession.role && ROLE_PERMISSIONS[savedSession.role]) setRoleState(savedSession.role)
       if (savedSession.user_id) setUserIdState(savedSession.user_id)
     }
-    setAuthReady(true)
+    setClientReady(true)
+    if (!IS_PRODUCTION) setAuthReady(true)
   }, [])
 
 
   useEffect(() => {
-    if (!authReady) return
+    if (!clientReady) return
     const token = accessToken.trim() || getStoredSession()?.access_token || ''
     if (!token && !IS_PRODUCTION) {
+      setCookieAuthenticated(false)
       setBusinessPermissions([])
+      setAuthReady(true)
       return
     }
     let cancelled = false
+    setAuthReady(false)
     fetch(`${API}/rbac/me`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: 'include' })
       .then(async (response) => {
         if (!response.ok) throw new Error(response.statusText)
-        return response.json() as Promise<{ effective_legacy_role?: Role | string; permissions?: string[] }>
+        return response.json() as Promise<{ user_id?: string; effective_legacy_role?: Role | string; role?: Role | string; permissions?: string[] }>
       })
       .then((data) => {
         if (cancelled) return
+        setCookieAuthenticated(true)
         setBusinessPermissions(Array.isArray(data.permissions) ? data.permissions : [])
-        const effectiveRole = data.effective_legacy_role as Role | undefined
+        const effectiveRole = (data.effective_legacy_role || data.role) as Role | undefined
         if (effectiveRole && ROLE_PERMISSIONS[effectiveRole]) setRoleState(effectiveRole)
+        if (data.user_id) setUserIdState(String(data.user_id))
       })
       .catch(() => {
-        if (!cancelled) setBusinessPermissions([])
+        if (!cancelled) {
+          setCookieAuthenticated(false)
+          setBusinessPermissions([])
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAuthReady(true)
       })
     return () => { cancelled = true }
-  }, [authReady, accessToken])
+  }, [clientReady, accessToken])
 
   const setCourseId = (value: string) => {
     setCourseIdState(value)
@@ -168,6 +182,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const applyAuthSession = (session: { access_token: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => {
     const token = session.access_token || ''
     setAccessTokenState(token)
+    setCookieAuthenticated(true)
+    setAuthReady(true)
     if (token && !IS_PRODUCTION) {
       window.sessionStorage.setItem(STORAGE_KEYS.sessionToken, JSON.stringify(session))
       window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
@@ -187,7 +203,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AppContextValue>(() => ({
     authReady,
-    isAuthenticated: !!accessToken.trim(),
+    isAuthenticated: !!accessToken.trim() || cookieAuthenticated,
     courseId,
     setCourseId,
     role,
@@ -211,7 +227,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (json) headers['Content-Type'] = 'application/json'
       return headers
     },
-  }), [authReady, courseId, role, userId, accessToken, businessPermissions])
+  }), [authReady, courseId, role, userId, accessToken, businessPermissions, cookieAuthenticated])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { exchangeOpenEdxSessionTicket } from '../../../lib/api'
@@ -11,6 +11,7 @@ function CmsCallbackContent() {
   const router = useRouter()
   const params = useSearchParams()
   const { applyAuthSession } = useAppContext()
+  const processedTicketRef = useRef<string | null>(null)
   const [message, setMessage] = useState<ActionMessageData | null>({ type: 'info', body: 'Đang nhận phiên đăng nhập từ CMS...' })
 
   useEffect(() => {
@@ -19,13 +20,19 @@ function CmsCallbackContent() {
       setMessage({ type: 'warning', title: 'Thiếu CMS session ticket', body: 'CMS không trả về ticket. Hãy đăng nhập CMS rồi thử lại.' })
       return
     }
+    if (processedTicketRef.current === ticket) return
+    processedTicketRef.current = ticket
+
     exchangeOpenEdxSessionTicket(ticket)
       .then((session) => {
         applyAuthSession(session)
         setMessage({ type: 'success', title: 'Đăng nhập CMS thành công', body: `Đã nhận quyền ${session.role} cho user ${session.user_id}. Đang chuyển về dashboard...` })
-        window.setTimeout(() => router.push('/dashboard'), 700)
+        window.setTimeout(() => router.replace('/bank'), 700)
       })
-      .catch((error) => setMessage(toUserError(error)))
+      .catch((error) => {
+        processedTicketRef.current = null
+        setMessage(toUserError(error))
+      })
   }, [params, applyAuthSession, router])
 
   return <div className="page-stack">

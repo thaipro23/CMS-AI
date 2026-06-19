@@ -49,7 +49,7 @@ function pageTitle(pathname: string) {
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz Open edX</span></div>
-    <div className="footer-links"><span>v25.9.16.3.5</span></div>
+    <div className="footer-links"><span>v25.9.16.4.6</span></div>
   </footer>
 }
 
@@ -59,7 +59,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     courseId,
     role,
     userId,
-    accessToken,
     can,
     isAuthenticated,
     authReady,
@@ -131,9 +130,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </nav>
 
       <div className="sidebar-note product-session-card">
-        <span className={accessToken.trim() ? 'session-dot ok' : 'session-dot wait'} />
-        <div><b>{accessToken.trim() ? 'Đã đăng nhập' : 'Đang lấy phiên CMS'}</b><span>{accessToken.trim() ? `${userId || 'user'} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'AI Server sẽ tự nhận phiên từ CMS khi có thể.')}</span></div>
-        <button className="btn small secondary" type="button" onClick={loginWithCms}>{accessToken.trim() ? 'Làm mới' : 'Đăng nhập CMS'}</button>
+        <span className={isAuthenticated ? 'session-dot ok' : 'session-dot wait'} />
+        <div><b>{isAuthenticated ? 'Đã đăng nhập' : 'Đang lấy phiên CMS'}</b><span>{isAuthenticated ? `${userId || 'user'} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'AI Server sẽ tự nhận phiên từ CMS khi có thể.')}</span></div>
+        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Làm mới' : 'Đăng nhập CMS'}</button>
       </div>
     </aside>
 
