@@ -845,7 +845,7 @@ class AcademicService:
             return {}
         totals = dict(self.db.query(AcademicClassStudent.class_id, func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(AcademicClassStudent.class_id).all())
         snapshot_query = self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
-        expected_courses = {course for course in (course_by_class or {}).values() if course}
+        expected_courses = {course for course in (course_by_subject or {}).values() if course}
         if expected_courses:
             snapshot_query = snapshot_query.filter(AcademicStudentLearningSnapshot.openedx_course_id.in_(sorted(expected_courses)))
         snapshots = snapshot_query.all()
@@ -909,7 +909,7 @@ class AcademicService:
         totals_rows = self.db.query(AcademicClass.subject_id, func.count(AcademicClassStudent.id)).join(AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id).filter(AcademicClass.id.in_(class_ids)).group_by(AcademicClass.subject_id).all()
         totals = {str(subject_id): int(count or 0) for subject_id, count in totals_rows}
         snapshot_query = self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
-        expected_courses = {course for course in (course_by_class or {}).values() if course}
+        expected_courses = {course for course in (course_by_subject or {}).values() if course}
         if expected_courses:
             snapshot_query = snapshot_query.filter(AcademicStudentLearningSnapshot.openedx_course_id.in_(sorted(expected_courses)))
         snapshots = snapshot_query.all()
