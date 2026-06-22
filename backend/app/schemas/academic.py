@@ -213,6 +213,7 @@ class AcademicSyncCounters(BaseModel):
     students: int = 0
     teacher_assignments: int = 0
     class_students: int = 0
+    skipped_empty_classes: int = 0
     errors: int = 0
 
 

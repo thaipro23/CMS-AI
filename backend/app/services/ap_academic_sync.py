@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import hashlib
 import re
 import ssl
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -21,6 +24,8 @@ from app.models.academic import (
     AcademicSubject,
     AcademicSyncError,
     AcademicSyncRun,
+    AcademicClassCourseMapping,
+    AcademicStudentLearningSnapshot,
     AcademicTeacher,
     AcademicTeacherAssignment,
     AcademicTerm,
@@ -40,6 +45,7 @@ class SyncCounters:
     students: int = 0
     teacher_assignments: int = 0
     class_students: int = 0
+    skipped_empty_classes: int = 0
     errors: int = 0
 
     def as_dict(self) -> dict[str, int]:
@@ -117,6 +123,12 @@ def _unique_upper(values: list[str]) -> list[str]:
     return out
 
 
+def _safe_filename_part(value: Any, *, default: str = 'unknown') -> str:
+    item = re.sub(r'[^a-zA-Z0-9_.-]+', '_', _clean(value))
+    item = item.strip('._-')
+    return item[:120] or default
+
+
 def _safe_payload(value: Any) -> Any:
     """Return small debug payload without PII-heavy student rosters."""
     if isinstance(value, dict):
@@ -177,30 +189,33 @@ class APAcademicClient:
             headers['campus'] = campus
         return headers
 
-    def get_subjects(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]]:
-        # ACMS legacy contract: /get-course must always use branch=poly to
-        # discover the canonical subject catalog. Some requested branches
-        # (notably ptcd) return noisy/incorrect subject lists. The requested
-        # branch is still preserved for downstream class/student sync.
+    def _subject_cache_enabled(self) -> bool:
+        return bool(getattr(settings, 'academic_ap_get_course_file_cache_enabled', True))
+
+    def _subject_cache_refresh(self) -> bool:
+        return bool(getattr(settings, 'academic_ap_get_course_file_cache_refresh', False))
+
+    def _subject_cache_ttl_seconds(self) -> int:
+        raw = getattr(settings, 'academic_ap_get_course_file_cache_ttl_seconds', 86400)
+        try:
+            return max(0, int(raw))
+        except Exception:
+            return 86400
+
+    def _subject_cache_dir(self) -> Path:
+        raw = _clean(getattr(settings, 'academic_ap_get_course_file_cache_dir', '/tmp/ai-server-ap-cache/get-course'))
+        return Path(raw or '/tmp/ai-server-ap-cache/get-course')
+
+    def _subject_cache_file(self, *, branch: str, term_name: str) -> Path:
+        # The AP discovery endpoint always uses branch=poly. The requested branch
+        # is intentionally not part of the file name so ptcd/poly UI choices reuse
+        # the same canonical course catalog and do not create duplicate files.
         discovery_branch = 'poly'
-        params = {'branch': discovery_branch, 'term_name': term_name}
-        with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
-            response = client.get(
-                f'{self.base_url}/get-course',
-                headers=self._headers(),
-                params=params,
-            )
-            response.raise_for_status()
-            data = response.json()
-        if isinstance(data, dict) and data.get('status') not in (None, 'success'):
-            raise RuntimeError(f'AP get-course failed: {data.get("message") or data.get("status")}')
-        root = data.get('data') if isinstance(data, dict) and isinstance(data.get('data'), (dict, list)) else data
-        if isinstance(root, dict):
-            items = root.get('course') or root.get('courses') or root.get('data') or []
-        elif isinstance(root, list):
-            items = root
-        else:
-            items = []
+        base_hash = hashlib.sha1(self.base_url.encode('utf-8')).hexdigest()[:10]
+        term_part = _safe_filename_part(term_name, default='term')
+        return self._subject_cache_dir() / f'{discovery_branch}_{term_part}_{base_hash}.json'
+
+    def _normalize_subject_items(self, items: Any, *, requested_branch: str) -> list[dict[str, Any]]:
         if not isinstance(items, list):
             raise RuntimeError('AP get-course trả dữ liệu môn không đúng định dạng list.')
         subjects: list[dict[str, Any]] = []
@@ -211,10 +226,99 @@ class APAcademicClient:
                     normalized = dict(item)
                     normalized.setdefault('subject_code', code)
                     normalized.setdefault('discovery_branch', 'poly')
-                    normalized.setdefault('requested_branch', _lower(branch) or 'poly')
+                    normalized.setdefault('requested_branch', _lower(requested_branch) or 'poly')
                     subjects.append(normalized)
+        return subjects
+
+    def _extract_subject_items_from_response(self, data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, dict) and data.get('status') not in (None, 'success'):
+            raise RuntimeError(f'AP get-course failed: {data.get("message") or data.get("status")}')
+        root = data.get('data') if isinstance(data, dict) and isinstance(data.get('data'), (dict, list)) else data
+        if isinstance(root, dict):
+            items = root.get('course') or root.get('courses') or root.get('data') or []
+        elif isinstance(root, list):
+            items = root
+        else:
+            items = []
+        return items
+
+    def _read_subject_cache(self, *, branch: str, term_name: str) -> list[dict[str, Any]] | None:
+        if not self._subject_cache_enabled() or self._subject_cache_refresh():
+            return None
+        path = self._subject_cache_file(branch=branch, term_name=term_name)
+        if not path.exists():
+            return None
+        ttl = self._subject_cache_ttl_seconds()
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+            cached_at_ts = float(raw.get('cached_at_ts') or 0)
+            if ttl > 0 and cached_at_ts > 0 and (datetime.now(timezone.utc).timestamp() - cached_at_ts) > ttl:
+                return None
+            items = raw.get('subjects') or raw.get('items') or []
+            subjects = self._normalize_subject_items(items, requested_branch=branch)
+            for item in subjects:
+                item['_catalog_source'] = 'ap.get-course.file-cache'
+                item['_catalog_cache_file'] = str(path)
+            return subjects or None
+        except Exception:
+            # Corrupt/stale cache must never break AP sync. Fall back to AP.
+            return None
+
+    def _write_subject_cache(self, *, branch: str, term_name: str, subjects: list[dict[str, Any]]) -> None:
+        if not self._subject_cache_enabled():
+            return
+        path = self._subject_cache_file(branch=branch, term_name=term_name)
+        payload = {
+            'schema_version': 1,
+            'source': 'ap.get-course',
+            'base_url': self.base_url,
+            'discovery_branch': 'poly',
+            'requested_branch': _lower(branch) or 'poly',
+            'term_name': term_name,
+            'cached_at': datetime.now(timezone.utc).isoformat(),
+            'cached_at_ts': datetime.now(timezone.utc).timestamp(),
+            'count': len(subjects),
+            # Store only get-course catalog rows. This file is deliberately not a
+            # DB table, so repeated syncs can reuse the discovery list without
+            # growing academic_subjects/classes.
+            'subjects': subjects,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(path.suffix + '.tmp')
+            tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding='utf-8')
+            tmp_path.replace(path)
+        except Exception:
+            # Cache write is an optimization only; never fail sync because /tmp or
+            # mounted cache storage is not writable.
+            return
+
+    def get_subjects(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]]:
+        # ACMS legacy contract: /get-course must always use branch=poly to
+        # discover the canonical subject catalog. Some requested branches
+        # (notably ptcd) return noisy/incorrect subject lists. The requested
+        # branch is still preserved for downstream class/student sync.
+        cached = self._read_subject_cache(branch=branch, term_name=term_name)
+        if cached:
+            return cached
+
+        discovery_branch = 'poly'
+        params = {'branch': discovery_branch, 'term_name': term_name}
+        with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
+            response = client.get(
+                f'{self.base_url}/get-course',
+                headers=self._headers(),
+                params=params,
+            )
+            response.raise_for_status()
+            data = response.json()
+        items = self._extract_subject_items_from_response(data)
+        subjects = self._normalize_subject_items(items, requested_branch=branch)
         if not subjects:
             raise RuntimeError(f'AP get-course không trả môn nào cho branch=poly, term={term_name}, requested_branch={branch}.')
+        for item in subjects:
+            item['_catalog_source'] = 'ap.get-course'
+        self._write_subject_cache(branch=branch, term_name=term_name, subjects=subjects)
         return subjects
 
     def get_division(self, *, campus: str, term_name: str, subject_code: str) -> dict[str, Any]:
@@ -268,6 +372,206 @@ class AcademicImportService:
             created_at=_now(),
         ))
 
+    def _set_if_changed(self, obj: Any, attr: str, value: Any, *, allow_empty: bool = False) -> bool:
+        """Assign only when the incoming value is meaningful and different.
+
+        AP sync is intentionally idempotent: re-running the same term/campus/subject
+        must not dirty rows or update updated_at when AP data did not actually
+        change. This avoids large no-op UPDATE storms and prevents repeated syncs
+        from fighting natural-key constraints.
+        """
+        if value is None:
+            return False
+        if isinstance(value, str):
+            value = _clean(value)
+            if not value and not allow_empty:
+                return False
+        current = getattr(obj, attr)
+        if current != value:
+            setattr(obj, attr, value)
+            return True
+        return False
+
+    def _set_json_if_changed(self, obj: Any, attr: str, value: dict | None) -> bool:
+        normalized = value or {}
+        if (getattr(obj, attr) or {}) != normalized:
+            setattr(obj, attr, normalized)
+            return True
+        return False
+
+    def _valid_student_items(self, raw_class: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return AP student rows that can be mapped into CMS/Open edX users.
+
+        DB-growth guard: AP can return thousands of empty class shells across many
+        campuses and subjects. A class without a valid student username is not
+        actionable for Student Management, enrollment, or learning analytics, so
+        production sync skips it before creating subject/class/teacher rows.
+        """
+        raw_students = raw_class.get('student') or raw_class.get('students') or []
+        if not isinstance(raw_students, list):
+            return []
+        valid: list[dict[str, Any]] = []
+        for item in raw_students:
+            if not isinstance(item, dict):
+                continue
+            username = _lower(item.get('username') or item.get('user_name') or item.get('login'))
+            if username:
+                # Preserve the original AP row but normalize the username key for the
+                # existing _get_or_create_student implementation.
+                if not item.get('username'):
+                    item = {**item, 'username': username}
+                valid.append(item)
+        return valid
+
+    def _mark_class_superseded(self, stale: AcademicClass, winner: AcademicClass, *, reason: str) -> bool:
+        changed = False
+        changed |= self._set_if_changed(stale, 'active', False)
+        meta = dict(stale.metadata_json or {})
+        meta.update({
+            'source': meta.get('source') or 'ap',
+            'superseded_by_class_id': winner.id,
+            'superseded_reason': reason,
+            'superseded_at': _now().isoformat(),
+        })
+        changed |= self._set_json_if_changed(stale, 'metadata_json', meta)
+        if changed:
+            stale.updated_at = _now()
+            self.db.add(stale)
+        return changed
+
+    def _merge_duplicate_class_relations(self, stale: AcademicClass, winner: AcademicClass) -> None:
+        """Move safe child rows from a stale duplicate class into the winner row.
+
+        Keep the stale class row inactive for audit/history; do not delete it because
+        other tables may still reference it. Child rows with unique constraints are
+        merged by deleting only duplicate links that already exist on the winner.
+        """
+        if stale.id == winner.id:
+            return
+
+        # Class-student links: class_id + student_id is unique.
+        for link in self.db.query(AcademicClassStudent).filter(AcademicClassStudent.class_id == stale.id).all():
+            existing = self.db.query(AcademicClassStudent).filter(
+                AcademicClassStudent.class_id == winner.id,
+                AcademicClassStudent.student_id == link.student_id,
+            ).first()
+            if existing:
+                self.db.delete(link)
+            else:
+                link.class_id = winner.id
+                self.db.add(link)
+
+        # Teacher assignments: teacher + class + subject + term + block is unique.
+        for assignment in self.db.query(AcademicTeacherAssignment).filter(AcademicTeacherAssignment.class_id == stale.id).all():
+            existing = self.db.query(AcademicTeacherAssignment).filter(
+                AcademicTeacherAssignment.teacher_id == assignment.teacher_id,
+                AcademicTeacherAssignment.class_id == winner.id,
+                AcademicTeacherAssignment.subject_id == winner.subject_id,
+                AcademicTeacherAssignment.term_id == winner.term_id,
+                AcademicTeacherAssignment.block_id == winner.block_id,
+            ).first()
+            if existing:
+                self.db.delete(assignment)
+            else:
+                assignment.class_id = winner.id
+                assignment.subject_id = winner.subject_id
+                assignment.term_id = winner.term_id
+                assignment.block_id = winner.block_id
+                assignment.campus = winner.campus or assignment.campus
+                assignment.branch = winner.branch or assignment.branch
+                self.db.add(assignment)
+
+        # Class-level Open edX override mapping is unique by class_id. Keep an existing
+        # winner mapping. If the winner has none, move the stale mapping.
+        stale_mapping = self.db.query(AcademicClassCourseMapping).filter(AcademicClassCourseMapping.class_id == stale.id).first()
+        if stale_mapping:
+            winner_mapping = self.db.query(AcademicClassCourseMapping).filter(AcademicClassCourseMapping.class_id == winner.id).first()
+            if winner_mapping:
+                stale_mapping.active = False
+                stale_mapping.updated_at = _now()
+                stale_mapping.note = (stale_mapping.note or '') + f'\nSuperseded by class {winner.id}'
+                self.db.add(stale_mapping)
+            else:
+                stale_mapping.class_id = winner.id
+                stale_mapping.updated_at = _now()
+                self.db.add(stale_mapping)
+
+        # Learning snapshots: class + student + course is unique.
+        for snap in self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id == stale.id).all():
+            existing = self.db.query(AcademicStudentLearningSnapshot).filter(
+                AcademicStudentLearningSnapshot.class_id == winner.id,
+                AcademicStudentLearningSnapshot.student_id == snap.student_id,
+                AcademicStudentLearningSnapshot.openedx_course_id == snap.openedx_course_id,
+            ).first()
+            if existing:
+                self.db.delete(snap)
+            else:
+                snap.class_id = winner.id
+                snap.updated_at = _now()
+                self.db.add(snap)
+
+        self._mark_class_superseded(stale, winner, reason='duplicate_natural_key')
+
+    def _resolve_class_row(
+        self,
+        *,
+        term: AcademicTerm,
+        block: AcademicBlock | None,
+        subject: AcademicSubject,
+        class_code: str,
+        ap_class_id: str | None,
+        counters: SyncCounters,
+    ) -> tuple[AcademicClass, bool]:
+        target_block_id = block.id if block else None
+        target_cls = self.db.query(AcademicClass).filter(
+            AcademicClass.term_id == term.id,
+            AcademicClass.block_id == target_block_id,
+            AcademicClass.subject_id == subject.id,
+            AcademicClass.class_code == class_code,
+        ).first()
+
+        ap_cls = None
+        if ap_class_id:
+            ap_cls = (
+                self.db.query(AcademicClass)
+                .filter(AcademicClass.ap_class_id == ap_class_id)
+                .order_by(AcademicClass.active.desc(), AcademicClass.updated_at.desc().nullslast())
+                .first()
+            )
+
+        if target_cls:
+            if ap_cls and ap_cls.id != target_cls.id:
+                self._merge_duplicate_class_relations(ap_cls, target_cls)
+            return target_cls, False
+
+        if ap_cls:
+            # Defensive check: if a duplicate natural-key row appeared between the
+            # first lookup and the AP-id lookup, use that row instead of updating
+            # ap_cls into a unique-constraint violation.
+            conflict = self.db.query(AcademicClass).filter(
+                AcademicClass.term_id == term.id,
+                AcademicClass.block_id == target_block_id,
+                AcademicClass.subject_id == subject.id,
+                AcademicClass.class_code == class_code,
+                AcademicClass.id != ap_cls.id,
+            ).first()
+            if conflict:
+                self._merge_duplicate_class_relations(ap_cls, conflict)
+                return conflict, False
+            return ap_cls, False
+
+        cls = AcademicClass(
+            id=str(uuid.uuid4()),
+            term_id=term.id,
+            block_id=target_block_id,
+            subject_id=subject.id,
+            class_code=class_code,
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        counters.classes += 1
+        return cls, True
+
     def _get_or_create_term(self, term_payload: dict[str, Any], branch: str, counters: SyncCounters) -> AcademicTerm:
         term_name = _clean(term_payload.get('term_name') or term_payload.get('pterm_name') or term_payload.get('name')) or 'Unknown Term'
         ap_term_id = _clean(term_payload.get('id') or term_payload.get('term_id') or term_payload.get('pterm_id')) or None
@@ -281,8 +585,6 @@ class AcademicImportService:
         ).first()
 
         if not term:
-            # Reuse the /semesters term even when AP sends only term_name. This is the
-            # canonical path after v25.9.16.2.13, where operators must create terms first.
             candidates = self.db.query(AcademicTerm).filter(AcademicTerm.branch == branch).all()
             wanted = _text_key(term_name)
             for candidate in candidates:
@@ -297,18 +599,26 @@ class AcademicImportService:
             ).first()
 
         if not term:
-            # Backward compatibility for rows created by older AP sync versions.
             term = self.db.query(AcademicTerm).filter(
                 AcademicTerm.term_code == legacy_code,
                 AcademicTerm.branch == branch,
             ).first()
 
+        is_new = False
         if not term:
-            term = AcademicTerm(id=str(uuid.uuid4()), term_code=canonical_code, term_name=term_name, branch=branch, created_at=_now(), updated_at=_now())
+            term = AcademicTerm(
+                id=str(uuid.uuid4()),
+                term_code=canonical_code,
+                term_name=term_name,
+                branch=branch,
+                created_at=_now(),
+                updated_at=_now(),
+            )
             counters.terms += 1
+            is_new = True
 
-        term.ap_term_id = ap_term_id or term.ap_term_id
-        # Do not overwrite the canonical /semesters code with the old normalized code.
+        changed = is_new
+        changed |= self._set_if_changed(term, 'ap_term_id', ap_term_id)
         if _text_key(term.term_code) in {_text_key(legacy_code), '', 'unknownterm'} and term.term_code != canonical_code:
             existing = self.db.query(AcademicTerm).filter(
                 AcademicTerm.term_code == canonical_code,
@@ -316,17 +626,18 @@ class AcademicImportService:
                 AcademicTerm.id != term.id,
             ).first()
             if not existing:
-                term.term_code = canonical_code
-        term.term_name = term_name
-        term.start_date = _parse_date(term_payload.get('startday') or term_payload.get('start_day') or term_payload.get('start_date')) or term.start_date
-        term.end_date = _parse_date(term_payload.get('endday') or term_payload.get('end_day') or term_payload.get('end_date')) or term.end_date
-        term.active = True
+                changed |= self._set_if_changed(term, 'term_code', canonical_code)
+        changed |= self._set_if_changed(term, 'term_name', term_name)
+        changed |= self._set_if_changed(term, 'start_date', _parse_date(term_payload.get('startday') or term_payload.get('start_day') or term_payload.get('start_date')))
+        changed |= self._set_if_changed(term, 'end_date', _parse_date(term_payload.get('endday') or term_payload.get('end_day') or term_payload.get('end_date')))
+        changed |= self._set_if_changed(term, 'active', True)
         meta = dict(term.metadata_json or {})
         meta.update({'source': meta.get('source') or 'ap', 'last_sync_source': 'ap', 'raw_keys': sorted(term_payload.keys())})
-        term.metadata_json = meta
-        term.updated_at = _now()
-        self.db.add(term)
-        self.db.flush()
+        changed |= self._set_json_if_changed(term, 'metadata_json', meta)
+        if changed:
+            term.updated_at = _now()
+            self.db.add(term)
+            self.db.flush()
         return term
 
     def _get_or_create_block(self, term: AcademicTerm, block_payload: dict[str, Any], counters: SyncCounters) -> AcademicBlock:
@@ -348,14 +659,23 @@ class AcademicImportService:
                 if _text_key(candidate.block_name) == wanted or _text_key(candidate.block_code) == wanted:
                     block = candidate
                     break
-        if not block:
-            block = AcademicBlock(id=str(uuid.uuid4()), term_id=term.id, block_code=canonical_code, block_name=name, created_at=_now(), updated_at=_now())
-            counters.blocks += 1
 
-        block.ap_block_id = ap_block_id or block.ap_block_id
-        block.block_name = name
-        # Preserve the readable /semesters block code (Block 1/Block 2). Only normalize
-        # legacy AP-id block codes when it is safe and no canonical duplicate exists.
+        is_new = False
+        if not block:
+            block = AcademicBlock(
+                id=str(uuid.uuid4()),
+                term_id=term.id,
+                block_code=canonical_code,
+                block_name=name,
+                created_at=_now(),
+                updated_at=_now(),
+            )
+            counters.blocks += 1
+            is_new = True
+
+        changed = is_new
+        changed |= self._set_if_changed(block, 'ap_block_id', ap_block_id)
+        changed |= self._set_if_changed(block, 'block_name', name)
         if block.block_code == legacy_code and block.block_code != canonical_code:
             existing = self.db.query(AcademicBlock).filter(
                 AcademicBlock.term_id == term.id,
@@ -363,17 +683,18 @@ class AcademicImportService:
                 AcademicBlock.id != block.id,
             ).first()
             if not existing:
-                block.block_code = canonical_code
-        block.start_date = _parse_date(block_payload.get('start_day') or block_payload.get('start_date')) or block.start_date
-        block.end_date = _parse_date(block_payload.get('end_day') or block_payload.get('end_date')) or block.end_date
-        block.sort_order = _block_sort_order(name) or block.sort_order or 0
-        block.active = True
+                changed |= self._set_if_changed(block, 'block_code', canonical_code)
+        changed |= self._set_if_changed(block, 'start_date', _parse_date(block_payload.get('start_day') or block_payload.get('start_date')))
+        changed |= self._set_if_changed(block, 'end_date', _parse_date(block_payload.get('end_day') or block_payload.get('end_date')))
+        changed |= self._set_if_changed(block, 'sort_order', _block_sort_order(name) or block.sort_order or 0)
+        changed |= self._set_if_changed(block, 'active', True)
         meta = dict(block.metadata_json or {})
         meta.update({'source': meta.get('source') or 'ap', 'last_sync_source': 'ap', 'raw_keys': sorted(block_payload.keys())})
-        block.metadata_json = meta
-        block.updated_at = _now()
-        self.db.add(block)
-        self.db.flush()
+        changed |= self._set_json_if_changed(block, 'metadata_json', meta)
+        if changed:
+            block.updated_at = _now()
+            self.db.add(block)
+            self.db.flush()
         return block
 
     def _get_or_create_subject(self, item: dict[str, Any], branch: str, counters: SyncCounters) -> AcademicSubject:
@@ -382,18 +703,30 @@ class AcademicImportService:
         if not subject_code:
             raise ValueError('Thiếu subject_code')
         subject = self.db.query(AcademicSubject).filter(AcademicSubject.subject_code == subject_code, AcademicSubject.branch == branch).first()
+        is_new = False
         if not subject:
-            subject = AcademicSubject(id=str(uuid.uuid4()), subject_code=subject_code, branch=branch, subject_name=subject_code, created_at=_now(), updated_at=_now())
+            subject = AcademicSubject(
+                id=str(uuid.uuid4()),
+                subject_code=subject_code,
+                branch=branch,
+                subject_name=subject_code,
+                created_at=_now(),
+                updated_at=_now(),
+            )
             counters.subjects += 1
-        subject.ap_subject_id = _clean(item.get('subject_id') or item.get('id')) or subject.ap_subject_id
-        subject.subject_name = _clean(item.get('psubject_name') or item.get('subject_name') or item.get('short_name')) or subject.subject_name or subject_code
-        subject.subject_name_en = _clean(item.get('subject_name_en')) or subject.subject_name_en
-        subject.skill_code = _clean(item.get('skill_code')) or subject.skill_code
-        subject.active = True
-        subject.metadata_json = {'source': 'ap', 'raw_keys': sorted(item.keys())}
-        subject.updated_at = _now()
-        self.db.add(subject)
-        self.db.flush()
+            is_new = True
+
+        changed = is_new
+        changed |= self._set_if_changed(subject, 'ap_subject_id', _clean(item.get('subject_id') or item.get('id')) or None)
+        changed |= self._set_if_changed(subject, 'subject_name', _clean(item.get('psubject_name') or item.get('subject_name') or item.get('short_name')) or subject.subject_name or subject_code)
+        changed |= self._set_if_changed(subject, 'subject_name_en', _clean(item.get('subject_name_en')) or None)
+        changed |= self._set_if_changed(subject, 'skill_code', _clean(item.get('skill_code')) or None)
+        changed |= self._set_if_changed(subject, 'active', True)
+        changed |= self._set_json_if_changed(subject, 'metadata_json', {'source': 'ap', 'raw_keys': sorted(item.keys())})
+        if changed:
+            subject.updated_at = _now()
+            self.db.add(subject)
+            self.db.flush()
         return subject
 
     def _get_or_create_teacher(self, username: str, campus: str | None, branch: str, counters: SyncCounters) -> AcademicTeacher:
@@ -401,15 +734,19 @@ class AcademicImportService:
         if not username:
             raise ValueError('Thiếu teacher username')
         teacher = self.db.query(AcademicTeacher).filter(func.lower(AcademicTeacher.username) == username).first()
+        is_new = False
         if not teacher:
             teacher = AcademicTeacher(id=str(uuid.uuid4()), username=username, full_name=username, created_at=_now(), updated_at=_now())
             counters.teachers += 1
-        teacher.campus = _lower(campus) or teacher.campus
-        teacher.branch = _lower(branch) or teacher.branch
-        teacher.active = True
-        teacher.updated_at = _now()
-        self.db.add(teacher)
-        self.db.flush()
+            is_new = True
+        changed = is_new
+        changed |= self._set_if_changed(teacher, 'campus', _lower(campus) or None)
+        changed |= self._set_if_changed(teacher, 'branch', _lower(branch) or None)
+        changed |= self._set_if_changed(teacher, 'active', True)
+        if changed:
+            teacher.updated_at = _now()
+            self.db.add(teacher)
+            self.db.flush()
         return teacher
 
     def _get_or_create_student(self, item: dict[str, Any], campus: str | None, branch: str, counters: SyncCounters) -> AcademicStudent:
@@ -417,20 +754,24 @@ class AcademicImportService:
         if not username:
             raise ValueError('Thiếu student username')
         student = self.db.query(AcademicStudent).filter(func.lower(AcademicStudent.username) == username).first()
+        is_new = False
         if not student:
             student = AcademicStudent(id=str(uuid.uuid4()), username=username, full_name='', created_at=_now(), updated_at=_now())
             counters.students += 1
-        student.student_code = _clean(item.get('student_code') or item.get('user_code')) or student.student_code
-        student.email = _lower(item.get('email')) or student.email
-        student.full_name = _clean(item.get('name') or item.get('full_name')) or student.full_name or username
-        student.phone = _clean(item.get('phone')) or student.phone
-        student.campus = _lower(campus) or student.campus
-        student.branch = _lower(branch) or student.branch
-        student.active = True
-        student.metadata_json = {'source': 'ap'}
-        student.updated_at = _now()
-        self.db.add(student)
-        self.db.flush()
+            is_new = True
+        changed = is_new
+        changed |= self._set_if_changed(student, 'student_code', _clean(item.get('student_code') or item.get('user_code')) or None)
+        changed |= self._set_if_changed(student, 'email', _lower(item.get('email')) or None)
+        changed |= self._set_if_changed(student, 'full_name', _clean(item.get('name') or item.get('full_name')) or student.full_name or username)
+        changed |= self._set_if_changed(student, 'phone', _clean(item.get('phone')) or None)
+        changed |= self._set_if_changed(student, 'campus', _lower(campus) or None)
+        changed |= self._set_if_changed(student, 'branch', _lower(branch) or None)
+        changed |= self._set_if_changed(student, 'active', True)
+        changed |= self._set_json_if_changed(student, 'metadata_json', {'source': 'ap'})
+        if changed:
+            student.updated_at = _now()
+            self.db.add(student)
+            self.db.flush()
         return student
 
     def import_payload(self, payload: dict[str, Any], *, run: AcademicSyncRun | None = None, campus: str | None = None, branch: str = 'poly') -> SyncCounters:
@@ -438,7 +779,36 @@ class AcademicImportService:
         branch = _lower(branch) or 'poly'
         campus = _lower(campus) or None
         term_payload = payload.get('term') if isinstance(payload.get('term'), dict) else {}
-        class_items = payload.get('class') if isinstance(payload.get('class'), list) else []
+        raw_class_items = payload.get('class') if isinstance(payload.get('class'), list) else []
+
+        # v25.9.16.4.9 DB-growth guard: skip class shells that have no valid
+        # students before creating term/block/subject/class/teacher records. AP
+        # returns many campuses/subjects/classes; empty classes are not useful for
+        # CMS-user mapping, enrollment, or progress dashboards.
+        class_items: list[dict[str, Any]] = []
+        student_items_by_ap_key: dict[str, list[dict[str, Any]]] = {}
+        skip_empty_classes = bool(getattr(settings, 'academic_ap_skip_empty_classes', True))
+        for raw in raw_class_items:
+            if not isinstance(raw, dict):
+                self._error(run, counters, 'class', 'unknown', 'Class payload không phải object', raw)
+                continue
+            ap_key = _clean(raw.get('id') or raw.get('group_name') or raw.get('class_code') or raw.get('classname') or str(len(class_items)))
+            valid_students = self._valid_student_items(raw)
+            if skip_empty_classes and not valid_students:
+                counters.skipped_empty_classes += 1
+                continue
+            class_items.append(raw)
+            student_items_by_ap_key[ap_key] = valid_students
+
+        if not class_items:
+            # No actionable class in this AP payload. Do not create term/block/subject
+            # rows because that would bloat the DB with empty shells.
+            if run:
+                current = run.counters_json if isinstance(run.counters_json, dict) else {}
+                run.counters_json = {**current, **counters.as_dict()}
+            self.db.commit()
+            return counters
+
         if class_items and not term_payload:
             first = class_items[0]
             term_payload = {'id': first.get('pterm_id'), 'term_name': first.get('pterm_name')}
@@ -455,97 +825,96 @@ class AcademicImportService:
                 self._error(run, counters, 'class', 'unknown', 'Class payload không phải object', raw)
                 continue
             try:
-                subject = self._get_or_create_subject(raw, branch, counters)
-                raw_block_id = _clean(raw.get('block_id'))
-                block = blocks_by_ap.get(raw_block_id)
-                if not block and raw_block_id:
-                    block = self._get_or_create_block(term, {'id': raw_block_id, 'block_name': raw.get('block_name') or f'Block {raw_block_id}'}, counters)
-                    blocks_by_ap[raw_block_id] = block
-                class_code = _clean(raw.get('group_name') or raw.get('class_code') or raw.get('classname'))
-                if not class_code:
-                    raise ValueError('Thiếu class/group_name')
-                ap_class_id = _clean(raw.get('id')) or None
-                target_block_id = block.id if block else None
-                target_cls = self.db.query(AcademicClass).filter(
-                    AcademicClass.term_id == term.id,
-                    AcademicClass.block_id == target_block_id,
-                    AcademicClass.subject_id == subject.id,
-                    AcademicClass.class_code == class_code,
-                ).first()
-                cls = None
-                ap_cls = None
-                if ap_class_id:
-                    ap_cls = self.db.query(AcademicClass).filter(AcademicClass.ap_class_id == ap_class_id).first()
-                if target_cls:
-                    cls = target_cls
-                    if ap_cls and ap_cls.id != target_cls.id:
-                        # Older builds could create the same AP class under a duplicate term.
-                        # Keep the canonical target row active and hide the stale duplicate.
-                        ap_cls.active = False
-                        ap_cls.metadata_json = {**(ap_cls.metadata_json or {}), 'superseded_by_class_id': target_cls.id}
-                        ap_cls.updated_at = _now()
-                        self.db.add(ap_cls)
-                elif ap_cls:
-                    cls = ap_cls
-                    cls.term_id = term.id
-                    cls.block_id = target_block_id
-                    cls.subject_id = subject.id
-                if not cls:
-                    cls = AcademicClass(id=str(uuid.uuid4()), term_id=term.id, block_id=target_block_id, subject_id=subject.id, class_code=class_code, created_at=_now(), updated_at=_now())
-                    counters.classes += 1
-                cls.ap_class_id = ap_class_id or cls.ap_class_id
-                cls.class_name = _clean(raw.get('classname') or raw.get('class_name') or class_code) or class_code
-                cls.campus = campus
-                cls.branch = branch
-                cls.start_date = _parse_date(raw.get('start_date')) or cls.start_date
-                cls.end_date = _parse_date(raw.get('end_date')) or cls.end_date
-                cls.active = True
-                cls.metadata_json = {'source': 'ap', 'raw_keys': sorted(raw.keys())}
-                cls.updated_at = _now()
-                self.db.add(cls)
-                self.db.flush()
+                # Savepoint per AP class keeps the session usable if one malformed
+                # class/student row fails. This prevents the common SQLAlchemy
+                # "transaction has been rolled back" cascade after a flush error.
+                with self.db.begin_nested():
+                    subject = self._get_or_create_subject(raw, branch, counters)
+                    raw_block_id = _clean(raw.get('block_id'))
+                    block = blocks_by_ap.get(raw_block_id)
+                    if not block and raw_block_id:
+                        block = self._get_or_create_block(term, {'id': raw_block_id, 'block_name': raw.get('block_name') or f'Block {raw_block_id}'}, counters)
+                        blocks_by_ap[raw_block_id] = block
+                    class_code = _clean(raw.get('group_name') or raw.get('class_code') or raw.get('classname'))
+                    if not class_code:
+                        raise ValueError('Thiếu class/group_name')
+                    ap_class_id = _clean(raw.get('id')) or None
+                    cls, is_new_class = self._resolve_class_row(
+                        term=term,
+                        block=block,
+                        subject=subject,
+                        class_code=class_code,
+                        ap_class_id=ap_class_id,
+                        counters=counters,
+                    )
 
-                teacher_username = _clean(raw.get('teacher'))
-                if teacher_username:
-                    teacher = self._get_or_create_teacher(teacher_username, campus, branch, counters)
-                    assignment = self.db.query(AcademicTeacherAssignment).filter(
-                        AcademicTeacherAssignment.teacher_id == teacher.id,
-                        AcademicTeacherAssignment.class_id == cls.id,
-                        AcademicTeacherAssignment.subject_id == subject.id,
-                        AcademicTeacherAssignment.term_id == term.id,
-                        AcademicTeacherAssignment.block_id == (block.id if block else None),
-                    ).first()
-                    if not assignment:
-                        assignment = AcademicTeacherAssignment(
-                            id=str(uuid.uuid4()),
-                            teacher_id=teacher.id,
-                            class_id=cls.id,
-                            subject_id=subject.id,
-                            term_id=term.id,
-                            block_id=block.id if block else None,
-                            campus=campus,
-                            branch=branch,
-                            source='ap',
-                            synced_at=_now(),
-                        )
-                        counters.teacher_assignments += 1
-                    assignment.synced_at = _now()
-                    assignment.campus = campus
-                    assignment.branch = branch
-                    self.db.add(assignment)
-                for raw_student in raw.get('student') or raw.get('students') or []:
-                    if not isinstance(raw_student, dict):
-                        continue
-                    try:
-                        student = self._get_or_create_student(raw_student, campus, branch, counters)
-                        link = self.db.query(AcademicClassStudent).filter(AcademicClassStudent.class_id == cls.id, AcademicClassStudent.student_id == student.id).first()
-                        if not link:
-                            link = AcademicClassStudent(id=str(uuid.uuid4()), class_id=cls.id, student_id=student.id, source='ap', synced_at=_now())
-                            counters.class_students += 1
-                        link.synced_at = _now()
-                        self.db.add(link)
-                    except Exception as exc:
-                        self._error(run, counters, 'student', _clean(raw_student.get('username') or raw_student.get('user_code') or 'unknown'), str(exc), raw_student)
+                    changed = is_new_class
+                    changed |= self._set_if_changed(cls, 'ap_class_id', ap_class_id)
+                    changed |= self._set_if_changed(cls, 'term_id', term.id)
+                    changed |= self._set_if_changed(cls, 'block_id', block.id if block else None)
+                    changed |= self._set_if_changed(cls, 'subject_id', subject.id)
+                    changed |= self._set_if_changed(cls, 'class_code', class_code)
+                    changed |= self._set_if_changed(cls, 'class_name', _clean(raw.get('classname') or raw.get('class_name') or class_code) or class_code)
+                    changed |= self._set_if_changed(cls, 'campus', campus)
+                    changed |= self._set_if_changed(cls, 'branch', branch)
+                    changed |= self._set_if_changed(cls, 'start_date', _parse_date(raw.get('start_date')))
+                    changed |= self._set_if_changed(cls, 'end_date', _parse_date(raw.get('end_date')))
+                    changed |= self._set_if_changed(cls, 'active', True)
+                    changed |= self._set_json_if_changed(cls, 'metadata_json', {'source': 'ap', 'raw_keys': sorted(raw.keys())})
+                    if changed:
+                        cls.updated_at = _now()
+                        self.db.add(cls)
+                        self.db.flush()
+
+                    teacher_username = _clean(raw.get('teacher'))
+                    if teacher_username:
+                        teacher = self._get_or_create_teacher(teacher_username, campus, branch, counters)
+                        assignment = self.db.query(AcademicTeacherAssignment).filter(
+                            AcademicTeacherAssignment.teacher_id == teacher.id,
+                            AcademicTeacherAssignment.class_id == cls.id,
+                            AcademicTeacherAssignment.subject_id == subject.id,
+                            AcademicTeacherAssignment.term_id == term.id,
+                            AcademicTeacherAssignment.block_id == (block.id if block else None),
+                        ).first()
+                        if not assignment:
+                            assignment = AcademicTeacherAssignment(
+                                id=str(uuid.uuid4()),
+                                teacher_id=teacher.id,
+                                class_id=cls.id,
+                                subject_id=subject.id,
+                                term_id=term.id,
+                                block_id=block.id if block else None,
+                                campus=campus,
+                                branch=branch,
+                                source='ap',
+                                synced_at=_now(),
+                            )
+                            counters.teacher_assignments += 1
+                            self.db.add(assignment)
+                        else:
+                            assignment_changed = False
+                            assignment_changed |= self._set_if_changed(assignment, 'campus', campus)
+                            assignment_changed |= self._set_if_changed(assignment, 'branch', branch)
+                            assignment_changed |= self._set_if_changed(assignment, 'source', 'ap')
+                            if assignment_changed:
+                                assignment.synced_at = _now()
+                                self.db.add(assignment)
+                    ap_key = _clean(raw.get('id') or raw.get('group_name') or raw.get('class_code') or raw.get('classname') or '')
+                    student_items = student_items_by_ap_key.get(ap_key) or self._valid_student_items(raw)
+                    for raw_student in student_items:
+                        try:
+                            student = self._get_or_create_student(raw_student, campus, branch, counters)
+                            link = self.db.query(AcademicClassStudent).filter(AcademicClassStudent.class_id == cls.id, AcademicClassStudent.student_id == student.id).first()
+                            if not link:
+                                link = AcademicClassStudent(id=str(uuid.uuid4()), class_id=cls.id, student_id=student.id, source='ap', synced_at=_now())
+                                counters.class_students += 1
+                                self.db.add(link)
+                            elif link.source != 'ap':
+                                link.source = 'ap'
+                                link.synced_at = _now()
+                                self.db.add(link)
+                        except Exception as exc:
+                            self._error(run, counters, 'student', _clean(raw_student.get('username') or raw_student.get('user_code') or 'unknown'), str(exc), raw_student)
             except Exception as exc:
                 self._error(run, counters, 'class', _clean(raw.get('id') or raw.get('group_name') or 'unknown'), str(exc), raw)
         if run:
@@ -867,7 +1236,14 @@ class AcademicImportService:
                 if dry_run:
                     continue
                 catalog_key = f'{_lower(branch) or "poly"}:{term_name}:{source}'
-                if catalog and catalog_key not in imported_catalog_keys:
+                if (
+                    catalog
+                    and catalog_key not in imported_catalog_keys
+                    and bool(getattr(settings, 'academic_ap_import_catalog_subjects', False))
+                ):
+                    # Discovery catalog import is disabled by default to avoid DB
+                    # bloat. Subjects are normally persisted only when /get-data-cms
+                    # returns at least one class with students for that subject.
                     self.import_subject_catalog(catalog, branch=branch, counters=counters)
                     imported_catalog_keys.add(catalog_key)
                 for code in codes:
