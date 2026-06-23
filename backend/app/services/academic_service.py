@@ -2521,6 +2521,11 @@ class AcademicService:
         client = OpenEdXConnectorClient()
         batch_size = max(1, min(getattr(settings, 'openedx_connector_max_batch_size', settings.openedx_student_insight_max_batch_size), 100))
         updated = 0
+        connector_enrolled_seen = 0
+        connector_progress_seen = 0
+        connector_grade_seen = 0
+        connector_component_seen = 0
+        connector_missing_result = 0
         for start in range(0, len(rows), batch_size):
             chunk = rows[start:start + batch_size]
             payload = []
@@ -2542,6 +2547,7 @@ class AcademicService:
                 if result is None and student.student_code:
                     result = by_code.get(str(student.student_code).strip().lower())
                 if result is None:
+                    connector_missing_result += 1
                     result = {
                         'student_code': student.student_code,
                         'ap_username': normalize_username(student.username),
@@ -2549,12 +2555,38 @@ class AcademicService:
                         'enrollment_status': 'unknown',
                         'note': 'Plugin không trả dữ liệu học tập cho sinh viên này',
                     }
+                enrollment_payload = result.get('enrollment') if isinstance(result.get('enrollment'), dict) else {}
+                enrollment_status_raw = str(result.get('enrollment_status') or enrollment_payload.get('status') or '').strip().lower()
+                if enrollment_status_raw in {'enrolled', 'already_enrolled', 'created', 'reactivated'} or _boolish(result.get('is_enrolled')) or enrollment_payload.get('is_enrolled') is True:
+                    connector_enrolled_seen += 1
+                progress_payload = result.get('progress') if isinstance(result.get('progress'), dict) else {}
+                grade_payload = result.get('grade') if isinstance(result.get('grade'), dict) else {}
+                if result.get('progress_percent') is not None or progress_payload.get('percent') is not None or result.get('completed_blocks') is not None or progress_payload.get('completed_blocks') is not None:
+                    connector_progress_seen += 1
+                if result.get('grade_percent') is not None or grade_payload.get('percent') is not None:
+                    connector_grade_seen += 1
+                if self._component_scores_from_payload(result):
+                    connector_component_seen += 1
                 self._upsert_learning_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_connector')
                 updated += 1
             self.db.flush()
         self.db.commit()
+        if updated > 0 and connector_enrolled_seen <= 0:
+            raise RuntimeError('Cập nhật tiến độ/điểm không có sinh viên nào được connector xác nhận enrolled trên Open edX. Hãy chạy lại Enrollment Course CMS và kiểm tra CourseEnrollment trước khi lấy điểm.')
         summary = self._learning_summary_for_class_course(class_id, course_id)
-        return {'ok': True, 'updated': updated, 'message': 'Đã cập nhật tiến độ/điểm CMS cho lớp', **summary}
+        connector_counts = {
+            'checked': int(updated),
+            'enrolled_seen': int(connector_enrolled_seen),
+            'with_progress': int(connector_progress_seen),
+            'with_total_grade': int(connector_grade_seen),
+            'with_component_grades': int(connector_component_seen),
+            'missing_result': int(connector_missing_result),
+        }
+        if connector_grade_seen or connector_component_seen or connector_progress_seen:
+            message = f'Đã cập nhật tiến độ/điểm CMS cho lớp: enrolled {connector_enrolled_seen}/{updated}, progress {connector_progress_seen}, điểm tổng {connector_grade_seen}, điểm thành phần {connector_component_seen}.'
+        else:
+            message = f'Đã kiểm tra học tập CMS: {connector_enrolled_seen}/{updated} sinh viên đã enrolled nhưng Open edX chưa có progress/grade/subsection grade để hiển thị.'
+        return {'ok': True, 'updated': updated, 'connector_counts': connector_counts, 'message': message, **summary}
 
 
     def _try_auto_map_course_for_class(self, user: UserContext, cls: AcademicClass) -> dict[str, Any]:
