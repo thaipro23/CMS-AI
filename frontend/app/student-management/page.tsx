@@ -13,9 +13,6 @@ import { AcademicCampus, AcademicLearningComponentScore, AcademicSubjectManageme
 
 const PAGE_SIZE = 50
 
-function branchLabel(value?: string | null) {
-  return value === 'ptcd' ? 'PTCĐ' : 'Poly'
-}
 
 function statusClass(status?: string | null) {
   const value = (status || '').toLowerCase()
@@ -131,7 +128,6 @@ export default function StudentManagementSubjectsPage() {
   }, [headers, termId, branch, campus, search, learningStatus, page])
 
   const selectedTerm = terms.find((item) => item.id === termId)
-  const selectedCampusLabel = campus ? campuses.find((item) => item.campus_code === campus)?.campus_name || campus.toUpperCase() : 'Tất cả cơ sở'
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const aggregate = useMemo(() => subjects.reduce((acc, item) => {
     acc.classes += item.class_count || 0
@@ -162,25 +158,6 @@ export default function StudentManagementSubjectsPage() {
   }
 
   return <div className="page-stack student-management-page academic-flow-page">
-    <section className="academic-flow-header">
-      <nav className="academic-breadcrumb" aria-label="Student Management breadcrumb">
-        <Link href="/student-management">Student Management</Link>
-        <span>/</span>
-        <b>Môn</b>
-      </nav>
-      <div className="academic-flow-title-row">
-        <div>
-          <p className="eyebrow">Môn · Lớp · Sinh viên</p>
-          <h1>Quản lý theo môn</h1>
-          <p className="academic-flow-subtitle">{selectedTerm ? `${selectedTerm.term_name} · ${branchLabel(branch)} · ${selectedCampusLabel}` : 'Chọn kỳ, hệ và cơ sở để xem dữ liệu đã đồng bộ từ AP.'}</p>
-        </div>
-        <div className="hero-actions">
-          <Link className="btn secondary" href="/ap-sync">Đồng bộ AP</Link>
-          <Link className="btn secondary" href="/semesters">Quản lý học kỳ</Link>
-        </div>
-      </div>
-    </section>
-
     <section className="card academic-unified-card">
       <div className="section-head list-card-head">
         <div>

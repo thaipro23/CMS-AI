@@ -46,15 +46,60 @@ function pageTitle(pathname: string) {
   return nested ? nested.label : 'AI Server'
 }
 
+
+function buildStudentManagementTopbar(pathname: string, searchParams: { get(name: string): string | null }) {
+  if (!pathname.startsWith('/student-management')) return null
+
+  const subjectIdMatch = pathname.match(/^\/student-management\/subjects\/([^/]+)\/classes/)
+  const classIdMatch = pathname.match(/^\/student-management\/classes\/([^/]+)/)
+  const subjectId = subjectIdMatch?.[1] || searchParams.get('subject_id') || ''
+  const subjectCode = searchParams.get('subject_code') || ''
+  const subjectName = searchParams.get('subject_name') || ''
+  const termId = searchParams.get('term_id') || ''
+  const termName = searchParams.get('term_name') || ''
+  const branch = searchParams.get('branch') || 'poly'
+  const campus = searchParams.get('campus') || ''
+
+  const subjectParams = new URLSearchParams()
+  if (termId) subjectParams.set('term_id', termId)
+  if (branch) subjectParams.set('branch', branch)
+  if (campus) subjectParams.set('campus', campus)
+  if (termName) subjectParams.set('term_name', termName)
+  if (subjectCode) subjectParams.set('subject_code', subjectCode)
+  if (subjectName) subjectParams.set('subject_name', subjectName)
+  const subjectHref = subjectId
+    ? `/student-management/subjects/${encodeURIComponent(subjectId)}/classes${subjectParams.toString() ? `?${subjectParams.toString()}` : ''}`
+    : '/student-management'
+
+  const items: Array<{ label: string; href?: string }> = [
+    { label: 'Student Management', href: '/student-management' },
+    { label: 'Môn', href: pathname === '/student-management' ? undefined : '/student-management' },
+  ]
+
+  if (subjectIdMatch || classIdMatch) {
+    items.push({
+      label: subjectCode || 'Môn đã chọn',
+      href: classIdMatch ? subjectHref : undefined,
+    })
+  }
+
+  if (classIdMatch) {
+    items.push({ label: 'Lớp' })
+  }
+
+  return items
+}
+
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz Open edX</span></div>
-    <div className="footer-links"><span>v25.9.16.4.7</span></div>
+    <div className="footer-links"><span>v25.9.16.5.3</span></div>
   </footer>
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const [topbarSearch, setTopbarSearch] = useState('')
   const {
     courseId,
     role,
@@ -67,6 +112,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const visibleItems = useMemo(() => navItems.filter((item) => !item.permission || can(item.permission)), [can])
   const currentTitle = pageTitle(pathname)
+  const studentTopbar = buildStudentManagementTopbar(pathname, new URLSearchParams(topbarSearch))
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setTopbarSearch(window.location.search || '')
+  }, [pathname])
 
   const loginWithCms = () => {
     try {
@@ -137,10 +188,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </aside>
 
     <div className="main-area product-main">
-      <header className="workspace-topbar workspace-topbar-minimal">
-        <div>
+      <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar' : 'workspace-topbar workspace-topbar-minimal'}>
+        <div className="workspace-topbar-main">
           <h1>{currentTitle}</h1>
+          {studentTopbar && <nav className="workspace-breadcrumb" aria-label="Student Management breadcrumb">
+            {studentTopbar.map((item, index) => <span key={`${item.label}-${index}`} className="workspace-breadcrumb-item">
+              {index > 0 && <span className="workspace-breadcrumb-separator">/</span>}
+              {item.href ? <Link href={item.href}>{item.label}</Link> : <b>{item.label}</b>}
+            </span>)}
+          </nav>}
         </div>
+        {studentTopbar && can('manage_settings') && <div className="workspace-topbar-actions">
+          <Link className="btn secondary small" href="/ap-sync">Đồng bộ AP</Link>
+          <Link className="btn secondary small" href="/semesters">Quản lý học kỳ</Link>
+        </div>}
       </header>
 
       <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{children}</main>

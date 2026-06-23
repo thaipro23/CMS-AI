@@ -19,7 +19,6 @@ import { AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, Ac
 
 const PAGE_SIZE = 50
 
-function branchLabel(value?: string | null) { return value === 'ptcd' ? 'PTCĐ' : 'Poly' }
 function cmsSyncLabel(status?: string | null) {
   const value = (status || 'not_checked').toLowerCase()
   if (value === 'matched') return 'Đã đồng bộ CMS'
@@ -279,34 +278,11 @@ function ClassDetailContent() {
   const backToClassesHref = subjectIdForBack ? `/student-management/subjects/${encodeURIComponent(subjectIdForBack)}/classes?${subjectBackParams.toString()}` : '/student-management'
 
   return <div className="page-stack student-management-page academic-flow-page class-detail-flow">
-    <section className="academic-flow-header">
-      <nav className="academic-breadcrumb" aria-label="Student Management breadcrumb">
-        <Link href="/student-management">Student Management</Link>
-        <span>/</span>
-        <Link href="/student-management">Môn</Link>
-        <span>/</span>
-        <Link href={backToClassesHref}>{classInfo?.subject_code || backSubjectCode || 'Môn'}</Link>
-        <span>/</span>
-        <b>{classInfo?.class_code || 'Lớp'}</b>
-      </nav>
-      <div className="academic-flow-title-row">
-        <div>
-          <p className="eyebrow">Chi tiết lớp</p>
-          <h1>{classInfo?.class_code || 'Chi tiết lớp'} · {classInfo?.subject_code || ''}</h1>
-          <p className="academic-flow-subtitle">{classInfo?.subject_name || backSubjectName || 'Môn đã chọn'} · {classInfo?.term_name || backTermName || 'Kỳ đã chọn'} · {branchLabel(classInfo?.branch || backBranch)} · {classInfo?.campus?.toUpperCase() || backCampus?.toUpperCase() || '—'}</p>
-        </div>
-        <div className="hero-actions">
-          <Link className="btn secondary" href={backToClassesHref}>← Quay lại danh sách lớp</Link>
-          <Link className="btn secondary" href="/student-management">Danh sách môn</Link>
-        </div>
-      </div>
-    </section>
-
     <section className="card academic-unified-card">
-      <div className="class-action-row">
-        <div>
-          <h2>Thao tác học tập CMS</h2>
-          <p>Full flow sẽ kiểm tra/auto-map Course CMS trước. Chỉ khi đã có Course CMS, hệ thống mới tạo/kiểm tra tài khoản CMS, enroll và lấy điểm/progress.</p>
+      <div className="class-action-row compact-sync-action-strip">
+        <div className="compact-sync-copy">
+          <b>Đồng bộ CMS</b>
+          <span>Map Course CMS trước, sau đó mới tạo user CMS, enroll và lấy điểm/progress.</span>
         </div>
         <div className="toolbar-actions">
           <button className="btn primary" type="button" disabled={syncingFullFlow} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang chạy full flow...' : 'Đồng bộ full CMS'}</button>

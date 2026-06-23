@@ -9,7 +9,6 @@ import { AcademicBlock, AcademicClass, AcademicLearningComponentScore } from '..
 
 const PAGE_SIZE = 50
 
-function branchLabel(value?: string | null) { return value === 'ptcd' ? 'PTCĐ' : 'Poly' }
 function mappingSourceLabel(source?: string | null) {
   if (source === 'subject_term_mapping') return 'Map theo môn'
   if (source === 'class_override') return 'Map riêng lớp'
@@ -120,26 +119,6 @@ function SubjectClassesContent() {
   }
 
   return <div className="page-stack student-management-page academic-flow-page">
-    <section className="academic-flow-header">
-      <nav className="academic-breadcrumb" aria-label="Student Management breadcrumb">
-        <Link href={listHref}>Student Management</Link>
-        <span>/</span>
-        <Link href={listHref}>Môn</Link>
-        <span>/</span>
-        <b>{subjectCode || 'Môn đã chọn'}</b>
-      </nav>
-      <div className="academic-flow-title-row">
-        <div>
-          <p className="eyebrow">Danh sách lớp</p>
-          <h1>{subjectCode || 'Môn'} · {subjectName || 'Danh sách lớp'}</h1>
-          <p className="academic-flow-subtitle">{termName || 'Kỳ đã chọn'} · {branchLabel(branch)}{campus ? ` · ${campus.toUpperCase()}` : ' · Tất cả cơ sở'}</p>
-        </div>
-        <div className="hero-actions">
-          <Link className="btn secondary" href={listHref}>← Quay lại danh sách môn</Link>
-        </div>
-      </div>
-    </section>
-
     <section className="card academic-unified-card">
       <div className="section-head list-card-head">
         <div>
