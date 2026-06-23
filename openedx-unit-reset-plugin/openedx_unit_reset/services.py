@@ -506,6 +506,7 @@ def _serialize_timer_config(config):
         'cooldown_seconds': config.cooldown_seconds,
         'auto_submit_on_timeout': config.auto_submit_on_timeout,
         'lock_after_timeout': config.lock_after_timeout,
+        'plugin_version': getattr(settings, 'OPENEDX_UNIT_RESET_PLUGIN_VERSION', '0.4.14'),
         'native_timed_exam': config.native_timed_exam,
         'metadata_json': config.metadata_json or {},
         'created_at': _iso(config.created_at),
@@ -713,10 +714,13 @@ def timeout_quiz_session_for_current_user(request, course_id, unit_usage_key, pa
             return data
         session.status = UnitQuizSession.STATUS_SUBMITTING
         session.auto_submitted_at = now
+        # v0.4.13/v0.4.14: reset cooldown is computed from expires_at, never from lock_at.
+        if not session.reset_available_at:
+            session.reset_available_at = session.expires_at + timedelta(seconds=session.cooldown_seconds)
         session.timeout_payload = payload or {}
         session.last_ip = get_client_ip(request)
         session.last_user_agent = (request.META.get('HTTP_USER_AGENT', '') or '')[:2000]
-        session.save(update_fields=['status', 'auto_submitted_at', 'timeout_payload', 'last_ip', 'last_user_agent', 'updated_at'])
+        session.save(update_fields=['status', 'auto_submitted_at', 'reset_available_at', 'timeout_payload', 'last_ip', 'last_user_agent', 'updated_at'])
     audit_reset(request, course_key, unit_key, action='quiz_session_timeout', success=True, code='QUIZ_TIMEOUT', message='Hết giờ, bắt đầu tự nộp các câu đã chọn.', cooldown_seconds=config.cooldown_seconds)
     data = _serialize_quiz_session(session, config)
     data['success'] = True
@@ -736,7 +740,10 @@ def lock_quiz_session_for_current_user(request, course_id, unit_usage_key, paylo
         if not session.auto_submitted_at:
             session.auto_submitted_at = now
         session.locked_at = now
-        session.reset_available_at = now + timedelta(seconds=session.cooldown_seconds)
+        # v0.4.13/v0.4.14 rule: cooldown must be based on quiz expiry, not lock time.
+        # If auto-submit/lock processing is slow, reset_available_at must remain stable.
+        expiry_base = session.expires_at or now
+        session.reset_available_at = expiry_base + timedelta(seconds=session.cooldown_seconds)
         merged = session.timeout_payload or {}
         merged.update(payload or {})
         session.timeout_payload = merged

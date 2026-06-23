@@ -319,65 +319,141 @@ def quiz_timer_config_upsert(request):
 @require_GET
 def quiz_session_runtime_js(request):
     from django.http import HttpResponse
+
+    # v0.4.14 — Submit Button Only No Save Hotfix
+    # Open edX problem UIs may expose both Save/Lưu and Submit/Check/Nộp bài.
+    # Auto-submit must never click Save/Lưu because that only triggers problem_save
+    # and does not grade the answer. We only click Submit/Check variants.
     js = """
 (function(){
   if (window.__OPENEDX_UNIT_RESET_TIMER_JS__) return;
   window.__OPENEDX_UNIT_RESET_TIMER_JS__ = true;
+
+  var PLUGIN_VERSION = '0.4.14';
+
+  function isVisible(el){
+    if (!el) return false;
+    var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) return false;
+    var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    return !rect || (rect.width > 0 && rect.height > 0);
+  }
+
+  function textOf(el){
+    return (((el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '') + '')).trim().toLowerCase();
+  }
+
   function selected(problem){
     var checked = problem.querySelector('input[type="radio"]:checked,input[type="checkbox"]:checked');
     if (checked) return true;
-    var textInputs = Array.prototype.slice.call(problem.querySelectorAll('input[type="text"],textarea'));
-    if (textInputs.some(function(el){ return el.value && el.value.trim().length > 0; })) return true;
+    var textInputs = Array.prototype.slice.call(problem.querySelectorAll('input[type="text"],input:not([type]),textarea'));
+    if (textInputs.some(function(el){ return !el.disabled && el.value && el.value.trim().length > 0; })) return true;
     var selects = Array.prototype.slice.call(problem.querySelectorAll('select'));
-    return selects.some(function(el){ return el.value && el.value.trim().length > 0; });
+    return selects.some(function(el){ return !el.disabled && el.value && el.value.trim().length > 0; });
   }
+
+  function isSaveLike(btn){
+    var text = textOf(btn);
+    var name = ((btn.name || btn.id || btn.className || btn.getAttribute('data-value') || '') + '').toLowerCase();
+    var blob = text + ' ' + name;
+    return [
+      'save', 'lưu', 'luu', 'save answer', 'save answers', 'lưu bài', 'luu bai',
+      'save_problem', 'problem_save', 'save-problem'
+    ].some(function(x){ return blob.indexOf(x) >= 0; });
+  }
+
+  function isForbidden(btn){
+    var text = textOf(btn);
+    return isSaveLike(btn) || [
+      'hint', 'show answer', 'xem đáp án', 'xem dap an', 'submission history',
+      'reset', 'clear', 'xóa', 'xoa', 'bookmark'
+    ].some(function(x){ return text.indexOf(x) >= 0; });
+  }
+
+  function isSubmitLike(btn){
+    var text = textOf(btn);
+    var name = ((btn.name || btn.id || btn.className || btn.getAttribute('data-value') || '') + '').toLowerCase();
+    var blob = text + ' ' + name;
+    return [
+      'submit', 'check', 'nộp bài', 'nop bai', 'nộp', 'nop', 'kiểm tra', 'kiem tra',
+      'problem_check', 'check-problem', 'submit-problem', 'submit-attempt', 'action-check'
+    ].some(function(x){ return blob.indexOf(x) >= 0; });
+  }
+
   function submitButton(problem){
     var buttons = Array.prototype.slice.call(problem.querySelectorAll('button,input[type="button"],input[type="submit"]'));
     return buttons.find(function(btn){
-      var text = ((btn.innerText || btn.value || '') + '').trim().toLowerCase();
-      return ['submit','check','nộp bài','nop bai','kiểm tra','kiem tra'].some(function(x){ return text.indexOf(x) >= 0; });
+      if (!isVisible(btn) || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return false;
+      if (isForbidden(btn)) return false;
+      return isSubmitLike(btn);
     });
   }
+
   function sleep(ms){ return new Promise(function(resolve){ setTimeout(resolve, ms); }); }
+
   async function autoSubmit(){
-    var problems = Array.prototype.slice.call(document.querySelectorAll('.problem,.xblock-student_view,[data-usage-id]'));
-    var submitted = 0;
-    for (var i=0; i<problems.length; i++){
-      var p = problems[i];
-      if (!selected(p)) continue;
-      var btn = submitButton(p);
-      if (!btn || btn.disabled) continue;
-      btn.click();
-      submitted += 1;
-      await sleep(800);
-    }
-    return submitted;
+    var roots = Array.prototype.slice.call(document.querySelectorAll('.problem,.problems-wrapper .vert,.xblock-student_view,[data-usage-id]'));
+    var seen = [];
+    var buttons = [];
+    roots.forEach(function(root){
+      if (!root || seen.indexOf(root) >= 0) return;
+      seen.push(root);
+      if (!selected(root)) return;
+      var btn = submitButton(root);
+      if (btn && buttons.indexOf(btn) < 0) buttons.push(btn);
+    });
+
+    var clicked = 0;
+    buttons.forEach(function(btn, idx){
+      window.setTimeout(function(){
+        try { btn.click(); } catch(e) {}
+      }, idx * 100);
+      clicked += 1;
+    });
+    if (clicked > 0) await sleep(Math.min(2500, 500 + clicked * 120));
+    return clicked;
   }
+
   function lock(){
     Array.prototype.slice.call(document.querySelectorAll('input,textarea,select,button')).forEach(function(el){
-      var text = ((el.innerText || el.value || '') + '').toLowerCase();
+      var text = textOf(el);
       if (text.indexOf('hint') >= 0 || text.indexOf('show answer') >= 0 || text.indexOf('xem đáp án') >= 0 || text.indexOf('submission history') >= 0) return;
       el.disabled = true;
       el.setAttribute('aria-disabled', 'true');
     });
     document.body.classList.add('ai-quiz-timeout-locked');
   }
+
   var configuredOrigins = __ALLOWED_PARENT_ORIGINS__;
   function allowedOrigin(origin){
     if (!origin) return false;
     if (origin === window.location.origin) return true;
     return configuredOrigins.indexOf(origin) >= 0;
   }
+
   window.addEventListener('message', async function(event){
     if (!allowedOrigin(event.origin)) return;
     if (!event.data || event.data.type !== 'AI_QUIZ_TIMEOUT_AUTO_SUBMIT') return;
     var count = await autoSubmit();
-    lock();
-    window.parent && window.parent.postMessage({type:'AI_QUIZ_TIMEOUT_AUTO_SUBMIT_DONE', submitted_problem_count: count}, event.origin);
+    var delayMs = __LOCK_DELAY_MS__;
+    window.setTimeout(function(){
+      lock();
+      window.parent && window.parent.postMessage({
+        type:'AI_QUIZ_TIMEOUT_AUTO_SUBMIT_DONE',
+        submitted_problem_count: count,
+        clicked_submit_or_check_only: true,
+        plugin_version: PLUGIN_VERSION
+      }, event.origin);
+    }, delayMs);
   });
 })();
 """
     raw_origins = os.environ.get('AI_QUIZ_RUNTIME_ALLOWED_ORIGINS') or getattr(settings, 'AI_QUIZ_RUNTIME_ALLOWED_ORIGINS', '') or ''
     allowed_origins = [item.strip().rstrip('/') for item in str(raw_origins).split(',') if item.strip()]
     js = js.replace('__ALLOWED_PARENT_ORIGINS__', json.dumps(allowed_origins))
+    try:
+        delay_ms = int(os.environ.get('UNIT_RESET_QUIZ_TIMER_RUNTIME_LOCK_DELAY_MS') or getattr(settings, 'UNIT_RESET_QUIZ_TIMER_RUNTIME_LOCK_DELAY_MS', 1500) or 1500)
+    except Exception:
+        delay_ms = 1500
+    js = js.replace('__LOCK_DELAY_MS__', str(max(delay_ms, 0)))
     return HttpResponse(js, content_type='application/javascript; charset=utf-8')
