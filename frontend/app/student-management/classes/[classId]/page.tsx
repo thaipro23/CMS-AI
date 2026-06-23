@@ -1,8 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { Suspense, useEffect, useMemo, useState } from 'react'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../context/AppContext'
 import {
   getAcademicClass,
@@ -12,9 +12,10 @@ import {
   enqueueAcademicClassCmsSyncJob,
   enqueueAcademicClassEnrollmentSyncJob,
   enqueueAcademicClassLearningSyncJob,
+  enqueueAcademicClassFullCmsSyncJob,
   getAcademicClassSyncJob,
 } from '../../../../lib/api'
-import { AcademicClass, AcademicClassSyncJob, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
+import { AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
 
 const PAGE_SIZE = 50
 
@@ -40,12 +41,10 @@ function mappingSourceLabel(source?: string | null) {
   if (source === 'class_override') return 'Map riêng lớp'
   return 'Chưa map'
 }
-
 function percentLabel(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A'
   return `${Math.round(value * 10) / 10}%`
 }
-
 function learningStatusLabel(value?: string | null) {
   const status = (value || 'not_synced').toLowerCase()
   if (status === 'cms_not_synced') return 'Chưa đồng bộ CMS'
@@ -59,7 +58,6 @@ function learningStatusLabel(value?: string | null) {
   if (status === 'in_progress') return 'Đang học'
   return 'Chưa cập nhật'
 }
-
 function learningStatusClass(value?: string | null) {
   const status = (value || 'not_synced').toLowerCase()
   if (['good', 'in_progress'].includes(status)) return 'status-pill success'
@@ -67,11 +65,14 @@ function learningStatusClass(value?: string | null) {
   if (status === 'no_activity') return 'status-pill warning'
   return 'status-pill neutral'
 }
-
-function componentScoreText(score: { percent?: number | null; earned?: number | null; possible?: number | null }) {
-  if (typeof score.percent === 'number') return percentLabel(score.percent)
+function componentScoreText(score?: AcademicLearningComponentScore | null) {
+  if (!score) return 'N/A'
+  if (typeof score.percent === 'number' && !Number.isNaN(score.percent)) return percentLabel(score.percent)
   if (typeof score.earned === 'number' && typeof score.possible === 'number') return `${Math.round(score.earned * 100) / 100}/${Math.round(score.possible * 100) / 100}`
   return 'N/A'
+}
+function componentKey(score: AcademicLearningComponentScore) {
+  return String(score.key || score.name || '').trim()
 }
 function enrollmentLabel(value?: string | null) {
   const status = (value || 'unknown').toLowerCase()
@@ -88,8 +89,9 @@ function enrollmentClass(value?: string | null) {
   return 'status-pill neutral'
 }
 
-export default function ClassDetailPage() {
+function ClassDetailContent() {
   const params = useParams<{ classId: string }>()
+  const searchParams = useSearchParams()
   const classId = decodeURIComponent(String(params.classId || ''))
   const { authHeaders } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
@@ -106,6 +108,7 @@ export default function ClassDetailPage() {
   const [checking, setChecking] = useState(false)
   const [syncingEnrollment, setSyncingEnrollment] = useState(false)
   const [syncingLearning, setSyncingLearning] = useState(false)
+  const [syncingFullFlow, setSyncingFullFlow] = useState(false)
   const [message, setMessage] = useState('')
   const [errorModal, setErrorModal] = useState('')
   const [activeJob, setActiveJob] = useState<AcademicClassSyncJob | null>(null)
@@ -139,9 +142,7 @@ export default function ClassDetailPage() {
     return () => { cancelled = true }
   }, [headers, classId, search, learningStatus, page])
 
-
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
   const waitForSyncJob = async (job: AcademicClassSyncJob): Promise<AcademicClassSyncJob> => {
     setActiveJob(job)
     let current = job
@@ -174,6 +175,30 @@ export default function ClassDetailPage() {
     }
   }
 
+  const runFullCmsSync = async () => {
+    setSyncingFullFlow(true)
+    setMessage('')
+    try {
+      const queued = await enqueueAcademicClassFullCmsSyncJob(jsonHeaders, classId, { force: true, limit: 500, autoMapCourse: true, syncLearning: true })
+      const finished = await waitForSyncJob(queued)
+      if (finished.status === 'failed') throw new Error(finished.error_message || 'Full CMS sync thất bại')
+      const result = finished.result_json as any
+      const cmsUpdated = result?.cms_users?.updated || 0
+      const cmsTotal = result?.cms_users?.total || 0
+      const created = result?.counts?.cms_created_user || 0
+      const mapped = result?.mapping?.openedx_course_id || result?.openedx_course_id || 'chưa map Course CMS'
+      const enrolled = result?.enrollment?.updated || 0
+      const enrolledTotal = result?.enrollment?.total || 0
+      const learned = result?.learning?.updated || 0
+      setMessage(`Full CMS sync: user CMS ${cmsUpdated}/${cmsTotal}, tạo mới ${created}, course ${mapped}, enroll ${enrolled}/${enrolledTotal}, điểm/progress ${learned}.`)
+      await refreshStudents()
+    } catch (error) {
+      setErrorModal(error instanceof Error ? `${error.message}. Full flow chỉ tạo user CMS sau khi lớp đã map được Course CMS; hãy map Course CMS rồi chạy lại.` : 'Full CMS sync thất bại')
+    } finally {
+      setSyncingFullFlow(false)
+      setActiveJob(null)
+    }
+  }
 
   const runEnrollmentSync = async () => {
     setSyncingEnrollment(true)
@@ -218,27 +243,78 @@ export default function ClassDetailPage() {
   const needsCmsAction = Math.max(0, (summary?.total || 0) - matched)
   const syncIssue = Math.max(0, (summary?.total || 0) - matched - notChecked)
 
-  return <div className="page-stack student-management-page">
-    <section className="card hero-card compact-hero">
-      <div>
-        <p className="eyebrow">Student Management / Chi tiết lớp</p>
-        <h1>{classInfo?.class_code || 'Chi tiết lớp'}</h1>
-        <p>{classInfo?.subject_code} · {classInfo?.subject_name} · {classInfo?.term_name} · {branchLabel(classInfo?.branch)} · {classInfo?.campus?.toUpperCase() || '—'}</p>
-      </div>
-      <div className="hero-actions">
-        <Link className="btn secondary" href="/student-management">Về màn môn</Link>
+  const componentColumns = useMemo(() => {
+    const columns: Array<{ key: string; name: string }> = []
+    const seen = new Set<string>()
+    const push = (score?: AcademicLearningComponentScore | null) => {
+      if (!score) return
+      const key = componentKey(score)
+      if (!key || seen.has(key)) return
+      seen.add(key)
+      columns.push({ key, name: score.name || key })
+    }
+    learningSummary?.component_summaries?.forEach(push)
+    students.forEach((student) => student.learning_component_scores?.forEach(push))
+    return columns.slice(0, 12)
+  }, [learningSummary, students])
+
+  const studentComponentScore = (student: AcademicStudent, column: { key: string; name: string }) => {
+    return student.learning_component_scores?.find((score) => componentKey(score) === column.key || score.name === column.name) || null
+  }
+
+  const subjectIdForBack = searchParams.get('subject_id') || classInfo?.subject_id || ''
+  const subjectBackParams = new URLSearchParams()
+  const backTermId = searchParams.get('term_id') || classInfo?.term_id || ''
+  const backBranch = searchParams.get('branch') || classInfo?.branch || 'poly'
+  const backCampus = searchParams.get('campus') || classInfo?.campus || ''
+  const backTermName = searchParams.get('term_name') || classInfo?.term_name || ''
+  const backSubjectCode = searchParams.get('subject_code') || classInfo?.subject_code || ''
+  const backSubjectName = searchParams.get('subject_name') || classInfo?.subject_name || ''
+  if (backTermId) subjectBackParams.set('term_id', backTermId)
+  if (backBranch) subjectBackParams.set('branch', backBranch)
+  if (backCampus) subjectBackParams.set('campus', backCampus)
+  if (backTermName) subjectBackParams.set('term_name', backTermName)
+  if (backSubjectCode) subjectBackParams.set('subject_code', backSubjectCode)
+  if (backSubjectName) subjectBackParams.set('subject_name', backSubjectName)
+  const backToClassesHref = subjectIdForBack ? `/student-management/subjects/${encodeURIComponent(subjectIdForBack)}/classes?${subjectBackParams.toString()}` : '/student-management'
+
+  return <div className="page-stack student-management-page academic-flow-page class-detail-flow">
+    <section className="academic-flow-header">
+      <nav className="academic-breadcrumb" aria-label="Student Management breadcrumb">
+        <Link href="/student-management">Student Management</Link>
+        <span>/</span>
+        <Link href="/student-management">Môn</Link>
+        <span>/</span>
+        <Link href={backToClassesHref}>{classInfo?.subject_code || backSubjectCode || 'Môn'}</Link>
+        <span>/</span>
+        <b>{classInfo?.class_code || 'Lớp'}</b>
+      </nav>
+      <div className="academic-flow-title-row">
+        <div>
+          <p className="eyebrow">Chi tiết lớp</p>
+          <h1>{classInfo?.class_code || 'Chi tiết lớp'} · {classInfo?.subject_code || ''}</h1>
+          <p className="academic-flow-subtitle">{classInfo?.subject_name || backSubjectName || 'Môn đã chọn'} · {classInfo?.term_name || backTermName || 'Kỳ đã chọn'} · {branchLabel(classInfo?.branch || backBranch)} · {classInfo?.campus?.toUpperCase() || backCampus?.toUpperCase() || '—'}</p>
+        </div>
+        <div className="hero-actions">
+          <Link className="btn secondary" href={backToClassesHref}>← Quay lại danh sách lớp</Link>
+          <Link className="btn secondary" href="/student-management">Danh sách môn</Link>
+        </div>
       </div>
     </section>
 
-    <section className="card">
-      <div className="section-head">
-        <div><h2>Thao tác học tập CMS</h2><p>Các nút dưới đây mới gọi CMS/Open edX. Mở trang hoặc F5 chỉ đọc dữ liệu đã lưu trong AI Server.</p></div>
-      </div>
-      <div className="toolbar-actions">
-        <button className="btn primary" type="button" disabled={checking} onClick={runCmsSyncCheck}>{checking ? 'Đang đồng bộ...' : 'Đồng bộ CMS'}</button>
-        <button className="btn secondary" type="button" disabled={syncingEnrollment || !classInfo?.openedx_course_id} onClick={runEnrollmentSync}>{syncingEnrollment ? 'Đang xử lý...' : 'Enrollment Course CMS'}</button>
-        <button className="btn secondary" type="button" disabled={syncingLearning || !classInfo?.openedx_course_id} onClick={runLearningSync}>{syncingLearning ? 'Đang cập nhật...' : 'Cập nhật tiến độ/điểm'}</button>
-        <button className="btn secondary" type="button" disabled={loading} onClick={() => refreshStudents().catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được dữ liệu'))}>Làm mới dữ liệu</button>
+    <section className="card academic-unified-card">
+      <div className="class-action-row">
+        <div>
+          <h2>Thao tác học tập CMS</h2>
+          <p>Full flow sẽ kiểm tra/auto-map Course CMS trước. Chỉ khi đã có Course CMS, hệ thống mới tạo/kiểm tra tài khoản CMS, enroll và lấy điểm/progress.</p>
+        </div>
+        <div className="toolbar-actions">
+          <button className="btn primary" type="button" disabled={syncingFullFlow} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang chạy full flow...' : 'Đồng bộ full CMS'}</button>
+          <button className="btn secondary" type="button" disabled={checking} onClick={runCmsSyncCheck}>{checking ? 'Đang tạo/kiểm tra user...' : 'Tạo/kiểm tra user CMS'}</button>
+          <button className="btn secondary" type="button" disabled={syncingEnrollment || !classInfo?.openedx_course_id} onClick={runEnrollmentSync}>{syncingEnrollment ? 'Đang xử lý...' : 'Enrollment Course CMS'}</button>
+          <button className="btn secondary" type="button" disabled={syncingLearning || !classInfo?.openedx_course_id} onClick={runLearningSync}>{syncingLearning ? 'Đang cập nhật...' : 'Cập nhật tiến độ/điểm'}</button>
+          <button className="btn secondary" type="button" disabled={loading} onClick={() => refreshStudents().catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được dữ liệu'))}>Làm mới</button>
+        </div>
       </div>
       {activeJob && <div className="sync-job-status">
         <b>{activeJob.progress_label || 'Đang xử lý job đồng bộ...'}</b>
@@ -246,51 +322,35 @@ export default function ClassDetailPage() {
         <div className="progress-track"><span style={{ width: `${Math.min(100, Math.round(((activeJob.progress_current || 0) / Math.max(1, activeJob.progress_total || 100)) * 100))}%` }} /></div>
       </div>}
       {message && <p className="form-message">{message}</p>}
-    </section>
 
-    <section className="summary-grid grid-4">
-      <div className="metric-card"><span>Tổng sinh viên AP</span><b>{summary?.total ?? classInfo?.student_count ?? 0}</b><small>Trong lớp</small></div>
-      <div className="metric-card"><span>Đã đồng bộ CMS</span><b>{matched}</b><small>User tồn tại theo username AP</small></div>
-      <div className="metric-card"><span>Chưa kiểm tra CMS</span><b>{notChecked}</b><small>Chưa chạy kiểm tra đồng bộ</small></div>
-      <div className="metric-card"><span>Cần xử lý CMS</span><b>{needsCmsAction}</b><small>Lỗi/không match: {syncIssue}</small></div>
-      <div className="metric-card"><span>Course CMS</span><b>{classInfo?.openedx_course_id ? 'Đã map' : 'Chưa map'}</b><small>{mappingSourceLabel(classInfo?.openedx_mapping_source)}</small></div>
-    </section>
-
-    <section className="summary-grid grid-4">
-      <div className="metric-card"><span>Đã enroll CMS</span><b>{learningSummary?.counts?.enrolled || 0}</b><small>Course: {learningSummary?.openedx_course_id || classInfo?.openedx_course_id || 'N/A'}</small></div>
-      <div className="metric-card"><span>Đã vào học</span><b>{learningSummary?.active_count || 0}</b><small>Có progress, điểm hoặc hoạt động CMS</small></div>
-      <div className="metric-card"><span>Tiến độ TB</span><b>{percentLabel(learningSummary?.avg_progress_percent)}</b><small>Dữ liệu từ CMS/Open edX</small></div>
-      <div className="metric-card"><span>Điểm TB</span><b>{percentLabel(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${new Date(learningSummary.last_synced_at).toLocaleString('vi-VN')}` : 'Chưa cập nhật'}</small></div>
-    </section>
-
-    <section className="card">
-      <div className="section-head">
-        <div><h2>Điểm thành phần của lớp</h2><p>Trung bình từng subsection/component lấy từ CMS/Open edX. Nếu Course chưa lưu subsection grade, hệ thống hiển thị N/A thay vì để trống.</p></div>
+      <div className="academic-summary-strip class-summary-strip">
+        <div><span>Tổng SV AP</span><b>{summary?.total ?? classInfo?.student_count ?? 0}</b><small>Trong lớp</small></div>
+        <div><span>Đồng bộ CMS</span><b>{matched}</b><small>Cần xử lý: {needsCmsAction}</small></div>
+        <div><span>Enrollment</span><b>{learningSummary?.counts?.enrolled || 0}</b><small>Course: {learningSummary?.openedx_course_id || classInfo?.openedx_course_id || 'N/A'}</small></div>
+        <div><span>Đã vào học</span><b>{learningSummary?.active_count || 0}</b><small>Có hoạt động CMS</small></div>
+        <div><span>Tiến độ TB</span><b>{percentLabel(learningSummary?.avg_progress_percent)}</b><small>Dữ liệu từ CMS</small></div>
+        <div><span>Điểm tổng TB</span><b>{percentLabel(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${new Date(learningSummary.last_synced_at).toLocaleString('vi-VN')}` : 'Chưa cập nhật'}</small></div>
       </div>
-      <div className="component-score-grid">
-        {learningSummary?.component_summaries?.length ? learningSummary.component_summaries.map((item) => <div className="component-score-card" key={item.key || item.name}>
-          <span>{item.name}</span>
-          <b>{componentScoreText(item)}</b>
-          <small>{item.source || item.category || 'Điểm thành phần'}</small>
-        </div>) : <div className="component-score-card"><span>Điểm thành phần</span><b>N/A</b><small>CMS/Open edX chưa có subsection/component grade</small></div>}
-      </div>
-    </section>
 
-    <section className="card">
-      <div className="section-head">
-        <div><h2>Thông tin lớp</h2><p>Lớp kế thừa mapping course từ màn môn/kỳ/hệ. Khi kiểm tra đồng bộ CMS xong, hệ thống tự tạo tài khoản CMS nếu thiếu, enroll sinh viên và gán giảng viên làm Course Staff.</p></div>
-      </div>
-      <div className="academic-detail-grid">
+      <div className="academic-detail-grid compact-class-info">
         <div><span>Mã lớp</span><b>{classInfo?.class_code || '—'}</b></div>
         <div><span>Block</span><b>{classInfo?.block_name || '—'}</b></div>
         <div><span>Giảng viên</span><b>{classInfo?.teacher_name || classInfo?.teacher_username || '—'}</b></div>
-        <div><span>Course CMS</span><b>{classInfo?.openedx_course_id || 'N/A'}</b></div>
+        <div><span>Course CMS</span><b>{classInfo?.openedx_course_id || 'N/A'}</b><small>{mappingSourceLabel(classInfo?.openedx_mapping_source)}</small></div>
+      </div>
+
+      <div className="component-summary-inline">
+        <b>Điểm thành phần của lớp</b>
+        {componentColumns.length ? componentColumns.slice(0, 8).map((column) => {
+          const score = learningSummary?.component_summaries?.find((item) => componentKey(item) === column.key || item.name === column.name)
+          return <span key={column.key}>{column.name}: <b>{componentScoreText(score)}</b></span>
+        }) : <span>CMS/Open edX chưa có điểm Quiz/Subsection. Bảng sinh viên sẽ hiển thị N/A.</span>}
       </div>
     </section>
 
-    <section className="card">
+    <section className="card academic-unified-card">
       <div className="section-head">
-        <div><h2>Danh sách sinh viên</h2><p>Trạng thái đồng bộ CMS, enrollment, tiến độ và điểm thành phần theo từng sinh viên.</p></div>
+        <div><h2>Danh sách sinh viên</h2><p>Cột điểm thành phần sinh động theo dữ liệu CMS: Quiz 1, Quiz 2, Lab, Assignment... Nếu chưa có dữ liệu thì hiển thị N/A.</p></div>
         <div className="toolbar-actions">
           <select className="input compact-input" value={learningStatus} onChange={(event) => { setLearningStatus(event.target.value); setPage(1) }}>
             <option value="all">Tất cả trạng thái</option>
@@ -304,21 +364,21 @@ export default function ClassDetailPage() {
           <input className="input compact-input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Tìm mã SV, username, họ tên..." />
         </div>
       </div>
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead><tr><th>Sinh viên</th><th>Username AP</th><th>Email</th><th>Username CMS</th><th>Đồng bộ CMS</th><th>Học tập CMS</th><th>Điểm tổng</th><th>Điểm thành phần</th></tr></thead>
+      <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">
+        <table className="data-table academic-data-table student-grade-table">
+          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username AP</th><th>Email</th><th>Username CMS</th><th>Đồng bộ CMS</th><th>Học tập CMS</th><th>Điểm tổng</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={8}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={8}>Không có sinh viên phù hợp.</td></tr>}
+            {loading && <tr><td colSpan={7 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
+            {!loading && !students.length && <tr><td colSpan={7 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
             {students.map((student) => <tr key={student.id}>
-              <td><b>{student.student_code || '—'}</b><small>{student.full_name}</small></td>
+              <td className="main-entity-cell sticky-col"><b>{student.student_code || '—'}</b><small>{student.full_name}</small></td>
               <td><b>{student.username}</b></td>
               <td>{student.email || 'N/A'}</td>
               <td>{student.openedx_username || 'N/A'}</td>
               <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${new Date(student.last_resolved_at).toLocaleString('vi-VN')}` : ''}</small></td>
               <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>Tiến độ: {percentLabel(student.learning_progress_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span></td>
               <td><b>{percentLabel(student.learning_grade_percent)}</b><small>{student.learning_last_synced_at ? `Cập nhật: ${new Date(student.learning_last_synced_at).toLocaleString('vi-VN')}` : ''}</small></td>
-              <td><div className="component-score-list">{student.learning_component_scores?.length ? student.learning_component_scores.slice(0, 5).map((score) => <span className="component-score-chip" key={score.key || score.name}><b>{score.name}</b> {componentScoreText(score)}</span>) : <span className="muted">N/A</span>}</div></td>
+              {componentColumns.map((column) => <td key={`${student.id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(studentComponentScore(student, column))}</b></td>)}
             </tr>)}
           </tbody>
         </table>
@@ -336,4 +396,8 @@ export default function ClassDetailPage() {
       </div>
     </div>}
   </div>
+}
+
+export default function ClassDetailPage() {
+  return <Suspense fallback={<div className="card">Đang tải chi tiết lớp...</div>}><ClassDetailContent /></Suspense>
 }

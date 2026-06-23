@@ -5,7 +5,7 @@ import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../../context/AppContext'
 import { getAcademicBlocks, getAcademicSubjectClasses } from '../../../../../lib/api'
-import { AcademicBlock, AcademicClass } from '../../../../../types'
+import { AcademicBlock, AcademicClass, AcademicLearningComponentScore } from '../../../../../types'
 
 const PAGE_SIZE = 50
 
@@ -26,13 +26,13 @@ function percentLabel(value?: number | null) {
   return `${Math.round(value * 10) / 10}%`
 }
 
-function componentScoreText(score: { percent?: number | null; earned?: number | null; possible?: number | null }) {
+function componentScoreText(score: AcademicLearningComponentScore) {
   if (typeof score.percent === 'number' && !Number.isNaN(score.percent)) return percentLabel(score.percent)
   if (typeof score.earned === 'number' && typeof score.possible === 'number') return `${Math.round(score.earned * 100) / 100}/${Math.round(score.possible * 100) / 100}`
   return 'N/A'
 }
 
-function componentSummaryLine(scores?: { name?: string | null; percent?: number | null; earned?: number | null; possible?: number | null }[]) {
+function componentSummaryLine(scores?: AcademicLearningComponentScore[]) {
   if (!scores?.length) return 'N/A'
   return scores.slice(0, 3).map((score) => `${score.name || 'TP'}: ${componentScoreText(score)}`).join(' · ')
 }
@@ -74,40 +74,82 @@ function SubjectClassesContent() {
     return () => { cancelled = true }
   }, [headers, termId, blockId])
 
-  useEffect(() => {
-    let cancelled = false
+  const loadClasses = async (cancelledRef?: { cancelled: boolean }) => {
     setLoading(true)
-    getAcademicSubjectClasses(headers, subjectId, { termId, branch, campus, blockId, search, learningStatus, page, pageSize: PAGE_SIZE })
-      .then((result) => {
-        if (cancelled) return
-        setClasses(result.items)
-        setTotal(result.total)
-      })
-      .catch((error) => { if (!cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được danh sách lớp') })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    setMessage('')
+    try {
+      const result = await getAcademicSubjectClasses(headers, subjectId, { termId, branch, campus, blockId, search, learningStatus, page, pageSize: PAGE_SIZE })
+      if (cancelledRef?.cancelled) return
+      setClasses(result.items)
+      setTotal(result.total)
+    } catch (error) {
+      if (!cancelledRef?.cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được danh sách lớp')
+    } finally {
+      if (!cancelledRef?.cancelled) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const cancelledRef = { cancelled: false }
+    loadClasses(cancelledRef)
+    return () => { cancelledRef.cancelled = true }
   }, [headers, subjectId, termId, branch, campus, blockId, search, learningStatus, page])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const listHref = '/student-management'
+  const aggregate = useMemo(() => classes.reduce((acc, item) => {
+    acc.students += item.student_count || 0
+    acc.synced += item.cms_synced_count || 0
+    acc.enrolled += item.learning_enrolled_count || 0
+    acc.mapped += item.openedx_course_id ? 1 : 0
+    acc.alerts += item.learning_alerts?.length ? 1 : 0
+    return acc
+  }, { students: 0, synced: 0, enrolled: 0, mapped: 0, alerts: 0 }), [classes])
 
-  return <div className="page-stack student-management-page">
-    <section className="card hero-card compact-hero">
-      <div>
-        <p className="eyebrow">Student Management / Lớp</p>
-        <h1>{subjectCode || 'Môn'} · Danh sách lớp</h1>
-        <p>{subjectName || 'Các lớp thuộc môn đã chọn'} · {termName || 'Kỳ đã chọn'} · {branchLabel(branch)}{campus ? ` · ${campus.toUpperCase()}` : ''}</p>
-      </div>
-      <div className="hero-actions">
-        <Link className="btn secondary" href="/student-management">Quay lại màn môn</Link>
+  function classDetailHref(item: AcademicClass) {
+    const detailParams = new URLSearchParams()
+    if (termId) detailParams.set('term_id', termId)
+    if (branch) detailParams.set('branch', branch)
+    if (campus) detailParams.set('campus', campus)
+    if (termName) detailParams.set('term_name', termName)
+    if (subjectCode) detailParams.set('subject_code', subjectCode)
+    if (subjectName) detailParams.set('subject_name', subjectName)
+    detailParams.set('subject_id', subjectId)
+    const qs = detailParams.toString()
+    return `/student-management/classes/${encodeURIComponent(item.id)}${qs ? `?${qs}` : ''}`
+  }
+
+  return <div className="page-stack student-management-page academic-flow-page">
+    <section className="academic-flow-header">
+      <nav className="academic-breadcrumb" aria-label="Student Management breadcrumb">
+        <Link href={listHref}>Student Management</Link>
+        <span>/</span>
+        <Link href={listHref}>Môn</Link>
+        <span>/</span>
+        <b>{subjectCode || 'Môn đã chọn'}</b>
+      </nav>
+      <div className="academic-flow-title-row">
+        <div>
+          <p className="eyebrow">Danh sách lớp</p>
+          <h1>{subjectCode || 'Môn'} · {subjectName || 'Danh sách lớp'}</h1>
+          <p className="academic-flow-subtitle">{termName || 'Kỳ đã chọn'} · {branchLabel(branch)}{campus ? ` · ${campus.toUpperCase()}` : ' · Tất cả cơ sở'}</p>
+        </div>
+        <div className="hero-actions">
+          <Link className="btn secondary" href={listHref}>← Quay lại danh sách môn</Link>
+        </div>
       </div>
     </section>
 
-    <section className="card">
+    <section className="card academic-unified-card">
       <div className="section-head list-card-head">
-        <div><h2>Danh sách lớp</h2><p>Chỉ hiển thị lớp bạn có quyền hoặc được AP phân công.</p></div>
+        <div>
+          <h2>Lớp của môn {subjectCode || ''}</h2>
+          <p>Chỉ hiển thị lớp có sinh viên đã sync từ AP. Admin xem toàn bộ; giảng viên xem lớp được phân công.</p>
+        </div>
         <span className="status-pill neutral">{total} lớp</span>
       </div>
-      <div className="academic-filter-grid academic-list-filter academic-list-filter-compact">
+
+      <div className="academic-filter-bar class-filter-bar">
         <label>Block
           <select className="input" value={blockId} onChange={(event) => { setBlockId(event.target.value); setPage(1) }}>
             <option value="">Tất cả block</option>
@@ -123,25 +165,35 @@ function SubjectClassesContent() {
             <option value="low_grade">Lớp có điểm thấp</option>
           </select>
         </label>
-        <label>Tìm lớp/giáo viên
-          <input className="input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="WEB107.01, tên GV..." />
+        <label className="academic-filter-search">Tìm lớp/giáo viên
+          <input className="input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="BUS2015.01, tên GV..." />
         </label>
       </div>
-      {message && <p className="form-message">{message}</p>}
-      <div className="table-wrap">
-        <table className="data-table">
+
+      <div className="academic-summary-strip">
+        <div><span>Lớp hiển thị</span><b>{total}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>Sinh viên</span><b>{aggregate.students}</b><small>Tổng trong trang</small></div>
+        <div><span>Đồng bộ CMS</span><b>{aggregate.synced}</b><small>Sinh viên đã match user CMS</small></div>
+        <div><span>Enrollment</span><b>{aggregate.enrolled}</b><small>Đã enroll CMS</small></div>
+        <div><span>Course CMS</span><b>{aggregate.mapped}/{classes.length}</b><small>Lớp có mapping hiệu lực</small></div>
+      </div>
+
+      {message && <div className="academic-inline-error"><b>Không tải được danh sách lớp</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadClasses()}>Thử lại</button></div>}
+
+      <div className="table-wrap academic-table-wrap">
+        <table className="data-table academic-data-table class-table">
           <thead><tr><th>Lớp</th><th>Cơ sở / Block</th><th>Giảng viên</th><th>Sinh viên</th><th>Course CMS</th><th>Học tập CMS</th><th>Thao tác</th></tr></thead>
           <tbody>
             {loading && <tr><td colSpan={7}>Đang tải danh sách lớp...</td></tr>}
             {!loading && !classes.length && <tr><td colSpan={7}>Không có lớp phù hợp.</td></tr>}
             {classes.map((item) => <tr key={item.id}>
-              <td><b>{item.class_code}</b><small>{item.class_name || item.subject_name}</small></td>
+              <td className="main-entity-cell"><b>{item.class_code}</b><small>{item.class_name || item.subject_name}</small></td>
               <td><b>{item.campus?.toUpperCase() || '—'}</b><small>{item.block_name || '—'}</small></td>
               <td><b>{item.teacher_name || '—'}</b><small>{item.teacher_username || ''}</small></td>
               <td><b>{item.student_count}</b><small>{item.cms_synced_count || 0}/{item.student_count} đã đồng bộ CMS</small></td>
               <td><span className={mappingClass(item.openedx_mapping_source)}>{mappingSourceLabel(item.openedx_mapping_source)}</span><small>{item.openedx_course_id || 'N/A'}</small></td>
-              <td><b>{item.learning_enrolled_count || 0}/{item.student_count} enroll</b><small>Dữ liệu: {item.learning_synced_count || 0}/{item.student_count} · Đã học: {item.learning_active_count || 0}/{item.student_count}</small><small>Tiến độ: {percentLabel(item.learning_avg_progress_percent)} · Điểm tổng: {percentLabel(item.learning_avg_grade_percent)}</small><small>Điểm TP: {componentSummaryLine(item.learning_component_summaries)}</small><small>{alertText(item.learning_alerts)}</small></td>
-              <td><Link className="btn small primary" href={`/student-management/classes/${encodeURIComponent(item.id)}`}>Chi tiết lớp</Link></td>
+              <td className="learning-cell"><b>{item.learning_enrolled_count || 0}/{item.student_count} enroll</b><small>Dữ liệu: {item.learning_synced_count || 0}/{item.student_count} · Đã học: {item.learning_active_count || 0}/{item.student_count}</small><small>Tiến độ TB: {percentLabel(item.learning_avg_progress_percent)} · Điểm tổng TB: {percentLabel(item.learning_avg_grade_percent)}</small><small>TP: {componentSummaryLine(item.learning_component_summaries)}</small><small>{alertText(item.learning_alerts)}</small></td>
+              <td><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết lớp</Link></td>
             </tr>)}
           </tbody>
         </table>

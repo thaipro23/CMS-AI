@@ -4180,3 +4180,169 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
   border-radius: inherit;
   background: linear-gradient(90deg, #2563eb, #22c55e);
 }
+
+/* v25.9.16.4.13 Student Management UX Polish + Breadcrumb + Dynamic Component Grades */
+.academic-flow-page { gap: 12px; }
+.academic-flow-header {
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px;
+  border: 1px solid rgba(148, 163, 184, .28);
+  border-radius: 22px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 16px 44px rgba(15, 23, 42, .06);
+}
+.academic-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 800;
+}
+.academic-breadcrumb a { color: #2563eb; text-decoration: none; }
+.academic-breadcrumb a:hover { text-decoration: underline; }
+.academic-breadcrumb b { color: #0f172a; }
+.academic-flow-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 18px;
+}
+.academic-flow-title-row h1 {
+  margin: 4px 0 6px;
+  font-size: clamp(26px, 3vw, 40px);
+  line-height: 1.05;
+  letter-spacing: -.045em;
+  color: #0f172a;
+}
+.academic-flow-subtitle {
+  margin: 0;
+  color: #475569;
+  line-height: 1.45;
+  font-weight: 600;
+}
+.academic-unified-card { padding: 16px 18px; border-radius: 22px; }
+.academic-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(130px, .5fr) minmax(200px, .8fr) minmax(200px, .9fr) minmax(210px, .9fr) minmax(250px, 1.15fr);
+  gap: 10px;
+  align-items: end;
+  margin: 10px 0 12px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 18px;
+  background: #f8fafc;
+}
+.academic-filter-bar.class-filter-bar { grid-template-columns: minmax(180px, 260px) minmax(260px, 320px) minmax(280px, 1fr); }
+.academic-filter-bar label { margin: 0; display: grid; gap: 6px; font-size: 12px; font-weight: 850; color: #64748b; }
+.academic-filter-search { min-width: 0; }
+.academic-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 14px;
+}
+.academic-summary-strip.class-summary-strip { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.academic-summary-strip > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+.academic-summary-strip span { color: #64748b; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
+.academic-summary-strip b { color: #0f172a; font-size: 20px; letter-spacing: -.02em; }
+.academic-summary-strip small { color: #64748b; line-height: 1.35; }
+.academic-inline-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 16px;
+  background: #fef2f2;
+  color: #991b1b;
+}
+.academic-inline-error span { flex: 1; min-width: 240px; color: #7f1d1d; }
+.academic-table-wrap { border: 1px solid rgba(148, 163, 184, .24); border-radius: 16px; overflow: auto; background: white; }
+.academic-data-table { width: 100%; min-width: 1120px; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.academic-data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 11px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #334155;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+.academic-data-table td { padding: 12px; border-bottom: 1px solid #eef2f7; vertical-align: top; color: #334155; line-height: 1.42; }
+.academic-data-table tbody tr:hover td { background: #f8fbff; }
+.academic-data-table tr:last-child td { border-bottom: 0; }
+.academic-data-table td b { color: #0f172a; font-weight: 850; }
+.academic-data-table .main-entity-cell { min-width: 220px; }
+.academic-data-table .main-entity-cell b { display: block; font-size: 14px; }
+.academic-data-table .main-entity-cell small { max-width: 320px; }
+.academic-data-table .learning-cell { min-width: 280px; }
+.row-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.class-action-row { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+.class-action-row h2 { margin: 0 0 6px; }
+.class-action-row p { margin: 0; color: #64748b; line-height: 1.45; }
+.compact-class-info { margin-top: 12px; }
+.component-summary-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(37, 99, 235, .18);
+  border-radius: 16px;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+.component-summary-inline > b { margin-right: 4px; color: #0f172a; }
+.component-summary-inline span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: 1px solid rgba(37, 99, 235, .16);
+  border-radius: 999px;
+  background: rgba(255,255,255,.78);
+  color: #334155;
+  font-size: 12px;
+  font-weight: 750;
+}
+.dynamic-grade-table-wrap { max-width: 100%; }
+.student-grade-table { min-width: 1180px; }
+.student-grade-table th.component-grade-th,
+.student-grade-table td.component-grade-cell { text-align: center; min-width: 96px; white-space: nowrap; }
+.student-grade-table td.component-grade-cell b { display: inline-flex; justify-content: center; min-width: 58px; padding: 4px 7px; border-radius: 999px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.student-grade-table .sticky-col { position: sticky; left: 0; z-index: 2; background: #fff; box-shadow: 1px 0 0 #e2e8f0; }
+.student-grade-table th.sticky-col { z-index: 3; background: #f8fafc; }
+@media (max-width: 1200px) {
+  .academic-summary-strip,
+  .academic-summary-strip.class-summary-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 980px) {
+  .academic-flow-title-row, .class-action-row { display: grid; align-items: stretch; }
+  .academic-filter-bar, .academic-filter-bar.class-filter-bar { grid-template-columns: 1fr; }
+  .academic-summary-strip,
+  .academic-summary-strip.class-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .academic-summary-strip,
+  .academic-summary-strip.class-summary-strip { grid-template-columns: 1fr; }
+  .academic-flow-header, .academic-unified-card { padding: 12px; border-radius: 16px; }
+}

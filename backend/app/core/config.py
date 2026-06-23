@@ -149,6 +149,13 @@ class Settings(BaseSettings):
     academic_auto_enroll_after_cms_sync: bool = True
     academic_auto_create_cms_users: bool = True
     academic_auto_add_teachers_to_course: bool = True
+    # v25.9.16.5.0 full Student Progress flow. When a class has no explicit
+    # Course CMS mapping yet, the worker may safely create a subject-term mapping
+    # only if the exact suggested course-v1:{ORG}+{SUBJECT}+{TERM} exists once.
+    # This keeps user creation independent from course mapping, while still
+    # allowing one-click production sync for already-created CMS courses.
+    academic_auto_map_course_before_cms_sync: bool = True
+    academic_full_sync_learning_after_enrollment: bool = True
     academic_learning_low_progress_threshold_percent: float = 50.0
     academic_learning_low_grade_threshold_percent: float = 50.0
     openedx_courses_search_endpoint: str = '/api/courses/v1/courses/'

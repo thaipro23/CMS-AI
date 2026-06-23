@@ -9,7 +9,7 @@ import {
   getAcademicTeacherSubjects,
   getAcademicTerms,
 } from '../../lib/api'
-import { AcademicCampus, AcademicSubjectManagement, AcademicTerm } from '../../types'
+import { AcademicCampus, AcademicLearningComponentScore, AcademicSubjectManagement, AcademicTerm } from '../../types'
 
 const PAGE_SIZE = 50
 
@@ -30,13 +30,13 @@ function percentLabel(value?: number | null) {
   return `${Math.round(value * 10) / 10}%`
 }
 
-function componentScoreText(score: { percent?: number | null; earned?: number | null; possible?: number | null }) {
+function componentScoreText(score: AcademicLearningComponentScore) {
   if (typeof score.percent === 'number' && !Number.isNaN(score.percent)) return percentLabel(score.percent)
   if (typeof score.earned === 'number' && typeof score.possible === 'number') return `${Math.round(score.earned * 100) / 100}/${Math.round(score.possible * 100) / 100}`
   return 'N/A'
 }
 
-function componentSummaryLine(scores?: { name?: string | null; percent?: number | null; earned?: number | null; possible?: number | null }[]) {
+function componentSummaryLine(scores?: AcademicLearningComponentScore[]) {
   if (!scores?.length) return 'N/A'
   return scores.slice(0, 3).map((score) => `${score.name || 'TP'}: ${componentScoreText(score)}`).join(' · ')
 }
@@ -50,6 +50,18 @@ function counterText(total: number, page: number, pageSize: number) {
   const start = (page - 1) * pageSize + 1
   const end = Math.min(total, page * pageSize)
   return `${start}-${end} / ${total}`
+}
+
+function buildSubjectClassesHref(subject: AcademicSubjectManagement, context: { termId: string; termName?: string; branch: string; campus: string }) {
+  const params = new URLSearchParams()
+  if (context.termId) params.set('term_id', context.termId)
+  if (context.branch) params.set('branch', context.branch)
+  if (context.campus) params.set('campus', context.campus)
+  if (context.termName) params.set('term_name', context.termName)
+  params.set('subject_code', subject.subject_code || '')
+  params.set('subject_name', subject.subject_name || '')
+  const qs = params.toString()
+  return `/student-management/subjects/${encodeURIComponent(subject.id)}/classes${qs ? `?${qs}` : ''}`
 }
 
 export default function StudentManagementSubjectsPage() {
@@ -97,24 +109,37 @@ export default function StudentManagementSubjectsPage() {
     return () => { cancelled = true }
   }, [headers, branch, campus])
 
-  useEffect(() => {
-    let cancelled = false
+  const loadSubjects = async (cancelledRef?: { cancelled: boolean }) => {
     setLoading(true)
-    getAcademicTeacherSubjects(headers, { termId, branch, campus, search, learningStatus, page, pageSize: PAGE_SIZE })
-      .then((result) => {
-        if (cancelled) return
-        setSubjects(result.items)
-        setTotal(result.total)
-      })
-      .catch((error) => {
-        if (!cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được danh sách môn')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    setMessage('')
+    try {
+      const result = await getAcademicTeacherSubjects(headers, { termId, branch, campus, search, learningStatus, page, pageSize: PAGE_SIZE })
+      if (cancelledRef?.cancelled) return
+      setSubjects(result.items)
+      setTotal(result.total)
+    } catch (error) {
+      if (!cancelledRef?.cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được danh sách môn')
+    } finally {
+      if (!cancelledRef?.cancelled) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const cancelledRef = { cancelled: false }
+    loadSubjects(cancelledRef)
+    return () => { cancelledRef.cancelled = true }
   }, [headers, termId, branch, campus, search, learningStatus, page])
 
   const selectedTerm = terms.find((item) => item.id === termId)
+  const selectedCampusLabel = campus ? campuses.find((item) => item.campus_code === campus)?.campus_name || campus.toUpperCase() : 'Tất cả cơ sở'
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const aggregate = useMemo(() => subjects.reduce((acc, item) => {
+    acc.classes += item.class_count || 0
+    acc.students += item.student_count || 0
+    acc.mapped += ['mapped', 'already_mapped', 'auto_mapped'].includes(String(item.course_mapping_status || '').toLowerCase()) ? 1 : 0
+    acc.alerts += item.learning_alerts?.length ? 1 : 0
+    return acc
+  }, { classes: 0, students: 0, mapped: 0, alerts: 0 }), [subjects])
 
   const runAutoMap = async (subject: AcademicSubjectManagement) => {
     if (!termId) {
@@ -136,25 +161,36 @@ export default function StudentManagementSubjectsPage() {
     }
   }
 
-  return <div className="page-stack student-management-page">
-    <section className="card hero-card compact-hero">
-      <div>
-        <p className="eyebrow">Student Management</p>
-        <h1>Quản lý theo môn</h1>
-        <p>Chọn kỳ, hệ và cơ sở để xem các môn bạn có quyền hoặc được AP phân công. Từ môn đi xuống danh sách lớp, rồi vào chi tiết lớp/sinh viên.</p>
-      </div>
-      <div className="hero-actions">
-        <Link className="btn secondary" href="/ap-sync">Đồng bộ AP</Link>
-        <Link className="btn secondary" href="/semesters">Quản lý học kỳ</Link>
+  return <div className="page-stack student-management-page academic-flow-page">
+    <section className="academic-flow-header">
+      <nav className="academic-breadcrumb" aria-label="Student Management breadcrumb">
+        <Link href="/student-management">Student Management</Link>
+        <span>/</span>
+        <b>Môn</b>
+      </nav>
+      <div className="academic-flow-title-row">
+        <div>
+          <p className="eyebrow">Môn · Lớp · Sinh viên</p>
+          <h1>Quản lý theo môn</h1>
+          <p className="academic-flow-subtitle">{selectedTerm ? `${selectedTerm.term_name} · ${branchLabel(branch)} · ${selectedCampusLabel}` : 'Chọn kỳ, hệ và cơ sở để xem dữ liệu đã đồng bộ từ AP.'}</p>
+        </div>
+        <div className="hero-actions">
+          <Link className="btn secondary" href="/ap-sync">Đồng bộ AP</Link>
+          <Link className="btn secondary" href="/semesters">Quản lý học kỳ</Link>
+        </div>
       </div>
     </section>
 
-    <section className="card">
+    <section className="card academic-unified-card">
       <div className="section-head list-card-head">
-        <div><h2>Danh sách môn</h2><p>{selectedTerm ? `${selectedTerm.term_name} · ${branchLabel(branch)} · lọc theo quyền/phân công AP` : 'Chọn kỳ để xem dữ liệu.'}</p></div>
-        <div className="toolbar-actions"><span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span></div>
+        <div>
+          <h2>Danh sách môn</h2>
+          <p>Admin xem toàn bộ môn đã có lớp/sinh viên; giảng viên chỉ thấy môn được phân công.</p>
+        </div>
+        <span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span>
       </div>
-      <div className="academic-filter-grid academic-list-filter">
+
+      <div className="academic-filter-bar">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => { setBranch(event.target.value); setCampus(''); setPage(1) }}>
             <option value="poly">Poly</option>
@@ -182,13 +218,23 @@ export default function StudentManagementSubjectsPage() {
             <option value="has_alert">Có cảnh báo</option>
           </select>
         </label>
-        <label>Tìm môn
-          <input className="input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="WEB107, thiết kế..." />
+        <label className="academic-filter-search">Tìm môn
+          <input className="input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="WEB107, BUS2015, thiết kế..." />
         </label>
       </div>
-      {message && <p className="form-message">{message}</p>}
-      <div className="table-wrap">
-        <table className="data-table">
+
+      <div className="academic-summary-strip">
+        <div><span>Môn hiển thị</span><b>{total}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>Lớp</span><b>{aggregate.classes}</b><small>Chỉ lớp có sinh viên</small></div>
+        <div><span>Sinh viên</span><b>{aggregate.students}</b><small>Đã sync từ AP</small></div>
+        <div><span>Course CMS</span><b>{aggregate.mapped}/{subjects.length}</b><small>Môn đã map trong trang này</small></div>
+        <div><span>Cảnh báo</span><b>{aggregate.alerts}</b><small>Môn có vấn đề học tập</small></div>
+      </div>
+
+      {message && <div className="academic-inline-error"><b>Không tải được dữ liệu</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Thử lại</button></div>}
+
+      <div className="table-wrap academic-table-wrap">
+        <table className="data-table academic-data-table subject-table">
           <thead>
             <tr>
               <th>Môn</th>
@@ -203,30 +249,30 @@ export default function StudentManagementSubjectsPage() {
             {loading ? <tr><td colSpan={6}>Đang tải danh sách môn...</td></tr> : null}
             {!loading && !subjects.length ? <tr><td colSpan={6}>Chưa có môn phù hợp hoặc bạn chưa được phân quyền/phân công.</td></tr> : null}
             {subjects.map((subject) => <tr key={subject.id}>
-              <td><b>{subject.subject_code}</b><small>{subject.subject_name}</small></td>
+              <td className="main-entity-cell"><b>{subject.subject_code}</b><small>{subject.subject_name}</small></td>
               <td>
                 <b>{subject.class_count} lớp</b>
                 <small>{subject.student_count} SV · {subject.teacher_count} GV · {subject.campus_count} cơ sở</small>
               </td>
               <td>
-                <span className="status-pill success">{subject.cms_synced_count} đã đồng bộ</span>
+                <span className={subject.cms_unsynced_count ? 'status-pill warning' : 'status-pill success'}>{subject.cms_synced_count}/{subject.student_count} đã đồng bộ</span>
                 <small>{subject.cms_unsynced_count} chưa/khác trạng thái</small>
               </td>
               <td>
                 <span className={statusClass(subject.course_mapping_status)}>{subject.course_mapping_label || subject.course_mapping_status}</span>
                 <small>{subject.openedx_course_id || subject.suggested_openedx_course_id || 'N/A'}</small>
               </td>
-              <td>
+              <td className="learning-cell">
                 <b>{subject.learning_enrolled_count || 0}/{subject.student_count} enroll</b>
                 <small>Dữ liệu: {subject.learning_synced_count || 0}/{subject.student_count} · Đã học: {subject.learning_active_count || 0}/{subject.student_count}</small>
-                <small>Tiến độ: {percentLabel(subject.learning_avg_progress_percent)} · Điểm tổng: {percentLabel(subject.learning_avg_grade_percent)}</small>
-                <small>Điểm TP: {componentSummaryLine(subject.learning_component_summaries)}</small>
+                <small>Tiến độ TB: {percentLabel(subject.learning_avg_progress_percent)} · Điểm tổng TB: {percentLabel(subject.learning_avg_grade_percent)}</small>
+                <small>TP: {componentSummaryLine(subject.learning_component_summaries)}</small>
                 <small>{alertText(subject.learning_alerts)}</small>
               </td>
               <td>
-                <div className="toolbar-actions">
-                  {subject.course_mapping_status === 'auto_candidate' && <button className="btn small primary" type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? 'Đang map...' : 'Auto map'}</button>}
-                  <Link className="btn small secondary" href={`/student-management/subjects/${encodeURIComponent(subject.id)}/classes?term_id=${encodeURIComponent(termId)}&branch=${encodeURIComponent(branch)}&campus=${encodeURIComponent(campus)}&term_name=${encodeURIComponent(selectedTerm?.term_name || '')}&subject_code=${encodeURIComponent(subject.subject_code)}&subject_name=${encodeURIComponent(subject.subject_name)}`}>Xem lớp</Link>
+                <div className="row-actions">
+                  <Link className="btn small primary" href={buildSubjectClassesHref(subject, { termId, termName: selectedTerm?.term_name, branch, campus })}>Xem lớp</Link>
+                  {!['mapped', 'already_mapped', 'auto_mapped'].includes(String(subject.course_mapping_status || '').toLowerCase()) && <button className="btn small secondary" type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? 'Đang map...' : 'Auto map'}</button>}
                 </div>
               </td>
             </tr>)}

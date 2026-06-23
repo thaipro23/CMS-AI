@@ -39,6 +39,8 @@ from app.schemas.academic import (
     AcademicImportFromJsonIn,
     AcademicEnrollmentSyncIn,
     AcademicEnrollmentSyncOut,
+    AcademicFullCmsSyncIn,
+    AcademicFullCmsSyncOut,
     AcademicLearningSyncIn,
     AcademicLearningSyncOut,
     AcademicLearningSummaryOut,
@@ -82,6 +84,8 @@ def _enqueue_class_sync_job(
     force: bool,
     limit: int,
     mode: str | None = None,
+    auto_map_course: bool | None = None,
+    sync_learning: bool | None = None,
 ) -> AcademicClassSyncJob:
     service = AcademicService(db)
     service.assert_can_access_class(user, class_id)
@@ -97,7 +101,7 @@ def _enqueue_class_sync_job(
         progress_current=0,
         progress_total=100,
         progress_label='Đang chờ xử lý',
-        request_json={'force': bool(force), 'limit': clean_limit, 'mode': mode},
+        request_json={'force': bool(force), 'limit': clean_limit, 'mode': mode, 'auto_map_course': auto_map_course, 'sync_learning': sync_learning},
         result_json={},
     )
     db.add(job)
@@ -528,6 +532,26 @@ def enqueue_class_learning_sync(
     return _enqueue_class_sync_job(db=db, user=user, class_id=class_id, job_type='learning_sync', force=payload.force, limit=payload.limit)
 
 
+@router.post('/classes/{class_id}/full-cms-sync/jobs', response_model=AcademicClassSyncJobOut)
+def enqueue_class_full_cms_sync(
+    class_id: str,
+    payload: AcademicFullCmsSyncIn,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    return _enqueue_class_sync_job(
+        db=db,
+        user=user,
+        class_id=class_id,
+        job_type='full_cms_sync',
+        force=payload.force,
+        limit=payload.limit,
+        mode=payload.mode,
+        auto_map_course=payload.auto_map_course,
+        sync_learning=payload.sync_learning,
+    )
+
+
 @router.get('/classes/{class_id}/sync-jobs/{job_id}', response_model=AcademicClassSyncJobOut)
 def get_class_sync_job(
     class_id: str,
@@ -551,6 +575,44 @@ def list_class_sync_jobs(
 ):
     AcademicService(db).assert_can_access_class(user, class_id)
     return db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.class_id == class_id).order_by(AcademicClassSyncJob.created_at.desc()).limit(limit).all()
+
+@router.post('/classes/{class_id}/full-cms-sync', response_model=AcademicFullCmsSyncOut)
+def sync_class_full_cms_flow(
+    class_id: str,
+    payload: AcademicFullCmsSyncIn,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    service = AcademicService(db)
+    try:
+        result = service.sync_class_full_cms_flow(
+            user,
+            class_id,
+            force=payload.force,
+            limit=payload.limit,
+            mode=payload.mode,
+            auto_map_course=payload.auto_map_course,
+            sync_learning=payload.sync_learning,
+        )
+        log_audit(
+            db,
+            action='academic.full_cms_sync.class',
+            status='success',
+            message=result.get('message', 'Đồng bộ full CMS hoàn tất'),
+            user=user,
+            target_type='academic_class',
+            target_id=class_id,
+            course_id=result.get('openedx_course_id'),
+            metadata={'counts': result.get('counts', {}), 'status': result.get('status')},
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        log_audit(db, action='academic.full_cms_sync.class', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='academic_class', target_id=class_id)
+        raise HTTPException(status_code=502, detail=_safe_error_message('academic_external_sync_failed')) from exc
+
 
 @router.post('/classes/{class_id}/cms-enrollment-sync', response_model=AcademicEnrollmentSyncOut)
 def sync_class_cms_enrollment(

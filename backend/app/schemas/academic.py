@@ -352,6 +352,14 @@ class AcademicLearningSyncIn(BaseModel):
     limit: int = Field(500, ge=1, le=500)
 
 
+class AcademicFullCmsSyncIn(BaseModel):
+    force: bool = False
+    limit: int = Field(500, ge=1, le=500)
+    mode: str | None = Field(None, max_length=50, description='Enrollment mode CMS/Open edX, mặc định audit')
+    auto_map_course: bool = True
+    sync_learning: bool = True
+
+
 class AcademicLearningSummaryOut(BaseModel):
     class_id: str
     openedx_course_id: str | None = None
@@ -370,6 +378,20 @@ class AcademicLearningSyncOut(AcademicLearningSummaryOut):
     ok: bool
     updated: int
     message: str
+
+
+class AcademicFullCmsSyncOut(BaseModel):
+    ok: bool
+    class_id: str
+    openedx_course_id: str | None = None
+    status: str = 'completed'
+    message: str
+    mapping: dict[str, Any] | None = None
+    cms_users: dict[str, Any] | None = None
+    enrollment: dict[str, Any] | None = None
+    learning: dict[str, Any] | None = None
+    counts: dict[str, int] = Field(default_factory=dict)
+    learning_summary: dict[str, Any] | None = None
 
 
 class AcademicClassSyncJobOut(BaseModel):

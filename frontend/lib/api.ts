@@ -1923,6 +1923,20 @@ export async function enqueueAcademicClassLearningSyncJob(headers: HeadersInit, 
   }));
 }
 
+export async function enqueueAcademicClassFullCmsSyncJob(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number; mode?: string; autoMapCourse?: boolean; syncLearning?: boolean } = {}): Promise<AcademicClassSyncJob> {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/full-cms-sync/jobs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      force: Boolean(payload.force),
+      limit: payload.limit || 500,
+      mode: payload.mode || null,
+      auto_map_course: payload.autoMapCourse !== false,
+      sync_learning: payload.syncLearning !== false,
+    }),
+  }));
+}
+
 export async function getAcademicClassSyncJob(headers: HeadersInit, classId: string, jobId: string): Promise<AcademicClassSyncJob> {
   return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/sync-jobs/${encodeURIComponent(jobId)}`, { credentials: 'include', headers }));
 }

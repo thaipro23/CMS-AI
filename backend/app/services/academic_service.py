@@ -1877,7 +1877,7 @@ class AcademicService:
         self.db.add(teacher)
         return status_value
 
-    def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000) -> dict[str, Any]:
+    def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, auto_enroll: bool = True) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
         limit = max(1, min(500, int(limit or 500)))
         query = self.db.query(AcademicStudent, OpenEdXUserMapping).join(
@@ -1967,7 +1967,7 @@ class AcademicService:
 
         self.db.commit()
         enrollment_result = None
-        if getattr(settings, 'academic_auto_enroll_after_cms_sync', True):
+        if auto_enroll and getattr(settings, 'academic_auto_enroll_after_cms_sync', True):
             try:
                 # Auto-enroll mapped students and add mapped/created teachers to Course Staff.
                 enrollment_result = self.sync_class_course_enrollment(user, class_id, force=False, limit=limit)
@@ -2183,6 +2183,19 @@ class AcademicService:
         course_id = mapping.openedx_course_id
         cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
         limit = max(1, min(500, int(limit or 500)))
+
+        # Full production behavior: enrollment must not silently skip learners just
+        # because they have not been mapped yet. First resolve/create CMS users by
+        # AP username, then enroll matched/created users. The nested call disables
+        # auto-enroll to avoid recursion.
+        if getattr(settings, 'academic_auto_create_cms_users', True):
+            try:
+                self.resolve_class_openedx_users(user, class_id, force=force, limit=limit, auto_enroll=False)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f'Không tạo/kiểm tra được tài khoản CMS trước khi enrollment: {exc}') from exc
+
         query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
@@ -2377,6 +2390,146 @@ class AcademicService:
         self.db.commit()
         summary = self._learning_summary_for_class_course(class_id, course_id)
         return {'ok': True, 'updated': updated, 'message': 'Đã cập nhật tiến độ/điểm CMS cho lớp', **summary}
+
+
+    def _try_auto_map_course_for_class(self, user: UserContext, cls: AcademicClass) -> dict[str, Any]:
+        """Best-effort safe course mapping for full Student Progress sync.
+
+        It only creates a subject-term mapping when the suggested course ID exists
+        exactly once in local CourseSyncState or CMS/Open edX course search. It
+        never creates a fake Course CMS and never blocks account creation.
+        """
+        current = self.effective_course_mapping_for_class(cls)
+        if current and current.openedx_course_id:
+            return {
+                'ok': True,
+                'status': 'already_mapped',
+                'openedx_course_id': current.openedx_course_id,
+                'mapping_source': 'class_override' if isinstance(current, AcademicClassCourseMapping) else 'subject_term_mapping',
+                'mapping': self._class_course_mapping_item(current) if isinstance(current, AcademicClassCourseMapping) else self._course_mapping_item(current),
+                'message': 'Lớp đã có Course CMS mapping.',
+            }
+        if not getattr(settings, 'academic_auto_map_course_before_cms_sync', True):
+            return {'ok': False, 'status': 'mapping_required', 'openedx_course_id': None, 'mapping': None, 'message': 'Lớp chưa có Course CMS mapping.'}
+        subject = self.db.get(AcademicSubject, cls.subject_id)
+        if not subject:
+            return {'ok': False, 'status': 'subject_missing', 'openedx_course_id': None, 'mapping': None, 'message': 'Không tìm thấy môn AP để auto-map Course CMS.'}
+        branch_value = (cls.branch or subject.branch or '').strip().lower() or None
+        suggested = self.suggested_course_id_for_scope(cls.term_id, cls.subject_id)
+        candidate, count, title, source = self._find_exact_openedx_course_candidate(suggested, allow_external=True)
+        if count != 1 or not candidate:
+            status_value = 'course_not_found' if count == 0 else 'multiple_course_candidates'
+            return {
+                'ok': False,
+                'status': status_value,
+                'openedx_course_id': None,
+                'suggested_openedx_course_id': suggested,
+                'candidate_count': count,
+                'mapping': None,
+                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ. Chưa tạo tài khoản CMS; cần map Course CMS trước khi chạy tạo user/enroll/lấy điểm.',
+            }
+        mapping = self._auto_create_subject_course_mapping_if_safe(
+            user,
+            term_id=cls.term_id,
+            subject_id=cls.subject_id,
+            branch_value=branch_value,
+            candidate=candidate,
+            suggested=suggested,
+            openedx_course_title=title,
+            candidate_source=source,
+            commit=True,
+        )
+        if not mapping:
+            return {'ok': False, 'status': 'mapping_validation_failed', 'openedx_course_id': None, 'suggested_openedx_course_id': suggested, 'mapping': None, 'message': 'Course CMS khớp mã nhưng không đạt điều kiện mapping an toàn.'}
+        return {
+            'ok': True,
+            'status': 'auto_mapped',
+            'openedx_course_id': mapping.openedx_course_id,
+            'suggested_openedx_course_id': suggested,
+            'mapping': self._course_mapping_item(mapping),
+            'message': 'Đã tự động map môn/kỳ với Course CMS khớp chính xác.',
+        }
+
+    def sync_class_full_cms_flow(
+        self,
+        user: UserContext,
+        class_id: str,
+        *,
+        force: bool = False,
+        limit: int = 1000,
+        mode: str | None = None,
+        auto_map_course: bool = True,
+        sync_learning: bool = True,
+    ) -> dict[str, Any]:
+        """Run the production Student Progress flow for a class.
+
+        Order is intentionally strict and map-first:
+          1. Resolve or safely auto-map Course CMS.
+          2. If Course CMS is still missing, stop without creating CMS accounts.
+          3. Resolve/create CMS accounts from AP usernames only after mapping exists.
+          4. Enroll learners and add teachers as Course Staff.
+          5. Pull progress, total grade and component/quiz grades.
+        """
+        self.assert_can_access_class(user, class_id)
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls:
+            raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
+        limit = max(1, min(500, int(limit or 500)))
+        counts: dict[str, int] = {}
+
+        mapping_result = self._try_auto_map_course_for_class(user, cls) if auto_map_course else {'ok': False, 'status': 'mapping_required', 'openedx_course_id': None, 'mapping': None, 'message': 'Auto-map Course CMS bị tắt cho lần chạy này.'}
+        mapping = self.effective_course_mapping_for_class(cls)
+        course_id = mapping.openedx_course_id if mapping else None
+        if not course_id:
+            return {
+                'ok': True,
+                'class_id': class_id,
+                'openedx_course_id': None,
+                'status': 'mapping_required_no_cms_user_created',
+                'message': 'Lớp chưa map Course CMS nên hệ thống chưa tạo tài khoản CMS, chưa enroll và chưa lấy điểm. Hãy map Course CMS trước rồi chạy lại Đồng bộ full CMS.',
+                'mapping': mapping_result,
+                'cms_users': None,
+                'enrollment': None,
+                'learning': None,
+                'counts': counts,
+                'learning_summary': self._learning_summary_for_class_course(class_id, None),
+            }
+
+        cms_result = self.resolve_class_openedx_users(user, class_id, force=True if force else False, limit=limit, auto_enroll=False)
+        for key, value in (cms_result.get('counts') or {}).items():
+            counts[f'cms_{key}'] = int(value or 0)
+        teacher_counts = ((cms_result.get('teachers') or {}).get('counts') or {}) if isinstance(cms_result.get('teachers'), dict) else {}
+        for key, value in teacher_counts.items():
+            counts[f'teacher_cms_{key}'] = int(value or 0)
+
+        enrollment_result = self.sync_class_course_enrollment(user, class_id, force=force, limit=limit, mode=mode)
+        for key, value in (enrollment_result.get('counts') or {}).items():
+            counts[f'enrollment_{key}'] = int(value or 0)
+        enroll_teacher_counts = ((enrollment_result.get('teachers') or {}).get('counts') or {}) if isinstance(enrollment_result.get('teachers'), dict) else {}
+        for key, value in enroll_teacher_counts.items():
+            counts[f'teacher_enrollment_{key}'] = int(value or 0)
+
+        learning_result = None
+        if sync_learning and getattr(settings, 'academic_full_sync_learning_after_enrollment', True):
+            learning_result = self.sync_class_learning_insight(user, class_id, force=force, limit=limit)
+            for key, value in (learning_result.get('counts') or {}).items():
+                counts[f'learning_{key}'] = int(value or 0)
+
+        summary = self._learning_summary_for_class_course(class_id, course_id)
+        message = 'Full CMS sync hoàn tất: đã tạo/kiểm tra user CMS, enroll Course CMS và cập nhật tiến độ/điểm.' if learning_result else 'Full CMS sync hoàn tất: đã tạo/kiểm tra user CMS và enroll Course CMS.'
+        return {
+            'ok': True,
+            'class_id': class_id,
+            'openedx_course_id': course_id,
+            'status': 'completed',
+            'message': message,
+            'mapping': mapping_result,
+            'cms_users': cms_result,
+            'enrollment': enrollment_result,
+            'learning': learning_result,
+            'counts': counts,
+            'learning_summary': summary,
+        }
 
 
     def import_openedx_user_mappings(self, records: list[dict[str, Any]], *, requested_by: str | None = None) -> dict[str, Any]:
