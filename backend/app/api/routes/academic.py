@@ -64,6 +64,7 @@ from app.services.academic_service import AcademicService
 from app.services.ap_academic_sync import AcademicImportService
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
+from app.core.json_safe import json_safe_value
 
 
 def _safe_error_message(message: str = 'academic_operation_failed') -> dict[str, str]:
@@ -117,7 +118,7 @@ def _enqueue_class_sync_job(
         progress_current=0,
         progress_total=100,
         progress_label='Đang chờ xử lý',
-        request_json={'force': bool(force), 'limit': clean_limit, 'mode': mode, 'auto_map_course': auto_map_course, 'sync_learning': sync_learning},
+        request_json=json_safe_value({'force': bool(force), 'limit': clean_limit, 'mode': mode, 'auto_map_course': auto_map_course, 'sync_learning': sync_learning}),
         result_json={},
     )
     db.add(job)

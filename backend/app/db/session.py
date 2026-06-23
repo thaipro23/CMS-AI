@@ -5,6 +5,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
+from app.core.json_safe import json_dumps_safe
 
 
 def _engine_kwargs(database_url: str) -> dict:
@@ -15,7 +16,7 @@ def _engine_kwargs(database_url: str) -> dict:
     behavior. SQLite does not accept QueuePool-only kwargs, so keep dev/test safe.
     """
     url = make_url(database_url)
-    kwargs: dict = {'pool_pre_ping': True}
+    kwargs: dict = {'pool_pre_ping': True, 'json_serializer': json_dumps_safe}
     if url.get_backend_name().startswith('postgresql'):
         kwargs.update(
             pool_size=max(1, int(settings.db_pool_size)),

@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from uuid import UUID
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -150,7 +151,7 @@ def _validation_result(checks: list[dict[str, Any]], *, suggested: str | None = 
 def _json_safe_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _json_safe_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, (list, tuple, set, frozenset)):
         return [_json_safe_value(item) for item in value]
     if isinstance(value, datetime):
         return value.isoformat()
@@ -158,6 +159,8 @@ def _json_safe_value(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, Decimal):
         return float(value)
+    if isinstance(value, UUID):
+        return str(value)
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)

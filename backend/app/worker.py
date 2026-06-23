@@ -5,6 +5,7 @@ from collections import defaultdict
 from celery import Celery
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.core.json_safe import json_safe_value
 from app.models.job import GenerationJob
 from app.models.generation_batch import GenerationBatch
 from app.models.course import ContentChunk
@@ -1054,21 +1055,31 @@ def academic_class_sync_task(job_id: str):
         else:
             raise ValueError(f'Unsupported academic class sync job_type: {job.job_type}')
 
+        safe_result = json_safe_value(result)
         job.status = 'completed'
         job.progress_current = 100
         job.progress_total = 100
         job.progress_label = label
-        job.result_json = result
+        job.result_json = safe_result
         job.error_message = None
         job.finished_at = datetime.utcnow()
         job.updated_at = datetime.utcnow()
         db.add(job)
         db.commit()
         try:
-            log_audit(db, action=action, status='success', message=label, user=None, target_type='academic_class_sync_job', target_id=job.id, metadata={'class_id': job.class_id, 'counts': result.get('counts', {}), 'updated': result.get('updated', 0)})
+            log_audit(
+                db,
+                action=action,
+                status='success',
+                message=label,
+                user=None,
+                target_type='academic_class_sync_job',
+                target_id=job.id,
+                metadata=json_safe_value({'class_id': job.class_id, 'counts': safe_result.get('counts', {}) if isinstance(safe_result, dict) else {}, 'updated': safe_result.get('updated', 0) if isinstance(safe_result, dict) else 0}),
+            )
         except Exception:
             pass
-        return result
+        return safe_result
     except Exception as exc:
         db.rollback()
         job = db.get(AcademicClassSyncJob, job_id)
@@ -1077,16 +1088,16 @@ def academic_class_sync_task(job_id: str):
             job.progress_current = job.progress_current or 0
             job.progress_total = 100
             job.progress_label = 'Đồng bộ thất bại'
-            job.error_message = 'Không thể hoàn tất đồng bộ lớp. Vui lòng kiểm tra Course CMS mapping, plugin Open edX và HMAC.'
-            job.result_json = {'ok': False, 'message': job.error_message}
+            job.error_message = str(exc)[:4000] or 'Không thể hoàn tất đồng bộ lớp. Vui lòng kiểm tra Course CMS mapping, plugin Open edX và HMAC.'
+            job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
             db.add(job)
             db.commit()
             try:
-                log_audit(db, action='academic.class_sync.async', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=None, target_type='academic_class_sync_job', target_id=job.id, metadata={'class_id': job.class_id, 'job_type': job.job_type})
+                log_audit(db, action='academic.class_sync.async', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=None, target_type='academic_class_sync_job', target_id=job.id, metadata=json_safe_value({'class_id': job.class_id, 'job_type': job.job_type}))
             except Exception:
                 pass
-        return {'ok': False, 'error': 'academic_class_sync_failed'}
+        return json_safe_value({'ok': False, 'error': 'academic_class_sync_failed', 'message': str(exc)})
     finally:
         db.close()
