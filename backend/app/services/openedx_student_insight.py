@@ -195,6 +195,15 @@ class OpenEdXConnectorClient:
         except Exception:
             plugin_message = (response.text or '')[:500]
         if response.status_code == 403:
+            text_l = (response.text or '').lower()
+            if '<html' in text_l and ('csrf' in text_l or 'forbidden' in text_l):
+                raise RuntimeError(
+                    f'Open edX Connector bị Django từ chối trước khi vào view khi {operation}: 403 Forbidden tại {path}. '
+                    'Body trả về là HTML 403, thường do endpoint server-to-server chưa được csrf_exempt hoặc Open edX đang chạy plugin cũ. '
+                    'Hãy cập nhật openedx_connector_plugin bản mới vào LMS/CMS, rebuild/restart lms cms lms-worker cms-worker, '
+                    'sau đó test lại /api/ai-connector/v1/users/resolve. '
+                    f'Chi tiết rút gọn: {plugin_message or plugin_code or "không có body"}.'
+                )
             raise RuntimeError(
                 f'Open edX Connector bị từ chối HMAC khi {operation}: 403 Forbidden tại {path}. '
                 f'Chi tiết plugin: {plugin_message or plugin_code or "không có body"}. '
