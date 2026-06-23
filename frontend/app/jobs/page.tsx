@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { getAuditLogs, getBankOperationJobs, getCourseQuizInstances } from '../../lib/api'
+import { getAuditLogs, getBankOperationJobs, getCourseQuizInstances, retryBankOperationJob } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { AuditLogRow, BankOperationJob, CourseQuizInstance } from '../../types'
@@ -60,6 +60,20 @@ export default function JobsPage() {
       setAuditRows((nextAudit.items || []).filter(isOpsAudit).slice(0, 30))
     } catch (error) { setMessage(toUserError(error)) } finally { setLoading(false) }
   }
+
+  async function retryJob(jobId: string) {
+    setLoading(true)
+    try {
+      const nextJob = await retryBankOperationJob(authHeaders(), jobId)
+      setOperationJobs((items) => items.map((item) => item.id === nextJob.id ? nextJob : item))
+      setMessage({ type: 'success', title: 'Đã đưa lại job vào hàng đợi', message: `Job ${shortId(jobId)} đã được gửi lại cho worker.` })
+      await load()
+    } catch (error) {
+      setMessage(toUserError(error))
+    } finally {
+      setLoading(false)
+    }
+  }
   useEffect(() => { load() }, [status, operationType]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredOps = useMemo(() => {
@@ -81,7 +95,7 @@ export default function JobsPage() {
     <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>Quiz đã tạo</span><b>{quizInstances.length}</b></div></section>
     <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm job<input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="id, lỗi, loại job, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">Tất cả</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option><option value="canceled">Đã hủy</option></select></label><label>Loại job<select className="input" value={operationType} onChange={(e) => setOperationType(e.target.value)}><option value="all">Tất cả</option><option value="material_extract">Tách tài liệu</option><option value="bank_generate">Tạo câu hỏi</option><option value="release_publish">Publish release</option><option value="quiz_create">Tạo Quiz</option></select></label></div></section>
     <section className="card"><div className="section-head"><div><h2>Operation jobs</h2><p className="helper">Bảng job async mới của Bank-first. Người không đủ quyền chỉ thấy job trong phạm vi được phép.</p></div></div>
-      <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>Loại việc</th><th>Trạng thái</th><th>Tiến độ</th><th>Đối tượng</th><th>Người tạo</th><th>Thời điểm</th><th>Nội dung / lỗi</th></tr></thead><tbody>{filteredOps.length ? filteredOps.map((job) => <tr key={job.id} className={`row-${job.status}`}><td><b>{jobLabel(job.operation_type)}</b><small>ID {shortId(job.id)}</small></td><td><StatusBadge status={job.status} /><small>{statusText(job.status)}</small></td><td><div className="job-progress table-progress"><i style={{ width: `${Math.max(0, Math.min(100, Number(job.progress_percent || 0)))}%` }} /></div><small>{Math.round(Number(job.progress_percent || 0))}% · {job.progress_current || 0}/{job.progress_total || 0}</small></td><td><span>{job.target_type || '—'}</span><small>{job.target_id || job.bank_version_id || job.release_id || '—'}</small></td><td>{job.requested_by || 'system'}</td><td><small>{dateText(job.created_at)}</small></td><td><span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error_message || job.progress_label || 'Đang chờ xử lý...'}</span></td></tr>) : <tr><td colSpan={7}><div className="empty-state">Không có job phù hợp.</div></td></tr>}</tbody></table></div>
+      <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>Loại việc</th><th>Trạng thái</th><th>Tiến độ</th><th>Đối tượng</th><th>Người tạo</th><th>Thời điểm</th><th>Nội dung / lỗi</th><th>Thao tác</th></tr></thead><tbody>{filteredOps.length ? filteredOps.map((job) => <tr key={job.id} className={`row-${job.status}`}><td><b>{jobLabel(job.operation_type)}</b><small>ID {shortId(job.id)}</small></td><td><StatusBadge status={job.status} /><small>{statusText(job.status)}</small></td><td><div className="job-progress table-progress"><i style={{ width: `${Math.max(0, Math.min(100, Number(job.progress_percent || 0)))}%` }} /></div><small>{Math.round(Number(job.progress_percent || 0))}% · {job.progress_current || 0}/{job.progress_total || 0}</small></td><td><span>{job.target_type || '—'}</span><small>{job.target_id || job.bank_version_id || job.release_id || '—'}</small></td><td>{job.requested_by || 'system'}</td><td><small>{dateText(job.created_at)}</small></td><td><span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error_message || job.progress_label || 'Đang chờ xử lý...'}</span></td><td>{['queued','failed','canceled'].includes(job.status) ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span>}</td></tr>) : <tr><td colSpan={8}><div className="empty-state">Không có job phù hợp.</div></td></tr>}</tbody></table></div>
     </section>
 
     <Popup open={quizOpen} title="Quiz gần đây" onClose={() => setQuizOpen(false)}>

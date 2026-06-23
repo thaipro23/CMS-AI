@@ -234,11 +234,57 @@ def _job_out(job: BankOperationJob) -> dict:
     return serialize_job(job)
 
 
-def _enqueue_task(task, job_id: str) -> None:
+def _enqueue_task(task, job_id: str, *, retry_token: str | None = None) -> dict:
+    """Enqueue a Celery task and return broker metadata.
+
+    Older code used ``task.delay`` and did not store the Celery task id. When Redis
+    or the worker was misconfigured, the UI could show ``queued`` forever with no
+    way to prove whether the task reached the broker. This helper makes enqueue
+    observable and uses a unique task id so retrying a stuck bank-operation job is
+    safe.
+    """
+    task_name = getattr(task, 'name', None) or getattr(task, '__name__', 'unknown_task')
+    token = retry_token or str(uuid.uuid4())
+    celery_task_id = f'{task_name}:{job_id}:{token}'
     if settings.task_always_eager:
-        task.apply(args=[job_id])
+        result = task.apply(args=[job_id], task_id=celery_task_id)
     else:
-        task.delay(job_id)
+        result = task.apply_async(args=[job_id], task_id=celery_task_id)
+    return {
+        'task_name': task_name,
+        'celery_task_id': getattr(result, 'id', celery_task_id),
+        'enqueued_at': datetime.utcnow().isoformat(),
+        'retry_token': token,
+    }
+
+
+def _persist_enqueue_metadata(db: Session, job: BankOperationJob, meta: dict, *, label: str | None = None) -> BankOperationJob:
+    result_json = dict(job.result_json or {})
+    enqueue_history = list(result_json.get('enqueue_history') or [])
+    enqueue_history.append(meta)
+    result_json['enqueue'] = meta
+    result_json['enqueue_history'] = enqueue_history[-10:]
+    job.result_json = result_json
+    if label:
+        job.progress_label = label
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def _enqueue_bank_job_or_fail(db: Session, job: BankOperationJob, task, *, label: str | None = None) -> BankOperationJob:
+    try:
+        meta = _enqueue_task(task, job.id)
+    except Exception as exc:
+        failed = BankOperationJobService(db).fail(
+            job,
+            error=f'Không đưa job vào hàng đợi Celery/Redis: {exc}',
+            result={'enqueue_error': str(exc), 'operation_type': job.operation_type},
+        )
+        raise HTTPException(status_code=503, detail='Không đưa job vào hàng đợi Celery/Redis. Kiểm tra Redis/worker rồi thử lại.') from exc
+    return _persist_enqueue_metadata(db, job, meta, label=label)
 
 
 def _queued_response(job: BankOperationJob, message: str) -> dict:
@@ -430,6 +476,57 @@ def cancel_bank_operation_job(job_id: str, db: Session = Depends(get_db), user: 
     if not _biz(db).is_system_admin(user) and job.requested_by != user.user_id:
         raise HTTPException(status_code=403, detail='Bạn không có quyền hủy job này')
     return _job_out(BankOperationJobService(db).cancel(job, reason='Người dùng yêu cầu hủy. Nếu worker đã chạy tới bước Open edX thì thao tác có thể vẫn hoàn tất.'))
+
+
+def _task_for_bank_operation(operation_type: str):
+    mapping = {
+        'material_extract': bank_material_extract_task,
+        'bank_generate': bank_generate_questions_task,
+        'release_publish': bank_release_publish_task,
+        'quiz_create': bank_quiz_create_task,
+    }
+    return mapping.get(operation_type)
+
+
+@router.post('/operation-jobs/{job_id}/retry', response_model=BankOperationJobOut)
+def retry_bank_operation_job(job_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_jobs'))):
+    """Requeue a stuck/failed BankOperationJob.
+
+    This is especially useful for Quiz creation jobs that remain ``queued`` when
+    the Celery worker was down or not consuming Redis during deployment. The
+    original request_json is reused; no duplicate BankOperationJob row is created.
+    """
+    job = db.get(BankOperationJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy operation job')
+    if not _biz(db).is_system_admin(user) and job.requested_by != user.user_id:
+        raise HTTPException(status_code=403, detail='Bạn không có quyền chạy lại job này')
+    if job.status == 'running':
+        raise HTTPException(status_code=409, detail='Job đang chạy, không thể retry để tránh chạy trùng trên Open edX.')
+    task = _task_for_bank_operation(job.operation_type)
+    if task is None:
+        raise HTTPException(status_code=400, detail=f'Loại job {job.operation_type} chưa hỗ trợ retry')
+
+    result_json = dict(job.result_json or {})
+    retry_count = int(result_json.get('retry_count') or 0) + 1
+    result_json['retry_count'] = retry_count
+    result_json['last_retry_requested_at'] = datetime.utcnow().isoformat()
+    result_json['last_retry_requested_by'] = user.user_id
+    job.status = 'queued'
+    job.error_message = None
+    job.started_at = None
+    job.finished_at = None
+    job.progress_current = 0
+    job.progress_label = 'Đã đưa lại vào hàng đợi xử lý'
+    job.result_json = result_json
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    job = _enqueue_bank_job_or_fail(db, job, task, label='Đã đưa lại job vào hàng đợi Celery')
+    log_audit(db, action='question_bank.operation_job.retry', status='success', message='Đã đưa lại job vào hàng đợi', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'operation_type': job.operation_type, 'retry_count': retry_count, 'enqueue': (job.result_json or {}).get('enqueue')})
+    return _job_out(job)
 
 
 @router.get('/summary', response_model=BankSummaryOut)
@@ -982,7 +1079,7 @@ async def upload_material_to_bank_version_job(
         progress_total=5,
         progress_label='Đã nhận file, đang chờ worker tách nội dung',
     )
-    _enqueue_task(bank_material_extract_task, job.id)
+    job = _enqueue_bank_job_or_fail(db, job, bank_material_extract_task, label='Đã đưa job tách tài liệu vào hàng đợi')
     log_audit(db, action='question_bank.material.upload.job', status='success', message='Đã kiểm tra file và tạo job tách tài liệu', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'file_name': file.filename, 'file_size': len(raw), 'preflight': preflight})
     return _queued_response(job, 'File đọc được. Đã đưa tài liệu vào hàng đợi tách nội dung.')
 
@@ -1033,7 +1130,7 @@ def generate_questions_from_bank_version_job(bank_version_id: str, payload: Bank
         progress_total=max(3, int(payload.question_count or 1) + 2),
         progress_label='Đã đưa yêu cầu tạo câu hỏi vào hàng đợi',
     )
-    _enqueue_task(bank_generate_questions_task, job.id)
+    job = _enqueue_bank_job_or_fail(db, job, bank_generate_questions_task, label='Đã đưa job generate câu hỏi vào hàng đợi')
     log_audit(db, action='question_bank.bank_version.generate.job', status='success', message='Đã tạo job generate câu hỏi', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'question_count': payload.question_count})
     return _queued_response(job, 'Đã đưa yêu cầu tạo câu hỏi vào hàng đợi.')
 
@@ -1371,7 +1468,7 @@ def publish_release_to_openedx_job(release_id: str, payload: BankReleasePublishR
         progress_total=5,
         progress_label='Đã đưa Release vào hàng đợi publish Open edX',
     )
-    _enqueue_task(bank_release_publish_task, job.id)
+    job = _enqueue_bank_job_or_fail(db, job, bank_release_publish_task, label='Đã đưa job publish Release vào hàng đợi')
     log_audit(db, action='question_bank.release.publish_openedx.job', status='success', message='Đã tạo job publish Release', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'release_id': release_id})
     return _queued_response(job, 'Đã đưa Release vào hàng đợi publish sang Open edX.')
 
@@ -1418,6 +1515,32 @@ def create_quiz_from_release_job(release_id: str, payload: BankReleaseQuizCreate
     _require_release(db, user, 'quiz.create_openedx', release_id)
     request_json = payload.model_dump()
     request_json['release_id'] = release_id
+
+    # Do not create duplicate Quiz-create jobs for the same release + mapping.
+    # If a queued job exists from a previous worker outage, requeue that exact job
+    # and return it instead of creating another row that will also sit at 0%.
+    active_jobs = (
+        db.query(BankOperationJob)
+        .filter(
+            BankOperationJob.operation_type == 'quiz_create',
+            BankOperationJob.target_type == 'bank_release',
+            BankOperationJob.target_id == release_id,
+            BankOperationJob.status.in_(['queued', 'running']),
+        )
+        .order_by(BankOperationJob.created_at.desc(), BankOperationJob.id.desc())
+        .limit(20)
+        .all()
+    )
+    for existing in active_jobs:
+        existing_request = existing.request_json or {}
+        if str(existing_request.get('course_chapter_mapping_id') or '') == str(payload.course_chapter_mapping_id):
+            if existing.status == 'queued':
+                existing = _enqueue_bank_job_or_fail(db, existing, bank_quiz_create_task, label='Đã đưa lại Quiz vào hàng đợi tạo trên Open edX')
+                message = 'Đã có job tạo Quiz đang chờ; hệ thống đã đưa lại job đó vào hàng đợi Celery thay vì tạo job trùng.'
+            else:
+                message = 'Đã có job tạo Quiz đang chạy cho Release/mapping này; không tạo job trùng.'
+            return _queued_response(existing, message)
+
     job = _create_bank_operation_job(
         db,
         operation_type='quiz_create',
@@ -1429,7 +1552,7 @@ def create_quiz_from_release_job(release_id: str, payload: BankReleaseQuizCreate
         progress_total=7,
         progress_label='Đã đưa Quiz vào hàng đợi tạo trên Open edX',
     )
-    _enqueue_task(bank_quiz_create_task, job.id)
+    job = _enqueue_bank_job_or_fail(db, job, bank_quiz_create_task, label='Đã đưa Quiz vào hàng đợi tạo trên Open edX')
     log_audit(db, action='question_bank.release.quiz.create.job', status='success', message='Đã tạo job tạo Quiz Open edX', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'release_id': release_id, 'course_chapter_mapping_id': payload.course_chapter_mapping_id})
     return _queued_response(job, 'Đã đưa Quiz vào hàng đợi tạo trên Open edX.')
 

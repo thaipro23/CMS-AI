@@ -182,6 +182,12 @@ export async function getBankOperationJob(headers: HeadersInit, jobId: string) {
   );
 }
 
+export async function retryBankOperationJob(headers: HeadersInit, jobId: string): Promise<BankOperationJob> {
+  return parseResponse<BankOperationJob>(
+    await apiFetch(`${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', credentials: "include", headers }),
+  );
+}
+
 export async function waitForBankOperationJob(headers: HeadersInit, jobId: string, options: { timeoutMs?: number; intervalMs?: number } = {}) {
   const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
   const intervalMs = options.intervalMs ?? 1200;
