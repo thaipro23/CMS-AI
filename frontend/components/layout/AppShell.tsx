@@ -198,10 +198,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </span>)}
           </nav>}
         </div>
-        {studentTopbar && can('manage_settings') && <div className="workspace-topbar-actions">
-          <Link className="btn secondary small" href="/ap-sync">Đồng bộ AP</Link>
-          <Link className="btn secondary small" href="/semesters">Quản lý học kỳ</Link>
-        </div>}
       </header>
 
       <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{children}</main>

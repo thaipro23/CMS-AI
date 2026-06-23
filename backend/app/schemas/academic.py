@@ -505,6 +505,9 @@ class AcademicSubjectCourseAutoMapOut(BaseModel):
     status: str
     message: str
     suggested_openedx_course_id: str | None = None
+    candidate_count: int | None = None
+    candidate_source: str | None = None
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
     mapping: AcademicCourseMappingOut | None = None
 
 

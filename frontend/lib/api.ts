@@ -1941,6 +1941,12 @@ export async function getAcademicClassSyncJob(headers: HeadersInit, classId: str
   return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/sync-jobs/${encodeURIComponent(jobId)}`, { credentials: 'include', headers }));
 }
 
+export async function getAcademicClassSyncJobs(headers: HeadersInit, classId: string, limit = 10): Promise<AcademicClassSyncJob[]> {
+  const params = new URLSearchParams();
+  params.set('limit', String(Math.max(1, Math.min(50, limit))));
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/sync-jobs?${params.toString()}`, { credentials: 'include', headers }));
+}
+
 export async function getAcademicCampuses(headers: HeadersInit, filters: { branch?: string; active?: boolean | null } = {}): Promise<AcademicCampus[]> {
   const params = new URLSearchParams();
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());

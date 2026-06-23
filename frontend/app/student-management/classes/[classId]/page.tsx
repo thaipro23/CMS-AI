@@ -14,6 +14,7 @@ import {
   enqueueAcademicClassLearningSyncJob,
   enqueueAcademicClassFullCmsSyncJob,
   getAcademicClassSyncJob,
+  getAcademicClassSyncJobs,
 } from '../../../../lib/api'
 import { AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
 
@@ -111,6 +112,8 @@ function ClassDetailContent() {
   const [message, setMessage] = useState('')
   const [errorModal, setErrorModal] = useState('')
   const [activeJob, setActiveJob] = useState<AcademicClassSyncJob | null>(null)
+  const [syncJobs, setSyncJobs] = useState<AcademicClassSyncJob[]>([])
+  const [recoveringJob, setRecoveringJob] = useState(false)
 
   const refreshStudents = async () => {
     const [studentPage, nextSummary, nextLearning] = await Promise.all([
@@ -122,6 +125,48 @@ function ClassDetailContent() {
     setTotal(studentPage.total)
     setSummary(nextSummary)
     setLearningSummary(nextLearning)
+  }
+
+  const isJobActive = (job?: AcademicClassSyncJob | null) => {
+    const status = String(job?.status || '').toLowerCase()
+    return Boolean(job?.id) && !['completed', 'failed'].includes(status)
+  }
+
+  const jobTypeLabel = (type?: string | null) => {
+    if (type === 'full_cms_sync') return 'Đồng bộ full CMS'
+    if (type === 'cms_sync_check') return 'Tạo/kiểm tra user CMS'
+    if (type === 'cms_enrollment_sync') return 'Enrollment Course CMS'
+    if (type === 'learning_sync') return 'Cập nhật tiến độ/điểm'
+    return 'Đồng bộ CMS'
+  }
+
+  const jobStatusLabel = (status?: string | null) => {
+    const value = String(status || '').toLowerCase()
+    if (value === 'queued') return 'Đang chờ worker'
+    if (value === 'running') return 'Đang chạy'
+    if (value === 'completed') return 'Hoàn tất'
+    if (value === 'failed') return 'Thất bại'
+    return status || 'Chưa rõ'
+  }
+
+  const jobProgressPercent = (job?: AcademicClassSyncJob | null) => {
+    if (!job) return 0
+    const current = Number(job.progress_current || 0)
+    const total = Math.max(1, Number(job.progress_total || 100))
+    return Math.min(100, Math.max(0, Math.round((current / total) * 100)))
+  }
+
+  const refreshSyncJobs = async () => {
+    const jobs = await getAcademicClassSyncJobs(headers, classId, 10)
+    setSyncJobs(jobs)
+    return jobs
+  }
+
+  const rememberActiveJob = (job?: AcademicClassSyncJob | null) => {
+    if (typeof window === 'undefined') return
+    const key = `academic-class-sync-active-job:${classId}`
+    if (isJobActive(job)) window.localStorage.setItem(key, job!.id)
+    else window.localStorage.removeItem(key)
   }
 
   useEffect(() => {
@@ -144,21 +189,90 @@ function ClassDetailContent() {
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
   const waitForSyncJob = async (job: AcademicClassSyncJob): Promise<AcademicClassSyncJob> => {
     setActiveJob(job)
+    setSyncJobs((items) => [job, ...items.filter((item) => item.id !== job.id)].slice(0, 10))
+    rememberActiveJob(job)
     let current = job
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      if (['completed', 'failed'].includes(String(current.status || '').toLowerCase())) return current
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      if (!isJobActive(current)) {
+        rememberActiveJob(null)
+        await refreshSyncJobs().catch(() => [])
+        return current
+      }
       await sleep(1500)
       current = await getAcademicClassSyncJob(headers, classId, current.id)
       setActiveJob(current)
+      setSyncJobs((items) => [current, ...items.filter((item) => item.id !== current.id)].slice(0, 10))
+      rememberActiveJob(current)
     }
     throw new Error('Job đồng bộ đang chạy quá lâu. Vui lòng mở lại trang hoặc kiểm tra worker Celery.')
   }
+
+  const followExistingJobIfAny = async () => {
+    const jobs = await refreshSyncJobs()
+    const running = jobs.find(isJobActive)
+    if (!running) return false
+    setMessage(`Đang có tiến trình ${jobTypeLabel(running.job_type)} chạy. Hệ thống sẽ tiếp tục theo dõi, không tạo job mới.`)
+    const finished = await waitForSyncJob(running)
+    if (finished.status === 'failed') throw new Error(finished.error_message || 'Job đồng bộ đang chạy thất bại')
+    await refreshStudents()
+    return true
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    const recover = async () => {
+      setRecoveringJob(true)
+      try {
+        const jobs = await getAcademicClassSyncJobs(headers, classId, 10)
+        if (cancelled) return
+        setSyncJobs(jobs)
+        let running = jobs.find(isJobActive) || null
+        if (!running && typeof window !== 'undefined') {
+          const rememberedId = window.localStorage.getItem(`academic-class-sync-active-job:${classId}`)
+          if (rememberedId) {
+            try {
+              const remembered = await getAcademicClassSyncJob(headers, classId, rememberedId)
+              if (!cancelled && isJobActive(remembered)) running = remembered
+              if (!isJobActive(remembered)) rememberActiveJob(null)
+            } catch {
+              rememberActiveJob(null)
+            }
+          }
+        }
+        if (running && !cancelled) {
+          setMessage(`Khôi phục tiến trình ${jobTypeLabel(running.job_type)} đang chạy sau khi tải lại trang.`)
+          const finished = await waitForSyncJob(running)
+          if (!cancelled) {
+            if (finished.status === 'failed') setErrorModal(finished.error_message || 'Job đồng bộ thất bại')
+            else {
+              setMessage(`${jobTypeLabel(finished.job_type)} hoàn tất.`)
+              await refreshStudents()
+            }
+          }
+        }
+      } catch (error) {
+        if (!cancelled) setErrorModal(error instanceof Error ? error.message : 'Không tải được tiến trình đồng bộ')
+      } finally {
+        if (!cancelled) setRecoveringJob(false)
+      }
+    }
+    recover()
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classId])
 
   const runCmsSyncCheck = async () => {
     setChecking(true)
     setMessage('')
     try {
+      if (await followExistingJobIfAny()) return
       const queued = await enqueueAcademicClassCmsSyncJob(jsonHeaders, classId, { force: true, limit: 500 })
+      if (queued.job_type !== 'cms_sync_check') {
+        setMessage(`Đang có tiến trình ${jobTypeLabel(queued.job_type)} chạy. Không tạo job mới để tránh đồng bộ trùng.`)
+        await waitForSyncJob(queued)
+        await refreshStudents()
+        return
+      }
       const finished = await waitForSyncJob(queued)
       if (finished.status === 'failed') throw new Error(finished.error_message || 'Đồng bộ CMS thất bại')
       const result = finished.result_json as any
@@ -178,7 +292,14 @@ function ClassDetailContent() {
     setSyncingFullFlow(true)
     setMessage('')
     try {
+      if (await followExistingJobIfAny()) return
       const queued = await enqueueAcademicClassFullCmsSyncJob(jsonHeaders, classId, { force: true, limit: 500, autoMapCourse: true, syncLearning: true })
+      if (queued.job_type !== 'full_cms_sync') {
+        setMessage(`Đang có tiến trình ${jobTypeLabel(queued.job_type)} chạy. Không tạo job mới để tránh đồng bộ trùng.`)
+        await waitForSyncJob(queued)
+        await refreshStudents()
+        return
+      }
       const finished = await waitForSyncJob(queued)
       if (finished.status === 'failed') throw new Error(finished.error_message || 'Full CMS sync thất bại')
       const result = finished.result_json as any
@@ -203,7 +324,14 @@ function ClassDetailContent() {
     setSyncingEnrollment(true)
     setMessage('')
     try {
+      if (await followExistingJobIfAny()) return
       const queued = await enqueueAcademicClassEnrollmentSyncJob(jsonHeaders, classId, { force: true, limit: 500 })
+      if (queued.job_type !== 'cms_enrollment_sync') {
+        setMessage(`Đang có tiến trình ${jobTypeLabel(queued.job_type)} chạy. Không tạo job mới để tránh đồng bộ trùng.`)
+        await waitForSyncJob(queued)
+        await refreshStudents()
+        return
+      }
       const finished = await waitForSyncJob(queued)
       if (finished.status === 'failed') throw new Error(finished.error_message || 'Enrollment CMS thất bại')
       const result = finished.result_json as any
@@ -221,7 +349,14 @@ function ClassDetailContent() {
     setSyncingLearning(true)
     setMessage('')
     try {
+      if (await followExistingJobIfAny()) return
       const queued = await enqueueAcademicClassLearningSyncJob(jsonHeaders, classId, { force: true, limit: 500 })
+      if (queued.job_type !== 'learning_sync') {
+        setMessage(`Đang có tiến trình ${jobTypeLabel(queued.job_type)} chạy. Không tạo job mới để tránh đồng bộ trùng.`)
+        await waitForSyncJob(queued)
+        await refreshStudents()
+        return
+      }
       const finished = await waitForSyncJob(queued)
       if (finished.status === 'failed') throw new Error(finished.error_message || 'Cập nhật tiến độ/điểm CMS thất bại')
       const result = finished.result_json as any
@@ -241,6 +376,8 @@ function ClassDetailContent() {
   const notChecked = counts.not_checked || 0
   const needsCmsAction = Math.max(0, (summary?.total || 0) - matched)
   const syncIssue = Math.max(0, (summary?.total || 0) - matched - notChecked)
+  const activeJobRunning = isJobActive(activeJob)
+  const actionBusy = activeJobRunning || checking || syncingEnrollment || syncingLearning || syncingFullFlow || recoveringJob
 
   const componentColumns = useMemo(() => {
     const columns: Array<{ key: string; name: string }> = []
@@ -285,17 +422,37 @@ function ClassDetailContent() {
           <span>Map Course CMS trước, sau đó mới tạo user CMS, enroll và lấy điểm/progress.</span>
         </div>
         <div className="toolbar-actions">
-          <button className="btn primary" type="button" disabled={syncingFullFlow} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang chạy full flow...' : 'Đồng bộ full CMS'}</button>
-          <button className="btn secondary" type="button" disabled={checking} onClick={runCmsSyncCheck}>{checking ? 'Đang tạo/kiểm tra user...' : 'Tạo/kiểm tra user CMS'}</button>
-          <button className="btn secondary" type="button" disabled={syncingEnrollment || !classInfo?.openedx_course_id} onClick={runEnrollmentSync}>{syncingEnrollment ? 'Đang xử lý...' : 'Enrollment Course CMS'}</button>
-          <button className="btn secondary" type="button" disabled={syncingLearning || !classInfo?.openedx_course_id} onClick={runLearningSync}>{syncingLearning ? 'Đang cập nhật...' : 'Cập nhật tiến độ/điểm'}</button>
-          <button className="btn secondary" type="button" disabled={loading} onClick={() => refreshStudents().catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được dữ liệu'))}>Làm mới</button>
+          <button className="btn primary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang chạy full flow...' : 'Đồng bộ full CMS'}</button>
+          <button className="btn secondary" type="button" disabled={actionBusy} onClick={runCmsSyncCheck}>{checking ? 'Đang tạo/kiểm tra user...' : 'Tạo/kiểm tra user CMS'}</button>
+          <button className="btn secondary" type="button" disabled={actionBusy || !classInfo?.openedx_course_id} onClick={runEnrollmentSync}>{syncingEnrollment ? 'Đang xử lý...' : 'Enrollment Course CMS'}</button>
+          <button className="btn secondary" type="button" disabled={actionBusy || !classInfo?.openedx_course_id} onClick={runLearningSync}>{syncingLearning ? 'Đang cập nhật...' : 'Cập nhật tiến độ/điểm'}</button>
+          <button className="btn secondary" type="button" disabled={loading || activeJobRunning} onClick={() => Promise.all([refreshStudents(), refreshSyncJobs()]).catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được dữ liệu'))}>Làm mới</button>
         </div>
       </div>
-      {activeJob && <div className="sync-job-status">
-        <b>{activeJob.progress_label || 'Đang xử lý job đồng bộ...'}</b>
-        <small>Trạng thái: {activeJob.status} · Tiến độ: {activeJob.progress_current || 0}/{activeJob.progress_total || 100}</small>
-        <div className="progress-track"><span style={{ width: `${Math.min(100, Math.round(((activeJob.progress_current || 0) / Math.max(1, activeJob.progress_total || 100)) * 100))}%` }} /></div>
+      {activeJob && <div className="sync-job-status persistent-sync-job-status">
+        <div className="sync-job-main-row">
+          <div>
+            <b>{activeJob.progress_label || 'Đang xử lý job đồng bộ...'}</b>
+            <small>{jobTypeLabel(activeJob.job_type)} · {jobStatusLabel(activeJob.status)} · Tiến độ: {activeJob.progress_current || 0}/{activeJob.progress_total || 100}</small>
+          </div>
+          <button className="btn secondary small" type="button" onClick={() => getAcademicClassSyncJob(headers, classId, activeJob.id).then((job) => { setActiveJob(job); setSyncJobs((items) => [job, ...items.filter((item) => item.id !== job.id)].slice(0, 10)) }).catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được tiến trình'))}>Làm mới tiến trình</button>
+        </div>
+        <div className="progress-track"><span style={{ width: `${jobProgressPercent(activeJob)}%` }} /></div>
+        <small>Tiến trình được lưu trong database. F5 không làm mất trạng thái; khi còn job đang chạy, các nút đồng bộ sẽ bị khóa để tránh bấm nhiều lần.</small>
+      </div>}
+      {Boolean(syncJobs.length) && <div className="sync-job-history compact-job-history">
+        <div className="section-head compact-section-head">
+          <div><h3>Tiến trình đồng bộ gần đây</h3><p>Theo dõi từ bảng jobs; tải lại trang vẫn khôi phục job queued/running.</p></div>
+          <button className="btn secondary small" type="button" onClick={() => refreshSyncJobs().catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không tải được danh sách job'))}>Tải lại jobs</button>
+        </div>
+        <div className="job-history-list">
+          {syncJobs.slice(0, 5).map((job) => <div key={job.id} className={`job-history-item job-${String(job.status || '').toLowerCase()}`}>
+            <div><b>{jobTypeLabel(job.job_type)}</b><small>{job.progress_label || jobStatusLabel(job.status)}</small></div>
+            <span className={isJobActive(job) ? 'status-pill warning' : job.status === 'failed' ? 'status-pill danger' : 'status-pill success'}>{jobStatusLabel(job.status)}</span>
+            <span>{jobProgressPercent(job)}%</span>
+            <small>{job.updated_at ? new Date(job.updated_at).toLocaleString('vi-VN') : job.created_at ? new Date(job.created_at).toLocaleString('vi-VN') : ''}</small>
+          </div>)}
+        </div>
       </div>}
       {message && <p className="form-message">{message}</p>}
 

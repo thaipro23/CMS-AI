@@ -964,46 +964,147 @@ class AcademicService:
         if cache is None:
             cache = {}
             setattr(self, '_openedx_course_candidate_cache', cache)
-        cache_key = raw.lower()
+        cache_key = f"exact:{raw.lower()}:{bool(allow_external)}"
         if cache_key in cache:
             return cache[cache_key]
+
+        # Auto-map is an explicit user/admin action, so it must query CMS/Open edX
+        # first. CourseSyncState is only a cache; a missing local cache entry must
+        # not make the UI say the course does not exist when CMS has it.
+        if allow_external:
+            try:
+                candidate, title, count, source = OpenEdXStudentInsightClient().find_exact_course(raw)
+                if count == 1 and candidate:
+                    result = (candidate, 1, title, source or 'cms_openedx_api_exact')
+                    cache[cache_key] = result
+                    return result
+                if count > 1:
+                    result = (None, count, None, source or 'cms_openedx_api_exact')
+                    cache[cache_key] = result
+                    return result
+            except Exception:
+                # Fallback to DB cache below. The caller will expose a useful
+                # message if both API and cache fail.
+                pass
 
         rows = self.db.query(CourseSyncState.course_id, CourseSyncState.display_name).filter(
             func.lower(CourseSyncState.course_id) == raw.lower(),
         ).distinct().limit(2).all()
         if len(rows) == 1:
-            result = (str(rows[0][0]), 1, str(rows[0][1] or '') or None, 'local_course_sync_state')
+            result = (str(rows[0][0]), 1, str(rows[0][1] or '') or None, 'course_cache_exact')
             cache[cache_key] = result
             return result
 
-        # Do not call CMS/Open edX from normal read/list APIs. Student
-        # Management pages refresh often, and a GET/F5 must stay local-db only.
-        # External lookup is allowed only from explicit actions such as
-        # /course-mapping/auto or validation/save flows.
-        if not allow_external:
-            result = (None, len(rows), None, 'local_course_sync_state')
-            cache[cache_key] = result
-            return result
-
-        # Explicit API-first autofill fallback: if the course has not been synced
-        # into CourseSyncState yet, ask CMS/Open edX directly only after the user
-        # triggers auto-map/validate.
-        try:
-            candidate, title, count, source = OpenEdXStudentInsightClient().find_exact_course(raw)
-            if count == 1 and candidate:
-                result = (candidate, 1, title, source)
-                cache[cache_key] = result
-                return result
-            if count > 0:
-                result = (None, count, None, source)
-                cache[cache_key] = result
-                return result
-        except Exception:
-            pass
-
-        result = (None, len(rows), None, 'local_course_sync_state')
+        result = (None, len(rows), None, 'course_cache_exact')
         cache[cache_key] = result
         return result
+
+    def _find_openedx_course_candidate_for_scope(
+        self,
+        *,
+        term: AcademicTerm,
+        subject: AcademicSubject,
+        suggested: str,
+        allow_external: bool = True,
+    ) -> dict[str, Any]:
+        """Find one safe CMS/Open edX course candidate for a subject + term.
+
+        The exact suggested course-v1 ID is tried first. If the deployment uses a
+        different run naming convention, search CMS/Open edX by subject code and
+        accept only when there is exactly one safe candidate. This avoids the old
+        false negative where the course exists in CMS but was not present in the
+        AI Server course cache.
+        """
+        exact_candidate, exact_count, exact_title, exact_source = self._find_exact_openedx_course_candidate(
+            suggested,
+            allow_external=allow_external,
+        )
+        if exact_candidate and exact_count == 1:
+            return {
+                'candidate': exact_candidate,
+                'count': 1,
+                'title': exact_title,
+                'source': exact_source or 'cms_openedx_api_exact',
+                'suggested_openedx_course_id': suggested,
+                'candidates': [{'course_id': exact_candidate, 'display_name': exact_title, 'source': exact_source or 'cms_openedx_api_exact', 'match': 'exact'}],
+            }
+
+        subject_code = str(subject.subject_code or '').strip()
+        if not subject_code:
+            return {'candidate': None, 'count': 0, 'title': None, 'source': exact_source or 'empty_subject_code', 'suggested_openedx_course_id': suggested, 'candidates': []}
+
+        term_candidates = _term_run_candidates(term)
+        subject_key = _normalize_text_key(subject_code)
+        seen: set[str] = set()
+        raw_candidates: list[dict[str, Any]] = []
+
+        if allow_external:
+            try:
+                api_rows = OpenEdXStudentInsightClient().search_courses(query=subject_code, exact_course_id=suggested, limit=50)
+                for row in api_rows:
+                    cid = str(row.get('course_id') or '').strip()
+                    if cid and cid.lower() not in seen:
+                        seen.add(cid.lower())
+                        raw_candidates.append({'course_id': cid, 'display_name': row.get('display_name'), 'source': 'cms_openedx_api_search', 'raw': row})
+            except Exception:
+                pass
+
+        # Cache fallback: useful when API is temporarily unavailable, but never
+        # described to the user as the primary source for auto-map.
+        cache_rows = self.db.query(CourseSyncState.course_id, CourseSyncState.display_name).filter(
+            or_(
+                func.lower(CourseSyncState.course_id).contains(subject_code.lower()),
+                func.lower(CourseSyncState.display_name).contains(subject_code.lower()),
+            )
+        ).distinct().limit(100).all()
+        for cid, title in cache_rows:
+            value = str(cid or '').strip()
+            if value and value.lower() not in seen:
+                seen.add(value.lower())
+                raw_candidates.append({'course_id': value, 'display_name': str(title or '') or None, 'source': 'course_cache_search'})
+
+        def _subject_matches(course_id: str) -> bool:
+            parsed = _parse_openedx_course_id(course_id)
+            if parsed:
+                return _normalize_text_key(parsed['course']) == subject_key
+            return f'+{subject_key}+' in _normalize_text_key(course_id)
+
+        def _term_score(item: dict[str, Any]) -> int:
+            cid = str(item.get('course_id') or '')
+            title = str(item.get('display_name') or '')
+            parsed = _parse_openedx_course_id(cid)
+            run_key = _clean_token(parsed['run']) if parsed else ''
+            haystack = _clean_token(f'{cid} {title}')
+            if term_candidates and run_key in term_candidates:
+                return 3
+            if term_candidates and any(candidate in haystack for candidate in term_candidates):
+                return 2
+            # When CMS has exactly one course for this subject, allow mapping even
+            # if the run naming convention is not recognized. validate_* will keep
+            # the term mismatch as a warning, not a hard failure.
+            return 1
+
+        subject_matches = [item for item in raw_candidates if _subject_matches(str(item.get('course_id') or ''))]
+        if not subject_matches:
+            return {'candidate': None, 'count': 0, 'title': None, 'source': exact_source or 'cms_openedx_api_search', 'suggested_openedx_course_id': suggested, 'candidates': raw_candidates[:10]}
+
+        preferred = [item for item in subject_matches if _term_score(item) >= 2]
+        candidates = preferred if preferred else subject_matches
+        unique = {str(item['course_id']).lower(): item for item in candidates}
+        candidates = list(unique.values())
+        candidates.sort(key=lambda item: (-_term_score(item), str(item.get('course_id') or '')))
+
+        if len(candidates) == 1:
+            item = candidates[0]
+            return {
+                'candidate': str(item.get('course_id') or ''),
+                'count': 1,
+                'title': item.get('display_name'),
+                'source': item.get('source') or 'cms_openedx_api_search',
+                'suggested_openedx_course_id': suggested,
+                'candidates': candidates[:10],
+            }
+        return {'candidate': None, 'count': len(candidates), 'title': None, 'source': 'cms_openedx_api_search', 'suggested_openedx_course_id': suggested, 'candidates': candidates[:10]}
 
     def _auto_create_subject_course_mapping_if_safe(
         self,
@@ -1087,14 +1188,21 @@ class AcademicService:
                 'suggested_openedx_course_id': suggested,
                 'mapping': self._course_mapping_item(current),
             }
-        candidate, candidate_count, candidate_title, candidate_source = self._find_exact_openedx_course_candidate(suggested, allow_external=True)
+        lookup = self._find_openedx_course_candidate_for_scope(term=term, subject=subject, suggested=suggested, allow_external=True)
+        candidate = lookup.get('candidate')
+        candidate_count = int(lookup.get('count') or 0)
+        candidate_title = lookup.get('title')
+        candidate_source = str(lookup.get('source') or 'cms_openedx_api')
         if candidate_count != 1 or not candidate:
             status_value = 'not_found' if candidate_count == 0 else 'multiple_candidates'
             return {
                 'ok': False,
                 'status': status_value,
-                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ từ dữ liệu local hoặc API CMS/Open edX.',
+                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ qua API CMS/Open edX. Hãy kiểm tra OPENEDX_STUDENT_INSIGHT_BASE_URL, HMAC secret và endpoint /api/ai-student-insight/v1/courses/search; nếu có nhiều course cùng mã môn, cần map thủ công để tránh nhầm kỳ.',
                 'suggested_openedx_course_id': suggested,
+                'candidate_count': candidate_count,
+                'candidate_source': candidate_source,
+                'candidates': lookup.get('candidates') or [],
                 'mapping': None,
             }
         mapping = self._auto_create_subject_course_mapping_if_safe(
@@ -2395,9 +2503,7 @@ class AcademicService:
     def _try_auto_map_course_for_class(self, user: UserContext, cls: AcademicClass) -> dict[str, Any]:
         """Best-effort safe course mapping for full Student Progress sync.
 
-        It only creates a subject-term mapping when the suggested course ID exists
-        exactly once in local CourseSyncState or CMS/Open edX course search. It
-        never creates a fake Course CMS and never blocks account creation.
+        It only creates a subject-term mapping when CMS/Open edX API returns one safe candidate for the subject + term. It never creates a fake Course CMS and never creates accounts before mapping exists.
         """
         current = self.effective_course_mapping_for_class(cls)
         if current and current.openedx_course_id:
@@ -2416,7 +2522,11 @@ class AcademicService:
             return {'ok': False, 'status': 'subject_missing', 'openedx_course_id': None, 'mapping': None, 'message': 'Không tìm thấy môn AP để auto-map Course CMS.'}
         branch_value = (cls.branch or subject.branch or '').strip().lower() or None
         suggested = self.suggested_course_id_for_scope(cls.term_id, cls.subject_id)
-        candidate, count, title, source = self._find_exact_openedx_course_candidate(suggested, allow_external=True)
+        lookup = self._find_openedx_course_candidate_for_scope(term=self.db.get(AcademicTerm, cls.term_id), subject=subject, suggested=suggested, allow_external=True)
+        candidate = lookup.get('candidate')
+        count = int(lookup.get('count') or 0)
+        title = lookup.get('title')
+        source = str(lookup.get('source') or 'cms_openedx_api')
         if count != 1 or not candidate:
             status_value = 'course_not_found' if count == 0 else 'multiple_course_candidates'
             return {
@@ -2425,8 +2535,10 @@ class AcademicService:
                 'openedx_course_id': None,
                 'suggested_openedx_course_id': suggested,
                 'candidate_count': count,
+                'candidate_source': source,
+                'candidates': lookup.get('candidates') or [],
                 'mapping': None,
-                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ. Chưa tạo tài khoản CMS; cần map Course CMS trước khi chạy tạo user/enroll/lấy điểm.',
+                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ qua API CMS/Open edX. Chưa tạo tài khoản CMS; hãy kiểm tra kết nối API CMS/Open edX hoặc map Course CMS thủ công trước khi chạy tạo user/enroll/lấy điểm.',
             }
         mapping = self._auto_create_subject_course_mapping_if_safe(
             user,

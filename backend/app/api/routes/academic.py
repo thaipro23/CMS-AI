@@ -90,6 +90,22 @@ def _enqueue_class_sync_job(
     service = AcademicService(db)
     service.assert_can_access_class(user, class_id)
     clean_limit = max(1, min(500, int(limit or 500)))
+
+    # Class sync jobs mutate the same CMS/Open edX and snapshot rows. Returning
+    # the existing active job makes the operation idempotent across refresh/F5
+    # and prevents users from accidentally enqueueing duplicate jobs.
+    existing_job = (
+        db.query(AcademicClassSyncJob)
+        .filter(
+            AcademicClassSyncJob.class_id == class_id,
+            AcademicClassSyncJob.status.in_(['queued', 'running']),
+        )
+        .order_by(AcademicClassSyncJob.created_at.desc())
+        .first()
+    )
+    if existing_job:
+        return existing_job
+
     job = AcademicClassSyncJob(
         job_type=job_type,
         status='queued',
