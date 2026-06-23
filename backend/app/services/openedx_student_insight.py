@@ -6,7 +6,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 
@@ -190,6 +190,28 @@ class OpenEdXStudentInsightClient:
             data = response.json()
         return self._extract_course_results(data)
 
+    def _get_course_via_lms_courses_api_exact(self, *, course_id: str) -> dict[str, Any] | None:
+        base = (settings.openedx_lms_base_url or settings.openedx_base_url or '').rstrip('/')
+        if not base or not course_id:
+            return None
+        endpoint = getattr(settings, 'openedx_courses_search_endpoint', '/api/courses/v1/courses/')
+        path = endpoint if endpoint.startswith('/') else f'/{endpoint}'
+        if not path.endswith('/'):
+            path += '/'
+        # Encode + as %2B. In query strings + means space; in path it is usually
+        # safe, but encoding avoids proxy/framework normalization surprises.
+        url = urljoin(base + '/', f"{path.lstrip('/')}{quote(course_id, safe='')}/")
+        headers = self._oauth_headers()
+        with httpx.Client(timeout=settings.openedx_request_timeout_seconds) as client:
+            response = client.get(url, headers=headers)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = response.json()
+        if isinstance(data, dict):
+            return self._normalize_course_item(data)
+        return None
+
     def search_courses(self, *, query: str, exact_course_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
         """Search Open edX courses using API-first fallbacks.
 
@@ -222,11 +244,27 @@ class OpenEdXStudentInsightClient:
         target = str(course_id or '').strip()
         if not target:
             return None, None, 0, 'empty'
+
+        # 1) Preferred: Student Insight plugin exact search. This is HMAC based
+        # and should work without user-session cookies.
         results = self.search_courses(query=target, exact_course_id=target, limit=10)
         exact = [item for item in results if str(item.get('course_id') or '').strip().lower() == target.lower()]
         if len(exact) == 1:
-            return str(exact[0]['course_id']), exact[0].get('display_name'), 1, 'openedx_api'
-        return None, None, len(exact), 'openedx_api' if results else 'unavailable'
+            return str(exact[0]['course_id']), exact[0].get('display_name'), 1, 'student_insight_course_search'
+        if len(exact) > 1:
+            return None, None, len(exact), 'student_insight_course_search'
+
+        # 2) Fallback: standard LMS course detail endpoint. This catches cases
+        # where /api/ai-student-insight/v1/courses/search is not deployed yet or
+        # an older plugin cannot parse CourseOverview.id correctly.
+        try:
+            item = self._get_course_via_lms_courses_api_exact(course_id=target)
+            if item and str(item.get('course_id') or '').strip().lower() == target.lower():
+                return str(item['course_id']), item.get('display_name'), 1, 'lms_courses_api_exact'
+        except Exception:
+            pass
+
+        return None, None, len(exact), 'openedx_api_unavailable_or_not_found'
 
     def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> list[dict[str, Any]]:
         """Fetch enrollment/progress/grade snapshots for a class from Open edX.
