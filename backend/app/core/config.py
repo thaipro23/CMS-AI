@@ -140,6 +140,21 @@ class Settings(BaseSettings):
 
     # v25.9.16 Academic AP / Student Management integration.
     # AP credentials are deployment secrets and must come from env, never from source.
+    # Canonical v25.9.16.5.8 runtime gateway: AI Server talks to the
+    # existing openedx_connector_plugin on the LMS Django host. The older
+    # OPENEDX_STUDENT_INSIGHT_* names remain as deployment aliases only.
+    openedx_connector_base_url: str | None = None
+    openedx_connector_users_resolve_endpoint: str = '/api/ai-connector/v1/users/resolve'
+    openedx_connector_course_search_endpoint: str = '/api/ai-connector/v1/courses/search'
+    openedx_connector_class_analytics_endpoint: str = '/api/ai-connector/v1/class-analytics'
+    openedx_connector_enrollment_enroll_endpoint: str = '/api/ai-connector/v1/course-enrollment/enroll'
+    openedx_connector_default_enrollment_mode: str = 'audit'
+    openedx_connector_client_id: str = 'ai-server'
+    openedx_connector_timeout_seconds: int = 30
+    openedx_connector_max_batch_size: int = 100
+
+    # Backward-compatible aliases for old env files. Do not use these for new
+    # deployments; prefer OPENEDX_CONNECTOR_BASE_URL and OPENEDX_CONNECTOR_HMAC_SECRET.
     openedx_student_insight_base_url: str | None = None
     openedx_student_insight_users_resolve_endpoint: str = '/api/ai-student-insight/v1/users/resolve'
     openedx_student_insight_course_search_endpoint: str = '/api/ai-student-insight/v1/courses/search'

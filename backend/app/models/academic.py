@@ -319,7 +319,7 @@ class AcademicStudentLearningSnapshot(Base):
 class AcademicClassSyncJob(Base):
     """Async class-level CMS/Open edX sync job tracked for UI polling.
 
-    Heavy class operations call the Open edX Student Insight plugin and can take
+    Heavy class operations call the Open edX Connector plugin and can take
     longer than a normal HTTP request. Keep them in Celery and let the frontend
     poll this table instead of blocking a Uvicorn worker.
     """

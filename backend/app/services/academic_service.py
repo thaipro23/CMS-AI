@@ -26,7 +26,7 @@ from app.models.academic import (
     OpenEdXUserMapping,
 )
 from app.services.business_rbac import BusinessRBACService
-from app.services.openedx_student_insight import OpenEdXStudentInsightClient, normalize_username, mask_email
+from app.services.openedx_student_insight import OpenEdXConnectorClient, normalize_username, mask_email
 from app.core.config import settings
 from app.models.course import CourseSyncState
 from app.models.question_bank import Subject as BankSubject
@@ -973,7 +973,7 @@ class AcademicService:
         # not make the UI say the course does not exist when CMS has it.
         if allow_external:
             try:
-                candidate, title, count, source = OpenEdXStudentInsightClient().find_exact_course(raw)
+                candidate, title, count, source = OpenEdXConnectorClient().find_exact_course(raw)
                 if count == 1 and candidate:
                     result = (candidate, 1, title, source or 'cms_openedx_api_exact')
                     cache[cache_key] = result
@@ -1040,7 +1040,7 @@ class AcademicService:
 
         if allow_external:
             try:
-                api_rows = OpenEdXStudentInsightClient().search_courses(query=subject_code, exact_course_id=suggested, limit=50)
+                api_rows = OpenEdXConnectorClient().search_courses(query=subject_code, exact_course_id=suggested, limit=50)
                 for row in api_rows:
                     cid = str(row.get('course_id') or '').strip()
                     if cid and cid.lower() not in seen:
@@ -1198,7 +1198,7 @@ class AcademicService:
             return {
                 'ok': False,
                 'status': status_value,
-                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ qua API CMS/Open edX. Hãy kiểm tra OPENEDX_STUDENT_INSIGHT_BASE_URL, HMAC secret và endpoint /api/ai-student-insight/v1/courses/search; nếu có nhiều course cùng mã môn, cần map thủ công để tránh nhầm kỳ.',
+                'message': 'Chưa tìm thấy đúng một Course CMS khớp mã môn/kỳ qua API CMS/Open edX. Hãy kiểm tra OPENEDX_CONNECTOR_BASE_URL, OPENEDX_CONNECTOR_HMAC_SECRET và endpoint /api/ai-connector/v1/courses/search; nếu có nhiều course cùng mã môn, cần map thủ công để tránh nhầm kỳ.',
                 'suggested_openedx_course_id': suggested,
                 'candidate_count': candidate_count,
                 'candidate_source': candidate_source,
@@ -1688,7 +1688,7 @@ class AcademicService:
         ).first()
         if duplicate_class and duplicate_class.class_id != class_id:
             checks.append(_check('duplicate_class_mapping', 'warn', 'Course này đã được map trực tiếp cho lớp khác. Nếu nhiều lớp cùng học chung course thì vẫn hợp lệ.', {'mapping_id': duplicate_class.id, 'class_id': duplicate_class.class_id}, blocking=False))
-        checks.append(_check('openedx_live_validation', 'warn', 'Chưa validate live course structure. Bản sau sẽ dùng LMS Student Insight/CMS connector để kiểm tra course/cohort thật.', blocking=False))
+        checks.append(_check('openedx_live_validation', 'warn', 'Chưa validate live course structure. Bản sau sẽ dùng LMS Open edX Connector để kiểm tra course/cohort thật.', blocking=False))
         if openedx_course_title and subject:
             left = _normalize_text_key(openedx_course_title)
             right = _normalize_text_key(subject.subject_name)
@@ -2002,8 +2002,8 @@ class AcademicService:
         if not rows and not teacher_payload:
             return {'ok': True, 'class_id': class_id, 'total': 0, 'updated': 0, 'counts': {}, 'message': 'Không có sinh viên/giảng viên cần kiểm tra đồng bộ CMS', 'teachers': {'total': 0, 'updated': 0, 'counts': {}}}
 
-        client = OpenEdXStudentInsightClient()
-        batch_size = max(1, min(settings.openedx_student_insight_max_batch_size, 100))
+        client = OpenEdXConnectorClient()
+        batch_size = max(1, min(getattr(settings, 'openedx_connector_max_batch_size', settings.openedx_student_insight_max_batch_size), 100))
         updated = 0
         counts: dict[str, int] = {}
         create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
@@ -2037,7 +2037,7 @@ class AcademicService:
                         'match_method': 'not_found',
                         'note': 'Open edX plugin không trả user cho username AP này',
                     }
-                mapping = self._upsert_mapping(student, result, source='openedx_student_insight')
+                mapping = self._upsert_mapping(student, result, source='openedx_connector')
                 counts[mapping.match_status] = counts.get(mapping.match_status, 0) + 1
                 if result.get('created') is True:
                     counts['created_user'] = counts.get('created_user', 0) + 1
@@ -2328,13 +2328,13 @@ class AcademicService:
         if not rows and not teacher_payload:
             summary = self._learning_summary_for_class_course(class_id, course_id)
             return {'ok': True, 'class_id': class_id, 'openedx_course_id': course_id, 'total': 0, 'updated': 0, 'counts': {}, 'message': 'Không có sinh viên/giảng viên cần xử lý Course CMS', 'learning_summary': summary, 'teachers': {'total': 0, 'updated': 0, 'counts': {}}}
-        client = OpenEdXStudentInsightClient()
-        batch_size = max(1, min(settings.openedx_student_insight_max_batch_size, 100))
+        client = OpenEdXConnectorClient()
+        batch_size = max(1, min(getattr(settings, 'openedx_connector_max_batch_size', settings.openedx_student_insight_max_batch_size), 100))
         counts: dict[str, int] = {}
         updated = 0
         teacher_counts: dict[str, int] = {}
         teacher_updated = 0
-        enrollment_mode = (mode or getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit') or 'audit').strip() or 'audit'
+        enrollment_mode = (mode or getattr(settings, 'openedx_connector_default_enrollment_mode', getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit')) or 'audit').strip() or 'audit'
         create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
 
         for start in range(0, len(rows), batch_size):
@@ -2368,7 +2368,7 @@ class AcademicService:
                         'enrollment_status': 'unknown',
                         'message': 'Plugin không trả kết quả enrollment cho sinh viên này',
                     }
-                snapshot = self._upsert_enrollment_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_student_insight_enrollment')
+                snapshot = self._upsert_enrollment_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_connector_enrollment')
                 status_value = str(result.get('status') or result.get('enrollment_status') or snapshot.enrollment_status or 'unknown')
                 if status_value in {'already_enrolled', 'created', 'reactivated'}:
                     status_value = 'enrolled'
@@ -2461,8 +2461,8 @@ class AcademicService:
         if not rows:
             summary = self._learning_summary_for_class_course(class_id, course_id)
             return {'ok': True, 'updated': 0, 'message': 'Không có sinh viên cần cập nhật học tập CMS', **summary}
-        client = OpenEdXStudentInsightClient()
-        batch_size = max(1, min(settings.openedx_student_insight_max_batch_size, 100))
+        client = OpenEdXConnectorClient()
+        batch_size = max(1, min(getattr(settings, 'openedx_connector_max_batch_size', settings.openedx_student_insight_max_batch_size), 100))
         updated = 0
         for start in range(0, len(rows), batch_size):
             chunk = rows[start:start + batch_size]
@@ -2492,7 +2492,7 @@ class AcademicService:
                         'enrollment_status': 'unknown',
                         'note': 'Plugin không trả dữ liệu học tập cho sinh viên này',
                     }
-                self._upsert_learning_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_student_insight')
+                self._upsert_learning_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_connector')
                 updated += 1
             self.db.flush()
         self.db.commit()

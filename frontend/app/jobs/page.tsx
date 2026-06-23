@@ -6,8 +6,9 @@ import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { AuditLogRow, BankOperationJob, CourseQuizInstance } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { formatVNDateTime } from '../../lib/time'
 
-function dateText(v?: string | null) { try { return v ? new Date(v).toLocaleString('vi-VN') : '—' } catch { return v || '—' } }
+function dateText(v?: string | null) { return formatVNDateTime(v) }
 function jobLabel(v: string) { return ({ material_extract: 'Tách tài liệu', bank_generate: 'Tạo câu hỏi', release_publish: 'Publish release', quiz_create: 'Tạo Quiz' } as Record<string,string>)[v] || v }
 function statusText(v: string) { return ({ queued: 'Đang chờ', running: 'Đang chạy', completed: 'Hoàn tất', failed: 'Thất bại', canceled: 'Đã hủy' } as Record<string,string>)[v] || v }
 function isOpsAudit(row: AuditLogRow) { const a = String(row.action || ''); return a.startsWith('question_bank.') || a.includes('publish') || a.includes('quiz') || a.includes('generation') }

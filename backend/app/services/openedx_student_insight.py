@@ -13,6 +13,10 @@ import httpx
 from app.core.config import settings
 
 
+CONNECTOR_PREFIX = '/api/ai-connector/v1'
+LEGACY_STUDENT_INSIGHT_PREFIX = '/api/ai-student-insight/v1'
+
+
 def normalize_username(value: Any) -> str:
     return str(value or '').strip().lower()
 
@@ -29,31 +33,76 @@ def mask_email(value: Any) -> str | None:
     return f'{masked}@{domain}'
 
 
-def _canonical(method: str, path: str, timestamp: str, nonce: str, raw_body: bytes) -> str:
-    body_hash = hashlib.sha256(raw_body).hexdigest()
-    return '\n'.join([method.upper(), path, timestamp, nonce, body_hash])
+def _path(value: str | None, default: str) -> str:
+    raw = str(value or default or '').strip() or default
+    return raw if raw.startswith('/') else f'/{raw}'
 
 
-class OpenEdXStudentInsightClient:
-    """Client for the future LMS plugin `openedx_ai_student_insight`.
+def _legacy_path(connector_path: str) -> str:
+    path = _path(connector_path, connector_path)
+    if path.startswith(CONNECTOR_PREFIX):
+        return LEGACY_STUDENT_INSIGHT_PREFIX + path[len(CONNECTOR_PREFIX):]
+    return path
 
-    v25.9.16.1 uses this only for AP username -> Open edX username mapping.
-    The API contract is intentionally the same as the planned LMS plugin:
-    POST /api/ai-student-insight/v1/users/resolve
+
+class OpenEdXConnectorClient:
+    """Unified AI Server -> openedx_connector_plugin client.
+
+    Canonical runtime API lives in the existing Open edX connector plugin on the
+    LMS Django host, under /api/ai-connector/v1/*.
+
+    The old /api/ai-student-insight/v1/* namespace is kept only as a deployment
+    compatibility fallback. New deployments should configure:
+      OPENEDX_CONNECTOR_BASE_URL=http(s)://<LMS-host>
+      OPENEDX_CONNECTOR_HMAC_SECRET=<same secret in Tutor LMS/CMS>
     """
 
     def __init__(self) -> None:
-        base = (settings.openedx_student_insight_base_url or settings.openedx_lms_base_url or '').rstrip('/')
+        base = (
+            getattr(settings, 'openedx_connector_base_url', None)
+            or settings.openedx_student_insight_base_url
+            or settings.openedx_lms_base_url
+            or ''
+        ).rstrip('/')
         self.base_url = base
-        self.endpoint = settings.openedx_student_insight_users_resolve_endpoint or '/api/ai-student-insight/v1/users/resolve'
-        self.class_analytics_endpoint = getattr(settings, 'openedx_student_insight_class_analytics_endpoint', '/api/ai-student-insight/v1/class-analytics')
-        self.enrollment_enroll_endpoint = getattr(settings, 'openedx_student_insight_enrollment_enroll_endpoint', '/api/ai-student-insight/v1/course-enrollment/enroll')
-        self.timeout_seconds = settings.openedx_student_insight_timeout_seconds
-        self.client_id = settings.openedx_student_insight_client_id or 'ai-server'
-        self.shared_secret = settings.openedx_student_insight_shared_secret or settings.openedx_connector_hmac_secret
+        self.users_resolve_endpoint = _path(
+            getattr(settings, 'openedx_connector_users_resolve_endpoint', None),
+            '/api/ai-connector/v1/users/resolve',
+        )
+        self.course_search_endpoint = _path(
+            getattr(settings, 'openedx_connector_course_search_endpoint', None),
+            '/api/ai-connector/v1/courses/search',
+        )
+        self.class_analytics_endpoint = _path(
+            getattr(settings, 'openedx_connector_class_analytics_endpoint', None),
+            '/api/ai-connector/v1/class-analytics',
+        )
+        self.enrollment_enroll_endpoint = _path(
+            getattr(settings, 'openedx_connector_enrollment_enroll_endpoint', None),
+            '/api/ai-connector/v1/course-enrollment/enroll',
+        )
+        self.timeout_seconds = int(
+            getattr(settings, 'openedx_connector_timeout_seconds', None)
+            or getattr(settings, 'openedx_student_insight_timeout_seconds', 30)
+            or 30
+        )
+        self.client_id = (
+            getattr(settings, 'openedx_connector_client_id', None)
+            or getattr(settings, 'openedx_student_insight_client_id', None)
+            or 'ai-server'
+        )
+        self.connector_secret = (
+            settings.openedx_connector_hmac_secret
+            or getattr(settings, 'openedx_student_insight_shared_secret', None)
+            or ''
+        )
+        # Backward-compatible public attribute used by older one-off debug scripts.
+        self.shared_secret = self.connector_secret
+        # Backward-compatible public attribute used by older one-off debug scripts.
+        self.endpoint = self.users_resolve_endpoint
 
     def configured(self) -> bool:
-        return bool(self.base_url and self.shared_secret)
+        return bool(self.base_url and self.connector_secret)
 
     @staticmethod
     def _infer_token_type(token: str | None) -> str | None:
@@ -73,10 +122,9 @@ class OpenEdXStudentInsightClient:
     def _oauth_headers(self) -> dict[str, str]:
         """Build Authorization headers for standard LMS/CMS APIs.
 
-        This is a synchronous, small counterpart of the normal Open edX connector
-        auth path. It is used only for lightweight lookups such as course search
-        so operators do not have to manually sync CourseSyncState before Academic
-        course mapping can work.
+        Connector/HMAC is preferred for production academic operations. This
+        OAuth fallback remains only for read-only standard Open edX course API
+        lookups when the connector endpoint is not deployed yet.
         """
         token = settings.openedx_access_token
         token_type = self._infer_token_type(token)
@@ -103,21 +151,90 @@ class OpenEdXStudentInsightClient:
             headers['Authorization'] = f'{self._normalize_auth_scheme(token_type)} {token}'
         return headers
 
-    def _headers(self, method: str, path: str, raw_body: bytes) -> dict[str, str]:
-        if not self.shared_secret:
-            raise RuntimeError('OPENEDX_STUDENT_INSIGHT_SHARED_SECRET hoặc OPENEDX_CONNECTOR_HMAC_SECRET chưa cấu hình')
-        timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-        nonce = str(uuid.uuid4())
-        canonical = _canonical(method, path, timestamp, nonce, raw_body)
-        signature = hmac.new(self.shared_secret.encode('utf-8'), canonical.encode('utf-8'), hashlib.sha256).hexdigest()
-        return {
+    def _headers(self, method: str, path: str, raw_body: bytes, *, use_nonce: bool = True) -> dict[str, str]:
+        if not self.connector_secret:
+            raise RuntimeError('OPENEDX_CONNECTOR_HMAC_SECRET chưa cấu hình cho AI Server')
+        timestamp = str(int(datetime.now(timezone.utc).timestamp()))
+        body_hash = hashlib.sha256(raw_body).hexdigest()
+        normalized_path = _path(path, path)
+        headers = {
+            'Accept': 'application/json',
             'Content-Type': 'application/json',
             'X-AI-Client': self.client_id,
-            'X-AI-Timestamp': timestamp,
-            'X-AI-Nonce': nonce,
-            'X-AI-Signature': signature,
+            'X-AI-Connector-Timestamp': timestamp,
         }
+        if use_nonce:
+            nonce = str(uuid.uuid4())
+            # v25.9.16.5.8 adds nonce to the connector canonical string. The Open edX
+            # plugin still accepts the old four-part canonical form for rolling upgrades,
+            # but nonce prevents duplicate signatures for identical requests inside the
+            # same second.
+            canonical = f'{timestamp}.{method.upper()}.{normalized_path}.{body_hash}.{nonce}'
+            headers['X-AI-Connector-Nonce'] = nonce
+        else:
+            # Rolling-upgrade fallback for older openedx_connector_plugin versions.
+            canonical = f'{timestamp}.{method.upper()}.{normalized_path}.{body_hash}'
+        signature = hmac.new(
+            self.connector_secret.encode('utf-8'),
+            canonical.encode('utf-8'),
+            hashlib.sha256,
+        ).hexdigest()
+        headers['X-AI-Connector-Signature'] = signature
+        return headers
 
+    def _raise_for_status_with_context(self, response: httpx.Response, *, operation: str, path: str) -> None:
+        if response.status_code < 400:
+            return
+        plugin_message = ''
+        plugin_code = ''
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                plugin_message = str(data.get('message') or data.get('detail') or data.get('error') or '')
+                plugin_code = str(data.get('code') or data.get('status') or '')
+        except Exception:
+            plugin_message = (response.text or '')[:500]
+        if response.status_code == 403:
+            raise RuntimeError(
+                f'Open edX Connector bị từ chối HMAC khi {operation}: 403 Forbidden tại {path}. '
+                f'Chi tiết plugin: {plugin_message or plugin_code or "không có body"}. '
+                'Kiểm tra OPENEDX_CONNECTOR_HMAC_SECRET ở AI Server phải giống AI_CONNECTOR_HMAC_SECRET trong Tutor LMS/CMS, '
+                'và OPENEDX_CONNECTOR_BASE_URL phải trỏ tới LMS Django, không phải MFE.'
+            )
+        response.raise_for_status()
+
+    def _post_json(self, *, path: str, body: dict[str, Any], operation: str, timeout: int | None = None, legacy_fallback: bool = True) -> Any:
+        if not self.configured():
+            raise RuntimeError('Chưa cấu hình OPENEDX_CONNECTOR_BASE_URL/OPENEDX_CONNECTOR_HMAC_SECRET để gọi Open edX Connector')
+        primary = _path(path, path)
+        candidates = [primary]
+        legacy = _legacy_path(primary)
+        if legacy_fallback and legacy != primary:
+            candidates.append(legacy)
+        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        last_404: httpx.Response | None = None
+        for candidate_path in candidates:
+            url = urljoin(self.base_url + '/', candidate_path.lstrip('/'))
+            headers = self._headers('POST', candidate_path, raw, use_nonce=True)
+            with httpx.Client(timeout=timeout or self.timeout_seconds) as client:
+                response = client.post(url, content=raw, headers=headers)
+                # Rolling-upgrade fallback: older connector plugins validate the
+                # four-part connector HMAC canonical string and do not know the
+                # X-AI-Connector-Nonce extension yet. Retry once without nonce if
+                # the nonce-signed request is rejected.
+                if response.status_code == 403:
+                    legacy_headers = self._headers('POST', candidate_path, raw, use_nonce=False)
+                    legacy_response = client.post(url, content=raw, headers=legacy_headers)
+                    if legacy_response.status_code < 400 or legacy_response.status_code == 404:
+                        response = legacy_response
+            if response.status_code == 404 and candidate_path != candidates[-1]:
+                last_404 = response
+                continue
+            self._raise_for_status_with_context(response, operation=operation, path=candidate_path)
+            return response.json()
+        if last_404 is not None:
+            self._raise_for_status_with_context(last_404, operation=operation, path=primary)
+        return None
 
     @staticmethod
     def _normalize_course_item(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -151,28 +268,16 @@ class OpenEdXStudentInsightClient:
         results: list[dict[str, Any]] = []
         for item in raw_items:
             if isinstance(item, dict):
-                normalized = OpenEdXStudentInsightClient._normalize_course_item(item)
+                normalized = OpenEdXConnectorClient._normalize_course_item(item)
                 if normalized:
                     results.append(normalized)
         return results
 
-    def _search_courses_via_student_insight(self, *, query: str, exact_course_id: str | None, limit: int) -> list[dict[str, Any]]:
+    def _search_courses_via_connector(self, *, query: str, exact_course_id: str | None, limit: int) -> list[dict[str, Any]]:
         if not self.configured():
             return []
-        endpoint = getattr(settings, 'openedx_student_insight_course_search_endpoint', '/api/ai-student-insight/v1/courses/search')
-        path = endpoint if endpoint.startswith('/') else f'/{endpoint}'
         body = {'query': query, 'exact_course_id': exact_course_id, 'limit': limit}
-        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        url = urljoin(self.base_url + '/', path.lstrip('/'))
-        headers = self._headers('POST', path, raw)
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.post(url, content=raw, headers=headers)
-            # Not all deployments have the future plugin endpoint yet. Treat 404 as
-            # unavailable and fall through to the public/standard Courses API.
-            if response.status_code == 404:
-                return []
-            response.raise_for_status()
-            data = response.json()
+        data = self._post_json(path=self.course_search_endpoint, body=body, operation='search Course CMS', timeout=self.timeout_seconds)
         return self._extract_course_results(data)
 
     def _search_courses_via_lms_courses_api(self, *, query: str, limit: int) -> list[dict[str, Any]]:
@@ -198,36 +303,26 @@ class OpenEdXStudentInsightClient:
         path = endpoint if endpoint.startswith('/') else f'/{endpoint}'
         if not path.endswith('/'):
             path += '/'
-        # Encode + as %2B. In query strings + means space; in path it is usually
-        # safe, but encoding avoids proxy/framework normalization surprises.
         url = urljoin(base + '/', f"{path.lstrip('/')}{quote(course_id, safe='')}/")
         headers = self._oauth_headers()
         with httpx.Client(timeout=settings.openedx_request_timeout_seconds) as client:
             response = client.get(url, headers=headers)
             if response.status_code == 404:
                 return None
-            response.raise_for_status()
+            self._raise_for_status_with_context(response, operation='get exact Course CMS', path=f'{path}{course_id}/')
             data = response.json()
         if isinstance(data, dict):
             return self._normalize_course_item(data)
         return None
 
     def search_courses(self, *, query: str, exact_course_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        """Search Open edX courses using API-first fallbacks.
-
-        Priority:
-        1. Student Insight/CMS plugin course search if installed.
-        2. Standard LMS Courses API.
-
-        Callers should treat an empty list as "API unavailable or no match" and
-        keep the page usable; this method is for auto-fill, not a hard dependency.
-        """
+        """Search Open edX courses using connector-first fallbacks."""
         cleaned_query = str(query or exact_course_id or '').strip()
         if not cleaned_query:
             return []
         limit = max(1, min(int(limit or 10), 50))
         try:
-            results = self._search_courses_via_student_insight(query=cleaned_query, exact_course_id=exact_course_id, limit=limit)
+            results = self._search_courses_via_connector(query=cleaned_query, exact_course_id=exact_course_id, limit=limit)
             if results:
                 return results[:limit]
         except Exception:
@@ -245,18 +340,13 @@ class OpenEdXStudentInsightClient:
         if not target:
             return None, None, 0, 'empty'
 
-        # 1) Preferred: Student Insight plugin exact search. This is HMAC based
-        # and should work without user-session cookies.
         results = self.search_courses(query=target, exact_course_id=target, limit=10)
         exact = [item for item in results if str(item.get('course_id') or '').strip().lower() == target.lower()]
         if len(exact) == 1:
-            return str(exact[0]['course_id']), exact[0].get('display_name'), 1, 'student_insight_course_search'
+            return str(exact[0]['course_id']), exact[0].get('display_name'), 1, 'openedx_connector_course_search'
         if len(exact) > 1:
-            return None, None, len(exact), 'student_insight_course_search'
+            return None, None, len(exact), 'openedx_connector_course_search'
 
-        # 2) Fallback: standard LMS course detail endpoint. This catches cases
-        # where /api/ai-student-insight/v1/courses/search is not deployed yet or
-        # an older plugin cannot parse CourseOverview.id correctly.
         try:
             item = self._get_course_via_lms_courses_api_exact(course_id=target)
             if item and str(item.get('course_id') or '').strip().lower() == target.lower():
@@ -264,93 +354,69 @@ class OpenEdXStudentInsightClient:
         except Exception:
             pass
 
-        return None, None, len(exact), 'openedx_api_unavailable_or_not_found'
+        return None, None, len(exact), 'openedx_connector_api_unavailable_or_not_found'
 
     def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> list[dict[str, Any]]:
-        """Fetch enrollment/progress/grade snapshots for a class from Open edX.
-
-        Contract:
-          POST /api/ai-student-insight/v1/class-analytics
-          {course_id, cohort_name, students:[{username, student_code, ...}]}
-
-        Returns a list aligned by username/student_code. The plugin is allowed to
-        return partial data; callers must keep the UI usable when fields are null.
-        """
         if not self.configured():
-            raise RuntimeError('Chưa cấu hình Open edX Student Insight plugin/HMAC để lấy tiến độ/điểm CMS')
-        path = self.class_analytics_endpoint if self.class_analytics_endpoint.startswith('/') else f'/{self.class_analytics_endpoint}'
+            raise RuntimeError('Chưa cấu hình Open edX Connector/HMAC để lấy tiến độ/điểm CMS')
         body = {'course_id': course_id, 'cohort_name': cohort_name, 'students': students}
-        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        url = urljoin(self.base_url + '/', path.lstrip('/'))
-        headers = self._headers('POST', path, raw)
-        with httpx.Client(timeout=max(self.timeout_seconds, 60)) as client:
-            response = client.post(url, content=raw, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        data = self._post_json(
+            path=self.class_analytics_endpoint,
+            body=body,
+            operation='lấy tiến độ/điểm CMS',
+            timeout=max(self.timeout_seconds, 60),
+        )
         if isinstance(data, dict):
             rows = data.get('results') or data.get('items') or data.get('students') or []
             return rows if isinstance(rows, list) else []
         if isinstance(data, list):
             return data
-        raise RuntimeError('Open edX Student Insight class analytics trả về dữ liệu không hợp lệ')
-
-
+        raise RuntimeError('Open edX Connector class analytics trả về dữ liệu không hợp lệ')
 
     def enroll_users(self, *, course_id: str, students: list[dict[str, Any]], teachers: list[dict[str, Any]] | None = None, mode: str | None = None, force: bool = False, cohort_name: str | None = None, create_missing: bool = False) -> list[dict[str, Any]]:
-        """Enroll students and add teachers to a mapped Course CMS.
-
-        Contract:
-          POST /api/ai-student-insight/v1/course-enrollment/enroll
-          {course_id, mode, force, cohort_name, create_missing, students:[...], teachers:[...]}
-
-        v25.9.16.3.2 allows account creation from AP data only when explicitly
-        requested by AI Server. Students are enrolled as learners; teachers are
-        granted Course Staff role by the plugin.
-        """
         if not self.configured():
-            raise RuntimeError('Chưa cấu hình Open edX Student Insight plugin/HMAC để enroll sinh viên vào Course CMS')
-        path = self.enrollment_enroll_endpoint if self.enrollment_enroll_endpoint.startswith('/') else f'/{self.enrollment_enroll_endpoint}'
+            raise RuntimeError('Chưa cấu hình Open edX Connector/HMAC để enroll sinh viên vào Course CMS')
+        default_mode = (
+            getattr(settings, 'openedx_connector_default_enrollment_mode', None)
+            or getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit')
+            or 'audit'
+        )
         body = {
             'course_id': course_id,
-            'mode': mode or getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit') or 'audit',
+            'mode': mode or default_mode,
             'force': bool(force),
             'cohort_name': cohort_name,
             'create_missing': bool(create_missing),
             'students': students,
             'teachers': teachers or [],
         }
-        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        url = urljoin(self.base_url + '/', path.lstrip('/'))
-        headers = self._headers('POST', path, raw)
-        with httpx.Client(timeout=max(self.timeout_seconds, 60)) as client:
-            response = client.post(url, content=raw, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        data = self._post_json(
+            path=self.enrollment_enroll_endpoint,
+            body=body,
+            operation='enroll Course CMS',
+            timeout=max(self.timeout_seconds, 60),
+        )
         if isinstance(data, dict):
             rows = data.get('results') or data.get('items') or data.get('students') or []
             return rows if isinstance(rows, list) else []
         if isinstance(data, list):
             return data
-        raise RuntimeError('Open edX Student Insight enrollment trả về dữ liệu không hợp lệ')
+        raise RuntimeError('Open edX Connector enrollment trả về dữ liệu không hợp lệ')
 
     def resolve_users(self, students: list[dict[str, Any]], *, create_missing: bool = False) -> list[dict[str, Any]]:
         if not self.configured():
-            raise RuntimeError('Chưa cấu hình Open edX Student Insight plugin/HMAC để resolve user')
-        path = self.endpoint if self.endpoint.startswith('/') else f'/{self.endpoint}'
+            raise RuntimeError('Chưa cấu hình Open edX Connector/HMAC để resolve/create user')
         body = {'students': students, 'create_missing': bool(create_missing)}
-        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        url = urljoin(self.base_url + '/', path.lstrip('/'))
-        headers = self._headers('POST', path, raw)
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.post(url, content=raw, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        data = self._post_json(
+            path=self.users_resolve_endpoint,
+            body=body,
+            operation='tạo/kiểm tra user CMS',
+            timeout=self.timeout_seconds,
+        )
         if isinstance(data, dict):
             results = data.get('results')
             if isinstance(results, list):
                 return results
-            # Accept the compact contract often used by simple Open edX plugins:
-            # {found: [{username/user_id/...}], missing: ["he..."]}.
             normalized: list[dict[str, Any]] = []
             found = data.get('found') or []
             if isinstance(found, list):
@@ -392,4 +458,9 @@ class OpenEdXStudentInsightClient:
             return []
         if isinstance(data, list):
             return data
-        raise RuntimeError('Open edX Student Insight trả về dữ liệu không hợp lệ')
+        raise RuntimeError('Open edX Connector trả về dữ liệu không hợp lệ')
+
+
+# Backward-compatible alias. Existing AcademicService imports keep working while
+# operators migrate env names from OPENEDX_STUDENT_INSIGHT_* to OPENEDX_CONNECTOR_*.
+OpenEdXStudentInsightClient = OpenEdXConnectorClient

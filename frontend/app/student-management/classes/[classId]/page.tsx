@@ -17,6 +17,7 @@ import {
   getAcademicClassSyncJobs,
 } from '../../../../lib/api'
 import { AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
+import { formatVNDateTime } from '../../../../lib/time'
 
 const PAGE_SIZE = 50
 
@@ -281,7 +282,7 @@ function ClassDetailContent() {
       setMessage(`Kiểm tra đồng bộ CMS hoàn tất: ${result?.updated || 0}/${result?.total || 0} sinh viên được cập nhật.${teacherMsg}${enrollMsg}`)
       await refreshStudents()
     } catch (error) {
-      setErrorModal(error instanceof Error ? `${error.message}. Kiểm tra lại LMS Student Insight plugin/HMAC nếu API CMS chưa sẵn sàng.` : 'Kiểm tra đồng bộ CMS thất bại')
+      setErrorModal(error instanceof Error ? `${error.message}. Kiểm tra lại openedx_connector_plugin/HMAC trên LMS nếu API CMS chưa sẵn sàng.` : 'Kiểm tra đồng bộ CMS thất bại')
     } finally {
       setChecking(false)
       setActiveJob(null)
@@ -363,7 +364,7 @@ function ClassDetailContent() {
       setMessage(`Cập nhật tiến độ/điểm CMS hoàn tất: ${result?.updated || 0}/${result?.total || 0} sinh viên được cập nhật.`)
       await refreshStudents()
     } catch (error) {
-      setErrorModal(error instanceof Error ? `${error.message}. Kiểm tra Course CMS mapping và Student Insight plugin/HMAC.` : 'Cập nhật tiến độ/điểm CMS thất bại')
+      setErrorModal(error instanceof Error ? `${error.message}. Kiểm tra Course CMS mapping và openedx_connector_plugin/HMAC.` : 'Cập nhật tiến độ/điểm CMS thất bại')
     } finally {
       setSyncingLearning(false)
       setActiveJob(null)
@@ -450,7 +451,7 @@ function ClassDetailContent() {
             <div><b>{jobTypeLabel(job.job_type)}</b><small>{job.progress_label || jobStatusLabel(job.status)}</small></div>
             <span className={isJobActive(job) ? 'status-pill warning' : job.status === 'failed' ? 'status-pill danger' : 'status-pill success'}>{jobStatusLabel(job.status)}</span>
             <span>{jobProgressPercent(job)}%</span>
-            <small>{job.updated_at ? new Date(job.updated_at).toLocaleString('vi-VN') : job.created_at ? new Date(job.created_at).toLocaleString('vi-VN') : ''}</small>
+            <small>{job.updated_at ? formatVNDateTime(job.updated_at) : job.created_at ? formatVNDateTime(job.created_at) : ''}</small>
           </div>)}
         </div>
       </div>}
@@ -462,7 +463,7 @@ function ClassDetailContent() {
         <div><span>Enrollment</span><b>{learningSummary?.counts?.enrolled || 0}</b><small>Course: {learningSummary?.openedx_course_id || classInfo?.openedx_course_id || 'N/A'}</small></div>
         <div><span>Đã vào học</span><b>{learningSummary?.active_count || 0}</b><small>Có hoạt động CMS</small></div>
         <div><span>Tiến độ TB</span><b>{percentLabel(learningSummary?.avg_progress_percent)}</b><small>Dữ liệu từ CMS</small></div>
-        <div><span>Điểm tổng TB</span><b>{percentLabel(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${new Date(learningSummary.last_synced_at).toLocaleString('vi-VN')}` : 'Chưa cập nhật'}</small></div>
+        <div><span>Điểm tổng TB</span><b>{percentLabel(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${formatVNDateTime(learningSummary.last_synced_at)}` : 'Chưa cập nhật'}</small></div>
       </div>
 
       <div className="academic-detail-grid compact-class-info">
@@ -508,9 +509,9 @@ function ClassDetailContent() {
               <td><b>{student.username}</b></td>
               <td>{student.email || 'N/A'}</td>
               <td>{student.openedx_username || 'N/A'}</td>
-              <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${new Date(student.last_resolved_at).toLocaleString('vi-VN')}` : ''}</small></td>
+              <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${formatVNDateTime(student.last_resolved_at)}` : ''}</small></td>
               <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>Tiến độ: {percentLabel(student.learning_progress_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span></td>
-              <td><b>{percentLabel(student.learning_grade_percent)}</b><small>{student.learning_last_synced_at ? `Cập nhật: ${new Date(student.learning_last_synced_at).toLocaleString('vi-VN')}` : ''}</small></td>
+              <td><b>{percentLabel(student.learning_grade_percent)}</b><small>{student.learning_last_synced_at ? `Cập nhật: ${formatVNDateTime(student.learning_last_synced_at)}` : ''}</small></td>
               {componentColumns.map((column) => <td key={`${student.id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(studentComponentScore(student, column))}</b></td>)}
             </tr>)}
           </tbody>

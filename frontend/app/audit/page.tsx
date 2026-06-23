@@ -7,6 +7,7 @@ import { AuditLogRow } from '../../types'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { PaginationControls } from '../../components/ui/PaginationControls'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { formatVNDateTime } from '../../lib/time'
 
 const actionLabel: Record<string, string> = {
   'question_bank.material.upload.async': 'Tách tài liệu',
@@ -24,7 +25,7 @@ function actionText(value: string) { return actionLabel[value] || value.replace(
 function errorText(v?: string | null) {
   return v === 'USER_ERROR' ? 'Do người dùng/cấu hình' : v === 'SYSTEM_ERROR' ? 'Do hệ thống' : v === 'EXTERNAL_SERVICE_ERROR' ? 'Dịch vụ ngoài' : v === 'VALIDATION_ERROR' ? 'Dữ liệu đầu vào' : v === 'AUTH_ERROR' ? 'Phân quyền' : '—'
 }
-function formatDate(value?: string | null) { try { return value ? new Date(value).toLocaleString('vi-VN') : '—' } catch { return value || '—' } }
+function formatDate(value?: string | null) { return formatVNDateTime(value) }
 function actorLabel(row: AuditLogRow) { return row.actor_id === 'system' ? 'Hệ thống' : row.actor_id || '—' }
 function targetLabel(row: AuditLogRow) { return [row.target_type, row.target_id].filter(Boolean).join(' ') || '—' }
 
