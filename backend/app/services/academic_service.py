@@ -2341,19 +2341,32 @@ class AcademicService:
             or_(OpenEdXUserMapping.openedx_username.isnot(None), OpenEdXUserMapping.openedx_user_id.isnot(None)),
         ).order_by(AcademicStudent.username.asc()).limit(limit)
         rows = query.all()
+        matched_student_count = len(rows)
         if not force:
             rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not snapshot or snapshot.enrollment_status not in {'enrolled'}]
+
+        class_student_count = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
+        if int(class_student_count) > 0 and matched_student_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail='Chưa có sinh viên nào được map user CMS/Open edX chính xác. Hãy chạy Tạo/kiểm tra user CMS trước rồi mới Enrollment Course CMS.',
+            )
 
         teacher_payload = self._teacher_payload_for_class(class_id) if getattr(settings, 'academic_auto_add_teachers_to_course', True) else []
         if not rows and not teacher_payload:
             summary = self._learning_summary_for_class_course(class_id, course_id)
-            return {'ok': True, 'class_id': class_id, 'openedx_course_id': course_id, 'total': 0, 'updated': 0, 'counts': {}, 'message': 'Không có sinh viên/giảng viên cần xử lý Course CMS', 'learning_summary': summary, 'teachers': {'total': 0, 'updated': 0, 'counts': {}}}
+            return {'ok': True, 'class_id': class_id, 'openedx_course_id': course_id, 'total': 0, 'updated': 0, 'processed': 0, 'verified': 0, 'counts': {}, 'message': 'Không có sinh viên/giảng viên cần xử lý Course CMS', 'learning_summary': summary, 'teachers': {'total': 0, 'updated': 0, 'processed': 0, 'verified': 0, 'counts': {}}}
         client = OpenEdXConnectorClient()
         batch_size = max(1, min(getattr(settings, 'openedx_connector_max_batch_size', settings.openedx_student_insight_max_batch_size), 100))
         counts: dict[str, int] = {}
+        processed = 0
         updated = 0
+        verified = 0
+        failed_messages: list[str] = []
         teacher_counts: dict[str, int] = {}
+        teacher_processed = 0
         teacher_updated = 0
+        teacher_verified = 0
         enrollment_mode = (mode or getattr(settings, 'openedx_connector_default_enrollment_mode', getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit')) or 'audit').strip() or 'audit'
         create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
 
@@ -2389,11 +2402,19 @@ class AcademicService:
                         'message': 'Plugin không trả kết quả enrollment cho sinh viên này',
                     }
                 snapshot = self._upsert_enrollment_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_connector_enrollment')
-                status_value = str(result.get('status') or result.get('enrollment_status') or snapshot.enrollment_status or 'unknown')
-                if status_value in {'already_enrolled', 'created', 'reactivated'}:
-                    status_value = 'enrolled'
+                raw_status = str(result.get('status') or result.get('enrollment_status') or snapshot.enrollment_status or 'unknown').strip().lower()
+                is_enrolled = _boolish(result.get('is_enrolled')) or str(result.get('enrollment_status') or '').strip().lower() == 'enrolled'
+                status_value = 'enrolled' if is_enrolled else raw_status
                 counts[status_value] = counts.get(status_value, 0) + 1
-                updated += 1
+                processed += 1
+                if is_enrolled:
+                    updated += 1
+                    if result.get('verified_after_write') is not False:
+                        verified += 1
+                else:
+                    message = str(result.get('message') or '').strip()
+                    if message and len(failed_messages) < 5:
+                        failed_messages.append(f"{student.username}: {message}")
             self.db.flush()
 
         # Add teachers to Course Staff. Teachers are not stored in student learning
@@ -2424,10 +2445,24 @@ class AcademicService:
                     teacher.updated_at = datetime.utcnow()
                     self.db.add(teacher)
                     status_value = str(result.get('status') or result.get('enrollment_status') or 'unknown')
+                    teacher_success = status_value in {'already_course_staff', 'course_staff_added'} or str(result.get('course_role') or '').strip().lower() == 'staff'
                     teacher_counts[status_value] = teacher_counts.get(status_value, 0) + 1
                     counts[f'teacher_{status_value}'] = counts.get(f'teacher_{status_value}', 0) + 1
-                    teacher_updated += 1
+                    teacher_processed += 1
+                    if teacher_success:
+                        teacher_updated += 1
+                        if result.get('verified_after_write') is not False:
+                            teacher_verified += 1
+                    else:
+                        message = str(result.get('message') or '').strip()
+                        if message and len(failed_messages) < 5:
+                            failed_messages.append(f"GV {username}: {message}")
                 self.db.flush()
+
+        if rows and updated == 0:
+            self.db.commit()
+            detail = '; '.join(failed_messages) if failed_messages else f"counts={counts}"
+            raise RuntimeError(f'Enrollment Course CMS không có sinh viên nào được xác nhận enrolled trên Open edX sau khi gọi connector. {detail}')
 
         self.db.commit()
         summary = self._learning_summary_for_class_course(class_id, course_id)
@@ -2436,11 +2471,13 @@ class AcademicService:
             'class_id': class_id,
             'openedx_course_id': course_id,
             'total': len(rows),
+            'processed': processed,
             'updated': updated,
+            'verified': verified,
             'counts': counts,
-            'message': 'Đã tự enrollment sinh viên đã đồng bộ CMS và gán giảng viên vào Course CMS',
+            'message': f'Enrollment Course CMS hoàn tất: {updated}/{len(rows)} sinh viên được Open edX xác nhận enrolled; {teacher_updated}/{len(teacher_payload)} giảng viên được gán Course Staff.',
             'learning_summary': summary,
-            'teachers': {'total': len(teacher_payload), 'updated': teacher_updated, 'counts': teacher_counts},
+            'teachers': {'total': len(teacher_payload), 'processed': teacher_processed, 'updated': teacher_updated, 'verified': teacher_verified, 'counts': teacher_counts},
         }
 
     def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000) -> dict[str, Any]:

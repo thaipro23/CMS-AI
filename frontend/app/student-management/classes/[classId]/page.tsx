@@ -336,7 +336,10 @@ function ClassDetailContent() {
       const finished = await waitForSyncJob(queued)
       if (finished.status === 'failed') throw new Error(finished.error_message || 'Enrollment CMS thất bại')
       const result = finished.result_json as any
-      setMessage(`Course CMS hoàn tất: ${result?.updated || 0}/${result?.total || 0} sinh viên được enroll; ${result?.teachers?.updated || 0}/${result?.teachers?.total || 0} giảng viên được tạo/gán Course Staff.`)
+      const verified = result?.verified ?? result?.updated ?? 0
+      const processed = result?.processed ?? result?.total ?? 0
+      const teacherVerified = result?.teachers?.verified ?? result?.teachers?.updated ?? 0
+      setMessage(`Course CMS hoàn tất: ${verified}/${result?.total || 0} sinh viên được Open edX xác nhận enrolled; đã xử lý ${processed}. Giảng viên: ${teacherVerified}/${result?.teachers?.total || 0} được xác nhận Course Staff.`)
       await refreshStudents()
     } catch (error) {
       setErrorModal(error instanceof Error ? `${error.message}. Chỉ sinh viên đã đồng bộ CMS và lớp đã map Course CMS mới được enroll.` : 'Enrollment CMS thất bại')
