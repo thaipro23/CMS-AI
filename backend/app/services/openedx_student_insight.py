@@ -4,7 +4,8 @@ import hashlib
 import hmac
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from decimal import Decimal
 from typing import Any
 from urllib.parse import quote, urljoin
 
@@ -31,6 +32,18 @@ def mask_email(value: Any) -> str | None:
     else:
         masked = f'{name[:2]}***{name[-1:]}'
     return f'{masked}@{domain}'
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    return str(value)
 
 
 def _path(value: str | None, default: str) -> str:
@@ -220,7 +233,7 @@ class OpenEdXConnectorClient:
         legacy = _legacy_path(primary)
         if legacy_fallback and legacy != primary:
             candidates.append(legacy)
-        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        raw = json.dumps(body, ensure_ascii=False, separators=(',', ':'), default=_json_default).encode('utf-8')
         last_404: httpx.Response | None = None
         for candidate_path in candidates:
             url = urljoin(self.base_url + '/', candidate_path.lstrip('/'))

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 from sqlalchemy.orm import Session
 from app.core.rbac import UserContext
 from app.models.audit import AuditLog
@@ -57,9 +60,19 @@ def _redact_metadata(value: Any) -> Any:
             else:
                 result[key] = _redact_metadata(item)
         return result
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple, set)):
         return [_redact_metadata(item) for item in value]
-    return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def log_audit(

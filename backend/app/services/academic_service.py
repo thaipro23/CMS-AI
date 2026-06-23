@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -146,6 +147,22 @@ def _validation_result(checks: list[dict[str, Any]], *, suggested: str | None = 
         'parsed_course': parsed,
     }
 
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
 def _safe_mapping_raw(result: dict[str, Any] | None) -> dict[str, Any]:
     result = result or {}
     safe: dict[str, Any] = {}
@@ -155,7 +172,7 @@ def _safe_mapping_raw(result: dict[str, Any] | None) -> dict[str, Any]:
         elif key in {'full_name', 'name', 'phone'}:
             safe[key] = '***REDACTED***'
         else:
-            safe[key] = value
+            safe[key] = _json_safe_value(value)
     return safe
 
 
@@ -1968,7 +1985,7 @@ class AcademicService:
         status_value, _method, _confidence, _note = _derive_mapping_status(result)
         existing = teacher.metadata_json if isinstance(teacher.metadata_json, dict) else {}
         teacher.metadata_json = {
-            **existing,
+            **_json_safe_value(existing),
             'cms_user': {
                 'status': status_value,
                 'openedx_user_id': str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or None,
@@ -2230,7 +2247,7 @@ class AcademicService:
         snapshot.completed_blocks = self._int_or_none(result.get('completed_blocks', progress.get('completed_blocks')))
         snapshot.total_blocks = self._int_or_none(result.get('total_blocks', progress.get('total_blocks')))
         snapshot.last_activity_at = self._dt_or_none(result.get('last_activity_at') or progress.get('last_activity_at'))
-        snapshot.raw_json = {'source': source, 'payload': result}
+        snapshot.raw_json = {'source': source, 'payload': _json_safe_value(result)}
         snapshot.learning_synced_at = now
         snapshot.last_synced_at = now
         snapshot.updated_at = now
@@ -2266,7 +2283,7 @@ class AcademicService:
         snapshot.enrollment_status = status_value[:50]
         snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or snapshot.enrollment_mode
         existing_raw = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
-        snapshot.raw_json = {**existing_raw, 'enrollment_source': source, 'enrollment_payload': result}
+        snapshot.raw_json = {**_json_safe_value(existing_raw), 'enrollment_source': source, 'enrollment_payload': _json_safe_value(result)}
         snapshot.enrollment_synced_at = now
         if snapshot.last_synced_at is None:
             snapshot.last_synced_at = now
@@ -2389,7 +2406,7 @@ class AcademicService:
                     result = result_by_username.get(username) or {'username': username, 'status': 'unknown', 'message': 'Plugin không trả kết quả gán giảng viên'}
                     existing = teacher.metadata_json if isinstance(teacher.metadata_json, dict) else {}
                     teacher.metadata_json = {
-                        **existing,
+                        **_json_safe_value(existing),
                         'course_staff': {
                             'openedx_course_id': course_id,
                             'status': str(result.get('status') or result.get('enrollment_status') or 'unknown'),
