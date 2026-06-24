@@ -17,17 +17,17 @@ type NavItem = {
 }
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', desc: 'Dashboard', icon: '⌁', group: 'work' },
-  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, bài', icon: '▦', group: 'work' },
-  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Map Open edX', icon: '◈', group: 'work' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Release & rollback', icon: '◷', group: 'work' },
+  { href: '/bank', label: 'Tổng quan', desc: 'Số liệu & việc cần xử lý', icon: '⌁', group: 'work' },
+  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, phiên bản', icon: '▦', group: 'work' },
+  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Đưa bài kiểm tra lên CMS', icon: '◈', group: 'work' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Đã tạo & khôi phục', icon: '◷', group: 'work' },
   { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_settings' },
   { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'operations', permission: 'manage_settings' },
   { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_settings' },
-  { href: '/student-management', label: 'Môn · Lớp · SV', desc: 'AP roster, CMS sync', icon: '◎', group: 'operations' },
-  { href: '/jobs', label: 'Tiến trình', desc: 'Job đang chạy', icon: '⚙', group: 'operations' },
-  { href: '/audit', label: 'Nhật ký', desc: 'Theo dõi thao tác', icon: '☷', group: 'operations' },
-  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo scope', icon: '◎', group: 'admin', permission: 'view_questions' },
+  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'operations' },
+  { href: '/jobs', label: 'Tiến trình', desc: 'Việc đang xử lý', icon: '⚙', group: 'operations' },
+  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'operations' },
+  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'admin', permission: 'view_questions' },
   { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'admin', permission: 'manage_settings' },
 ]
 
@@ -72,7 +72,7 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
     : '/student-management'
 
   const items: Array<{ label: string; href?: string }> = [
-    { label: 'Student Management', href: '/student-management' },
+    { label: 'Quản lý sinh viên', href: '/student-management' },
     { label: 'Môn', href: pathname === '/student-management' ? undefined : '/student-management' },
   ]
 
@@ -92,8 +92,8 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
-    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz Open edX</span></div>
-    <div className="footer-links"><span>v25.9.16.5.3</span></div>
+    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz trên CMS</span></div>
+    <div className="footer-links"><span>v25.9.16.5.23</span></div>
   </footer>
 }
 
@@ -158,7 +158,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <aside className="sidebar product-sidebar" aria-label="Điều hướng chính">
       <Link href="/bank" className="brand product-brand" aria-label="Open edX AI Server">
         <div className="brand-mark product-brand-mark">AI</div>
-        <div><b>AI Server</b><small>Question Bank · Open edX</small></div>
+        <div><b>AI Server</b><small>Ngân hàng đề · Open edX</small></div>
       </Link>
 
       <nav className="side-nav grouped-side-nav product-nav">
@@ -191,7 +191,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar' : 'workspace-topbar workspace-topbar-minimal'}>
         <div className="workspace-topbar-main">
           <h1>{currentTitle}</h1>
-          {studentTopbar && <nav className="workspace-breadcrumb" aria-label="Student Management breadcrumb">
+          {studentTopbar && <nav className="workspace-breadcrumb" aria-label="Điều hướng Quản lý sinh viên">
             {studentTopbar.map((item, index) => <span key={`${item.label}-${index}`} className="workspace-breadcrumb-item">
               {index > 0 && <span className="workspace-breadcrumb-separator">/</span>}
               {item.href ? <Link href={item.href}>{item.label}</Link> : <b>{item.label}</b>}

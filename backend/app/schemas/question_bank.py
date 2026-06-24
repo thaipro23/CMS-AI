@@ -403,6 +403,7 @@ class MaterialDeleteOut(BaseModel):
     jobs_detached_count: int = 0
     file_deleted: bool = False
     file_delete_skipped: bool = False
+    auto_retire_result: dict | None = None
     message: str
 
 class MaterialUploadOut(BaseModel):
@@ -415,6 +416,7 @@ class MaterialUploadOut(BaseModel):
     diff_required: bool = False
     diff_base_bank_version_id: str | None = None
     document_change_state: str | None = None
+    auto_retire_result: dict | None = None
     message: str
 
 

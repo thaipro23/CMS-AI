@@ -16,6 +16,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table('academic_student_learning_snapshots'):
+        return
     op.create_table(
         'academic_student_learning_snapshots',
         sa.Column('id', sa.String(), primary_key=True),

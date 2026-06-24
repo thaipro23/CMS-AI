@@ -1087,6 +1087,7 @@ export type MaterialUploadResult = {
   diff_required?: boolean
   diff_base_bank_version_id?: string | null
   document_change_state?: string | null
+  auto_retire_result?: Record<string, any> | null
   message: string
 }
 

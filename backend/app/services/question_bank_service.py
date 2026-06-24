@@ -222,6 +222,40 @@ def bank_text_similarity(a: str | None, b: str | None) -> float:
     return SequenceMatcher(None, a_norm[:12000], b_norm[:12000]).ratio()
 
 
+
+
+AUTO_RETIRE_MIN_EVIDENCE_CHARS = 60
+AUTO_RETIRE_STRONG_CHUNK_SIMILARITY = 0.82
+AUTO_RETIRE_TOKEN_OVERLAP_THRESHOLD = 0.58
+AUTO_RETIRE_MIN_TOKEN_COUNT = 8
+
+
+def _evidence_tokens(value: str | None) -> set[str]:
+    text = normalize_question_text_for_diff(value)
+    if not text:
+        return set()
+    return {token for token in text.split() if len(token) >= 3}
+
+
+def _token_overlap_ratio(evidence: str | None, material: str | None) -> float:
+    evidence_tokens = _evidence_tokens(evidence)
+    if len(evidence_tokens) < AUTO_RETIRE_MIN_TOKEN_COUNT:
+        return 0.0
+    material_tokens = _evidence_tokens(material)
+    if not material_tokens:
+        return 0.0
+    return len(evidence_tokens & material_tokens) / max(len(evidence_tokens), 1)
+
+
+def _bounded_similarity(a: str | None, b: str | None, *, max_chars: int = 2400) -> float:
+    a_norm = normalize_question_text_for_diff(a)[:max_chars]
+    b_norm = normalize_question_text_for_diff(b)[:max_chars]
+    if not a_norm or not b_norm:
+        return 0.0
+    if a_norm == b_norm:
+        return 1.0
+    return SequenceMatcher(None, a_norm, b_norm).ratio()
+
 def stable_concept_identity(question: Question) -> str:
     return slugify(question.concept_key or question.concept_title or question.topic or question.learning_objective or 'unknown-concept', 'concept')
 
@@ -572,6 +606,7 @@ class VersionedQuestionBankService:
         chapter_map: dict[str, SubjectChapter] = {}
         bank_map: dict[str, QuestionBankVersion] = {}
         material_map: dict[str, LearningMaterialVersion] = {}
+        chunk_map: dict[str, str] = {}
         concept_map: dict[str, ConceptVersion] = {}
         family_map: dict[str, BankQuestionFamily] = {}
         counts = {'chapters': 0, 'bank_versions': 0, 'materials': 0, 'chunks': 0, 'concepts': 0, 'families': 0, 'questions': 0, 'releases_not_cloned': 0}
@@ -652,7 +687,7 @@ class VersionedQuestionBankService:
                 material_map[src_mat.id] = dst_mat
                 counts['materials'] += 1
                 for src_chunk in self.db.query(MaterialChunk).filter(MaterialChunk.material_version_id == src_mat.id).order_by(MaterialChunk.chunk_index.asc()).all():
-                    self.db.add(MaterialChunk(
+                    dst_chunk = MaterialChunk(
                             id=str(uuid.uuid4()),
                             material_version_id=dst_mat.id,
                             bank_version_id=dst_bv.id,
@@ -666,7 +701,9 @@ class VersionedQuestionBankService:
                             page_number=src_chunk.page_number,
                             source_ref=src_chunk.source_ref,
                             content_hash=src_chunk.content_hash,
-                    ))
+                    )
+                    self.db.add(dst_chunk)
+                    chunk_map[src_chunk.id] = dst_chunk.id
                     counts['chunks'] += 1
 
             for src_concept in self.db.query(ConceptVersion).filter(ConceptVersion.bank_version_id == src_bv.id).order_by(ConceptVersion.created_at.asc()).all():
@@ -767,7 +804,7 @@ class VersionedQuestionBankService:
                     source_page=src_q.source_page,
                     source_timestamp_start=src_q.source_timestamp_start,
                     source_timestamp_end=src_q.source_timestamp_end,
-                    source_chunk_id=src_q.source_chunk_id,
+                    source_chunk_id=join_source_chunk_ids([chunk_map.get(cid, cid) for cid in split_source_chunk_ids(src_q.source_chunk_id)]),
                     source_node_id=f'bank-version:{dst_bv.id}',
                     source_node_title=f'Clone từ {source.code}',
                     chapter_node_id=dst_chapter.id,
@@ -1375,6 +1412,202 @@ class VersionedQuestionBankService:
     def _material_hash_set(self, bank_version_id: str) -> set[str]:
         return {r.content_hash for r in self.db.query(LearningMaterialVersion.content_hash).filter(LearningMaterialVersion.bank_version_id == bank_version_id, LearningMaterialVersion.content_hash.isnot(None)).all() if r.content_hash}
 
+    def _active_material_chunk_rows(self, bank_version_id: str) -> list[MaterialChunk]:
+        return (
+            self.db.query(MaterialChunk)
+            .join(LearningMaterialVersion, LearningMaterialVersion.id == MaterialChunk.material_version_id)
+            .filter(
+                MaterialChunk.bank_version_id == bank_version_id,
+                LearningMaterialVersion.status != 'deleted',
+            )
+            .order_by(MaterialChunk.material_version_id.asc(), MaterialChunk.chunk_index.asc(), MaterialChunk.id.asc())
+            .all()
+        )
+
+    def _material_chunks_by_ids(self, ids: list[str]) -> list[MaterialChunk]:
+        clean_ids = [value for value in split_source_chunk_ids(ids) if value]
+        if not clean_ids:
+            return []
+        return self.db.query(MaterialChunk).filter(MaterialChunk.id.in_(clean_ids)).all()
+
+    def _question_evidence_snippets(self, question: Question) -> list[dict[str, str]]:
+        snippets: list[dict[str, str]] = []
+        def add(label: str, value: str | None) -> None:
+            text = (value or '').strip()
+            if len(normalize_question_text_for_diff(text)) >= AUTO_RETIRE_MIN_EVIDENCE_CHARS:
+                snippets.append({'label': label, 'text': text})
+
+        add('source_excerpt', question.source_excerpt)
+        add('source_evidence', question.source_evidence)
+        add('explanation', question.explanation)
+        add('learning_objective', question.learning_objective)
+        for chunk in self._material_chunks_by_ids(split_source_chunk_ids(question.source_chunk_id)):
+            add(f'chunk:{chunk.id}', chunk.content)
+
+        if question.previous_question_id:
+            previous = self.db.get(Question, question.previous_question_id)
+            if previous:
+                add('previous_source_excerpt', previous.source_excerpt)
+                add('previous_source_evidence', previous.source_evidence)
+                add('previous_explanation', previous.explanation)
+                for chunk in self._material_chunks_by_ids(split_source_chunk_ids(previous.source_chunk_id)):
+                    add(f'previous_chunk:{chunk.id}', chunk.content)
+
+        # Deduplicate by normalized text while preserving order. This keeps the
+        # recheck deterministic and avoids comparing the same long excerpt many times.
+        seen: set[str] = set()
+        unique: list[dict[str, str]] = []
+        for item in snippets:
+            key = normalize_question_text_for_diff(item.get('text'))[:1200]
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique[:12]
+
+    def _question_still_supported_by_current_materials(self, question: Question, current_chunks: list[MaterialChunk]) -> dict[str, Any]:
+        if not current_chunks:
+            return {'supported': False, 'confidence': 1.0, 'reason': 'no_current_material_chunks'}
+
+        current_hashes = {chunk.content_hash for chunk in current_chunks if chunk.content_hash}
+        referenced_chunks = self._material_chunks_by_ids(split_source_chunk_ids(question.source_chunk_id))
+        if question.previous_question_id:
+            previous = self.db.get(Question, question.previous_question_id)
+            if previous:
+                referenced_chunks.extend(self._material_chunks_by_ids(split_source_chunk_ids(previous.source_chunk_id)))
+        for chunk in referenced_chunks:
+            if chunk.content_hash and chunk.content_hash in current_hashes:
+                return {'supported': True, 'confidence': 1.0, 'reason': 'source_chunk_hash_still_exists', 'matched_chunk_hash': chunk.content_hash}
+
+        evidence_items = self._question_evidence_snippets(question)
+        if not evidence_items:
+            # Do not auto-delete rows that have no usable evidence. They may be
+            # legacy questions generated before source evidence was captured.
+            return {'supported': True, 'confidence': 0.35, 'reason': 'no_strong_evidence_keep_safe'}
+
+        material_text = normalize_question_text_for_diff('\n\n'.join(chunk.content or '' for chunk in current_chunks))
+        best: dict[str, Any] = {'supported': False, 'confidence': 0.0, 'reason': 'evidence_not_found'}
+        for item in evidence_items:
+            evidence_text = item['text']
+            evidence_norm = normalize_question_text_for_diff(evidence_text)
+            if len(evidence_norm) >= AUTO_RETIRE_MIN_EVIDENCE_CHARS and evidence_norm in material_text:
+                return {'supported': True, 'confidence': 1.0, 'reason': 'evidence_exact_text_found', 'evidence_label': item['label']}
+
+            # Fast token-overlap check against all current material text catches
+            # renamed/rechunked documents without relying on file names.
+            overlap = _token_overlap_ratio(evidence_text, material_text)
+            if overlap > float(best.get('confidence') or 0):
+                best = {'supported': overlap >= AUTO_RETIRE_TOKEN_OVERLAP_THRESHOLD, 'confidence': round(overlap, 4), 'reason': 'evidence_token_overlap', 'evidence_label': item['label']}
+            if overlap >= AUTO_RETIRE_TOKEN_OVERLAP_THRESHOLD:
+                return best
+
+            # More expensive but bounded chunk-level similarity is a fallback for
+            # short paragraphs with reordered punctuation/formatting.
+            for chunk in current_chunks[:500]:
+                score = _bounded_similarity(evidence_text, chunk.content)
+                if score > float(best.get('confidence') or 0):
+                    best = {'supported': score >= AUTO_RETIRE_STRONG_CHUNK_SIMILARITY, 'confidence': round(score, 4), 'reason': 'evidence_chunk_similarity', 'evidence_label': item['label'], 'matched_chunk_id': chunk.id}
+                if score >= AUTO_RETIRE_STRONG_CHUNK_SIMILARITY:
+                    return best
+        return best
+
+    def auto_retire_carry_over_questions_for_changed_materials(self, *, bank_version_id: str, actor: str | None = None, reason: str | None = None, commit: bool = True) -> dict[str, Any]:
+        """Retire cloned/carry-over questions whose source evidence disappeared.
+
+        Product rule for subject-version clone: cloned questions remain approved.
+        Only when materials in the cloned version change do we automatically
+        re-check approved carry-over questions against the entire current material
+        set of that bank version. File names are ignored: if the same text moved
+        to another file, the question is retained.
+        """
+        version = self.db.get(QuestionBankVersion, bank_version_id)
+        if not version:
+            raise ValueError('Không tìm thấy Bank Version')
+        if not version.based_on_version_id:
+            return {'ok': True, 'bank_version_id': bank_version_id, 'skipped': True, 'reason': 'not_cloned_bank_version', 'retired_count': 0, 'kept_count': 0}
+
+        current_chunks = self._active_material_chunk_rows(bank_version_id)
+        candidates = self.db.query(Question).filter(
+            Question.bank_version_id == bank_version_id,
+            Question.is_carry_over.is_(True),
+            Question.status.in_(['approved', 'published']),
+            or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
+            Question.is_duplicate.is_(False),
+        ).order_by(Question.created_at.asc(), Question.id.asc()).all()
+
+        now = datetime.utcnow()
+        retired: list[dict[str, Any]] = []
+        kept: list[dict[str, Any]] = []
+        safe_skipped: list[dict[str, Any]] = []
+        for question in candidates:
+            support = self._question_still_supported_by_current_materials(question, current_chunks)
+            if support.get('supported'):
+                item = {'question_id': question.id, 'reason': support.get('reason'), 'confidence': support.get('confidence')}
+                if support.get('reason') == 'no_strong_evidence_keep_safe':
+                    safe_skipped.append(item)
+                else:
+                    kept.append(item)
+                continue
+
+            question.status = 'retired'
+            question.is_retired = True
+            question.retired_at = now
+            question.retired_reason = reason or 'auto_retired_material_source_missing'
+            question.quality_flags = list(question.quality_flags or []) + ['auto_retired_material_source_missing']
+            # Keep Open edX lifecycle fields untouched; this bank version has not
+            # been republished yet. Publish flow will ignore retired questions.
+            retired.append({'question_id': question.id, 'reason': support.get('reason'), 'confidence': support.get('confidence')})
+
+        release_removed = 0
+        if retired:
+            retired_ids = [row['question_id'] for row in retired]
+            draft_release_ids = [
+                row.id for row in self.db.query(QuestionBankRelease.id).filter(
+                    QuestionBankRelease.bank_version_id == bank_version_id,
+                    QuestionBankRelease.status.notin_(['published', 'archived', 'deprecated']),
+                ).all()
+            ]
+            if draft_release_ids:
+                release_removed = int(self.db.query(BankReleaseQuestion).filter(
+                    BankReleaseQuestion.bank_release_id.in_(draft_release_ids),
+                    BankReleaseQuestion.question_id.in_(retired_ids),
+                ).delete(synchronize_session=False) or 0)
+
+        meta = dict(version.metadata_json or {})
+        history = list(meta.get('auto_material_recheck_history') or [])
+        summary = {
+            'checked_at': now.isoformat(),
+            'actor': actor,
+            'trigger': reason or meta.get('diff_trigger') or 'material_changed_after_clone',
+            'candidate_count': len(candidates),
+            'kept_count': len(kept),
+            'safe_skipped_count': len(safe_skipped),
+            'retired_count': len(retired),
+            'release_removed_count': release_removed,
+            'current_material_chunk_count': len(current_chunks),
+        }
+        history.append(summary)
+        meta.update({
+            'document_change_state': 'auto_rechecked_after_material_change',
+            'diff_required': False,
+            'last_auto_material_recheck': summary,
+            'auto_material_recheck_history': history[-10:],
+        })
+        version.metadata_json = meta
+
+        if commit:
+            self.db.commit()
+            self._safe_refresh_bank_version_stats(bank_version_id)
+        return {
+            'ok': True,
+            'bank_version_id': bank_version_id,
+            **summary,
+            'kept_question_ids': [row['question_id'] for row in kept],
+            'safe_skipped_question_ids': [row['question_id'] for row in safe_skipped],
+            'retired_question_ids': [row['question_id'] for row in retired],
+            'message': f'Đã kiểm tra lại câu hỏi clone: giữ {len(kept) + len(safe_skipped)}, tự loại {len(retired)} câu không còn căn cứ trong tài liệu hiện tại.',
+        }
+
     def _concept_map(self, bank_version_id: str) -> dict[str, ConceptVersion]:
         return {row.concept_key: row for row in self.db.query(ConceptVersion).filter(ConceptVersion.bank_version_id == bank_version_id).all()}
 
@@ -1877,7 +2110,17 @@ class VersionedQuestionBankService:
         version.metadata_json = meta
         self.db.commit()
         self.db.refresh(material)
-        self._safe_refresh_chapter_stats(version.chapter_id)
+        auto_retire_result = None
+        if diff_required:
+            auto_retire_result = self.auto_retire_carry_over_questions_for_changed_materials(
+                bank_version_id=version.id,
+                actor=actor,
+                reason='material_uploaded_after_clone',
+                commit=True,
+            )
+        else:
+            self._safe_refresh_chapter_stats(version.chapter_id)
+        self.db.refresh(version)
         return {
             'ok': True,
             'reused_existing': False,
@@ -1885,10 +2128,11 @@ class VersionedQuestionBankService:
             'chunks_created': chunks_created,
             'tokens_indexed': tokens_indexed,
             'source_types': sorted(source_types),
-            'diff_required': diff_required,
+            'diff_required': False if auto_retire_result else diff_required,
             'diff_base_bank_version_id': version.based_on_version_id if diff_required else None,
             'document_change_state': version.metadata_json.get('document_change_state') if version.metadata_json else None,
-            'message': 'Tải tài liệu và tách nội dung vào Bank Version thành công.' + (' Version này clone từ kỳ trước nên đã đánh dấu cần kiểm tra khác biệt tài liệu.' if diff_required else ''),
+            'auto_retire_result': auto_retire_result,
+            'message': 'Tải tài liệu và tách nội dung vào Bank Version thành công.' + (f' {auto_retire_result.get("message")}' if auto_retire_result else ''),
         }
 
 
@@ -1916,8 +2160,18 @@ class VersionedQuestionBankService:
 
         result = self._soft_delete_material_version(material, actor=actor, reason='audit_lineage_required')
         self.db.commit()
-        self._safe_refresh_chapter_stats(version.chapter_id)
-        result['message'] = 'Đã xóa tài liệu khỏi bài. File/chunk đã được dọn; metadata được giữ để bảo toàn lịch sử câu hỏi/release.'
+        auto_retire_result = None
+        if version.based_on_version_id:
+            auto_retire_result = self.auto_retire_carry_over_questions_for_changed_materials(
+                bank_version_id=version.id,
+                actor=actor,
+                reason='material_deleted_after_clone',
+                commit=True,
+            )
+        else:
+            self._safe_refresh_chapter_stats(version.chapter_id)
+        result['auto_retire_result'] = auto_retire_result
+        result['message'] = 'Đã xóa tài liệu khỏi bài. File/chunk đã được dọn; metadata được giữ để bảo toàn lịch sử câu hỏi/release.' + (f' {auto_retire_result.get("message")}' if auto_retire_result else '')
         return result
 
     def bank_material_cleanup_health(self) -> dict[str, Any]:

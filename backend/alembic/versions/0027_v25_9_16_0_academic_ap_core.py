@@ -29,6 +29,8 @@ def _ensure_alembic_version_length() -> None:
 
 
 def upgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table('academic_terms'):
+        return
     _ensure_alembic_version_length()
 
     op.create_table(

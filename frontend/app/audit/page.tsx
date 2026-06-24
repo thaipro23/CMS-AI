@@ -11,11 +11,11 @@ import { formatVNDateTime } from '../../lib/time'
 
 const actionLabel: Record<string, string> = {
   'question_bank.material.upload.async': 'Tách tài liệu',
-  'question_bank.material.upload.job': 'Tạo job upload tài liệu',
+  'question_bank.material.upload.job': 'Đưa tài liệu vào hàng đợi xử lý',
   'question_bank.bank_version.generate.async': 'Tạo câu hỏi bằng AI',
-  'question_bank.bank_version.generate.job': 'Tạo job generate',
-  'question_bank.release.publish_openedx': 'Publish release',
-  'question_bank.release.quiz.create': 'Tạo Quiz Open edX',
+  'question_bank.bank_version.generate.job': 'Đưa việc tạo câu hỏi vào hàng đợi',
+  'question_bank.release.publish_openedx': 'Đưa bộ đề lên CMS',
+  'question_bank.release.quiz.create': 'Tạo Quiz trên CMS',
   'question_bank.version.question.review': 'Duyệt/Từ chối câu hỏi',
   'question_bank.version.question.update': 'Sửa câu hỏi',
   'rbac.assignment.create': 'Gán quyền',
@@ -69,7 +69,7 @@ export default function AuditPage() {
   if (!can('view_jobs')) return <div className="card empty-state">Bạn không có quyền xem nhật ký hoạt động.</div>
   return <div className="page-stack ops-console audit-console">
     <section className="ops-hero card">
-      <div><span className="eyebrow">Audit scope</span><h1>Nhật ký hoạt động</h1><p>Nhật ký được trình bày dạng bảng để dễ lọc, dễ đọc và dễ đối soát. Backend đã lọc dữ liệu theo quyền.</p></div>
+      <div><span className="eyebrow">Nhật ký</span><h1>Nhật ký hoạt động</h1><p>Nhật ký được trình bày dạng bảng để dễ lọc, dễ đọc và dễ đối soát. Backend đã lọc dữ liệu theo quyền.</p></div>
       <button className="btn secondary" onClick={() => load(1, pageSize)} disabled={loading}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
     </section>
     <ActionMessage message={message} onClose={() => setMessage(null)} />

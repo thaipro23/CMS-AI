@@ -103,8 +103,8 @@ export function buildChapterTitle(value: string) {
 export function statusLabel(status?: string | null) {
   const value = status || 'draft'
   const labels: Record<string, string> = {
-    active: 'Đang dùng', draft: 'Bản nháp', approved: 'Đã duyệt', published: 'Đã publish', ready: 'Sẵn sàng',
-    pending_review: 'Chờ duyệt', rejected: 'Đã bỏ', failed: 'Lỗi', created: 'Đã tạo', rolled_back: 'Đã rollback', indexed: 'Đã xử lý', deleted: 'Đã xóa',
+    active: 'Đang dùng', draft: 'Bản nháp', approved: 'Đã duyệt', published: 'Đã đưa lên CMS', ready: 'Sẵn sàng',
+    pending_review: 'Chờ duyệt', rejected: 'Đã bỏ', failed: 'Lỗi', created: 'Đã tạo', rolled_back: 'Đã khôi phục', indexed: 'Đã xử lý', deleted: 'Đã xóa',
   }
   return labels[value] || value
 }
@@ -168,7 +168,7 @@ export function Toolbar({ title, helper, action }: { title: string; helper?: str
 
 export function SearchActionBar({ search, setSearch, placeholder, action }: { search: string; setSearch: (value: string) => void; placeholder: string; action?: React.ReactNode }) {
   return <div className="search-action-bar">
-    <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
+    <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
     {action}
   </div>
 }
@@ -190,7 +190,7 @@ export function Modal({ open, title, children, onClose, wide = false }: { open: 
 
   if (!open) return null
   return <div className="modal-backdrop bank-popup-backdrop" onMouseDown={onClose}>
-    <div className={`modal-card bank-modal${wide ? ' bank-modal-wide' : ''}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+    <div className={`modal-card bank-modal${wide ? ' bank-modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
       <div className="section-head bank-modal-head">
         <div><h2>{title}</h2></div>
         <button className="btn small secondary" type="button" onClick={onClose}>Đóng</button>
@@ -242,7 +242,7 @@ export function EntityActions({ canManage, onEdit, onDelete }: { canManage: bool
     <button
       type="button"
       className="entity-actions-trigger"
-      aria-label="Hành động"
+      aria-label="Mở menu hành động"
       aria-expanded={open}
       title="Hành động"
       onClick={(event) => { stop(event); setOpen((current) => !current) }}
@@ -266,7 +266,7 @@ export function matchesSearch(text: string, search: string) {
 
 export function reviewStatusText(status?: string | null) {
   const labels: Record<string, string> = {
-    published: 'Đã publish',
+    published: 'Đã đưa lên CMS',
     ready: 'Đã xử lý xong',
     needs_review: 'Còn câu cần duyệt',
     needs_fix: 'Có câu lỗi',
@@ -304,7 +304,7 @@ export function QuickSearchBox({ compact = false }: { compact?: boolean }) {
     return () => window.clearTimeout(timer)
   }, [q, headers])
   return <div className={compact ? 'quick-search quick-search-compact' : 'quick-search'}>
-    <input className="input" value={q} onChange={(event) => setQ(event.target.value)} placeholder="Tìm nhanh bộ môn / môn / version / bài / câu hỏi..." />
+    <input className="input" value={q} onChange={(event) => setQ(event.target.value)} aria-label="Tìm nhanh bộ môn, môn, phiên bản, bài hoặc câu hỏi" placeholder="Tìm nhanh bộ môn, môn, phiên bản, bài hoặc câu hỏi..." />
     {q.trim().length >= 2 ? <div className="quick-search-results">
       {loading ? <div className="quick-search-row muted">Đang tìm...</div> : null}
       {!loading && results.map((item) => <Link key={`${item.type}-${item.href}`} className="quick-search-row" href={item.href}>
@@ -330,7 +330,7 @@ export function questionStats(questions: BankVersionQuestion[]) {
 }
 
 export function nextReleaseText(release?: BankRelease | null) {
-  if (!release) return 'Chưa có Release'
+  if (!release) return 'Chưa chốt bộ đề'
   return `${release.release_code} · ${statusLabel(release.status)} · ${release.approved_question_count} câu`
 }
 
@@ -455,14 +455,14 @@ export function countRows<T>(items: T[], getter: (item: T) => string | null | un
 
 export function auditActionText(action?: string | null) {
   const map: Record<string, string> = {
-    'question_bank.release.quiz.create': 'Tạo Quiz Open edX',
-    'question_bank.course_quiz.rollback': 'Rollback Quiz',
-    'question_bank.release.publish_openedx': 'Publish Release',
+    'question_bank.release.quiz.create': 'Tạo Quiz trên CMS',
+    'question_bank.course_quiz.rollback': 'Khôi phục Quiz',
+    'question_bank.release.publish_openedx': 'Đưa bộ đề lên CMS',
     'question_bank.version.question.review': 'Duyệt câu hỏi',
     'question_bank.version.question.bulk_review': 'Duyệt hàng loạt',
     'question_bank.bank_version.generate': 'Tạo câu hỏi',
-    'question_bank.material.upload': 'Upload tài liệu',
-    'question_bank.quiz.auto_map.apply': 'Lưu cấu hình map Quiz',
+    'question_bank.material.upload': 'Tải tài liệu lên',
+    'question_bank.quiz.auto_map.apply': 'Lưu cấu hình tạo Quiz',
   }
   return map[action || ''] || action || '—'
 }

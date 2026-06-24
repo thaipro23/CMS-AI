@@ -21,6 +21,8 @@ def _has_table(table: str) -> bool:
 
 
 def upgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table('academic_class_sync_jobs'):
+        return
     bind = op.get_bind()
     bind.exec_driver_sql(
         'ALTER TABLE IF EXISTS alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)'

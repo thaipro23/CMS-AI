@@ -1333,6 +1333,24 @@ def get_bank_version_question_detail(
     return question
 
 
+@router.post('/bank-versions/{bank_version_id}/materials/recheck-carry-over')
+def recheck_carry_over_after_material_change(bank_version_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('review_questions'))):
+    """Manually rerun the automatic material recheck for cloned questions."""
+    _require_bank_version(db, user, 'question.reject', bank_version_id)
+    try:
+        result = VersionedQuestionBankService(db).auto_retire_carry_over_questions_for_changed_materials(
+            bank_version_id=bank_version_id,
+            actor=user.user_id,
+            reason='manual_material_recheck',
+            commit=True,
+        )
+        log_audit(db, action='question_bank.material.recheck_carry_over', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={k: v for k, v in result.items() if k not in {'kept_question_ids', 'retired_question_ids', 'safe_skipped_question_ids'}})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.material.recheck_carry_over', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post('/bank-versions/{bank_version_id}/diff/preview', response_model=BankVersionDiffPreviewOut)
 def preview_bank_version_diff(bank_version_id: str, payload: BankVersionDiffPreviewRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     _require_bank_version(db, user, 'bank.view', bank_version_id)

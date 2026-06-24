@@ -15,7 +15,7 @@ function labelStatus(value?: string | null) {
     approved: 'Đã duyệt',
     rejected: 'Bị từ chối',
     draft_error: 'Câu lỗi',
-    published: 'Đã publish',
+    published: 'Đã đưa lên CMS',
   }
   return labels[String(value || '')] || value || 'Tất cả'
 }
@@ -191,7 +191,7 @@ export default function SearchPageClient() {
       <div>
         <span className="eyebrow">Danh sách</span>
         <h1>Câu hỏi trong phạm vi được giao</h1>
-        <p>Kết quả lấy theo quyền hiện tại của tài khoản, dùng để kiểm tra nhanh các chỉ số trên Dashboard.</p>
+        <p>Kết quả được lọc theo quyền hiện tại của tài khoản.</p>
         <div className="dashboard-filter-row">
           {q ? <Chip>Từ khóa: {q}</Chip> : null}
           {status ? <Chip>Trạng thái: {labelStatus(status)}</Chip> : null}
@@ -203,7 +203,7 @@ export default function SearchPageClient() {
           {subjectId ? <Chip>Môn: {subjectId}</Chip> : null}
         </div>
       </div>
-      <Link className="btn secondary" href="/bank">Về Dashboard</Link>
+      <Link className="btn secondary" href="/bank">Về Tổng quan</Link>
     </div>
 
     {loading ? <div className="dashboard-search-list">
@@ -223,7 +223,7 @@ export default function SearchPageClient() {
     </> : <div className="dashboard-empty-state">
       <b>Không có kết quả trong phạm vi của bạn.</b>
       <p>Dữ liệu có thể chưa được tạo hoặc bạn không có quyền trong phạm vi đó.</p>
-      <Link className="btn secondary small" href="/bank">Quay lại Dashboard</Link>
+      <Link className="btn secondary small" href="/bank">Quay lại Tổng quan</Link>
     </div>}
   </div>
 }

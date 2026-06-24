@@ -4558,3 +4558,261 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
     text-align: left;
   }
 }
+
+/* v25.9.16.5.23 UI/UX design system hardening
+   Custom design tokens: one visual system across Bank, Jobs, RBAC and Student Management. */
+:root {
+  --font-sans: Arial, Helvetica, sans-serif;
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f1f5f9;
+  --color-text: #0f172a;
+  --color-muted: #475569;
+  --color-border: #d8dee8;
+  --color-primary: #1d4ed8;
+  --color-primary-strong: #1e40af;
+  --color-primary-soft: #eff6ff;
+  --color-success: #047857;
+  --color-success-soft: #ecfdf5;
+  --color-warning: #b45309;
+  --color-warning-soft: #fff7ed;
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fef2f2;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --shadow-card: 0 10px 30px rgba(15, 23, 42, .06);
+  --shadow-elevated: 0 24px 70px rgba(15, 23, 42, .16);
+  --focus-ring: 0 0 0 4px rgba(37, 99, 235, .18);
+
+  /* keep legacy variables mapped to the new token system */
+  --bg: var(--color-bg);
+  --card: var(--color-surface);
+  --text: var(--color-text);
+  --muted: var(--color-muted);
+  --border: var(--color-border);
+  --primary: var(--color-primary);
+  --primary-soft: var(--color-primary-soft);
+  --green: var(--color-success);
+  --red: var(--color-danger);
+  --blue: var(--color-primary);
+  --amber: var(--color-warning);
+}
+
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.5; text-rendering: optimizeLegibility; }
+img, svg, video, canvas { max-width: 100%; height: auto; }
+a { color: var(--color-primary); text-underline-offset: 3px; }
+a:hover { color: var(--color-primary-strong); }
+::selection { background: rgba(37, 99, 235, .18); }
+
+.skip-link {
+  position: fixed;
+  left: 12px;
+  top: 12px;
+  transform: translateY(-140%);
+  z-index: 1000;
+  background: var(--color-text);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-elevated);
+}
+.skip-link:focus { transform: translateY(0); outline: 0; }
+
+:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, .9);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+button:focus-visible,
+a:focus-visible,
+.input:focus-visible,
+[role="button"]:focus-visible { border-radius: var(--radius-sm); }
+
+button, .btn, .nav-link, .entity-card, .searchable-select-option, .quick-search-row {
+  -webkit-tap-highlight-color: transparent;
+}
+button, .btn { min-height: 40px; }
+.btn.small { min-height: 34px; }
+.btn {
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(15,23,42,.08);
+}
+.btn:hover { background: var(--color-primary-strong); }
+.btn.secondary { background: #fff; color: var(--color-text); border-color: var(--color-border); }
+.btn.secondary:hover { background: var(--color-surface-soft); }
+.btn.danger { background: var(--color-danger); }
+.btn.success { background: var(--color-success); }
+
+.card,
+.stat-panel,
+.metric-card,
+.access-kpi,
+.academic-unified-card,
+.entity-card,
+.bank-chart-card,
+.ops-filter-card,
+.ops-hero {
+  border-color: var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.input,
+select.input,
+textarea.input {
+  min-height: 42px;
+  border-color: #cbd5e1;
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+}
+.input::placeholder { color: #64748b; }
+.input:focus { border-color: var(--color-primary); box-shadow: var(--focus-ring); }
+label, .field-label { color: var(--color-text); }
+.helper, .muted, small { color: var(--color-muted); }
+
+.status.success,
+.status.approved,
+.status.published { background: var(--color-success-soft); color: var(--color-success); }
+.status.warning,
+.status.pending { background: var(--color-warning-soft); color: var(--color-warning); }
+.status.danger,
+.status.rejected { background: var(--color-danger-soft); color: var(--color-danger); }
+
+.responsive-table-wrap,
+.table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.ops-data-table th,
+.table th,
+.data-table th {
+  color: #334155;
+  background: #f8fafc;
+  font-weight: 850;
+}
+.ops-data-table td,
+.table td,
+.data-table td { color: var(--color-text); }
+
+.modal-backdrop { backdrop-filter: blur(3px); }
+.modal-card,
+.bank-modal {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-elevated);
+}
+.entity-actions-trigger { min-width: 36px; min-height: 36px; }
+.entity-actions-menu button { min-height: 38px; }
+
+/* Mobile-first safety net for pages that still use older grid/table classes. */
+@media (max-width: 1024px) {
+  .content-shell,
+  .compact-content-shell,
+  .product-content { padding: var(--space-4); }
+  .grid-3,
+  .dashboard-grid,
+  .summary-grid,
+  .ops-kpi-grid,
+  .access-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .entity-list.horizontal,
+  .multipage-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .section-head,
+  .page-intro,
+  .access-hero-grid,
+  .sync-job-main-row { align-items: stretch; }
+}
+
+@media (max-width: 768px) {
+  .app-layout { display: block; }
+  .sidebar,
+  .product-sidebar {
+    position: relative;
+    height: auto;
+    padding: var(--space-4);
+  }
+  .side-nav,
+  .grouped-side-nav,
+  .product-nav { grid-template-columns: 1fr; }
+  .nav-group-items { grid-template-columns: 1fr; }
+  .workspace-topbar,
+  .topbar {
+    position: static;
+    padding: var(--space-4);
+  }
+  .workspace-topbar h1,
+  .topbar h1 { font-size: 24px; line-height: 1.2; }
+  .content-shell,
+  .compact-content-shell,
+  .product-content { padding: var(--space-3); }
+  .card,
+  .academic-unified-card,
+  .access-card-large,
+  .ops-hero { padding: var(--space-4); border-radius: var(--radius-lg); }
+  .grid-2,
+  .grid-3,
+  .dashboard-grid,
+  .summary-grid,
+  .ops-kpi-grid,
+  .access-kpi-grid,
+  .entity-list.horizontal,
+  .multipage-list,
+  .academic-filter-bar,
+  .modal-filter-bar { grid-template-columns: 1fr !important; }
+  .section-head,
+  .page-intro,
+  .button-row,
+  .history-action-buttons,
+  .chapter-primary-actions,
+  .modal-actions { flex-direction: column; align-items: stretch; }
+  .button-row .btn,
+  .history-action-buttons .btn,
+  .chapter-primary-actions .btn,
+  .modal-actions .btn { width: 100%; justify-content: center; }
+  .modal-card,
+  .bank-modal,
+  .bank-modal-wide {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    margin: 12px;
+    border-radius: var(--radius-lg);
+  }
+  .bank-modal-body { max-height: calc(100vh - 132px); overflow: auto; }
+  .ops-data-table,
+  .table,
+  .data-table { min-width: 760px; }
+}
+
+@media (max-width: 480px) {
+  .workspace-topbar h1,
+  .topbar h1 { font-size: 21px; }
+  .brand-mark,
+  .product-brand-mark { width: 36px; height: 36px; border-radius: 12px; }
+  .card,
+  .academic-unified-card,
+  .access-card-large,
+  .ops-hero { padding: var(--space-3); }
+  .metric-card b,
+  .summary-grid b { font-size: 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .001ms !important;
+  }
+}

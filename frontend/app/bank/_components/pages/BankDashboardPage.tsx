@@ -207,7 +207,7 @@ function AlertPanel({ alerts }: { alerts: DashboardAnalytics['alerts'] }) {
       {alerts.length ? alerts.map((alert) => <button key={alert.id} type="button" className={`dashboard-alert-item ${alert.severity}`} onClick={() => alert.drilldown && router.push(drilldownUrl(alert.drilldown))}>
         <span>{alert.severity === 'critical' ? '🔴' : alert.severity === 'warning' ? '🟡' : '🔵'}</span>
         <div><b>{alert.title}</b>{alert.description ? <small>{alert.description}</small> : null}</div>
-      </button>) : <div className="dashboard-chart-empty">Chưa có cảnh báo trong scope này.</div>}
+      </button>) : <div className="dashboard-chart-empty">Chưa có cảnh báo trong phạm vi này.</div>}
     </div>
   </section>
 }
@@ -302,7 +302,7 @@ export function BankDashboardPage() {
         <h1>Tổng quan Ngân hàng đề</h1>
         <div className="dashboard-scope-strip">
           <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
-          {data?.cache ? <span className="dashboard-scope-chip subtle">Cache: {data.cache.hit ? 'hit' : 'fresh'} · TTL {data.cache.ttl_seconds}s</span> : null}
+          {data?.cache ? <span className="dashboard-scope-chip subtle">Dữ liệu: {data.cache.hit ? 'đã lưu tạm' : 'mới cập nhật'}</span> : null}
           {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {new Date(data.generated_at).toLocaleString('vi-VN')}</span> : null}
         </div>
       </div>
@@ -327,13 +327,13 @@ export function BankDashboardPage() {
       <section className="dashboard-tech-strip">
         <span><b>{formatNumber(Number(data.meta?.departments_total || 0))}</b> bộ môn</span>
         <span><b>{formatNumber(Number(data.meta?.subjects_total || 0))}</b> môn</span>
-        <span><b>{formatNumber(Number(data.meta?.subject_versions_total || 0))}</b> version</span>
-        <span><b>{formatNumber(Number(data.meta?.chapters_total || 0))}</b> bài/chapter</span>
+        <span><b>{formatNumber(Number(data.meta?.subject_versions_total || 0))}</b> phiên bản môn</span>
+        <span><b>{formatNumber(Number(data.meta?.chapters_total || 0))}</b> bài</span>
       </section>
 
       <section className="card bank-search-card">
         <div className="section-head">
-          <div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, version, bài hoặc câu hỏi trong scope được giao.</p></div>
+          <div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, phiên bản, bài hoặc câu hỏi trong phạm vi được giao.</p></div>
           <div className="button-row compact">
             <button className="btn small secondary" type="button" onClick={() => setAlertsOpen(true)}>Cảnh báo ({formatNumber((data.alerts || []).length)})</button>
             <button className="btn small secondary" type="button" onClick={() => setActivityOpen(true)}>Hoạt động ({formatNumber((data.activity_feed || []).length)})</button>

@@ -16,6 +16,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table('openedx_user_mappings'):
+        return
     op.create_table(
         'openedx_user_mappings',
         sa.Column('id', sa.String(), primary_key=True),

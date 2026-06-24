@@ -5,7 +5,7 @@ import { AppShell } from '../components/layout/AppShell'
 
 export const metadata: Metadata = {
   title: 'Open edX AI Server · FPT Polytechnic',
-  description: 'Máy chủ AI quản lý ngân hàng đề, tạo Quiz Open edX và theo dõi vận hành giảng viên.'
+  description: 'Hệ thống quản lý ngân hàng đề, tạo Quiz trên CMS và theo dõi tiến trình học tập.'
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

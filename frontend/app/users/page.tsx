@@ -38,9 +38,9 @@ const roleLabels: Record<string, string> = {
 
 const roleSubtitles: Record<string, string> = {
   SYSTEM_ADMIN: 'Toàn hệ thống. Chỉ dành cho admin kỹ thuật/ban quản trị.',
-  DEPARTMENT_HEAD: 'Quản lý các môn, version, bài và reviewer trong một bộ môn.',
-  SUBJECT_OWNER: 'Quản lý một môn hoặc một version/kỳ cụ thể.',
-  QUESTION_REVIEWER: 'Chỉ xem, sửa, duyệt hoặc từ chối câu hỏi trong scope được giao.',
+  DEPARTMENT_HEAD: 'Quản lý các môn, phiên bản, bài và người duyệt trong một bộ môn.',
+  SUBJECT_OWNER: 'Quản lý một môn hoặc một phiên bản/kỳ cụ thể.',
+  QUESTION_REVIEWER: 'Chỉ xem, sửa, duyệt hoặc từ chối câu hỏi trong phạm vi được giao.',
 }
 
 const roleTone: Record<string, string> = {
@@ -222,7 +222,7 @@ export default function UsersPage() {
       setForm((prev) => ({ ...prev, user_id: '', email: '', grant_reason: '' }))
       await loadAll()
     } catch (e) {
-      setMessage(toUserError(e, 'Không gán được quyền. Kiểm tra đúng role, scope và quyền người đang thao tác.'))
+      setMessage(toUserError(e, 'Không gán được quyền. Kiểm tra đúng vai trò, phạm vi và quyền người đang thao tác.'))
     }
   }
 
@@ -277,9 +277,9 @@ export default function UsersPage() {
     <section className="access-hero">
       <div className="access-hero-grid">
         <div>
-          <div className="eyebrow">AI Question Bank · RBAC</div>
+          <div className="eyebrow">Phân quyền</div>
           <h2>Quản lý quyền truy cập</h2>
-          <p>Gán quyền theo đúng nhánh công việc. Giao diện chỉ hiển thị scope bạn được phép quản lý.</p>
+          <p>Gán quyền theo đúng nhánh công việc. Giao diện chỉ hiển thị phạm vi bạn được phép quản lý.</p>
         </div>
         <div className="access-session-card">
           <span>Phiên hiện tại</span>
@@ -294,9 +294,9 @@ export default function UsersPage() {
 
     <section className="access-kpi-grid">
       <div className="access-kpi"><span>Quyền đang hiệu lực</span><b>{assignmentStats.total}</b><small>Trong phạm vi bạn quản lý</small></div>
-      <div className="access-kpi"><span>Trưởng bộ môn</span><b>{assignmentStats.heads}</b><small>DEPARTMENT_HEAD</small></div>
-      <div className="access-kpi"><span>Chủ môn</span><b>{assignmentStats.owners}</b><small>SUBJECT_OWNER</small></div>
-      <div className="access-kpi"><span>Người duyệt</span><b>{assignmentStats.reviewers}</b><small>QUESTION_REVIEWER</small></div>
+      <div className="access-kpi"><span>Trưởng bộ môn</span><b>{assignmentStats.heads}</b><small>Quản lý bộ môn</small></div>
+      <div className="access-kpi"><span>Chủ môn</span><b>{assignmentStats.owners}</b><small>Quản lý môn học</small></div>
+      <div className="access-kpi"><span>Người duyệt</span><b>{assignmentStats.reviewers}</b><small>Duyệt câu hỏi</small></div>
     </section>
 
     <section className="access-main-grid">
@@ -312,7 +312,7 @@ export default function UsersPage() {
           </button>)}
         </div>
         <div className="grid grid-2">
-          <div><label>User ID / username Open edX</label><input className="input" value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })} placeholder="vd: owner_web107" /></div>
+          <div><label>Tài khoản Open edX</label><input className="input" value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })} placeholder="vd: owner_web107" /></div>
           <div><label>Email</label><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user@fpt.edu.vn" /></div>
         </div>
         <div className="grid grid-3">
@@ -337,8 +337,8 @@ export default function UsersPage() {
           <div><label>Lý do cấp quyền</label><input className="input" value={form.grant_reason} onChange={(e) => setForm({ ...form, grant_reason: e.target.value })} placeholder="Phụ trách WEB107 SU26" /></div>
         </div>
         {form.scope_id && <div className="scope-preview"><span>Quyền sẽ được cấp</span><b>{roleLabels[form.role_code]} · {scopeLabel[form.scope_type]}</b><small>{scopeOptions.find((s) => s.id === form.scope_id)?.path || form.scope_id}</small></div>}
-        <label className="check-row"><input type="checkbox" checked={form.sync_openedx} onChange={(e) => setForm({ ...form, sync_openedx: e.target.checked })} /> Ghi nhận yêu cầu sync Open edX trong metadata</label>
-        <div className="button-row"><button className="btn" onClick={submitAssignment}>Gán quyền</button><button className="btn secondary" onClick={() => setForm({ user_id: '', email: '', role_code: 'DEPARTMENT_HEAD', scope_type: 'DEPARTMENT', scope_id: '', grant_reason: '', sync_openedx: false })}>Xóa form</button></div>
+        <label className="check-row"><input type="checkbox" checked={form.sync_openedx} onChange={(e) => setForm({ ...form, sync_openedx: e.target.checked })} /> Ghi nhận yêu cầu đồng bộ Open edX</label>
+        <div className="button-row"><button className="btn" onClick={submitAssignment}>Gán quyền</button><button className="btn secondary" onClick={() => setForm({ user_id: '', email: '', role_code: 'DEPARTMENT_HEAD', scope_type: 'DEPARTMENT', scope_id: '', grant_reason: '', sync_openedx: false })}>Xóa thông tin đã nhập</button></div>
       </div>
 
       <div className="card access-side-actions">
@@ -350,17 +350,17 @@ export default function UsersPage() {
     </section>
 
     <Popup open={importOpen} title="Import phân quyền bằng Excel" onClose={() => setImportOpen(false)}>
-      <div className="import-steps"><div><b>1</b><span>Tải file mẫu</span></div><div><b>2</b><span>Điền user, role, scope</span></div><div><b>3</b><span>Dry-run kiểm tra</span></div><div><b>4</b><span>Import thật</span></div></div>
+      <div className="import-steps"><div><b>1</b><span>Tải file mẫu</span></div><div><b>2</b><span>Điền user, vai trò, phạm vi</span></div><div><b>3</b><span>Kiểm tra thử</span></div><div><b>4</b><span>Import chính thức</span></div></div>
       <div className="button-row"><button className="btn secondary" onClick={downloadTemplate}>Tải Excel mẫu</button></div>
       <label>Chọn file Excel</label><input className="input" type="file" accept=".xlsx,.xlsm" onChange={onFileChange} />
-      <label className="check-row"><input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} /> Dry-run trước, chưa ghi DB</label>
+      <label className="check-row"><input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} /> Kiểm tra trước, chưa ghi dữ liệu</label>
       <div className="button-row"><button className="btn" onClick={submitImport}>{dryRun ? 'Kiểm tra file' : 'Import phân quyền'}</button></div>
       {importResult && <div className="import-result"><div className="summary-grid"><div><span>Tổng dòng</span><b>{importResult.total_rows}</b></div><div><span>Hợp lệ</span><b>{importResult.valid_rows}</b></div><div><span>Đã tạo</span><b>{importResult.created_count}</b></div><div><span>Lỗi</span><b>{importResult.failed_count}</b></div></div><div className="import-row-list">{importResult.rows.slice(0, 30).map((row) => <div key={row.row_index} className="stat-row"><span>Dòng {row.row_index} · {row.user_id} · {row.role_code}</span><b className={`status ${resultClass(row.status)}`}>{row.status}</b><small>{row.message}</small></div>)}</div></div>}
     </Popup>
 
     <Popup open={assignmentsOpen} title="Danh sách quyền đang có" onClose={() => setAssignmentsOpen(false)}>
       <div className="section-head compact-section-head"><div><p className="helper">Chỉ hiển thị các quyền bạn được phép nhìn thấy hoặc quản lý.</p></div><label className="check-row"><input type="checkbox" checked={includeRevoked} onChange={(e) => setIncludeRevoked(e.target.checked)} /> Cả quyền đã thu hồi</label></div>
-      <div className="grid grid-3"><div><label>Tìm trong danh sách</label><input className="input" value={filterText} onChange={(e) => setFilterText(e.target.value)} placeholder="user, role, scope..." /></div></div>
+      <div className="grid grid-3"><div><label>Tìm trong danh sách</label><input className="input" value={filterText} onChange={(e) => setFilterText(e.target.value)} placeholder="user, vai trò, phạm vi..." /></div></div>
       <div className="assignment-board modal-assignment-board">
         {filteredAssignments.map((a) => <article className={`assignment-card ${a.revoked_at ? 'is-revoked' : ''}`} key={a.id}>
           <div className="assignment-top"><span className={`role-dot tone-${roleTone[a.role_code] || 'blue'}`}>{roleLabels[a.role_code] || a.role_code}</span><span className="pill">{a.scope_type}</span></div>

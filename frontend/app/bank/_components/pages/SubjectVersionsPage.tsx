@@ -154,14 +154,14 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     run(async () => {
       await updateSubjectOffering(headers, editing.id, { code: editCode, name: editName })
       setEditing(null)
-    }, 'Đã sửa version môn', load)
+    }, 'Đã sửa phiên bản môn', load)
   }
   const confirmDeleteSubjectVersion = () => {
     if (!deleteTarget) return
     run(async () => {
       await deleteSubjectOffering(headers, deleteTarget.id)
       setDeleteTarget(null)
-    }, 'Đã xóa version môn', load)
+    }, 'Đã xóa phiên bản môn', load)
   }
 
   return <div className="page-stack bank-multipage">
@@ -169,20 +169,20 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>{subject ? `Danh sách version của ${subject.code}` : 'Danh sách version môn'}</h2><p className="helper">Tạo version mới trống hoặc clone 100% bản làm việc từ kỳ cũ.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm version môn" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Tạo version môn</button>} />
+      <div className="section-head"><div><h2>{subject ? `Danh sách phiên bản của ${subject.code}` : 'Danh sách phiên bản môn'}</h2><p className="helper">Tạo mới hoàn toàn hoặc tạo từ phiên bản cũ của môn.</p></div></div>
+      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm phiên bản môn" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button>} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject_version, stats }) => {
           const hasPublished = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published')
           return <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
             <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditSubjectVersion(subject_version)} onDelete={() => setDeleteTarget(subject_version)} />
-            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã publish' : reviewStatusText(stats.status)}</span></div>
-            <small>{subject_version.name || subject_version.term || 'Version môn'}</small>
+            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></div>
+            <small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small>
             <StatLine label="Bài" value={stats.chapter_count || 0} />
             <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))}`} />
             <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
             <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
-            <StatLine label="Release đã publish" value={`${stats.published_release_count || 0}/${stats.chapter_count || 0} bài`} />
+            <StatLine label="Bộ đề đã đưa lên CMS" value={`${stats.published_release_count || 0}/${stats.chapter_count || 0} bài`} />
             {hasPublished ? <span className="status success">Đã khóa chỉnh sửa</span> : null}
           </Link>
         })}
@@ -190,12 +190,12 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
       {!visible.length ? <div className="empty-state">Chưa có version phù hợp.</div> : null}
     </section>
 
-    <Modal open={Boolean(editing)} title="Sửa version môn" onClose={() => setEditing(null)}>
+    <Modal open={Boolean(editing)} title="Sửa phiên bản môn" onClose={() => setEditing(null)}>
       <div className="mini-form">
-        <label className="field-label">Mã version môn</label>
-        <input className="input" value={editCode} onChange={(event) => setEditCode(event.target.value)} placeholder="Mã version môn" />
-        <label className="field-label">Tên version môn</label>
-        <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên version môn" />
+        <label className="field-label">Mã phiên bản môn</label>
+        <input className="input" value={editCode} onChange={(event) => setEditCode(event.target.value)} placeholder="Mã phiên bản môn" />
+        <label className="field-label">Tên phiên bản môn</label>
+        <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên phiên bản môn" />
         <div className="modal-actions">
           <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
           <button className="btn" type="button" disabled={busy || !editCode.trim()} onClick={saveEditSubjectVersion}>Lưu thay đổi</button>
@@ -204,8 +204,8 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     </Modal>
     <ConfirmDialog
       open={Boolean(deleteTarget)}
-      title={`Xóa version môn ${deleteTarget?.code || ''}?`}
-      description={<p>Chỉ xóa được khi version môn chưa có bài/tài liệu/câu hỏi/release.</p>}
+      title={`Xóa phiên bản môn ${deleteTarget?.code || ''}?`}
+      description={<p>Chỉ xóa được khi phiên bản môn chưa có bài, tài liệu, câu hỏi hoặc bộ đề đã chốt.</p>}
       confirmLabel="Xác nhận xóa"
       danger
       busy={busy}
@@ -213,17 +213,17 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
       onConfirm={confirmDeleteSubjectVersion}
     />
 
-    <Modal open={createOpen} title="Tạo version môn" onClose={() => setCreateOpen(false)}>
+    <Modal open={createOpen} title="Tạo phiên bản môn" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
-        <div className="button-row"><button className={mode === 'clone' ? 'btn' : 'btn secondary'} onClick={() => setMode('clone')}>Clone từ version khác</button><button className={mode === 'blank' ? 'btn' : 'btn secondary'} onClick={() => setMode('blank')}>Tạo mới trống</button></div>
+        <div className="button-row"><button className={mode === 'clone' ? 'btn' : 'btn secondary'} onClick={() => setMode('clone')}>Tạo từ phiên bản cũ</button><button className={mode === 'blank' ? 'btn' : 'btn secondary'} onClick={() => setMode('blank')}>Tạo mới hoàn toàn</button></div>
         <select className="input" value={term} onChange={(event) => setTerm(event.target.value)}>{TERMS.map(([value, label]) => <option value={value} key={value}>{value} - {label}</option>)}</select>
-        {mode === 'clone' ? <select className="input" value={cloneFromId} onChange={(event) => setCloneFromId(event.target.value)}>{summaries.map(({ subject_version }) => <option value={subject_version.id} key={subject_version.id}>Clone từ {subject_version.code}</option>)}</select> : null}
-        <p className="helper">Clone 100% bản làm việc: bài, tài liệu, bank version, câu hỏi approved. Không clone Release/Open edX Library và không chạy diff khi clone.</p>
+        {mode === 'clone' ? <select className="input" value={cloneFromId} onChange={(event) => setCloneFromId(event.target.value)}>{summaries.map(({ subject_version }) => <option value={subject_version.id} key={subject_version.id}>Tạo từ {subject_version.code}</option>)}</select> : null}
+        <p className="helper">Hệ thống sao chép bài, tài liệu và câu hỏi đã duyệt từ phiên bản cũ. Nếu sau đó thay tài liệu, hệ thống tự loại các câu không còn nằm trong bộ tài liệu hiện tại.</p>
         <div className="modal-actions"><button className="btn secondary" onClick={() => setCreateOpen(false)}>Hủy</button><button className="btn" disabled={busy || !term || (mode === 'clone' && !cloneFromId)} onClick={() => run(async () => {
           const created = await createSubjectOffering(headers, { subject_id: subjectId, term, clone_from_offering_id: mode === 'clone' ? cloneFromId : null, version_code: term, clone_chapters: true, clone_materials: true, clone_questions: true })
           setCreateOpen(false)
           router.push(`/bank/subject-versions/${created.id}/chapters`)
-        }, 'Đã tạo version môn', load)}>Tạo version</button></div>
+        }, 'Đã tạo phiên bản môn', load)}>Tạo phiên bản</button></div>
       </div>
     </Modal>
   </div>
