@@ -13,6 +13,23 @@ function jobLabel(v: string) { return ({ material_extract: 'Tách tài liệu', 
 function statusText(v: string) { return ({ queued: 'Đang chờ', running: 'Đang chạy', completed: 'Hoàn tất', failed: 'Thất bại', canceled: 'Đã hủy' } as Record<string,string>)[v] || v }
 function isOpsAudit(row: AuditLogRow) { const a = String(row.action || ''); return a.startsWith('question_bank.') || a.includes('publish') || a.includes('quiz') || a.includes('generation') }
 function shortId(v?: string | null) { return v ? v.slice(0, 8) : '—' }
+function jobEnqueueMeta(job: BankOperationJob) {
+  const result = (job.result || {}) as Record<string, unknown>
+  const enqueue = (result.enqueue || {}) as Record<string, unknown>
+  return {
+    taskName: job.task_name || (typeof enqueue.task_name === 'string' ? enqueue.task_name : null),
+    celeryTaskId: job.celery_task_id || (typeof enqueue.celery_task_id === 'string' ? enqueue.celery_task_id : null),
+    enqueuedAt: job.enqueued_at || (typeof enqueue.enqueued_at === 'string' ? enqueue.enqueued_at : null),
+  }
+}
+function enqueueMetaText(job: BankOperationJob) {
+  const meta = jobEnqueueMeta(job)
+  return [
+    meta.taskName ? `task ${meta.taskName}` : null,
+    meta.celeryTaskId ? `celery ${shortId(meta.celeryTaskId)}` : null,
+    meta.enqueuedAt ? `enqueue ${dateText(meta.enqueuedAt)}` : null,
+  ].filter(Boolean).join(' · ')
+}
 
 function Popup({ open, title, children, onClose }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void }) {
   useEffect(() => {
@@ -95,7 +112,7 @@ export default function JobsPage() {
     <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>Quiz đã tạo</span><b>{quizInstances.length}</b></div></section>
     <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm job<input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="id, lỗi, loại job, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">Tất cả</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option><option value="canceled">Đã hủy</option></select></label><label>Loại job<select className="input" value={operationType} onChange={(e) => setOperationType(e.target.value)}><option value="all">Tất cả</option><option value="material_extract">Tách tài liệu</option><option value="bank_generate">Tạo câu hỏi</option><option value="release_publish">Publish release</option><option value="quiz_create">Tạo Quiz</option></select></label></div></section>
     <section className="card"><div className="section-head"><div><h2>Operation jobs</h2><p className="helper">Bảng job async mới của Bank-first. Người không đủ quyền chỉ thấy job trong phạm vi được phép.</p></div></div>
-      <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>Loại việc</th><th>Trạng thái</th><th>Tiến độ</th><th>Đối tượng</th><th>Người tạo</th><th>Thời điểm</th><th>Nội dung / lỗi</th><th>Thao tác</th></tr></thead><tbody>{filteredOps.length ? filteredOps.map((job) => <tr key={job.id} className={`row-${job.status}`}><td><b>{jobLabel(job.operation_type)}</b><small>ID {shortId(job.id)}</small></td><td><StatusBadge status={job.status} /><small>{statusText(job.status)}</small></td><td><div className="job-progress table-progress"><i style={{ width: `${Math.max(0, Math.min(100, Number(job.progress_percent || 0)))}%` }} /></div><small>{Math.round(Number(job.progress_percent || 0))}% · {job.progress_current || 0}/{job.progress_total || 0}</small></td><td><span>{job.target_type || '—'}</span><small>{job.target_id || job.bank_version_id || job.release_id || '—'}</small></td><td>{job.requested_by || 'system'}</td><td><small>{dateText(job.created_at)}</small></td><td><span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error_message || job.progress_label || 'Đang chờ xử lý...'}</span></td><td>{['queued','failed','canceled'].includes(job.status) ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span>}</td></tr>) : <tr><td colSpan={8}><div className="empty-state">Không có job phù hợp.</div></td></tr>}</tbody></table></div>
+      <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>Loại việc</th><th>Trạng thái</th><th>Tiến độ</th><th>Đối tượng</th><th>Người tạo</th><th>Thời điểm</th><th>Nội dung / lỗi</th><th>Thao tác</th></tr></thead><tbody>{filteredOps.length ? filteredOps.map((job) => <tr key={job.id} className={`row-${job.status}`}><td><b>{jobLabel(job.operation_type)}</b><small>ID {shortId(job.id)}</small></td><td><StatusBadge status={job.status} /><small>{statusText(job.status)}</small></td><td><div className="job-progress table-progress"><i style={{ width: `${Math.max(0, Math.min(100, Number(job.progress_percent || 0)))}%` }} /></div><small>{Math.round(Number(job.progress_percent || 0))}% · {job.progress_current || 0}/{job.progress_total || 0}</small></td><td><span>{job.target_type || '—'}</span><small>{job.target_id || job.bank_version_id || job.release_id || '—'}</small></td><td>{job.requested_by || 'system'}</td><td><small>{dateText(job.created_at)}</small></td><td><span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error_message || job.progress_label || 'Đang chờ xử lý...'}</span>{enqueueMetaText(job) ? <small>{enqueueMetaText(job)}</small> : null}</td><td>{['queued','failed','canceled'].includes(job.status) ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span>}</td></tr>) : <tr><td colSpan={8}><div className="empty-state">Không có job phù hợp.</div></td></tr>}</tbody></table></div>
     </section>
 
     <Popup open={quizOpen} title="Quiz gần đây" onClose={() => setQuizOpen(false)}>

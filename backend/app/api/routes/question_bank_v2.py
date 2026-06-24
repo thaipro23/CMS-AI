@@ -26,6 +26,7 @@ from app.models.question_bank import (
     SubjectOffering,
     SubjectChapter,
     BankOperationJob,
+    BankChapterStats,
 )
 from app.schemas.question_bank import (
     BankReleaseCreate,
@@ -379,7 +380,19 @@ def _scoped_bank_summary(db: Session, user: UserContext) -> dict:
     release_query = biz.apply_hierarchy_filter(db.query(QuestionBankRelease), QuestionBankRelease, user)
     material_query = biz.apply_hierarchy_filter(db.query(LearningMaterialVersion), LearningMaterialVersion, user)
     chunk_query = biz.apply_hierarchy_filter(db.query(MaterialChunk), MaterialChunk, user)
-    question_query = biz.apply_hierarchy_filter(db.query(Question), Question, user).filter(Question.bank_version_id.isnot(None))
+    if chapter_ids:
+        stat_row = db.query(
+            func.coalesce(func.sum(BankChapterStats.total_questions), 0),
+            func.coalesce(func.sum(BankChapterStats.retired_count), 0),
+            func.coalesce(func.sum(BankChapterStats.carry_over_count), 0),
+        ).filter(BankChapterStats.chapter_id.in_(chapter_ids)).one()
+        bank_questions = int(stat_row[0] or 0)
+        retired_questions = int(stat_row[1] or 0)
+        carry_over_questions = int(stat_row[2] or 0)
+    else:
+        bank_questions = 0
+        retired_questions = 0
+        carry_over_questions = 0
     mapping_query = biz.apply_hierarchy_filter(db.query(EdxCourseMapping), EdxCourseMapping, user)
     quiz_query = biz.apply_hierarchy_filter(db.query(QuizBlueprint), QuizBlueprint, user)
     return {
@@ -394,10 +407,10 @@ def _scoped_bank_summary(db: Session, user: UserContext) -> dict:
         'quiz_blueprints': quiz_query.count(),
         'material_versions': material_query.count(),
         'material_chunks': chunk_query.count(),
-        'bank_questions': question_query.count(),
+        'bank_questions': bank_questions,
         'bank_diffs': 0,
-        'carry_over_questions': question_query.filter(Question.is_carry_over.is_(True)).count(),
-        'retired_questions': question_query.filter(Question.is_retired.is_(True)).count(),
+        'carry_over_questions': carry_over_questions,
+        'retired_questions': retired_questions,
     }
 
 
@@ -739,6 +752,15 @@ def list_departments(page: int = Query(1, ge=1), page_size: int = Query(50, ge=1
     return _paginate(query.order_by(Department.code.asc()), page=page, page_size=page_size, max_page_size=50)
 
 
+@router.get('/departments/{department_id}', response_model=DepartmentOut)
+def get_department(department_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_visible(db, user, 'DEPARTMENT', department_id)
+    item = db.get(Department, department_id)
+    if not item:
+        raise HTTPException(status_code=404, detail='Không tìm thấy bộ môn')
+    return item
+
+
 @router.post('/departments', response_model=DepartmentOut)
 def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
     _require_business(db, user, 'department.manage_all')
@@ -782,6 +804,15 @@ def list_subjects(department_id: str | None = None, page: int = Query(1, ge=1), 
         _require_visible(db, user, 'DEPARTMENT', department_id)
         query = query.filter(Subject.department_id == department_id)
     return _paginate(query.order_by(Subject.code.asc()), page=page, page_size=page_size, max_page_size=100)
+
+
+@router.get('/subjects/{subject_id}', response_model=SubjectOut)
+def get_subject(subject_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_visible(db, user, 'SUBJECT', subject_id)
+    item = db.get(Subject, subject_id)
+    if not item:
+        raise HTTPException(status_code=404, detail='Không tìm thấy môn học')
+    return item
 
 
 @router.post('/subjects', response_model=SubjectOut)
@@ -828,6 +859,16 @@ def list_subject_offerings(subject_id: str | None = None, page: int = Query(1, g
         _require_visible(db, user, 'SUBJECT', subject_id)
         query = query.filter(SubjectOffering.subject_id == subject_id)
     return _paginate(query.order_by(SubjectOffering.code.asc()), page=page, page_size=page_size, max_page_size=100)
+
+
+@router.get('/subject-offerings/{subject_offering_id}', response_model=SubjectOfferingOut)
+@router.get('/subject-versions/{subject_offering_id}', response_model=SubjectOfferingOut)
+def get_subject_offering(subject_offering_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_visible(db, user, 'SUBJECT_VERSION', subject_offering_id)
+    item = db.get(SubjectOffering, subject_offering_id)
+    if not item:
+        raise HTTPException(status_code=404, detail='Không tìm thấy phiên bản môn')
+    return item
 
 
 @router.post('/subject-offerings', response_model=SubjectOfferingOut)
@@ -879,6 +920,15 @@ def list_chapters(subject_id: str | None = None, subject_offering_id: str | None
         _require_visible(db, user, 'SUBJECT_VERSION', subject_offering_id)
         query = query.filter(SubjectChapter.subject_offering_id == subject_offering_id)
     return _paginate(query.order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc(), SubjectChapter.id.asc()), page=page, page_size=page_size, max_page_size=100)
+
+
+@router.get('/chapters/{chapter_id}', response_model=ChapterOut)
+def get_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_visible(db, user, 'CHAPTER', chapter_id)
+    item = db.get(SubjectChapter, chapter_id)
+    if not item:
+        raise HTTPException(status_code=404, detail='Không tìm thấy bài/chapter')
+    return item
 
 
 @router.post('/chapters', response_model=ChapterOut)

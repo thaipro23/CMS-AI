@@ -239,6 +239,14 @@ class VersionedQuestionBankService:
         self.db = db
 
     def summary(self) -> dict:
+        stat_row = self.db.query(
+            func.coalesce(func.sum(BankChapterStats.total_questions), 0),
+            func.coalesce(func.sum(BankChapterStats.retired_count), 0),
+            func.coalesce(func.sum(BankChapterStats.carry_over_count), 0),
+        ).one()
+        bank_questions = int(stat_row[0] or 0)
+        retired_questions = int(stat_row[1] or 0)
+        carry_over_questions = int(stat_row[2] or 0)
         return {
             'departments': self.db.query(Department).count(),
             'subjects': self.db.query(Subject).count(),
@@ -251,10 +259,12 @@ class VersionedQuestionBankService:
             'quiz_blueprints': self.db.query(QuizBlueprint).count(),
             'material_versions': self.db.query(LearningMaterialVersion).count(),
             'material_chunks': self.db.query(MaterialChunk).count(),
-            'bank_questions': self.db.query(Question).filter(Question.bank_version_id.isnot(None)).count(),
+            # v25.9.16.5.21: dashboard-scale totals come from the 15k-row
+            # ai_bank_chapter_stats table instead of counting ai_questions.
+            'bank_questions': bank_questions,
             'bank_diffs': self.db.query(BankVersionDiff).count(),
-            'carry_over_questions': self.db.query(Question).filter(Question.is_carry_over.is_(True)).count(),
-            'retired_questions': self.db.query(Question).filter(Question.is_retired.is_(True)).count(),
+            'carry_over_questions': carry_over_questions,
+            'retired_questions': retired_questions,
         }
 
 

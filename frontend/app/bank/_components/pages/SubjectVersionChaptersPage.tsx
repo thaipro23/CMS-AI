@@ -57,9 +57,13 @@ import {
   getBankVersions,
   getCourseQuizInstances,
   getDepartments,
+  getDepartment,
   getMaterialVersions,
+  getSubjectChapter,
   getSubjectChapters,
+  getSubjectOffering,
   getSubjectOfferings,
+  getSubject,
   getSubjects,
   markBankDiffResolved,
   previewBankVersionDiff,
@@ -125,10 +129,13 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const [deleteError, setDeleteError] = useState('')
 
   const load = async () => {
-    const [nextDepartments, nextSubjects, nextOfferings, nextSummaries] = await Promise.all([
-      getDepartments(headers), getSubjects(headers), getSubjectOfferings(headers), getChapterSummaries(headers, versionId),
+    const offering = await getSubjectOffering(headers, versionId)
+    const [subject, nextSummaries] = await Promise.all([
+      getSubject(headers, offering.subject_id),
+      getChapterSummaries(headers, versionId),
     ])
-    setDepartments(nextDepartments); setSubjects(nextSubjects); setOfferings(nextOfferings); setSummaries(nextSummaries)
+    const department = await getDepartment(headers, subject.department_id)
+    setDepartments([department]); setSubjects([subject]); setOfferings([offering]); setSummaries(nextSummaries)
   }
   useEffect(() => { load().catch(() => null) }, [versionId]) // eslint-disable-line react-hooks/exhaustive-deps
 

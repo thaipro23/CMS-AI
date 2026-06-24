@@ -23,6 +23,10 @@ def operation_pending_dir() -> Path:
 
 
 def serialize_job(job: BankOperationJob) -> dict[str, Any]:
+    result_json = job.result_json or {}
+    enqueue = result_json.get('enqueue') if isinstance(result_json, dict) else None
+    enqueue = enqueue if isinstance(enqueue, dict) else {}
+
     return {
         'id': job.id,
         'operation_type': job.operation_type,
@@ -40,7 +44,12 @@ def serialize_job(job: BankOperationJob) -> dict[str, Any]:
         'progress_percent': round((int(job.progress_current or 0) / max(int(job.progress_total or 1), 1)) * 100, 2),
         'progress_label': job.progress_label,
         'request': job.request_json or {},
-        'result': job.result_json or {},
+        'result': result_json,
+        'celery_task_id': enqueue.get('celery_task_id'),
+        'task_name': enqueue.get('task_name'),
+        'enqueued_at': enqueue.get('enqueued_at'),
+        'retry_token': enqueue.get('retry_token'),
+        'enqueue_history': result_json.get('enqueue_history') or [],
         'error_message': job.error_message,
         'created_at': job.created_at,
         'started_at': job.started_at,

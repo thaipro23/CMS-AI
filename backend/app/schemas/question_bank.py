@@ -826,6 +826,11 @@ class BankOperationJobOut(BaseModel):
     progress_label: str = ''
     request: dict = Field(default_factory=dict)
     result: dict = Field(default_factory=dict)
+    celery_task_id: str | None = None
+    task_name: str | None = None
+    enqueued_at: datetime | str | None = None
+    retry_token: str | None = None
+    enqueue_history: list[dict] = Field(default_factory=list)
     error_message: str | None = None
     created_at: datetime | None = None
     started_at: datetime | None = None

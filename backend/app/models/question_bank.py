@@ -416,6 +416,7 @@ class BankChapterStats(Base):
     draft_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retired_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    carry_over_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     duplicate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     easy_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     medium_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

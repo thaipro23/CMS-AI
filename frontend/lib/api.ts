@@ -224,8 +224,40 @@ function unwrapCursorPage<T>(data: T[] | CursorPaginatedResponse<T>): T[] {
   return data?.items || [];
 }
 
+async function parsePage<T>(response: Response): Promise<PaginatedResponse<T>> {
+  const data = await parseResponse<T[] | PaginatedResponse<T>>(response);
+  if (Array.isArray(data)) {
+    return {
+      items: data,
+      total: data.length,
+      page: 1,
+      page_size: data.length,
+      total_pages: 1,
+      has_next: false,
+    };
+  }
+  return data;
+}
+
 async function parsePageItems<T>(response: Response): Promise<T[]> {
   return unwrapPage<T>(await parseResponse<T[] | PaginatedResponse<T>>(response));
+}
+
+async function fetchAllPageItems<T>(
+  buildUrl: (page: number) => string,
+  init: RequestInit,
+  options: { maxPages?: number } = {},
+): Promise<T[]> {
+  const maxPages = Math.max(1, options.maxPages || 250);
+  const items: T[] = [];
+  let page = 1;
+  while (page <= maxPages) {
+    const data = await parsePage<T>(await apiFetch(buildUrl(page), init));
+    items.push(...(data.items || []));
+    if (!data.has_next) break;
+    page += 1;
+  }
+  return items;
 }
 
 async function parseCursorPageItems<T>(response: Response): Promise<T[]> {
@@ -1135,8 +1167,16 @@ export async function getBankSummary(headers: HeadersInit) {
 }
 
 export async function getDepartments(headers: HeadersInit) {
-  return parsePageItems<Department>(
-    await apiFetch(`${API}/question-bank-v2/departments?page_size=50`, { credentials: "include", headers }),
+  return fetchAllPageItems<Department>(
+    (page) => `${API}/question-bank-v2/departments?page=${page}&page_size=50`,
+    { credentials: "include", headers },
+    { maxPages: 20 },
+  );
+}
+
+export async function getDepartment(headers: HeadersInit, id: string) {
+  return parseResponse<Department>(
+    await apiFetch(`${API}/question-bank-v2/departments/${encodeURIComponent(id)}`, { credentials: "include", headers }),
   );
 }
 
@@ -1160,11 +1200,22 @@ export async function deleteDepartment(headers: HeadersInit, id: string) {
 }
 
 export async function getSubjects(headers: HeadersInit, departmentId?: string) {
-  const params = new URLSearchParams();
-  if (departmentId) params.set('department_id', departmentId);
-  params.set('page_size', '100');
-  return parsePageItems<Subject>(
-    await apiFetch(`${API}/question-bank-v2/subjects?${params.toString()}`, { credentials: "include", headers }),
+  return fetchAllPageItems<Subject>(
+    (page) => {
+      const params = new URLSearchParams();
+      if (departmentId) params.set('department_id', departmentId);
+      params.set('page', String(page));
+      params.set('page_size', '100');
+      return `${API}/question-bank-v2/subjects?${params.toString()}`;
+    },
+    { credentials: "include", headers },
+    { maxPages: departmentId ? 50 : 20 },
+  );
+}
+
+export async function getSubject(headers: HeadersInit, id: string) {
+  return parseResponse<Subject>(
+    await apiFetch(`${API}/question-bank-v2/subjects/${encodeURIComponent(id)}`, { credentials: "include", headers }),
   );
 }
 
@@ -1188,11 +1239,22 @@ export async function deleteSubject(headers: HeadersInit, id: string) {
 }
 
 export async function getSubjectOfferings(headers: HeadersInit, subjectId?: string) {
-  const params = new URLSearchParams();
-  if (subjectId) params.set('subject_id', subjectId);
-  params.set('page_size', '100');
-  return parsePageItems<SubjectOffering>(
-    await apiFetch(`${API}/question-bank-v2/subject-versions?${params.toString()}`, { credentials: "include", headers }),
+  return fetchAllPageItems<SubjectOffering>(
+    (page) => {
+      const params = new URLSearchParams();
+      if (subjectId) params.set('subject_id', subjectId);
+      params.set('page', String(page));
+      params.set('page_size', '100');
+      return `${API}/question-bank-v2/subject-versions?${params.toString()}`;
+    },
+    { credentials: "include", headers },
+    { maxPages: subjectId ? 50 : 30 },
+  );
+}
+
+export async function getSubjectOffering(headers: HeadersInit, id: string) {
+  return parseResponse<SubjectOffering>(
+    await apiFetch(`${API}/question-bank-v2/subject-versions/${encodeURIComponent(id)}`, { credentials: "include", headers }),
   );
 }
 
@@ -1216,12 +1278,23 @@ export async function deleteSubjectOffering(headers: HeadersInit, id: string) {
 }
 
 export async function getSubjectChapters(headers: HeadersInit, subjectId?: string, subjectOfferingId?: string) {
-  const params = new URLSearchParams();
-  if (subjectId) params.set('subject_id', subjectId);
-  if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
-  params.set('page_size', '100');
-  return parsePageItems<SubjectChapter>(
-    await apiFetch(`${API}/question-bank-v2/chapters?${params.toString()}`, { credentials: "include", headers }),
+  return fetchAllPageItems<SubjectChapter>(
+    (page) => {
+      const params = new URLSearchParams();
+      if (subjectId) params.set('subject_id', subjectId);
+      if (subjectOfferingId) params.set('subject_offering_id', subjectOfferingId);
+      params.set('page', String(page));
+      params.set('page_size', '100');
+      return `${API}/question-bank-v2/chapters?${params.toString()}`;
+    },
+    { credentials: "include", headers },
+    { maxPages: subjectOfferingId ? 50 : 250 },
+  );
+}
+
+export async function getSubjectChapter(headers: HeadersInit, id: string) {
+  return parseResponse<SubjectChapter>(
+    await apiFetch(`${API}/question-bank-v2/chapters/${encodeURIComponent(id)}`, { credentials: "include", headers }),
   );
 }
 

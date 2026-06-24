@@ -199,6 +199,7 @@ class BankDashboardStatsService:
             'draft_error_count': draft_error,
             'rejected_count': int(stat.rejected_count or 0),
             'retired_count': int(stat.retired_count or 0),
+            'carry_over_count': int(getattr(stat, 'carry_over_count', 0) or 0),
             'duplicate_count': int(stat.duplicate_count or 0),
             'easy_count': int(stat.easy_count or 0),
             'medium_count': int(stat.medium_count or 0),
@@ -238,13 +239,17 @@ class BankDashboardStatsService:
         chapter_stats = chapter_stats or self.chapter_stats_map()
         offerings = self.db.query(SubjectOffering).all()
         chapters = self.db.query(SubjectChapter).all()
+        chapters_by_offering: dict[str, list[SubjectChapter]] = {}
+        for chapter in chapters:
+            if chapter.subject_offering_id:
+                chapters_by_offering.setdefault(chapter.subject_offering_id, []).append(chapter)
         chapter_limit = self.chapter_question_limit_default()
         out: dict[str, dict[str, Any]] = {}
         for offering in offerings:
-            own = [c for c in chapters if c.subject_offering_id == offering.id]
+            own = chapters_by_offering.get(offering.id, [])
             stats = [chapter_stats.get(c.id, {}) for c in own]
             chapter_count = len(own)
-            done = len([s for s in stats if s.get('is_review_done')])
+            done = sum(1 for s in stats if s.get('is_review_done'))
             unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
             draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
@@ -284,12 +289,15 @@ class BankDashboardStatsService:
         offering_stats = offering_stats or self.offering_summary_map()
         subjects = self.db.query(Subject).all()
         offerings = self.db.query(SubjectOffering).all()
+        offerings_by_subject: dict[str, list[SubjectOffering]] = {}
+        for offering in offerings:
+            offerings_by_subject.setdefault(offering.subject_id, []).append(offering)
         out: dict[str, dict[str, Any]] = {}
         for subject in subjects:
-            own = [o for o in offerings if o.subject_id == subject.id]
+            own = offerings_by_subject.get(subject.id, [])
             stats = [offering_stats.get(o.id, {}) for o in own]
             version_count = len(own)
-            done = len([s for s in stats if s.get('is_review_done')])
+            done = sum(1 for s in stats if s.get('is_review_done'))
             unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
             draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
             total = sum(int(s.get('total_questions') or 0) for s in stats)
@@ -328,12 +336,15 @@ class BankDashboardStatsService:
         subject_stats = subject_stats or self.subject_summary_map()
         departments = self.db.query(Department).all()
         subjects = self.db.query(Subject).all()
+        subjects_by_department: dict[str, list[Subject]] = {}
+        for subject in subjects:
+            subjects_by_department.setdefault(subject.department_id, []).append(subject)
         out: dict[str, dict[str, Any]] = {}
         for department in departments:
-            own = [s for s in subjects if s.department_id == department.id]
+            own = subjects_by_department.get(department.id, [])
             stats = [subject_stats.get(s.id, {}) for s in own]
             subject_count = len(own)
-            done = len([s for s in stats if s.get('is_review_done')])
+            done = sum(1 for s in stats if s.get('is_review_done'))
             unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
             draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
             total = sum(int(s.get('total_questions') or 0) for s in stats)
@@ -457,6 +468,7 @@ class BankDashboardStatsService:
             func.sum(case((and_(active, Question.status.in_(BANK_ERROR_STATUSES)), 1), else_=0)).label('draft_error_count'),
             func.sum(case((and_(active, Question.status == 'rejected'), 1), else_=0)).label('rejected_count'),
             func.sum(case((Question.is_retired.is_(True), 1), else_=0)).label('retired_count'),
+            func.sum(case((and_(active, Question.is_carry_over.is_(True)), 1), else_=0)).label('carry_over_count'),
             func.sum(case((and_(active, Question.is_duplicate.is_(True)), 1), else_=0)).label('duplicate_count'),
             func.sum(case((and_(active, Question.difficulty.in_(DIFFICULTY_EASY)), 1), else_=0)).label('easy_count'),
             func.sum(case((and_(active, Question.difficulty.in_(DIFFICULTY_MEDIUM)), 1), else_=0)).label('medium_count'),
@@ -509,6 +521,7 @@ class BankDashboardStatsService:
             row.draft_error_count = draft_error
             row.rejected_count = int(getattr(q, 'rejected_count', 0) or 0)
             row.retired_count = int(getattr(q, 'retired_count', 0) or 0)
+            row.carry_over_count = int(getattr(q, 'carry_over_count', 0) or 0)
             row.duplicate_count = int(getattr(q, 'duplicate_count', 0) or 0)
             row.easy_count = int(getattr(q, 'easy_count', 0) or 0)
             row.medium_count = int(getattr(q, 'medium_count', 0) or 0)

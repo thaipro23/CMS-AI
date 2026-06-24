@@ -174,6 +174,11 @@ export type BankOperationJob = {
   progress_label: string
   request?: Record<string, unknown>
   result?: Record<string, unknown>
+  celery_task_id?: string | null
+  task_name?: string | null
+  enqueued_at?: string | null
+  retry_token?: string | null
+  enqueue_history?: Array<Record<string, unknown>>
   error_message?: string | null
   created_at?: string | null
   started_at?: string | null

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.4.4-academic-security-scale-hardening'
+    app_version: str = '25.9.16.5.21-bank-scale-runtime-hardening'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 

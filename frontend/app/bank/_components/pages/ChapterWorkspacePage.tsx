@@ -57,9 +57,13 @@ import {
   getBankVersions,
   getCourseQuizInstances,
   getDepartments,
+  getDepartment,
   getMaterialVersions,
+  getSubjectChapter,
   getSubjectChapters,
+  getSubjectOffering,
   getSubjectOfferings,
+  getSubject,
   getSubjects,
   markBankDiffResolved,
   previewBankVersionDiff,
@@ -143,10 +147,15 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [questionSort, setQuestionSort] = useState('needs_review')
 
   const load = async () => {
-    const [nextDepartments, nextSubjects, nextOfferings, nextChapters, nextBankVersions, nextReleases] = await Promise.all([
-      getDepartments(headers), getSubjects(headers), getSubjectOfferings(headers), getSubjectChapters(headers), getBankVersions(headers, chapterId), getBankReleases(headers, undefined, chapterId),
+    const chapter = await getSubjectChapter(headers, chapterId)
+    const [subject, offering, nextBankVersions, nextReleases] = await Promise.all([
+      getSubject(headers, chapter.subject_id),
+      chapter.subject_offering_id ? getSubjectOffering(headers, chapter.subject_offering_id) : Promise.resolve(null),
+      getBankVersions(headers, chapterId),
+      getBankReleases(headers, undefined, chapterId),
     ])
-    setDepartments(nextDepartments); setSubjects(nextSubjects); setOfferings(nextOfferings); setChapters(nextChapters); setBankVersions(nextBankVersions); setReleases(nextReleases)
+    const department = await getDepartment(headers, subject.department_id)
+    setDepartments([department]); setSubjects([subject]); setOfferings(offering ? [offering] : []); setChapters([chapter]); setBankVersions(nextBankVersions); setReleases(nextReleases)
   }
 
   const selectedBankVersion = bankVersions[0] || null
