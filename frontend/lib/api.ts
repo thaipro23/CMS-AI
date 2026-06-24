@@ -1426,7 +1426,7 @@ export async function deleteMaterialVersion(headers: HeadersInit, materialVersio
   );
 }
 
-export async function uploadBankMaterial(
+export async function enqueueBankMaterialUpload(
   headers: HeadersInit,
   bankVersionId: string,
   file: File,
@@ -1437,13 +1437,22 @@ export async function uploadBankMaterial(
   form.append('title', payload.title || file.name);
   form.append('change_type', payload.change_type || 'initial');
   form.append('replace_existing', String(Boolean(payload.replace_existing)));
-  const queued = await parseResponse<BankOperationJobQueued>(
+  return parseResponse<BankOperationJobQueued>(
     await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/upload-job`, {
       method: 'POST',
       headers: withoutContentType(headers),
       body: form,
     }),
   );
+}
+
+export async function uploadBankMaterial(
+  headers: HeadersInit,
+  bankVersionId: string,
+  file: File,
+  payload: { title?: string; change_type?: string; replace_existing?: boolean } = {},
+) {
+  const queued = await enqueueBankMaterialUpload(headers, bankVersionId, file, payload);
   return enqueueAndWait<MaterialUploadResult>(headers, queued, 10 * 60 * 1000);
 }
 
@@ -1477,6 +1486,29 @@ export async function previewGenerateFromBankVersion(
   );
 }
 
+export async function enqueueGenerateFromBankVersion(
+  headers: HeadersInit,
+  bankVersionId: string,
+  payload: {
+    question_count: number;
+    target_question_count?: number;
+    difficulty_easy?: number;
+    difficulty_medium?: number;
+    difficulty_hard?: number;
+    material_version_ids?: string[] | null;
+    provider?: string;
+    approve_after_generate?: boolean;
+  },
+) {
+  return parseResponse<BankOperationJobQueued>(
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate-job`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
 export async function generateFromBankVersion(
   headers: HeadersInit,
   bankVersionId: string,
@@ -1491,13 +1523,7 @@ export async function generateFromBankVersion(
     approve_after_generate?: boolean;
   },
 ) {
-  const queued = await parseResponse<BankOperationJobQueued>(
-    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/generate-job`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-    }),
-  );
+  const queued = await enqueueGenerateFromBankVersion(headers, bankVersionId, payload);
   return enqueueAndWait<BankGenerateResult>(headers, queued, 20 * 60 * 1000);
 }
 

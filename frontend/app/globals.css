@@ -4816,3 +4816,14 @@ label, .field-label { color: var(--color-text); }
     transition-duration: .001ms !important;
   }
 }
+
+/* v25.9.16.5.25 Bank chapter persistent operation UX */
+.bank-operation-banner {
+  display: grid;
+  gap: 4px;
+}
+.bank-operation-banner small {
+  display: block;
+  opacity: .85;
+  margin-top: 2px;
+}
