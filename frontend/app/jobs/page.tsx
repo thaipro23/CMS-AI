@@ -66,7 +66,7 @@ export default function JobsPage() {
     try {
       const nextJob = await retryBankOperationJob(authHeaders(), jobId)
       setOperationJobs((items) => items.map((item) => item.id === nextJob.id ? nextJob : item))
-      setMessage({ type: 'success', title: 'Đã đưa lại job vào hàng đợi', message: `Job ${shortId(jobId)} đã được gửi lại cho worker.` })
+      setMessage({ type: 'success', title: 'Đã đưa lại job vào hàng đợi', body: `Job ${shortId(jobId)} đã được gửi lại cho worker.` })
       await load()
     } catch (error) {
       setMessage(toUserError(error))
