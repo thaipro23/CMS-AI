@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import {
   BankRelease,
@@ -110,6 +110,10 @@ import {
   BankStackedChart,
   countRows,
   auditActionText,
+  SystemStatusBanner,
+  BANK_OPERATION_COPY,
+  validateBankMaterialFile,
+  normalizeBankFileError,
 } from '../shared'
 
 type ChapterLongOperation = {
@@ -126,21 +130,63 @@ type ChapterLongOperation = {
 }
 
 type PopupMessage = { type: 'info' | 'success' | 'warning' | 'danger'; text: string }
+type ChapterActionKey =
+  | 'prepare_workspace'
+  | 'generate_preview'
+  | 'generate_enqueue'
+  | 'material_upload_enqueue'
+  | 'material_delete'
+  | 'diff_check'
+  | 'diff_apply'
+  | 'release_create'
+  | 'release_publish'
+  | 'bulk_approve'
+  | 'question_review'
+  | 'question_edit'
+  | 'question_reject'
+
 
 function chapterOperationStorageKey(chapterId: string) {
   return `ai-bank-chapter-operation:${chapterId}`
 }
 
 function errorText(error: unknown, fallback = 'Thao tác thất bại. Vui lòng thử lại.') {
-  if (error instanceof Error && error.message) return error.message
-  if (typeof error === 'string' && error.trim()) return error
-  return fallback
+  const raw = error instanceof Error && error.message ? error.message : typeof error === 'string' && error.trim() ? error : fallback
+  return normalizeBankFileError(raw)
 }
 
 function operationResultMessage(result: Record<string, unknown> | null | undefined, fallback: string) {
   const userMessage = typeof result?.user_message === 'string' ? result.user_message : ''
   const message = typeof result?.message === 'string' ? result.message : ''
   return userMessage || message || fallback
+}
+
+
+function operationTitle(operation: ChapterLongOperation | null) {
+  if (!operation) return 'Hệ thống đang xử lý'
+  return operation.type === 'generate' ? 'Hệ thống đang tạo câu hỏi' : 'Hệ thống đang xử lý tài liệu'
+}
+
+function operationSteps(operation: ChapterLongOperation | null) {
+  if (!operation) return []
+  return operation.type === 'generate' ? BANK_OPERATION_COPY.generate : BANK_OPERATION_COPY.material_upload
+}
+
+function operationActiveStep(operation: ChapterLongOperation | null) {
+  if (!operation) return 0
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - operation.createdAt) / 1000))
+  if (operation.type === 'generate') {
+    if (ageSeconds < 4) return 0
+    if (ageSeconds < 16) return 1
+    if (ageSeconds < 28) return 2
+    if (ageSeconds < 42) return 3
+    return 4
+  }
+  if (ageSeconds < 3) return 0
+  if (ageSeconds < 8) return 1
+  if (ageSeconds < 20) return 2
+  if (ageSeconds < 30) return 3
+  return 4
 }
 
 export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
@@ -177,6 +223,8 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [popupMessage, setPopupMessage] = useState<PopupMessage | null>(null)
   const [submittingLabel, setSubmittingLabel] = useState('')
   const [activeOperation, setActiveOperation] = useState<ChapterLongOperation | null>(null)
+  const [operationTick, setOperationTick] = useState(0)
+  const [actionBusy, setActionBusy] = useState<ChapterActionKey | null>(null)
   const [questionStatusFilter, setQuestionStatusFilter] = useState(() => searchParams.get('status') || 'all')
   const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState(() => searchParams.get('difficulty') || 'all')
   const [questionSort, setQuestionSort] = useState('needs_review')
@@ -256,6 +304,12 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     }
   }, [chapterId])
 
+  useEffect(() => {
+    if (!activeOperation) return undefined
+    const timer = window.setInterval(() => setOperationTick((value) => value + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [activeOperation?.id])
+
   const persistOperation = (operation: ChapterLongOperation) => {
     setActiveOperation(operation)
     try { window.localStorage.setItem(chapterOperationStorageKey(chapterId), JSON.stringify(operation)) } catch { /* best effort */ }
@@ -264,6 +318,18 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const clearPersistedOperation = () => {
     setActiveOperation(null)
     try { window.localStorage.removeItem(chapterOperationStorageKey(chapterId)) } catch { /* best effort */ }
+  }
+
+  const isActionBusy = (key: ChapterActionKey) => actionBusy === key
+  const BusyLabel = ({ text }: { text: string }) => <><span className="spinner tiny" aria-hidden="true" />{text}</>
+  const runAction = async (key: ChapterActionKey, work: () => Promise<unknown>, ok: string, after?: () => Promise<void>, loadingText?: string) => {
+    if (actionBusy) return
+    setActionBusy(key)
+    try {
+      await run(work, ok, after, loadingText || ok)
+    } finally {
+      setActionBusy(null)
+    }
   }
 
   useEffect(() => {
@@ -339,9 +405,8 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const overQuota = numericGenerateCount > remainingQuota
   const invalidDifficulty = difficultyTotal !== 100
   const canGenerateNow = Boolean(!chapterPublished && selectedBankVersion && materials.length && can('generate_questions') && !overQuota && !invalidDifficulty && numericGenerateCount >= 1 && remainingQuota > 0)
-  const pageBusy = busy || Boolean(submittingLabel) || Boolean(activeOperation)
-  const pageBusyLabel = submittingLabel || activeOperation?.label || busyLabel
-  const activeOperationMessage = activeOperation?.label || ''
+  const materialOperationBusy = activeOperation?.type === 'material_upload'
+  const generateOperationBusy = activeOperation?.type === 'generate'
   const filteredQuestions = useMemo(() => {
     const reviewRank = (q: BankVersionQuestion) => {
       if (q.status === 'draft_error') return 0
@@ -376,7 +441,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   useEffect(() => {
     if (chapter && !chapterPublished && !selectedBankVersion && !autoCreateTried && can('edit_questions')) {
       setAutoCreateTried(true)
-      run(async () => { await ensureBankVersion() }, 'Đã chuẩn bị workspace cho bài', load).catch(() => null)
+      runAction('prepare_workspace', async () => { await ensureBankVersion() }, 'Đã chuẩn bị workspace cho bài', load, 'Đang chuẩn bị workspace...').catch(() => null)
     }
   }, [chapter?.id, selectedBankVersion?.id, autoCreateTried]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -460,21 +525,22 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: difficultyEasy === '' ? 50 : Number(difficultyEasy), difficulty_medium: difficultyMedium === '' ? 30 : Number(difficultyMedium), difficulty_hard: difficultyHard === '' ? 20 : Number(difficultyHard) }
 
   const openGenerateConfirm = async () => {
-    if (!selectedBankVersion || chapterPublished) return
-    await run(async () => {
+    if (!selectedBankVersion || chapterPublished || isActionBusy('generate_preview')) return
+    await runAction('generate_preview', async () => {
       const preview = await previewGenerateFromBankVersion(headers, selectedBankVersion.id, generationPayload)
       setGeneratePreview(preview)
     }, 'Đã tính chi phí dự kiến', undefined, 'Đang tính chi phí dự kiến...')
   }
 
   const confirmGenerateQuestions = async () => {
-    if (!selectedBankVersion || chapterPublished || !generatePreview || pageBusy) return
+    if (!selectedBankVersion || chapterPublished || !generatePreview || generateOperationBusy || isActionBusy('generate_enqueue')) return
     const questionCount = generatePreview.question_count || numericGenerateCount
     setPopupMessage(null)
-    setSubmittingLabel(`AI đang tạo ${questionCount} câu hỏi, vui lòng chờ...`)
+    setSubmittingLabel(`Hệ thống đang tạo ${questionCount} câu hỏi, vui lòng chờ...`)
+    setActionBusy('generate_enqueue')
     try {
       const queued = await enqueueGenerateFromBankVersion(headers, selectedBankVersion.id, generationPayload)
-      const label = `AI đang tạo ${questionCount} câu hỏi, vui lòng chờ...`
+      const label = `Hệ thống đang tạo ${questionCount} câu hỏi từ học liệu của bài này. Bạn chưa cần thao tác thêm.`
       persistOperation({
         id: `${queued.job.id}:generate`,
         jobId: queued.job.id,
@@ -495,17 +561,25 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setMessage(text)
     } finally {
       setSubmittingLabel('')
+      setActionBusy(null)
     }
   }
 
   const uploadSelectedMaterial = async () => {
-    if (!file || !selectedBankVersion || chapterPublished || pageBusy) return
+    if (!file || !selectedBankVersion || chapterPublished || materialOperationBusy || isActionBusy('material_upload_enqueue')) return
     const selectedFile = file
+    const validationError = validateBankMaterialFile(selectedFile)
+    if (validationError) {
+      setPopupMessage({ type: 'danger', text: validationError })
+      setMessage(validationError)
+      return
+    }
     setPopupMessage(null)
-    setSubmittingLabel(`Đang thêm tài liệu ${selectedFile.name}, vui lòng chờ...`)
+    setSubmittingLabel(`Hệ thống đang tiếp nhận học liệu ${selectedFile.name}, vui lòng chờ...`)
+    setActionBusy('material_upload_enqueue')
     try {
       const queued = await enqueueBankMaterialUpload(headers, selectedBankVersion.id, selectedFile, { title: selectedFile.name, change_type: diffBaseBankVersionId ? 'updated_after_clone' : 'initial', replace_existing: false })
-      const label = `Đang thêm tài liệu ${selectedFile.name}, vui lòng chờ...`
+      const label = `Hệ thống đang tiếp nhận và bóc tách nội dung từ ${selectedFile.name}. Trạng thái sẽ tự cập nhật tại đây.`
       persistOperation({
         id: `${queued.job.id}:material_upload`,
         jobId: queued.job.id,
@@ -525,7 +599,22 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setMessage(text)
     } finally {
       setSubmittingLabel('')
+      setActionBusy(null)
     }
+  }
+
+  const onMaterialFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files?.[0] || null
+    const validationError = validateBankMaterialFile(selected)
+    if (selected && validationError) {
+      setFile(null)
+      setPopupMessage({ type: 'danger', text: validationError })
+      setMessage(validationError)
+      event.currentTarget.value = ''
+      return
+    }
+    setFile(selected)
+    if (popupMessage?.type === 'danger') setPopupMessage(null)
   }
 
   const materialPreviewChunks = (materialView?.chunks || []).slice(0, 80)
@@ -533,17 +622,15 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 ${chunk.content}`).join('\n\n')
 
   return <div className="page-stack bank-multipage">
-    {pageBusy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{pageBusyLabel}</b><small>Trạng thái đã được lưu. Nếu F5, hệ thống vẫn tiếp tục theo dõi việc đang chạy.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }, { label: chapterDisplayName(chapter) }]} />
     {message ? <div className="alert info">{message}</div> : null}
-    {activeOperationMessage ? <div className="alert info bank-operation-banner"><b>{activeOperation?.type === 'generate' ? 'Đang tạo câu hỏi.' : 'Đang thêm tài liệu.'}</b> {activeOperationMessage}<small> Có thể tải lại trang, hệ thống vẫn theo dõi tiếp việc này.</small></div> : null}
     {chapterPublished ? <div className="alert success"><b>Bài đã publish.</b> Các thao tác sửa tài liệu, tạo câu hỏi, duyệt/bỏ câu, kiểm tra thay đổi và chốt lại đã được khóa. Muốn thay đổi, hãy clone/tạo version mới.</div> : null}
     {!chapterPublished && diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
     {!chapterPublished && unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
 
 
     <section className="summary-grid compact-summary">
-      <div><span>Tài liệu</span><b>{materials.length}</b></div>
+      <div className={materialOperationBusy ? 'summary-local-busy' : ''}><span>Tài liệu</span><b>{materials.length}</b>{materialOperationBusy ? <small><span className="spinner tiny" aria-hidden="true" />Đang up tài liệu</small> : null}</div>
       <div><span>Tổng câu hiện có</span><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Còn {remainingQuota} câu</small></div>
       <div><span>Câu đã duyệt</span><b>{stats.approved}</b></div>
       <div><span>Câu chờ duyệt</span><b>{stats.pending}</b></div>
@@ -559,27 +646,27 @@ ${chunk.content}`).join('\n\n')
         <p className="helper">Các thao tác chính nằm trong popup để màn hình duyệt câu hỏi không bị rời rạc.</p>
       </div>
       <div className="button-row no-margin">
-        <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>Tài liệu ({materials.length})</button>
-        {!chapterPublished ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>Tạo câu hỏi</button> : null}
+        <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>
+        {!chapterPublished ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : 'Tạo câu hỏi'}</button> : null}
         <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? 'Xem câu hỏi' : 'Duyệt câu hỏi'}</button>
-        {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={pageBusy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => run(async () => {
+        {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={isActionBusy('diff_check') || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => runAction('diff_check', async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
-        }, 'Đã kiểm tra khác biệt', refreshCurrent)}>Kiểm tra thay đổi</button> : null}
-        {chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button> : !latestRelease ? <button className="btn" disabled={pageBusy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => run(async () => {
+        }, 'Đã kiểm tra khác biệt', refreshCurrent, 'Đang kiểm tra thay đổi...')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra thay đổi'}</button> : null}
+        {chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => runAction('release_create', async () => {
           if (!selectedBankVersion) return
           await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
-        }, 'Đã chốt bộ đề', refreshCurrent)}>Chốt bộ đề</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={pageBusy || !can('publish_questions')} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã public thư viện', refreshCurrent)}>Public thư viện</button> : <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button>}
+        }, 'Đã chốt bộ đề', refreshCurrent, 'Đang chốt bộ đề...')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || !can('publish_questions')} onClick={() => runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã public thư viện', refreshCurrent, 'Đang public thư viện...')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Public thư viện'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button>}
       </div>
       {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">
-        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div>{!chapterPublished ? <button className="btn secondary chapter-action-button review" disabled={pageBusy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
+        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div>{!chapterPublished ? <button className="btn secondary chapter-action-button review" disabled={isActionBusy('bulk_approve') || !can('review_questions') || stats.pending === 0} onClick={() => runAction('bulk_approve', async () => {
           if (!selectedBankVersion) return
           await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
-        }, 'Đã duyệt hết câu chờ', refreshCurrent)}>Duyệt hết câu chờ</button> : null}</div>
+        }, 'Đã duyệt hết câu chờ', refreshCurrent, 'Đang duyệt câu hỏi...')}>{isActionBusy('bulk_approve') ? <BusyLabel text="Đang duyệt" /> : 'Duyệt hết câu chờ'}</button> : null}</div>
         <div className="question-filter-bar">
           <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => setQuestionStatusFilter(event.target.value)}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã public thư viện</option></select></label>
           <label>Độ khó<select className="input" value={questionDifficultyFilter} onChange={(event) => setQuestionDifficultyFilter(event.target.value)}><option value="all">Tất cả</option><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
@@ -620,13 +707,13 @@ ${chunk.content}`).join('\n\n')
                 <div className="question-control-actions">
                   <div className="box-label">Thao tác</div>
                   <div className="question-actions">
-                    {!chapterPublished && item.status !== 'published' ? <button className="btn small secondary" disabled={pageBusy || !can('review_questions')} onClick={() => startEditQuestion(item)}>Sửa</button> : null}
-                    {!chapterPublished && (item.status === 'pending_review' || item.status === 'needs_review' || item.status === 'rejected') ? <button className="btn small success" disabled={pageBusy || !can('review_questions')} onClick={() => run(async () => {
+                    {!chapterPublished && item.status !== 'published' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => startEditQuestion(item)}>Sửa</button> : null}
+                    {!chapterPublished && (item.status === 'pending_review' || item.status === 'needs_review' || item.status === 'rejected') ? <button className="btn small success" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
                       if (!selectedBankVersion) return
                       await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' })
                     }, 'Đã duyệt câu hỏi', refreshCurrent)}>{item.status === 'rejected' ? 'Duyệt lại' : 'Duyệt'}</button> : null}
-                    {!chapterPublished && item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={pageBusy || !can('review_questions')} onClick={() => openRejectQuestion(item)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
-                    {!chapterPublished && item.status === 'approved' ? <button className="btn small secondary" disabled={pageBusy || !can('review_questions')} onClick={() => run(async () => {
+                    {!chapterPublished && item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={busy || !can('review_questions')} onClick={() => openRejectQuestion(item)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
+                    {!chapterPublished && item.status === 'approved' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
                       if (!selectedBankVersion) return
                       await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' })
                     }, 'Đã đưa câu hỏi về chờ duyệt', refreshCurrent)}>Hoàn tác</button> : null}
@@ -636,7 +723,7 @@ ${chunk.content}`).join('\n\n')
             </article>
           })}
         </div>
-        {questionHasNext ? <div className="load-more-row"><button className="btn secondary" type="button" disabled={questionLoadingMore || pageBusy} onClick={loadMoreQuestions}>{questionLoadingMore ? 'Đang tải thêm...' : 'Tải thêm 100 câu'}</button><span className="helper">Đang hiển thị {questions.length} câu đầu. Danh sách dùng cursor/keyset nên không kéo toàn bộ bank vào trình duyệt.</span></div> : null}
+        {questionHasNext ? <div className="load-more-row"><button className="btn secondary" type="button" disabled={questionLoadingMore || busy} onClick={loadMoreQuestions}>{questionLoadingMore ? 'Đang tải thêm...' : 'Tải thêm 100 câu'}</button><span className="helper">Đang hiển thị {questions.length} câu đầu. Danh sách dùng cursor/keyset nên không kéo toàn bộ bank vào trình duyệt.</span></div> : null}
         {!filteredQuestions.length ? <div className="empty-state">Không có câu hỏi phù hợp bộ lọc.</div> : null}
       </div>
     </section>}
@@ -647,10 +734,11 @@ ${chunk.content}`).join('\n\n')
           <h3>Gắn tài liệu</h3>
           <p className="helper">Tài liệu là nguồn để AI tạo câu hỏi cho đúng bài này. Nếu version clone bị đổi tài liệu, hệ thống sẽ kiểm tra khác biệt.</p>
           {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
-          {activeOperation?.type === 'material_upload' ? <div className="alert info"><b>Đang xử lý.</b> {activeOperation.label}</div> : null}
+          {activeOperation?.type === 'material_upload' ? <SystemStatusBanner compact title="Hệ thống đang xử lý tài liệu" message={activeOperation.label} steps={BANK_OPERATION_COPY.material_upload} activeStep={operationActiveStep(activeOperation)} busy /> : null}
           <div className="mini-form">
-            <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
-            <button className="btn" disabled={pageBusy || !file || !can('edit_questions')} onClick={uploadSelectedMaterial}>+ Gắn tài liệu</button>
+            <input className="input" type="file" accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.html,.htm,.srt,.vtt" onChange={onMaterialFileChange} aria-describedby="bank-material-file-help" />
+            <small id="bank-material-file-help" className="helper">Hỗ trợ PDF, DOCX, PPTX, XLSX, CSV, TXT, Markdown, HTML, SRT/VTT. Office cũ DOC/XLS/PPT cần đổi sang định dạng mới.</small>
+            <button className="btn" disabled={materialOperationBusy || isActionBusy('material_upload_enqueue') || !file || !can('edit_questions')} onClick={uploadSelectedMaterial}>{(materialOperationBusy || isActionBusy('material_upload_enqueue')) ? <BusyLabel text="Đang up tài liệu" /> : '+ Gắn tài liệu'}</button>
           </div>
         </div> : <div className="popup-action-panel"><h3>Đã public thư viện</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo bộ đề.</p></div>}
         <div className="popup-list-panel">
@@ -661,7 +749,7 @@ ${chunk.content}`).join('\n\n')
               <small>{item.file_type} · {new Date(item.created_at).toLocaleString('vi-VN')}</small>
               <div className="button-row no-margin">
                 <button className="btn small secondary" onClick={() => openMaterial(item)}>Xem</button>
-                {!chapterPublished ? <button className="btn small danger" disabled={pageBusy || !can('edit_questions')} onClick={() => run(async () => { await deleteMaterialVersion(headers, item.id) }, 'Đã xóa tài liệu', refreshCurrent)}>Xóa</button> : null}
+                {!chapterPublished ? <button className="btn small danger" disabled={isActionBusy('material_delete') || !can('edit_questions')} onClick={() => runAction('material_delete', async () => { await deleteMaterialVersion(headers, item.id) }, 'Đã xóa tài liệu', refreshCurrent, 'Đang xóa tài liệu...')}>{isActionBusy('material_delete') ? <BusyLabel text="Đang xóa" /> : 'Xóa'}</button> : null}
               </div>
             </div>)}
             {!materials.length ? <div className="empty-state">Chưa có tài liệu.</div> : null}
@@ -676,7 +764,7 @@ ${chunk.content}`).join('\n\n')
           <h3>Kế hoạch tạo câu hỏi</h3>
           <p className="helper">AI dùng tài liệu đã gắn để tạo câu hỏi theo tỷ lệ EASY/MEDIUM/HARD, kiểm tra chất lượng rồi đưa vào hàng chờ duyệt.</p>
           {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
-          {activeOperation?.type === 'generate' ? <div className="alert info"><b>Đang xử lý.</b> {activeOperation.label}</div> : null}
+          {activeOperation?.type === 'generate' ? <SystemStatusBanner compact title="Hệ thống đang tạo câu hỏi" message={activeOperation.label} steps={BANK_OPERATION_COPY.generate} activeStep={operationActiveStep(activeOperation)} busy /> : null}
           {chapterPublished ? <div className="alert warning">Bài đã publish nên không thể tạo thêm câu hỏi trên version này.</div> : null}
           <div className="quota-box"><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Tổng câu đã tạo / giới hạn của bài · còn {remainingQuota} câu</small></div>
           <div className="generation-plan-box">
@@ -698,7 +786,7 @@ ${chunk.content}`).join('\n\n')
             {invalidDifficulty ? <div className="alert warning">Tổng tỷ lệ Dễ/Trung bình/Khó phải bằng 100%.</div> : null}
             {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
             {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu. Không thể tạo thêm.</div> : null}
-            <div className="modal-actions"><button className="btn secondary" onClick={() => setGenerateManagerOpen(false)}>Đóng</button><button className="btn" disabled={pageBusy || !canGenerateNow} onClick={openGenerateConfirm}>Tính chi phí & tạo</button></div>
+            <div className="modal-actions"><button className="btn secondary" onClick={() => setGenerateManagerOpen(false)}>Đóng</button><button className="btn" disabled={isActionBusy('generate_preview') || generateOperationBusy || !canGenerateNow} onClick={openGenerateConfirm}>{isActionBusy('generate_preview') ? <BusyLabel text="Đang tính" /> : generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : 'Tính chi phí & tạo'}</button></div>
           </div>
         </div>
       </div>
@@ -719,7 +807,7 @@ ${chunk.content}`).join('\n\n')
           <div><span>Token dự kiến</span><b>{Number(generatePreview.estimated_input_tokens + generatePreview.estimated_output_tokens).toLocaleString('vi-VN')}</b><small>Input {generatePreview.estimated_input_tokens.toLocaleString('vi-VN')} · Output {generatePreview.estimated_output_tokens.toLocaleString('vi-VN')}</small></div>
         </div>
         <p className="helper">{generatePreview.message}</p>
-        <div className="button-row"><button className="btn secondary" disabled={pageBusy} onClick={() => setGeneratePreview(null)}>Hủy</button><button className="btn" disabled={chapterPublished || pageBusy} onClick={confirmGenerateQuestions}>Xác nhận tạo câu hỏi</button></div>
+        <div className="button-row"><button className="btn secondary" disabled={isActionBusy('generate_enqueue')} onClick={() => setGeneratePreview(null)}>Hủy</button><button className="btn" disabled={chapterPublished || generateOperationBusy || isActionBusy('generate_enqueue')} onClick={confirmGenerateQuestions}>{isActionBusy('generate_enqueue') ? <BusyLabel text="Đang gửi yêu cầu" /> : 'Xác nhận tạo câu hỏi'}</button></div>
       </div> : null}
     </Modal>
 
@@ -729,7 +817,7 @@ ${chunk.content}`).join('\n\n')
         <p className="helper">Nhập lý do hủy/bỏ câu. Lý do này được lưu lại để biết ai làm gì và dùng làm dữ liệu fine-tune AI sau này.</p>
         {rejectingQuestion ? <div className="reject-question-preview"><b>{rejectingQuestion.question_text || 'Câu lỗi chưa có nội dung'}</b>{rejectingQuestion.status === 'draft_error' ? <small>Lý do lỗi: {bankQuestionErrorMessage(rejectingQuestion) || 'Không rõ'}</small> : null}</div> : null}
         <textarea className="input" rows={4} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Ví dụ: Câu hỏi không đúng tài liệu, đáp án sai, câu lỗi không sửa được..." />
-        <div className="modal-actions"><button className="btn secondary" disabled={pageBusy} onClick={() => { setRejectingQuestion(null); setRejectReason('') }}>Hủy</button><button className="btn danger" disabled={chapterPublished || pageBusy || !rejectReason.trim()} onClick={confirmRejectQuestion}>Xác nhận bỏ câu</button></div>
+        <div className="modal-actions"><button className="btn secondary" disabled={busy} onClick={() => { setRejectingQuestion(null); setRejectReason('') }}>Hủy</button><button className="btn danger" disabled={chapterPublished || busy || !rejectReason.trim()} onClick={confirmRejectQuestion}>Xác nhận bỏ câu</button></div>
       </div>
     </Modal>
 
@@ -761,7 +849,7 @@ ${chunk.content}`).join('\n\n')
         </div>
         <label>Trích đoạn nguồn<textarea className="input" rows={2} value={editForm.source_excerpt} onChange={(event) => updateEditForm('source_excerpt', event.target.value)} /></label>
         <label>Bằng chứng nguồn<textarea className="input" rows={2} value={editForm.source_evidence} onChange={(event) => updateEditForm('source_evidence', event.target.value)} /></label>
-        <div className="button-row"><button className="btn" disabled={chapterPublished || pageBusy || !editForm.question_text.trim() || !editForm.option_a.trim() || !editForm.option_b.trim() || !editForm.option_c.trim() || !editForm.option_d.trim()} onClick={saveEditedQuestion}>Lưu chỉnh sửa</button><button className="btn secondary" onClick={() => { setEditingQuestion(null); setEditForm(null) }}>Hủy</button></div>
+        <div className="button-row"><button className="btn" disabled={chapterPublished || busy || !editForm.question_text.trim() || !editForm.option_a.trim() || !editForm.option_b.trim() || !editForm.option_c.trim() || !editForm.option_d.trim()} onClick={saveEditedQuestion}>Lưu chỉnh sửa</button><button className="btn secondary" onClick={() => { setEditingQuestion(null); setEditForm(null) }}>Hủy</button></div>
       </div> : null}
     </Modal>
 
@@ -786,8 +874,8 @@ ${chunk.content}`).join('\n\n')
         </div>
         <p className="helper">Giáo viên chỉ cần chọn cách xử lý. Hệ thống sẽ tự cập nhật danh sách câu hỏi.</p>
         <div className="button-row">
-          <button className="btn" disabled={pageBusy} onClick={() => run(keepReusableOnly, 'Đã giữ câu phù hợp và bỏ câu không còn chắc phù hợp')}>Giữ câu còn phù hợp</button>
-          <button className="btn secondary" disabled={pageBusy} onClick={() => run(rejectAllCarryOver, 'Đã bỏ các câu clone từ tài liệu cũ')}>Không giữ câu cũ</button>
+          <button className="btn" disabled={isActionBusy('diff_apply')} onClick={() => runAction('diff_apply', keepReusableOnly, 'Đã giữ câu phù hợp và bỏ câu không còn chắc phù hợp', undefined, 'Đang áp dụng kết quả kiểm tra...')}>{isActionBusy('diff_apply') ? <BusyLabel text="Đang áp dụng" /> : 'Giữ câu còn phù hợp'}</button>
+          <button className="btn secondary" disabled={isActionBusy('diff_apply')} onClick={() => runAction('diff_apply', rejectAllCarryOver, 'Đã bỏ các câu clone từ tài liệu cũ', undefined, 'Đang cập nhật câu hỏi...')}>{isActionBusy('diff_apply') ? <BusyLabel text="Đang cập nhật" /> : 'Không giữ câu cũ'}</button>
         </div>
       </div> : null}
     </Modal>

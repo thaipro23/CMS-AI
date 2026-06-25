@@ -284,6 +284,110 @@ export function reviewStatusClass(status?: string | null) {
   return 'bank-status-card status-incomplete'
 }
 
+
+export const BANK_STATUS_LEGEND = [
+  { key: 'empty', label: 'Chưa làm', className: 'dot-empty' },
+  { key: 'incomplete', label: 'Chưa làm hết', className: 'dot-incomplete' },
+  { key: 'published', label: 'Đã public thư viện', className: 'dot-published' },
+] as const
+
+export function BankStatusLegend() {
+  return <div className="bank-status-legend bank-status-legend-refined" aria-label="Chú giải trạng thái">
+    {BANK_STATUS_LEGEND.map((item) => <span key={item.key}><i className={item.className} />{item.label}</span>)}
+  </div>
+}
+
+export const BANK_MATERIAL_ALLOWED_EXTENSIONS = ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt', 'md', 'html', 'htm', 'srt', 'vtt']
+const LEGACY_OFFICE_EXTENSIONS = ['doc', 'xls', 'ppt']
+
+export function normalizeBankFileError(message: string) {
+  const text = (message || '').trim()
+  const lower = text.toLowerCase()
+  if (!text) return 'Không xử lý được tài liệu. Vui lòng thử lại hoặc chọn file khác.'
+  if (lower.includes('.doc') || lower.includes('.xls') || lower.includes('.ppt') || lower.includes('office cũ') || lower.includes('legacy')) {
+    return 'Định dạng Office cũ chưa được hỗ trợ. Hãy chuyển file sang DOCX/XLSX/PPTX hoặc PDF rồi tải lại.'
+  }
+  if (lower.includes('unsupported') || lower.includes('not supported') || lower.includes('không hỗ trợ') || lower.includes('chưa được hỗ trợ')) {
+    return text.startsWith('Định dạng file') ? text : `Định dạng file không hỗ trợ. ${text}`
+  }
+  if (lower.includes('file quá lớn') || lower.includes('too large') || lower.includes('413')) {
+    return 'File quá lớn. Vui lòng chia nhỏ tài liệu hoặc giảm dung lượng file rồi tải lại.'
+  }
+  if (lower.includes('extract') || lower.includes('trích xuất') || lower.includes('bóc tách') || lower.includes('parse')) {
+    return `Không thể đọc nội dung tài liệu ở bước bóc tách văn bản. ${text}`
+  }
+  return text
+}
+
+export function validateBankMaterialFile(file: File | null | undefined) {
+  if (!file) return 'Chưa chọn tài liệu.'
+  const parts = file.name.split('.')
+  const ext = parts.length > 1 ? String(parts.pop() || '').toLowerCase() : ''
+  if (!ext) return 'File chưa có phần mở rộng. Vui lòng chọn tài liệu có định dạng rõ ràng như PDF, DOCX, PPTX, XLSX, CSV hoặc TXT.'
+  if (LEGACY_OFFICE_EXTENSIONS.includes(ext)) return 'Định dạng Office cũ chưa được hỗ trợ. Hãy chuyển file sang DOCX/XLSX/PPTX hoặc PDF rồi tải lại.'
+  if (!BANK_MATERIAL_ALLOWED_EXTENSIONS.includes(ext)) return `Định dạng file .${ext} chưa được hỗ trợ. Hệ thống hỗ trợ: ${BANK_MATERIAL_ALLOWED_EXTENSIONS.map((item) => item.toUpperCase()).join(', ')}.`
+  if (file.size <= 0) return 'File không có nội dung. Vui lòng chọn tài liệu khác.'
+  return ''
+}
+
+export const BANK_OPERATION_COPY = {
+  material_upload: [
+    'Tiếp nhận học liệu',
+    'Kiểm tra định dạng tệp',
+    'Bóc tách nội dung',
+    'Chuẩn hóa văn bản',
+    'Đồng bộ danh sách tài liệu',
+  ],
+  generate: [
+    'Dựng ngữ cảnh từ học liệu',
+    'Sinh ứng viên câu hỏi',
+    'Cân bằng độ khó',
+    'Đối chiếu trùng lặp',
+    'Ghi bộ câu hỏi',
+  ],
+} as const
+
+export function SystemStatusBanner({
+  tone = 'info',
+  title,
+  message,
+  detail,
+  steps = [],
+  activeStep,
+  busy = false,
+  compact = false,
+}: {
+  tone?: 'info' | 'success' | 'warning' | 'danger'
+  title: string
+  message: string
+  detail?: ReactNode
+  steps?: readonly string[]
+  activeStep?: number
+  busy?: boolean
+  compact?: boolean
+}) {
+  const safeActive = Math.max(0, Math.min(typeof activeStep === 'number' ? activeStep : (busy ? 1 : steps.length - 1), Math.max(0, steps.length - 1)))
+  return <section
+    className={`system-status-banner system-status-${tone}${busy ? ' is-busy' : ''}${compact ? ' compact' : ''}`}
+    role={tone === 'danger' ? 'alert' : 'status'}
+    aria-live={tone === 'danger' ? 'assertive' : 'polite'}
+    aria-busy={busy ? 'true' : 'false'}
+  >
+    <div className="system-status-main">
+      <span className="system-status-orb" aria-hidden="true" />
+      <div>
+        <b>{title}</b>
+        <p>{message}</p>
+        {detail ? <small>{detail}</small> : null}
+      </div>
+    </div>
+    {steps.length ? <div className="system-status-steps" aria-label="Các bước xử lý">
+      {steps.map((step, index) => <span key={`${step}-${index}`} className={index < safeActive ? 'done' : index === safeActive ? 'active' : ''}>{step}</span>)}
+    </div> : null}
+    {busy ? <div className="system-status-progress" role="progressbar" aria-label={title} aria-valuetext="Hệ thống đang xử lý"><span /></div> : null}
+  </section>
+}
+
 export function emptyReviewStats(extra: Record<string, unknown> = {}) {
   return {
     total_questions: 0,
