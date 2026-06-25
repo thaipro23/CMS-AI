@@ -96,6 +96,7 @@ import {
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
+  emptyReviewStats,
   StatLine,
   QuickSearchBox,
   questionStats,
@@ -110,6 +111,7 @@ import {
   BankStackedChart,
   countRows,
   auditActionText,
+  BankStatusLegend,
 } from '../shared'
 
 export function SubjectVersionChaptersPage({ versionId }: { versionId: string }) {
@@ -181,17 +183,19 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     <section className="card">
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
+      <BankStatusLegend />
       <div className="entity-list horizontal multipage-list">
-        {visible.map(({ chapter, stats }) => {
+        {visible.map(({ chapter, stats: rawStats }) => {
+          const stats = rawStats || emptyReviewStats()
           const hasPublished = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0)
           return <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
             <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} />
-            <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{hasPublished ? 'Đã publish' : reviewStatusText(stats.status)}</span></div>
+            <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{hasPublished ? 'Đã public thư viện' : reviewStatusText(stats.status)}</span></div>
             <StatLine label="Tài liệu" value={stats.material_count || 0} />
             <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
             <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
             <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
-            <StatLine label="Release" value={hasPublished ? 'Đã publish' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
+            <StatLine label="Bộ đề" value={hasPublished ? 'Đã public thư viện' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
             {hasPublished ? <span className="status success">Đã khóa chỉnh sửa</span> : stats.ready_to_release ? <span className="status success">Sẵn sàng chốt bộ đề</span> : null}
           </Link>
         })}
@@ -248,9 +252,15 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
             if (!offering) return
             const nextNo = (summaries.reduce((max, item) => Math.max(max, Number(item.chapter.sort_order || item.chapter.chapter_no || 0)), 0) || 0) + 1
             const title = buildChapterTitle(chapterInput)
-            await createSubjectChapter(headers, { subject_id: offering.subject_id, subject_offering_id: offering.id, title, sort_order: nextNo })
+            const created = await createSubjectChapter(headers, { subject_id: offering.subject_id, subject_offering_id: offering.id, title, sort_order: nextNo })
+            setSummaries((current) => {
+              const withoutDuplicate = current.filter((item) => item.chapter.id !== created.id)
+              return [...withoutDuplicate, { chapter: created, stats: emptyReviewStats({ material_count: 0, bank_version_count: 0, release_count: 0, question_limit: 100 }) }].sort((a, b) => Number(a.chapter.sort_order || a.chapter.chapter_no || 0) - Number(b.chapter.sort_order || b.chapter.chapter_no || 0))
+            })
             setChapterInput(''); setCreateOpen(false)
-          }, 'Đã thêm bài', load)}>Tạo bài</button>
+            await load()
+            window.setTimeout(() => { load().catch(() => null) }, 500)
+          }, 'Đã thêm bài')}>Tạo bài</button>
         </div>
       </div>
     </Modal>

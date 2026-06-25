@@ -96,6 +96,7 @@ import {
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
+  emptyReviewStats,
   StatLine,
   QuickSearchBox,
   questionStats,
@@ -110,6 +111,7 @@ import {
   BankStackedChart,
   countRows,
   auditActionText,
+  BankStatusLegend,
 } from '../shared'
 
 export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
@@ -171,12 +173,14 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     <section className="card">
       <div className="section-head"><div><h2>{subject ? `Danh sách phiên bản của ${subject.code}` : 'Danh sách phiên bản môn'}</h2><p className="helper">Tạo mới hoàn toàn hoặc tạo từ phiên bản cũ của môn.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm phiên bản môn" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button>} />
+      <BankStatusLegend />
       <div className="entity-list horizontal multipage-list">
-        {visible.map(({ subject_version, stats }) => {
+        {visible.map(({ subject_version, stats: rawStats }) => {
+          const stats = rawStats || emptyReviewStats()
           const hasPublished = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published')
-          return <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+          return <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
             <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditSubjectVersion(subject_version)} onDelete={() => setDeleteTarget(subject_version)} />
-            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></div>
+            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã public thư viện' : reviewStatusText(stats.status)}</span></div>
             <small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small>
             <StatLine label="Bài" value={stats.chapter_count || 0} />
             <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))}`} />
@@ -221,9 +225,13 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
         <p className="helper">Hệ thống sao chép bài, tài liệu và câu hỏi đã duyệt từ phiên bản cũ. Nếu sau đó thay tài liệu, hệ thống tự loại các câu không còn nằm trong bộ tài liệu hiện tại.</p>
         <div className="modal-actions"><button className="btn secondary" onClick={() => setCreateOpen(false)}>Hủy</button><button className="btn" disabled={busy || !term || (mode === 'clone' && !cloneFromId)} onClick={() => run(async () => {
           const created = await createSubjectOffering(headers, { subject_id: subjectId, term, clone_from_offering_id: mode === 'clone' ? cloneFromId : null, version_code: term, clone_chapters: true, clone_materials: true, clone_questions: true })
-          setCreateOpen(false)
+          setSummaries((current) => {
+            const withoutDuplicate = current.filter((item) => item.subject_version.id !== created.id)
+            return [...withoutDuplicate, { subject_version: created, stats: emptyReviewStats({ chapter_count: 0, review_done_chapter_count: 0, review_not_done_chapter_count: 0 }) }].sort((a, b) => String(a.subject_version.code || '').localeCompare(String(b.subject_version.code || '')))
+          })
+          setTerm(''); setCloneFromId(''); setCreateOpen(false)
           router.push(`/bank/subject-versions/${created.id}/chapters`)
-        }, 'Đã tạo phiên bản môn', load)}>Tạo phiên bản</button></div>
+        }, 'Đã tạo phiên bản môn')}>Tạo phiên bản</button></div>
       </div>
     </Modal>
   </div>

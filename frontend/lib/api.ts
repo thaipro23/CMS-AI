@@ -127,6 +127,34 @@ function withoutContentType(headers: HeadersInit): HeadersInit {
   return next;
 }
 
+function normalizeApiErrorMessage(response: Response, data: any): string {
+  const errorEnvelope = data?.error;
+  const rawMessage = data?.detail?.message || errorEnvelope?.message || data?.detail || data?.message || response.statusText;
+  const code = errorEnvelope?.code || data?.detail?.code || data?.code || '';
+  const mapOne = (item: any): string => {
+    if (!item) return 'Dữ liệu không hợp lệ';
+    if (typeof item === 'string') return item;
+    return item?.msg || item?.message || item?.detail || 'Dữ liệu không hợp lệ';
+  };
+  let message = '';
+  if (typeof rawMessage === 'string') message = rawMessage;
+  else if (Array.isArray(rawMessage)) message = rawMessage.map(mapOne).join('; ');
+  else if (rawMessage && typeof rawMessage === 'object') message = mapOne(rawMessage);
+  else message = 'Có lỗi xảy ra từ máy chủ. Vui lòng thử lại.';
+
+  const lower = message.toLowerCase();
+  if (response.status === 413 || lower.includes('file quá lớn')) {
+    return 'File quá lớn. Vui lòng giảm dung lượng file hoặc chia nhỏ tài liệu rồi upload lại.';
+  }
+  if (lower.includes('office cũ') || lower.includes('legacy') || lower.includes('.doc') || lower.includes('.xls')) {
+    return message;
+  }
+  if (lower.includes('unsupported') || lower.includes('not supported') || lower.includes('không hỗ trợ') || lower.includes('chưa được hỗ trợ')) {
+    return message.startsWith('Định dạng file') ? message : `Định dạng file không hỗ trợ. ${message}`;
+  }
+  return code ? `${message} [${code}]` : message;
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   let data: any = null;
@@ -140,19 +168,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
     );
   }
   if (!response.ok) {
-    const errorEnvelope = data?.error;
-    const rawMessage = data?.detail?.message || errorEnvelope?.message || data?.detail || data?.message || response.statusText;
-    if (typeof rawMessage === "string") {
-      const detail = errorEnvelope?.code || data?.detail?.code ? ` [${errorEnvelope?.code || data?.detail?.code}]` : "";
-      throw new Error(`${rawMessage}${detail}`);
-    }
-    if (Array.isArray(rawMessage))
-      throw new Error(
-        rawMessage
-          .map((item) => item?.msg || item?.message || "Dữ liệu không hợp lệ")
-          .join("; "),
-      );
-    throw new Error("Có lỗi xảy ra từ máy chủ. Vui lòng thử lại.");
+    throw new Error(normalizeApiErrorMessage(response, data));
   }
   return data as T;
 }
@@ -1426,12 +1442,29 @@ export async function deleteMaterialVersion(headers: HeadersInit, materialVersio
   );
 }
 
+function assertSupportedBankMaterialFile(file: File) {
+  const name = (file.name || '').toLowerCase();
+  const ext = name.includes('.') ? name.split('.').pop() || '' : '';
+  const supported = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'xlsm', 'csv', 'tsv', 'txt', 'md', 'markdown', 'html', 'htm', 'xml', 'json', 'srt', 'vtt']);
+  const legacy = new Set(['doc', 'xls', 'ppt']);
+  if (legacy.has(ext)) {
+    throw new Error(`Định dạng file .${ext} là Office cũ. Vui lòng chuyển sang DOCX/XLSX/PPTX hoặc PDF rồi upload lại.`);
+  }
+  if (ext && !supported.has(ext)) {
+    throw new Error(`Định dạng file .${ext} chưa được hỗ trợ. Hệ thống hiện hỗ trợ: PDF, DOCX, PPTX, XLSX, CSV/TSV, TXT/MD, HTML, JSON/XML, SRT/VTT.`);
+  }
+  if (!ext && !(file.type || '').toLowerCase().startsWith('text/')) {
+    throw new Error('Không xác định được định dạng file. Vui lòng upload tài liệu có đuôi file rõ ràng như PDF, DOCX, PPTX, XLSX, CSV hoặc TXT.');
+  }
+}
+
 export async function enqueueBankMaterialUpload(
   headers: HeadersInit,
   bankVersionId: string,
   file: File,
   payload: { title?: string; change_type?: string; replace_existing?: boolean } = {},
 ) {
+  assertSupportedBankMaterialFile(file);
   const form = new FormData();
   form.append('file', file);
   form.append('title', payload.title || file.name);

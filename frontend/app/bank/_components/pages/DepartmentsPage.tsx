@@ -92,6 +92,7 @@ import {
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
+  emptyReviewStats,
   StatLine,
   QuickSearchBox,
   questionStats,
@@ -106,6 +107,7 @@ import {
   BankStackedChart,
   countRows,
   auditActionText,
+  BankStatusLegend,
 } from '../shared'
 
 export function DepartmentsPage() {
@@ -147,15 +149,18 @@ export function DepartmentsPage() {
   }
 
   return <div className="page-stack bank-multipage">
-    {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]} />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
+    {busy ? <div className="inline-operation-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>Danh sách bộ môn</h2><p className="helper">Click vào bộ môn để xem các môn bên trong.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button>} />
+      <BankStatusLegend />
       <div className="entity-list horizontal multipage-list">
-        {visible.map(({ department, stats }) => <Link key={department.id} href={`/bank/departments/${department.id}/subjects`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+        {visible.map(({ department, stats: rawStats }) => {
+          const stats = rawStats || emptyReviewStats()
+          return <Link key={department.id} href={`/bank/departments/${department.id}/subjects`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
           <EntityActions canManage={can('manage_settings')} onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} />
           <div className="entity-card-head"><b>{department.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <small>{department.code}</small>
@@ -164,7 +169,8 @@ export function DepartmentsPage() {
           <StatLine label="Chưa duyệt xong" value={`${stats.review_not_done_subject_count || 0} môn`} />
           <StatLine label="Câu chờ xử lý" value={stats.unresolved_count || 0} />
           <StatLine label="Bài sẵn sàng chốt" value={stats.ready_to_release_chapter_count || 0} />
-        </Link>)}
+        </Link>
+        })}
       </div>
       {!visible.length ? <div className="empty-state">Chưa có bộ môn phù hợp.</div> : null}
     </section>
@@ -177,7 +183,7 @@ export function DepartmentsPage() {
         <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên bộ môn" />
         <div className="modal-actions">
           <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !editCode.trim() || !editName.trim()} onClick={saveEditDepartment}>Lưu thay đổi</button>
+          <button className="btn" type="button" disabled={busy || !editCode.trim() || !editName.trim()} onClick={saveEditDepartment}>{busy ? <><span className="spinner tiny" aria-hidden="true" />Đang lưu</> : 'Lưu thay đổi'}</button>
         </div>
       </div>
     </Modal>
@@ -197,9 +203,15 @@ export function DepartmentsPage() {
         <input className="input" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Mã bộ môn, ví dụ CNTT" />
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Tên bộ môn, ví dụ Công nghệ thông tin" />
         <button className="btn" type="button" disabled={busy || !code.trim() || !name.trim()} onClick={() => run(async () => {
-          await createDepartment(headers, { code, name })
+          const created = await createDepartment(headers, { code, name })
+          setSummaries((current) => {
+            const withoutDuplicate = current.filter((item) => item.department.id !== created.id)
+            return [...withoutDuplicate, { department: created, stats: emptyReviewStats({ subject_count: 0, review_done_subject_count: 0, review_not_done_subject_count: 0 }) }].sort((a, b) => String(a.department.code || '').localeCompare(String(b.department.code || '')))
+          })
           setCode(''); setName(''); setCreateOpen(false)
-        }, 'Đã thêm bộ môn', load)}>Lưu bộ môn</button>
+          await load()
+          window.setTimeout(() => { load().catch(() => null) }, 500)
+        }, 'Đã thêm bộ môn')}>{busy ? <><span className="spinner tiny" aria-hidden="true" />Đang lưu</> : 'Lưu bộ môn'}</button>
       </div>
     </Modal>
   </div>

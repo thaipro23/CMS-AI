@@ -351,6 +351,12 @@ class VersionedQuestionBankService:
     def _dashboard_stats(self) -> BankDashboardStatsService:
         return BankDashboardStatsService(self.db)
 
+    def _invalidate_dashboard_cache(self) -> None:
+        try:
+            self._dashboard_stats().invalidate_cache()
+        except Exception:
+            pass
+
     def _search_index(self) -> BankSearchService:
         return BankSearchService(self.db)
 
@@ -497,6 +503,7 @@ class VersionedQuestionBankService:
         self.db.add(item)
         self.db.commit()
         self.db.refresh(item)
+        self._invalidate_dashboard_cache()
         return item
 
     def create_subject(self, *, department_id: str, code: str, name: str, description: str = '') -> Subject:
@@ -504,6 +511,7 @@ class VersionedQuestionBankService:
         self.db.add(item)
         self.db.commit()
         self.db.refresh(item)
+        self._invalidate_dashboard_cache()
         return item
 
     def create_subject_offering(
@@ -587,6 +595,7 @@ class VersionedQuestionBankService:
 
         self.db.commit()
         self.db.refresh(item)
+        self._invalidate_dashboard_cache()
         return item
 
     def _clone_subject_offering_content(
@@ -885,6 +894,7 @@ class VersionedQuestionBankService:
         self.db.commit()
         self.db.refresh(item)
         self._safe_refresh_chapter_stats(item.id)
+        self._invalidate_dashboard_cache()
         return item
 
 
@@ -932,6 +942,7 @@ class VersionedQuestionBankService:
             item.description = description or ''
         item.updated_at = datetime.utcnow()
         self.db.commit(); self.db.refresh(item)
+        self._invalidate_dashboard_cache()
         return item
 
     def delete_department(self, department_id: str) -> dict:
@@ -945,6 +956,7 @@ class VersionedQuestionBankService:
         if msg:
             raise ValueError(msg)
         self.db.delete(item); self.db.commit()
+        self._invalidate_dashboard_cache()
         return {'ok': True, 'deleted': True, 'entity_type': 'department', 'entity_id': department_id, 'message': 'Đã xóa bộ môn'}
 
     def update_subject(self, subject_id: str, *, code: str | None = None, name: str | None = None, description: str | None = None) -> Subject:
@@ -968,6 +980,7 @@ class VersionedQuestionBankService:
             item.description = description or ''
         item.updated_at = datetime.utcnow()
         self.db.commit(); self.db.refresh(item)
+        self._invalidate_dashboard_cache()
         return item
 
     def delete_subject(self, subject_id: str) -> dict:
@@ -991,6 +1004,7 @@ class VersionedQuestionBankService:
         if msg:
             raise ValueError(msg)
         self.db.delete(item); self.db.commit()
+        self._invalidate_dashboard_cache()
         return {'ok': True, 'deleted': True, 'entity_type': 'subject', 'entity_id': subject_id, 'message': 'Đã xóa môn'}
 
     def update_subject_offering(self, subject_offering_id: str, *, code: str | None = None, name: str | None = None, term: str | None = None, version_code: str | None = None, description: str | None = None) -> SubjectOffering:
@@ -1020,6 +1034,7 @@ class VersionedQuestionBankService:
             item.metadata_json = meta
         item.updated_at = datetime.utcnow()
         self.db.commit(); self.db.refresh(item)
+        self._invalidate_dashboard_cache()
         return item
 
     def delete_subject_offering(self, subject_offering_id: str) -> dict:
@@ -1042,6 +1057,7 @@ class VersionedQuestionBankService:
         if msg:
             raise ValueError(msg)
         self.db.delete(item); self.db.commit()
+        self._invalidate_dashboard_cache()
         return {'ok': True, 'deleted': True, 'entity_type': 'subject_offering', 'entity_id': subject_offering_id, 'message': 'Đã xóa phiên bản môn'}
 
     def update_chapter(self, chapter_id: str, *, title: str | None = None, description: str | None = None, sort_order: int | None = None) -> SubjectChapter:
@@ -1067,6 +1083,7 @@ class VersionedQuestionBankService:
         item.updated_at = datetime.utcnow()
         self.db.commit(); self.db.refresh(item)
         self._safe_refresh_chapter_stats(chapter_id)
+        self._invalidate_dashboard_cache()
         return item
 
     def _bank_version_content_counts(self, bank_version_id: str) -> dict[str, int]:
@@ -1306,6 +1323,7 @@ class VersionedQuestionBankService:
         if msg:
             raise ValueError(msg)
         self.db.delete(item); self.db.commit()
+        self._invalidate_dashboard_cache()
         cleanup_parts = []
         if removed_empty_versions:
             cleanup_parts.append(f'{removed_empty_versions} bank version rỗng')

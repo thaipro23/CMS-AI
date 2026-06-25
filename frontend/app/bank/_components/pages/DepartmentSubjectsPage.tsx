@@ -96,6 +96,7 @@ import {
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
+  emptyReviewStats,
   StatLine,
   QuickSearchBox,
   questionStats,
@@ -110,6 +111,7 @@ import {
   BankStackedChart,
   countRows,
   auditActionText,
+  BankStatusLegend,
 } from '../shared'
 
 export function DepartmentSubjectsPage({ departmentId }: { departmentId: string }) {
@@ -165,8 +167,11 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     <section className="card">
       <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('subject.create')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
+      <BankStatusLegend />
       <div className="entity-list horizontal multipage-list">
-        {visible.map(({ subject, stats }) => <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
+        {visible.map(({ subject, stats: rawStats }) => {
+          const stats = rawStats || emptyReviewStats()
+          return <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
           <EntityActions canManage={can('subject.update')} onEdit={() => openEditSubject(subject)} onDelete={() => setDeleteTarget(subject)} />
           <div className="entity-card-head"><b>{subject.code} - {subject.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
           <StatLine label="Phiên bản môn" value={stats.subject_version_count || 0} />
@@ -175,7 +180,8 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
           <StatLine label="Tổng câu" value={stats.total_questions || 0} />
           <StatLine label="Câu chờ xử lý" value={stats.unresolved_count || 0} />
           <StatLine label="Bài sẵn sàng chốt" value={stats.ready_to_release_chapter_count || 0} />
-        </Link>)}
+        </Link>
+        })}
       </div>
       {!visible.length ? <div className="empty-state">Chưa có môn phù hợp.</div> : null}
     </section>
@@ -208,9 +214,15 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
         <input className="input" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Mã môn, ví dụ WEB107" />
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Tên môn, ví dụ Thiết kế trang web" />
         <button className="btn" type="button" disabled={busy || !code.trim() || !name.trim()} onClick={() => run(async () => {
-          await createSubject(headers, { department_id: departmentId, code, name })
+          const created = await createSubject(headers, { department_id: departmentId, code, name })
+          setSummaries((current) => {
+            const withoutDuplicate = current.filter((item) => item.subject.id !== created.id)
+            return [...withoutDuplicate, { subject: created, stats: emptyReviewStats({ subject_version_count: 0, review_done_version_count: 0, review_not_done_version_count: 0 }) }].sort((a, b) => String(a.subject.code || '').localeCompare(String(b.subject.code || '')))
+          })
           setCode(''); setName(''); setCreateOpen(false)
-        }, 'Đã thêm môn', load)}>Lưu môn</button>
+          await load()
+          window.setTimeout(() => { load().catch(() => null) }, 500)
+        }, 'Đã thêm môn')}>Lưu môn</button>
       </div>
     </Modal>
   </div>

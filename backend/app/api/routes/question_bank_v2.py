@@ -168,6 +168,53 @@ async def _read_bank_upload_limited(file: UploadFile, *, max_bytes: int = _BANK_
     return b''.join(chunks)
 
 
+def _bank_material_upload_extension(filename: str, content_type: str = '') -> str:
+    name = (filename or '').lower().split('?', 1)[0].split('#', 1)[0]
+    if '.' in name:
+        return name.rsplit('.', 1)[-1].strip()
+    mime = (content_type or '').lower()
+    if 'pdf' in mime:
+        return 'pdf'
+    if 'wordprocessingml' in mime:
+        return 'docx'
+    if 'spreadsheetml' in mime:
+        return 'xlsx'
+    if 'presentationml' in mime or 'powerpoint' in mime:
+        return 'pptx'
+    if 'csv' in mime:
+        return 'csv'
+    if 'html' in mime:
+        return 'html'
+    if 'json' in mime:
+        return 'json'
+    if 'xml' in mime:
+        return 'xml'
+    if mime.startswith('text/'):
+        return 'txt'
+    return ''
+
+
+def _raise_unsupported_bank_material(filename: str, content_type: str = '') -> None:
+    ext = _bank_material_upload_extension(filename, content_type)
+    legacy = {'doc', 'xls', 'ppt'}
+    supported = {'pdf', 'docx', 'pptx', 'xlsx', 'xlsm', 'csv', 'tsv', 'txt', 'md', 'markdown', 'html', 'htm', 'xml', 'json', 'srt', 'vtt'}
+    if ext in legacy:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Định dạng file .{ext} là Office cũ, hệ thống không hỗ trợ tách nội dung ổn định. Vui lòng chuyển sang DOCX/XLSX/PPTX hoặc PDF rồi upload lại.',
+        )
+    if ext and ext not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Định dạng file .{ext} chưa được hỗ trợ. Hệ thống hiện hỗ trợ: PDF, DOCX, PPTX, XLSX, CSV/TSV, TXT/MD, HTML, JSON/XML, SRT/VTT.',
+        )
+    if not ext and not (content_type or '').lower().startswith('text/'):
+        raise HTTPException(
+            status_code=400,
+            detail='Không xác định được định dạng file. Vui lòng upload tài liệu có đuôi file rõ ràng như PDF, DOCX, PPTX, XLSX, CSV hoặc TXT.',
+        )
+
+
 def _preflight_bank_material_upload(*, raw: bytes, filename: str, content_type: str) -> dict:
     """Fail fast if an uploaded material cannot be extracted.
 
@@ -176,6 +223,7 @@ def _preflight_bank_material_upload(*, raw: bytes, filename: str, content_type: 
     extract/chunk/index step; this preflight only validates readability and gives
     a user-facing message early.
     """
+    _raise_unsupported_bank_material(filename, content_type)
     if not settings.material_upload_preflight_enabled:
         return {'skipped': True, 'reason': 'material_upload_preflight_disabled'}
     try:
