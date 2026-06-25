@@ -11,24 +11,26 @@ type NavItem = {
   href: string
   label: string
   desc: string
-  icon: string
+  icon: IconName
   group: 'work' | 'operations' | 'admin'
   permission?: string
 }
 
+type IconName = 'dashboard' | 'bank' | 'quiz' | 'history' | 'building' | 'calendar' | 'sync' | 'students' | 'jobs' | 'audit' | 'users' | 'settings'
+
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', desc: 'Số liệu & việc cần xử lý', icon: '⌁', group: 'work' },
-  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, phiên bản', icon: '▦', group: 'work' },
-  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Đưa bài kiểm tra lên CMS', icon: '◈', group: 'work' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Đã tạo & khôi phục', icon: '◷', group: 'work' },
-  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_settings' },
-  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'operations', permission: 'manage_settings' },
-  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_settings' },
-  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'operations' },
-  { href: '/jobs', label: 'Tiến trình', desc: 'Việc đang xử lý', icon: '⚙', group: 'operations' },
-  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'operations' },
-  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'admin', permission: 'view_questions' },
-  { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'admin', permission: 'manage_settings' },
+  { href: '/bank', label: 'Tổng quan', desc: 'Số liệu & việc cần xử lý', icon: 'dashboard', group: 'work' },
+  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, phiên bản', icon: 'bank', group: 'work' },
+  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Đưa bài kiểm tra lên CMS', icon: 'quiz', group: 'work' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Đã tạo & khôi phục', icon: 'history', group: 'work' },
+  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: 'building', group: 'operations', permission: 'manage_settings' },
+  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: 'calendar', group: 'operations', permission: 'manage_settings' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: 'sync', group: 'operations', permission: 'manage_settings' },
+  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: 'students', group: 'operations' },
+  { href: '/jobs', label: 'Tiến trình', desc: 'Việc đang xử lý', icon: 'jobs', group: 'operations' },
+  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: 'audit', group: 'operations' },
+  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: 'users', group: 'admin', permission: 'view_questions' },
+  { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: 'settings', group: 'admin', permission: 'manage_settings' },
 ]
 
 const navGroups: Array<{ key: NavItem['group']; label: string }> = [
@@ -36,6 +38,26 @@ const navGroups: Array<{ key: NavItem['group']; label: string }> = [
   { key: 'operations', label: 'Vận hành' },
   { key: 'admin', label: 'Quản trị' },
 ]
+
+
+function ShellIcon({ name }: { name: IconName }) {
+  const common = { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true }
+  const icons: Record<IconName, React.ReactNode> = {
+    dashboard: <><path d="M4 13h6V4H4z" /><path d="M14 20h6V4h-6z" /><path d="M4 20h6v-3H4z" /></>,
+    bank: <><path d="M4 10h16" /><path d="M6 10v8" /><path d="M10 10v8" /><path d="M14 10v8" /><path d="M18 10v8" /><path d="M3 20h18" /><path d="M12 4l8 4H4z" /></>,
+    quiz: <><path d="M9 11l2 2 4-5" /><path d="M5 4h14v16H5z" /><path d="M8 17h8" /></>,
+    history: <><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 7v6l4 2" /></>,
+    building: <><path d="M4 20h16" /><path d="M6 20V6h8v14" /><path d="M14 10h4v10" /><path d="M8 9h2" /><path d="M8 13h2" /></>,
+    calendar: <><path d="M7 3v4" /><path d="M17 3v4" /><path d="M4 8h16" /><path d="M5 5h14v15H5z" /></>,
+    sync: <><path d="M21 12a8.5 8.5 0 0 1-14.5 6" /><path d="M3 12a8.5 8.5 0 0 1 14.5-6" /><path d="M18 3v5h-5" /><path d="M6 21v-5h5" /></>,
+    students: <><path d="M16 11a4 4 0 1 0-8 0" /><path d="M4 20a8 8 0 0 1 16 0" /><path d="M17 8a3 3 0 0 1 3 3" /></>,
+    jobs: <><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3-.2-.1a1.7 1.7 0 0 0-2 .1 1.7 1.7 0 0 0-.8 1.5V22h-3.6v-.5a1.7 1.7 0 0 0-.8-1.5 1.7 1.7 0 0 0-2-.1l-.2.1-2-3 .1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.4-1.1H4v-3.8h.4a1.7 1.7 0 0 0 1.4-1.1" /></>,
+    audit: <><path d="M5 4h14" /><path d="M5 8h14" /><path d="M5 12h10" /><path d="M5 16h8" /><path d="M5 20h14" /></>,
+    users: <><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" /><path d="M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" /><path d="M17 11l2 2 3-4" /></>,
+    settings: <><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3-.2-.1a1.7 1.7 0 0 0-2 .1 1.7 1.7 0 0 0-.8 1.5V22h-3.6v-.5a1.7 1.7 0 0 0-.8-1.5 1.7 1.7 0 0 0-2-.1l-.2.1-2-3 .1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.4-1.1H4v-3.8h.4a1.7 1.7 0 0 0 1.4-1.1" /></>,
+  }
+  return <svg {...common}>{icons[name]}</svg>
+}
 
 function pageTitle(pathname: string) {
   const exact = navItems.find((item) => pathname === item.href)
@@ -46,6 +68,15 @@ function pageTitle(pathname: string) {
   return nested ? nested.label : 'AI Server'
 }
 
+function pageSubtitle(pathname: string) {
+  if (pathname.startsWith('/bank/chapters/')) return 'Không gian làm việc bài học, học liệu và câu hỏi.'
+  if (pathname.startsWith('/bank/departments')) return 'Quản trị cấu trúc ngân hàng đề theo bộ môn.'
+  if (pathname.startsWith('/bank/subjects')) return 'Quản trị phiên bản môn và vòng đời học liệu.'
+  if (pathname.startsWith('/student-management')) return 'Theo dõi lớp, sinh viên, enrollment và tiến độ CMS.'
+  if (pathname.startsWith('/jobs')) return 'Giám sát tác vụ nền, queue và lỗi vận hành.'
+  if (pathname.startsWith('/settings')) return 'Cấu hình chính sách tích hợp và vận hành hệ thống.'
+  return 'Ngân hàng đề · Open edX · AP Sync · Quiz trên CMS'
+}
 
 function buildStudentManagementTopbar(pathname: string, searchParams: { get(name: string): string | null }) {
   if (!pathname.startsWith('/student-management')) return null
@@ -76,30 +107,22 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
     { label: 'Môn', href: pathname === '/student-management' ? undefined : '/student-management' },
   ]
 
-  if (subjectIdMatch || classIdMatch) {
-    items.push({
-      label: subjectCode || 'Môn đã chọn',
-      href: classIdMatch ? subjectHref : undefined,
-    })
-  }
-
-  if (classIdMatch) {
-    items.push({ label: 'Lớp' })
-  }
-
+  if (subjectIdMatch || classIdMatch) items.push({ label: subjectCode || 'Môn đã chọn', href: classIdMatch ? subjectHref : undefined })
+  if (classIdMatch) items.push({ label: 'Lớp' })
   return items
 }
 
 function AppFooter() {
-  return <footer className="app-footer app-footer-compact product-footer">
-    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz trên CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.5.32</span></div>
+  return <footer className="app-footer">
+    <span>AI Server · Open edX CMS</span>
+    <span>v25.9.16.5.34</span>
   </footer>
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [topbarSearch, setTopbarSearch] = useState('')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const {
     courseId,
     role,
@@ -114,7 +137,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const stored = window.localStorage.getItem('ai-server-theme')
-    const nextTheme = stored === 'light' || stored === 'dark' ? stored : 'dark'
+    const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    const nextTheme = stored === 'light' || stored === 'dark' ? stored : (systemDark ? 'dark' : 'light')
     setTheme(nextTheme)
   }, [])
 
@@ -123,19 +147,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     document.documentElement.setAttribute('data-ai-theme', theme)
     document.body.classList.toggle('ai-theme-dark', theme === 'dark')
     document.body.classList.toggle('ai-theme-light', theme === 'light')
-    document.body.classList.remove('ai-dark-theme')
     try { window.localStorage.setItem('ai-server-theme', theme) } catch (error) { /* ignore */ }
   }, [theme])
 
   const toggleTheme = () => setTheme((current) => current === 'dark' ? 'light' : 'dark')
-
   const visibleItems = useMemo(() => navItems.filter((item) => !item.permission || can(item.permission)), [can])
   const currentTitle = pageTitle(pathname)
+  const currentSubtitle = pageSubtitle(pathname)
   const studentTopbar = buildStudentManagementTopbar(pathname, new URLSearchParams(topbarSearch))
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     setTopbarSearch(window.location.search || '')
+    setSidebarOpen(false)
   }, [pathname])
 
   const loginWithCms = () => {
@@ -172,15 +196,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [authReady, courseId, isAuthenticated, pathname])
 
-  return <div className="app-layout product-shell">
+  return <div className={`app-layout ${sidebarOpen ? 'sidebar-open' : ''}`}>
     <a className="skip-link" href="#main-content">Bỏ qua menu, tới nội dung chính</a>
-    <aside className="sidebar product-sidebar" aria-label="Điều hướng chính">
-      <Link href="/bank" className="brand product-brand" aria-label="Open edX AI Server">
-        <div className="brand-mark product-brand-mark">AI</div>
+    <button className="sidebar-scrim" type="button" aria-label="Đóng menu" onClick={() => setSidebarOpen(false)} />
+
+    <aside className="sidebar" aria-label="Điều hướng chính">
+      <Link href="/bank" className="brand" aria-label="Open edX AI Server">
+        <div className="brand-mark">AI</div>
         <div><b>AI Server</b><small>Ngân hàng đề · Open edX</small></div>
       </Link>
 
-      <nav className="side-nav grouped-side-nav product-nav">
+      <nav className="side-nav grouped-side-nav">
         {navGroups.map((group) => {
           const items = visibleItems.filter((item) => item.group === group.key)
           if (!items.length) return null
@@ -190,7 +216,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {items.map((item) => {
                 const active = pathname === item.href || pathname.startsWith(`${item.href}/`)
                 return <Link key={item.href} href={item.href} className={active ? 'nav-link active' : 'nav-link'} aria-current={active ? 'page' : undefined}>
-                  <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="nav-icon" aria-hidden="true"><ShellIcon name={item.icon} /></span>
                   <span className="nav-text"><b>{item.label}</b><small>{item.desc}</small></span>
                 </Link>
               })}
@@ -199,17 +225,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         })}
       </nav>
 
-      <div className="sidebar-note product-session-card">
+      <div className="sidebar-note">
         <span className={isAuthenticated ? 'session-dot ok' : 'session-dot wait'} />
         <div><b>{isAuthenticated ? 'Đã đăng nhập' : 'Đang lấy phiên CMS'}</b><span>{isAuthenticated ? `${userId || 'user'} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'AI Server sẽ tự nhận phiên từ CMS khi có thể.')}</span></div>
-        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Làm mới' : 'Đăng nhập CMS'}</button>
+        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Làm mới phiên' : 'Đăng nhập CMS'}</button>
       </div>
     </aside>
 
-    <div className="main-area product-main">
-      <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar' : 'workspace-topbar workspace-topbar-minimal'}>
+    <div className="main-area">
+      <header className="workspace-topbar">
+        <button className="mobile-menu-button" type="button" onClick={() => setSidebarOpen(true)} aria-label="Mở menu">☰</button>
         <div className="workspace-topbar-main">
+          <span className="eyebrow">AI Server</span>
           <h1>{currentTitle}</h1>
+          <p>{currentSubtitle}</p>
           {studentTopbar && <nav className="workspace-breadcrumb" aria-label="Điều hướng Quản lý sinh viên">
             {studentTopbar.map((item, index) => <span key={`${item.label}-${index}`} className="workspace-breadcrumb-item">
               {index > 0 && <span className="workspace-breadcrumb-separator">/</span>}
@@ -218,6 +247,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>}
         </div>
         <div className="workspace-topbar-actions">
+          <span className={isAuthenticated ? 'topbar-session ok' : 'topbar-session'}>{isAuthenticated ? 'Live' : 'Đang xác thực'}</span>
           <button
             type="button"
             className="theme-toggle-button"
@@ -225,13 +255,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             aria-label={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'}
             title={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'}
           >
-            <span className="theme-toggle-button__icon" aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
-            <span>{theme === 'dark' ? 'Sáng' : 'Tối'}</span>
+            <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
+            <b>{theme === 'dark' ? 'Sáng' : 'Tối'}</b>
           </button>
         </div>
       </header>
 
-      <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{children}</main>
+      <main id="main-content" className="content-shell" tabIndex={-1}>{children}</main>
       <AppFooter />
     </div>
   </div>
