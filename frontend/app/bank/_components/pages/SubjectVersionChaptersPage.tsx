@@ -111,7 +111,6 @@ import {
   BankStackedChart,
   countRows,
   auditActionText,
-  BankStatusLegend,
 } from '../shared'
 
 export function SubjectVersionChaptersPage({ versionId }: { versionId: string }) {
@@ -183,7 +182,9 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     <section className="card">
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
-      <BankStatusLegend />
+      <div className="bank-status-legend" aria-label="Chú giải trạng thái">
+        <span><i className="dot-empty" />Chưa làm</span><span><i className="dot-incomplete" />Chưa làm hết</span><span><i className="dot-published" />Đã public thư viện</span>
+      </div>
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ chapter, stats: rawStats }) => {
           const stats = rawStats || emptyReviewStats()

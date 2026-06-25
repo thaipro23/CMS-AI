@@ -107,7 +107,6 @@ import {
   BankStackedChart,
   countRows,
   auditActionText,
-  BankStatusLegend,
 } from '../shared'
 
 export function DepartmentsPage() {
@@ -152,11 +151,13 @@ export function DepartmentsPage() {
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]} />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
-    {busy ? <div className="inline-operation-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel}</div> : null}
+    {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel || 'Hệ thống đang xử lý. Bạn có thể tiếp tục xem dữ liệu hiện có.'}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>Danh sách bộ môn</h2><p className="helper">Click vào bộ môn để xem các môn bên trong.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button>} />
-      <BankStatusLegend />
+      <div className="bank-status-legend" aria-label="Chú giải trạng thái">
+        <span><i className="dot-empty" />Chưa làm</span><span><i className="dot-incomplete" />Chưa làm hết</span><span><i className="dot-published" />Đã public thư viện</span>
+      </div>
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ department, stats: rawStats }) => {
           const stats = rawStats || emptyReviewStats()
@@ -183,7 +184,7 @@ export function DepartmentsPage() {
         <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên bộ môn" />
         <div className="modal-actions">
           <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !editCode.trim() || !editName.trim()} onClick={saveEditDepartment}>{busy ? <><span className="spinner tiny" aria-hidden="true" />Đang lưu</> : 'Lưu thay đổi'}</button>
+          <button className="btn" type="button" disabled={busy || !editCode.trim() || !editName.trim()} onClick={saveEditDepartment}>{busy ? <span className="inline-busy-label"><span className="spinner tiny" aria-hidden="true" />Đang lưu</span> : 'Lưu thay đổi'}</button>
         </div>
       </div>
     </Modal>
@@ -211,7 +212,7 @@ export function DepartmentsPage() {
           setCode(''); setName(''); setCreateOpen(false)
           await load()
           window.setTimeout(() => { load().catch(() => null) }, 500)
-        }, 'Đã thêm bộ môn')}>{busy ? <><span className="spinner tiny" aria-hidden="true" />Đang lưu</> : 'Lưu bộ môn'}</button>
+        }, 'Đã thêm bộ môn')}>{busy ? <span className="inline-busy-label"><span className="spinner tiny" aria-hidden="true" />Đang lưu</span> : 'Lưu bộ môn'}</button>
       </div>
     </Modal>
   </div>
