@@ -93,7 +93,7 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz trên CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.5.29</span></div>
+    <div className="footer-links"><span>v25.9.16.5.32</span></div>
   </footer>
 }
 
@@ -109,6 +109,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     authReady,
   } = useAppContext()
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem('ai-server-theme')
+    const nextTheme = stored === 'light' || stored === 'dark' ? stored : 'dark'
+    setTheme(nextTheme)
+  }, [])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    document.documentElement.setAttribute('data-ai-theme', theme)
+    document.body.classList.toggle('ai-theme-dark', theme === 'dark')
+    document.body.classList.toggle('ai-theme-light', theme === 'light')
+    document.body.classList.remove('ai-dark-theme')
+    try { window.localStorage.setItem('ai-server-theme', theme) } catch (error) { /* ignore */ }
+  }, [theme])
+
+  const toggleTheme = () => setTheme((current) => current === 'dark' ? 'light' : 'dark')
 
   const visibleItems = useMemo(() => navItems.filter((item) => !item.permission || can(item.permission)), [can])
   const currentTitle = pageTitle(pathname)
@@ -197,6 +216,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {item.href ? <Link href={item.href}>{item.label}</Link> : <b>{item.label}</b>}
             </span>)}
           </nav>}
+        </div>
+        <div className="workspace-topbar-actions">
+          <button
+            type="button"
+            className="theme-toggle-button"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'}
+            title={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'}
+          >
+            <span className="theme-toggle-button__icon" aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
+            <span>{theme === 'dark' ? 'Sáng' : 'Tối'}</span>
+          </button>
         </div>
       </header>
 

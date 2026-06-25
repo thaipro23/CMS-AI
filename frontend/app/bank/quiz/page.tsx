@@ -54,8 +54,8 @@ export default function BankQuizPage() {
   const [customTimerEnabled, setCustomTimerEnabled] = useState(true)
   const [timeLimitMinutes, setTimeLimitMinutes] = useState(15)
   const [retakeCooldownMinutes, setRetakeCooldownMinutes] = useState(5)
-  const [autoSubmitOnTimeout, setAutoSubmitOnTimeout] = useState(false)
-  const [lockAfterTimeout, setLockAfterTimeout] = useState(true)
+  const autoSubmitOnTimeout = customTimerEnabled
+  const lockAfterTimeout = customTimerEnabled
   const [createModal, setCreateModal] = useState<PendingCreate | null>(null)
 
   const loadHistory = async (targetCourseId = courseId) => {
@@ -381,9 +381,15 @@ export default function BankQuizPage() {
                 <label>Thời gian làm bài/phút<input className="input" type="number" min={1} max={300} disabled={!customTimerEnabled} value={timeLimitMinutes} onChange={(event) => setTimeLimitMinutes(Number(event.target.value || 15))} /></label>
                 <label>Chờ làm lại/phút<input className="input" type="number" min={0} max={10080} disabled={!customTimerEnabled} value={retakeCooldownMinutes} onChange={(event) => setRetakeCooldownMinutes(Number(event.target.value || 0))} /></label>
               </div>
-              <div className="option-grid compact-options">
-                <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={autoSubmitOnTimeout} onChange={(event) => setAutoSubmitOnTimeout(event.target.checked)} /><span>Tự nộp khi hết giờ</span></label>
-                <label className="toggle-line"><input type="checkbox" disabled={!customTimerEnabled} checked={lockAfterTimeout} onChange={(event) => setLockAfterTimeout(event.target.checked)} /><span>Khóa sau hết giờ</span></label>
+              <div className="quiz-timer-policy-card" aria-live="polite">
+                <div>
+                  <b>Tự nộp khi hết giờ</b>
+                  <span>{customTimerEnabled ? 'Bật mặc định. Hệ thống sẽ gửi bài qua API khi đồng hồ về 0.' : 'Tắt vì chưa bật timer quiz tự luyện.'}</span>
+                </div>
+                <div>
+                  <b>Khóa sau hết giờ</b>
+                  <span>{customTimerEnabled ? 'Bật mặc định. Sinh viên không thể chọn thêm đáp án sau khi hết giờ.' : 'Tắt vì chưa bật timer quiz tự luyện.'}</span>
+                </div>
               </div>
             </div>
           </div>
