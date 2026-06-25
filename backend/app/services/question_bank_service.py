@@ -4327,8 +4327,8 @@ class VersionedQuestionBankService:
             'duration_seconds': int(time_limit_minutes or 15) * 60,
             'retake_cooldown_minutes': int(retake_cooldown_minutes or 0),
             'cooldown_seconds': int(retake_cooldown_minutes or 0) * 60,
-            'auto_submit_on_timeout': bool(custom_timer_enabled),
-            'lock_after_timeout': bool(custom_timer_enabled),
+            'auto_submit_on_timeout': bool(auto_submit_on_timeout),
+            'lock_after_timeout': bool(lock_after_timeout),
             'native_timed_exam': bool(native_timed_exam),
         }
         if timer_config['native_timed_exam']:

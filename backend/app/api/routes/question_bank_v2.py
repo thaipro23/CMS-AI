@@ -1630,10 +1630,6 @@ def preview_quiz_from_release(release_id: str, payload: BankReleaseQuizPreviewRe
 def create_quiz_from_release_job(release_id: str, payload: BankReleaseQuizCreateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions'))):
     _require_release(db, user, 'quiz.create_openedx', release_id)
     request_json = payload.model_dump()
-    # v25.9.16.5.32 policy: custom timed quizzes always auto-submit and lock after timeout.
-    if request_json.get('custom_timer_enabled', True):
-        request_json['auto_submit_on_timeout'] = True
-        request_json['lock_after_timeout'] = True
     request_json['release_id'] = release_id
 
     # Do not create duplicate Quiz-create jobs for the same release + mapping.

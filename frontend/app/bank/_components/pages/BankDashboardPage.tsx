@@ -8,33 +8,19 @@ import { getBankDashboardAnalytics } from '../../../../lib/api'
 import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
 const STATUS_COLORS: Record<string, string> = {
-  draft: 'var(--text-muted)',
-  pending_review: 'var(--accent-warning)',
-  approved: 'var(--accent-success)',
-  rejected: 'var(--accent-danger)',
-  draft_error: 'var(--accent-danger)',
-  easy: 'var(--accent-success)',
-  medium: 'var(--accent-warning)',
-  hard: 'var(--accent-danger)',
-  single_choice: 'var(--accent-info)',
-  multiple_choice: 'var(--accent-cyan)',
-  essay: 'var(--accent-primary-light)',
-  short_answer: 'var(--accent-success)',
-  unknown: 'var(--text-muted)',
-}
-
-const FALLBACK_CHART_COLORS = [
-  'var(--accent-primary)',
-  'var(--accent-info)',
-  'var(--accent-success)',
-  'var(--accent-warning)',
-  'var(--accent-danger)',
-  'var(--accent-pink)',
-  'var(--accent-cyan)',
-]
-
-function chartColor(key: unknown, index: number) {
-  return STATUS_COLORS[String(key)] || FALLBACK_CHART_COLORS[index % FALLBACK_CHART_COLORS.length]
+  draft: '#64748b',
+  pending_review: '#f59e0b',
+  approved: '#10b981',
+  rejected: '#ef4444',
+  draft_error: '#dc2626',
+  easy: '#22c55e',
+  medium: '#f59e0b',
+  hard: '#ef4444',
+  single_choice: '#2563eb',
+  multiple_choice: '#0891b2',
+  essay: '#7c3aed',
+  short_answer: '#0f766e',
+  unknown: '#64748b',
 }
 
 function formatNumber(value?: number | null) {
@@ -108,7 +94,7 @@ function DonutChart({ chart }: { chart: DashboardChart }) {
   return <ChartCard title={chart.title} empty={!items.length}>
     <div className="dashboard-donut-layout">
       <svg className="dashboard-donut" viewBox="0 0 100 100" role="img" aria-label={chart.title}>
-        <circle cx="50" cy="50" r={radius} fill="none" stroke="var(--border-subtle)" strokeWidth="14" />
+        <circle cx="50" cy="50" r={radius} fill="none" stroke="#e5e7eb" strokeWidth="14" />
         {items.map((item, index) => {
           const value = Number(item.value || 0)
           const dash = total ? (value / total) * circumference : 0
@@ -120,7 +106,7 @@ function DonutChart({ chart }: { chart: DashboardChart }) {
             cy="50"
             r={radius}
             fill="none"
-            stroke={chartColor(item.key, index)}
+            stroke={STATUS_COLORS[String(item.key)] || `hsl(${(index * 67) % 360} 70% 45%)`}
             strokeWidth="14"
             strokeDasharray={`${dash} ${circumference - dash}`}
             strokeDashoffset={segmentOffset}
@@ -133,7 +119,7 @@ function DonutChart({ chart }: { chart: DashboardChart }) {
       </svg>
       <div className="dashboard-legend-list">
         {items.map((item, index) => <button key={`${item.key || item.label}-${index}`} type="button" className="dashboard-legend-row" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))} title={`${item.label}: ${formatNumber(item.value)} (${item.percent || 0}%)`}>
-          <i style={{ background: chartColor(item.key, index) }} />
+          <i style={{ background: STATUS_COLORS[String(item.key)] || `hsl(${(index * 67) % 360} 70% 45%)` }} />
           <span>{item.label}</span>
           <b>{formatNumber(item.value)}</b>
           <em>{item.percent || 0}%</em>
@@ -164,13 +150,13 @@ function LineChart({ chart }: { chart: DashboardChart }) {
           const y = padY + ratio * (height - padY * 2)
           const value = Math.round(max * (1 - ratio))
           return <g key={ratio}>
-            <line x1={padX + 20} x2={width - padX} y1={y} y2={y} stroke="var(--border-subtle)" strokeWidth="1" />
+            <line x1={padX + 20} x2={width - padX} y1={y} y2={y} stroke="#e5e7eb" strokeWidth="1" />
             <text x={padX + 14} y={y + 4} textAnchor="end" className="dashboard-y-axis-label">{formatNumber(value)}</text>
           </g>
         })}
-        <path d={path} fill="none" stroke="var(--accent-info)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d={path} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
         {points.map((point, index) => <g key={`${point.item.date || index}-${index}`} className="dashboard-line-point" onClick={() => point.item.drilldown && router.push(drilldownUrl(point.item.drilldown))}>
-          <circle cx={point.x} cy={point.y} r="5" fill="var(--accent-info)" />
+          <circle cx={point.x} cy={point.y} r="5" fill="#2563eb" />
           <title>{point.item.label || point.item.date}: {formatNumber(point.item.value)}</title>
         </g>)}
       </svg>

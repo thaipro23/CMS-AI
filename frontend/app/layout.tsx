@@ -9,5 +9,5 @@ export const metadata: Metadata = {
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="vi" data-ai-theme="dark" suppressHydrationWarning><body className="ai-theme-dark"><AppProvider><AppShell>{children}</AppShell></AppProvider></body></html>
+  return <html lang="vi" suppressHydrationWarning><body><AppProvider><AppShell>{children}</AppShell></AppProvider></body></html>
 }
