@@ -12,7 +12,17 @@ type TermForm = { id?: string | null; term_code: string; term_name: string; bran
 
 function branchLabel(branch?: string | null) { return (branch || '').toLowerCase() === 'ptcd' ? 'PTCĐ' : 'Poly' }
 function formatDate(value?: string | null) { if (!value) return '—'; try { return new Date(value).toLocaleDateString('vi-VN') } catch { return '—' } }
-function toDateInput(value?: string | null) { if (!value) return ''; try { return new Date(value).toISOString().slice(0, 10) } catch { return '' } }
+function toDateInput(value?: string | null) {
+  if (!value) return ''
+  try {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return ''
+    const yyyy = date.getFullYear()
+    const mm = String(date.getMonth() + 1).padStart(2, '0')
+    const dd = String(date.getDate()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd}`
+  } catch { return '' }
+}
 function toIsoDate(value: string) { return value ? `${value}T00:00:00` : null }
 function defaultBlocks(): BlockForm[] { return [{ block_code: 'Block 1', block_name: 'Block 1', start_date: '', end_date: '', active: true }, { block_code: 'Block 2', block_name: 'Block 2', start_date: '', end_date: '', active: true }] }
 function emptyForm(branch: Branch = 'poly'): TermForm { return { term_code: 'Summer 2026', term_name: 'Summer 2026', branch, active: true, blocks: defaultBlocks() } }
@@ -47,7 +57,7 @@ export default function SemestersPage() {
     setSaving(true); setMessage('')
     try {
       const full = await getAcademicTermWithBlocks(headers, item.id) as TermRow
-      const sourceBlocks = (full.blocks || []).slice(0, 2)
+      const sourceBlocks = (full.blocks || []).slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.block_name || a.block_code || '').localeCompare(String(b.block_name || b.block_code || ''))).slice(0, 2)
       const nextBlocks = [0, 1].map((index) => {
         const block = sourceBlocks[index]
         return block ? { id: block.id, block_code: block.block_code || `Block ${index + 1}`, block_name: block.block_name || `Block ${index + 1}`, start_date: toDateInput(block.start_date), end_date: toDateInput(block.end_date), active: block.active } : defaultBlocks()[index]

@@ -1288,8 +1288,21 @@ class VersionedQuestionBankService:
         versions = self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).all()
         for version in versions:
             counts = self._bank_version_content_counts(version.id)
-            if any(int(value or 0) > 0 for value in counts.values()):
+            # Operational jobs/search documents are derived/runtime records. They
+            # must not turn an auto-created empty bank version into real content.
+            # Detach jobs first, then delete the shell version if no user-facing
+            # content depends on it.
+            blocking_counts = {
+                key: int(value or 0)
+                for key, value in counts.items()
+                if key not in {'jobs'} and int(value or 0) > 0
+            }
+            if blocking_counts:
                 continue
+            self.db.query(BankOperationJob).filter(BankOperationJob.bank_version_id == version.id).update(
+                {BankOperationJob.bank_version_id: None},
+                synchronize_session=False,
+            )
             self.db.query(QuestionSearchDocument).filter(QuestionSearchDocument.bank_version_id == version.id).delete(synchronize_session=False)
             self.db.delete(version)
             removed += 1

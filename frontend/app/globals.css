@@ -1106,7 +1106,8 @@ label { margin: 5px 0 4px; font-size: 12px; }
 .bank-popup-backdrop {
   padding: 18px;
   background: rgba(15, 23, 42, .62);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .bank-modal {
   display: flex;
@@ -1281,6 +1282,9 @@ label { margin: 5px 0 4px; font-size: 12px; }
 .bank-stat-line span { color: #64748b; font-size: 12px; }
 .bank-stat-line b { color: #0f172a; }
 .bank-status-card { border-left: 6px solid #cbd5e1; }
+.entity-card.bank-status-card.status-published { border-color: rgba(22,163,74,.32); border-left-color: #16a34a; background: linear-gradient(180deg, #ffffff, #ecfdf5); box-shadow: inset 0 0 0 1px rgba(22,163,74,.18); }
+.entity-card.bank-status-card.status-incomplete { border-color: rgba(245,158,11,.34); border-left-color: #f59e0b; background: linear-gradient(180deg, #ffffff, #fffbeb); box-shadow: inset 0 0 0 1px rgba(245,158,11,.2); }
+.entity-card.bank-status-card.status-empty { border-color: rgba(148,163,184,.36); border-left-color: #94a3b8; background: linear-gradient(180deg, #ffffff, #f8fafc); box-shadow: inset 0 0 0 1px rgba(148,163,184,.22); }
 .status-published { border-left-color: #16a34a; background: linear-gradient(180deg, #ffffff, #ecfdf5); box-shadow: inset 0 0 0 1px rgba(22,163,74,.18); }
 .status-incomplete { border-left-color: #f59e0b; background: linear-gradient(180deg, #ffffff, #fffbeb); box-shadow: inset 0 0 0 1px rgba(245,158,11,.2); }
 .status-empty { border-left-color: #94a3b8; background: linear-gradient(180deg, #ffffff, #f8fafc); box-shadow: inset 0 0 0 1px rgba(148,163,184,.22); }

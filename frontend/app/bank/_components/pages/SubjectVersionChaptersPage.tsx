@@ -182,9 +182,6 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     <section className="card">
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
-      <div className="bank-status-legend" aria-label="Chú giải trạng thái">
-        <span><i className="dot-empty" />Chưa làm</span><span><i className="dot-incomplete" />Chưa làm hết</span><span><i className="dot-published" />Đã public thư viện</span>
-      </div>
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ chapter, stats: rawStats }) => {
           const stats = rawStats || emptyReviewStats()
@@ -206,12 +203,9 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
 
     <Modal open={Boolean(editing)} title="Sửa bài" onClose={() => setEditing(null)}>
       <div className="mini-form">
-        <label className="field-label" htmlFor="chapter-edit-lesson-input">Bài:</label>
-        <div className="chapter-input-row">
-          <span className="input-prefix">Bài</span>
-          <input id="chapter-edit-lesson-input" className="input" value={editLesson} onChange={(event) => setEditLesson(event.target.value)} placeholder="1, 2, 1.1, 1.2..." />
-        </div>
-        <p className="helper">Ví dụ nhập 1.2, hệ thống tự lưu thành “Bài 1.2”.</p>
+        <label className="field-label" htmlFor="chapter-edit-lesson-input">Tên bài / Final test / Assignment:</label>
+        <input id="chapter-edit-lesson-input" className="input" value={editLesson} onChange={(event) => setEditLesson(event.target.value)} placeholder="1, 2, 1.1, Final test, Assignment..." />
+        <p className="helper">Nhập số sẽ tự lưu thành “Bài 1.2”. Nhập “Final test” hoặc “Assignment” sẽ giữ nguyên tên đặc biệt.</p>
         <div className="modal-actions">
           <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
           <button className="btn" type="button" disabled={busy || !normalizeLessonInput(editLesson)} onClick={saveEditChapter}>Lưu thay đổi</button>
@@ -221,7 +215,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     <ConfirmDialog
       open={Boolean(deleteTarget)}
       title={`Xóa ${deleteTarget ? chapterDisplayName(deleteTarget) : 'bài'}?`}
-      description={<p>Chỉ xóa được khi bài chưa có tài liệu/câu hỏi/release/mapping. Nếu bài chỉ có bank version rỗng do vừa mở workspace, hệ thống sẽ tự dọn và vẫn cho xóa.</p>}
+      description={<p>Chỉ xóa được khi bài chưa có tài liệu thật, câu hỏi, release, mapping hoặc quiz. Bank version rỗng do hệ thống tự tạo sẽ được dọn tự động.</p>}
       confirmLabel="Xác nhận xóa"
       danger
       busy={busy || deleteBusy}
@@ -232,7 +226,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     <Modal open={Boolean(deleteError)} title="Không thể xóa bài/chapter" onClose={() => setDeleteError('')}>
       <div className="mini-form">
         <div className="alert danger">{deleteError}</div>
-        <p className="helper">Bài chỉ xóa được khi không còn tài liệu thật, câu hỏi, release, mapping hoặc quiz. Các bản ghi rỗng/đã xóa sẽ được backend tự dọn.</p>
+        <p className="helper">Kiểm tra lại tài liệu, câu hỏi, release, mapping hoặc quiz đang liên kết với bài này.</p>
         <div className="modal-actions">
           <button className="btn" type="button" onClick={() => setDeleteError('')}>Đã hiểu</button>
         </div>
@@ -241,12 +235,9 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
 
     <Modal open={createOpen} title="Thêm bài" onClose={() => setCreateOpen(false)}>
       <div className="mini-form">
-        <label className="field-label" htmlFor="chapter-lesson-input">Bài:</label>
-        <div className="chapter-input-row">
-          <span className="input-prefix">Bài</span>
-          <input id="chapter-lesson-input" className="input" value={chapterInput} onChange={(event) => setChapterInput(event.target.value)} placeholder="1, 2, 1.1, 1.2..." />
-        </div>
-        <p className="helper">Ví dụ nhập 1.2, hệ thống tự tạo tên “Bài 1.2”. ID do hệ thống tự sinh.</p>
+        <label className="field-label" htmlFor="chapter-lesson-input">Tên bài / Final test / Assignment:</label>
+        <input id="chapter-lesson-input" className="input" value={chapterInput} onChange={(event) => setChapterInput(event.target.value)} placeholder="1, 2, 1.1, Final test, Assignment..." />
+        <p className="helper">Nhập số để tạo “Bài 1.2”. Nhập “Final test” hoặc “Assignment” để tạo đúng tên đặc biệt.</p>
         <div className="modal-actions">
           <button className="btn secondary" type="button" onClick={() => { setChapterInput(''); setCreateOpen(false) }}>Hủy</button>
           <button className="btn" type="button" disabled={busy || !offering || !normalizeLessonInput(chapterInput)} onClick={() => run(async () => {

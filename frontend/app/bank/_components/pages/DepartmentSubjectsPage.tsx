@@ -166,9 +166,6 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     <section className="card">
       <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={<button className="btn" disabled={!can('subject.create')} onClick={() => setCreateOpen(true)}>+ Thêm môn</button>} />
-      <div className="bank-status-legend" aria-label="Chú giải trạng thái">
-        <span><i className="dot-empty" />Chưa làm</span><span><i className="dot-incomplete" />Chưa làm hết</span><span><i className="dot-published" />Đã public thư viện</span>
-      </div>
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject, stats: rawStats }) => {
           const stats = rawStats || emptyReviewStats()

@@ -91,13 +91,22 @@ export function chapterDisplayName(chapter?: SubjectChapter | null) {
 }
 
 export function normalizeLessonInput(value: string) {
-  const raw = value.trim().replace(/^bài\s*/i, '').trim()
-  return raw
+  const raw = value.trim()
+  if (!raw) return ''
+  const withoutBai = raw.replace(/^bài\s*/i, '').trim()
+  if (/^final\s*test$/i.test(withoutBai)) return 'Final test'
+  if (/^assignment$/i.test(withoutBai)) return 'Assignment'
+  return withoutBai
 }
 
 export function buildChapterTitle(value: string) {
   const raw = normalizeLessonInput(value)
-  return raw ? `Bài ${raw}` : ''
+  if (!raw) return ''
+  if (/^final\s*test$/i.test(raw)) return 'Final test'
+  if (/^assignment$/i.test(raw)) return 'Assignment'
+  if (/^[0-9]+(?:\.[0-9]+)*$/.test(raw)) return `Bài ${raw}`
+  if (/^bài\s+/i.test(raw)) return raw
+  return raw
 }
 
 export function statusLabel(status?: string | null) {
@@ -176,16 +185,11 @@ export function SearchActionBar({ search, setSearch, placeholder, action }: { se
 export function Modal({ open, title, children, onClose, wide = false }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
   useEffect(() => {
     if (!open) return undefined
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.body.style.overflow = previousOverflow
-      document.removeEventListener('keydown', onKeyDown)
-    }
+    return () => { document.removeEventListener('keydown', onKeyDown) }
   }, [open, onClose])
 
   if (!open) return null
