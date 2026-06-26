@@ -8,18 +8,89 @@ import {
   getAcademicTerms,
   getAcademicTrainingTeacherReport,
 } from '../../lib/api'
-import { AcademicCampus, AcademicTerm, AcademicTrainingTeacherReport } from '../../types'
+import { AcademicCampus, AcademicLearningComponentScore, AcademicTerm, AcademicTrainingTeacherReport } from '../../types'
 
 const PAGE_SIZE = 50
 
+type TrainingSummary = {
+  teacher_count: number
+  class_count: number
+  subject_count: number
+  student_count: number
+  unique_student_count: number
+  cms_synced_count: number
+  learning_enrolled_count: number
+  learning_active_count: number
+  risk_student_count: number
+  classes_without_course_count: number
+  deadline_late_student_count: number
+  deadline_late_quiz_count: number
+}
+
+const EMPTY_SUMMARY: TrainingSummary = {
+  teacher_count: 0,
+  class_count: 0,
+  subject_count: 0,
+  student_count: 0,
+  unique_student_count: 0,
+  cms_synced_count: 0,
+  learning_enrolled_count: 0,
+  learning_active_count: 0,
+  risk_student_count: 0,
+  classes_without_course_count: 0,
+  deadline_late_student_count: 0,
+  deadline_late_quiz_count: 0,
+}
+
+function normalizeSummary(value?: Partial<TrainingSummary> | null): TrainingSummary {
+  return {
+    ...EMPTY_SUMMARY,
+    ...(value || {}),
+    deadline_late_student_count: Number(value?.deadline_late_student_count || 0),
+    deadline_late_quiz_count: Number(value?.deadline_late_quiz_count || 0),
+  }
+}
+
+function normalizePercentValue(value?: number | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return null
+  if (value >= 0 && value <= 1) return value * 100
+  return value
+}
+
 function percentLabel(value?: number | null) {
-  if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A'
-  return `${Math.round(value * 10) / 10}%`
+  const percent = normalizePercentValue(value)
+  if (percent === null) return 'N/A'
+  return `${Math.round(percent * 10) / 10}%`
 }
 
 function grade10Label(value?: number | null) {
-  if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A'
-  return `${Math.round(value * 100) / 100}/10`
+  const percent = normalizePercentValue(value)
+  if (percent === null) return 'N/A'
+  const score = Math.max(0, Math.min(10, percent / 10))
+  return `${Math.round(score * 10) / 10}/10`
+}
+
+function componentKey(score: AcademicLearningComponentScore) {
+  return String(score.key || score.name || '').trim()
+}
+
+function componentDisplayName(score: AcademicLearningComponentScore) {
+  return String(score.name || score.key || 'Đầu điểm').trim()
+}
+
+function gradeColumnCompare(left: { key: string; name: string }, right: { key: string; name: string }) {
+  return left.name.localeCompare(right.name, 'vi', { numeric: true, sensitivity: 'base' })
+}
+
+function componentScoreText(score?: AcademicLearningComponentScore | null) {
+  if (!score) return 'N/A'
+  const percent = normalizePercentValue(score.percent)
+  if (percent !== null) return grade10Label(percent)
+  if (typeof score.earned === 'number' && typeof score.possible === 'number' && score.possible > 0) {
+    const value = Math.max(0, Math.min(10, (score.earned / score.possible) * 10))
+    return `${Math.round(value * 10) / 10}/10`
+  }
+  return 'N/A'
 }
 
 function countLabel(value?: number | null) {
@@ -64,7 +135,7 @@ export default function TrainingManagementPage() {
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [campuses, setCampuses] = useState<AcademicCampus[]>([])
   const [items, setItems] = useState<AcademicTrainingTeacherReport[]>([])
-  const [summary, setSummary] = useState({ teacher_count: 0, class_count: 0, subject_count: 0, student_count: 0, unique_student_count: 0, cms_synced_count: 0, learning_enrolled_count: 0, learning_active_count: 0, risk_student_count: 0, classes_without_course_count: 0, deadline_late_student_count: 0, deadline_late_quiz_count: 0 })
+  const [summary, setSummary] = useState<TrainingSummary>(EMPTY_SUMMARY)
   const [termId, setTermId] = useState('')
   const [branch, setBranch] = useState('poly')
   const [campus, setCampus] = useState('')
@@ -111,7 +182,7 @@ export default function TrainingManagementPage() {
       const result = await getAcademicTrainingTeacherReport(headers, { termId, branch, campus, search, learningStatus, page, pageSize: PAGE_SIZE })
       if (cancelledRef?.cancelled) return
       setItems(result.items || [])
-      setSummary(result.summary || summary)
+      setSummary(normalizeSummary(result.summary))
       setTotal(result.total || 0)
     } catch (error) {
       if (!cancelledRef?.cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được báo cáo quản lý đào tạo')
@@ -128,6 +199,26 @@ export default function TrainingManagementPage() {
 
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  const classComponentColumns = (item: AcademicTrainingTeacherReport) => {
+    const columns: Array<{ key: string; name: string }> = []
+    const seen = new Set<string>()
+    ;(item.classes || []).forEach((cls) => {
+      ;(cls.learning_component_summaries || []).forEach((score) => {
+        const key = componentKey(score)
+        const name = componentDisplayName(score)
+        const dedupeKey = (key || name).toLowerCase()
+        if (!dedupeKey || seen.has(dedupeKey)) return
+        seen.add(dedupeKey)
+        columns.push({ key: key || name, name })
+      })
+    })
+    return columns.sort(gradeColumnCompare)
+  }
+
+  const classComponentScore = (cls: any, column: { key: string; name: string }) => {
+    return cls.learning_component_summaries?.find((score: AcademicLearningComponentScore) => componentKey(score) === column.key || score.name === column.name) || null
+  }
 
   const exportExcel = async () => {
     setExporting(true)
@@ -265,25 +356,30 @@ export default function TrainingManagementPage() {
       {expandedTeacherId && <div className="training-class-detail-panel">
         {items.filter((item) => item.teacher_id === expandedTeacherId).map((item) => <div key={item.teacher_id} className="academic-unified-card nested-card">
           <div className="section-head list-card-head"><div><h3>Chi tiết lớp của {item.teacher_name}</h3><p>Mỗi lớp có Course completion, điểm tổng hệ 10 và deadline quiz tính theo 6 tuần đầu của block.</p></div></div>
-          <div className="table-wrap academic-table-wrap">
-            <table className="data-table academic-data-table">
-              <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Tiến độ học</th><th>Deadline quiz</th><th>Cảnh báo</th></tr></thead>
-              <tbody>
-                {item.classes.map((cls) => <tr key={cls.class_id}>
-                  <td><b>{cls.class_code}</b><small>{cls.term_name}{cls.block_name ? ` · ${cls.block_name}` : ''}</small></td>
-                  <td><b>{cls.subject_code}</b><small>{cls.subject_name}</small></td>
-                  <td>{cls.openedx_course_id ? <><b>{cls.openedx_course_id}</b><small>{cls.openedx_mapping_source}</small></> : <span className="status-pill warning">Chưa map</span>}</td>
-                  <td><b>{cls.student_count} SV</b><small>CMS {ratioLabel(cls.cms_synced_count, cls.student_count)} · Enroll {ratioLabel(cls.learning_enrolled_count, cls.student_count)}</small></td>
-                  <td><b>Completion {percentLabel(cls.learning_avg_progress_percent)}</b><small>Điểm tổng {grade10Label(cls.learning_avg_grade_10)}</small></td>
-                  <td>
-                    <b>{countLabel(cls.deadline_late_student_count)} SV trễ</b>
-                    <small>{countLabel(cls.deadline_late_quiz_count)} lượt quiz trễ · Đã đến hạn {countLabel(cls.deadline_due_quiz_count)}/{countLabel(cls.deadline_quiz_count)} quiz</small>
-                    <small>{cls.deadline_next_quiz_label ? `${cls.deadline_next_quiz_label}: ${cls.deadline_next_quiz_from_date || 'N/A'} → ${cls.deadline_next_quiz_due_date || 'N/A'}` : 'Đã qua lịch quiz hoặc chưa có Detailed grades'}</small>
-                  </td>
-                  <td><span className={cls.learning_alerts?.length ? 'status-pill warning' : 'status-pill success'}>{cls.learning_alerts?.length ? 'Có cảnh báo' : 'Ổn'}</span><small>{alertText(cls.learning_alerts)}</small></td>
-                </tr>)}
-              </tbody>
-            </table>
+          <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">
+            {(() => {
+              const columns = classComponentColumns(item)
+              return <table className="data-table academic-data-table training-class-grade-table">
+                <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Cảnh báo</th></tr></thead>
+                <tbody>
+                  {item.classes.map((cls) => <tr key={cls.class_id}>
+                    <td><b>{cls.class_code}</b><small>{cls.term_name}{cls.block_name ? ` · ${cls.block_name}` : ''}</small></td>
+                    <td><b>{cls.subject_code}</b><small>{cls.subject_name}</small></td>
+                    <td>{cls.openedx_course_id ? <><b>{cls.openedx_course_id}</b><small>{cls.openedx_mapping_source}</small></> : <span className="status-pill warning">Chưa map</span>}</td>
+                    <td><b>{cls.student_count} SV</b><small>CMS {ratioLabel(cls.cms_synced_count, cls.student_count)} · Enroll {ratioLabel(cls.learning_enrolled_count, cls.student_count)}</small></td>
+                    <td><b>Course completion {percentLabel(cls.learning_avg_progress_percent)}</b><small>Điểm tổng {grade10Label(cls.learning_avg_grade_10)}</small></td>
+                    {columns.map((column) => <td key={`${cls.class_id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(classComponentScore(cls, column))}</b></td>)}
+                    <td>
+                      <b>{countLabel(cls.deadline_late_student_count)} SV trễ</b>
+                      <small>{countLabel(cls.deadline_late_quiz_count)} lượt quiz trễ · Đã đến hạn {countLabel(cls.deadline_due_quiz_count)}/{countLabel(cls.deadline_quiz_count)} quiz</small>
+                      <small>{cls.deadline_next_quiz_label ? `${cls.deadline_next_quiz_label}: ${cls.deadline_next_quiz_from_date || 'N/A'} → ${cls.deadline_next_quiz_due_date || 'N/A'}` : 'Đã qua lịch quiz hoặc chưa có Detailed grades'}</small>
+                    </td>
+                    <td><span className={cls.learning_alerts?.length ? 'status-pill warning' : 'status-pill success'}>{cls.learning_alerts?.length ? 'Có cảnh báo' : 'Ổn'}</span><small>{alertText(cls.learning_alerts)}</small></td>
+                  </tr>)}
+                  {!columns.length && <tr><td colSpan={8}>Chưa có cột Detailed grades. Hãy chạy Đồng bộ full CMS cho lớp sau khi Course CMS đã map đúng.</td></tr>}
+                </tbody>
+              </table>
+            })()}
           </div>
         </div>)}
       </div>}

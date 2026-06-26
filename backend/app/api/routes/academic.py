@@ -102,6 +102,48 @@ def _grade10(value: Any) -> float | None:
     return round(max(0.0, min(100.0, number)) / 10.0, 2)
 
 
+def _component_key(item: dict[str, Any]) -> str:
+    return str(item.get('key') or item.get('name') or '').strip()
+
+
+def _component_name(item: dict[str, Any]) -> str:
+    return str(item.get('name') or item.get('key') or 'Đầu điểm').strip()
+
+
+def _component_score_text(item: dict[str, Any] | None) -> Any:
+    if not item:
+        return ''
+    if item.get('percent') is not None:
+        return _grade10(item.get('percent'))
+    try:
+        earned = float(item.get('earned'))
+        possible = float(item.get('possible'))
+        if possible > 0:
+            return round(max(0.0, min(10.0, earned / possible * 10.0)), 2)
+    except Exception:
+        pass
+    return ''
+
+
+def _training_component_columns(report: dict[str, Any]) -> list[dict[str, str]]:
+    columns: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in report.get('items') or []:
+        for cls in item.get('classes') or []:
+            for score in cls.get('learning_component_summaries') or []:
+                if not isinstance(score, dict):
+                    continue
+                key = _component_key(score)
+                name = _component_name(score)
+                dedupe = (key or name).lower()
+                if not dedupe or dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                columns.append({'key': key or name, 'name': name})
+    columns.sort(key=lambda item: str(item.get('name') or item.get('key') or '').lower())
+    return columns
+
+
 def _setup_sheet(ws, headers: list[str], widths: list[int] | None = None) -> None:
     header_fill = PatternFill('solid', fgColor='111827')
     for col, name in enumerate(headers, 1):
@@ -142,14 +184,17 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
         ])
 
     class_ws = wb.create_sheet('ChiTietLop')
+    component_columns = _training_component_columns(report)
     class_headers = [
         'Giảng viên', 'Username GV', 'Hệ', 'Cơ sở', 'Học kỳ', 'Block', 'Môn', 'Tên môn',
         'Lớp', 'Tên lớp', 'Course CMS', 'Nguồn mapping', 'SV', 'Đã đồng bộ CMS', 'Đã enroll',
-        'Có hoạt động', 'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'Số Quiz', 'Quiz đã đến hạn',
+        'Có hoạt động', 'Course completion TB (%)', 'Điểm tổng TB (hệ 10)',
+        *[column['name'] for column in component_columns],
+        'Số Quiz', 'Quiz đã đến hạn',
         'SV trễ deadline', 'Lượt quiz trễ', 'Đợt quiz kế tiếp', 'Ngày làm quiz kế tiếp', 'Deadline kế tiếp',
         'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
     ]
-    _setup_sheet(class_ws, class_headers, [28, 22, 10, 12, 18, 16, 12, 30, 16, 26, 38, 20, 8, 16, 12, 12, 20, 18, 10, 14, 16, 14, 18, 18, 18, 18, 12, 12, 14, 12, 12, 22, 48])
+    _setup_sheet(class_ws, class_headers, [28, 22, 10, 12, 18, 16, 12, 30, 16, 26, 38, 20, 8, 16, 12, 12, 20, 18, *([12] * len(component_columns)), 10, 14, 16, 14, 18, 18, 18, 18, 12, 12, 14, 12, 12, 22, 48])
     for item in report.get('items') or []:
         for cls in item.get('classes') or []:
             statuses = cls.get('status_counts') or {}
@@ -157,7 +202,12 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
                 item.get('teacher_name'), item.get('teacher_username'), cls.get('branch'), cls.get('campus'), cls.get('term_name'), cls.get('block_name'),
                 cls.get('subject_code'), cls.get('subject_name'), cls.get('class_code'), cls.get('class_name'), cls.get('openedx_course_id'), cls.get('openedx_mapping_source'),
                 cls.get('student_count'), cls.get('cms_synced_count'), cls.get('learning_enrolled_count'), cls.get('learning_active_count'),
-                cls.get('learning_avg_progress_percent'), cls.get('learning_avg_grade_10'), cls.get('deadline_quiz_count'), cls.get('deadline_due_quiz_count'),
+                cls.get('learning_avg_progress_percent'), cls.get('learning_avg_grade_10'),
+                *[
+                    _component_score_text(next((score for score in (cls.get('learning_component_summaries') or []) if isinstance(score, dict) and (_component_key(score) == column['key'] or _component_name(score) == column['name'])), None))
+                    for column in component_columns
+                ],
+                cls.get('deadline_quiz_count'), cls.get('deadline_due_quiz_count'),
                 cls.get('deadline_late_student_count'), cls.get('deadline_late_quiz_count'), cls.get('deadline_next_quiz_label'), cls.get('deadline_next_quiz_from_date'), cls.get('deadline_next_quiz_due_date'),
                 statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), cls.get('learning_last_synced_at'), cls.get('learning_alerts'),
             ])

@@ -78,6 +78,12 @@ def _normalize_text_key(value: Any) -> str:
     return re.sub(r'[^a-z0-9]+', '', str(value or '').strip().lower())
 
 
+def _natural_sort_key(value: Any) -> list[Any]:
+    raw = str(value or '').strip().lower()
+    parts = re.split(r'(\d+)', raw)
+    return [int(part) if part.isdigit() else part for part in parts]
+
+
 def _parse_openedx_course_id(course_id: str) -> dict[str, str] | None:
     raw = str(course_id or '').strip()
     match = re.match(r'^course-v1:([^+\s]+)\+([^+\s]+)\+([^+\s]+)$', raw)
@@ -623,31 +629,192 @@ class AcademicService:
             number *= 100.0
         return round(number, 2)
 
+    def _payload_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> dict[str, Any]:
+        if not snapshot or not isinstance(snapshot.raw_json, dict):
+            return {}
+        raw = snapshot.raw_json
+        payload = raw.get('payload') if isinstance(raw.get('payload'), dict) else {}
+        # Some older jobs wrote partial data under enrollment_payload/learning_payload
+        # or stored the connector result directly at raw_json root. Merge, do not
+        # overwrite the main learning payload. This makes old snapshots readable
+        # after a code upgrade without forcing a destructive resync.
+        merged: dict[str, Any] = {}
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                if key not in {'payload'}:
+                    merged[key] = value
+        if isinstance(raw.get('enrollment_payload'), dict):
+            merged.setdefault('enrollment_payload', raw.get('enrollment_payload'))
+        if isinstance(raw.get('learning_payload'), dict):
+            merged.update(raw.get('learning_payload') or {})
+        if isinstance(payload, dict):
+            merged.update(payload)
+        return merged
+
+    def _percent_from_value(self, value: Any, *, kind: str = 'progress') -> float | None:
+        if isinstance(value, dict):
+            direct_keys = (
+                'percent', 'percentage', 'value', 'score_percent', 'grade_percent',
+                'progress_percent', 'course_progress_percent', 'completion_percent',
+                'course_completion_percent', 'courseCompletionPercent', 'completed_percent',
+                'percent_complete', 'percentComplete', 'completion_rate', 'completionRate',
+                'completion', 'course_completion', 'courseCompletion', 'progress',
+            )
+            for key in direct_keys:
+                if key in value:
+                    percent = self._percent_display_value(value.get(key))
+                    if percent is not None:
+                        return percent
+            completed = self._number_or_none(
+                value.get('completed_blocks')
+                or value.get('complete_count')
+                or value.get('completed_count')
+                or value.get('completed')
+                or value.get('complete')
+                or value.get('done')
+                or value.get('visited')
+            )
+            total = self._number_or_none(
+                value.get('total_blocks')
+                or value.get('total_count')
+                or value.get('block_count')
+                or value.get('total')
+                or value.get('possible')
+                or value.get('required')
+            )
+            if completed is not None and total and total > 0:
+                return round((completed / total) * 100.0, 2)
+            return None
+        return self._percent_display_value(value)
+
+    def _candidate_payload_containers(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        containers: list[dict[str, Any]] = []
+        seen: set[int] = set()
+
+        def add(value: Any, depth: int = 0) -> None:
+            if depth > 2 or not isinstance(value, dict):
+                return
+            marker = id(value)
+            if marker in seen:
+                return
+            seen.add(marker)
+            containers.append(value)
+            for key in (
+                'payload', 'result', 'data', 'analytics', 'course', 'courseware',
+                'progress', 'course_progress', 'courseProgress', 'completion',
+                'course_completion', 'courseCompletion', 'completion_summary',
+                'completionSummary', 'progress_summary', 'progressSummary',
+                'grade', 'grades', 'overall', 'summary', 'student', 'learner',
+                'details', 'detail', 'detailed', 'gradebook', 'grading',
+            ):
+                child = value.get(key)
+                if isinstance(child, dict):
+                    add(child, depth + 1)
+
+        add(payload)
+        return containers
+
+    def _progress_percent_from_payload(self, payload: dict[str, Any]) -> float | None:
+        if not isinstance(payload, dict):
+            return None
+        keys = (
+            'progress_percent', 'course_progress_percent', 'completion_percent',
+            'course_completion_percent', 'courseCompletionPercent', 'completed_percent',
+            'percent_complete', 'percentComplete', 'completion_rate', 'completionRate',
+            'progress', 'course_progress', 'courseProgress', 'completion',
+            'course_completion', 'courseCompletion', 'completion_summary',
+            'completionSummary', 'progress_summary', 'progressSummary', 'progressSummaryData',
+        )
+        for container in self._candidate_payload_containers(payload):
+            for key in keys:
+                if key not in container:
+                    continue
+                percent = self._percent_from_value(container.get(key), kind='progress')
+                if percent is not None:
+                    return percent
+            completed = self._number_or_none(container.get('completed_blocks') or container.get('completed_count') or container.get('completed') or container.get('done') or container.get('visited'))
+            total = self._number_or_none(container.get('total_blocks') or container.get('total_count') or container.get('block_count') or container.get('total') or container.get('required'))
+            if completed is not None and total and total > 0:
+                return round((completed / total) * 100.0, 2)
+        return None
+
+    def _grade_percent_from_payload(self, payload: dict[str, Any]) -> float | None:
+        if not isinstance(payload, dict):
+            return None
+        keys = (
+            'grade_percent', 'total_grade_percent', 'overall_grade_percent',
+            'course_grade_percent', 'percent_graded', 'weighted_percent',
+            'grade', 'total_grade', 'overall_grade', 'course_grade',
+            'final_grade', 'grading', 'grade_summary', 'gradeSummary',
+        )
+        for container in self._candidate_payload_containers(payload):
+            for key in keys:
+                if key not in container:
+                    continue
+                percent = self._percent_from_value(container.get(key), kind='grade')
+                if percent is not None:
+                    return percent
+        return None
+
+    def _snapshot_progress_percent(self, snapshot: AcademicStudentLearningSnapshot | None) -> float | None:
+        if not snapshot:
+            return None
+        direct = self._percent_display_value(snapshot.progress_percent)
+        if direct is not None:
+            return direct
+        return self._progress_percent_from_payload(self._payload_from_snapshot(snapshot))
+
+    def _snapshot_grade_percent(self, snapshot: AcademicStudentLearningSnapshot | None) -> float | None:
+        if not snapshot:
+            return None
+        direct = self._percent_display_value(snapshot.grade_percent)
+        if direct is not None:
+            return direct
+        return self._grade_percent_from_payload(self._payload_from_snapshot(snapshot))
+
     def _normalize_component_score_item(self, item: Any) -> dict[str, Any] | None:
         if not isinstance(item, dict):
             return None
         key = str(
             item.get('key')
             or item.get('usage_key')
+            or item.get('usageKey')
             or item.get('block_id')
+            or item.get('blockId')
+            or item.get('module_id')
+            or item.get('moduleId')
             or item.get('id')
             or item.get('name')
             or item.get('display_name')
+            or item.get('displayName')
+            or item.get('label')
+            or item.get('title')
             or ''
         ).strip()
         name = str(
             item.get('name')
             or item.get('display_name')
+            or item.get('displayName')
             or item.get('subsection_name')
+            or item.get('subsectionName')
             or item.get('assignment_name')
+            or item.get('assignmentName')
             or item.get('label')
             or item.get('title')
+            or item.get('module_name')
+            or item.get('moduleName')
             or key
             or 'Điểm thành phần'
         ).strip()
-        earned = self._number_or_none(item.get('earned', item.get('earned_graded', item.get('score', item.get('earned_score')))))
-        possible = self._number_or_none(item.get('possible', item.get('possible_graded', item.get('max_score', item.get('possible_score')))))
-        percent = self._percent_display_value(item.get('percent', item.get('grade_percent', item.get('score_percent', item.get('percent_graded', item.get('value'))))))
+        earned = self._number_or_none(
+            item.get('earned', item.get('earned_graded', item.get('earnedGraded', item.get('earned_score', item.get('earnedScore', item.get('score_earned', item.get('scoreEarned', item.get('score', item.get('points_earned')))))))))
+        )
+        possible = self._number_or_none(
+            item.get('possible', item.get('possible_graded', item.get('possibleGraded', item.get('possible_score', item.get('possibleScore', item.get('score_possible', item.get('scorePossible', item.get('max_score', item.get('maxScore', item.get('max_grade', item.get('points_possible')))))))))))
+        )
+        percent = self._percent_display_value(
+            item.get('percent', item.get('percentage', item.get('grade_percent', item.get('gradePercent', item.get('score_percent', item.get('scorePercent', item.get('percent_graded', item.get('percentGraded', item.get('value')))))))))
+        )
         if percent is None and earned is not None and possible and possible > 0:
             percent = round((earned / possible) * 100.0, 2)
         if percent is None and earned is None and possible is None:
@@ -666,51 +833,79 @@ class AcademicService:
     def _component_scores_from_payload(self, payload: Any) -> list[dict[str, Any]]:
         if not isinstance(payload, dict):
             return []
-        candidate_lists: list[Any] = []
         component_keys = (
             'detailed_grades',
             'detailedGrades',
             'detailed_grade',
             'detailed_grade_breakdown',
+            'detailedGradeBreakdown',
             'grade_breakdown',
+            'gradeBreakdown',
             'grade_details',
+            'gradeDetails',
             'component_scores',
+            'componentScores',
             'component_grades',
+            'componentGrades',
             'grade_components',
+            'gradeComponents',
             'graded_subsections',
+            'gradedSubsections',
             'subsection_grades',
+            'subsectionGrades',
             'section_scores',
+            'sectionScores',
             'scores',
+            'items',
+            'results',
+            'rows',
             'breakdown',
+            'components',
+            'subsections',
+            'assignments',
+            'detailed',
+            'details',
         )
-        for key in component_keys:
-            candidate_lists.append(payload.get(key))
-        grade = payload.get('grade') if isinstance(payload.get('grade'), dict) else {}
-        for key in component_keys + ('components', 'subsections', 'assignments'):
-            candidate_lists.append(grade.get(key))
+        candidate_lists: list[Any] = []
+        for container in self._candidate_payload_containers(payload):
+            for key in component_keys:
+                candidate_lists.append(container.get(key))
+            grade = container.get('grade') if isinstance(container.get('grade'), dict) else {}
+            for key in component_keys:
+                candidate_lists.append(grade.get(key))
         normalized: list[dict[str, Any]] = []
         seen: set[str] = set()
         for candidate in candidate_lists:
             if isinstance(candidate, dict):
-                iterable = []
-                for key, value in candidate.items():
-                    if isinstance(value, dict):
-                        iterable.append({'key': key, **value})
-                    elif isinstance(value, (int, float, str)):
-                        iterable.append({'key': key, 'name': key, 'percent': value})
-                candidate = iterable
+                # Candidate may be either a single component object or a mapping
+                # {component_name: score}. Try single object first.
+                single = self._normalize_component_score_item(candidate)
+                if single:
+                    candidate = [candidate]
+                else:
+                    iterable = []
+                    for key, value in candidate.items():
+                        if isinstance(value, dict):
+                            iterable.append({'key': key, 'name': value.get('name') or value.get('display_name') or value.get('displayName') or key, **value})
+                        elif isinstance(value, list):
+                            for sub in value:
+                                if isinstance(sub, dict):
+                                    iterable.append({'parent_key': key, **sub})
+                        elif isinstance(value, (int, float, str)):
+                            iterable.append({'key': key, 'name': key, 'percent': value})
+                    candidate = iterable
             if not isinstance(candidate, list):
                 continue
             for raw_item in candidate:
                 item = self._normalize_component_score_item(raw_item)
                 if not item:
                     continue
-                dedupe = str(item.get('key') or item.get('name') or '').lower()
+                dedupe = _normalize_text_key(item.get('key') or item.get('name') or '')
                 if dedupe in seen:
                     continue
                 seen.add(dedupe)
                 normalized.append(item)
-        normalized.sort(key=lambda item: str(item.get('name') or item.get('key') or ''))
+        normalized.sort(key=lambda item: _natural_sort_key(item.get('name') or item.get('key') or ''))
         return normalized[:80]
 
     def _component_scores_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> list[dict[str, Any]]:
@@ -886,14 +1081,13 @@ class AcademicService:
         except Exception:
             return 50.0
 
-    @staticmethod
     def _snapshot_has_learning_activity(snapshot: AcademicStudentLearningSnapshot | None) -> bool:
         if not snapshot:
             return False
         if str(snapshot.enrollment_status or '').lower() != 'enrolled':
             return False
-        progress = snapshot.progress_percent
-        grade = snapshot.grade_percent
+        progress = self._snapshot_progress_percent(snapshot)
+        grade = self._snapshot_grade_percent(snapshot)
         completed = snapshot.completed_blocks or 0
         if progress is not None and progress > 0:
             return True
@@ -915,8 +1109,8 @@ class AcademicService:
             return 'sync_error'
         if enrollment_status != 'enrolled':
             return 'not_enrolled'
-        progress = snapshot.progress_percent
-        grade = snapshot.grade_percent
+        progress = self._snapshot_progress_percent(snapshot)
+        grade = self._snapshot_grade_percent(snapshot)
         if not self._snapshot_has_learning_activity(snapshot):
             return 'no_activity'
         if grade is not None and grade < self._low_grade_threshold():
@@ -964,8 +1158,8 @@ class AcademicService:
                 'weight': None,
                 'source': f"{bucket.get('student_count', 0)} SV",
             })
-        results.sort(key=lambda item: (item.get('percent') is None, str(item.get('name') or '')))
-        return results[:20]
+        results.sort(key=lambda item: _natural_sort_key(item.get('name') or item.get('key') or ''))
+        return results[:80]
 
     def _learning_alerts_from_summary(self, *, total: int, enrolled: int, synced: int, active: int = 0, avg_progress: float | None, avg_grade: float | None, course_id: str | None) -> list[str]:
         alerts: list[str] = []
@@ -1053,10 +1247,12 @@ class AcademicService:
             bucket['snapshots'].append(snapshot)
             status_value = str(snapshot.enrollment_status or 'unknown')
             bucket['counts'][status_value] = bucket['counts'].get(status_value, 0) + 1
-            if snapshot.progress_percent is not None:
-                bucket['progress'].append(float(snapshot.progress_percent))
-            if snapshot.grade_percent is not None:
-                bucket['grades'].append(float(snapshot.grade_percent))
+            progress_value = self._snapshot_progress_percent(snapshot)
+            grade_value = self._snapshot_grade_percent(snapshot)
+            if progress_value is not None:
+                bucket['progress'].append(float(progress_value))
+            if grade_value is not None:
+                bucket['grades'].append(float(grade_value))
             if self._snapshot_has_learning_activity(snapshot):
                 bucket['active'] = int(bucket.get('active', 0) or 0) + 1
             sync_at = snapshot.learning_synced_at or snapshot.last_synced_at
@@ -1120,10 +1316,12 @@ class AcademicService:
             bucket['snapshots'].append(snapshot)
             status_value = str(snapshot.enrollment_status or 'unknown')
             bucket['counts'][status_value] = bucket['counts'].get(status_value, 0) + 1
-            if snapshot.progress_percent is not None:
-                bucket['progress'].append(float(snapshot.progress_percent))
-            if snapshot.grade_percent is not None:
-                bucket['grades'].append(float(snapshot.grade_percent))
+            progress_value = self._snapshot_progress_percent(snapshot)
+            grade_value = self._snapshot_grade_percent(snapshot)
+            if progress_value is not None:
+                bucket['progress'].append(float(progress_value))
+            if grade_value is not None:
+                bucket['grades'].append(float(grade_value))
             if self._snapshot_has_learning_activity(snapshot):
                 bucket['active'] = int(bucket.get('active', 0) or 0) + 1
             sync_at = snapshot.learning_synced_at or snapshot.last_synced_at
@@ -1622,8 +1820,8 @@ class AcademicService:
             'learning_snapshot_id': learning.id if learning else None,
             'learning_enrollment_status': learning.enrollment_status if learning else None,
             'learning_enrollment_mode': learning.enrollment_mode if learning else None,
-            'learning_progress_percent': learning.progress_percent if learning else None,
-            'learning_grade_percent': learning.grade_percent if learning else None,
+            'learning_progress_percent': self._snapshot_progress_percent(learning),
+            'learning_grade_percent': self._snapshot_grade_percent(learning),
             'learning_passed': learning.passed if learning else None,
             'learning_completed_blocks': learning.completed_blocks if learning else None,
             'learning_total_blocks': learning.total_blocks if learning else None,
@@ -1979,6 +2177,7 @@ class AcademicService:
                 'learning_avg_grade_percent': avg_grade,
                 'learning_avg_grade_10': self._percent_to_grade10(avg_grade),
                 'learning_last_synced_at': last_synced,
+                'learning_component_summaries': learning.get('learning_component_summaries') or [],
                 'status_counts': status_counts,
                 'learning_alerts': alerts,
                 'deadline_quiz_count': int(deadline.get('quiz_count') or 0),
@@ -2127,9 +2326,9 @@ class AcademicService:
                         'status': status_name,
                         'status_label': self._learning_status_label(status_name),
                         'enrollment_status': snapshot.enrollment_status if snapshot else None,
-                        'progress_percent': snapshot.progress_percent if snapshot else None,
-                        'grade_percent': snapshot.grade_percent if snapshot else None,
-                        'grade_10': self._percent_to_grade10(snapshot.grade_percent if snapshot else None),
+                        'progress_percent': self._snapshot_progress_percent(snapshot),
+                        'grade_percent': self._snapshot_grade_percent(snapshot),
+                        'grade_10': self._percent_to_grade10(self._snapshot_grade_percent(snapshot)),
                         'last_activity_at': snapshot.last_activity_at if snapshot else None,
                         'last_synced_at': (snapshot.learning_synced_at or snapshot.last_synced_at) if snapshot else None,
                         'deadline_due_quiz_count': int(deadline_status.get('due_quiz_count') or 0),
@@ -2479,17 +2678,14 @@ class AcademicService:
             return mapping.openedx_cohort_name or cls.class_code
         return cls.class_code if mapping else None
 
-    @staticmethod
-    def _snapshot_has_learning_payload(snapshot: AcademicStudentLearningSnapshot | None) -> bool:
+    def _snapshot_has_learning_payload(self, snapshot: AcademicStudentLearningSnapshot | None) -> bool:
         if not snapshot:
             return False
-        if snapshot.progress_percent is not None or snapshot.grade_percent is not None:
+        if self._snapshot_progress_percent(snapshot) is not None or self._snapshot_grade_percent(snapshot) is not None:
             return True
         if snapshot.completed_blocks is not None or snapshot.total_blocks is not None:
             return True
-        raw = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
-        payload = raw.get('payload') if isinstance(raw.get('payload'), dict) else {}
-        return bool(self._component_scores_from_payload(payload))
+        return bool(self._component_scores_from_snapshot(snapshot))
 
     def class_course_mapping_proposal(self, user: UserContext, class_id: str) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
@@ -2801,16 +2997,6 @@ class AcademicService:
         counts = {str(status or 'unknown'): int(count or 0) for status, count in rows}
         synced = sum(counts.values())
         counts['not_synced'] = max(0, int(total) - synced)
-        avg_progress = self.db.query(func.avg(AcademicStudentLearningSnapshot.progress_percent)).filter(
-            AcademicStudentLearningSnapshot.class_id == class_id,
-            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
-            AcademicStudentLearningSnapshot.progress_percent.isnot(None),
-        ).scalar()
-        avg_grade = self.db.query(func.avg(AcademicStudentLearningSnapshot.grade_percent)).filter(
-            AcademicStudentLearningSnapshot.class_id == class_id,
-            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
-            AcademicStudentLearningSnapshot.grade_percent.isnot(None),
-        ).scalar()
         last_synced = self.db.query(func.max(func.coalesce(AcademicStudentLearningSnapshot.learning_synced_at, AcademicStudentLearningSnapshot.last_synced_at))).filter(
             AcademicStudentLearningSnapshot.class_id == class_id,
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
@@ -2819,6 +3005,10 @@ class AcademicService:
             AcademicStudentLearningSnapshot.class_id == class_id,
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
         ).all()
+        progress_values = [value for value in (self._snapshot_progress_percent(snapshot) for snapshot in snapshots) if value is not None]
+        grade_values = [value for value in (self._snapshot_grade_percent(snapshot) for snapshot in snapshots) if value is not None]
+        avg_progress = round(sum(progress_values) / len(progress_values), 2) if progress_values else None
+        avg_grade = round(sum(grade_values) / len(grade_values), 2) if grade_values else None
         status_counts: dict[str, int] = {}
         alert_counts = {'cms_not_synced': 0, 'not_enrolled': 0, 'no_activity': 0, 'low_progress': 0, 'low_grade': 0, 'sync_error': 0, 'good': 0, 'in_progress': 0}
         active_count = sum(1 for snapshot in snapshots if self._snapshot_has_learning_activity(snapshot))
@@ -2837,8 +3027,8 @@ class AcademicService:
             'total': int(total),
             'counts': counts,
             'active_count': active_count,
-            'avg_progress_percent': round(float(avg_progress), 2) if avg_progress is not None else None,
-            'avg_grade_percent': round(float(avg_grade), 2) if avg_grade is not None else None,
+            'avg_progress_percent': avg_progress,
+            'avg_grade_percent': avg_grade,
             'last_synced_at': last_synced,
             'component_summaries': self._component_summary_from_snapshots(snapshots),
             'status_counts': status_counts,
@@ -2874,7 +3064,11 @@ class AcademicService:
         )[:50]
         snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or None
         snapshot.progress_percent = self._float_or_none(result.get('progress_percent', progress.get('percent')))
+        if snapshot.progress_percent is None:
+            snapshot.progress_percent = self._progress_percent_from_payload(result)
         snapshot.grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
+        if snapshot.grade_percent is None:
+            snapshot.grade_percent = self._grade_percent_from_payload(result)
         if 'passed' in result:
             snapshot.passed = _boolish(result.get('passed'))
         elif 'passed' in grade:

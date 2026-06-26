@@ -1917,6 +1917,7 @@ export type AcademicTrainingClassReport = {
   learning_avg_grade_percent?: number | null
   learning_avg_grade_10?: number | null
   learning_last_synced_at?: string | null
+  learning_component_summaries?: AcademicLearningComponentScore[]
   status_counts?: Record<string, number>
   learning_alerts?: string[]
   deadline_quiz_count?: number | null
@@ -1974,8 +1975,8 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
     learning_active_count: number
     risk_student_count: number
     classes_without_course_count: number
-    deadline_late_student_count?: number
-    deadline_late_quiz_count?: number
+    deadline_late_student_count: number
+    deadline_late_quiz_count: number
   }
 }
 
