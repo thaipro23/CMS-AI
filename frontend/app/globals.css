@@ -4944,3 +4944,30 @@ label, .field-label { color: var(--color-text); }
 @media(max-width: 760px){
   .chapter-operation-status__head { flex-direction: column; }
 }
+
+/* v25.9.16.5.44 Class detail CMS learning column polish */
+.student-grade-table td.username-combined-cell,
+.student-grade-table td.learning-progress-cell {
+  min-width: 160px;
+}
+.student-grade-table td.username-combined-cell b,
+.student-grade-table td.learning-progress-cell b,
+.student-grade-table td.learning-progress-cell small {
+  display: block;
+}
+.student-grade-table td.username-combined-cell small,
+.student-grade-table td.learning-progress-cell small {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+.student-grade-table td.learning-progress-cell .status-pill {
+  margin-top: 6px;
+}
+.student-grade-table th.component-grade-th,
+.student-grade-table td.component-grade-cell {
+  min-width: 110px;
+}
+.student-grade-table td.component-grade-cell b {
+  min-width: 64px;
+}

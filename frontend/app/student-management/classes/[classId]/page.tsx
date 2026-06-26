@@ -9,9 +9,6 @@ import {
   getAcademicClassMappingSummary,
   getAcademicClassLearningSummary,
   getAcademicClassStudents,
-  enqueueAcademicClassCmsSyncJob,
-  enqueueAcademicClassEnrollmentSyncJob,
-  enqueueAcademicClassLearningSyncJob,
   enqueueAcademicClassFullCmsSyncJob,
   getAcademicClassSyncJob,
   getAcademicClassSyncJobs,
@@ -42,9 +39,21 @@ function mappingSourceLabel(source?: string | null) {
   if (source === 'class_override') return 'Map riêng lớp'
   return 'Chưa map'
 }
+function normalizePercentValue(value?: number | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return null
+  if (value >= 0 && value <= 1) return value * 100
+  return value
+}
 function percentLabel(value?: number | null) {
-  if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A'
-  return `${Math.round(value * 10) / 10}%`
+  const percent = normalizePercentValue(value)
+  if (percent === null) return 'N/A'
+  return `${Math.round(percent * 10) / 10}%`
+}
+function grade10Label(value?: number | null) {
+  const percent = normalizePercentValue(value)
+  if (percent === null) return 'N/A'
+  const score = Math.max(0, Math.min(10, percent / 10))
+  return `${Math.round(score * 10) / 10}/10`
 }
 function learningStatusLabel(value?: string | null) {
   const status = (value || 'not_synced').toLowerCase()
@@ -68,12 +77,22 @@ function learningStatusClass(value?: string | null) {
 }
 function componentScoreText(score?: AcademicLearningComponentScore | null) {
   if (!score) return 'N/A'
-  if (typeof score.percent === 'number' && !Number.isNaN(score.percent)) return percentLabel(score.percent)
-  if (typeof score.earned === 'number' && typeof score.possible === 'number') return `${Math.round(score.earned * 100) / 100}/${Math.round(score.possible * 100) / 100}`
+  const percent = normalizePercentValue(score.percent)
+  if (percent !== null) return grade10Label(percent)
+  if (typeof score.earned === 'number' && typeof score.possible === 'number' && score.possible > 0) {
+    const value = Math.max(0, Math.min(10, (score.earned / score.possible) * 10))
+    return `${Math.round(value * 10) / 10}/10`
+  }
   return 'N/A'
 }
 function componentKey(score: AcademicLearningComponentScore) {
   return String(score.key || score.name || '').trim()
+}
+function componentDisplayName(score: AcademicLearningComponentScore) {
+  return String(score.name || score.key || 'Đầu điểm').trim()
+}
+function gradeColumnCompare(left: { key: string; name: string }, right: { key: string; name: string }) {
+  return left.name.localeCompare(right.name, 'vi', { numeric: true, sensitivity: 'base' })
 }
 function enrollmentLabel(value?: string | null) {
   const status = (value || 'unknown').toLowerCase()
@@ -106,9 +125,6 @@ function ClassDetailContent() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [checking, setChecking] = useState(false)
-  const [syncingEnrollment, setSyncingEnrollment] = useState(false)
-  const [syncingLearning, setSyncingLearning] = useState(false)
   const [syncingFullFlow, setSyncingFullFlow] = useState(false)
   const [message, setMessage] = useState('')
   const [errorModal, setErrorModal] = useState('')
@@ -135,9 +151,7 @@ function ClassDetailContent() {
 
   const jobTypeLabel = (type?: string | null) => {
     if (type === 'full_cms_sync') return 'Đồng bộ full CMS'
-    if (type === 'cms_sync_check') return 'Tạo/kiểm tra user CMS'
-    if (type === 'cms_enrollment_sync') return 'Enrollment Course CMS'
-    if (type === 'learning_sync') return 'Cập nhật tiến độ/điểm'
+    if (['cms_sync_check', 'cms_enrollment_sync', 'learning_sync'].includes(String(type || ''))) return 'Đồng bộ full CMS'
     return 'Đồng bộ CMS'
   }
 
@@ -262,33 +276,6 @@ function ClassDetailContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classId])
 
-  const runCmsSyncCheck = async () => {
-    setChecking(true)
-    setMessage('')
-    try {
-      if (await followExistingJobIfAny()) return
-      const queued = await enqueueAcademicClassCmsSyncJob(jsonHeaders, classId, { force: true, limit: 500 })
-      if (queued.job_type !== 'cms_sync_check') {
-        setMessage(`Đang có tiến trình ${jobTypeLabel(queued.job_type)} chạy. Không tạo job mới để tránh đồng bộ trùng.`)
-        await waitForSyncJob(queued)
-        await refreshStudents()
-        return
-      }
-      const finished = await waitForSyncJob(queued)
-      if (finished.status === 'failed') throw new Error(finished.error_message || 'Đồng bộ CMS thất bại')
-      const result = finished.result_json as any
-      const teacherMsg = result?.teachers?.total ? ` Giảng viên: ${result.teachers.updated || 0}/${result.teachers.total} được kiểm tra/tạo tài khoản CMS.` : ''
-      const enrollMsg = result?.enrollment?.ok ? ` Course CMS: ${result.enrollment.updated}/${result.enrollment.total} sinh viên đã enroll; ${result.enrollment.teachers?.updated || 0}/${result.enrollment.teachers?.total || 0} giảng viên được gán vào course.` : ''
-      setMessage(`Kiểm tra đồng bộ CMS hoàn tất: ${result?.updated || 0}/${result?.total || 0} sinh viên được cập nhật.${teacherMsg}${enrollMsg}`)
-      await refreshStudents()
-    } catch (error) {
-      setErrorModal(error instanceof Error ? `${error.message}. Kiểm tra lại openedx_connector_plugin/HMAC trên LMS nếu API CMS chưa sẵn sàng.` : 'Kiểm tra đồng bộ CMS thất bại')
-    } finally {
-      setChecking(false)
-      setActiveJob(null)
-    }
-  }
-
   const runFullCmsSync = async () => {
     setSyncingFullFlow(true)
     setMessage('')
@@ -302,7 +289,7 @@ function ClassDetailContent() {
         return
       }
       const finished = await waitForSyncJob(queued)
-      if (finished.status === 'failed') throw new Error(finished.error_message || 'Full CMS sync thất bại')
+      if (finished.status === 'failed') throw new Error(finished.error_message || 'Đồng bộ full CMS thất bại')
       const result = finished.result_json as any
       const cmsUpdated = result?.cms_users?.updated || 0
       const cmsTotal = result?.cms_users?.total || 0
@@ -311,65 +298,12 @@ function ClassDetailContent() {
       const enrolled = result?.enrollment?.updated || 0
       const enrolledTotal = result?.enrollment?.total || 0
       const learned = result?.learning?.updated || 0
-      setMessage(`Full CMS sync: user CMS ${cmsUpdated}/${cmsTotal}, tạo mới ${created}, course ${mapped}, enroll ${enrolled}/${enrolledTotal}, điểm/progress ${learned}.`)
+      setMessage(`Đồng bộ full CMS hoàn tất: user CMS ${cmsUpdated}/${cmsTotal}, tạo mới ${created}, course ${mapped}, đã enroll ${enrolled}/${enrolledTotal}, đã lấy Course completion/điểm cho ${learned} sinh viên.`)
       await refreshStudents()
     } catch (error) {
-      setErrorModal(error instanceof Error ? `${error.message}. Full flow chỉ tạo user CMS sau khi lớp đã map được Course CMS; hãy map Course CMS rồi chạy lại.` : 'Full CMS sync thất bại')
+      setErrorModal(error instanceof Error ? `${error.message}. Đồng bộ full CMS chỉ chạy đủ luồng sau khi lớp đã map được Course CMS; hãy map Course CMS rồi chạy lại.` : 'Đồng bộ full CMS thất bại')
     } finally {
       setSyncingFullFlow(false)
-      setActiveJob(null)
-    }
-  }
-
-  const runEnrollmentSync = async () => {
-    setSyncingEnrollment(true)
-    setMessage('')
-    try {
-      if (await followExistingJobIfAny()) return
-      const queued = await enqueueAcademicClassEnrollmentSyncJob(jsonHeaders, classId, { force: true, limit: 500 })
-      if (queued.job_type !== 'cms_enrollment_sync') {
-        setMessage(`Đang có tiến trình ${jobTypeLabel(queued.job_type)} chạy. Không tạo job mới để tránh đồng bộ trùng.`)
-        await waitForSyncJob(queued)
-        await refreshStudents()
-        return
-      }
-      const finished = await waitForSyncJob(queued)
-      if (finished.status === 'failed') throw new Error(finished.error_message || 'Enrollment CMS thất bại')
-      const result = finished.result_json as any
-      const verified = result?.verified ?? result?.updated ?? 0
-      const processed = result?.processed ?? result?.total ?? 0
-      const teacherVerified = result?.teachers?.verified ?? result?.teachers?.updated ?? 0
-      setMessage(`Course CMS hoàn tất: ${verified}/${result?.total || 0} sinh viên được Open edX xác nhận enrolled; đã xử lý ${processed}. Giảng viên: ${teacherVerified}/${result?.teachers?.total || 0} được xác nhận Course Staff.`)
-      await refreshStudents()
-    } catch (error) {
-      setErrorModal(error instanceof Error ? `${error.message}. Chỉ sinh viên đã đồng bộ CMS và lớp đã map Course CMS mới được enroll.` : 'Enrollment CMS thất bại')
-    } finally {
-      setSyncingEnrollment(false)
-      setActiveJob(null)
-    }
-  }
-
-  const runLearningSync = async () => {
-    setSyncingLearning(true)
-    setMessage('')
-    try {
-      if (await followExistingJobIfAny()) return
-      const queued = await enqueueAcademicClassLearningSyncJob(jsonHeaders, classId, { force: true, limit: 500 })
-      if (queued.job_type !== 'learning_sync') {
-        setMessage(`Đang có tiến trình ${jobTypeLabel(queued.job_type)} chạy. Không tạo job mới để tránh đồng bộ trùng.`)
-        await waitForSyncJob(queued)
-        await refreshStudents()
-        return
-      }
-      const finished = await waitForSyncJob(queued)
-      if (finished.status === 'failed') throw new Error(finished.error_message || 'Cập nhật tiến độ/điểm CMS thất bại')
-      const result = finished.result_json as any
-      setMessage(`Cập nhật tiến độ/điểm CMS hoàn tất: ${result?.updated || 0}/${result?.total || 0} sinh viên được cập nhật.`)
-      await refreshStudents()
-    } catch (error) {
-      setErrorModal(error instanceof Error ? `${error.message}. Kiểm tra Course CMS mapping và openedx_connector_plugin/HMAC.` : 'Cập nhật tiến độ/điểm CMS thất bại')
-    } finally {
-      setSyncingLearning(false)
       setActiveJob(null)
     }
   }
@@ -381,7 +315,7 @@ function ClassDetailContent() {
   const needsCmsAction = Math.max(0, (summary?.total || 0) - matched)
   const syncIssue = Math.max(0, (summary?.total || 0) - matched - notChecked)
   const activeJobRunning = isJobActive(activeJob)
-  const actionBusy = activeJobRunning || checking || syncingEnrollment || syncingLearning || syncingFullFlow || recoveringJob
+  const actionBusy = activeJobRunning || syncingFullFlow || recoveringJob
 
   const componentColumns = useMemo(() => {
     const columns: Array<{ key: string; name: string }> = []
@@ -389,13 +323,15 @@ function ClassDetailContent() {
     const push = (score?: AcademicLearningComponentScore | null) => {
       if (!score) return
       const key = componentKey(score)
-      if (!key || seen.has(key)) return
-      seen.add(key)
-      columns.push({ key, name: score.name || key })
+      const name = componentDisplayName(score)
+      const dedupeKey = (key || name).toLowerCase()
+      if (!dedupeKey || seen.has(dedupeKey)) return
+      seen.add(dedupeKey)
+      columns.push({ key: key || name, name })
     }
     learningSummary?.component_summaries?.forEach(push)
     students.forEach((student) => student.learning_component_scores?.forEach(push))
-    return columns.slice(0, 12)
+    return columns.sort(gradeColumnCompare)
   }, [learningSummary, students])
 
   const studentComponentScore = (student: AcademicStudent, column: { key: string; name: string }) => {
@@ -423,13 +359,10 @@ function ClassDetailContent() {
       <div className="class-action-row compact-sync-action-strip">
         <div className="compact-sync-copy">
           <b>Đồng bộ CMS</b>
-          <span>Map Course CMS trước, sau đó mới tạo user CMS, enroll và lấy điểm/progress.</span>
+          <span>Một nút xử lý trọn luồng: tạo/kiểm tra user CMS, enroll Course CMS và lấy Course completion/điểm.</span>
         </div>
         <div className="toolbar-actions">
-          <button className="btn primary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang chạy full flow...' : 'Đồng bộ full CMS'}</button>
-          <button className="btn secondary" type="button" disabled={actionBusy} onClick={runCmsSyncCheck}>{checking ? 'Đang tạo/kiểm tra user...' : 'Tạo/kiểm tra user CMS'}</button>
-          <button className="btn secondary" type="button" disabled={actionBusy || !classInfo?.openedx_course_id} onClick={runEnrollmentSync}>{syncingEnrollment ? 'Đang xử lý...' : 'Enrollment Course CMS'}</button>
-          <button className="btn secondary" type="button" disabled={actionBusy || !classInfo?.openedx_course_id} onClick={runLearningSync}>{syncingLearning ? 'Đang cập nhật...' : 'Cập nhật tiến độ/điểm'}</button>
+          <button className="btn primary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>
           <button className="btn secondary" type="button" disabled={loading || activeJobRunning} onClick={() => Promise.all([refreshStudents(), refreshSyncJobs()]).catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được dữ liệu'))}>Làm mới</button>
         </div>
       </div>
@@ -444,29 +377,15 @@ function ClassDetailContent() {
         <div className="progress-track"><span style={{ width: `${jobProgressPercent(activeJob)}%` }} /></div>
         <small>Tiến trình được lưu trong database. F5 không làm mất trạng thái; khi còn job đang chạy, các nút đồng bộ sẽ bị khóa để tránh bấm nhiều lần.</small>
       </div>}
-      {Boolean(syncJobs.length) && <div className="sync-job-history compact-job-history">
-        <div className="section-head compact-section-head">
-          <div><h3>Tiến trình đồng bộ gần đây</h3><p>Theo dõi từ bảng jobs; tải lại trang vẫn khôi phục job queued/running.</p></div>
-          <button className="btn secondary small" type="button" onClick={() => refreshSyncJobs().catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không tải được danh sách job'))}>Tải lại jobs</button>
-        </div>
-        <div className="job-history-list">
-          {syncJobs.slice(0, 5).map((job) => <div key={job.id} className={`job-history-item job-${String(job.status || '').toLowerCase()}`}>
-            <div><b>{jobTypeLabel(job.job_type)}</b><small>{job.progress_label || jobStatusLabel(job.status)}</small></div>
-            <span className={isJobActive(job) ? 'status-pill warning' : job.status === 'failed' ? 'status-pill danger' : 'status-pill success'}>{jobStatusLabel(job.status)}</span>
-            <span>{jobProgressPercent(job)}%</span>
-            <small>{job.updated_at ? formatVNDateTime(job.updated_at) : job.created_at ? formatVNDateTime(job.created_at) : ''}</small>
-          </div>)}
-        </div>
-      </div>}
       {message && <p className="form-message">{message}</p>}
 
       <div className="academic-summary-strip class-summary-strip">
         <div><span>Tổng SV AP</span><b>{summary?.total ?? classInfo?.student_count ?? 0}</b><small>Trong lớp</small></div>
-        <div><span>Đồng bộ CMS</span><b>{matched}</b><small>Cần xử lý: {needsCmsAction}</small></div>
-        <div><span>Enrollment</span><b>{learningSummary?.counts?.enrolled || 0}</b><small>Course: {learningSummary?.openedx_course_id || classInfo?.openedx_course_id || 'N/A'}</small></div>
+        <div><span>Đã đồng bộ CMS</span><b>{matched}</b><small>Cần xử lý: {needsCmsAction}</small></div>
+        <div><span>Đã enroll</span><b>{learningSummary?.counts?.enrolled || 0}</b><small>Course: {learningSummary?.openedx_course_id || classInfo?.openedx_course_id || 'N/A'}</small></div>
         <div><span>Đã vào học</span><b>{learningSummary?.active_count || 0}</b><small>Có hoạt động CMS</small></div>
-        <div><span>Tiến độ TB</span><b>{percentLabel(learningSummary?.avg_progress_percent)}</b><small>Dữ liệu từ CMS</small></div>
-        <div><span>Điểm tổng TB</span><b>{percentLabel(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${formatVNDateTime(learningSummary.last_synced_at)}` : 'Chưa cập nhật'}</small></div>
+        <div><span>Course completion TB</span><b>{percentLabel(learningSummary?.avg_progress_percent)}</b><small>Dữ liệu từ CMS</small></div>
+        <div><span>Điểm tổng TB</span><b>{grade10Label(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${formatVNDateTime(learningSummary.last_synced_at)}` : 'Chưa cập nhật'}</small></div>
       </div>
 
       <div className="academic-detail-grid compact-class-info">
@@ -477,17 +396,17 @@ function ClassDetailContent() {
       </div>
 
       <div className="component-summary-inline">
-        <b>Điểm thành phần của lớp</b>
+        <b>Các đầu điểm CMS</b>
         {componentColumns.length ? componentColumns.slice(0, 8).map((column) => {
           const score = learningSummary?.component_summaries?.find((item) => componentKey(item) === column.key || item.name === column.name)
           return <span key={column.key}>{column.name}: <b>{componentScoreText(score)}</b></span>
-        }) : <span>CMS/Open edX chưa có điểm Quiz/Subsection. Bảng sinh viên sẽ hiển thị N/A.</span>}
+        }) : <span>CMS/Open edX chưa trả Detailed grades cho course này. Bảng sinh viên sẽ hiển thị N/A ở phần đầu điểm.</span>}
       </div>
     </section>
 
     <section className="card academic-unified-card">
       <div className="section-head">
-        <div><h2>Danh sách sinh viên</h2><p>Cột điểm thành phần sinh động theo dữ liệu CMS: Quiz 1, Quiz 2, Lab, Assignment... Nếu chưa có dữ liệu thì hiển thị N/A.</p></div>
+        <div><h2>Danh sách sinh viên</h2><p>Tiến độ học hiển thị Course completion và điểm tổng hệ 10. Các cột điểm được tạo động từ Detailed grades của Course CMS; mỗi course có bao nhiêu đầu điểm thì bảng tự mở bấy nhiêu cột.</p></div>
         <div className="toolbar-actions">
           <select className="input compact-input" value={learningStatus} onChange={(event) => { setLearningStatus(event.target.value); setPage(1) }}>
             <option value="all">Tất cả trạng thái</option>
@@ -503,18 +422,17 @@ function ClassDetailContent() {
       </div>
       <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">
         <table className="data-table academic-data-table student-grade-table">
-          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username AP</th><th>Email</th><th>Username CMS</th><th>Đồng bộ CMS</th><th>Học tập CMS</th><th>Điểm tổng</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}</tr></thead>
+          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={7 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={7 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
+            {loading && <tr><td colSpan={6 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
+            {!loading && !students.length && <tr><td colSpan={6 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
             {students.map((student) => <tr key={student.id}>
               <td className="main-entity-cell sticky-col"><b>{student.student_code || '—'}</b><small>{student.full_name}</small></td>
-              <td><b>{student.username}</b></td>
+              <td className="username-combined-cell"><b>{student.username || 'N/A'}</b>{student.openedx_username && student.openedx_username !== student.username ? <small>CMS: {student.openedx_username}</small> : <small>AP/CMS</small>}</td>
               <td>{student.email || 'N/A'}</td>
-              <td>{student.openedx_username || 'N/A'}</td>
               <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${formatVNDateTime(student.last_resolved_at)}` : ''}</small></td>
-              <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>Tiến độ: {percentLabel(student.learning_progress_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span></td>
-              <td><b>{percentLabel(student.learning_grade_percent)}</b><small>{student.learning_last_synced_at ? `Cập nhật: ${formatVNDateTime(student.learning_last_synced_at)}` : ''}</small></td>
+              <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>{student.learning_enrollment_synced_at ? `Kiểm tra: ${formatVNDateTime(student.learning_enrollment_synced_at)}` : ''}</small></td>
+              <td className="learning-progress-cell"><b>Course completion: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{student.learning_last_synced_at ? <small>Cập nhật: {formatVNDateTime(student.learning_last_synced_at)}</small> : null}</td>
               {componentColumns.map((column) => <td key={`${student.id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(studentComponentScore(student, column))}</b></td>)}
             </tr>)}
           </tbody>

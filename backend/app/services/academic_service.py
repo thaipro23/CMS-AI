@@ -638,14 +638,16 @@ class AcademicService:
         name = str(
             item.get('name')
             or item.get('display_name')
+            or item.get('subsection_name')
+            or item.get('assignment_name')
             or item.get('label')
             or item.get('title')
             or key
             or 'Điểm thành phần'
         ).strip()
-        earned = self._number_or_none(item.get('earned', item.get('earned_graded', item.get('score'))))
-        possible = self._number_or_none(item.get('possible', item.get('possible_graded', item.get('max_score'))))
-        percent = self._percent_display_value(item.get('percent', item.get('grade_percent', item.get('score_percent'))))
+        earned = self._number_or_none(item.get('earned', item.get('earned_graded', item.get('score', item.get('earned_score')))))
+        possible = self._number_or_none(item.get('possible', item.get('possible_graded', item.get('max_score', item.get('possible_score')))))
+        percent = self._percent_display_value(item.get('percent', item.get('grade_percent', item.get('score_percent', item.get('percent_graded', item.get('value'))))))
         if percent is None and earned is not None and possible and possible > 0:
             percent = round((earned / possible) * 100.0, 2)
         if percent is None and earned is None and possible is None:
@@ -665,10 +667,26 @@ class AcademicService:
         if not isinstance(payload, dict):
             return []
         candidate_lists: list[Any] = []
-        for key in ('component_scores', 'component_grades', 'grade_components', 'subsection_grades', 'section_scores', 'scores'):
+        component_keys = (
+            'detailed_grades',
+            'detailedGrades',
+            'detailed_grade',
+            'detailed_grade_breakdown',
+            'grade_breakdown',
+            'grade_details',
+            'component_scores',
+            'component_grades',
+            'grade_components',
+            'graded_subsections',
+            'subsection_grades',
+            'section_scores',
+            'scores',
+            'breakdown',
+        )
+        for key in component_keys:
             candidate_lists.append(payload.get(key))
         grade = payload.get('grade') if isinstance(payload.get('grade'), dict) else {}
-        for key in ('components', 'component_scores', 'component_grades', 'subsection_grades', 'section_scores', 'breakdown'):
+        for key in component_keys + ('components', 'subsections', 'assignments'):
             candidate_lists.append(grade.get(key))
         normalized: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -678,6 +696,8 @@ class AcademicService:
                 for key, value in candidate.items():
                     if isinstance(value, dict):
                         iterable.append({'key': key, **value})
+                    elif isinstance(value, (int, float, str)):
+                        iterable.append({'key': key, 'name': key, 'percent': value})
                 candidate = iterable
             if not isinstance(candidate, list):
                 continue
@@ -691,7 +711,7 @@ class AcademicService:
                 seen.add(dedupe)
                 normalized.append(item)
         normalized.sort(key=lambda item: str(item.get('name') or item.get('key') or ''))
-        return normalized[:30]
+        return normalized[:80]
 
     def _component_scores_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> list[dict[str, Any]]:
         if not snapshot or not isinstance(snapshot.raw_json, dict):
@@ -1856,8 +1876,7 @@ class AcademicService:
             return True
         raw = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
         payload = raw.get('payload') if isinstance(raw.get('payload'), dict) else {}
-        component_scores = payload.get('component_scores') or payload.get('component_grades')
-        return bool(component_scores)
+        return bool(self._component_scores_from_payload(payload))
 
     def class_course_mapping_proposal(self, user: UserContext, class_id: str) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
