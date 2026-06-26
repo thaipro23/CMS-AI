@@ -6,7 +6,7 @@ import re
 import ssl
 import uuid
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -339,24 +339,50 @@ class APAcademicClient:
 class AcademicImportService:
     def __init__(self, db: Session):
         self.db = db
+        # AP /get-data-cms is called once per campus/subject. Every response carries
+        # the same term.block payload, so repeatedly touching /semesters rows inside
+        # one sync run is unnecessary. This cache is scoped to one service instance
+        # and still refreshes immediately when AP returns a different signature.
+        self._term_block_payload_cache: dict[str, tuple[AcademicTerm, dict[str, AcademicBlock], list[AcademicBlock]]] = {}
 
-    def create_run(self, *, source: str, mode: str, requested_by: str | None = None, term_name: str | None = None, campus: str | None = None, branch: str | None = None) -> AcademicSyncRun:
+    def create_run(self, *, source: str, mode: str, requested_by: str | None = None, term_name: str | None = None, campus: str | None = None, branch: str | None = None, status: str = 'running', counters_json: dict[str, Any] | None = None) -> AcademicSyncRun:
+        now = _now()
         run = AcademicSyncRun(
             id=str(uuid.uuid4()),
             source=source,
             mode=mode,
-            status='running',
+            status=status or 'running',
             requested_by=requested_by,
             term_name=term_name,
             campus=_lower(campus) or None,
             branch=_lower(branch) or 'poly',
-            counters_json={},
-            started_at=_now(),
-            created_at=_now(),
+            counters_json=counters_json or {},
+            started_at=now,
+            created_at=now,
         )
         self.db.add(run)
         self.db.commit()
         self.db.refresh(run)
+        return run
+
+    def update_run_progress(self, run: AcademicSyncRun, *, current: int, total: int, label: str, plan: dict[str, Any] | None = None, counters: SyncCounters | None = None, commit: bool = True) -> AcademicSyncRun:
+        data = run.counters_json if isinstance(run.counters_json, dict) else {}
+        next_data = dict(data)
+        if counters is not None:
+            next_data.update(counters.as_dict())
+        if plan is not None:
+            next_data['plan'] = plan
+        next_data['progress'] = {
+            'current': max(0, int(current or 0)),
+            'total': max(1, int(total or 1)),
+            'label': label,
+            'updated_at': _now().isoformat(),
+        }
+        run.counters_json = next_data
+        self.db.add(run)
+        if commit:
+            self.db.commit()
+            self.db.refresh(run)
         return run
 
     def _error(self, run: AcademicSyncRun | None, counters: SyncCounters, entity_type: str, entity_key: str, message: str, payload: Any = None) -> None:
@@ -697,6 +723,163 @@ class AcademicImportService:
             self.db.flush()
         return block
 
+    def _term_block_signature(self, term_payload: dict[str, Any]) -> str:
+        """Stable signature for AP term/block master data.
+
+        The signature intentionally contains only term and block master fields used
+        by /semesters. Class/student rosters are excluded so a normal class sync
+        cannot force noisy term/block checks for every /get-data-cms response.
+        """
+        blocks: list[dict[str, Any]] = []
+        for raw in term_payload.get('block') or []:
+            if not isinstance(raw, dict):
+                continue
+            blocks.append({
+                'id': _clean(raw.get('id') or raw.get('block_id')),
+                'block_name': _clean(raw.get('block_name') or raw.get('block') or raw.get('name')),
+                'start_day': _clean(raw.get('start_day') or raw.get('start_date')),
+                'end_day': _clean(raw.get('end_day') or raw.get('end_date')),
+            })
+        normalized = {
+            'term_id': _clean(term_payload.get('id') or term_payload.get('term_id') or term_payload.get('pterm_id')),
+            'term_name': _clean(term_payload.get('term_name') or term_payload.get('pterm_name') or term_payload.get('name')),
+            'startday': _clean(term_payload.get('startday') or term_payload.get('start_day') or term_payload.get('start_date')),
+            'endday': _clean(term_payload.get('endday') or term_payload.get('end_day') or term_payload.get('end_date')),
+            'blocks': sorted(blocks, key=lambda item: (item.get('id') or '', item.get('block_name') or '')),
+        }
+        return hashlib.sha1(json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+
+    def _recent_term_block_signature(self, term: AcademicTerm, signature: str) -> bool:
+        meta = term.metadata_json if isinstance(term.metadata_json, dict) else {}
+        if meta.get('ap_term_block_signature') != signature:
+            return False
+        raw_at = _clean(meta.get('ap_term_block_checked_at'))
+        if not raw_at:
+            return False
+        try:
+            checked_at = datetime.fromisoformat(raw_at.replace('Z', '+00:00'))
+            if checked_at.tzinfo:
+                checked_at = checked_at.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            return False
+        ttl = max(0, int(getattr(settings, 'academic_ap_term_block_refresh_ttl_seconds', 3600) or 0))
+        if ttl <= 0:
+            return False
+        return (_now() - checked_at) < timedelta(seconds=ttl)
+
+    def _load_blocks_for_term(self, term: AcademicTerm) -> tuple[dict[str, AcademicBlock], list[AcademicBlock]]:
+        blocks = (
+            self.db.query(AcademicBlock)
+            .filter(AcademicBlock.term_id == term.id)
+            .order_by(AcademicBlock.sort_order.asc(), AcademicBlock.block_name.asc(), AcademicBlock.id.asc())
+            .all()
+        )
+        blocks_by_ap = {str(block.ap_block_id): block for block in blocks if block.ap_block_id}
+        return blocks_by_ap, blocks
+
+    def _get_or_create_term_and_blocks_cached(
+        self,
+        term_payload: dict[str, Any],
+        branch: str,
+        counters: SyncCounters,
+    ) -> tuple[AcademicTerm, dict[str, AcademicBlock], list[AcademicBlock]]:
+        signature = self._term_block_signature(term_payload)
+        term_name = _clean(term_payload.get('term_name') or term_payload.get('pterm_name') or term_payload.get('name')) or 'Unknown Term'
+        term_key = _clean(term_payload.get('id') or term_payload.get('term_id') or term_payload.get('pterm_id')) or _text_key(term_name)
+        cache_key = f'{_lower(branch) or "poly"}:{term_key}:{signature}'
+        cached = self._term_block_payload_cache.get(cache_key)
+        if cached:
+            return cached
+
+        term = self._get_or_create_term(term_payload, branch, counters)
+        meta = dict(term.metadata_json or {})
+
+        # If AP master data did not change recently, do not repeatedly run the
+        # block upsert path while get-data-cms loops over many subjects. We still
+        # load local blocks for class.block_id resolution and date fallback.
+        if self._recent_term_block_signature(term, signature):
+            blocks_by_ap, blocks = self._load_blocks_for_term(term)
+            cached_value = (term, blocks_by_ap, blocks)
+            self._term_block_payload_cache[cache_key] = cached_value
+            return cached_value
+
+        for raw_block in term_payload.get('block') or []:
+            if not isinstance(raw_block, dict):
+                continue
+            self._get_or_create_block(term, raw_block, counters)
+
+        meta.update({
+            'source': meta.get('source') or 'ap',
+            'last_sync_source': 'ap',
+            'ap_term_block_signature': signature,
+            'ap_term_block_checked_at': _now().isoformat(),
+            'ap_term_block_count': len([item for item in (term_payload.get('block') or []) if isinstance(item, dict)]),
+        })
+        if self._set_json_if_changed(term, 'metadata_json', meta):
+            term.updated_at = _now()
+            self.db.add(term)
+            self.db.flush()
+
+        blocks_by_ap, blocks = self._load_blocks_for_term(term)
+        cached_value = (term, blocks_by_ap, blocks)
+        self._term_block_payload_cache[cache_key] = cached_value
+        return cached_value
+
+    def _infer_block_from_class_dates(self, raw: dict[str, Any], blocks: list[AcademicBlock]) -> AcademicBlock | None:
+        class_start = _parse_date(raw.get('start_date') or raw.get('start_day'))
+        class_end = _parse_date(raw.get('end_date') or raw.get('end_day'))
+        if not class_start and not class_end:
+            return None
+        usable = [block for block in blocks if block.start_date and block.end_date]
+        if not usable:
+            return None
+
+        # Best match: class start day falls inside the AP block range.
+        if class_start:
+            for block in usable:
+                if block.start_date <= class_start <= block.end_date:
+                    return block
+
+        # Fallback: class end day falls inside the block range.
+        if class_end:
+            for block in usable:
+                if block.start_date <= class_end <= block.end_date:
+                    return block
+
+        # Last fallback: any interval overlap. This handles short AP date offsets
+        # without assigning a class to an unrelated block.
+        if class_start and class_end:
+            for block in usable:
+                if class_start <= block.end_date and class_end >= block.start_date:
+                    return block
+        return None
+
+    def _resolve_block_for_class(
+        self,
+        term: AcademicTerm,
+        raw: dict[str, Any],
+        blocks_by_ap: dict[str, AcademicBlock],
+        blocks: list[AcademicBlock],
+        counters: SyncCounters,
+    ) -> tuple[AcademicBlock | None, str]:
+        raw_block_id = _clean(raw.get('block_id'))
+        if raw_block_id and raw_block_id in blocks_by_ap:
+            return blocks_by_ap[raw_block_id], 'ap_block_id'
+
+        inferred = self._infer_block_from_class_dates(raw, blocks)
+        if inferred:
+            return inferred, 'date_range'
+
+        if raw_block_id:
+            # AP sent a block id that is not present in term.block. Preserve the
+            # class instead of dropping it, but make the placeholder visible in
+            # /semesters so admins can correct AP/master-data mismatch.
+            block = self._get_or_create_block(term, {'id': raw_block_id, 'block_name': raw.get('block_name') or f'Block {raw_block_id}'}, counters)
+            blocks_by_ap[raw_block_id] = block
+            blocks.append(block)
+            return block, 'ap_block_id_placeholder'
+        return None, 'unresolved'
+
     def _get_or_create_subject(self, item: dict[str, Any], branch: str, counters: SyncCounters) -> AcademicSubject:
         branch = _lower(branch) or 'poly'
         subject_code = _clean(item.get('psubject_code') or item.get('subject_code') or item.get('id'))
@@ -800,6 +983,16 @@ class AcademicImportService:
             class_items.append(raw)
             student_items_by_ap_key[ap_key] = valid_students
 
+        term: AcademicTerm | None = None
+        blocks_by_ap: dict[str, AcademicBlock] = {}
+        blocks_for_term: list[AcademicBlock] = []
+        if term_payload:
+            # Keep /semesters aligned with AP term.block even when a particular
+            # get-data-cms response has no actionable class/student rows. The
+            # signature/TTL cache prevents the many subject calls in one sync from
+            # repeatedly touching the same term/block rows.
+            term, blocks_by_ap, blocks_for_term = self._get_or_create_term_and_blocks_cached(term_payload, branch, counters)
+
         if not class_items:
             # No actionable class in this AP payload. Do not create term/block/subject
             # rows because that would bloat the DB with empty shells.
@@ -812,14 +1005,9 @@ class AcademicImportService:
         if class_items and not term_payload:
             first = class_items[0]
             term_payload = {'id': first.get('pterm_id'), 'term_name': first.get('pterm_name')}
-        term = self._get_or_create_term(term_payload, branch, counters)
-        blocks_by_ap: dict[str, AcademicBlock] = {}
-        for raw_block in term_payload.get('block') or []:
-            if not isinstance(raw_block, dict):
-                continue
-            block = self._get_or_create_block(term, raw_block, counters)
-            if block.ap_block_id:
-                blocks_by_ap[str(block.ap_block_id)] = block
+            term, blocks_by_ap, blocks_for_term = self._get_or_create_term_and_blocks_cached(term_payload, branch, counters)
+        if term is None:
+            raise ValueError('Không xác định được kỳ học từ AP payload')
         for raw in class_items:
             if not isinstance(raw, dict):
                 self._error(run, counters, 'class', 'unknown', 'Class payload không phải object', raw)
@@ -831,10 +1019,7 @@ class AcademicImportService:
                 with self.db.begin_nested():
                     subject = self._get_or_create_subject(raw, branch, counters)
                     raw_block_id = _clean(raw.get('block_id'))
-                    block = blocks_by_ap.get(raw_block_id)
-                    if not block and raw_block_id:
-                        block = self._get_or_create_block(term, {'id': raw_block_id, 'block_name': raw.get('block_name') or f'Block {raw_block_id}'}, counters)
-                        blocks_by_ap[raw_block_id] = block
+                    block, block_resolution = self._resolve_block_for_class(term, raw, blocks_by_ap, blocks_for_term, counters)
                     class_code = _clean(raw.get('group_name') or raw.get('class_code') or raw.get('classname'))
                     if not class_code:
                         raise ValueError('Thiếu class/group_name')
@@ -860,7 +1045,12 @@ class AcademicImportService:
                     changed |= self._set_if_changed(cls, 'start_date', _parse_date(raw.get('start_date')))
                     changed |= self._set_if_changed(cls, 'end_date', _parse_date(raw.get('end_date')))
                     changed |= self._set_if_changed(cls, 'active', True)
-                    changed |= self._set_json_if_changed(cls, 'metadata_json', {'source': 'ap', 'raw_keys': sorted(raw.keys())})
+                    changed |= self._set_json_if_changed(cls, 'metadata_json', {
+                        'source': 'ap',
+                        'raw_keys': sorted(raw.keys()),
+                        'ap_block_id': raw_block_id or None,
+                        'block_resolution': block_resolution,
+                    })
                     if changed:
                         cls.updated_at = _now()
                         self.db.add(cls)
@@ -1190,18 +1380,35 @@ class AcademicImportService:
         dry_run: bool = False,
         sync_scope: str = 'campus',
         campuses: list[str] | None = None,
+        run: AcademicSyncRun | None = None,
     ) -> tuple[AcademicSyncRun, SyncCounters]:
         scope = _lower(sync_scope or 'campus')
         resolved_campuses = self._resolve_campuses(sync_scope=scope, campus=campus, campuses=campuses, branch=branch)
         run_campus = ','.join(resolved_campuses[:10]) + ('...' if len(resolved_campuses) > 10 else '')
-        run = self.create_run(
-            source='ap',
-            mode=f'api_{scope}_dry_run' if dry_run else f'api_{scope}',
-            requested_by=requested_by,
-            term_name=term_name,
-            campus=run_campus,
-            branch=branch,
-        )
+        mode = f'api_{scope}_dry_run' if dry_run else f'api_{scope}'
+        if run is None:
+            run = self.create_run(
+                source='ap',
+                mode=mode,
+                requested_by=requested_by,
+                term_name=term_name,
+                campus=run_campus,
+                branch=branch,
+            )
+        else:
+            run.source = 'ap'
+            run.mode = mode
+            run.status = 'running'
+            run.requested_by = requested_by or run.requested_by
+            run.term_name = term_name
+            run.campus = run_campus
+            run.branch = _lower(branch) or run.branch or 'poly'
+            run.started_at = run.started_at or _now()
+            run.error_message = ''
+            run.finished_at = None
+            self.db.add(run)
+            self.db.commit()
+            self.db.refresh(run)
         client = APAcademicClient()
         counters = SyncCounters()
         planned: dict[str, Any] = {
@@ -1217,8 +1424,11 @@ class AcademicImportService:
         }
         catalog_cache: dict[str, list[dict[str, Any]]] = {}
         imported_catalog_keys: set[str] = set()
+        estimated_total = max(1, len(resolved_campuses))
+        self.update_run_progress(run, current=0, total=estimated_total, label='Đã đưa job đồng bộ AP vào hàng đợi xử lý', plan=planned, counters=counters)
         try:
-            for campus_code in resolved_campuses:
+            for campus_index, campus_code in enumerate(resolved_campuses, start=1):
+                self.update_run_progress(run, current=max(0, campus_index - 1), total=estimated_total, label=f'Đang lấy danh sách môn từ AP cho cơ sở {campus_code}', plan=planned, counters=counters)
                 codes, catalog, source, warning = self._resolve_subject_codes_for_campus(
                     client,
                     branch=branch,
@@ -1233,6 +1443,8 @@ class AcademicImportService:
                 if warning:
                     planned['warnings'].append({'campus': campus_code, 'message': warning})
                 planned['subjects_by_campus'][campus_code] = {'count': len(codes), 'preview': codes[:20], 'source': source}
+                estimated_total = max(estimated_total, sum(int(item.get('count') or 0) for item in planned['subjects_by_campus'].values()) or len(resolved_campuses))
+                self.update_run_progress(run, current=min(estimated_total - 1, sum(int(item.get('count') or 0) for item in list(planned['subjects_by_campus'].values())[:campus_index - 1])), total=estimated_total, label=f'Đã xác định {len(codes)} môn cho cơ sở {campus_code}', plan=planned, counters=counters)
                 if dry_run:
                     continue
                 catalog_key = f'{_lower(branch) or "poly"}:{term_name}:{source}'
@@ -1246,8 +1458,10 @@ class AcademicImportService:
                     # returns at least one class with students for that subject.
                     self.import_subject_catalog(catalog, branch=branch, counters=counters)
                     imported_catalog_keys.add(catalog_key)
-                for code in codes:
+                completed_before_campus = sum(int(item.get('count') or 0) for item in list(planned['subjects_by_campus'].values())[:campus_index - 1])
+                for subject_index, code in enumerate(codes, start=1):
                     try:
+                        self.update_run_progress(run, current=min(estimated_total - 1, completed_before_campus + subject_index - 1), total=estimated_total, label=f'Đang gọi AP /get-data-cms cho {campus_code} · {code}', plan=planned, counters=counters)
                         payload = client.get_division(campus=campus_code, term_name=term_name, subject_code=code)
                         if not payload:
                             self._error(run, counters, 'ap_subject', f'{campus_code}:{code}', 'AP trả payload rỗng', {'campus': campus_code, 'subject_code': code})
@@ -1255,14 +1469,15 @@ class AcademicImportService:
                         imported = self.import_payload(payload, run=run, campus=campus_code, branch=branch)
                         for key, value in imported.as_dict().items():
                             setattr(counters, key, getattr(counters, key) + value)
+                        self.update_run_progress(run, current=min(estimated_total, completed_before_campus + subject_index), total=estimated_total, label=f'Đã đồng bộ {campus_code} · {code}', plan=planned, counters=counters)
                     except Exception as exc:
                         self._error(run, counters, 'ap_subject', f'{campus_code}:{code}', str(exc), {'campus': campus_code, 'subject_code': code})
             if dry_run:
                 counters.subjects = sum(item['count'] for item in planned['subjects_by_campus'].values())
-                run.counters_json = {**counters.as_dict(), 'plan': planned}
+                run.counters_json = {**counters.as_dict(), 'plan': planned, 'progress': {'current': estimated_total, 'total': estimated_total, 'label': 'Đã kiểm tra kế hoạch đồng bộ AP', 'updated_at': _now().isoformat()}}
                 return self.finish_run(run, counters), counters
             current = run.counters_json or {}
-            run.counters_json = {**current, **counters.as_dict(), 'plan': planned}
+            run.counters_json = {**current, **counters.as_dict(), 'plan': planned, 'progress': {'current': estimated_total, 'total': estimated_total, 'label': 'Đã đồng bộ AP', 'updated_at': _now().isoformat()}}
             return self.finish_run(run, counters), counters
         except Exception as exc:
             self.db.rollback()

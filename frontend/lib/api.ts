@@ -84,6 +84,7 @@ import {
   AcademicClassSyncJob,
   AcademicStudentListResponse,
   AcademicSyncResult,
+  AcademicSyncRun,
   AcademicAPSyncOptions,
   AcademicMappingSummary,
   AcademicLearningSummary,
@@ -2126,6 +2127,23 @@ export async function seedAcademicCampusesFromEnv(headers: HeadersInit, branch =
 
 export async function syncAcademicFromAp(headers: HeadersInit, payload: { term_name: string; sync_scope?: 'all' | 'campus' | 'subject'; campus?: string; campuses?: string[]; branch?: string; subject_codes?: string[]; max_subjects?: number; dry_run?: boolean }): Promise<AcademicSyncResult> {
   return parseResponse(await apiFetch(`${API}/academic/sync/ap`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function enqueueAcademicApSyncJob(headers: HeadersInit, payload: { term_name: string; sync_scope?: 'all' | 'campus' | 'subject'; campus?: string; campuses?: string[]; branch?: string; subject_codes?: string[]; max_subjects?: number; dry_run?: boolean }): Promise<AcademicSyncResult> {
+  return parseResponse(await apiFetch(`${API}/academic/sync/ap/jobs`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+}
+
+export async function getAcademicApSyncJobs(headers: HeadersInit, filters: { termName?: string; branch?: string; status?: 'active' | 'queued' | 'running' | 'completed' | 'failed' | 'all'; limit?: number } = {}): Promise<AcademicSyncRun[]> {
+  const params = new URLSearchParams();
+  if (filters.termName?.trim()) params.set('term_name', filters.termName.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.status) params.set('status', filters.status);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  return parseResponse(await apiFetch(`${API}/academic/sync/ap/jobs?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAcademicApSyncJob(headers: HeadersInit, runId: string): Promise<AcademicSyncRun> {
+  return parseResponse(await apiFetch(`${API}/academic/sync/ap/jobs/${encodeURIComponent(runId)}`, { credentials: 'include', headers }));
 }
 
 export async function checkAcademicClassCmsSync(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number } = {}): Promise<AcademicMappingResolveResult> {

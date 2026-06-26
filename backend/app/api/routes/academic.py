@@ -916,6 +916,122 @@ def sync_from_json(
         raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
 
 
+
+@router.post('/sync/ap/jobs', response_model=AcademicImportResultOut)
+def enqueue_sync_from_ap_job(
+    payload: AcademicAPSyncIn,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    branch = (payload.branch or 'poly').strip().lower() or 'poly'
+    term_name = (payload.term_name or '').strip()
+    if not term_name:
+        raise HTTPException(status_code=400, detail='Vui lòng chọn kỳ trước khi đồng bộ AP.')
+    scope = (payload.sync_scope or 'all').strip().lower() or 'all'
+    active = (
+        db.query(AcademicSyncRun)
+        .filter(
+            AcademicSyncRun.source == 'ap',
+            AcademicSyncRun.status.in_(['queued', 'running']),
+            AcademicSyncRun.term_name == term_name,
+            AcademicSyncRun.branch == branch,
+        )
+        .order_by(AcademicSyncRun.created_at.desc())
+        .first()
+    )
+    if active:
+        return {'ok': True, 'message': 'Hệ thống đang có job đồng bộ AP đang chạy. Trạng thái sẽ tự cập nhật.', 'sync_run': active, 'counters': AcademicSyncCounters()}
+
+    request_json = json_safe_value({
+        'term_name': term_name,
+        'sync_scope': scope,
+        'campus': payload.campus,
+        'campuses': payload.campuses or [],
+        'branch': branch,
+        'subject_codes': payload.subject_codes or [],
+        'max_subjects': int(payload.max_subjects or 0),
+        'dry_run': bool(payload.dry_run),
+    })
+    importer = AcademicImportService(db)
+    run = importer.create_run(
+        source='ap',
+        mode=f'api_{scope}_job_dry_run' if payload.dry_run else f'api_{scope}_job',
+        requested_by=user.user_id,
+        term_name=term_name,
+        campus=','.join((payload.campuses or [])[:10]) if payload.campuses else payload.campus,
+        branch=branch,
+        status='queued',
+        counters_json={
+            'request': request_json,
+            'progress': {'current': 0, 'total': 1, 'label': 'Đã đưa job đồng bộ AP vào hàng đợi', 'updated_at': None},
+        },
+    )
+    try:
+        from app.worker import academic_ap_sync_task
+        async_result = academic_ap_sync_task.delay(run.id)
+        data = run.counters_json if isinstance(run.counters_json, dict) else {}
+        data['enqueue'] = {'task_name': 'academic_ap_sync_task', 'celery_task_id': getattr(async_result, 'id', None)}
+        run.counters_json = json_safe_value(data)
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+    except Exception as exc:
+        run.status = 'failed'
+        run.error_message = f'Không đưa job đồng bộ AP vào Celery/Redis: {exc}'[:4000]
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        raise HTTPException(status_code=503, detail='Không đưa job đồng bộ AP vào hàng đợi. Kiểm tra Redis/worker rồi thử lại.') from exc
+
+    log_audit(
+        db,
+        action='academic.ap.sync_api.enqueue',
+        status='success',
+        message='Đã đưa job đồng bộ AP vào hàng đợi',
+        user=user,
+        target_type='academic_sync_run',
+        target_id=run.id,
+        metadata=request_json,
+    )
+    return {'ok': True, 'message': 'Đã đưa job đồng bộ AP vào hàng đợi. Trạng thái sẽ tự cập nhật.', 'sync_run': run, 'counters': AcademicSyncCounters()}
+
+
+@router.get('/sync/ap/jobs', response_model=list[AcademicSyncRunOut])
+def list_ap_sync_jobs(
+    term_name: str = Query(''),
+    branch: str = Query(''),
+    status_filter: str = Query('active', alias='status'),
+    limit: int = Query(10, ge=1, le=50),
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    query = db.query(AcademicSyncRun).filter(AcademicSyncRun.source == 'ap')
+    if term_name.strip():
+        query = query.filter(AcademicSyncRun.term_name == term_name.strip())
+    if branch.strip():
+        query = query.filter(AcademicSyncRun.branch == branch.strip().lower())
+    if status_filter == 'active':
+        query = query.filter(AcademicSyncRun.status.in_(['queued', 'running']))
+    elif status_filter and status_filter != 'all':
+        query = query.filter(AcademicSyncRun.status == status_filter)
+    return query.order_by(AcademicSyncRun.created_at.desc()).limit(limit).all()
+
+
+@router.get('/sync/ap/jobs/{run_id}', response_model=AcademicSyncRunOut)
+def get_ap_sync_job(
+    run_id: str,
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    run = db.get(AcademicSyncRun, run_id)
+    if not run or run.source != 'ap':
+        raise HTTPException(status_code=404, detail='Không tìm thấy job đồng bộ AP')
+    return run
+
+
 @router.post('/sync/ap', response_model=AcademicImportResultOut)
 def sync_from_ap(
     payload: AcademicAPSyncIn,

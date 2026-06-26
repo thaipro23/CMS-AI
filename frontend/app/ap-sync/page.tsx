@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
-import { getAcademicApSyncOptions, syncAcademicFromAp } from '../../lib/api'
-import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult } from '../../types'
+import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions } from '../../lib/api'
+import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult, AcademicSyncRun } from '../../types'
 
 type BranchCode = 'poly' | 'ptcd'
 type BranchState = Record<BranchCode, AcademicAPSyncOptions>
@@ -47,6 +47,43 @@ function summarizeCounters(result: AcademicSyncResult) {
   return parts.join(' · ')
 }
 
+function countersFromRun(run: AcademicSyncRun): Record<string, number> {
+  const data = run.counters_json || {}
+  return {
+    terms: Number(data.terms || 0),
+    blocks: Number(data.blocks || 0),
+    subjects: Number(data.subjects || 0),
+    classes: Number(data.classes || 0),
+    teachers: Number(data.teachers || 0),
+    students: Number(data.students || 0),
+    teacher_assignments: Number(data.teacher_assignments || 0),
+    class_students: Number(data.class_students || 0),
+    skipped_empty_classes: Number(data.skipped_empty_classes || 0),
+    errors: Number(data.errors || 0),
+  }
+}
+
+function resultFromRun(run: AcademicSyncRun): AcademicSyncResult {
+  return {
+    ok: run.status === 'completed',
+    message: run.status === 'completed' ? 'Đã đồng bộ dữ liệu AP' : (run.error_message || 'Đồng bộ AP đang xử lý'),
+    sync_run: run,
+    counters: countersFromRun(run),
+  }
+}
+
+function runProgress(run: AcademicSyncRun) {
+  const progress = run.counters_json?.progress || {}
+  const current = Number(progress.current || 0)
+  const total = Math.max(1, Number(progress.total || 1))
+  const percent = Math.max(0, Math.min(100, Math.round((current / total) * 100)))
+  return { current, total, percent, label: String(progress.label || run.error_message || 'Đang chờ xử lý') }
+}
+
+function isRunActive(run?: AcademicSyncRun | null) {
+  return Boolean(run && ['queued', 'running'].includes(run.status))
+}
+
 export default function ApSyncPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
@@ -59,6 +96,7 @@ export default function ApSyncPage() {
   const [dryRun, setDryRun] = useState(false)
   const [message, setMessage] = useState('')
   const [lastResults, setLastResults] = useState<Array<{ branch: BranchCode; result: AcademicSyncResult }>>([])
+  const [activeRuns, setActiveRuns] = useState<Array<{ branch: BranchCode; run: AcademicSyncRun }>>([])
   const [syncConfirm, setSyncConfirm] = useState<SyncConfirm>(null)
 
   const termOptions = useMemo(() => uniqueTermOptions(optionsByBranch), [optionsByBranch])
@@ -86,10 +124,57 @@ export default function ApSyncPage() {
     }
   }
 
+  const refreshActiveRuns = async () => {
+    const jobs = await Promise.all(BRANCHES.map(async (branch) => {
+      const runs = await getAcademicApSyncJobs(headers, { termName, branch: branch.value, status: 'active', limit: 5 })
+      return runs.map((run) => ({ branch: branch.value, run }))
+    }))
+    const flattened = jobs.flat().filter((item) => isRunActive(item.run))
+    setActiveRuns(flattened)
+    return flattened
+  }
+
   useEffect(() => {
     loadOptions()
+    refreshActiveRuns().catch(() => null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [headers, termName])
+
+  useEffect(() => {
+    if (!activeRuns.length) return
+    let canceled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const poll = async () => {
+      try {
+        const next = await Promise.all(activeRuns.map(async (item) => ({ branch: item.branch, run: await getAcademicApSyncJob(headers, item.run.id) })))
+        if (canceled) return
+        setActiveRuns(next.filter((item) => isRunActive(item.run)))
+        const finished = next.filter((item) => !isRunActive(item.run))
+        if (finished.length) {
+          setLastResults((current) => {
+            const mapped = finished.map((item) => ({ branch: item.branch, result: resultFromRun(item.run) }))
+            const seen = new Set(mapped.map((item) => item.result.sync_run.id))
+            return [...mapped, ...current.filter((item) => !seen.has(item.result.sync_run.id))].slice(0, 10)
+          })
+          if (finished.some((item) => item.run.status === 'failed')) {
+            setMessage('Có job đồng bộ AP thất bại. Xem chi tiết trong bảng kết quả gần nhất.')
+          } else {
+            setMessage(dryRun ? 'Đã kiểm tra kế hoạch đồng bộ AP.' : 'Đã chạy xong đồng bộ AP.')
+            await loadOptions()
+          }
+        }
+        if (next.some((item) => isRunActive(item.run))) timer = setTimeout(poll, 2000)
+      } catch (error) {
+        if (!canceled) {
+          setMessage(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái job đồng bộ AP')
+          timer = setTimeout(poll, 4000)
+        }
+      }
+    }
+    timer = setTimeout(poll, 1000)
+    return () => { canceled = true; if (timer) clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRuns.map((item) => item.run.id).join(','), headers])
 
   const requestRunForBranches = (branches: BranchCode[]) => {
     if (!can('manage_settings')) {
@@ -119,11 +204,11 @@ export default function ApSyncPage() {
     setMessage('')
     setLastResults([])
     try {
-      const results: Array<{ branch: BranchCode; result: AcademicSyncResult }> = []
+      const queuedRuns: Array<{ branch: BranchCode; run: AcademicSyncRun }> = []
       setSyncConfirm(null)
       for (const branch of runnable) {
         const campuses = optionValues(optionsByBranch[branch].campuses)
-        const result = await syncAcademicFromAp(jsonHeaders, {
+        const result = await enqueueAcademicApSyncJob(jsonHeaders, {
           term_name: normalizedTerm,
           sync_scope: 'all',
           branch,
@@ -132,13 +217,15 @@ export default function ApSyncPage() {
           max_subjects: 0,
           dry_run: dryRun,
         })
-        results.push({ branch, result })
-        setLastResults([...results])
+        queuedRuns.push({ branch, run: result.sync_run })
       }
-      setMessage(dryRun ? 'Đã kiểm tra kế hoạch đồng bộ AP.' : 'Đã chạy đồng bộ AP.')
-      await loadOptions()
+      setActiveRuns((current) => {
+        const seen = new Set(current.map((item) => item.run.id))
+        return [...queuedRuns, ...current.filter((item) => !seen.has(item.run.id))]
+      })
+      setMessage(dryRun ? 'Đã đưa job kiểm tra kế hoạch AP vào hàng đợi.' : 'Đã đưa job đồng bộ AP vào hàng đợi. Bạn có thể F5 hoặc mở máy khác để theo dõi tiếp.')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Đồng bộ AP thất bại')
+      setMessage(error instanceof Error ? error.message : 'Không đưa được job đồng bộ AP vào hàng đợi')
     } finally {
       setRunning(false)
     }
@@ -157,6 +244,32 @@ export default function ApSyncPage() {
     </section>
 
     {message ? <div className="alert">{message}</div> : null}
+
+    {activeRuns.length ? <section className="card sync-job-status persistent-sync-job-status" role="status" aria-live="polite" aria-busy="true">
+      <div className="section-head">
+        <div>
+          <h2>Hệ thống đang đồng bộ AP</h2>
+          <p>Job chạy ở nền. F5 hoặc mở máy khác vẫn đọc lại trạng thái từ backend.</p>
+        </div>
+        <button className="btn secondary small" type="button" onClick={() => refreshActiveRuns().catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được trạng thái job'))}>Làm mới tiến trình</button>
+      </div>
+      <div className="operation-stack">
+        {activeRuns.map(({ branch, run }) => {
+          const progress = runProgress(run)
+          return <div className="operation-row" key={run.id}>
+            <div>
+              <b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b>
+              <p>{progress.label}</p>
+              <small>Run ID {run.id.slice(0, 8)} · {run.status}</small>
+            </div>
+            <div className="operation-progress">
+              <span>{progress.percent}%</span>
+              <progress value={progress.current} max={progress.total} aria-label="Tiến độ đồng bộ AP" />
+            </div>
+          </div>
+        })}
+      </div>
+    </section> : null}
 
     <section className="card">
       <div className="section-head">
@@ -182,10 +295,10 @@ export default function ApSyncPage() {
         </label>
       </div>
       <div className="toolbar-actions ap-sync-actions ap-sync-actions-primary">
-        <button className="btn" disabled={running || loadingOptions || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>
+        <button className="btn" disabled={running || loadingOptions || Boolean(activeRuns.length) || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>
           {running ? 'Đang chạy...' : 'Đồng bộ tất cả'}
         </button>
-        <button className="btn secondary" disabled={running || loadingOptions || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>
+        <button className="btn secondary" disabled={running || loadingOptions || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>
           {running ? 'Đang chạy...' : `Đồng bộ theo hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label || ''}`}
         </button>
       </div>

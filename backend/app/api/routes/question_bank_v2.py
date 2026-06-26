@@ -585,6 +585,20 @@ def retry_bank_operation_job(job_id: str, db: Session = Depends(get_db), user: U
     db.commit()
     db.refresh(job)
 
+    if job.operation_type == 'material_extract' and bool(getattr(settings, 'bank_material_extract_inline_enabled', True)):
+        _persist_enqueue_metadata(db, job, {
+            'task_name': 'bank_material_extract_task',
+            'celery_task_id': None,
+            'enqueued_at': datetime.utcnow().isoformat(),
+            'retry_token': f'inline-retry-{retry_count}',
+            'mode': 'inline_backend',
+        }, label='Đang chạy lại tách tài liệu trên backend')
+        task.apply(args=[job.id])
+        db.expire_all()
+        job = db.get(BankOperationJob, job.id) or job
+        log_audit(db, action='question_bank.operation_job.retry', status='success', message='Đã chạy lại job tách tài liệu trực tiếp', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'operation_type': job.operation_type, 'retry_count': retry_count, 'mode': 'inline_backend'})
+        return _job_out(job)
+
     job = _enqueue_bank_job_or_fail(db, job, task, label='Đã đưa lại job vào hàng đợi Celery')
     log_audit(db, action='question_bank.operation_job.retry', status='success', message='Đã đưa lại job vào hàng đợi', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'operation_type': job.operation_type, 'retry_count': retry_count, 'enqueue': (job.result_json or {}).get('enqueue')})
     return _job_out(job)
@@ -1177,8 +1191,31 @@ async def upload_material_to_bank_version_job(
         progress_total=5,
         progress_label='Đã nhận file, đang chờ worker tách nội dung',
     )
+    if bool(getattr(settings, 'bank_material_extract_inline_enabled', True)):
+        # Restore the pre-async UX for material upload: extraction runs immediately
+        # inside the backend process so documents do not sit forever in queued
+        # state when the Celery worker is not consuming Redis. The operation job is
+        # still recorded and progresses through running/completed/failed for audit.
+        _persist_enqueue_metadata(db, job, {
+            'task_name': 'bank_material_extract_task',
+            'celery_task_id': None,
+            'enqueued_at': datetime.utcnow().isoformat(),
+            'retry_token': 'inline',
+            'mode': 'inline_backend',
+        }, label='Đang tách tài liệu trên backend')
+        bank_material_extract_task.apply(args=[job.id])
+        db.expire_all()
+        refreshed = db.get(BankOperationJob, job.id) or job
+        status_message = (refreshed.result_json or {}).get('user_message') if isinstance(refreshed.result_json, dict) else None
+        if refreshed.status == 'failed':
+            status_message = status_message or refreshed.error_message or 'Tách tài liệu thất bại.'
+        else:
+            status_message = status_message or 'Hệ thống đã ghi nhận tài liệu và đồng bộ danh sách bên dưới.'
+        log_audit(db, action='question_bank.material.upload.job', status='success', message='Đã kiểm tra file và tách tài liệu trực tiếp', user=user, target_type='bank_operation_job', target_id=refreshed.id, metadata={'bank_version_id': bank_version_id, 'file_name': file.filename, 'file_size': len(raw), 'preflight': preflight, 'mode': 'inline_backend'})
+        return _queued_response(refreshed, status_message)
+
     job = _enqueue_bank_job_or_fail(db, job, bank_material_extract_task, label='Đã đưa job tách tài liệu vào hàng đợi')
-    log_audit(db, action='question_bank.material.upload.job', status='success', message='Đã kiểm tra file và tạo job tách tài liệu', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'file_name': file.filename, 'file_size': len(raw), 'preflight': preflight})
+    log_audit(db, action='question_bank.material.upload.job', status='success', message='Đã kiểm tra file và tạo job tách tài liệu', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'file_name': file.filename, 'file_size': len(raw), 'preflight': preflight, 'mode': 'celery_queue'})
     return _queued_response(job, 'File đọc được. Đã đưa tài liệu vào hàng đợi tách nội dung.')
 
 

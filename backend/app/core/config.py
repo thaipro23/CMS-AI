@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.5.22-auto-retire-carry-over-material-change'
+    app_version: str = '25.9.16.5.40-ap-block-cache-material-inline-hotfix'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -232,6 +232,16 @@ class Settings(BaseSettings):
     task_always_eager: bool = False
     generation_batch_size: int = 50
     bank_operation_job_ttl_days: int = 30
+    # Material upload extraction is heavy and must run as a background job by
+    # default. Keep the inline switch only as an emergency fallback for local
+    # debugging; production should leave it false and watch the operation job.
+    bank_material_extract_inline_enabled: bool = False
+
+    # Avoid repeatedly refreshing the same AP term/block master data while a
+    # sync run loops over many /get-data-cms subject responses. If AP returns a
+    # different term/block signature we still update immediately; otherwise this
+    # TTL controls the next idempotent verification window.
+    academic_ap_term_block_refresh_ttl_seconds: int = 3600
 
     # v25.9.15.6.37 async material/generate/publish/quiz safety limits.
     max_upload_bytes: int = 50 * 1024 * 1024

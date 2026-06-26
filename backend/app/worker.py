@@ -982,6 +982,70 @@ def bank_material_cleanup_task(retention_days: int | None = None, limit: int | N
         db.close()
 
 
+@celery_app.task(name='academic_ap_sync_task')
+def academic_ap_sync_task(run_id: str):
+    """Run AP get-data-cms sync outside request/response and persist progress in AcademicSyncRun."""
+    from app.models.academic import AcademicSyncRun
+    from app.services.ap_academic_sync import AcademicImportService, SyncCounters
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        run = db.get(AcademicSyncRun, run_id)
+        if not run:
+            return {'ok': False, 'error': 'sync_run_not_found'}
+        if run.status not in {'queued', 'running'}:
+            return {'ok': run.status == 'completed', 'status': run.status, 'sync_run_id': run.id}
+
+        data = run.counters_json if isinstance(run.counters_json, dict) else {}
+        request = data.get('request') if isinstance(data.get('request'), dict) else {}
+        service = AcademicImportService(db)
+        service.update_run_progress(run, current=0, total=1, label='Hệ thống đang chuẩn bị job đồng bộ AP', counters=SyncCounters())
+        result_run, counters = service.sync_from_ap(
+            requested_by=run.requested_by,
+            term_name=str(request.get('term_name') or run.term_name or ''),
+            campus=request.get('campus'),
+            branch=str(request.get('branch') or run.branch or 'poly'),
+            subject_codes=list(request.get('subject_codes') or []),
+            max_subjects=int(request.get('max_subjects') or 0),
+            dry_run=bool(request.get('dry_run')),
+            sync_scope=str(request.get('sync_scope') or 'all'),
+            campuses=list(request.get('campuses') or []),
+            run=run,
+        )
+        status = 'success' if result_run.status == 'completed' else 'failed'
+        try:
+            log_audit(
+                db,
+                action='academic.ap.sync_api.async',
+                status=status,
+                error_type=None if status == 'success' else AuditErrorType.EXTERNAL_SERVICE_ERROR,
+                message='Đồng bộ dữ liệu AP qua job hoàn tất' if status == 'success' else result_run.error_message,
+                user=None,
+                target_type='academic_sync_run',
+                target_id=result_run.id,
+                metadata=json_safe_value({'request': request, 'counters': counters.as_dict()}),
+            )
+        except Exception:
+            pass
+        return {'ok': result_run.status == 'completed', 'sync_run_id': result_run.id, 'status': result_run.status, 'counters': counters.as_dict()}
+    except Exception as exc:
+        db.rollback()
+        run = db.get(AcademicSyncRun, run_id)
+        if run:
+            run.status = 'failed'
+            run.error_message = str(exc)[:4000] or 'Không thể hoàn tất đồng bộ AP.'
+            data = run.counters_json if isinstance(run.counters_json, dict) else {}
+            data['progress'] = {'current': 0, 'total': 1, 'label': 'Đồng bộ AP thất bại', 'updated_at': datetime.utcnow().isoformat()}
+            run.counters_json = json_safe_value(data)
+            run.finished_at = datetime.utcnow()
+            db.add(run)
+            db.commit()
+        return {'ok': False, 'error': 'academic_ap_sync_failed', 'message': str(exc)}
+    finally:
+        db.close()
+
+
 @celery_app.task(name='academic_class_sync_task')
 def academic_class_sync_task(job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
