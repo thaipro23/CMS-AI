@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from app.core.rbac import UserContext, get_user_context, require_permission
 from app.db.session import get_db
@@ -74,6 +80,129 @@ def _safe_error_message(message: str = 'academic_operation_failed') -> dict[str,
     }
 
 router = APIRouter()
+
+
+def _excel_value(value: Any) -> Any:
+    if value is None:
+        return ''
+    if isinstance(value, (list, tuple, set)):
+        return ', '.join(str(item) for item in value if item is not None)
+    return value
+
+
+def _grade10(value: Any) -> float | None:
+    if value is None or value == '':
+        return None
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if 0 <= number <= 1:
+        number *= 100.0
+    return round(max(0.0, min(100.0, number)) / 10.0, 2)
+
+
+def _setup_sheet(ws, headers: list[str], widths: list[int] | None = None) -> None:
+    header_fill = PatternFill('solid', fgColor='111827')
+    for col, name in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=name)
+        cell.font = Font(color='FFFFFF', bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    ws.freeze_panes = 'A2'
+    for idx, width in enumerate(widths or [], 1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+
+def _append_row(ws, values: list[Any]) -> None:
+    ws.append([_excel_value(value) for value in values])
+
+
+def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'TongQuanGV'
+    overview_headers = [
+        'Hệ', 'Cơ sở', 'Giảng viên', 'Username', 'Email', 'Số môn', 'Môn', 'Số lớp',
+        'SV lượt lớp', 'SV riêng biệt', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động',
+        'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'Lớp chưa map Course',
+        'SV rủi ro', 'SV trễ deadline', 'Lượt quiz trễ', 'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp',
+        'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
+    ]
+    _setup_sheet(ws, overview_headers, [12, 12, 28, 24, 30, 10, 28, 10, 12, 14, 16, 12, 12, 20, 18, 18, 12, 16, 14, 18, 12, 12, 14, 12, 12, 22, 48])
+    for item in report.get('items') or []:
+        statuses = item.get('status_counts') or {}
+        _append_row(ws, [
+            item.get('branch'), item.get('campus'), item.get('teacher_name'), item.get('teacher_username'), item.get('teacher_email'),
+            item.get('subject_count'), item.get('subject_codes'), item.get('class_count'), item.get('student_count'), item.get('unique_student_count'),
+            item.get('cms_synced_count'), item.get('learning_enrolled_count'), item.get('learning_active_count'),
+            item.get('learning_avg_progress_percent'), item.get('learning_avg_grade_10'), item.get('classes_without_course_count'),
+            item.get('risk_student_count'), item.get('deadline_late_student_count'), item.get('deadline_late_quiz_count'), statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'),
+            statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), item.get('last_synced_at'), item.get('learning_alerts'),
+        ])
+
+    class_ws = wb.create_sheet('ChiTietLop')
+    class_headers = [
+        'Giảng viên', 'Username GV', 'Hệ', 'Cơ sở', 'Học kỳ', 'Block', 'Môn', 'Tên môn',
+        'Lớp', 'Tên lớp', 'Course CMS', 'Nguồn mapping', 'SV', 'Đã đồng bộ CMS', 'Đã enroll',
+        'Có hoạt động', 'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'Số Quiz', 'Quiz đã đến hạn',
+        'SV trễ deadline', 'Lượt quiz trễ', 'Đợt quiz kế tiếp', 'Ngày làm quiz kế tiếp', 'Deadline kế tiếp',
+        'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
+    ]
+    _setup_sheet(class_ws, class_headers, [28, 22, 10, 12, 18, 16, 12, 30, 16, 26, 38, 20, 8, 16, 12, 12, 20, 18, 10, 14, 16, 14, 18, 18, 18, 18, 12, 12, 14, 12, 12, 22, 48])
+    for item in report.get('items') or []:
+        for cls in item.get('classes') or []:
+            statuses = cls.get('status_counts') or {}
+            _append_row(class_ws, [
+                item.get('teacher_name'), item.get('teacher_username'), cls.get('branch'), cls.get('campus'), cls.get('term_name'), cls.get('block_name'),
+                cls.get('subject_code'), cls.get('subject_name'), cls.get('class_code'), cls.get('class_name'), cls.get('openedx_course_id'), cls.get('openedx_mapping_source'),
+                cls.get('student_count'), cls.get('cms_synced_count'), cls.get('learning_enrolled_count'), cls.get('learning_active_count'),
+                cls.get('learning_avg_progress_percent'), cls.get('learning_avg_grade_10'), cls.get('deadline_quiz_count'), cls.get('deadline_due_quiz_count'),
+                cls.get('deadline_late_student_count'), cls.get('deadline_late_quiz_count'), cls.get('deadline_next_quiz_label'), cls.get('deadline_next_quiz_from_date'), cls.get('deadline_next_quiz_due_date'),
+                statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), cls.get('learning_last_synced_at'), cls.get('learning_alerts'),
+            ])
+
+    watch_ws = wb.create_sheet('SinhVienCanTheoDoi')
+    watch_headers = [
+        'Giảng viên', 'Username GV', 'Học kỳ', 'Block', 'Môn', 'Tên môn', 'Lớp', 'Mã SV',
+        'Username', 'Họ tên', 'Email', 'Username CMS', 'Trạng thái', 'Enrollment',
+        'Course completion (%)', 'Điểm tổng (hệ 10)', 'Quiz đã đến hạn', 'Quiz đã hoàn thành đúng hạn',
+        'Quiz trễ', 'Danh sách quiz trễ', 'Đợt quiz kế tiếp', 'Deadline kế tiếp', 'Hoạt động cuối', 'Cập nhật cuối'
+    ]
+    _setup_sheet(watch_ws, watch_headers, [28, 22, 18, 16, 12, 30, 16, 14, 22, 28, 32, 22, 20, 16, 22, 18, 14, 20, 12, 34, 18, 18, 22, 22])
+    for row in report.get('student_watch_rows') or []:
+        _append_row(watch_ws, [
+            row.get('teacher_name'), row.get('teacher_username'), row.get('term_name'), row.get('block_name'), row.get('subject_code'), row.get('subject_name'), row.get('class_code'),
+            row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('student_email'), row.get('openedx_username'), row.get('status_label'),
+            row.get('enrollment_status'), row.get('progress_percent'), row.get('grade_10'), row.get('deadline_due_quiz_count'), row.get('deadline_completed_due_quiz_count'),
+            row.get('deadline_late_quiz_count'), row.get('deadline_late_quizzes'), row.get('deadline_next_quiz_label'), row.get('deadline_next_quiz_due_date'), row.get('last_activity_at'), row.get('last_synced_at'),
+        ])
+
+    guide = wb.create_sheet('HuongDan')
+    guide['A1'] = 'Báo cáo quản lý đào tạo theo giảng viên'
+    guide['A1'].font = Font(size=15, bold=True)
+    notes = [
+        'Mỗi dòng TongQuanGV là một giảng viên theo bộ lọc trên AI Server.',
+        'SV lượt lớp tính theo class-student enrollment; một sinh viên học nhiều lớp có thể được tính nhiều lần.',
+        'SV riêng biệt là số sinh viên không trùng trong phạm vi các lớp của giảng viên đó.',
+        'Course completion lấy từ progress CMS/Open edX; Điểm tổng được quy đổi từ phần trăm sang hệ 10.',
+        'SinhVienCanTheoDoi chỉ liệt kê sinh viên có trạng thái cần xử lý: chưa đồng bộ CMS, chưa enroll, chưa học, tiến độ thấp, điểm thấp, lỗi đồng bộ hoặc trễ deadline quiz.',
+        'Deadline quiz được tính theo quy tắc: mỗi block 7 tuần, 6 tuần đầu dành deadline quiz từ Thứ 2 đến Thứ 7, tuần 7 Ôn+Thi; số quiz được chia đều vào 6 tuần và phần dư dồn vào các tuần đầu.',
+    ]
+    for idx, note in enumerate(notes, 3):
+        guide.cell(row=idx, column=1, value=f'- {note}')
+    guide.column_dimensions['A'].width = 110
+
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(vertical='top', wrap_text=True)
+        if sheet.max_row > 1:
+            sheet.auto_filter.ref = sheet.dimensions
+
+    raw = BytesIO()
+    wb.save(raw)
+    return raw.getvalue()
 
 
 def _enqueue_class_sync_job(
@@ -169,6 +298,61 @@ def academic_health(user: UserContext = Depends(require_permission('view_questio
         'assignments': db.query(func.count(AcademicTeacherAssignment.id)).scalar() or 0,
         'last_sync': last_sync,
     }
+
+
+
+@router.get('/training/teachers')
+def list_training_teacher_report(
+    term_id: str | None = None,
+    branch: str | None = None,
+    campus: str | None = None,
+    search: str | None = None,
+    learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    return AcademicService(db).training_teacher_report(
+        user,
+        term_id=term_id,
+        branch=branch,
+        campus=campus,
+        search=search,
+        learning_status=learning_status,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get('/training/teachers/export')
+def export_training_teacher_report(
+    term_id: str | None = None,
+    branch: str | None = None,
+    campus: str | None = None,
+    search: str | None = None,
+    learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    report = AcademicService(db).training_teacher_report(
+        user,
+        term_id=term_id,
+        branch=branch,
+        campus=campus,
+        search=search,
+        learning_status=learning_status,
+        page=1,
+        page_size=200,
+        include_all=True,
+        include_students=True,
+    )
+    content = _build_training_teacher_report_xlsx(report)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="training-management-teacher-report.xlsx"'},
+    )
 
 
 @router.get('/terms', response_model=list[AcademicTermOut])

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal
 from uuid import UUID
 from typing import Any
@@ -720,6 +720,160 @@ class AcademicService:
         payload = raw.get('payload') if isinstance(raw.get('payload'), dict) else raw
         return self._component_scores_from_payload(payload)
 
+    @staticmethod
+    def _date_only(value: Any) -> date | None:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        raw = str(value or '').strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _quiz_numbers_from_text(value: Any) -> list[int]:
+        raw = str(value or '').strip().lower()
+        if not raw:
+            return []
+        numbers: set[int] = set()
+        for start, end in re.findall(r'quiz\s*#?\s*(\d{1,3})\s*[-–]\s*(\d{1,3})', raw, flags=re.I):
+            a, b = int(start), int(end)
+            if 1 <= a <= b <= 200:
+                numbers.update(range(a, b + 1))
+        for token in re.findall(r'quiz\s*#?\s*(\d{1,3})', raw, flags=re.I):
+            n = int(token)
+            if 1 <= n <= 200:
+                numbers.add(n)
+        # Some Open edX/connector payloads use labels such as "LC 1" or "Learning Check 1".
+        for token in re.findall(r'(?:learning\s*check|lc)\s*#?\s*(\d{1,3})', raw, flags=re.I):
+            n = int(token)
+            if 1 <= n <= 200:
+                numbers.add(n)
+        return sorted(numbers)
+
+    def _completed_quiz_numbers_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> set[int]:
+        completed: set[int] = set()
+        for item in self._component_scores_from_snapshot(snapshot):
+            numbers = self._quiz_numbers_from_text(' '.join(str(item.get(key) or '') for key in ('name', 'key', 'category')))
+            if not numbers:
+                continue
+            percent = self._number_or_none(item.get('percent'))
+            earned = self._number_or_none(item.get('earned'))
+            possible = self._number_or_none(item.get('possible'))
+            # Deadline warning is about "đã làm quiz". In connector payloads a missing
+            # component usually means no attempt. A scored component with positive score is
+            # certainly completed; zero-score components remain a warning unless the plugin
+            # later provides explicit attempt/completion flags.
+            done = (percent is not None and percent > 0) or (earned is not None and earned > 0)
+            if done or (percent is not None and possible is not None and possible == 0):
+                completed.update(numbers)
+        return completed
+
+    @staticmethod
+    def _quiz_deadline_schedule(quiz_count: int, block_start: date | None) -> list[dict[str, Any]]:
+        quiz_count = max(0, int(quiz_count or 0))
+        if quiz_count <= 0 or not block_start:
+            return []
+        # Một block học 7 tuần: 6 tuần đầu dành deadline quiz, tuần 7 là Ôn+Thi.
+        quiz_weeks = 6
+        base = quiz_count // quiz_weeks
+        remainder = quiz_count % quiz_weeks
+        schedule: list[dict[str, Any]] = []
+        quiz_number = 1
+        for week_index in range(quiz_weeks):
+            week_quiz_count = base + (1 if week_index < remainder else 0)
+            if week_quiz_count <= 0:
+                continue
+            from_date = block_start + timedelta(days=week_index * 7)
+            due_date = from_date + timedelta(days=5)  # T2 -> T7
+            quiz_numbers = list(range(quiz_number, quiz_number + week_quiz_count))
+            quiz_number += week_quiz_count
+            if len(quiz_numbers) == 1:
+                label = f"Quiz {quiz_numbers[0]}"
+            else:
+                label = f"Quiz {quiz_numbers[0]}-{quiz_numbers[-1]}"
+            schedule.append({
+                'week_number': week_index + 1,
+                'label': label,
+                'quiz_numbers': quiz_numbers,
+                'from_date': from_date.isoformat(),
+                'due_date': due_date.isoformat(),
+            })
+        return schedule
+
+    def _training_deadline_status_by_class(
+        self,
+        class_by_id: dict[str, AcademicClass],
+        block_by_class: dict[str, AcademicBlock | None],
+        snapshot_by_class_student: dict[tuple[str, str], AcademicStudentLearningSnapshot],
+    ) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+        today = date.today()
+        snapshots_by_class: dict[str, list[AcademicStudentLearningSnapshot]] = {}
+        for (class_id, _student_id), snapshot in snapshot_by_class_student.items():
+            snapshots_by_class.setdefault(class_id, []).append(snapshot)
+
+        summary_by_class: dict[str, dict[str, Any]] = {}
+        student_status_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        for class_id, cls in class_by_id.items():
+            snapshots = snapshots_by_class.get(class_id, [])
+            quiz_count = 0
+            for snapshot in snapshots:
+                for item in self._component_scores_from_snapshot(snapshot):
+                    numbers = self._quiz_numbers_from_text(' '.join(str(item.get(key) or '') for key in ('name', 'key', 'category')))
+                    if numbers:
+                        quiz_count = max(quiz_count, max(numbers))
+            block = block_by_class.get(class_id)
+            block_start = self._date_only(block.start_date if block else None) or self._date_only(cls.start_date)
+            schedule = self._quiz_deadline_schedule(quiz_count, block_start)
+            due_numbers: set[int] = set()
+            next_item: dict[str, Any] | None = None
+            for item in schedule:
+                due = date.fromisoformat(str(item['due_date']))
+                if today > due:
+                    due_numbers.update(int(n) for n in item.get('quiz_numbers') or [])
+                elif next_item is None:
+                    next_item = item
+            late_student_count = 0
+            late_quiz_count = 0
+            completed_due_sum = 0
+            for (sid_class_id, student_id), snapshot in snapshot_by_class_student.items():
+                if sid_class_id != class_id:
+                    continue
+                completed = self._completed_quiz_numbers_from_snapshot(snapshot)
+                late_numbers = sorted(due_numbers - completed)
+                completed_due = len(due_numbers.intersection(completed))
+                completed_due_sum += completed_due
+                if late_numbers:
+                    late_student_count += 1
+                    late_quiz_count += len(late_numbers)
+                student_status_by_key[(class_id, student_id)] = {
+                    'quiz_count': quiz_count,
+                    'due_quiz_count': len(due_numbers),
+                    'completed_due_quiz_count': completed_due,
+                    'late_quiz_count': len(late_numbers),
+                    'late_quizzes': [f'Quiz {n}' for n in late_numbers[:30]],
+                    'next_quiz_label': next_item.get('label') if next_item else None,
+                    'next_quiz_from_date': next_item.get('from_date') if next_item else None,
+                    'next_quiz_due_date': next_item.get('due_date') if next_item else None,
+                }
+            summary_by_class[class_id] = {
+                'quiz_count': quiz_count,
+                'due_quiz_count': len(due_numbers),
+                'completed_due_quiz_count': completed_due_sum,
+                'late_student_count': late_student_count,
+                'late_quiz_count': late_quiz_count,
+                'next_quiz_label': next_item.get('label') if next_item else None,
+                'next_quiz_from_date': next_item.get('from_date') if next_item else None,
+                'next_quiz_due_date': next_item.get('due_date') if next_item else None,
+                'schedule': schedule,
+                'schedule_note': '6 tuần đầu của block chia deadline quiz; tuần 7 là Ôn+Thi. Quiz dư được dồn vào các tuần đầu.',
+            }
+        return summary_by_class, student_status_by_key
+
     def _low_progress_threshold(self) -> float:
         try:
             return float(getattr(settings, 'academic_learning_low_progress_threshold_percent', 50.0))
@@ -840,6 +994,7 @@ class AcademicService:
             'no_progress': 'no_learning_data', 'no_learning': 'no_learning_data', 'no_learning_data': 'no_learning_data',
             'no_activity': 'no_activity',
             'low_progress': 'low_progress', 'low_grade': 'low_grade',
+            'deadline_late': 'deadline_late', 'late_deadline': 'deadline_late', 'quiz_deadline_late': 'deadline_late',
             'sync_error': 'sync_error', 'has_alert': 'has_alert', 'warning': 'has_alert',
         }
         return aliases.get(raw, raw or 'all')
@@ -1534,6 +1689,464 @@ class AcademicService:
         items = [self._student_mapping_item(class_id, student, synced_at, mapping, learning) for student, synced_at, mapping, learning in rows]
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
+
+    @staticmethod
+    def _percent_to_grade10(value: Any) -> float | None:
+        if value is None or value == '':
+            return None
+        try:
+            number = float(value)
+        except Exception:
+            return None
+        if 0 <= number <= 1:
+            number *= 100.0
+        return round(max(0.0, min(100.0, number)) / 10.0, 2)
+
+    def _learning_status_label(self, status_name: str | None) -> str:
+        labels = {
+            'cms_not_synced': 'Chưa đồng bộ CMS',
+            'not_synced': 'Chưa cập nhật học tập',
+            'not_enrolled': 'Chưa enroll',
+            'sync_error': 'Lỗi đồng bộ',
+            'no_activity': 'Chưa học',
+            'low_progress': 'Tiến độ thấp',
+            'low_grade': 'Điểm thấp',
+            'in_progress': 'Đang học',
+            'good': 'Ổn',
+        }
+        return labels.get(str(status_name or ''), str(status_name or 'Không rõ'))
+
+    def _training_learning_status_counts_by_class(
+        self,
+        class_ids: list[str],
+        course_by_class: dict[str, str | None],
+    ) -> tuple[dict[str, dict[str, int]], dict[tuple[str, str], AcademicStudentLearningSnapshot]]:
+        if not class_ids:
+            return {}, {}
+        snapshots = self.db.query(AcademicStudentLearningSnapshot).filter(
+            AcademicStudentLearningSnapshot.class_id.in_(class_ids)
+        ).all()
+        snapshot_by_class_student: dict[tuple[str, str], AcademicStudentLearningSnapshot] = {}
+        for snapshot in snapshots:
+            expected_course = course_by_class.get(snapshot.class_id)
+            if expected_course and snapshot.openedx_course_id != expected_course:
+                continue
+            if not expected_course:
+                continue
+            snapshot_by_class_student[(snapshot.class_id, snapshot.student_id)] = snapshot
+
+        rows = self.db.query(
+            AcademicClassStudent.class_id,
+            AcademicClassStudent.student_id,
+            OpenEdXUserMapping,
+        ).outerjoin(
+            OpenEdXUserMapping,
+            OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
+        ).filter(AcademicClassStudent.class_id.in_(class_ids)).all()
+
+        counts_by_class: dict[str, dict[str, int]] = {class_id: {} for class_id in class_ids}
+        for class_id, student_id, mapping in rows:
+            status_name = self._learning_status_for_snapshot(snapshot_by_class_student.get((class_id, student_id)), mapping)
+            bucket = counts_by_class.setdefault(class_id, {})
+            bucket[status_name] = bucket.get(status_name, 0) + 1
+        return counts_by_class, snapshot_by_class_student
+
+    def training_teacher_report(
+        self,
+        user: UserContext,
+        *,
+        term_id: str | None = None,
+        branch: str | None = None,
+        campus: str | None = None,
+        search: str | None = None,
+        learning_status: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        include_all: bool = False,
+        include_students: bool = False,
+    ) -> dict[str, Any]:
+        page, page_size = _page(page, page_size)
+        decision = self.access_decision(user)
+        status_filter = self._normalize_learning_list_filter(learning_status)
+        query = self.db.query(
+            AcademicTeacher,
+            AcademicTeacherAssignment,
+            AcademicClass,
+            AcademicTerm,
+            AcademicBlock,
+            AcademicSubject,
+        ).join(
+            AcademicTeacherAssignment,
+            AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
+        ).join(
+            AcademicClass,
+            AcademicClass.id == AcademicTeacherAssignment.class_id,
+        ).join(
+            AcademicTerm,
+            AcademicTerm.id == AcademicClass.term_id,
+        ).outerjoin(
+            AcademicBlock,
+            AcademicBlock.id == AcademicClass.block_id,
+        ).join(
+            AcademicSubject,
+            AcademicSubject.id == AcademicClass.subject_id,
+        ).filter(
+            AcademicTeacher.active.is_(True),
+            AcademicClass.active.is_(True),
+            AcademicSubject.active.is_(True),
+        )
+        query = self._apply_academic_access_filter(query, user, decision)
+        if term_id:
+            query = query.filter(AcademicClass.term_id == term_id)
+        if branch:
+            query = query.filter(AcademicClass.branch == branch.strip().lower())
+        if campus:
+            query = query.filter(AcademicClass.campus == campus.strip().lower())
+        if search and search.strip():
+            like = f"%{search.strip()}%"
+            query = query.filter(or_(
+                AcademicTeacher.username.ilike(like),
+                AcademicTeacher.full_name.ilike(like),
+                AcademicTeacher.email.ilike(like),
+                AcademicClass.class_code.ilike(like),
+                AcademicSubject.subject_code.ilike(like),
+                AcademicSubject.subject_name.ilike(like),
+            ))
+        rows = query.order_by(
+            AcademicTeacher.full_name.asc().nullslast(),
+            AcademicTeacher.username.asc(),
+            AcademicTerm.start_date.desc().nullslast(),
+            AcademicSubject.subject_code.asc(),
+            AcademicClass.class_code.asc(),
+        ).all()
+
+        class_by_id: dict[str, AcademicClass] = {}
+        block_by_class: dict[str, AcademicBlock | None] = {}
+        class_context: dict[str, dict[str, Any]] = {}
+        for teacher, assignment, cls, term, block, subject in rows:
+            class_by_id[cls.id] = cls
+            block_by_class[cls.id] = block
+            class_context[cls.id] = {
+                'term_name': term.term_name if term else None,
+                'block_name': block.block_name if block else None,
+                'subject_code': subject.subject_code if subject else None,
+                'subject_name': subject.subject_name if subject else None,
+            }
+        class_ids = list(class_by_id.keys())
+
+        student_rows = self.db.query(AcademicClassStudent.class_id, AcademicClassStudent.student_id).filter(
+            AcademicClassStudent.class_id.in_(class_ids)
+        ).all() if class_ids else []
+        student_ids_by_class: dict[str, set[str]] = {class_id: set() for class_id in class_ids}
+        for class_id, student_id in student_rows:
+            student_ids_by_class.setdefault(class_id, set()).add(student_id)
+        student_count_by_class = {class_id: len(ids) for class_id, ids in student_ids_by_class.items()}
+
+        sync_by_class = self._student_sync_summary_for_classes(class_ids)
+        class_overrides = self.db.query(AcademicClassCourseMapping).filter(
+            AcademicClassCourseMapping.class_id.in_(class_ids),
+            AcademicClassCourseMapping.active.is_(True),
+        ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast()).all() if class_ids else []
+        override_by_class = {item.class_id: item for item in class_overrides}
+        inherited_by_class = self.inherited_course_mappings_for_classes(list(class_by_id.values()))
+        course_by_class: dict[str, str | None] = {}
+        mapping_source_by_class: dict[str, str | None] = {}
+        for class_id, cls in class_by_id.items():
+            mapping = override_by_class.get(class_id) or inherited_by_class.get(class_id)
+            course_by_class[class_id] = mapping.openedx_course_id if mapping else None
+            mapping_source_by_class[class_id] = 'class_override' if class_id in override_by_class else ('subject_term_mapping' if mapping else None)
+
+        learning_by_class = self._learning_summary_by_class_ids(class_ids, course_by_class)
+        status_counts_by_class, snapshot_by_class_student = self._training_learning_status_counts_by_class(class_ids, course_by_class)
+        deadline_by_class, deadline_by_class_student = self._training_deadline_status_by_class(class_by_id, block_by_class, snapshot_by_class_student)
+
+        teacher_buckets: dict[str, dict[str, Any]] = {}
+        seen_teacher_classes: set[tuple[str, str]] = set()
+        class_teacher_context: dict[str, list[dict[str, Any]]] = {}
+        for teacher, assignment, cls, term, block, subject in rows:
+            key = teacher.id
+            bucket = teacher_buckets.setdefault(key, {
+                'teacher_id': teacher.id,
+                'teacher_code': teacher.teacher_code,
+                'teacher_username': teacher.username,
+                'teacher_name': teacher.full_name or teacher.username,
+                'teacher_email': teacher.email,
+                'campus': teacher.campus or cls.campus,
+                'branch': teacher.branch or cls.branch,
+                'subject_ids': set(),
+                'subject_codes': set(),
+                'class_ids': set(),
+                'unique_student_ids': set(),
+                'student_count': 0,
+                'cms_synced_count': 0,
+                'cms_unsynced_count': 0,
+                'learning_enrolled_count': 0,
+                'learning_active_count': 0,
+                'learning_synced_count': 0,
+                'classes_without_course_count': 0,
+                'deadline_late_student_count': 0,
+                'deadline_late_quiz_count': 0,
+                'deadline_due_quiz_count': 0,
+                'progress_weighted_sum': 0.0,
+                'progress_weight': 0,
+                'grade_weighted_sum': 0.0,
+                'grade_weight': 0,
+                'status_counts': {},
+                'class_items': [],
+                'last_synced_at': None,
+            })
+            class_teacher_context.setdefault(cls.id, []).append({
+                'teacher_id': teacher.id,
+                'teacher_username': teacher.username,
+                'teacher_name': teacher.full_name or teacher.username,
+                'teacher_email': teacher.email,
+            })
+            pair = (teacher.id, cls.id)
+            if pair in seen_teacher_classes:
+                continue
+            seen_teacher_classes.add(pair)
+            bucket['class_ids'].add(cls.id)
+            bucket['subject_ids'].add(subject.id)
+            bucket['subject_codes'].add(subject.subject_code)
+            class_student_ids = student_ids_by_class.get(cls.id, set())
+            bucket['unique_student_ids'].update(class_student_ids)
+            class_student_count = int(student_count_by_class.get(cls.id, 0) or 0)
+            bucket['student_count'] += class_student_count
+            sync_counts = sync_by_class.get(cls.id, {})
+            cms_synced = int(sync_counts.get('matched', 0) or 0)
+            cms_unsynced = max(0, class_student_count - cms_synced)
+            bucket['cms_synced_count'] += cms_synced
+            bucket['cms_unsynced_count'] += cms_unsynced
+            learning = learning_by_class.get(cls.id, {})
+            enrolled = int(learning.get('learning_enrolled_count') or 0)
+            active = int(learning.get('learning_active_count') or 0)
+            synced = int(learning.get('learning_synced_count') or 0)
+            bucket['learning_enrolled_count'] += enrolled
+            bucket['learning_active_count'] += active
+            bucket['learning_synced_count'] += synced
+            if not course_by_class.get(cls.id):
+                bucket['classes_without_course_count'] += 1
+            avg_progress = learning.get('learning_avg_progress_percent')
+            avg_grade = learning.get('learning_avg_grade_percent')
+            if isinstance(avg_progress, (int, float)) and synced:
+                bucket['progress_weighted_sum'] += float(avg_progress) * synced
+                bucket['progress_weight'] += synced
+            if isinstance(avg_grade, (int, float)) and synced:
+                bucket['grade_weighted_sum'] += float(avg_grade) * synced
+                bucket['grade_weight'] += synced
+            status_counts = status_counts_by_class.get(cls.id, {})
+            for status_name, count in status_counts.items():
+                bucket['status_counts'][status_name] = int(bucket['status_counts'].get(status_name, 0) or 0) + int(count or 0)
+            last_synced = learning.get('learning_last_synced_at')
+            if last_synced and (bucket['last_synced_at'] is None or last_synced > bucket['last_synced_at']):
+                bucket['last_synced_at'] = last_synced
+            deadline = deadline_by_class.get(cls.id, {})
+            deadline_late_students = int(deadline.get('late_student_count') or 0)
+            deadline_late_quizzes = int(deadline.get('late_quiz_count') or 0)
+            deadline_due_quizzes = int(deadline.get('due_quiz_count') or 0)
+            bucket['deadline_late_student_count'] += deadline_late_students
+            bucket['deadline_late_quiz_count'] += deadline_late_quizzes
+            bucket['deadline_due_quiz_count'] += deadline_due_quizzes
+            if deadline_late_students:
+                bucket['status_counts']['deadline_late'] = int(bucket['status_counts'].get('deadline_late', 0) or 0) + deadline_late_students
+            alerts = list(learning.get('learning_alerts') or [])
+            if not course_by_class.get(cls.id) and 'Chưa map Course CMS' not in alerts:
+                alerts.append('Chưa map Course CMS')
+            if deadline_late_students:
+                alerts.append(f'{deadline_late_students} SV trễ deadline quiz ({deadline_late_quizzes} lượt quiz)')
+            bucket['class_items'].append({
+                'class_id': cls.id,
+                'class_code': cls.class_code,
+                'class_name': cls.class_name,
+                'term_id': cls.term_id,
+                'term_name': term.term_name if term else None,
+                'block_id': cls.block_id,
+                'block_name': block.block_name if block else None,
+                'subject_id': subject.id,
+                'subject_code': subject.subject_code,
+                'subject_name': subject.subject_name,
+                'campus': cls.campus,
+                'branch': cls.branch,
+                'student_count': class_student_count,
+                'cms_synced_count': cms_synced,
+                'cms_unsynced_count': cms_unsynced,
+                'openedx_course_id': course_by_class.get(cls.id),
+                'openedx_mapping_source': mapping_source_by_class.get(cls.id),
+                'learning_enrolled_count': enrolled,
+                'learning_active_count': active,
+                'learning_synced_count': synced,
+                'learning_avg_progress_percent': avg_progress,
+                'learning_avg_grade_percent': avg_grade,
+                'learning_avg_grade_10': self._percent_to_grade10(avg_grade),
+                'learning_last_synced_at': last_synced,
+                'status_counts': status_counts,
+                'learning_alerts': alerts,
+                'deadline_quiz_count': int(deadline.get('quiz_count') or 0),
+                'deadline_due_quiz_count': deadline_due_quizzes,
+                'deadline_completed_due_quiz_count': int(deadline.get('completed_due_quiz_count') or 0),
+                'deadline_late_student_count': deadline_late_students,
+                'deadline_late_quiz_count': deadline_late_quizzes,
+                'deadline_next_quiz_label': deadline.get('next_quiz_label'),
+                'deadline_next_quiz_from_date': deadline.get('next_quiz_from_date'),
+                'deadline_next_quiz_due_date': deadline.get('next_quiz_due_date'),
+                'deadline_schedule_note': deadline.get('schedule_note'),
+            })
+
+        items: list[dict[str, Any]] = []
+        alert_keys = ['cms_not_synced', 'not_synced', 'not_enrolled', 'sync_error', 'no_activity', 'low_progress', 'low_grade', 'deadline_late']
+        for bucket in teacher_buckets.values():
+            status_counts = dict(bucket['status_counts'])
+            avg_progress = round(bucket['progress_weighted_sum'] / bucket['progress_weight'], 2) if bucket['progress_weight'] else None
+            avg_grade = round(bucket['grade_weighted_sum'] / bucket['grade_weight'], 2) if bucket['grade_weight'] else None
+            risk_student_count = int(sum(int(status_counts.get(key, 0) or 0) for key in alert_keys))
+            learning_alerts: list[str] = []
+            if bucket['classes_without_course_count']:
+                learning_alerts.append(f"{bucket['classes_without_course_count']} lớp chưa map Course CMS")
+            if int(status_counts.get('cms_not_synced', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('cms_not_synced', 0) or 0)} SV chưa đồng bộ CMS")
+            if int(status_counts.get('not_enrolled', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('not_enrolled', 0) or 0)} SV chưa enroll")
+            if int(status_counts.get('no_activity', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('no_activity', 0) or 0)} SV chưa học")
+            if int(status_counts.get('low_progress', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('low_progress', 0) or 0)} SV tiến độ thấp")
+            if int(status_counts.get('low_grade', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('low_grade', 0) or 0)} SV điểm thấp")
+            if int(status_counts.get('deadline_late', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('deadline_late', 0) or 0)} SV trễ deadline quiz")
+            item = {
+                'teacher_id': bucket['teacher_id'],
+                'teacher_code': bucket['teacher_code'],
+                'teacher_username': bucket['teacher_username'],
+                'teacher_name': bucket['teacher_name'],
+                'teacher_email': bucket['teacher_email'],
+                'campus': bucket['campus'],
+                'branch': bucket['branch'],
+                'subject_count': len(bucket['subject_ids']),
+                'subject_codes': sorted(bucket['subject_codes']),
+                'class_count': len(bucket['class_ids']),
+                'student_count': int(bucket['student_count']),
+                'unique_student_count': len(bucket['unique_student_ids']),
+                'cms_synced_count': int(bucket['cms_synced_count']),
+                'cms_unsynced_count': int(bucket['cms_unsynced_count']),
+                'learning_enrolled_count': int(bucket['learning_enrolled_count']),
+                'learning_active_count': int(bucket['learning_active_count']),
+                'learning_synced_count': int(bucket['learning_synced_count']),
+                'classes_without_course_count': int(bucket['classes_without_course_count']),
+                'deadline_late_student_count': int(bucket['deadline_late_student_count']),
+                'deadline_late_quiz_count': int(bucket['deadline_late_quiz_count']),
+                'deadline_due_quiz_count': int(bucket['deadline_due_quiz_count']),
+                'learning_avg_progress_percent': avg_progress,
+                'learning_avg_grade_percent': avg_grade,
+                'learning_avg_grade_10': self._percent_to_grade10(avg_grade),
+                'risk_student_count': risk_student_count,
+                'status_counts': status_counts,
+                'learning_alerts': learning_alerts,
+                'last_synced_at': bucket['last_synced_at'],
+                'classes': sorted(bucket['class_items'], key=lambda item: (str(item.get('subject_code') or ''), str(item.get('class_code') or ''))),
+            }
+            items.append(item)
+
+        def matches_training_filter(item: dict[str, Any]) -> bool:
+            if status_filter == 'all':
+                return True
+            status_counts = item.get('status_counts') or {}
+            if status_filter == 'no_course_map':
+                return int(item.get('classes_without_course_count') or 0) > 0
+            if status_filter == 'cms_not_synced':
+                return int(status_counts.get('cms_not_synced', 0) or 0) > 0 or int(item.get('cms_unsynced_count') or 0) > 0
+            if status_filter == 'not_fully_enrolled':
+                return int(status_counts.get('not_enrolled', 0) or 0) > 0 or int(item.get('learning_enrolled_count') or 0) < int(item.get('student_count') or 0)
+            if status_filter == 'no_learning_data':
+                return int(item.get('learning_synced_count') or 0) == 0 and int(item.get('student_count') or 0) > 0
+            if status_filter in {'no_activity', 'low_progress', 'low_grade', 'sync_error', 'deadline_late'}:
+                return int(status_counts.get(status_filter, 0) or 0) > 0
+            if status_filter == 'has_alert':
+                return bool(item.get('learning_alerts')) or int(item.get('risk_student_count') or 0) > 0
+            return True
+
+        filtered_items = [item for item in items if matches_training_filter(item)]
+        filtered_items.sort(key=lambda item: (str(item.get('teacher_name') or ''), str(item.get('teacher_username') or '')))
+        total = len(filtered_items)
+        if include_all:
+            page_items = filtered_items
+            total_pages = 1 if total else 0
+        else:
+            page_items = filtered_items[(page - 1) * page_size: page * page_size]
+            total_pages = math.ceil(total / page_size) if total else 0
+        summary = {
+            'teacher_count': total,
+            'class_count': sum(int(item.get('class_count') or 0) for item in filtered_items),
+            'subject_count': len({code for item in filtered_items for code in (item.get('subject_codes') or [])}),
+            'student_count': sum(int(item.get('student_count') or 0) for item in filtered_items),
+            'unique_student_count': sum(int(item.get('unique_student_count') or 0) for item in filtered_items),
+            'cms_synced_count': sum(int(item.get('cms_synced_count') or 0) for item in filtered_items),
+            'learning_enrolled_count': sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items),
+            'learning_active_count': sum(int(item.get('learning_active_count') or 0) for item in filtered_items),
+            'risk_student_count': sum(int(item.get('risk_student_count') or 0) for item in filtered_items),
+            'classes_without_course_count': sum(int(item.get('classes_without_course_count') or 0) for item in filtered_items),
+            'deadline_late_student_count': sum(int(item.get('deadline_late_student_count') or 0) for item in filtered_items),
+            'deadline_late_quiz_count': sum(int(item.get('deadline_late_quiz_count') or 0) for item in filtered_items),
+        }
+        result: dict[str, Any] = {'items': page_items, 'summary': summary, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': (not include_all and page < total_pages)}
+
+        if include_students and class_ids:
+            student_query = self.db.query(
+                AcademicClassStudent.class_id,
+                AcademicStudent,
+                OpenEdXUserMapping,
+            ).join(
+                AcademicStudent,
+                AcademicStudent.id == AcademicClassStudent.student_id,
+            ).outerjoin(
+                OpenEdXUserMapping,
+                OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
+            ).filter(AcademicClassStudent.class_id.in_(class_ids))
+            watch_rows: list[dict[str, Any]] = []
+            for class_id, student, mapping in student_query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).all():
+                snapshot = snapshot_by_class_student.get((class_id, student.id))
+                status_name = self._learning_status_for_snapshot(snapshot, mapping)
+                deadline_status = deadline_by_class_student.get((class_id, student.id), {})
+                if status_name in {'good', 'in_progress'} and int(deadline_status.get('late_quiz_count') or 0) <= 0:
+                    continue
+                for teacher_ctx in class_teacher_context.get(class_id, []):
+                    context = class_context.get(class_id, {})
+                    watch_rows.append({
+                        **teacher_ctx,
+                        'class_id': class_id,
+                        'class_code': class_by_id[class_id].class_code if class_id in class_by_id else '',
+                        'term_name': context.get('term_name'),
+                        'block_name': context.get('block_name'),
+                        'subject_code': context.get('subject_code'),
+                        'subject_name': context.get('subject_name'),
+                        'student_code': student.student_code,
+                        'student_username': student.username,
+                        'student_name': student.full_name,
+                        'student_email': student.email,
+                        'openedx_username': mapping.openedx_username if mapping else None,
+                        'status': status_name,
+                        'status_label': self._learning_status_label(status_name),
+                        'enrollment_status': snapshot.enrollment_status if snapshot else None,
+                        'progress_percent': snapshot.progress_percent if snapshot else None,
+                        'grade_percent': snapshot.grade_percent if snapshot else None,
+                        'grade_10': self._percent_to_grade10(snapshot.grade_percent if snapshot else None),
+                        'last_activity_at': snapshot.last_activity_at if snapshot else None,
+                        'last_synced_at': (snapshot.learning_synced_at or snapshot.last_synced_at) if snapshot else None,
+                        'deadline_due_quiz_count': int(deadline_status.get('due_quiz_count') or 0),
+                        'deadline_completed_due_quiz_count': int(deadline_status.get('completed_due_quiz_count') or 0),
+                        'deadline_late_quiz_count': int(deadline_status.get('late_quiz_count') or 0),
+                        'deadline_late_quizzes': deadline_status.get('late_quizzes') or [],
+                        'deadline_next_quiz_label': deadline_status.get('next_quiz_label'),
+                        'deadline_next_quiz_from_date': deadline_status.get('next_quiz_from_date'),
+                        'deadline_next_quiz_due_date': deadline_status.get('next_quiz_due_date'),
+                    })
+                    if len(watch_rows) >= 20000:
+                        break
+                if len(watch_rows) >= 20000:
+                    break
+            result['student_watch_rows'] = watch_rows
+        return result
+
     def _upsert_mapping(self, student: AcademicStudent, result: dict[str, Any] | None, *, source: str = 'plugin') -> OpenEdXUserMapping:
         now = datetime.utcnow()
         result = result or {}

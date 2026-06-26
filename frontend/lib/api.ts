@@ -97,6 +97,7 @@ import {
   AcademicClassCourseMapping,
   AcademicClassCourseMappingProposal,
   AcademicCourseMappingListResponse,
+  AcademicTrainingTeacherReportResponse,
 } from "../types";
 
 const rawApiBase =
@@ -1956,6 +1957,33 @@ export async function getAcademicSubjects(headers: HeadersInit, filters: { termI
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   return parseResponse(await apiFetch(`${API}/academic/subjects?${params.toString()}`, { credentials: "include", headers }));
+}
+
+export async function getAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicTrainingTeacherReportResponse> {
+  const params = new URLSearchParams();
+  if (filters.termId) params.set('term_id', filters.termId);
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 50));
+  return parseResponse(await apiFetch(`${API}/academic/training/teachers?${params.toString()}`, { credentials: "include", headers }));
+}
+
+export async function downloadAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string } = {}): Promise<Blob> {
+  const params = new URLSearchParams();
+  if (filters.termId) params.set('term_id', filters.termId);
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
+  const response = await apiFetch(`${API}/academic/training/teachers/export?${params.toString()}`, { credentials: "include", headers });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || response.statusText);
+  }
+  return response.blob();
 }
 
 export async function getAcademicTeacherClasses(headers: HeadersInit, filters: { termId?: string; blockId?: string; subjectId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicClassListResponse> {

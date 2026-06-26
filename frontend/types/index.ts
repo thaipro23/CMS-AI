@@ -1892,6 +1892,93 @@ export type AcademicManualMappingImportResult = {
   errors: Array<Record<string, any>>
 }
 
+export type AcademicTrainingClassReport = {
+  class_id: string
+  class_code: string
+  class_name?: string | null
+  term_id?: string | null
+  term_name?: string | null
+  block_id?: string | null
+  block_name?: string | null
+  subject_id?: string | null
+  subject_code?: string | null
+  subject_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  student_count: number
+  cms_synced_count: number
+  cms_unsynced_count: number
+  openedx_course_id?: string | null
+  openedx_mapping_source?: string | null
+  learning_enrolled_count: number
+  learning_active_count: number
+  learning_synced_count: number
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_avg_grade_10?: number | null
+  learning_last_synced_at?: string | null
+  status_counts?: Record<string, number>
+  learning_alerts?: string[]
+  deadline_quiz_count?: number | null
+  deadline_due_quiz_count?: number | null
+  deadline_completed_due_quiz_count?: number | null
+  deadline_late_student_count?: number | null
+  deadline_late_quiz_count?: number | null
+  deadline_next_quiz_label?: string | null
+  deadline_next_quiz_from_date?: string | null
+  deadline_next_quiz_due_date?: string | null
+  deadline_schedule_note?: string | null
+}
+
+export type AcademicTrainingTeacherReport = {
+  teacher_id: string
+  teacher_code?: string | null
+  teacher_username: string
+  teacher_name: string
+  teacher_email?: string | null
+  campus?: string | null
+  branch?: string | null
+  subject_count: number
+  subject_codes: string[]
+  class_count: number
+  student_count: number
+  unique_student_count: number
+  cms_synced_count: number
+  cms_unsynced_count: number
+  learning_enrolled_count: number
+  learning_active_count: number
+  learning_synced_count: number
+  classes_without_course_count: number
+  deadline_late_student_count?: number | null
+  deadline_late_quiz_count?: number | null
+  deadline_due_quiz_count?: number | null
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_avg_grade_10?: number | null
+  risk_student_count: number
+  status_counts: Record<string, number>
+  learning_alerts: string[]
+  last_synced_at?: string | null
+  classes: AcademicTrainingClassReport[]
+}
+
+export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTrainingTeacherReport> & {
+  summary: {
+    teacher_count: number
+    class_count: number
+    subject_count: number
+    student_count: number
+    unique_student_count: number
+    cms_synced_count: number
+    learning_enrolled_count: number
+    learning_active_count: number
+    risk_student_count: number
+    classes_without_course_count: number
+    deadline_late_student_count?: number
+    deadline_late_quiz_count?: number
+  }
+}
+
 export type AcademicClassListResponse = PaginatedResponse<AcademicClass>
 export type AcademicStudentListResponse = PaginatedResponse<AcademicStudent>
 

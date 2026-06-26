@@ -4971,3 +4971,37 @@ label, .field-label { color: var(--color-text); }
 .student-grade-table td.component-grade-cell b {
   min-width: 64px;
 }
+
+/* v25.9.16.5.46: Training management report */
+.training-management-page .training-summary-strip {
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+}
+.training-management-page .training-table-wrap {
+  overflow-x: auto;
+}
+.training-management-page .training-teacher-table th,
+.training-management-page .training-teacher-table td {
+  vertical-align: top;
+}
+.training-management-page .training-class-detail-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+.training-management-page .nested-card {
+  background: rgba(248, 250, 252, .82);
+  border-style: dashed;
+}
+.training-management-page .danger-text {
+  color: #b91c1c !important;
+  font-weight: 700;
+}
+html[data-theme='dark'] .training-management-page .nested-card {
+  background: rgba(15, 23, 42, .72);
+}
+@media (max-width: 1180px) {
+  .training-management-page .training-summary-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .training-management-page .training-summary-strip { grid-template-columns: 1fr; }
+}
