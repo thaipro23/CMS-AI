@@ -152,6 +152,7 @@ class AcademicStudentOut(BaseModel):
     email: str | None = None
     full_name: str
     phone: str | None = None
+    total_relearn: int = 0
     campus: str | None = None
     branch: str | None = None
     active: bool

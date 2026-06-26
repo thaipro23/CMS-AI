@@ -1081,7 +1081,20 @@ class AcademicService:
         except Exception:
             return 50.0
 
-    def _snapshot_has_learning_activity(snapshot: AcademicStudentLearningSnapshot | None) -> bool:
+    @staticmethod
+    def _metadata_total_relearn(*values: Any) -> int:
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            for key in ('total_relearn', 'totalRelearn', 'relearn_count', 'relearnCount', 'so_lan_hoc_lai'):
+                if key in value and value.get(key) not in (None, ''):
+                    try:
+                        return max(0, int(float(value.get(key))))
+                    except Exception:
+                        return 0
+        return 0
+
+    def _snapshot_has_learning_activity(self, snapshot: AcademicStudentLearningSnapshot | None) -> bool:
         if not snapshot:
             return False
         if str(snapshot.enrollment_status or '').lower() != 'enrolled':
@@ -1794,7 +1807,7 @@ class AcademicService:
             'openedx_mapping_validation_status': effective_mapping.validation_status if effective_mapping else None,
         }
 
-    def _student_mapping_item(self, class_id: str, student: AcademicStudent, synced_at: datetime | None, mapping: OpenEdXUserMapping | None, learning: AcademicStudentLearningSnapshot | None = None) -> dict[str, Any]:
+    def _student_mapping_item(self, class_id: str, student: AcademicStudent, synced_at: datetime | None, mapping: OpenEdXUserMapping | None, learning: AcademicStudentLearningSnapshot | None = None, class_student: AcademicClassStudent | None = None) -> dict[str, Any]:
         return {
             'class_id': class_id,
             'id': student.id,
@@ -1803,6 +1816,7 @@ class AcademicService:
             'email': student.email,
             'full_name': student.full_name,
             'phone': student.phone,
+            'total_relearn': self._metadata_total_relearn(class_student.metadata_json if class_student else None, student.metadata_json),
             'campus': student.campus,
             'branch': student.branch,
             'active': student.active,
@@ -1838,7 +1852,7 @@ class AcademicService:
         cls = self.db.get(AcademicClass, class_id)
         effective_mapping = self.effective_course_mapping_for_class(cls) if cls else None
         course_id = effective_mapping.openedx_course_id if effective_mapping else None
-        query = self.db.query(AcademicStudent, AcademicClassStudent.synced_at, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
+        query = self.db.query(AcademicStudent, AcademicClassStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
         ).outerjoin(
@@ -1884,7 +1898,7 @@ class AcademicService:
                 ))
         total = query.count()
         rows = query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).offset((page - 1) * page_size).limit(page_size).all()
-        items = [self._student_mapping_item(class_id, student, synced_at, mapping, learning) for student, synced_at, mapping, learning in rows]
+        items = [self._student_mapping_item(class_id, student, class_student.synced_at, mapping, learning, class_student) for student, class_student, mapping, learning in rows]
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
 
@@ -2032,12 +2046,20 @@ class AcademicService:
             }
         class_ids = list(class_by_id.keys())
 
-        student_rows = self.db.query(AcademicClassStudent.class_id, AcademicClassStudent.student_id).filter(
+        student_rows = self.db.query(AcademicClassStudent.class_id, AcademicClassStudent.student_id, AcademicClassStudent.metadata_json).filter(
             AcademicClassStudent.class_id.in_(class_ids)
         ).all() if class_ids else []
         student_ids_by_class: dict[str, set[str]] = {class_id: set() for class_id in class_ids}
-        for class_id, student_id in student_rows:
+        relearn_by_class: dict[str, dict[str, int]] = {class_id: {'student_count': 0, 'total': 0} for class_id in class_ids}
+        relearn_by_class_student: dict[tuple[str, str], int] = {}
+        for class_id, student_id, meta in student_rows:
             student_ids_by_class.setdefault(class_id, set()).add(student_id)
+            total_relearn = self._metadata_total_relearn(meta)
+            relearn_by_class_student[(class_id, student_id)] = total_relearn
+            if total_relearn > 0:
+                bucket = relearn_by_class.setdefault(class_id, {'student_count': 0, 'total': 0})
+                bucket['student_count'] += 1
+                bucket['total'] += total_relearn
         student_count_by_class = {class_id: len(ids) for class_id, ids in student_ids_by_class.items()}
 
         sync_by_class = self._student_sync_summary_for_classes(class_ids)
@@ -2085,6 +2107,8 @@ class AcademicService:
                 'deadline_late_student_count': 0,
                 'deadline_late_quiz_count': 0,
                 'deadline_due_quiz_count': 0,
+                'relearn_student_count': 0,
+                'total_relearn_count': 0,
                 'progress_weighted_sum': 0.0,
                 'progress_weight': 0,
                 'grade_weighted_sum': 0.0,
@@ -2109,7 +2133,12 @@ class AcademicService:
             class_student_ids = student_ids_by_class.get(cls.id, set())
             bucket['unique_student_ids'].update(class_student_ids)
             class_student_count = int(student_count_by_class.get(cls.id, 0) or 0)
+            class_relearn = relearn_by_class.get(cls.id, {})
+            relearn_student_count = int(class_relearn.get('student_count') or 0)
+            total_relearn_count = int(class_relearn.get('total') or 0)
             bucket['student_count'] += class_student_count
+            bucket['relearn_student_count'] += relearn_student_count
+            bucket['total_relearn_count'] += total_relearn_count
             sync_counts = sync_by_class.get(cls.id, {})
             cms_synced = int(sync_counts.get('matched', 0) or 0)
             cms_unsynced = max(0, class_student_count - cms_synced)
@@ -2166,6 +2195,8 @@ class AcademicService:
                 'campus': cls.campus,
                 'branch': cls.branch,
                 'student_count': class_student_count,
+                'relearn_student_count': relearn_student_count,
+                'total_relearn_count': total_relearn_count,
                 'cms_synced_count': cms_synced,
                 'cms_unsynced_count': cms_unsynced,
                 'openedx_course_id': course_by_class.get(cls.id),
@@ -2226,6 +2257,8 @@ class AcademicService:
                 'class_count': len(bucket['class_ids']),
                 'student_count': int(bucket['student_count']),
                 'unique_student_count': len(bucket['unique_student_ids']),
+                'relearn_student_count': int(bucket['relearn_student_count']),
+                'total_relearn_count': int(bucket['total_relearn_count']),
                 'cms_synced_count': int(bucket['cms_synced_count']),
                 'cms_unsynced_count': int(bucket['cms_unsynced_count']),
                 'learning_enrolled_count': int(bucket['learning_enrolled_count']),
@@ -2279,6 +2312,8 @@ class AcademicService:
             'subject_count': len({code for item in filtered_items for code in (item.get('subject_codes') or [])}),
             'student_count': sum(int(item.get('student_count') or 0) for item in filtered_items),
             'unique_student_count': sum(int(item.get('unique_student_count') or 0) for item in filtered_items),
+            'relearn_student_count': sum(int(item.get('relearn_student_count') or 0) for item in filtered_items),
+            'total_relearn_count': sum(int(item.get('total_relearn_count') or 0) for item in filtered_items),
             'cms_synced_count': sum(int(item.get('cms_synced_count') or 0) for item in filtered_items),
             'learning_enrolled_count': sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items),
             'learning_active_count': sum(int(item.get('learning_active_count') or 0) for item in filtered_items),
@@ -2292,6 +2327,7 @@ class AcademicService:
         if include_students and class_ids:
             student_query = self.db.query(
                 AcademicClassStudent.class_id,
+                AcademicClassStudent.metadata_json,
                 AcademicStudent,
                 OpenEdXUserMapping,
             ).join(
@@ -2302,7 +2338,7 @@ class AcademicService:
                 OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
             ).filter(AcademicClassStudent.class_id.in_(class_ids))
             watch_rows: list[dict[str, Any]] = []
-            for class_id, student, mapping in student_query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).all():
+            for class_id, class_student_meta, student, mapping in student_query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).all():
                 snapshot = snapshot_by_class_student.get((class_id, student.id))
                 status_name = self._learning_status_for_snapshot(snapshot, mapping)
                 deadline_status = deadline_by_class_student.get((class_id, student.id), {})
@@ -2322,6 +2358,7 @@ class AcademicService:
                         'student_username': student.username,
                         'student_name': student.full_name,
                         'student_email': student.email,
+                        'total_relearn': self._metadata_total_relearn(class_student_meta, student.metadata_json),
                         'openedx_username': mapping.openedx_username if mapping else None,
                         'status': status_name,
                         'status_label': self._learning_status_label(status_name),

@@ -680,9 +680,9 @@ ${chunk.content}`).join('\n\n')
 
     <section className="card chapter-command-bar">
       <div>
-        <div className="eyebrow">Workspace bài</div>
+        <div className="eyebrow">Bài học</div>
         <h2>{chapterDisplayName(chapter)}</h2>
-        <p className="helper">Các thao tác chính nằm trong popup để màn hình duyệt câu hỏi không bị rời rạc.</p>
+        <p className="helper">Quản lý tài liệu, tạo câu hỏi, duyệt câu và chốt bộ đề cho bài này.</p>
       </div>
       <div className="button-row no-margin">
         <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>

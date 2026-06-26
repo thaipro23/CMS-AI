@@ -18,6 +18,8 @@ type TrainingSummary = {
   subject_count: number
   student_count: number
   unique_student_count: number
+  relearn_student_count: number
+  total_relearn_count: number
   cms_synced_count: number
   learning_enrolled_count: number
   learning_active_count: number
@@ -33,6 +35,8 @@ const EMPTY_SUMMARY: TrainingSummary = {
   subject_count: 0,
   student_count: 0,
   unique_student_count: 0,
+  relearn_student_count: 0,
+  total_relearn_count: 0,
   cms_synced_count: 0,
   learning_enrolled_count: 0,
   learning_active_count: 0,
@@ -46,6 +50,8 @@ function normalizeSummary(value?: Partial<TrainingSummary> | null): TrainingSumm
   return {
     ...EMPTY_SUMMARY,
     ...(value || {}),
+    relearn_student_count: Number(value?.relearn_student_count || 0),
+    total_relearn_count: Number(value?.total_relearn_count || 0),
     deadline_late_student_count: Number(value?.deadline_late_student_count || 0),
     deadline_late_quiz_count: Number(value?.deadline_late_quiz_count || 0),
   }
@@ -326,6 +332,7 @@ export default function TrainingManagementPage() {
                   <b>{item.class_count} lớp · {item.subject_count} môn</b>
                   <small>{item.subject_codes?.slice(0, 6).join(', ') || 'N/A'}</small>
                   <small>{item.student_count} lượt SV · {item.unique_student_count} SV riêng biệt</small>
+                  <small>Học lại: {countLabel(item.relearn_student_count)} SV · {countLabel(item.total_relearn_count)} lượt</small>
                 </td>
                 <td>
                   <span className="status-pill success">Đã đồng bộ CMS {ratioLabel(item.cms_synced_count, item.student_count)}</span>
@@ -360,13 +367,14 @@ export default function TrainingManagementPage() {
             {(() => {
               const columns = classComponentColumns(item)
               return <table className="data-table academic-data-table training-class-grade-table">
-                <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Cảnh báo</th></tr></thead>
+                <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Học lại</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Cảnh báo</th></tr></thead>
                 <tbody>
                   {item.classes.map((cls) => <tr key={cls.class_id}>
                     <td><b>{cls.class_code}</b><small>{cls.term_name}{cls.block_name ? ` · ${cls.block_name}` : ''}</small></td>
                     <td><b>{cls.subject_code}</b><small>{cls.subject_name}</small></td>
                     <td>{cls.openedx_course_id ? <><b>{cls.openedx_course_id}</b><small>{cls.openedx_mapping_source}</small></> : <span className="status-pill warning">Chưa map</span>}</td>
                     <td><b>{cls.student_count} SV</b><small>CMS {ratioLabel(cls.cms_synced_count, cls.student_count)} · Enroll {ratioLabel(cls.learning_enrolled_count, cls.student_count)}</small></td>
+                    <td><b>{countLabel(cls.relearn_student_count)} SV</b><small>{countLabel(cls.total_relearn_count)} lượt học lại</small></td>
                     <td><b>Course completion {percentLabel(cls.learning_avg_progress_percent)}</b><small>Điểm tổng {grade10Label(cls.learning_avg_grade_10)}</small></td>
                     {columns.map((column) => <td key={`${cls.class_id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(classComponentScore(cls, column))}</b></td>)}
                     <td>
@@ -376,7 +384,7 @@ export default function TrainingManagementPage() {
                     </td>
                     <td><span className={cls.learning_alerts?.length ? 'status-pill warning' : 'status-pill success'}>{cls.learning_alerts?.length ? 'Có cảnh báo' : 'Ổn'}</span><small>{alertText(cls.learning_alerts)}</small></td>
                   </tr>)}
-                  {!columns.length && <tr><td colSpan={8}>Chưa có cột Detailed grades. Hãy chạy Đồng bộ full CMS cho lớp sau khi Course CMS đã map đúng.</td></tr>}
+                  {!columns.length && <tr><td colSpan={9}>Chưa có cột Detailed grades. Hãy chạy Đồng bộ full CMS cho lớp sau khi Course CMS đã map đúng.</td></tr>}
                 </tbody>
               </table>
             })()}

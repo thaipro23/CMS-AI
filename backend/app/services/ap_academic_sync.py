@@ -63,6 +63,14 @@ def _clean(value: Any) -> str:
 def _lower(value: Any) -> str:
     return _clean(value).lower()
 
+def _intish(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == '':
+            return default
+        return max(0, int(float(value)))
+    except Exception:
+        return default
+
 
 def _parse_date(value: Any) -> datetime | None:
     raw = _clean(value)
@@ -950,7 +958,11 @@ class AcademicImportService:
         changed |= self._set_if_changed(student, 'campus', _lower(campus) or None)
         changed |= self._set_if_changed(student, 'branch', _lower(branch) or None)
         changed |= self._set_if_changed(student, 'active', True)
-        changed |= self._set_json_if_changed(student, 'metadata_json', {'source': 'ap'})
+        student_meta = dict(student.metadata_json or {})
+        student_meta['source'] = 'ap'
+        if 'total_relearn' in item or 'totalRelearn' in item:
+            student_meta['total_relearn'] = _intish(item.get('total_relearn', item.get('totalRelearn')))
+        changed |= self._set_json_if_changed(student, 'metadata_json', student_meta)
         if changed:
             student.updated_at = _now()
             self.db.add(student)
@@ -1095,14 +1107,25 @@ class AcademicImportService:
                         try:
                             student = self._get_or_create_student(raw_student, campus, branch, counters)
                             link = self.db.query(AcademicClassStudent).filter(AcademicClassStudent.class_id == cls.id, AcademicClassStudent.student_id == student.id).first()
+                            total_relearn = _intish(raw_student.get('total_relearn', raw_student.get('totalRelearn')))
+                            link_meta = {'source': 'ap', 'total_relearn': total_relearn}
                             if not link:
-                                link = AcademicClassStudent(id=str(uuid.uuid4()), class_id=cls.id, student_id=student.id, source='ap', synced_at=_now())
+                                link = AcademicClassStudent(id=str(uuid.uuid4()), class_id=cls.id, student_id=student.id, source='ap', synced_at=_now(), metadata_json=link_meta)
                                 counters.class_students += 1
                                 self.db.add(link)
-                            elif link.source != 'ap':
-                                link.source = 'ap'
-                                link.synced_at = _now()
-                                self.db.add(link)
+                            else:
+                                link_changed = False
+                                if link.source != 'ap':
+                                    link.source = 'ap'
+                                    link_changed = True
+                                current_meta = dict(link.metadata_json or {})
+                                current_meta.update(link_meta)
+                                if current_meta != (link.metadata_json or {}):
+                                    link.metadata_json = current_meta
+                                    link_changed = True
+                                if link_changed:
+                                    link.synced_at = _now()
+                                    self.db.add(link)
                         except Exception as exc:
                             self._error(run, counters, 'student', _clean(raw_student.get('username') or raw_student.get('user_code') or 'unknown'), str(exc), raw_student)
             except Exception as exc:

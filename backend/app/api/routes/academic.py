@@ -166,7 +166,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
     ws.title = 'TongQuanGV'
     overview_headers = [
         'Hệ', 'Cơ sở', 'Giảng viên', 'Username', 'Email', 'Số môn', 'Môn', 'Số lớp',
-        'SV lượt lớp', 'SV riêng biệt', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động',
+        'SV lượt lớp', 'SV riêng biệt', 'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động',
         'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'Lớp chưa map Course',
         'SV rủi ro', 'SV trễ deadline', 'Lượt quiz trễ', 'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp',
         'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
@@ -177,7 +177,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
         _append_row(ws, [
             item.get('branch'), item.get('campus'), item.get('teacher_name'), item.get('teacher_username'), item.get('teacher_email'),
             item.get('subject_count'), item.get('subject_codes'), item.get('class_count'), item.get('student_count'), item.get('unique_student_count'),
-            item.get('cms_synced_count'), item.get('learning_enrolled_count'), item.get('learning_active_count'),
+            item.get('relearn_student_count'), item.get('total_relearn_count'), item.get('cms_synced_count'), item.get('learning_enrolled_count'), item.get('learning_active_count'),
             item.get('learning_avg_progress_percent'), item.get('learning_avg_grade_10'), item.get('classes_without_course_count'),
             item.get('risk_student_count'), item.get('deadline_late_student_count'), item.get('deadline_late_quiz_count'), statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'),
             statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), item.get('last_synced_at'), item.get('learning_alerts'),
@@ -187,7 +187,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
     component_columns = _training_component_columns(report)
     class_headers = [
         'Giảng viên', 'Username GV', 'Hệ', 'Cơ sở', 'Học kỳ', 'Block', 'Môn', 'Tên môn',
-        'Lớp', 'Tên lớp', 'Course CMS', 'Nguồn mapping', 'SV', 'Đã đồng bộ CMS', 'Đã enroll',
+        'Lớp', 'Tên lớp', 'Course CMS', 'Nguồn mapping', 'SV', 'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll',
         'Có hoạt động', 'Course completion TB (%)', 'Điểm tổng TB (hệ 10)',
         *[column['name'] for column in component_columns],
         'Số Quiz', 'Quiz đã đến hạn',
@@ -201,7 +201,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
             _append_row(class_ws, [
                 item.get('teacher_name'), item.get('teacher_username'), cls.get('branch'), cls.get('campus'), cls.get('term_name'), cls.get('block_name'),
                 cls.get('subject_code'), cls.get('subject_name'), cls.get('class_code'), cls.get('class_name'), cls.get('openedx_course_id'), cls.get('openedx_mapping_source'),
-                cls.get('student_count'), cls.get('cms_synced_count'), cls.get('learning_enrolled_count'), cls.get('learning_active_count'),
+                cls.get('student_count'), cls.get('relearn_student_count'), cls.get('total_relearn_count'), cls.get('cms_synced_count'), cls.get('learning_enrolled_count'), cls.get('learning_active_count'),
                 cls.get('learning_avg_progress_percent'), cls.get('learning_avg_grade_10'),
                 *[
                     _component_score_text(next((score for score in (cls.get('learning_component_summaries') or []) if isinstance(score, dict) and (_component_key(score) == column['key'] or _component_name(score) == column['name'])), None))
@@ -215,7 +215,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
     watch_ws = wb.create_sheet('SinhVienCanTheoDoi')
     watch_headers = [
         'Giảng viên', 'Username GV', 'Học kỳ', 'Block', 'Môn', 'Tên môn', 'Lớp', 'Mã SV',
-        'Username', 'Họ tên', 'Email', 'Username CMS', 'Trạng thái', 'Enrollment',
+        'Username', 'Họ tên', 'Email', 'Học lại', 'Username CMS', 'Trạng thái', 'Enrollment',
         'Course completion (%)', 'Điểm tổng (hệ 10)', 'Quiz đã đến hạn', 'Quiz đã hoàn thành đúng hạn',
         'Quiz trễ', 'Danh sách quiz trễ', 'Đợt quiz kế tiếp', 'Deadline kế tiếp', 'Hoạt động cuối', 'Cập nhật cuối'
     ]
@@ -223,7 +223,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
     for row in report.get('student_watch_rows') or []:
         _append_row(watch_ws, [
             row.get('teacher_name'), row.get('teacher_username'), row.get('term_name'), row.get('block_name'), row.get('subject_code'), row.get('subject_name'), row.get('class_code'),
-            row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('student_email'), row.get('openedx_username'), row.get('status_label'),
+            row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('student_email'), row.get('total_relearn'), row.get('openedx_username'), row.get('status_label'),
             row.get('enrollment_status'), row.get('progress_percent'), row.get('grade_10'), row.get('deadline_due_quiz_count'), row.get('deadline_completed_due_quiz_count'),
             row.get('deadline_late_quiz_count'), row.get('deadline_late_quizzes'), row.get('deadline_next_quiz_label'), row.get('deadline_next_quiz_due_date'), row.get('last_activity_at'), row.get('last_synced_at'),
         ])

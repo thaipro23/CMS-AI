@@ -422,14 +422,15 @@ function ClassDetailContent() {
       </div>
       <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">
         <table className="data-table academic-data-table student-grade-table">
-          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}</tr></thead>
+          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Học lại</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={6 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={6 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
+            {loading && <tr><td colSpan={7 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
+            {!loading && !students.length && <tr><td colSpan={7 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
             {students.map((student) => <tr key={student.id}>
               <td className="main-entity-cell sticky-col"><b>{student.student_code || '—'}</b><small>{student.full_name}</small></td>
               <td className="username-combined-cell"><b>{student.username || 'N/A'}</b>{student.openedx_username && student.openedx_username !== student.username ? <small>CMS: {student.openedx_username}</small> : <small>AP/CMS</small>}</td>
               <td>{student.email || 'N/A'}</td>
+              <td className="relearn-count-cell"><b>{student.total_relearn || 0}</b><small>Số lần học lại</small></td>
               <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${formatVNDateTime(student.last_resolved_at)}` : ''}</small></td>
               <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>{student.learning_enrollment_synced_at ? `Kiểm tra: ${formatVNDateTime(student.learning_enrollment_synced_at)}` : ''}</small></td>
               <td className="learning-progress-cell"><b>Course completion: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{student.learning_last_synced_at ? <small>Cập nhật: {formatVNDateTime(student.learning_last_synced_at)}</small> : null}</td>

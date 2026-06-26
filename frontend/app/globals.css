@@ -5005,3 +5005,60 @@ html[data-theme='dark'] .training-management-page .nested-card {
 @media (max-width: 720px) {
   .training-management-page .training-summary-strip { grid-template-columns: 1fr; }
 }
+
+
+/* v25.9.16.5.49 — ACMS-like bank workspace: calmer radius, weight, and non-sticky actions */
+.bank-multipage .chapter-command-bar {
+  position: static;
+  top: auto;
+  z-index: auto;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}
+.bank-multipage .compact-page-header,
+.bank-multipage .entity-card,
+.bank-multipage .workspace-panel,
+.bank-multipage .chapter-question-workspace .workspace-panel.full,
+.bank-multipage .question-filter-bar,
+.bank-multipage .question-review-card,
+.bank-multipage .answer-option,
+.bank-multipage .bank-modal,
+.bank-multipage .card {
+  border-radius: 10px;
+}
+.bank-multipage .btn,
+.bank-multipage .input,
+.bank-multipage select,
+.bank-multipage .status-pill,
+.bank-multipage .chapter-action-button {
+  border-radius: 8px;
+}
+.bank-multipage h1,
+.bank-multipage h2,
+.bank-multipage h3,
+.bank-multipage b,
+.bank-multipage strong,
+.bank-multipage .btn,
+.bank-multipage .status-pill,
+.bank-multipage .eyebrow,
+.bank-multipage .question-index,
+.bank-multipage .answer-letter,
+.bank-multipage .bank-flow-tabs span {
+  font-weight: 600;
+}
+.bank-multipage .chapter-command-bar h2 {
+  font-size: 20px;
+  letter-spacing: -.015em;
+}
+.bank-multipage .helper,
+.bank-multipage small {
+  font-weight: 400;
+}
+.bank-multipage .question-filter-bar label {
+  box-shadow: none;
+}
+.bank-multipage .question-review-card {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}
+.relearn-count-cell b { font-size: 14px; }
+.relearn-count-cell small { display: block; color: #64748b; margin-top: 3px; }

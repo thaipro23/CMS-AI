@@ -1722,6 +1722,8 @@ export type AcademicSubjectManagement = AcademicSubject & {
   campus_count: number
   teacher_count: number
   student_count: number
+  relearn_student_count?: number
+  total_relearn_count?: number
   cms_synced_count: number
   cms_unsynced_count: number
   course_mapping_status: string
@@ -1786,6 +1788,7 @@ export type AcademicStudent = {
   email?: string | null
   full_name: string
   phone?: string | null
+  total_relearn?: number
   campus?: string | null
   branch?: string | null
   active: boolean
@@ -1906,6 +1909,8 @@ export type AcademicTrainingClassReport = {
   campus?: string | null
   branch?: string | null
   student_count: number
+  relearn_student_count?: number
+  total_relearn_count?: number
   cms_synced_count: number
   cms_unsynced_count: number
   openedx_course_id?: string | null
@@ -1944,6 +1949,8 @@ export type AcademicTrainingTeacherReport = {
   class_count: number
   student_count: number
   unique_student_count: number
+  relearn_student_count?: number
+  total_relearn_count?: number
   cms_synced_count: number
   cms_unsynced_count: number
   learning_enrolled_count: number
@@ -1970,6 +1977,8 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
     subject_count: number
     student_count: number
     unique_student_count: number
+    relearn_student_count: number
+    total_relearn_count: number
     cms_synced_count: number
     learning_enrolled_count: number
     learning_active_count: number
