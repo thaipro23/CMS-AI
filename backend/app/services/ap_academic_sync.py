@@ -1132,36 +1132,22 @@ class AcademicImportService:
 
 
     def seed_campuses_from_settings(self, *, branch: str = 'poly') -> list[AcademicCampus]:
-        """Seed/update campus master data from ACADEMIC_AP_CAMPUSES once.
+        """Deprecated compatibility stub.
 
-        AP does not expose a campus listing endpoint. ACMS legacy solved this with
-        admin_cms.premises. AI Server stores the same concept in academic_campuses
-        so operators do not have to type campus codes for every sync.
+        Campus/premises master data must be owned by the /premises screen
+        (academic_campuses table). We deliberately do not seed from
+        ACADEMIC_AP_CAMPUSES anymore because a shared env list can mix Poly and
+        PTCĐ campuses and makes the AP sync plan count the wrong premises.
         """
         normalized_branch = _lower(branch) or 'poly'
-        rows: list[AcademicCampus] = []
-        for index, code in enumerate(_parse_csv_codes(settings.academic_ap_campuses), start=1):
-            item = self.db.query(AcademicCampus).filter(AcademicCampus.campus_code == code, AcademicCampus.branch == normalized_branch).first()
-            if not item:
-                item = AcademicCampus(
-                    id=str(uuid.uuid4()),
-                    campus_code=code,
-                    branch=normalized_branch,
-                    created_at=_now(),
-                )
-                self.db.add(item)
-            item.campus_name = item.campus_name or code.upper()
-            item.active = True
-            item.sort_order = item.sort_order or index
-            item.metadata_json = {'source': 'env.ACADEMIC_AP_CAMPUSES'}
-            item.updated_at = _now()
-            rows.append(item)
-        self.db.commit()
-        for item in rows:
-            self.db.refresh(item)
-        return rows
+        return (
+            self.db.query(AcademicCampus)
+            .filter(AcademicCampus.active.is_(True), AcademicCampus.branch == normalized_branch)
+            .order_by(AcademicCampus.sort_order.asc(), AcademicCampus.campus_code.asc())
+            .all()
+        )
 
-    def _campus_master_values(self, *, branch: str = 'poly', include_env: bool = True, include_seen_classes: bool = True) -> list[dict[str, Any]]:
+    def _campus_master_values(self, *, branch: str = 'poly', include_env: bool = False, include_seen_classes: bool = False) -> list[dict[str, Any]]:
         normalized_branch = _lower(branch) or 'poly'
         values: dict[str, dict[str, Any]] = {}
         for item in (
@@ -1188,8 +1174,12 @@ class AcademicImportService:
                         'meta': {'source': 'env', 'sort_order': 10000 + index},
                     }
         if include_seen_classes:
+            # Debug fallback only. Normal sync planning must not use historical
+            # classes as master premises because old class rows can contain
+            # campuses from another branch.
             db_campuses = (
                 self.db.query(AcademicClass.campus)
+                .filter(AcademicClass.branch == normalized_branch)
                 .filter(AcademicClass.campus.isnot(None), AcademicClass.campus != '')
                 .distinct()
                 .order_by(AcademicClass.campus.asc())
@@ -1214,7 +1204,7 @@ class AcademicImportService:
         if scope == 'all':
             configured = requested or [item['value'] for item in self._campus_master_values(branch=branch)]
             if not configured:
-                raise RuntimeError('sync_scope=all cần danh sách cơ sở. ACMS cũ lấy từ admin_cms.premises; AI Server lấy từ academic_campuses hoặc ACADEMIC_AP_CAMPUSES. Hãy seed cơ sở một lần trước khi dùng Tích tất cả.')
+                raise RuntimeError('sync_scope=all cần danh sách cơ sở đang dùng trong /premises. Vào trang Cơ sở, thêm hoặc bật cơ sở cho đúng hệ rồi chạy lại.')
             return configured
         if scope in {'campus', 'subject'}:
             if not requested:
@@ -1288,11 +1278,11 @@ class AcademicImportService:
     def get_ap_sync_options(self, *, term_name: str | None = None, branch: str = 'poly', include_subjects: bool = True) -> dict[str, Any]:
         """Return safe dropdown options for AP sync.
 
-        ACMS legacy stores campuses in admin_cms.premises and subjects in AP get-course.
-        AI Server does not own the old premises table, so campuses are resolved from
-        ACADEMIC_AP_CAMPUSES plus campuses already seen in academic_classes. Subjects
-        are resolved from AP /get-course when a term is selected, with local DB/env as
-        fallback to keep the UI usable when AP is temporarily unavailable.
+        Campuses are resolved only from /premises (academic_campuses).
+        Do not mix in ACADEMIC_AP_CAMPUSES or previously synced classes because
+        those sources can over-count campuses across Poly/PTCĐ branches. Subjects
+        are resolved from AP /get-course when a term is selected, with local DB/env
+        subject fallback to keep the UI usable when AP is temporarily unavailable.
         """
         normalized_branch = _lower(branch) or 'poly'
         warnings: list[str] = []
@@ -1304,7 +1294,7 @@ class AcademicImportService:
 
         campuses = self._campus_master_values(branch=normalized_branch)
         if not campuses:
-            warnings.append('Chưa có danh sách cơ sở. ACMS cũ lấy từ admin_cms.premises; AI Server cần seed một lần vào academic_campuses hoặc cấu hình ACADEMIC_AP_CAMPUSES=pt,hn,hcm,...')
+            warnings.append('Chưa có cơ sở đang dùng cho hệ này. Vào /premises để thêm hoặc bật cơ sở trước khi đồng bộ AP.')
 
         term_query = self.db.query(AcademicTerm).filter(AcademicTerm.active.is_(True))
         if normalized_branch:
