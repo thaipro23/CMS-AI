@@ -12,11 +12,18 @@ import {
   enqueueAcademicClassFullCmsSyncJob,
   getAcademicClassSyncJob,
   getAcademicClassSyncJobs,
+  getAcademicClassQuizDeadlineOverrides,
+  saveAcademicClassQuizDeadlineOverrides,
+  getAcademicClassAssignmentDefenseScores,
+  saveAcademicClassAssignmentDefenseScores,
 } from '../../../../lib/api'
-import { AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
+import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicQuizDeadlineOverride, AcademicStudent } from '../../../../types'
 import { formatVNDateTime } from '../../../../lib/time'
+import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 
 const PAGE_SIZE = 50
+
+type GradeColumn = { key: string; name: string; quizNumber?: number | null; deadlineDate?: string | null; availableFrom?: string | null; deadlineMode?: string | null; scheduleWarning?: string | null }
 
 function cmsSyncLabel(status?: string | null) {
   const value = (status || 'not_checked').toLowerCase()
@@ -91,9 +98,6 @@ function componentKey(score: AcademicLearningComponentScore) {
 function componentDisplayName(score: AcademicLearningComponentScore) {
   return String(score.name || score.key || 'Đầu điểm').trim()
 }
-function gradeColumnCompare(left: { key: string; name: string }, right: { key: string; name: string }) {
-  return left.name.localeCompare(right.name, 'vi', { numeric: true, sensitivity: 'base' })
-}
 function enrollmentLabel(value?: string | null) {
   const status = (value || 'unknown').toLowerCase()
   if (status === 'enrolled') return 'Đã enroll'
@@ -109,6 +113,88 @@ function enrollmentClass(value?: string | null) {
   return 'status-pill neutral'
 }
 
+function formatDateOnly(value?: string | null) {
+  if (!value) return 'N/A'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleDateString('vi-VN')
+}
+function quizNumbersFromText(value?: string | null) {
+  const text = String(value || '').toLowerCase()
+  const numbers: number[] = []
+  const patterns = [/quiz\s*#?\s*(\d{1,3})/gi, /learning\s*check\s*#?\s*(\d{1,3})/gi, /\blc\s*#?\s*(\d{1,3})/gi]
+  patterns.forEach((pattern) => {
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(text)) !== null) {
+      const number = Number(match[1])
+      if (number > 0 && number <= 200 && !numbers.includes(number)) numbers.push(number)
+    }
+  })
+  return numbers.sort((a, b) => a - b)
+}
+function quizNumber(score?: AcademicLearningComponentScore | null) {
+  if (!score) return null
+  if (typeof score.quiz_number === 'number' && score.quiz_number > 0) return score.quiz_number
+  const fromText = quizNumbersFromText(`${score.name || ''} ${score.key || ''} ${score.category || ''}`)
+  return fromText[0] || null
+}
+function gradeColumnIdentity(score: AcademicLearningComponentScore) {
+  const number = quizNumber(score)
+  if (number) return `quiz:${number}`
+  return String(score.key || score.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/gi, '')
+}
+function gradeColumnCompare(left: { key: string; name: string; quizNumber?: number | null }, right: { key: string; name: string; quizNumber?: number | null }) {
+  const leftQuiz = left.quizNumber || quizNumbersFromText(left.name)[0] || null
+  const rightQuiz = right.quizNumber || quizNumbersFromText(right.name)[0] || null
+  if (leftQuiz && rightQuiz) return leftQuiz - rightQuiz
+  if (leftQuiz) return -1
+  if (rightQuiz) return 1
+  return left.name.localeCompare(right.name, 'vi', { numeric: true, sensitivity: 'base' })
+}
+function quizStatusLabel(score?: AcademicLearningComponentScore | null) {
+  const status = String(score?.quiz_status || '').toLowerCase()
+  if (status === 'early_before_start') return 'Làm trước thời gian học'
+  if (status === 'late') return 'Quá hạn'
+  if (status === 'late_not_100') return 'Quá hạn / chưa đạt 100%'
+  if (status === 'not_100') return 'Chưa đạt 100%'
+  if (status === 'not_attempted') return 'Chưa làm'
+  if (status === 'on_time') return 'Đúng hạn'
+  if (!score || score.percent == null) return 'Chưa làm'
+  return 'Đã có điểm'
+}
+function quizStatusClass(score?: AcademicLearningComponentScore | null) {
+  const status = String(score?.quiz_status || '').toLowerCase()
+  if (status === 'on_time') return 'quiz-status-badge success'
+  if (status === 'early_before_start') return 'quiz-status-badge warning'
+  if (['late', 'late_not_100'].includes(status)) return 'quiz-status-badge danger'
+  if (['not_100', 'not_attempted'].includes(status)) return 'quiz-status-badge neutral'
+  return 'quiz-status-badge neutral'
+}
+function componentDeadlineLabel(column: { deadlineDate?: string | null; deadlineMode?: string | null }) {
+  if (column.deadlineMode === 'manual_required') return 'Cần chỉnh deadline tay'
+  if (!column.deadlineDate) return 'Deadline: N/A'
+  return `Deadline: ${formatDateOnly(column.deadlineDate)}`
+}
+
+function examStatusClass(value?: string | null) {
+  const status = String(value || '').toLowerCase()
+  if (status === 'eligible') return 'status-pill success'
+  if (status === 'not_eligible') return 'status-pill danger'
+  return 'status-pill warning'
+}
+function examStatusLabel(student: AcademicStudent) {
+  return student.exam_status_label || (student.exam_status === 'eligible' ? 'Được thi' : student.exam_status === 'not_eligible' ? 'Không được thi' : 'Chưa đủ dữ liệu')
+}
+function defenseStatusLabel(value?: string | null) {
+  const status = String(value || 'not_graded').toLowerCase()
+  if (status === 'graded') return 'Đã chấm'
+  if (status === 'waiting_defense') return 'Chờ bảo vệ'
+  if (status === 'submitted') return 'Đã nộp'
+  if (status === 'absent') return 'Vắng bảo vệ'
+  if (status === 'needs_regrade') return 'Cần chấm lại'
+  return 'Chưa có điểm'
+}
+
 function ClassDetailContent() {
   const params = useParams<{ classId: string }>()
   const searchParams = useSearchParams()
@@ -121,6 +207,7 @@ function ClassDetailContent() {
   const [summary, setSummary] = useState<AcademicMappingSummary | null>(null)
   const [learningSummary, setLearningSummary] = useState<AcademicLearningSummary | null>(null)
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search, 350)
   const [learningStatus, setLearningStatus] = useState('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -131,10 +218,16 @@ function ClassDetailContent() {
   const [activeJob, setActiveJob] = useState<AcademicClassSyncJob | null>(null)
   const [syncJobs, setSyncJobs] = useState<AcademicClassSyncJob[]>([])
   const [recoveringJob, setRecoveringJob] = useState(false)
+  const [selectedQuiz, setSelectedQuiz] = useState<{ student: AcademicStudent; column: GradeColumn; score: AcademicLearningComponentScore | null } | null>(null)
+  const [deadlineModalOpen, setDeadlineModalOpen] = useState(false)
+  const [deadlineRows, setDeadlineRows] = useState<AcademicQuizDeadlineOverride[]>([])
+  const [assignmentModalOpen, setAssignmentModalOpen] = useState(false)
+  const [assignmentRows, setAssignmentRows] = useState<AcademicAssignmentDefenseScore[]>([])
+  const [savingPolicy, setSavingPolicy] = useState(false)
 
   const refreshStudents = async () => {
     const [studentPage, nextSummary, nextLearning] = await Promise.all([
-      getAcademicClassStudents(headers, classId, { search, learningStatus, page, pageSize: PAGE_SIZE }),
+      getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE }),
       getAcademicClassMappingSummary(headers, classId),
       getAcademicClassLearningSummary(headers, classId),
     ])
@@ -187,7 +280,7 @@ function ClassDetailContent() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    Promise.all([getAcademicClass(headers, classId), getAcademicClassStudents(headers, classId, { search, learningStatus, page, pageSize: PAGE_SIZE }), getAcademicClassMappingSummary(headers, classId), getAcademicClassLearningSummary(headers, classId)])
+    Promise.all([getAcademicClass(headers, classId), getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE }), getAcademicClassMappingSummary(headers, classId), getAcademicClassLearningSummary(headers, classId)])
       .then(([detail, studentPage, nextSummary, nextLearning]) => {
         if (cancelled) return
         setClassInfo(detail)
@@ -199,7 +292,7 @@ function ClassDetailContent() {
       .catch((error) => { if (!cancelled) setErrorModal(error instanceof Error ? error.message : 'Không tải được chi tiết lớp') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [headers, classId, search, learningStatus, page])
+  }, [headers, classId, debouncedSearch, learningStatus, page])
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
   const waitForSyncJob = async (job: AcademicClassSyncJob): Promise<AcademicClassSyncJob> => {
@@ -276,6 +369,66 @@ function ClassDetailContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classId])
 
+
+  const openDeadlineModal = async () => {
+    try {
+      const rows = await getAcademicClassQuizDeadlineOverrides(headers, classId, classInfo?.openedx_course_id)
+      const byQuiz = new Map<number, AcademicQuizDeadlineOverride>()
+      rows.forEach((row) => { if (row.quiz_number) byQuiz.set(row.quiz_number, row) })
+      const merged = componentColumns.filter((column) => column.quizNumber).map((column) => byQuiz.get(column.quizNumber || 0) || ({
+        course_id: classInfo?.openedx_course_id || null,
+        component_key: column.key,
+        component_label: column.name,
+        quiz_number: column.quizNumber || null,
+        start_date: column.availableFrom || null,
+        deadline_date: column.deadlineDate || null,
+        reason: '',
+      } as AcademicQuizDeadlineOverride))
+      setDeadlineRows(merged)
+      setDeadlineModalOpen(true)
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không tải được cấu hình deadline')
+    }
+  }
+
+  const saveDeadlineRows = async () => {
+    setSavingPolicy(true)
+    try {
+      await saveAcademicClassQuizDeadlineOverrides(jsonHeaders, classId, deadlineRows)
+      setDeadlineModalOpen(false)
+      await refreshStudents()
+      setMessage('Đã lưu deadline quiz thủ công. Điều kiện thi sẽ được tính lại theo deadline mới.')
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không lưu được deadline quiz')
+    } finally {
+      setSavingPolicy(false)
+    }
+  }
+
+  const openAssignmentModal = async () => {
+    try {
+      const rows = await getAcademicClassAssignmentDefenseScores(headers, classId, classInfo?.openedx_course_id)
+      setAssignmentRows(rows)
+      setAssignmentModalOpen(true)
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không tải được điểm bảo vệ Assignment')
+    }
+  }
+
+  const saveAssignmentRows = async () => {
+    setSavingPolicy(true)
+    try {
+      await saveAcademicClassAssignmentDefenseScores(jsonHeaders, classId, assignmentRows)
+      setAssignmentModalOpen(false)
+      await refreshStudents()
+      setMessage('Đã lưu điểm bảo vệ Assignment. Điều kiện thi sẽ được tính lại.')
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không lưu được điểm bảo vệ Assignment')
+    } finally {
+      setSavingPolicy(false)
+    }
+  }
+
   const runFullCmsSync = async () => {
     setSyncingFullFlow(true)
     setMessage('')
@@ -308,6 +461,18 @@ function ClassDetailContent() {
     }
   }
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (selectedQuiz) setSelectedQuiz(null)
+      else if (deadlineModalOpen) setDeadlineModalOpen(false)
+      else if (assignmentModalOpen) setAssignmentModalOpen(false)
+      else if (errorModal) setErrorModal('')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selectedQuiz, deadlineModalOpen, assignmentModalOpen, errorModal])
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const counts = summary?.counts || {}
   const matched = counts.matched || 0
@@ -317,25 +482,35 @@ function ClassDetailContent() {
   const activeJobRunning = isJobActive(activeJob)
   const actionBusy = activeJobRunning || syncingFullFlow || recoveringJob
 
-  const componentColumns = useMemo(() => {
-    const columns: Array<{ key: string; name: string }> = []
-    const seen = new Set<string>()
-    const push = (score?: AcademicLearningComponentScore | null) => {
-      if (!score) return
-      const key = componentKey(score)
-      const name = componentDisplayName(score)
-      const dedupeKey = (key || name).toLowerCase()
-      if (!dedupeKey || seen.has(dedupeKey)) return
-      seen.add(dedupeKey)
-      columns.push({ key: key || name, name })
+  const componentColumns = useMemo<GradeColumn[]>(() => {
+    const sourceScores: AcademicLearningComponentScore[] = []
+    if (learningSummary?.component_summaries?.length) {
+      sourceScores.push(...learningSummary.component_summaries)
+    } else {
+      students.forEach((student) => student.learning_component_scores?.forEach((score) => sourceScores.push(score)))
     }
-    learningSummary?.component_summaries?.forEach(push)
-    students.forEach((student) => student.learning_component_scores?.forEach(push))
-    return columns.sort(gradeColumnCompare)
+    const byIdentity = new Map<string, GradeColumn>()
+    sourceScores.forEach((score) => {
+      const identity = gradeColumnIdentity(score)
+      if (!identity) return
+      const number = quizNumber(score)
+      const existing = byIdentity.get(identity)
+      const next: GradeColumn = {
+        key: identity,
+        name: number ? `Quiz ${number}` : componentDisplayName(score),
+        quizNumber: number,
+        deadlineDate: score.deadline_date || existing?.deadlineDate || null,
+        availableFrom: score.available_from || existing?.availableFrom || null,
+        deadlineMode: score.deadline_mode || existing?.deadlineMode || null,
+        scheduleWarning: score.schedule_warning || existing?.scheduleWarning || null,
+      }
+      byIdentity.set(identity, existing ? { ...existing, ...next, deadlineDate: next.deadlineDate || existing.deadlineDate, availableFrom: next.availableFrom || existing.availableFrom } : next)
+    })
+    return Array.from(byIdentity.values()).sort(gradeColumnCompare)
   }, [learningSummary, students])
 
-  const studentComponentScore = (student: AcademicStudent, column: { key: string; name: string }) => {
-    return student.learning_component_scores?.find((score) => componentKey(score) === column.key || score.name === column.name) || null
+  const studentComponentScore = (student: AcademicStudent, column: GradeColumn) => {
+    return student.learning_component_scores?.find((score) => gradeColumnIdentity(score) === column.key || componentKey(score) === column.key || score.name === column.name) || null
   }
 
   const subjectIdForBack = searchParams.get('subject_id') || classInfo?.subject_id || ''
@@ -364,6 +539,8 @@ function ClassDetailContent() {
         <div className="toolbar-actions">
           <button className="btn primary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>
           <button className="btn secondary" type="button" disabled={loading || activeJobRunning} onClick={() => Promise.all([refreshStudents(), refreshSyncJobs()]).catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được dữ liệu'))}>Làm mới</button>
+          <button className="btn secondary" type="button" disabled={!componentColumns.length} onClick={openDeadlineModal}>Cấu hình deadline</button>
+          <button className="btn secondary" type="button" onClick={openAssignmentModal}>Nhập điểm Assignment</button>
         </div>
       </div>
       {activeJob && <div className="sync-job-status persistent-sync-job-status">
@@ -398,7 +575,7 @@ function ClassDetailContent() {
       <div className="component-summary-inline">
         <b>Các đầu điểm CMS</b>
         {componentColumns.length ? componentColumns.slice(0, 8).map((column) => {
-          const score = learningSummary?.component_summaries?.find((item) => componentKey(item) === column.key || item.name === column.name)
+          const score = learningSummary?.component_summaries?.find((item) => gradeColumnIdentity(item) === column.key || componentKey(item) === column.key || item.name === column.name)
           return <span key={column.key}>{column.name}: <b>{componentScoreText(score)}</b></span>
         }) : <span>CMS/Open edX chưa trả Detailed grades cho course này. Bảng sinh viên sẽ hiển thị N/A ở phần đầu điểm.</span>}
       </div>
@@ -422,10 +599,10 @@ function ClassDetailContent() {
       </div>
       <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">
         <table className="data-table academic-data-table student-grade-table">
-          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Học lại</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}</tr></thead>
+          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Số lần học lại</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={7 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={7 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
+            {loading && <tr><td colSpan={8 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
+            {!loading && !students.length && <tr><td colSpan={8 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
             {students.map((student) => <tr key={student.id}>
               <td className="main-entity-cell sticky-col"><b>{student.student_code || '—'}</b><small>{student.full_name}</small></td>
               <td className="username-combined-cell"><b>{student.username || 'N/A'}</b>{student.openedx_username && student.openedx_username !== student.username ? <small>CMS: {student.openedx_username}</small> : <small>AP/CMS</small>}</td>
@@ -434,7 +611,16 @@ function ClassDetailContent() {
               <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${formatVNDateTime(student.last_resolved_at)}` : ''}</small></td>
               <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>{student.learning_enrollment_synced_at ? `Kiểm tra: ${formatVNDateTime(student.learning_enrollment_synced_at)}` : ''}</small></td>
               <td className="learning-progress-cell"><b>Course completion: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{student.learning_last_synced_at ? <small>Cập nhật: {formatVNDateTime(student.learning_last_synced_at)}</small> : null}</td>
-              {componentColumns.map((column) => <td key={`${student.id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(studentComponentScore(student, column))}</b></td>)}
+              <td className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Final test chưa áp dụng rule'}</small><small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small></td>
+              {componentColumns.map((column) => {
+                const score = studentComponentScore(student, column)
+                return <td key={`${student.id}-${column.key}`} className="component-grade-cell">
+                  <button className="quiz-grade-cell-button" type="button" onClick={() => setSelectedQuiz({ student, column, score })}>
+                    <b>{componentScoreText(score)}</b>
+                    <span className={quizStatusClass(score)}>{quizStatusLabel(score)}</span>
+                  </button>
+                </td>
+              })}
             </tr>)}
           </tbody>
         </table>
@@ -445,9 +631,51 @@ function ClassDetailContent() {
         <button className="btn secondary small" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>Trang sau</button>
       </div>
     </section>
-    {errorModal && <div className="modal-backdrop">
-      <div className="card bank-modal academic-confirm-modal">
-        <div className="section-head"><div><h2>Không thực hiện được thao tác</h2><p>{errorModal}</p></div></div>
+
+
+    {deadlineModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeadlineModalOpen(false) }}>
+      <div className="card bank-modal academic-confirm-modal wide-policy-modal" role="dialog" aria-modal="true" aria-labelledby="deadline-modal-title">
+        <div className="section-head"><div><h2 id="deadline-modal-title">Cấu hình deadline quiz</h2><p>Nếu block dài hơn 7 tuần do nghỉ/lễ, hãy nhập deadline thủ công để hệ thống xét điều kiện thi.</p></div></div>
+        <div className="policy-edit-table-wrap"><table className="data-table compact-table"><thead><tr><th>Quiz</th><th>Từ ngày</th><th>Deadline</th><th>Ghi chú</th></tr></thead><tbody>
+          {deadlineRows.map((row, index) => <tr key={`${row.quiz_number}-${index}`}><td><b>{row.component_label || `Quiz ${row.quiz_number}`}</b></td><td><input type="date" value={String(row.start_date || '').slice(0,10)} onChange={(event) => setDeadlineRows((items) => items.map((item, idx) => idx === index ? { ...item, start_date: event.target.value } : item))} /></td><td><input type="date" value={String(row.deadline_date || '').slice(0,10)} onChange={(event) => setDeadlineRows((items) => items.map((item, idx) => idx === index ? { ...item, deadline_date: event.target.value } : item))} /></td><td><input value={row.reason || ''} onChange={(event) => setDeadlineRows((items) => items.map((item, idx) => idx === index ? { ...item, reason: event.target.value } : item))} placeholder="Nghỉ lễ, điều chỉnh lịch..." /></td></tr>)}
+        </tbody></table></div>
+        <div className="modal-actions"><button className="btn secondary" onClick={() => setDeadlineModalOpen(false)}>Đóng</button><button className="btn primary" disabled={savingPolicy} onClick={saveDeadlineRows}>{savingPolicy ? 'Đang lưu...' : 'Lưu deadline'}</button></div>
+      </div>
+    </div>}
+
+    {assignmentModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssignmentModalOpen(false) }}>
+      <div className="card bank-modal academic-confirm-modal wide-policy-modal" role="dialog" aria-modal="true" aria-labelledby="assignment-modal-title">
+        <div className="section-head"><div><h2 id="assignment-modal-title">Nhập điểm bảo vệ Assignment</h2><p>Điểm này là điểm chính thức sau buổi bảo vệ; điểm Assignment từ CMS chỉ dùng tham khảo.</p></div></div>
+        <div className="policy-edit-table-wrap"><table className="data-table compact-table"><thead><tr><th>Sinh viên</th><th>Trạng thái</th><th>Điểm /10</th><th>Ghi chú</th></tr></thead><tbody>
+          {assignmentRows.map((row, index) => <tr key={row.student_id}><td><b>{row.student_code || row.student_username}</b><small>{row.student_name}</small></td><td><select value={row.defense_status || 'not_graded'} onChange={(event) => setAssignmentRows((items) => items.map((item, idx) => idx === index ? { ...item, defense_status: event.target.value } : item))}><option value="not_graded">Chưa có điểm</option><option value="submitted">Đã nộp</option><option value="waiting_defense">Chờ bảo vệ</option><option value="graded">Đã chấm</option><option value="absent">Vắng bảo vệ</option><option value="needs_regrade">Cần chấm lại</option></select></td><td><input type="number" min="0" max="10" step="0.1" value={row.score_10 ?? ''} onChange={(event) => setAssignmentRows((items) => items.map((item, idx) => idx === index ? { ...item, score_10: event.target.value === '' ? null : Number(event.target.value), course_id: classInfo?.openedx_course_id || item.course_id || null, assignment_key: item.assignment_key || 'assignment', assignment_label: item.assignment_label || 'Assignment' } : item))} /></td><td><input value={row.note || ''} onChange={(event) => setAssignmentRows((items) => items.map((item, idx) => idx === index ? { ...item, note: event.target.value } : item))} /></td></tr>)}
+        </tbody></table></div>
+        <div className="modal-actions"><button className="btn secondary" onClick={() => setAssignmentModalOpen(false)}>Đóng</button><button className="btn primary" disabled={savingPolicy} onClick={saveAssignmentRows}>{savingPolicy ? 'Đang lưu...' : 'Lưu điểm Assignment'}</button></div>
+      </div>
+    </div>}
+
+    {selectedQuiz && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedQuiz(null) }}>
+      <div className="card bank-modal academic-confirm-modal quiz-detail-modal" role="dialog" aria-modal="true" aria-labelledby="quiz-detail-modal-title">
+        <div className="section-head">
+          <div>
+            <h2 id="quiz-detail-modal-title">{selectedQuiz.column.name}</h2>
+            <p>{selectedQuiz.student.student_code || selectedQuiz.student.username} · {selectedQuiz.student.full_name}</p>
+          </div>
+        </div>
+        <div className="quiz-detail-grid">
+          <div><span>Điểm</span><b>{componentScoreText(selectedQuiz.score)}</b></div>
+          <div><span>Trạng thái</span><b>{quizStatusLabel(selectedQuiz.score)}</b></div>
+          <div><span>Thời gian bắt đầu hợp lệ</span><b>{formatDateOnly(selectedQuiz.score?.available_from || selectedQuiz.column.availableFrom)}</b></div>
+          <div><span>Deadline</span><b>{formatDateOnly(selectedQuiz.score?.deadline_date || selectedQuiz.column.deadlineDate)}</b></div>
+          <div><span>Ngày làm/nộp</span><b>{formatDateOnly(selectedQuiz.score?.submitted_at)}</b></div>
+          <div><span>Nguồn dữ liệu</span><b>{selectedQuiz.score?.source || 'CMS/Open edX'}</b></div>
+        </div>
+        {(selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning) && <p className="form-message warning-message">{selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning}</p>}
+        <div className="modal-actions"><button className="btn primary" type="button" onClick={() => setSelectedQuiz(null)}>Đóng</button></div>
+      </div>
+    </div>}
+    {errorModal && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setErrorModal('') }}>
+      <div className="card bank-modal academic-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="error-modal-title">
+        <div className="section-head"><div><h2 id="error-modal-title">Không thực hiện được thao tác</h2><p>{errorModal}</p></div></div>
         <div className="modal-actions"><button className="btn primary" type="button" onClick={() => setErrorModal('')}>Đã hiểu</button></div>
       </div>
     </div>}

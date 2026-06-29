@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -313,6 +313,68 @@ class AcademicStudentLearningSnapshot(Base):
         UniqueConstraint('class_id', 'student_id', 'openedx_course_id', name='uq_academic_learning_class_student_course'),
         Index('ix_academic_learning_class_course_sync', 'class_id', 'openedx_course_id', 'last_synced_at'),
         Index('ix_academic_learning_status_grade', 'enrollment_status', 'passed', 'grade_percent'),
+    )
+
+
+class AcademicQuizDeadlineOverride(Base):
+    __tablename__ = 'academic_quiz_deadline_overrides'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    class_id: Mapped[str] = mapped_column(String, ForeignKey('academic_classes.id'), index=True)
+    course_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    component_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    component_label: Mapped[str] = mapped_column(String(255), default='')
+    quiz_number: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    start_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deadline_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default='')
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+
+    __table_args__ = (
+        Index('ix_academic_quiz_deadline_class_course', 'class_id', 'course_id', 'quiz_number'),
+        Index(
+            'uq_academic_quiz_deadline_class_course_number_v2',
+            'class_id',
+            text("COALESCE(course_id, '')"),
+            'quiz_number',
+            unique=True,
+            postgresql_where=text('quiz_number IS NOT NULL'),
+        ),
+    )
+
+
+class AcademicAssignmentDefenseScore(Base):
+    __tablename__ = 'academic_assignment_defense_scores'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    class_id: Mapped[str] = mapped_column(String, ForeignKey('academic_classes.id'), index=True)
+    student_id: Mapped[str] = mapped_column(String, ForeignKey('academic_students.id'), index=True)
+    course_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    assignment_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    assignment_label: Mapped[str] = mapped_column(String(255), default='Assignment')
+    score_10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    defense_status: Mapped[str] = mapped_column(String(50), default='not_graded', index=True)
+    graded_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    graded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    note: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+
+    __table_args__ = (
+        Index('ix_academic_assignment_defense_class_student', 'class_id', 'student_id'),
+        Index(
+            'uq_academic_assignment_defense_class_student_key_v2',
+            'class_id',
+            'student_id',
+            text("COALESCE(course_id, '')"),
+            text("COALESCE(assignment_key, '')"),
+            unique=True,
+        ),
     )
 
 

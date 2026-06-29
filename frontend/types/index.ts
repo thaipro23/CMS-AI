@@ -1716,6 +1716,49 @@ export type AcademicLearningComponentScore = {
   weight?: number | null
   source?: string | null
   planned?: boolean | null
+  order?: number | null
+  quiz_number?: number | null
+  submitted_at?: string | null
+  available_from?: string | null
+  deadline_date?: string | null
+  deadline_mode?: string | null
+  schedule_warning?: string | null
+  quiz_status?: string | null
+}
+
+export type AcademicQuizDeadlineOverride = {
+  id?: string
+  class_id?: string
+  course_id?: string | null
+  component_key?: string | null
+  component_label?: string | null
+  quiz_number?: number | null
+  start_date?: string | null
+  deadline_date?: string | null
+  reason?: string | null
+  created_by?: string | null
+  updated_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicAssignmentDefenseScore = {
+  id?: string
+  class_id?: string
+  student_id: string
+  student_code?: string | null
+  student_username?: string | null
+  student_name?: string | null
+  course_id?: string | null
+  assignment_key?: string | null
+  assignment_label?: string | null
+  score_10?: number | null
+  defense_status?: string | null
+  graded_by?: string | null
+  graded_at?: string | null
+  note?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export type AcademicSubjectManagement = AcademicSubject & {
@@ -1782,6 +1825,33 @@ export type AcademicClass = {
   learning_alerts?: string[]
 }
 
+
+export type AcademicTrainingPolicy = {
+  policy_version?: string | null
+  quiz_rule?: string | null
+  final_test_rule?: string | null
+  quiz_total?: number
+  quiz_passed_count?: number
+  quiz_failed_count?: number
+  quiz_late_count?: number
+  quiz_not_attempted_count?: number
+  quiz_early_count?: number
+  quiz_missing_deadline_count?: number
+  all_quizzes_eligible?: boolean
+  assignment_expected?: boolean
+  assignment_status?: string | null
+  assignment_score_10?: number | null
+  assignment_note?: string | null
+  exam_eligible?: boolean
+  exam_status?: string | null
+  exam_status_label?: string | null
+  exam_reasons?: string[]
+  exam_notes?: string[]
+  quiz_results?: Array<Record<string, any>>
+  deadline_mode?: string | null
+  deadline_mode_note?: string | null
+}
+
 export type AcademicStudent = {
   id: string
   class_id?: string
@@ -1818,6 +1888,13 @@ export type AcademicStudent = {
   learning_enrollment_synced_at?: string | null
   learning_status?: string
   learning_component_scores?: AcademicLearningComponentScore[]
+  training_policy?: AcademicTrainingPolicy | null
+  exam_eligible?: boolean | null
+  exam_status?: string | null
+  exam_status_label?: string | null
+  exam_reasons?: string[]
+  assignment_defense_status?: string | null
+  assignment_score_10?: number | null
 }
 
 export type AcademicLearningSummary = {
@@ -1936,6 +2013,14 @@ export type AcademicTrainingClassReport = {
   deadline_next_quiz_from_date?: string | null
   deadline_next_quiz_due_date?: string | null
   deadline_schedule_note?: string | null
+  exam_eligible_student_count?: number | null
+  exam_not_eligible_student_count?: number | null
+  exam_insufficient_data_student_count?: number | null
+  quiz_failed_count?: number | null
+  quiz_late_count?: number | null
+  quiz_not_attempted_count?: number | null
+  quiz_missing_deadline_count?: number | null
+  assignment_not_graded_count?: number | null
 }
 
 export type AcademicTrainingTeacherReport = {
@@ -1962,6 +2047,11 @@ export type AcademicTrainingTeacherReport = {
   deadline_late_student_count?: number | null
   deadline_late_quiz_count?: number | null
   deadline_due_quiz_count?: number | null
+  exam_eligible_student_count?: number | null
+  exam_not_eligible_student_count?: number | null
+  exam_insufficient_data_student_count?: number | null
+  quiz_failed_count?: number | null
+  assignment_not_graded_count?: number | null
   learning_avg_progress_percent?: number | null
   learning_avg_grade_percent?: number | null
   learning_avg_grade_10?: number | null
@@ -1988,6 +2078,11 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
     classes_without_course_count: number
     deadline_late_student_count: number
     deadline_late_quiz_count: number
+    exam_eligible_student_count?: number
+    exam_not_eligible_student_count?: number
+    exam_insufficient_data_student_count?: number
+    quiz_failed_count?: number
+    assignment_not_graded_count?: number
   }
 }
 

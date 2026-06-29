@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal
 from uuid import UUID
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, func, or_
@@ -29,10 +30,13 @@ from app.models.academic import (
 )
 from app.services.business_rbac import BusinessRBACService
 from app.services.openedx_student_insight import OpenEdXConnectorClient, normalize_username, mask_email
+from app.services.training_policy_service import TrainingPolicyService
 from app.core.config import settings
 from app.models.course import CourseSyncState
 from app.models.question_bank import Subject as BankSubject
 
+
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 def _actor_names(user: UserContext) -> set[str]:
     raw = user.raw_claims or {}
@@ -736,23 +740,10 @@ class AcademicService:
             total = self._number_or_none(container.get('total_blocks') or container.get('total_count') or container.get('block_count') or container.get('total') or container.get('required'))
             if completed is not None and total and total > 0:
                 return round((completed / total) * 100.0, 2)
-        # Last-resort fallback when Open edX completion app is unavailable but
-        # the connector returned planned Detailed-grade/quiz components. This is
-        # not a replacement for native completion; it prevents the UI from showing
-        # N/A when the only available learning evidence is quiz/problem progress.
-        components = self._component_scores_from_payload(payload)
-        if components:
-            scored = 0
-            total = 0
-            for item in components:
-                total += 1
-                percent = self._number_or_none(item.get('percent'))
-                earned = self._number_or_none(item.get('earned'))
-                possible = self._number_or_none(item.get('possible'))
-                if (percent is not None and percent > 0) or (earned is not None and earned > 0) or (possible is not None and percent is not None):
-                    scored += 1
-            if total > 0:
-                return round((scored / total) * 100.0, 2)
+        # Do not infer Course completion from grade/quiz components.
+        # Course completion is a distinct CMS/Open edX progress value. If the
+        # connector does not return an official progress/completion percentage,
+        # show N/A rather than a misleading ratio of completed quizzes.
         return None
 
     def _grade_percent_from_payload(self, payload: dict[str, Any]) -> float | None:
@@ -776,10 +767,23 @@ class AcademicService:
     def _snapshot_progress_percent(self, snapshot: AcademicStudentLearningSnapshot | None) -> float | None:
         if not snapshot:
             return None
-        direct = self._percent_display_value(snapshot.progress_percent)
-        if direct is not None:
-            return direct
-        return self._progress_percent_from_payload(self._payload_from_snapshot(snapshot))
+        payload = self._payload_from_snapshot(snapshot)
+        progress_payload = payload.get('progress') if isinstance(payload.get('progress'), dict) else {}
+        progress_source = str(progress_payload.get('source') or payload.get('progress_source') or payload.get('progressSource') or '').strip().lower()
+        # Old connector fallbacks based on StudentModule/BlockCompletion can disagree
+        # with the official CMS learner Course completion. Do not reuse those
+        # values as Course completion; the UI should show N/A unless the connector
+        # returns an official Course Home/progress completion value.
+        fallback_sources = {'studentmodule', 'student_module', 'blockcompletion', 'block_completion'}
+        if progress_source and progress_source.replace(' ', '').lower() not in fallback_sources:
+            direct = self._percent_display_value(snapshot.progress_percent)
+            if direct is not None:
+                return direct
+        if not progress_source:
+            direct = self._percent_display_value(snapshot.progress_percent)
+            if direct is not None:
+                return direct
+        return self._progress_percent_from_payload(payload)
 
     def _snapshot_grade_percent(self, snapshot: AcademicStudentLearningSnapshot | None) -> float | None:
         if not snapshot:
@@ -837,6 +841,11 @@ class AcademicService:
         planned = bool(item.get('planned') is True or item.get('is_planned') is True or str(item.get('source') or '').strip().lower() in {'course_outline', 'cms_course_outline'})
         if percent is None and earned is None and possible is None and not planned:
             return None
+        submitted_at = item.get('submitted_at') or item.get('submittedAt') or item.get('last_submitted_at') or item.get('lastSubmittedAt') or item.get('attempted_at') or item.get('attemptedAt') or item.get('modified') or item.get('updated_at') or item.get('updatedAt')
+        available_from = item.get('available_from') or item.get('availableFrom') or item.get('start_date') or item.get('startDate') or item.get('open_date') or item.get('openDate')
+        deadline_date = item.get('deadline_date') or item.get('deadlineDate') or item.get('deadline') or item.get('due_date') or item.get('dueDate') or item.get('due')
+        quiz_numbers = self._quiz_numbers_from_text(' '.join([str(name or ''), str(key or ''), str(item.get('category') or '')]))
+        quiz_number = quiz_numbers[0] if quiz_numbers else None
         return {
             'key': key or name,
             'name': name[:255],
@@ -848,6 +857,10 @@ class AcademicService:
             'source': str(item.get('source') or item.get('model') or '').strip() or None,
             'planned': planned,
             'order': int(self._number_or_none(item.get('order') or item.get('index') or item.get('position') or item.get('quiz_index') or item.get('quizIndex')) or 0) or None,
+            'quiz_number': quiz_number,
+            'submitted_at': submitted_at,
+            'available_from': available_from,
+            'deadline_date': deadline_date,
         }
 
     def _component_scores_from_payload(self, payload: Any) -> list[dict[str, Any]]:
@@ -920,13 +933,49 @@ class AcademicService:
                 item = self._normalize_component_score_item(raw_item)
                 if not item:
                     continue
-                dedupe = _normalize_text_key(item.get('key') or item.get('name') or '')
-                if dedupe in seen:
+                identity = self._component_identity_key(item)
+                if identity in seen:
+                    # Prefer the item that has actual score data over a planned shell.
+                    for index, existing in enumerate(normalized):
+                        if self._component_identity_key(existing) != identity:
+                            continue
+                        existing_has_score = self._number_or_none(existing.get('percent')) is not None or self._number_or_none(existing.get('earned')) is not None
+                        item_has_score = self._number_or_none(item.get('percent')) is not None or self._number_or_none(item.get('earned')) is not None
+                        if item_has_score and not existing_has_score:
+                            normalized[index] = item
+                        break
                     continue
-                seen.add(dedupe)
+                seen.add(identity)
                 normalized.append(item)
-        normalized.sort(key=lambda item: _natural_sort_key(item.get('name') or item.get('key') or ''))
+        # If CMS returned real Detailed grades for Quiz 1..N, do not keep
+        # course-outline planned quiz shells beyond that range. This prevents
+        # duplicate/phantom columns such as Quiz 2 twice or Quiz 14 when the CMS
+        # gradebook currently has only Quiz 1 and Quiz 2.
+        real_quiz_numbers = [int(item.get('quiz_number') or 0) for item in normalized if item.get('quiz_number') and not item.get('planned')]
+        if real_quiz_numbers:
+            max_real_quiz = max(real_quiz_numbers)
+            normalized = [item for item in normalized if not (item.get('planned') and item.get('quiz_number') and int(item.get('quiz_number') or 0) > max_real_quiz)]
+        normalized.sort(key=lambda item: self._component_sort_key(item))
         return normalized[:80]
+
+
+    def _component_identity_key(self, item: dict[str, Any] | None) -> str:
+        if not isinstance(item, dict):
+            return ''
+        numbers = self._quiz_numbers_from_component_item(item)
+        if numbers:
+            return f"quiz:{numbers[0]}"
+        raw = item.get('key') or item.get('usage_key') or item.get('name') or ''
+        return _normalize_text_key(raw)
+
+    def _component_sort_key(self, item: dict[str, Any]) -> tuple[int, int, Any]:
+        numbers = self._quiz_numbers_from_component_item(item)
+        if numbers:
+            return (0, int(numbers[0]), _natural_sort_key(item.get('name') or item.get('key') or ''))
+        order = self._number_or_none(item.get('order'))
+        if order is not None and order > 0:
+            return (1, int(order), _natural_sort_key(item.get('name') or item.get('key') or ''))
+        return (2, 9999, _natural_sort_key(item.get('name') or item.get('key') or ''))
 
     def _component_scores_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> list[dict[str, Any]]:
         if not snapshot or not isinstance(snapshot.raw_json, dict):
@@ -939,7 +988,11 @@ class AcademicService:
 
     @staticmethod
     def _date_only(value: Any) -> date | None:
+        if value is None or value == '':
+            return None
         if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                return value.astimezone(VN_TZ).date()
             return value.date()
         if isinstance(value, date):
             return value
@@ -947,9 +1000,18 @@ class AcademicService:
         if not raw:
             return None
         try:
-            return datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
+            parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(VN_TZ)
+            return parsed.date()
         except Exception:
-            return None
+            pass
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
+            try:
+                return datetime.strptime(raw[:10], fmt).date()
+            except Exception:
+                continue
+        return None
 
     @staticmethod
     def _quiz_numbers_from_text(value: Any) -> list[int]:
@@ -1044,6 +1106,113 @@ class AcademicService:
                 'due_date': due_date.isoformat(),
             })
         return schedule
+
+
+    def _block_for_class(self, cls: AcademicClass | None) -> AcademicBlock | None:
+        if not cls or not cls.block_id:
+            return None
+        try:
+            return self.db.get(AcademicBlock, cls.block_id)
+        except Exception:
+            return None
+
+    def _quiz_schedule_map_for_class(self, cls: AcademicClass | None, components: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+        if not cls:
+            return {}
+        quiz_numbers: set[int] = set()
+        for item in components:
+            quiz_numbers.update(self._quiz_numbers_from_component_item(item))
+        if not quiz_numbers:
+            return {}
+        block = self._block_for_class(cls)
+        start_date = self._date_only(block.start_date if block else None) or self._date_only(cls.start_date)
+        end_date = self._date_only(block.end_date if block else None) or self._date_only(cls.end_date)
+        quiz_count = max(quiz_numbers)
+        schedule_items = self._quiz_deadline_schedule(quiz_count, start_date)
+        manual_required = False
+        schedule_warning = None
+        if not start_date or not end_date:
+            manual_required = True
+            schedule_warning = 'Thiếu ngày bắt đầu/kết thúc block hoặc lớp. Cần cấu hình deadline thủ công.'
+        elif (end_date - start_date).days + 1 > 49:
+            manual_required = True
+            schedule_warning = 'Block dài hơn 7 tuần. Cần cấu hình deadline thủ công để xét trễ hạn chính xác.'
+        elif start_date.weekday() != 0:
+            manual_required = True
+            schedule_warning = 'Ngày bắt đầu block/lớp không phải Thứ 2. Cần cấu hình deadline thủ công.'
+        schedule_by_number: dict[int, dict[str, Any]] = {}
+        for item in schedule_items:
+            for number in item.get('quiz_numbers') or []:
+                schedule_by_number[int(number)] = {
+                    **item,
+                    'deadline_mode': 'manual_required' if manual_required else 'auto',
+                    'schedule_warning': schedule_warning if manual_required else None,
+                }
+        return schedule_by_number
+
+    def _component_score_percent(self, item: dict[str, Any]) -> float | None:
+        percent = self._number_or_none(item.get('percent'))
+        if percent is not None:
+            if 0 <= percent <= 1:
+                percent *= 100.0
+            return max(0.0, min(100.0, percent))
+        earned = self._number_or_none(item.get('earned'))
+        possible = self._number_or_none(item.get('possible'))
+        if earned is not None and possible and possible > 0:
+            return max(0.0, min(100.0, (earned / possible) * 100.0))
+        return None
+
+    def _component_status_for_class(self, item: dict[str, Any], cls: AcademicClass | None, schedule_by_number: dict[int, dict[str, Any]]) -> str | None:
+        numbers = self._quiz_numbers_from_component_item(item)
+        if not numbers:
+            return None
+        number = numbers[0]
+        schedule = schedule_by_number.get(number) or {}
+        deadline = self._date_only(item.get('deadline_date')) or self._date_only(schedule.get('due_date'))
+        available_from = self._date_only(item.get('available_from')) or self._date_only(schedule.get('from_date'))
+        if available_from is None and cls is not None:
+            block = self._block_for_class(cls)
+            available_from = self._date_only(block.start_date if block else None) or self._date_only(cls.start_date)
+        submitted = self._date_only(item.get('submitted_at'))
+        percent = self._component_score_percent(item)
+        has_score = percent is not None
+        if submitted and available_from and submitted < available_from:
+            return 'early_before_start'
+        if submitted and deadline and submitted > deadline:
+            return 'late'
+        if not has_score:
+            if deadline and date.today() > deadline:
+                return 'late'
+            return 'not_attempted'
+        if percent is not None and percent >= 100:
+            return 'on_time'
+        if deadline and date.today() > deadline:
+            return 'late_not_100'
+        return 'not_100'
+
+    def _enrich_component_scores_for_class(self, items: list[dict[str, Any]], cls: AcademicClass | None) -> list[dict[str, Any]]:
+        normalized = list(items or [])
+        schedule_by_number = self._quiz_schedule_map_for_class(cls, normalized)
+        enriched: list[dict[str, Any]] = []
+        for item in normalized:
+            row = dict(item)
+            numbers = self._quiz_numbers_from_component_item(row)
+            if numbers:
+                number = numbers[0]
+                row['quiz_number'] = number
+                schedule = schedule_by_number.get(number) or {}
+                if not row.get('deadline_date') and schedule.get('due_date'):
+                    row['deadline_date'] = schedule.get('due_date')
+                if not row.get('available_from') and schedule.get('from_date'):
+                    row['available_from'] = schedule.get('from_date')
+                if schedule.get('deadline_mode'):
+                    row['deadline_mode'] = schedule.get('deadline_mode')
+                if schedule.get('schedule_warning'):
+                    row['schedule_warning'] = schedule.get('schedule_warning')
+                row['quiz_status'] = self._component_status_for_class(row, cls, schedule_by_number)
+            enriched.append(row)
+        enriched.sort(key=lambda item: self._component_sort_key(item))
+        return enriched
 
     def _training_deadline_status_by_class(
         self,
@@ -1200,14 +1369,41 @@ class AcademicService:
             return 'good'
         return 'in_progress'
 
-    def _component_summary_from_snapshots(self, snapshots: list[AcademicStudentLearningSnapshot]) -> list[dict[str, Any]]:
+    def _component_summary_from_snapshots(self, snapshots: list[AcademicStudentLearningSnapshot], cls: AcademicClass | None = None) -> list[dict[str, Any]]:
         buckets: dict[str, dict[str, Any]] = {}
         for snapshot in snapshots:
             for item in self._component_scores_from_snapshot(snapshot):
-                key = str(item.get('key') or item.get('name') or '').strip()
-                if not key:
+                identity = self._component_identity_key(item)
+                if not identity:
                     continue
-                bucket = buckets.setdefault(key, {'key': key, 'name': item.get('name') or key, 'category': item.get('category'), 'percents': [], 'earned': 0.0, 'possible': 0.0, 'student_count': 0})
+                bucket = buckets.setdefault(identity, {
+                    'key': item.get('key') or item.get('name') or identity,
+                    'name': item.get('name') or item.get('key') or identity,
+                    'category': item.get('category'),
+                    'percents': [],
+                    'earned': 0.0,
+                    'possible': 0.0,
+                    'student_count': 0,
+                    'source': item.get('source'),
+                    'planned': bool(item.get('planned')),
+                    'quiz_number': item.get('quiz_number'),
+                    'deadline_date': item.get('deadline_date'),
+                    'available_from': item.get('available_from'),
+                })
+                # Prefer stable CMS key/name from scored rows over planned shells.
+                has_score = self._number_or_none(item.get('percent')) is not None or self._number_or_none(item.get('earned')) is not None
+                if has_score:
+                    bucket['key'] = item.get('key') or bucket['key']
+                    bucket['name'] = item.get('name') or bucket['name']
+                    bucket['category'] = item.get('category') or bucket.get('category')
+                    bucket['planned'] = False
+                    bucket['source'] = item.get('source') or bucket.get('source')
+                if item.get('quiz_number'):
+                    bucket['quiz_number'] = item.get('quiz_number')
+                if item.get('deadline_date'):
+                    bucket['deadline_date'] = item.get('deadline_date')
+                if item.get('available_from'):
+                    bucket['available_from'] = item.get('available_from')
                 percent = self._percent_display_value(item.get('percent'))
                 if percent is not None:
                     bucket['percents'].append(percent)
@@ -1235,9 +1431,14 @@ class AcademicService:
                 'possible': round(bucket.get('possible', 0.0), 2) if bucket.get('possible') else None,
                 'percent': percent,
                 'weight': None,
-                'source': f"{bucket.get('student_count', 0)} SV",
+                'source': bucket.get('source') or f"{bucket.get('student_count', 0)} SV",
+                'planned': bool(bucket.get('planned')),
+                'quiz_number': bucket.get('quiz_number'),
+                'deadline_date': bucket.get('deadline_date'),
+                'available_from': bucket.get('available_from'),
             })
-        results.sort(key=lambda item: _natural_sort_key(item.get('name') or item.get('key') or ''))
+        results = self._enrich_component_scores_for_class(results, cls)
+        results.sort(key=lambda item: self._component_sort_key(item))
         return results[:80]
 
     def _learning_alerts_from_summary(self, *, total: int, enrolled: int, synced: int, active: int = 0, avg_progress: float | None, avg_grade: float | None, course_id: str | None) -> list[str]:
@@ -1348,9 +1549,7 @@ class AcademicService:
             avg_progress = round(sum(bucket['progress']) / len(bucket['progress']), 2) if bucket['progress'] else None
             avg_grade = round(sum(bucket['grades']) / len(bucket['grades']), 2) if bucket['grades'] else None
             course_id = (course_by_class or {}).get(class_id)
-            component_summaries = self._component_summary_from_snapshots(bucket['snapshots'])
-            if not component_summaries:
-                component_summaries = self._planned_quiz_components_for_class(class_by_id_for_plan.get(class_id))
+            component_summaries = self._component_summary_from_snapshots(bucket['snapshots'], class_by_id_for_plan.get(class_id))
             result[class_id] = {
                 'learning_enrolled_count': enrolled,
                 'learning_active_count': int(bucket.get('active', 0) or 0),
@@ -1879,7 +2078,40 @@ class AcademicService:
             'quiz_count': 0,
         }
 
-    def _student_mapping_item(self, class_id: str, student: AcademicStudent, synced_at: datetime | None, mapping: OpenEdXUserMapping | None, learning: AcademicStudentLearningSnapshot | None = None, class_student: AcademicClassStudent | None = None) -> dict[str, Any]:
+    def _student_mapping_item(
+        self,
+        class_id: str,
+        student: AcademicStudent,
+        synced_at: datetime | None,
+        mapping: OpenEdXUserMapping | None,
+        learning: AcademicStudentLearningSnapshot | None = None,
+        class_student: AcademicClassStudent | None = None,
+        *,
+        cls: AcademicClass | None = None,
+        block: AcademicBlock | None = None,
+        policy_service: TrainingPolicyService | None = None,
+        assignment_scores: dict[str, Any] | None = None,
+        deadline_overrides: dict[int, Any] | None = None,
+        course_id: str | None = None,
+    ) -> dict[str, Any]:
+        cls = cls or self.db.get(AcademicClass, class_id)
+        block = block if block is not None else (self._block_for_class(cls) if cls else None)
+        components = self._enrich_component_scores_for_class(self._component_scores_from_snapshot(learning), cls)
+        course_id = course_id or (learning.openedx_course_id if learning else None)
+        policy_service = policy_service or TrainingPolicyService(self.db)
+        if assignment_scores is None:
+            assignment_scores = policy_service.assignment_scores_for_class(class_id, course_id)
+        if deadline_overrides is None:
+            deadline_overrides = policy_service.deadline_overrides_for_class(class_id, course_id)
+        training_policy = policy_service.evaluate_student(
+            cls=cls,
+            student_id=student.id,
+            components=components,
+            block=block,
+            course_id=course_id,
+            assignment_score=assignment_scores.get(student.id),
+            overrides=deadline_overrides,
+        )
         return {
             'class_id': class_id,
             'id': student.id,
@@ -1915,7 +2147,14 @@ class AcademicService:
             'learning_last_synced_at': (learning.learning_synced_at or learning.last_synced_at) if learning else None,
             'learning_enrollment_synced_at': learning.enrollment_synced_at if learning else None,
             'learning_status': self._learning_status_for_snapshot(learning, mapping),
-            'learning_component_scores': self._component_scores_from_snapshot(learning),
+            'learning_component_scores': components,
+            'training_policy': training_policy,
+            'exam_eligible': training_policy.get('exam_eligible'),
+            'exam_status': training_policy.get('exam_status'),
+            'exam_status_label': training_policy.get('exam_status_label'),
+            'exam_reasons': training_policy.get('exam_reasons') or [],
+            'assignment_defense_status': training_policy.get('assignment_status'),
+            'assignment_score_10': training_policy.get('assignment_score_10'),
         }
 
     def list_class_students(self, user: UserContext, class_id: str, *, search: str | None = None, learning_status: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
@@ -1970,7 +2209,27 @@ class AcademicService:
                 ))
         total = query.count()
         rows = query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).offset((page - 1) * page_size).limit(page_size).all()
-        items = [self._student_mapping_item(class_id, student, class_student.synced_at, mapping, learning, class_student) for student, class_student, mapping, learning in rows]
+        block = self._block_for_class(cls) if cls else None
+        policy_service = TrainingPolicyService(self.db)
+        assignment_scores = policy_service.assignment_scores_for_class(class_id, course_id)
+        deadline_overrides = policy_service.deadline_overrides_for_class(class_id, course_id)
+        items = [
+            self._student_mapping_item(
+                class_id,
+                student,
+                class_student.synced_at,
+                mapping,
+                learning,
+                class_student,
+                cls=cls,
+                block=block,
+                policy_service=policy_service,
+                assignment_scores=assignment_scores,
+                deadline_overrides=deadline_overrides,
+                course_id=course_id,
+            )
+            for student, class_student, mapping, learning in rows
+        ]
         total_pages = math.ceil(total / page_size) if total else 0
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
 
@@ -2152,6 +2411,51 @@ class AcademicService:
         status_counts_by_class, snapshot_by_class_student = self._training_learning_status_counts_by_class(class_ids, course_by_class)
         deadline_by_class, deadline_by_class_student = self._training_deadline_status_by_class(class_by_id, block_by_class, snapshot_by_class_student)
 
+        policy_service = TrainingPolicyService(self.db)
+        policy_by_class_student: dict[tuple[str, str], dict[str, Any]] = {}
+        policy_summary_by_class: dict[str, dict[str, int]] = {}
+        for class_id, cls in class_by_id.items():
+            course_id = course_by_class.get(class_id)
+            overrides = policy_service.deadline_overrides_for_class(class_id, course_id)
+            assignment_scores = policy_service.assignment_scores_for_class(class_id, course_id)
+            summary_bucket = {
+                'exam_eligible_student_count': 0,
+                'exam_not_eligible_student_count': 0,
+                'exam_insufficient_data_student_count': 0,
+                'quiz_failed_count': 0,
+                'quiz_late_count': 0,
+                'quiz_not_attempted_count': 0,
+                'quiz_missing_deadline_count': 0,
+                'assignment_not_graded_count': 0,
+            }
+            for student_id in student_ids_by_class.get(class_id, set()):
+                snapshot = snapshot_by_class_student.get((class_id, student_id))
+                components = self._enrich_component_scores_for_class(self._component_scores_from_snapshot(snapshot), cls)
+                policy = policy_service.evaluate_student(
+                    cls=cls,
+                    student_id=student_id,
+                    components=components,
+                    block=block_by_class.get(class_id),
+                    course_id=course_id,
+                    assignment_score=assignment_scores.get(student_id),
+                    overrides=overrides,
+                )
+                policy_by_class_student[(class_id, student_id)] = policy
+                status_name = str(policy.get('exam_status') or '')
+                if status_name == 'eligible':
+                    summary_bucket['exam_eligible_student_count'] += 1
+                elif status_name == 'not_eligible':
+                    summary_bucket['exam_not_eligible_student_count'] += 1
+                else:
+                    summary_bucket['exam_insufficient_data_student_count'] += 1
+                summary_bucket['quiz_failed_count'] += int(policy.get('quiz_failed_count') or 0)
+                summary_bucket['quiz_late_count'] += int(policy.get('quiz_late_count') or 0)
+                summary_bucket['quiz_not_attempted_count'] += int(policy.get('quiz_not_attempted_count') or 0)
+                summary_bucket['quiz_missing_deadline_count'] += int(policy.get('quiz_missing_deadline_count') or 0)
+                if policy.get('assignment_expected') and policy.get('assignment_status') != 'graded':
+                    summary_bucket['assignment_not_graded_count'] += 1
+            policy_summary_by_class[class_id] = summary_bucket
+
         teacher_buckets: dict[str, dict[str, Any]] = {}
         seen_teacher_classes: set[tuple[str, str]] = set()
         class_teacher_context: dict[str, list[dict[str, Any]]] = {}
@@ -2179,6 +2483,14 @@ class AcademicService:
                 'deadline_late_student_count': 0,
                 'deadline_late_quiz_count': 0,
                 'deadline_due_quiz_count': 0,
+                'exam_eligible_student_count': 0,
+                'exam_not_eligible_student_count': 0,
+                'exam_insufficient_data_student_count': 0,
+                'quiz_failed_count': 0,
+                'quiz_late_count': 0,
+                'quiz_not_attempted_count': 0,
+                'quiz_missing_deadline_count': 0,
+                'assignment_not_graded_count': 0,
                 'relearn_student_count': 0,
                 'total_relearn_count': 0,
                 'progress_weighted_sum': 0.0,
@@ -2246,6 +2558,13 @@ class AcademicService:
             bucket['deadline_late_student_count'] += deadline_late_students
             bucket['deadline_late_quiz_count'] += deadline_late_quizzes
             bucket['deadline_due_quiz_count'] += deadline_due_quizzes
+            policy_summary = policy_summary_by_class.get(cls.id, {})
+            for policy_key in ('exam_eligible_student_count', 'exam_not_eligible_student_count', 'exam_insufficient_data_student_count', 'quiz_failed_count', 'quiz_late_count', 'quiz_not_attempted_count', 'quiz_missing_deadline_count', 'assignment_not_graded_count'):
+                bucket[policy_key] += int(policy_summary.get(policy_key) or 0)
+            if int(policy_summary.get('exam_not_eligible_student_count') or 0):
+                bucket['status_counts']['exam_not_eligible'] = int(bucket['status_counts'].get('exam_not_eligible', 0) or 0) + int(policy_summary.get('exam_not_eligible_student_count') or 0)
+            if int(policy_summary.get('exam_insufficient_data_student_count') or 0):
+                bucket['status_counts']['exam_insufficient_data'] = int(bucket['status_counts'].get('exam_insufficient_data', 0) or 0) + int(policy_summary.get('exam_insufficient_data_student_count') or 0)
             if deadline_late_students:
                 bucket['status_counts']['deadline_late'] = int(bucket['status_counts'].get('deadline_late', 0) or 0) + deadline_late_students
             alerts = list(learning.get('learning_alerts') or [])
@@ -2292,10 +2611,18 @@ class AcademicService:
                 'deadline_next_quiz_from_date': deadline.get('next_quiz_from_date'),
                 'deadline_next_quiz_due_date': deadline.get('next_quiz_due_date'),
                 'deadline_schedule_note': deadline.get('schedule_note'),
+                'exam_eligible_student_count': int(policy_summary.get('exam_eligible_student_count') or 0),
+                'exam_not_eligible_student_count': int(policy_summary.get('exam_not_eligible_student_count') or 0),
+                'exam_insufficient_data_student_count': int(policy_summary.get('exam_insufficient_data_student_count') or 0),
+                'quiz_failed_count': int(policy_summary.get('quiz_failed_count') or 0),
+                'quiz_late_count': int(policy_summary.get('quiz_late_count') or 0),
+                'quiz_not_attempted_count': int(policy_summary.get('quiz_not_attempted_count') or 0),
+                'quiz_missing_deadline_count': int(policy_summary.get('quiz_missing_deadline_count') or 0),
+                'assignment_not_graded_count': int(policy_summary.get('assignment_not_graded_count') or 0),
             })
 
         items: list[dict[str, Any]] = []
-        alert_keys = ['cms_not_synced', 'not_synced', 'not_enrolled', 'sync_error', 'no_activity', 'low_progress', 'low_grade', 'deadline_late']
+        alert_keys = ['cms_not_synced', 'not_synced', 'not_enrolled', 'sync_error', 'no_activity', 'low_progress', 'low_grade', 'deadline_late', 'exam_not_eligible', 'exam_insufficient_data']
         for bucket in teacher_buckets.values():
             status_counts = dict(bucket['status_counts'])
             avg_progress = round(bucket['progress_weighted_sum'] / bucket['progress_weight'], 2) if bucket['progress_weight'] else None
@@ -2316,6 +2643,10 @@ class AcademicService:
                 learning_alerts.append(f"{int(status_counts.get('low_grade', 0) or 0)} SV điểm thấp")
             if int(status_counts.get('deadline_late', 0) or 0):
                 learning_alerts.append(f"{int(status_counts.get('deadline_late', 0) or 0)} SV trễ deadline quiz")
+            if int(status_counts.get('exam_not_eligible', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('exam_not_eligible', 0) or 0)} SV không được thi")
+            if int(status_counts.get('exam_insufficient_data', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('exam_insufficient_data', 0) or 0)} SV chưa đủ dữ liệu xét thi")
             item = {
                 'teacher_id': bucket['teacher_id'],
                 'teacher_code': bucket['teacher_code'],
@@ -2340,6 +2671,14 @@ class AcademicService:
                 'deadline_late_student_count': int(bucket['deadline_late_student_count']),
                 'deadline_late_quiz_count': int(bucket['deadline_late_quiz_count']),
                 'deadline_due_quiz_count': int(bucket['deadline_due_quiz_count']),
+                'exam_eligible_student_count': int(bucket['exam_eligible_student_count']),
+                'exam_not_eligible_student_count': int(bucket['exam_not_eligible_student_count']),
+                'exam_insufficient_data_student_count': int(bucket['exam_insufficient_data_student_count']),
+                'quiz_failed_count': int(bucket['quiz_failed_count']),
+                'quiz_late_count': int(bucket['quiz_late_count']),
+                'quiz_not_attempted_count': int(bucket['quiz_not_attempted_count']),
+                'quiz_missing_deadline_count': int(bucket['quiz_missing_deadline_count']),
+                'assignment_not_graded_count': int(bucket['assignment_not_graded_count']),
                 'learning_avg_progress_percent': avg_progress,
                 'learning_avg_grade_percent': avg_grade,
                 'learning_avg_grade_10': self._percent_to_grade10(avg_grade),
@@ -2363,7 +2702,7 @@ class AcademicService:
                 return int(status_counts.get('not_enrolled', 0) or 0) > 0 or int(item.get('learning_enrolled_count') or 0) < int(item.get('student_count') or 0)
             if status_filter == 'no_learning_data':
                 return int(item.get('learning_synced_count') or 0) == 0 and int(item.get('student_count') or 0) > 0
-            if status_filter in {'no_activity', 'low_progress', 'low_grade', 'sync_error', 'deadline_late'}:
+            if status_filter in {'no_activity', 'low_progress', 'low_grade', 'sync_error', 'deadline_late', 'exam_not_eligible', 'exam_insufficient_data'}:
                 return int(status_counts.get(status_filter, 0) or 0) > 0
             if status_filter == 'has_alert':
                 return bool(item.get('learning_alerts')) or int(item.get('risk_student_count') or 0) > 0
@@ -2393,6 +2732,11 @@ class AcademicService:
             'classes_without_course_count': sum(int(item.get('classes_without_course_count') or 0) for item in filtered_items),
             'deadline_late_student_count': sum(int(item.get('deadline_late_student_count') or 0) for item in filtered_items),
             'deadline_late_quiz_count': sum(int(item.get('deadline_late_quiz_count') or 0) for item in filtered_items),
+            'exam_eligible_student_count': sum(int(item.get('exam_eligible_student_count') or 0) for item in filtered_items),
+            'exam_not_eligible_student_count': sum(int(item.get('exam_not_eligible_student_count') or 0) for item in filtered_items),
+            'exam_insufficient_data_student_count': sum(int(item.get('exam_insufficient_data_student_count') or 0) for item in filtered_items),
+            'quiz_failed_count': sum(int(item.get('quiz_failed_count') or 0) for item in filtered_items),
+            'assignment_not_graded_count': sum(int(item.get('assignment_not_graded_count') or 0) for item in filtered_items),
         }
         result: dict[str, Any] = {'items': page_items, 'summary': summary, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': (not include_all and page < total_pages)}
 
@@ -2414,7 +2758,8 @@ class AcademicService:
                 snapshot = snapshot_by_class_student.get((class_id, student.id))
                 status_name = self._learning_status_for_snapshot(snapshot, mapping)
                 deadline_status = deadline_by_class_student.get((class_id, student.id), {})
-                if status_name in {'good', 'in_progress'} and int(deadline_status.get('late_quiz_count') or 0) <= 0:
+                policy = policy_by_class_student.get((class_id, student.id), {})
+                if status_name in {'good', 'in_progress'} and int(deadline_status.get('late_quiz_count') or 0) <= 0 and policy.get('exam_status') != 'not_eligible':
                     continue
                 for teacher_ctx in class_teacher_context.get(class_id, []):
                     context = class_context.get(class_id, {})
@@ -2440,6 +2785,14 @@ class AcademicService:
                         'grade_10': self._percent_to_grade10(self._snapshot_grade_percent(snapshot)),
                         'last_activity_at': snapshot.last_activity_at if snapshot else None,
                         'last_synced_at': (snapshot.learning_synced_at or snapshot.last_synced_at) if snapshot else None,
+                        'exam_status': policy.get('exam_status'),
+                        'exam_status_label': policy.get('exam_status_label'),
+                        'exam_reasons': policy.get('exam_reasons') or [],
+                        'quiz_passed_count': policy.get('quiz_passed_count'),
+                        'quiz_failed_count': policy.get('quiz_failed_count'),
+                        'quiz_not_attempted_count': policy.get('quiz_not_attempted_count'),
+                        'assignment_status': policy.get('assignment_status'),
+                        'assignment_score_10': policy.get('assignment_score_10'),
                         'deadline_due_quiz_count': int(deadline_status.get('due_quiz_count') or 0),
                         'deadline_completed_due_quiz_count': int(deadline_status.get('completed_due_quiz_count') or 0),
                         'deadline_late_quiz_count': int(deadline_status.get('late_quiz_count') or 0),
@@ -3098,7 +3451,7 @@ class AcademicService:
     def _learning_summary_for_class_course(self, class_id: str, course_id: str | None) -> dict[str, Any]:
         total = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
         if not course_id:
-            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'active_count': 0, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None, 'component_summaries': self._planned_quiz_components_for_class(self.db.get(AcademicClass, class_id)), 'status_counts': {'not_synced': int(total)}, 'alert_counts': {'not_synced': int(total)}}
+            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'active_count': 0, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None, 'component_summaries': [], 'status_counts': {'not_synced': int(total)}, 'alert_counts': {'not_synced': int(total)}}
         rows = self.db.query(AcademicStudentLearningSnapshot.enrollment_status, func.count(AcademicStudentLearningSnapshot.id)).filter(
             AcademicStudentLearningSnapshot.class_id == class_id,
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
@@ -3139,7 +3492,7 @@ class AcademicService:
             'avg_progress_percent': avg_progress,
             'avg_grade_percent': avg_grade,
             'last_synced_at': last_synced,
-            'component_summaries': (self._component_summary_from_snapshots(snapshots) or self._planned_quiz_components_for_class(self.db.get(AcademicClass, class_id))),
+            'component_summaries': (self._component_summary_from_snapshots(snapshots, self.db.get(AcademicClass, class_id))),
             'status_counts': status_counts,
             'alert_counts': alert_counts,
         }

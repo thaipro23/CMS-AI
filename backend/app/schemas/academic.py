@@ -160,6 +160,31 @@ class AcademicStudentOut(BaseModel):
     model_config = {'from_attributes': True}
 
 
+class AcademicTrainingPolicyOut(BaseModel):
+    policy_version: str | None = None
+    quiz_rule: str | None = None
+    final_test_rule: str | None = None
+    quiz_total: int = 0
+    quiz_passed_count: int = 0
+    quiz_failed_count: int = 0
+    quiz_late_count: int = 0
+    quiz_not_attempted_count: int = 0
+    quiz_early_count: int = 0
+    quiz_missing_deadline_count: int = 0
+    all_quizzes_eligible: bool = False
+    assignment_expected: bool = False
+    assignment_status: str = 'not_required'
+    assignment_score_10: float | None = None
+    assignment_note: str = ''
+    exam_eligible: bool = False
+    exam_status: str = 'insufficient_data'
+    exam_status_label: str = 'Chưa đủ dữ liệu'
+    exam_reasons: list[str] = Field(default_factory=list)
+    exam_notes: list[str] = Field(default_factory=list)
+    quiz_results: list[dict[str, Any]] = Field(default_factory=list)
+    deadline_mode: str = 'auto'
+    deadline_mode_note: str | None = None
+
 class AcademicClassStudentOut(AcademicStudentOut):
     class_id: str
     synced_at: datetime | None = None
@@ -185,6 +210,13 @@ class AcademicClassStudentOut(AcademicStudentOut):
     learning_last_synced_at: datetime | None = None
     learning_status: str = 'not_synced'
     learning_component_scores: list[dict[str, Any]] = Field(default_factory=list)
+    training_policy: AcademicTrainingPolicyOut | None = None
+    exam_eligible: bool | None = None
+    exam_status: str | None = None
+    exam_status_label: str | None = None
+    exam_reasons: list[str] = Field(default_factory=list)
+    assignment_defense_status: str | None = None
+    assignment_score_10: float | None = None
 
 
 class AcademicClassListOut(BaseModel):
@@ -567,3 +599,71 @@ class AcademicClassCourseMappingProposalOut(BaseModel):
     effective_openedx_cohort_name: str | None = None
     effective_mapping_source: str
     checks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AcademicQuizDeadlineOverrideIn(BaseModel):
+    id: str | None = None
+    course_id: str | None = None
+    component_key: str | None = None
+    component_label: str = 'Quiz'
+    quiz_number: int | None = Field(None, ge=1, le=200)
+    start_date: datetime | None = None
+    deadline_date: datetime | None = None
+    reason: str | None = None
+
+
+class AcademicQuizDeadlineOverrideBulkIn(BaseModel):
+    items: list[AcademicQuizDeadlineOverrideIn] = Field(default_factory=list, max_length=300)
+
+
+class AcademicQuizDeadlineOverrideOut(BaseModel):
+    id: str
+    class_id: str
+    course_id: str | None = None
+    component_key: str | None = None
+    component_label: str = ''
+    quiz_number: int | None = None
+    start_date: datetime | None = None
+    deadline_date: datetime | None = None
+    reason: str = ''
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {'from_attributes': True}
+
+
+class AcademicAssignmentDefenseScoreIn(BaseModel):
+    student_id: str
+    course_id: str | None = None
+    assignment_key: str | None = None
+    assignment_label: str = 'Assignment'
+    score_10: float | None = Field(None, ge=0, le=10)
+    defense_status: str = Field('not_graded', max_length=50)
+    note: str | None = None
+
+
+class AcademicAssignmentDefenseScoreBulkIn(BaseModel):
+    items: list[AcademicAssignmentDefenseScoreIn] = Field(default_factory=list, max_length=2000)
+
+
+class AcademicAssignmentDefenseScoreOut(BaseModel):
+    id: str
+    class_id: str
+    student_id: str
+    student_code: str | None = None
+    student_username: str | None = None
+    student_name: str | None = None
+    course_id: str | None = None
+    assignment_key: str | None = None
+    assignment_label: str = 'Assignment'
+    score_10: float | None = None
+    defense_status: str = 'not_graded'
+    graded_by: str | None = None
+    graded_at: datetime | None = None
+    note: str = ''
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {'from_attributes': True}

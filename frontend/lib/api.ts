@@ -98,6 +98,8 @@ import {
   AcademicClassCourseMappingProposal,
   AcademicCourseMappingListResponse,
   AcademicTrainingTeacherReportResponse,
+  AcademicQuizDeadlineOverride,
+  AcademicAssignmentDefenseScore,
 } from "../types";
 
 const rawApiBase =
@@ -1957,6 +1959,37 @@ export async function getAcademicSubjects(headers: HeadersInit, filters: { termI
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   return parseResponse(await apiFetch(`${API}/academic/subjects?${params.toString()}`, { credentials: "include", headers }));
+}
+
+
+export async function getAcademicClassQuizDeadlineOverrides(headers: HeadersInit, classId: string, courseId?: string | null): Promise<AcademicQuizDeadlineOverride[]> {
+  const params = new URLSearchParams();
+  if (courseId) params.set('course_id', courseId);
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/quiz-deadline-overrides?${params.toString()}`, { credentials: "include", headers }));
+}
+
+export async function saveAcademicClassQuizDeadlineOverrides(headers: HeadersInit, classId: string, items: AcademicQuizDeadlineOverride[]): Promise<AcademicQuizDeadlineOverride[]> {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/quiz-deadline-overrides`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ items }),
+  }));
+}
+
+export async function getAcademicClassAssignmentDefenseScores(headers: HeadersInit, classId: string, courseId?: string | null): Promise<AcademicAssignmentDefenseScore[]> {
+  const params = new URLSearchParams();
+  if (courseId) params.set('course_id', courseId);
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/assignment-defense-scores?${params.toString()}`, { credentials: "include", headers }));
+}
+
+export async function saveAcademicClassAssignmentDefenseScores(headers: HeadersInit, classId: string, items: AcademicAssignmentDefenseScore[]): Promise<AcademicAssignmentDefenseScore[]> {
+  return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/assignment-defense-scores`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ items }),
+  }));
 }
 
 export async function getAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicTrainingTeacherReportResponse> {

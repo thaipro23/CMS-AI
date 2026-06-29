@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from typing import Any
+from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -17,6 +18,8 @@ from app.models.academic import (
     AcademicClass,
     AcademicClassStudent,
     AcademicClassSyncJob,
+    AcademicQuizDeadlineOverride,
+    AcademicAssignmentDefenseScore,
     AcademicStudent,
     AcademicSubject,
     AcademicSyncRun,
@@ -65,6 +68,10 @@ from app.schemas.academic import (
     AcademicTermOut,
     AcademicTermUpsertIn,
     AcademicTermWithBlocksOut,
+    AcademicQuizDeadlineOverrideBulkIn,
+    AcademicQuizDeadlineOverrideOut,
+    AcademicAssignmentDefenseScoreBulkIn,
+    AcademicAssignmentDefenseScoreOut,
 )
 from app.services.academic_service import AcademicService
 from app.services.ap_academic_sync import AcademicImportService
@@ -168,7 +175,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
         'Hệ', 'Cơ sở', 'Giảng viên', 'Username', 'Email', 'Số môn', 'Môn', 'Số lớp',
         'SV lượt lớp', 'SV riêng biệt', 'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động',
         'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'Lớp chưa map Course',
-        'SV rủi ro', 'SV trễ deadline', 'Lượt quiz trễ', 'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp',
+        'SV rủi ro', 'SV trễ deadline', 'Lượt quiz trễ', 'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm', 'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp',
         'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
     ]
     _setup_sheet(ws, overview_headers, [12, 12, 28, 24, 30, 10, 28, 10, 12, 14, 16, 12, 12, 20, 18, 18, 12, 16, 14, 18, 12, 12, 14, 12, 12, 22, 48])
@@ -179,7 +186,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
             item.get('subject_count'), item.get('subject_codes'), item.get('class_count'), item.get('student_count'), item.get('unique_student_count'),
             item.get('relearn_student_count'), item.get('total_relearn_count'), item.get('cms_synced_count'), item.get('learning_enrolled_count'), item.get('learning_active_count'),
             item.get('learning_avg_progress_percent'), item.get('learning_avg_grade_10'), item.get('classes_without_course_count'),
-            item.get('risk_student_count'), item.get('deadline_late_student_count'), item.get('deadline_late_quiz_count'), statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'),
+            item.get('risk_student_count'), item.get('deadline_late_student_count'), item.get('deadline_late_quiz_count'), item.get('exam_not_eligible_student_count'), item.get('exam_insufficient_data_student_count'), item.get('quiz_failed_count'), item.get('assignment_not_graded_count'), statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'),
             statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), item.get('last_synced_at'), item.get('learning_alerts'),
         ])
 
@@ -191,7 +198,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
         'Có hoạt động', 'Course completion TB (%)', 'Điểm tổng TB (hệ 10)',
         *[column['name'] for column in component_columns],
         'Số Quiz', 'Quiz đã đến hạn',
-        'SV trễ deadline', 'Lượt quiz trễ', 'Đợt quiz kế tiếp', 'Ngày làm quiz kế tiếp', 'Deadline kế tiếp',
+        'SV trễ deadline', 'Lượt quiz trễ', 'SV được thi', 'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm', 'Đợt quiz kế tiếp', 'Ngày làm quiz kế tiếp', 'Deadline kế tiếp',
         'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
     ]
     _setup_sheet(class_ws, class_headers, [28, 22, 10, 12, 18, 16, 12, 30, 16, 26, 38, 20, 8, 16, 12, 12, 20, 18, *([12] * len(component_columns)), 10, 14, 16, 14, 18, 18, 18, 18, 12, 12, 14, 12, 12, 22, 48])
@@ -208,7 +215,7 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
                     for column in component_columns
                 ],
                 cls.get('deadline_quiz_count'), cls.get('deadline_due_quiz_count'),
-                cls.get('deadline_late_student_count'), cls.get('deadline_late_quiz_count'), cls.get('deadline_next_quiz_label'), cls.get('deadline_next_quiz_from_date'), cls.get('deadline_next_quiz_due_date'),
+                cls.get('deadline_late_student_count'), cls.get('deadline_late_quiz_count'), cls.get('exam_eligible_student_count'), cls.get('exam_not_eligible_student_count'), cls.get('exam_insufficient_data_student_count'), cls.get('quiz_failed_count'), cls.get('assignment_not_graded_count'), cls.get('deadline_next_quiz_label'), cls.get('deadline_next_quiz_from_date'), cls.get('deadline_next_quiz_due_date'),
                 statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), cls.get('learning_last_synced_at'), cls.get('learning_alerts'),
             ])
 
@@ -228,6 +235,54 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
             row.get('deadline_late_quiz_count'), row.get('deadline_late_quizzes'), row.get('deadline_next_quiz_label'), row.get('deadline_next_quiz_due_date'), row.get('last_activity_at'), row.get('last_synced_at'),
         ])
 
+
+    student_ws = wb.create_sheet('ChiTietSinhVien')
+    student_headers = [
+        'Giảng viên', 'Username GV', 'Học kỳ', 'Block', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên',
+        'Course completion (%)', 'Điểm tổng (hệ 10)', 'Quiz đạt', 'Quiz chưa đạt 100%', 'Quiz chưa làm',
+        'Quiz trễ', 'Assignment', 'Điểm Assignment', 'Điều kiện thi', 'Lý do'
+    ]
+    _setup_sheet(student_ws, student_headers, [26, 20, 18, 14, 12, 16, 14, 20, 26, 18, 18, 12, 16, 12, 12, 16, 16, 18, 60])
+    for row in report.get('student_watch_rows') or []:
+        _append_row(student_ws, [
+            row.get('teacher_name'), row.get('teacher_username'), row.get('term_name'), row.get('block_name'), row.get('subject_code'), row.get('class_code'),
+            row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('progress_percent'), row.get('grade_10'),
+            row.get('quiz_passed_count'), row.get('quiz_failed_count'), row.get('quiz_not_attempted_count'), row.get('deadline_late_quiz_count'),
+            row.get('assignment_status'), row.get('assignment_score_10'), row.get('exam_status_label') or row.get('exam_status'), row.get('exam_reasons'),
+        ])
+
+    late_ws = wb.create_sheet('TreDeadlineQuiz')
+    late_headers = ['Giảng viên', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên', 'Số quiz trễ', 'Danh sách quiz trễ', 'Điều kiện thi', 'Lý do']
+    _setup_sheet(late_ws, late_headers, [26, 12, 16, 14, 20, 26, 12, 38, 18, 60])
+    for row in report.get('student_watch_rows') or []:
+        if int(row.get('deadline_late_quiz_count') or 0) <= 0:
+            continue
+        _append_row(late_ws, [row.get('teacher_name'), row.get('subject_code'), row.get('class_code'), row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('deadline_late_quiz_count'), row.get('deadline_late_quizzes'), row.get('exam_status_label') or row.get('exam_status'), row.get('exam_reasons')])
+
+    not100_ws = wb.create_sheet('QuizChuaDat100')
+    not100_headers = ['Giảng viên', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên', 'Quiz chưa đạt 100%', 'Quiz chưa làm', 'Lý do']
+    _setup_sheet(not100_ws, not100_headers, [26, 12, 16, 14, 20, 26, 16, 14, 70])
+    for row in report.get('student_watch_rows') or []:
+        if int(row.get('quiz_failed_count') or 0) <= 0 and int(row.get('quiz_not_attempted_count') or 0) <= 0:
+            continue
+        _append_row(not100_ws, [row.get('teacher_name'), row.get('subject_code'), row.get('class_code'), row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('quiz_failed_count'), row.get('quiz_not_attempted_count'), row.get('exam_reasons')])
+
+    assignment_ws = wb.create_sheet('AssignmentBaoVe')
+    assignment_headers = ['Giảng viên', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên', 'Trạng thái Assignment', 'Điểm Assignment', 'Điều kiện thi', 'Lý do']
+    _setup_sheet(assignment_ws, assignment_headers, [26, 12, 16, 14, 20, 26, 20, 16, 18, 70])
+    for row in report.get('student_watch_rows') or []:
+        if not row.get('assignment_status'):
+            continue
+        _append_row(assignment_ws, [row.get('teacher_name'), row.get('subject_code'), row.get('class_code'), row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('assignment_status'), row.get('assignment_score_10'), row.get('exam_status_label') or row.get('exam_status'), row.get('exam_reasons')])
+
+    exam_ws = wb.create_sheet('KhongDuocThi')
+    exam_headers = ['Giảng viên', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên', 'Điều kiện thi', 'Lý do']
+    _setup_sheet(exam_ws, exam_headers, [26, 12, 16, 14, 20, 26, 18, 90])
+    for row in report.get('student_watch_rows') or []:
+        if row.get('exam_status') != 'not_eligible':
+            continue
+        _append_row(exam_ws, [row.get('teacher_name'), row.get('subject_code'), row.get('class_code'), row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('exam_status_label') or 'Không được thi', row.get('exam_reasons')])
+
     guide = wb.create_sheet('HuongDan')
     guide['A1'] = 'Báo cáo quản lý đào tạo theo giảng viên'
     guide['A1'].font = Font(size=15, bold=True)
@@ -238,6 +293,9 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
         'Course completion lấy từ progress CMS/Open edX; Điểm tổng được quy đổi từ phần trăm sang hệ 10.',
         'SinhVienCanTheoDoi chỉ liệt kê sinh viên có trạng thái cần xử lý: chưa đồng bộ CMS, chưa enroll, chưa học, tiến độ thấp, điểm thấp, lỗi đồng bộ hoặc trễ deadline quiz.',
         'Deadline quiz được tính theo quy tắc: mỗi block 7 tuần, 6 tuần đầu dành deadline quiz từ Thứ 2 đến Thứ 7, tuần 7 Ôn+Thi; số quiz được chia đều vào 6 tuần và phần dư dồn vào các tuần đầu.',
+        'Rule mới: tất cả Quiz phải đạt 100% và hoàn thành trước hoặc đúng deadline. Quiz chưa làm, dưới 100%, làm sau deadline hoặc làm trước thời gian học đều không đạt điều kiện.',
+        'Assignment là điểm bảo vệ do giáo viên nhập thủ công; điểm Assignment từ CMS nếu có chỉ là tham khảo.',
+        'Final test chưa áp dụng rule chính thức trong bản này.',
     ]
     for idx, note in enumerate(notes, 3):
         guide.cell(row=idx, column=1, value=f'- {note}')
@@ -328,6 +386,34 @@ def _require_academic_sync_permission(
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail='Bạn không có quyền đồng bộ/thao tác học vụ CMS/Open edX.',
+    )
+
+
+def _require_training_write_permission(
+    user: UserContext = Depends(get_user_context),
+    db: Session = Depends(get_db),
+) -> UserContext:
+    """Allow deadline/assignment training mutations for training-capable users.
+
+    Keep legacy sync_course/manage_settings compatibility while introducing a
+    narrower permission surface for future RBAC configuration. Class-level
+    access is still checked by AcademicService.assert_can_access_class().
+    """
+    allowed = {'manage_training_deadlines', 'manage_assignment_scores', 'view_training_reports', 'sync_course', 'manage_settings'}
+    if allowed.intersection(set(user.permissions or [])):
+        return user
+    try:
+        service = BusinessRBACService(db)
+        for permission in allowed:
+            if service.has_any_business_permission(user, permission):
+                return user
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail='Bạn không có quyền cấu hình deadline hoặc nhập điểm đào tạo.',
     )
 
 def _require_academic_admin(db: Session, user: UserContext) -> None:
@@ -751,6 +837,177 @@ def get_class_learning_summary(
     return AcademicService(db).learning_summary_for_class(user, class_id)
 
 
+
+
+
+
+@router.get('/classes/{class_id}/quiz-deadline-overrides', response_model=list[AcademicQuizDeadlineOverrideOut])
+def list_class_quiz_deadline_overrides(
+    class_id: str,
+    course_id: str | None = Query(None),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    AcademicService(db).assert_can_access_class(user, class_id)
+    query = db.query(AcademicQuizDeadlineOverride).filter(AcademicQuizDeadlineOverride.class_id == class_id)
+    if course_id:
+        query = query.filter((AcademicQuizDeadlineOverride.course_id == course_id) | (AcademicQuizDeadlineOverride.course_id.is_(None)))
+    return query.order_by(AcademicQuizDeadlineOverride.quiz_number.asc().nullslast(), AcademicQuizDeadlineOverride.updated_at.desc()).all()
+
+
+@router.put('/classes/{class_id}/quiz-deadline-overrides', response_model=list[AcademicQuizDeadlineOverrideOut])
+def save_class_quiz_deadline_overrides(
+    class_id: str,
+    payload: AcademicQuizDeadlineOverrideBulkIn,
+    user: UserContext = Depends(_require_training_write_permission),
+    db: Session = Depends(get_db),
+):
+    AcademicService(db).assert_can_access_class(user, class_id)
+    saved: list[AcademicQuizDeadlineOverride] = []
+    now = datetime.utcnow()
+    for item in payload.items:
+        if not item.quiz_number:
+            continue
+        course_id = (item.course_id or '').strip() or None
+        row = db.query(AcademicQuizDeadlineOverride).filter(
+            AcademicQuizDeadlineOverride.class_id == class_id,
+            AcademicQuizDeadlineOverride.course_id.is_(None) if course_id is None else AcademicQuizDeadlineOverride.course_id == course_id,
+            AcademicQuizDeadlineOverride.quiz_number == int(item.quiz_number),
+        ).first()
+        if not row:
+            row = AcademicQuizDeadlineOverride(
+                class_id=class_id,
+                course_id=course_id,
+                quiz_number=int(item.quiz_number),
+                created_by=user.user_id,
+                created_at=now,
+            )
+            db.add(row)
+        row.component_key = (item.component_key or '').strip() or None
+        row.component_label = (item.component_label or f'Quiz {item.quiz_number}').strip()
+        row.start_date = item.start_date
+        row.deadline_date = item.deadline_date
+        row.reason = (item.reason or '').strip()
+        row.updated_by = user.user_id
+        row.updated_at = now
+        row.metadata_json = {'source': 'manual_ui'}
+        saved.append(row)
+    db.commit()
+    for row in saved:
+        db.refresh(row)
+    log_audit(db, action='academic.quiz_deadline_override.save', status='success', message='Lưu deadline quiz thủ công thành công', user=user, target_type='academic_class', target_id=class_id, metadata={'count': len(saved)})
+    return saved
+
+
+@router.get('/classes/{class_id}/assignment-defense-scores', response_model=list[AcademicAssignmentDefenseScoreOut])
+def list_class_assignment_defense_scores(
+    class_id: str,
+    course_id: str | None = Query(None),
+    user: UserContext = Depends(require_permission('view_questions')),
+    db: Session = Depends(get_db),
+):
+    AcademicService(db).assert_can_access_class(user, class_id)
+    score_join_conditions = [
+        AcademicAssignmentDefenseScore.class_id == AcademicClassStudent.class_id,
+        AcademicAssignmentDefenseScore.student_id == AcademicClassStudent.student_id,
+    ]
+    if course_id:
+        score_join_conditions.append(or_(
+            AcademicAssignmentDefenseScore.course_id == course_id,
+            AcademicAssignmentDefenseScore.course_id.is_(None),
+        ))
+    rows = db.query(AcademicClassStudent, AcademicStudent, AcademicAssignmentDefenseScore).join(
+        AcademicStudent,
+        AcademicStudent.id == AcademicClassStudent.student_id,
+    ).outerjoin(
+        AcademicAssignmentDefenseScore,
+        and_(*score_join_conditions),
+    ).filter(AcademicClassStudent.class_id == class_id).order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).all()
+    result: list[dict[str, Any]] = []
+    seen_students: set[str] = set()
+    for _class_student, student, score in rows:
+        if student.id in seen_students:
+            continue
+        seen_students.add(student.id)
+        result.append({
+            'id': score.id if score else f'new:{student.id}',
+            'class_id': class_id,
+            'student_id': student.id,
+            'student_code': student.student_code,
+            'student_username': student.username,
+            'student_name': student.full_name,
+            'course_id': score.course_id if score else course_id,
+            'assignment_key': score.assignment_key if score else None,
+            'assignment_label': score.assignment_label if score else 'Assignment',
+            'score_10': score.score_10 if score else None,
+            'defense_status': score.defense_status if score else 'not_graded',
+            'graded_by': score.graded_by if score else None,
+            'graded_at': score.graded_at if score else None,
+            'note': score.note if score else '',
+            'created_at': score.created_at if score else None,
+            'updated_at': score.updated_at if score else None,
+        })
+    return result
+
+
+@router.put('/classes/{class_id}/assignment-defense-scores', response_model=list[AcademicAssignmentDefenseScoreOut])
+def save_class_assignment_defense_scores(
+    class_id: str,
+    payload: AcademicAssignmentDefenseScoreBulkIn,
+    user: UserContext = Depends(_require_training_write_permission),
+    db: Session = Depends(get_db),
+):
+    AcademicService(db).assert_can_access_class(user, class_id)
+    now = datetime.utcnow()
+    saved: list[AcademicAssignmentDefenseScore] = []
+    allowed_status = {'not_graded', 'waiting_defense', 'graded', 'absent', 'needs_regrade', 'submitted'}
+    audit_changes: list[dict[str, Any]] = []
+    response_course_id: str | None = None
+    for item in payload.items:
+        course_id = (item.course_id or '').strip() or None
+        response_course_id = response_course_id or course_id
+        assignment_key = (item.assignment_key or 'assignment').strip() or 'assignment'
+        row = db.query(AcademicAssignmentDefenseScore).filter(
+            AcademicAssignmentDefenseScore.class_id == class_id,
+            AcademicAssignmentDefenseScore.student_id == item.student_id,
+            AcademicAssignmentDefenseScore.course_id.is_(None) if course_id is None else AcademicAssignmentDefenseScore.course_id == course_id,
+            AcademicAssignmentDefenseScore.assignment_key == assignment_key,
+        ).first()
+        if not row:
+            row = AcademicAssignmentDefenseScore(
+                class_id=class_id,
+                student_id=item.student_id,
+                course_id=course_id,
+                assignment_key=assignment_key,
+                created_at=now,
+            )
+            db.add(row)
+        old_score = row.score_10
+        old_status = row.defense_status
+        row.assignment_label = (item.assignment_label or 'Assignment').strip()
+        row.score_10 = item.score_10
+        status_value = (item.defense_status or 'not_graded').strip().lower()
+        row.defense_status = status_value if status_value in allowed_status else 'not_graded'
+        row.graded_by = user.user_id if row.defense_status == 'graded' else row.graded_by
+        row.graded_at = now if row.defense_status == 'graded' else row.graded_at
+        row.note = (item.note or '').strip()
+        if old_score != row.score_10 or old_status != row.defense_status:
+            audit_changes.append({
+                'student_id': item.student_id,
+                'assignment_key': assignment_key,
+                'old_score': old_score,
+                'new_score': row.score_10,
+                'old_status': old_status,
+                'new_status': row.defense_status,
+            })
+        row.updated_at = now
+        row.metadata_json = {'source': 'manual_ui'}
+        saved.append(row)
+    db.commit()
+    for row in saved:
+        db.refresh(row)
+    log_audit(db, action='academic.assignment_defense_score.save', status='success', message='Lưu điểm bảo vệ Assignment thành công', user=user, target_type='academic_class', target_id=class_id, metadata={'count': len(saved), 'changes': audit_changes[:200]})
+    return list_class_assignment_defense_scores(class_id, course_id=response_course_id, user=user, db=db)
 
 
 @router.post('/classes/{class_id}/cms-sync-check/jobs', response_model=AcademicClassSyncJobOut)

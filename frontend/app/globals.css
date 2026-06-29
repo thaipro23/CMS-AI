@@ -5062,3 +5062,87 @@ html[data-theme='dark'] .training-management-page .nested-card {
 }
 .relearn-count-cell b { font-size: 14px; }
 .relearn-count-cell small { display: block; color: #64748b; margin-top: 3px; }
+
+/* v25.9.16.5.52 — class-detail quiz column alignment */
+.student-grade-table .component-grade-th {
+  min-width: 136px;
+  white-space: normal;
+  vertical-align: top;
+}
+.student-grade-table .component-grade-th span {
+  display: block;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.student-grade-table .component-grade-th small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted-foreground, #64748b);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+.quiz-grade-cell-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 6px 4px;
+  color: inherit;
+}
+.quiz-grade-cell-button:hover b {
+  text-decoration: underline;
+}
+.quiz-status-badge {
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.quiz-status-badge.success { background: #dcfce7; color: #166534; }
+.quiz-status-badge.warning { background: #fef3c7; color: #92400e; }
+.quiz-status-badge.danger { background: #fee2e2; color: #991b1b; }
+.quiz-status-badge.neutral { background: #eef2ff; color: #334155; }
+.quiz-detail-modal { max-width: 620px; }
+.quiz-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.quiz-detail-grid > div {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.quiz-detail-grid span {
+  display: block;
+  color: var(--muted-foreground, #64748b);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.quiz-detail-grid b {
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .quiz-detail-grid { grid-template-columns: 1fr; }
+}
+
+/* v25.9.16.5.57 training policy UI */
+.exam-policy-cell { min-width: 210px; }
+.exam-policy-cell small { display: block; margin-top: 4px; color: var(--muted-text, #64748b); line-height: 1.35; }
+.wide-policy-modal { width: min(1080px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.policy-edit-table-wrap { max-height: 62vh; overflow: auto; border: 1px solid rgba(148, 163, 184, .28); border-radius: 10px; }
+.policy-edit-table-wrap input,
+.policy-edit-table-wrap select { width: 100%; min-width: 120px; border: 1px solid rgba(148, 163, 184, .45); border-radius: 8px; padding: 8px 10px; background: #fff; font: inherit; }
+.policy-edit-table-wrap td small { display: block; color: var(--muted-text, #64748b); margin-top: 3px; }

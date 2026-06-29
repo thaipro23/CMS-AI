@@ -9,6 +9,7 @@ import {
   getAcademicTrainingTeacherReport,
 } from '../../lib/api'
 import { AcademicCampus, AcademicLearningComponentScore, AcademicTerm, AcademicTrainingTeacherReport } from '../../types'
+import { useDebouncedValue } from '../../lib/useDebouncedValue'
 
 const PAGE_SIZE = 50
 
@@ -27,6 +28,11 @@ type TrainingSummary = {
   classes_without_course_count: number
   deadline_late_student_count: number
   deadline_late_quiz_count: number
+  exam_eligible_student_count: number
+  exam_not_eligible_student_count: number
+  exam_insufficient_data_student_count: number
+  quiz_failed_count: number
+  assignment_not_graded_count: number
 }
 
 const EMPTY_SUMMARY: TrainingSummary = {
@@ -44,6 +50,11 @@ const EMPTY_SUMMARY: TrainingSummary = {
   classes_without_course_count: 0,
   deadline_late_student_count: 0,
   deadline_late_quiz_count: 0,
+  exam_eligible_student_count: 0,
+  exam_not_eligible_student_count: 0,
+  exam_insufficient_data_student_count: 0,
+  quiz_failed_count: 0,
+  assignment_not_graded_count: 0,
 }
 
 function normalizeSummary(value?: Partial<TrainingSummary> | null): TrainingSummary {
@@ -54,6 +65,11 @@ function normalizeSummary(value?: Partial<TrainingSummary> | null): TrainingSumm
     total_relearn_count: Number(value?.total_relearn_count || 0),
     deadline_late_student_count: Number(value?.deadline_late_student_count || 0),
     deadline_late_quiz_count: Number(value?.deadline_late_quiz_count || 0),
+    exam_eligible_student_count: Number((value as any)?.exam_eligible_student_count || 0),
+    exam_not_eligible_student_count: Number((value as any)?.exam_not_eligible_student_count || 0),
+    exam_insufficient_data_student_count: Number((value as any)?.exam_insufficient_data_student_count || 0),
+    quiz_failed_count: Number((value as any)?.quiz_failed_count || 0),
+    assignment_not_graded_count: Number((value as any)?.assignment_not_graded_count || 0),
   }
 }
 
@@ -131,8 +147,10 @@ function downloadBlob(blob: Blob, filename: string) {
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export default function TrainingManagementPage() {
@@ -146,6 +164,7 @@ export default function TrainingManagementPage() {
   const [branch, setBranch] = useState('poly')
   const [campus, setCampus] = useState('')
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search, 350)
   const [learningStatus, setLearningStatus] = useState('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -185,7 +204,7 @@ export default function TrainingManagementPage() {
     setLoading(true)
     setMessage('')
     try {
-      const result = await getAcademicTrainingTeacherReport(headers, { termId, branch, campus, search, learningStatus, page, pageSize: PAGE_SIZE })
+      const result = await getAcademicTrainingTeacherReport(headers, { termId, branch, campus, search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE })
       if (cancelledRef?.cancelled) return
       setItems(result.items || [])
       setSummary(normalizeSummary(result.summary))
@@ -201,7 +220,7 @@ export default function TrainingManagementPage() {
     const cancelledRef = { cancelled: false }
     loadReport(cancelledRef)
     return () => { cancelledRef.cancelled = true }
-  }, [headers, termId, branch, campus, search, learningStatus, page])
+  }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page])
 
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -230,7 +249,7 @@ export default function TrainingManagementPage() {
     setExporting(true)
     setMessage('')
     try {
-      const blob = await downloadAcademicTrainingTeacherReport(headers, { termId, branch, campus, search, learningStatus })
+      const blob = await downloadAcademicTrainingTeacherReport(headers, { termId, branch, campus, search: debouncedSearch, learningStatus })
       const termPart = (selectedTerm?.term_name || 'term').replace(/[^a-zA-Z0-9]+/g, '-')
       downloadBlob(blob, `bao-cao-quan-ly-dao-tao-${branch}-${termPart}.xlsx`)
       setMessage('Đã xuất Excel báo cáo quản lý đào tạo.')
@@ -284,6 +303,8 @@ export default function TrainingManagementPage() {
             <option value="low_progress">Có SV tiến độ thấp</option>
             <option value="low_grade">Có SV điểm thấp</option>
             <option value="deadline_late">Có SV trễ deadline quiz</option>
+            <option value="exam_not_eligible">Có SV không được thi</option>
+            <option value="exam_insufficient_data">Có SV thiếu dữ liệu xét thi</option>
             <option value="has_alert">Có cảnh báo</option>
           </select>
         </label>
@@ -300,6 +321,7 @@ export default function TrainingManagementPage() {
         <div><span>Đã enroll</span><b>{countLabel(summary.learning_enrolled_count)}</b><small>Enrollment CMS</small></div>
         <div><span>Cần theo dõi</span><b>{countLabel(summary.risk_student_count)}</b><small>SV có cảnh báo học tập</small></div>
         <div><span>Trễ deadline</span><b>{countLabel(summary.deadline_late_student_count)}</b><small>{countLabel(summary.deadline_late_quiz_count)} lượt quiz trễ</small></div>
+        <div><span>Không được thi</span><b>{countLabel(summary.exam_not_eligible_student_count)}</b><small>{countLabel(summary.exam_insufficient_data_student_count)} SV thiếu dữ liệu</small></div>
       </div>
 
       {message && <div className="academic-inline-error"><b>Thông báo</b><span>{message}</span></div>}
@@ -348,7 +370,7 @@ export default function TrainingManagementPage() {
                 <td>
                   <span className={riskTone(item)}>{item.risk_student_count ? `${item.risk_student_count} SV cần theo dõi` : 'Ổn'}</span>
                   <small>Chưa học {countLabel(statuses.no_activity)} · Tiến độ thấp {countLabel(statuses.low_progress)} · Điểm thấp {countLabel(statuses.low_grade)}</small>
-                  <small>Trễ deadline {countLabel(statuses.deadline_late)} SV</small>
+                  <small>Trễ deadline {countLabel(statuses.deadline_late)} SV · Không được thi {countLabel(statuses.exam_not_eligible)} SV</small>
                   <small>{alertText(item.learning_alerts)}</small>
                 </td>
                 <td>
@@ -367,7 +389,7 @@ export default function TrainingManagementPage() {
             {(() => {
               const columns = classComponentColumns(item)
               return <table className="data-table academic-data-table training-class-grade-table">
-                <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Học lại</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Cảnh báo</th></tr></thead>
+                <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Học lại</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Điều kiện thi</th><th>Cảnh báo</th></tr></thead>
                 <tbody>
                   {item.classes.map((cls) => <tr key={cls.class_id}>
                     <td><b>{cls.class_code}</b><small>{cls.term_name}{cls.block_name ? ` · ${cls.block_name}` : ''}</small></td>
@@ -382,9 +404,10 @@ export default function TrainingManagementPage() {
                       <small>{countLabel(cls.deadline_late_quiz_count)} lượt quiz trễ · Đã đến hạn {countLabel(cls.deadline_due_quiz_count)}/{countLabel(cls.deadline_quiz_count)} quiz</small>
                       <small>{cls.deadline_next_quiz_label ? `${cls.deadline_next_quiz_label}: ${cls.deadline_next_quiz_from_date || 'N/A'} → ${cls.deadline_next_quiz_due_date || 'N/A'}` : 'Đã qua lịch quiz hoặc chưa có Detailed grades'}</small>
                     </td>
+                    <td><b>{countLabel(cls.exam_eligible_student_count)} được thi</b><small>{countLabel(cls.exam_not_eligible_student_count)} không được thi · {countLabel(cls.exam_insufficient_data_student_count)} thiếu dữ liệu</small><small>Quiz chưa đạt: {countLabel(cls.quiz_failed_count)} · Assignment chưa chấm: {countLabel(cls.assignment_not_graded_count)}</small></td>
                     <td><span className={cls.learning_alerts?.length ? 'status-pill warning' : 'status-pill success'}>{cls.learning_alerts?.length ? 'Có cảnh báo' : 'Ổn'}</span><small>{alertText(cls.learning_alerts)}</small></td>
                   </tr>)}
-                  {!columns.length && <tr><td colSpan={9}>Chưa có cột Detailed grades. Hãy chạy Đồng bộ full CMS cho lớp sau khi Course CMS đã map đúng.</td></tr>}
+                  {!columns.length && <tr><td colSpan={10}>Chưa có cột Detailed grades. Hãy chạy Đồng bộ full CMS cho lớp sau khi Course CMS đã map đúng.</td></tr>}
                 </tbody>
               </table>
             })()}
