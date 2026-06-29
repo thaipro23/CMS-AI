@@ -1236,6 +1236,21 @@ export type BankVersionDiffPreview = {
   message: string
 }
 
+
+export type BankMaterialRecheckResult = {
+  ok: boolean
+  bank_version_id?: string | null
+  candidate_count: number
+  kept_count: number
+  safe_skipped_count: number
+  retired_count: number
+  release_removed_count?: number
+  current_material_chunk_count?: number
+  message: string
+  user_message?: string | null
+  [key: string]: any
+}
+
 export type BankCarryOverResult = {
   ok: boolean
   created_count: number

@@ -3127,36 +3127,58 @@ class VersionedQuestionBankService:
             'message': 'Đã rollback Quiz trên Open edX.' if openedx_deleted else 'Đã đánh dấu cần kiểm tra/xóa Quiz thủ công trong Studio.',
         }
 
+    def _normalize_release_term_slug(self, raw_term: str | None) -> str | None:
+        raw = (raw_term or '').strip()
+        if not raw:
+            return None
+        compact = re.sub(r'[^A-Za-z0-9]+', '', raw).upper()
+        match = re.search(r'\b(SU|SP|FA|SUMMER|SPRING|FALL)(?:[-_\s]*)(20)?(\d{2})\b', raw, flags=re.I)
+        if match:
+            prefix_raw = match.group(1).upper()
+            prefix = {'SUMMER': 'SU', 'SPRING': 'SP', 'FALL': 'FA'}.get(prefix_raw, prefix_raw)
+            return f'{prefix}{match.group(3)}'
+        match = re.search(r'(SUMMER|SPRING|FALL)[-_\s]*(20)(\d{2})', raw, flags=re.I)
+        if match:
+            prefix = {'SUMMER': 'SU', 'SPRING': 'SP', 'FALL': 'FA'}[match.group(1).upper()]
+            return f'{prefix}{match.group(3)}'
+        if re.fullmatch(r'(SU|SP|FA)\d{2}', compact):
+            return compact
+        term = re.sub(r'[^A-Za-z0-9]+', '-', raw).strip('-').upper()
+        return term or None
+
     def _release_offering_term_slug(self, *, subject: Subject, version: QuestionBankVersion) -> str | None:
         """Return the subject offering/term part used in Open edX Library keys.
 
-        FPT rule: library keys for question-bank releases must include the
-        subject version/term. Example:
-            WEB107_FA26 / Bài 2.1 / v1.0
-            -> lib:FPT:web107-FA26-b-i-2-1-v1-0
+        FPT rule: every release/library is term-scoped. Example:
+            WEB107_SU26 / Bài 2.1 / v1.0
+            -> lib:FPT:web107-SU26-b-i-2-1-v1-0
 
-        Older builds produced keys without the term, for example:
-            lib:FPT:web107-b-i-2-1-v1-0
+        This avoids sharing one Open edX Library across SU/SP/FA offerings.
         """
         offering = self.db.get(SubjectOffering, version.subject_offering_id) if version.subject_offering_id else None
-        if not offering:
-            return None
-
-        raw_term = (offering.term or '').strip()
-        if not raw_term:
-            offering_code = (offering.code or '').strip()
-            subject_code = (subject.code or '').strip()
-            if offering_code and subject_code and offering_code.upper().startswith(subject_code.upper()):
-                raw_term = offering_code[len(subject_code):].strip(' _-')
-            else:
-                raw_term = offering_code
-
-        if not raw_term:
-            return None
-
-        # Keep FPT term readable in the key: FA26/SU25/SP25, not fa26/su25.
-        term = re.sub(r'[^A-Za-z0-9]+', '-', raw_term).strip('-').upper()
-        return term or None
+        candidates: list[str] = []
+        if offering:
+            candidates.extend([offering.term or '', offering.code or '', offering.name or '', offering.version_code or ''])
+        metadata = version.metadata_json or {}
+        if isinstance(metadata, dict):
+            candidates.extend([
+                str(metadata.get('term') or ''),
+                str(metadata.get('term_code') or ''),
+                str(metadata.get('term_name') or ''),
+                str(metadata.get('subject_offering_code') or ''),
+            ])
+        candidates.extend([version.title or '', version.version_code or ''])
+        subject_code = (subject.code or '').strip()
+        for candidate in candidates:
+            raw = (candidate or '').strip()
+            if not raw:
+                continue
+            if subject_code and raw.upper().startswith(subject_code.upper()):
+                raw = raw[len(subject_code):].strip(' _-') or candidate
+            term = self._normalize_release_term_slug(raw)
+            if term:
+                return term
+        return None
 
     def release_library_key(self, *, subject: Subject, chapter: SubjectChapter, version: QuestionBankVersion) -> str:
         subject_slug = slugify(subject.code or subject.name, 'subject')
@@ -3267,7 +3289,12 @@ class VersionedQuestionBankService:
         if not force and not readiness.get('can_create_release'):
             raise ValueError('Chưa thể chốt Release: ' + readiness.get('message', 'Cần xử lý xong câu hỏi/tài liệu trước khi chốt.'))
         chapter_code = slugify(self._chapter_display_name(chapter), 'chapter')
-        code = release_code or f'{subject.code}-{chapter_code}-{version.version_code}'
+        term_slug = self._release_offering_term_slug(subject=subject, version=version)
+        code_parts = [subject.code]
+        if term_slug:
+            code_parts.append(term_slug)
+        code_parts.extend([chapter_code, version.version_code])
+        code = release_code or '-'.join(str(part) for part in code_parts if str(part or '').strip())
         library_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
         questions = self._release_questions_for_version(version) if include_approved_questions else []
         counts = {'easy': 0, 'medium': 0, 'hard': 0}
@@ -3284,7 +3311,7 @@ class VersionedQuestionBankService:
             chapter_id=version.chapter_id,
             subject_offering_id=version.subject_offering_id,
             release_code=code,
-            title=title or f'{subject.code} - {self._chapter_display_name(chapter)} - {version.version_code}',
+            title=title or f"{subject.code}{f' - {term_slug}' if term_slug else ''} - {self._chapter_display_name(chapter)} - {version.version_code}",
             # v25.9.15.1: create is a draft/ready metadata step. It is only
             # marked published after Open edX import verifies.
             status='ready' if questions else 'draft',
@@ -3296,7 +3323,14 @@ class VersionedQuestionBankService:
             openedx_library_key=library_key,
             published_at=None,
             published_by=None,
-            metadata_json={'one_bank_release_one_openedx_library': True, 'shared_across_courses': True, 'publish_wiring': 'pending_openedx_import'},
+            metadata_json={
+                'one_bank_release_one_openedx_library': True,
+                'term_scoped_library': True,
+                'shared_across_terms': False,
+                'shared_across_courses': False,
+                'term_slug': term_slug,
+                'publish_wiring': 'pending_openedx_import',
+            },
         )
         self.db.add(release)
         self.db.flush()
@@ -4571,10 +4605,15 @@ class VersionedQuestionBankService:
         }
         self.db.commit()
 
+        term_slug = self._release_offering_term_slug(subject=subject, version=version)
         metadata_base = {
             'library_key': library_key,
             'library_org': 'FPT',
             'org': 'FPT',
+            'term_slug': term_slug,
+            'term_scoped_library': True,
+            'shared_across_terms': False,
+            'shared_across_courses': False,
             'subject_id': subject.id,
             'subject_code': subject.code,
             'subject_name': subject.name,
@@ -4591,6 +4630,7 @@ class VersionedQuestionBankService:
                 'ai-learning-check',
                 'generated',
                 f'subject:{subject.code}',
+                *( [f'term:{term_slug}'] if term_slug else [] ),
                 f'chapter:{self._chapter_display_name(chapter)}',
                 f'bank-release:{release.release_code}',
             ],

@@ -135,7 +135,9 @@ function quizNumbersFromText(value?: string | null) {
 function quizNumber(score?: AcademicLearningComponentScore | null) {
   if (!score) return null
   if (typeof score.quiz_number === 'number' && score.quiz_number > 0) return score.quiz_number
-  const fromText = quizNumbersFromText(`${score.name || ''} ${score.key || ''} ${score.category || ''}`)
+  // Only parse human-facing labels. Do not parse storage keys like
+  // `block@quiz-14-...`, otherwise a random usage key can create a phantom `Quiz 14` column.
+  const fromText = quizNumbersFromText(`${score.name || ''} ${(score as any).label || ''} ${(score as any).display_name || ''} ${(score as any).title || ''}`)
   return fromText[0] || null
 }
 function gradeColumnIdentity(score: AcademicLearningComponentScore) {

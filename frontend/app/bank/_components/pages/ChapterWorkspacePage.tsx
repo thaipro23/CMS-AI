@@ -16,6 +16,7 @@ import {
   BankReleaseReadiness,
   BankVersion,
   BankVersionDiffPreview,
+  BankMaterialRecheckResult,
   BankVersionQuestion,
   CourseQuizInstance,
   AuditLogRow,
@@ -71,6 +72,7 @@ import {
   markBankDiffResolved,
   previewBankVersionDiff,
   previewGenerateFromBankVersion,
+  recheckBankMaterialCarryOver,
   publishBankRelease,
   reviewBankQuestion,
   rollbackCourseQuizInstance,
@@ -229,6 +231,34 @@ function operationResultMessage(result: Record<string, unknown> | null | undefin
   return userMessage || message || fallback
 }
 
+function diffImpactGroups(diff: BankVersionDiffPreview | null) {
+  const summary = diff?.summary
+  if (!summary) return { critical: [] as string[], warning: [] as string[], info: [] as string[] }
+  const similarity = Number(summary.material_similarity ?? diff?.material_similarity ?? 0)
+  const critical: string[] = []
+  const warning: string[] = []
+  const info: string[] = []
+
+  if (summary.removed_concept_count > 0) critical.push(`${summary.removed_concept_count} concept nguồn không còn trong tài liệu mới; các câu hỏi bám vào concept này nên bị bỏ hoặc review lại.`)
+  if (summary.retire_candidate_count > 0) critical.push(`${summary.retire_candidate_count} câu nên bỏ vì không còn căn cứ rõ trong tài liệu hiện tại.`)
+  if (summary.review_candidate_count > 0) warning.push(`${summary.review_candidate_count} câu cần giáo viên xem lại vì concept/tài liệu đã thay đổi hoặc hệ thống chưa đủ chắc để giữ tự động.`)
+  if (summary.new_concept_count > 0) warning.push(`${summary.new_concept_count} concept mới xuất hiện; nên sinh/bổ sung câu hỏi để phủ nội dung mới.`)
+  if (summary.changed_concept_count > 0) warning.push(`${summary.changed_concept_count} concept có nội dung thay đổi; cần rà lại câu hỏi liên quan.`)
+  if (summary.carry_over_candidate_count > 0) info.push(`${summary.carry_over_candidate_count} câu có thể giữ vì concept ổn định hoặc tài liệu đủ giống.`)
+  if (summary.already_exists_count > 0) info.push(`${summary.already_exists_count} câu đã tồn tại trong version hiện tại nên không cần tạo lại.`)
+  if (similarity < 0.72) critical.push(`Độ giống tài liệu chỉ khoảng ${Math.round(similarity * 100)}%; không nên giữ câu cũ hàng loạt.`)
+  if (!critical.length && !warning.length) info.push('Không phát hiện thay đổi có rủi ro cao so với Bank Version gốc. Không cần xử lý thêm nếu giáo viên đã kiểm tra nội dung.')
+  return { critical, warning, info }
+}
+
+function diffActionHint(diff: BankVersionDiffPreview | null) {
+  const summary = diff?.summary
+  if (!summary) return 'Chưa có kết quả kiểm tra.'
+  if (summary.retire_candidate_count || summary.review_candidate_count || summary.removed_concept_count) return 'Nên bấm “Áp dụng xử lý tự động” để hệ thống tự loại câu clone không còn căn cứ, rồi giáo viên review các câu còn lại.'
+  if (summary.new_concept_count || summary.changed_concept_count) return 'Nên bổ sung/sinh thêm câu hỏi cho concept mới hoặc concept đã thay đổi.'
+  return 'Không cần đồng bộ mù. Có thể tiếp tục duyệt/chốt bộ đề nếu câu hỏi đã đạt.'
+}
+
 export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const { headers, can } = useBankData()
   const searchParams = useSearchParams()
@@ -253,6 +283,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [autoCreateTried, setAutoCreateTried] = useState(false)
   const [materialView, setMaterialView] = useState<{ material: MaterialVersion; chunks: MaterialChunk[] } | null>(null)
   const [diffPreview, setDiffPreview] = useState<BankVersionDiffPreview | null>(null)
+  const [materialRecheckResult, setMaterialRecheckResult] = useState<BankMaterialRecheckResult | null>(null)
   const [generatePreview, setGeneratePreview] = useState<BankGeneratePreview | null>(null)
   const [editingQuestion, setEditingQuestion] = useState<BankVersionQuestion | null>(null)
   const [editForm, setEditForm] = useState<BankQuestionEditForm | null>(null)
@@ -518,7 +549,16 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 
   const runDiffNow = async (bankVersionId: string, baseId: string) => {
     const diff = await previewBankVersionDiff(headers, bankVersionId, { base_bank_version_id: baseId, persist: true })
+    setMaterialRecheckResult(null)
     setDiffPreview(diff)
+  }
+
+  const applyMaterialRecheck = async () => {
+    if (!selectedBankVersion) return
+    const result = await recheckBankMaterialCarryOver(headers, selectedBankVersion.id)
+    setMaterialRecheckResult(result)
+    setPopupMessage({ type: 'success', text: result.user_message || result.message || 'Đã áp dụng xử lý tự động sau khi kiểm tra thay đổi tài liệu.' })
+    await refreshCurrent()
   }
 
   const rejectQuestionsByPreviousIds = async (sourceIds: string[], note: string) => {
@@ -902,17 +942,32 @@ ${chunk.content}`).join('\n\n')
       </div>
     </Modal>
 
-    <Modal open={Boolean(diffPreview)} title="Kết quả kiểm tra thay đổi tài liệu" onClose={() => setDiffPreview(null)}>
+    <Modal open={Boolean(diffPreview)} title="Kết quả kiểm tra thay đổi tài liệu" onClose={() => { setDiffPreview(null); setMaterialRecheckResult(null) }} wide>
       {diffPreview ? <div className="diff-result-box">
         <div className="summary-grid compact-summary">
           <div><span>Tài liệu giống nhau</span><b>{Math.round(Number(diffPreview.summary.material_similarity ?? diffPreview.material_similarity ?? 0) * 100)}%</b></div>
           <div><span>Câu có thể giữ</span><b>{diffPreview.summary.carry_over_candidate_count}</b></div>
           <div><span>Câu nên bỏ</span><b>{diffPreview.summary.retire_candidate_count}</b></div>
           <div><span>Câu cần xem lại</span><b>{diffPreview.summary.review_candidate_count}</b></div>
+          <div><span>Concept mới</span><b>{diffPreview.summary.new_concept_count}</b></div>
+          <div><span>Concept bị xóa</span><b>{diffPreview.summary.removed_concept_count}</b></div>
         </div>
-        <p className="helper">Giáo viên chỉ cần chọn cách xử lý. Hệ thống sẽ tự cập nhật danh sách câu hỏi.</p>
+        {(() => {
+          const impact = diffImpactGroups(diffPreview)
+          return <div className="diff-impact-panel">
+            {impact.critical.length ? <div className="diff-impact-section danger"><b>Ảnh hưởng nghiêm trọng</b><ul>{impact.critical.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+            {impact.warning.length ? <div className="diff-impact-section warning"><b>Cần xử lý</b><ul>{impact.warning.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+            {impact.info.length ? <div className="diff-impact-section"><b>Thông tin</b><ul>{impact.info.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+          </div>
+        })()}
+        {diffPreview.summary.changed_concepts?.length ? <div className="diff-chip-group"><b>Concept đổi:</b>{diffPreview.summary.changed_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
+        {diffPreview.summary.new_concepts?.length ? <div className="diff-chip-group"><b>Concept mới:</b>{diffPreview.summary.new_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
+        {diffPreview.summary.removed_concepts?.length ? <div className="diff-chip-group danger"><b>Concept bị xóa:</b>{diffPreview.summary.removed_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
+        <div className="alert warning"><b>Gợi ý xử lý:</b> {diffActionHint(diffPreview)}</div>
+        {materialRecheckResult ? <div className="alert success"><b>Đã áp dụng xử lý tự động.</b> Giữ {materialRecheckResult.kept_count + materialRecheckResult.safe_skipped_count} câu, tự loại {materialRecheckResult.retired_count} câu, gỡ {materialRecheckResult.release_removed_count || 0} mapping release.</div> : null}
         <div className="button-row">
-          <button className="btn" disabled={Boolean(actionBusy)} onClick={() => run(keepReusableOnly, 'Đã giữ câu phù hợp và bỏ câu không còn chắc phù hợp')}>Giữ câu còn phù hợp</button>
+          <button className="btn" disabled={Boolean(actionBusy)} onClick={() => runAction('diff_apply', applyMaterialRecheck, 'Đã áp dụng xử lý tự động sau khi kiểm tra thay đổi tài liệu.', undefined, 'Không áp dụng được xử lý tự động. Vui lòng thử lại.')}>Áp dụng xử lý tự động</button>
+          <button className="btn secondary" disabled={Boolean(actionBusy)} onClick={() => run(keepReusableOnly, 'Đã giữ câu phù hợp và bỏ câu không còn chắc phù hợp')}>Giữ câu còn phù hợp</button>
           <button className="btn secondary" disabled={Boolean(actionBusy)} onClick={() => run(rejectAllCarryOver, 'Đã bỏ các câu clone từ tài liệu cũ')}>Không giữ câu cũ</button>
         </div>
       </div> : null}

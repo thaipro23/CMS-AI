@@ -106,7 +106,9 @@ def _quiz_number(item: dict[str, Any]) -> int | None:
             return int(raw)
     except Exception:
         pass
-    numbers = _quiz_numbers(' '.join(str(item.get(k) or '') for k in ('name', 'key', 'category', 'label')))
+    # Parse only human-facing labels, not Open edX usage keys. Storage keys can
+    # contain fragments like `quiz-14` and must not create a `Quiz 14` policy item.
+    numbers = _quiz_numbers(' '.join(str(item.get(k) or '') for k in ('name', 'label', 'display_name', 'title')))
     return numbers[0] if numbers else None
 
 

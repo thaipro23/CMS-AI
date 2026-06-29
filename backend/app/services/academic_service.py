@@ -1055,13 +1055,20 @@ class AcademicService:
     def _quiz_numbers_from_component_item(self, item: dict[str, Any] | None) -> list[int]:
         if not isinstance(item, dict):
             return []
-        text = ' '.join(str(item.get(key) or '') for key in ('name', 'key', 'category'))
-        numbers = self._quiz_numbers_from_text(text)
+        explicit = self._number_or_none(item.get('quiz_number') or item.get('quizNumber'))
+        if explicit is not None and 1 <= int(explicit) <= 200:
+            return [int(explicit)]
+
+        # Only parse human-facing labels here. Do not parse usage keys such as
+        # `block@quiz-14-...`: those are storage identifiers and created phantom
+        # columns like `Quiz 14` even when CMS had only 2 real Quiz subsections.
+        label_text = ' '.join(str(item.get(key) or '') for key in ('name', 'label', 'display_name', 'title'))
+        numbers = self._quiz_numbers_from_text(label_text)
         if numbers:
             return numbers
+
         category = str(item.get('category') or '').strip().lower()
-        source = str(item.get('source') or '').strip().lower()
-        name = str(item.get('name') or item.get('key') or '').strip().lower()
+        name = str(item.get('name') or item.get('label') or '').strip().lower()
         looks_like_quiz = (
             'quiz' in category
             or 'quiz' in name
@@ -1081,10 +1088,32 @@ class AcademicService:
         if quiz_count <= 0 or not block_start:
             return []
         # Một block học 7 tuần: 6 tuần đầu dành deadline quiz, tuần 7 là Ôn+Thi.
+        # Khi số Quiz ít hơn 6, chia đều **thời lượng học** cho từng Quiz.
+        # Ví dụ 2 Quiz => Quiz 1 hết tuần 3, Quiz 2 hết tuần 6; không dồn cả hai vào tuần 1.
         quiz_weeks = 6
+        schedule: list[dict[str, Any]] = []
+        if quiz_count <= quiz_weeks:
+            base_weeks = quiz_weeks // quiz_count
+            remainder_weeks = quiz_weeks % quiz_count
+            week_cursor = 0
+            for quiz_number in range(1, quiz_count + 1):
+                span = base_weeks + (1 if quiz_number <= remainder_weeks else 0)
+                from_date = block_start + timedelta(days=week_cursor * 7)
+                due_date = block_start + timedelta(days=(week_cursor + span - 1) * 7 + 5)  # T2 -> T7 của tuần cuối được phân bổ
+                schedule.append({
+                    'week_number': week_cursor + 1,
+                    'week_to_number': week_cursor + span,
+                    'label': f'Quiz {quiz_number}',
+                    'quiz_numbers': [quiz_number],
+                    'from_date': from_date.isoformat(),
+                    'due_date': due_date.isoformat(),
+                })
+                week_cursor += span
+            return schedule
+
+        # Khi số Quiz nhiều hơn 6, chia số Quiz theo từng tuần, phần dư dồn vào các tuần đầu.
         base = quiz_count // quiz_weeks
         remainder = quiz_count % quiz_weeks
-        schedule: list[dict[str, Any]] = []
         quiz_number = 1
         for week_index in range(quiz_weeks):
             week_quiz_count = base + (1 if week_index < remainder else 0)
@@ -1094,10 +1123,7 @@ class AcademicService:
             due_date = from_date + timedelta(days=5)  # T2 -> T7
             quiz_numbers = list(range(quiz_number, quiz_number + week_quiz_count))
             quiz_number += week_quiz_count
-            if len(quiz_numbers) == 1:
-                label = f"Quiz {quiz_numbers[0]}"
-            else:
-                label = f"Quiz {quiz_numbers[0]}-{quiz_numbers[-1]}"
+            label = f"Quiz {quiz_numbers[0]}" if len(quiz_numbers) == 1 else f"Quiz {quiz_numbers[0]}-{quiz_numbers[-1]}"
             schedule.append({
                 'week_number': week_index + 1,
                 'label': label,

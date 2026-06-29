@@ -44,6 +44,7 @@ import {
   BankVersionQuestion,
   BankQuestionListItem,
   BankVersionDiffPreview,
+  BankMaterialRecheckResult,
   BankCarryOverResult,
   BankRetireResult,
   BankReleaseQuizPlan,
@@ -1662,6 +1663,15 @@ export async function previewBankVersionDiff(
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function recheckBankMaterialCarryOver(headers: HeadersInit, bankVersionId: string) {
+  return parseResponse<BankMaterialRecheckResult>(
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/materials/recheck-carry-over`, {
+      method: 'POST',
+      headers,
     }),
   );
 }

@@ -94,3 +94,21 @@ def test_final_test_rule_is_not_applied_yet():
     result = _service().evaluate_student(cls=_cls(), student_id='s1', components=[_quiz(1, 100, '2026-05-15'), {'name': 'Final test'}], overrides={})
     assert result['final_test_rule'] == 'pending'
     assert result['exam_status'] == 'eligible'
+
+
+def test_quiz_usage_key_number_does_not_create_phantom_quiz():
+    # Storage keys like block@quiz-14 are not human quiz labels. They must not
+    # create a Quiz 14 policy item when the real UI has only generic `Quiz`.
+    component = {
+        'name': 'Quiz',
+        'key': 'block-v1:FPT+COM1071+SU26+type@sequential+block@quiz-14-random',
+        'category': 'quiz',
+        'percent': 100,
+        'submitted_at': '2026-05-15',
+        'deadline_date': '2026-05-16',
+        'available_from': '2026-05-11',
+    }
+    result = _service().evaluate_student(cls=_cls(), student_id='s1', components=[component], overrides={})
+    assert result['quiz_total'] == 0
+    assert result['exam_status'] == 'insufficient_data'
+
