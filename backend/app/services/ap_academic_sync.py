@@ -83,7 +83,15 @@ def _parse_date(value: Any) -> datetime | None:
             parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
         return parsed
     except Exception:
+        # Excel serial date support for ACMS import-like AP payloads.
+        try:
+            serial = float(raw)
+            if 20000 <= serial <= 70000:
+                return datetime(1899, 12, 30) + timedelta(days=serial)
+        except Exception:
+            pass
         return None
+
 
 
 def _block_sort_order(name: str) -> int:
@@ -913,7 +921,9 @@ class AcademicImportService:
         changed |= self._set_if_changed(subject, 'subject_name_en', _clean(item.get('subject_name_en')) or None)
         changed |= self._set_if_changed(subject, 'skill_code', _clean(item.get('skill_code')) or None)
         changed |= self._set_if_changed(subject, 'active', True)
-        changed |= self._set_json_if_changed(subject, 'metadata_json', {'source': 'ap', 'raw_keys': sorted(item.keys())})
+        subject_meta = dict(subject.metadata_json or {})
+        subject_meta.update({'source': 'ap', 'raw_keys': sorted(item.keys())})
+        changed |= self._set_json_if_changed(subject, 'metadata_json', subject_meta)
         if changed:
             subject.updated_at = _now()
             self.db.add(subject)
@@ -1057,12 +1067,14 @@ class AcademicImportService:
                     changed |= self._set_if_changed(cls, 'start_date', _parse_date(raw.get('start_date')))
                     changed |= self._set_if_changed(cls, 'end_date', _parse_date(raw.get('end_date')))
                     changed |= self._set_if_changed(cls, 'active', True)
-                    changed |= self._set_json_if_changed(cls, 'metadata_json', {
+                    class_meta = dict(cls.metadata_json or {})
+                    class_meta.update({
                         'source': 'ap',
                         'raw_keys': sorted(raw.keys()),
                         'ap_block_id': raw_block_id or None,
                         'block_resolution': block_resolution,
                     })
+                    changed |= self._set_json_if_changed(cls, 'metadata_json', class_meta)
                     if changed:
                         cls.updated_at = _now()
                         self.db.add(cls)

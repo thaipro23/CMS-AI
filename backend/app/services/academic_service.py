@@ -736,6 +736,23 @@ class AcademicService:
             total = self._number_or_none(container.get('total_blocks') or container.get('total_count') or container.get('block_count') or container.get('total') or container.get('required'))
             if completed is not None and total and total > 0:
                 return round((completed / total) * 100.0, 2)
+        # Last-resort fallback when Open edX completion app is unavailable but
+        # the connector returned planned Detailed-grade/quiz components. This is
+        # not a replacement for native completion; it prevents the UI from showing
+        # N/A when the only available learning evidence is quiz/problem progress.
+        components = self._component_scores_from_payload(payload)
+        if components:
+            scored = 0
+            total = 0
+            for item in components:
+                total += 1
+                percent = self._number_or_none(item.get('percent'))
+                earned = self._number_or_none(item.get('earned'))
+                possible = self._number_or_none(item.get('possible'))
+                if (percent is not None and percent > 0) or (earned is not None and earned > 0) or (possible is not None and percent is not None):
+                    scored += 1
+            if total > 0:
+                return round((scored / total) * 100.0, 2)
         return None
 
     def _grade_percent_from_payload(self, payload: dict[str, Any]) -> float | None:
@@ -817,7 +834,8 @@ class AcademicService:
         )
         if percent is None and earned is not None and possible and possible > 0:
             percent = round((earned / possible) * 100.0, 2)
-        if percent is None and earned is None and possible is None:
+        planned = bool(item.get('planned') is True or item.get('is_planned') is True or str(item.get('source') or '').strip().lower() in {'course_outline', 'cms_course_outline'})
+        if percent is None and earned is None and possible is None and not planned:
             return None
         return {
             'key': key or name,
@@ -828,6 +846,8 @@ class AcademicService:
             'percent': percent,
             'weight': self._number_or_none(item.get('weight')),
             'source': str(item.get('source') or item.get('model') or '').strip() or None,
+            'planned': planned,
+            'order': int(self._number_or_none(item.get('order') or item.get('index') or item.get('position') or item.get('quiz_index') or item.get('quizIndex')) or 0) or None,
         }
 
     def _component_scores_from_payload(self, payload: Any) -> list[dict[str, Any]]:
@@ -911,9 +931,11 @@ class AcademicService:
     def _component_scores_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> list[dict[str, Any]]:
         if not snapshot or not isinstance(snapshot.raw_json, dict):
             return []
-        raw = snapshot.raw_json
-        payload = raw.get('payload') if isinstance(raw.get('payload'), dict) else raw
-        return self._component_scores_from_payload(payload)
+        # Use the merged snapshot payload so component grades are still readable
+        # when enrollment sync later wrote enrollment_payload next to the original
+        # class-analytics payload, or when older jobs stored connector results at
+        # raw_json root.
+        return self._component_scores_from_payload(self._payload_from_snapshot(snapshot))
 
     @staticmethod
     def _date_only(value: Any) -> date | None:
@@ -953,7 +975,7 @@ class AcademicService:
     def _completed_quiz_numbers_from_snapshot(self, snapshot: AcademicStudentLearningSnapshot | None) -> set[int]:
         completed: set[int] = set()
         for item in self._component_scores_from_snapshot(snapshot):
-            numbers = self._quiz_numbers_from_text(' '.join(str(item.get(key) or '') for key in ('name', 'key', 'category')))
+            numbers = self._quiz_numbers_from_component_item(item)
             if not numbers:
                 continue
             percent = self._number_or_none(item.get('percent'))
@@ -967,6 +989,29 @@ class AcademicService:
             if done or (percent is not None and possible is not None and possible == 0):
                 completed.update(numbers)
         return completed
+
+    def _quiz_numbers_from_component_item(self, item: dict[str, Any] | None) -> list[int]:
+        if not isinstance(item, dict):
+            return []
+        text = ' '.join(str(item.get(key) or '') for key in ('name', 'key', 'category'))
+        numbers = self._quiz_numbers_from_text(text)
+        if numbers:
+            return numbers
+        category = str(item.get('category') or '').strip().lower()
+        source = str(item.get('source') or '').strip().lower()
+        name = str(item.get('name') or item.get('key') or '').strip().lower()
+        looks_like_quiz = (
+            'quiz' in category
+            or 'quiz' in name
+            or 'learning check' in name
+            or name.startswith('lc ')
+        )
+        if not looks_like_quiz:
+            return []
+        order = self._number_or_none(item.get('order') or item.get('quiz_index') or item.get('quizIndex') or item.get('position') or item.get('index'))
+        if order is not None and 1 <= int(order) <= 200:
+            return [int(order)]
+        return []
 
     @staticmethod
     def _quiz_deadline_schedule(quiz_count: int, block_start: date | None) -> list[dict[str, Any]]:
@@ -1016,11 +1061,20 @@ class AcademicService:
         for class_id, cls in class_by_id.items():
             snapshots = snapshots_by_class.get(class_id, [])
             quiz_count = 0
+            quiz_component_count = 0
             for snapshot in snapshots:
                 for item in self._component_scores_from_snapshot(snapshot):
-                    numbers = self._quiz_numbers_from_text(' '.join(str(item.get(key) or '') for key in ('name', 'key', 'category')))
+                    numbers = self._quiz_numbers_from_component_item(item)
                     if numbers:
                         quiz_count = max(quiz_count, max(numbers))
+                    else:
+                        category = str(item.get('category') or '').strip().lower()
+                        name = str(item.get('name') or item.get('key') or '').strip().lower()
+                        source = str(item.get('source') or '').strip().lower()
+                        if 'quiz' in category or 'quiz' in name or 'learning check' in name or name.startswith('lc '):
+                            quiz_component_count += 1
+            if quiz_count <= 0 and quiz_component_count > 0:
+                quiz_count = quiz_component_count
             block = block_by_class.get(class_id)
             block_start = self._date_only(block.start_date if block else None) or self._date_only(cls.start_date)
             schedule = self._quiz_deadline_schedule(quiz_count, block_start)
@@ -1093,6 +1147,18 @@ class AcademicService:
                     except Exception:
                         return 0
         return 0
+
+    def _quiz_count_from_metadata(self, *values: Any) -> int:
+        # Deprecated: AP sync does not provide quiz plan/deadline metadata in production.
+        # Quiz columns and deadline counts must come from CMS/Open edX Detailed grades
+        # or the CMS course outline returned by the connector plugin.
+        return 0
+
+    def _planned_quiz_components_for_class(self, cls: AcademicClass | None) -> list[dict[str, Any]]:
+        # Do not synthesize Quiz columns from AP metadata. If CMS/Open edX does not
+        # return Detailed grades/course-outline components, the UI must honestly show
+        # that no CMS grade components were received yet.
+        return []
 
     def _snapshot_has_learning_activity(self, snapshot: AcademicStudentLearningSnapshot | None) -> bool:
         if not snapshot:
@@ -1272,6 +1338,8 @@ class AcademicService:
             if sync_at and (bucket['last_synced_at'] is None or sync_at > bucket['last_synced_at']):
                 bucket['last_synced_at'] = sync_at
         result: dict[str, dict[str, Any]] = {}
+        class_rows = self.db.query(AcademicClass).filter(AcademicClass.id.in_(class_ids)).all() if class_ids else []
+        class_by_id_for_plan = {cls.id: cls for cls in class_rows}
         for class_id, bucket in buckets.items():
             total = int(totals.get(class_id, 0) or 0)
             counts = dict(bucket['counts'])
@@ -1280,6 +1348,9 @@ class AcademicService:
             avg_progress = round(sum(bucket['progress']) / len(bucket['progress']), 2) if bucket['progress'] else None
             avg_grade = round(sum(bucket['grades']) / len(bucket['grades']), 2) if bucket['grades'] else None
             course_id = (course_by_class or {}).get(class_id)
+            component_summaries = self._component_summary_from_snapshots(bucket['snapshots'])
+            if not component_summaries:
+                component_summaries = self._planned_quiz_components_for_class(class_by_id_for_plan.get(class_id))
             result[class_id] = {
                 'learning_enrolled_count': enrolled,
                 'learning_active_count': int(bucket.get('active', 0) or 0),
@@ -1288,7 +1359,7 @@ class AcademicService:
                 'learning_avg_progress_percent': avg_progress,
                 'learning_avg_grade_percent': avg_grade,
                 'learning_last_synced_at': bucket['last_synced_at'],
-                'learning_component_summaries': self._component_summary_from_snapshots(bucket['snapshots']),
+                'learning_component_summaries': component_summaries,
                 'learning_alerts': self._learning_alerts_from_summary(total=total, enrolled=enrolled, synced=synced, active=int(bucket.get('active', 0) or 0), avg_progress=avg_progress, avg_grade=avg_grade, course_id=course_id),
             }
         return result
@@ -1805,6 +1876,7 @@ class AcademicService:
             'openedx_cohort_name': class_mapping.openedx_cohort_name if class_mapping else (cls.class_code if inherited else None),
             'openedx_mapping_source': 'class_override' if class_mapping else ('subject_term_mapping' if inherited else None),
             'openedx_mapping_validation_status': effective_mapping.validation_status if effective_mapping else None,
+            'quiz_count': 0,
         }
 
     def _student_mapping_item(self, class_id: str, student: AcademicStudent, synced_at: datetime | None, mapping: OpenEdXUserMapping | None, learning: AcademicStudentLearningSnapshot | None = None, class_student: AcademicClassStudent | None = None) -> dict[str, Any]:
@@ -3026,7 +3098,7 @@ class AcademicService:
     def _learning_summary_for_class_course(self, class_id: str, course_id: str | None) -> dict[str, Any]:
         total = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
         if not course_id:
-            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'active_count': 0, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None, 'component_summaries': [], 'status_counts': {'not_synced': int(total)}, 'alert_counts': {'not_synced': int(total)}}
+            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'active_count': 0, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None, 'component_summaries': self._planned_quiz_components_for_class(self.db.get(AcademicClass, class_id)), 'status_counts': {'not_synced': int(total)}, 'alert_counts': {'not_synced': int(total)}}
         rows = self.db.query(AcademicStudentLearningSnapshot.enrollment_status, func.count(AcademicStudentLearningSnapshot.id)).filter(
             AcademicStudentLearningSnapshot.class_id == class_id,
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
@@ -3067,7 +3139,7 @@ class AcademicService:
             'avg_progress_percent': avg_progress,
             'avg_grade_percent': avg_grade,
             'last_synced_at': last_synced,
-            'component_summaries': self._component_summary_from_snapshots(snapshots),
+            'component_summaries': (self._component_summary_from_snapshots(snapshots) or self._planned_quiz_components_for_class(self.db.get(AcademicClass, class_id))),
             'status_counts': status_counts,
             'alert_counts': alert_counts,
         }

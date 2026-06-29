@@ -1715,6 +1715,7 @@ export type AcademicLearningComponentScore = {
   percent?: number | null
   weight?: number | null
   source?: string | null
+  planned?: boolean | null
 }
 
 export type AcademicSubjectManagement = AcademicSubject & {
@@ -1769,6 +1770,7 @@ export type AcademicClass = {
   openedx_cohort_name?: string | null
   openedx_mapping_source?: string | null
   openedx_mapping_validation_status?: string | null
+  quiz_count?: number | null
   learning_enrolled_count?: number
   learning_active_count?: number
   learning_synced_count?: number
