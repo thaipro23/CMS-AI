@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVNDateTime } from '../../../lib/time'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
@@ -47,7 +48,7 @@ function resultTypeLabel(type?: string | null) {
 
 function formatDate(value?: string | null) {
   if (!value) return '—'
-  try { return new Date(value).toLocaleString('vi-VN') } catch { return value }
+  try { return formatVNDateTime(value) } catch { return value }
 }
 
 function truncate(value?: string | null, max = 180) {

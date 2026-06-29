@@ -12,13 +12,11 @@ import {
   enqueueAcademicClassFullCmsSyncJob,
   getAcademicClassSyncJob,
   getAcademicClassSyncJobs,
-  getAcademicClassQuizDeadlineOverrides,
-  saveAcademicClassQuizDeadlineOverrides,
   getAcademicClassAssignmentDefenseScores,
   saveAcademicClassAssignmentDefenseScores,
 } from '../../../../lib/api'
-import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicQuizDeadlineOverride, AcademicStudent } from '../../../../types'
-import { formatVNDateTime } from '../../../../lib/time'
+import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
+import { formatVNDate, formatVNDateTime } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 
 const PAGE_SIZE = 50
@@ -115,9 +113,8 @@ function enrollmentClass(value?: string | null) {
 
 function formatDateOnly(value?: string | null) {
   if (!value) return 'N/A'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value)
-  return date.toLocaleDateString('vi-VN')
+  const formatted = formatVNDate(value)
+  return formatted === '—' ? 'N/A' : formatted
 }
 function quizNumbersFromText(value?: string | null) {
   const text = String(value || '').toLowerCase()
@@ -221,8 +218,6 @@ function ClassDetailContent() {
   const [syncJobs, setSyncJobs] = useState<AcademicClassSyncJob[]>([])
   const [recoveringJob, setRecoveringJob] = useState(false)
   const [selectedQuiz, setSelectedQuiz] = useState<{ student: AcademicStudent; column: GradeColumn; score: AcademicLearningComponentScore | null } | null>(null)
-  const [deadlineModalOpen, setDeadlineModalOpen] = useState(false)
-  const [deadlineRows, setDeadlineRows] = useState<AcademicQuizDeadlineOverride[]>([])
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false)
   const [assignmentRows, setAssignmentRows] = useState<AcademicAssignmentDefenseScore[]>([])
   const [savingPolicy, setSavingPolicy] = useState(false)
@@ -372,41 +367,6 @@ function ClassDetailContent() {
   }, [classId])
 
 
-  const openDeadlineModal = async () => {
-    try {
-      const rows = await getAcademicClassQuizDeadlineOverrides(headers, classId, classInfo?.openedx_course_id)
-      const byQuiz = new Map<number, AcademicQuizDeadlineOverride>()
-      rows.forEach((row) => { if (row.quiz_number) byQuiz.set(row.quiz_number, row) })
-      const merged = componentColumns.filter((column) => column.quizNumber).map((column) => byQuiz.get(column.quizNumber || 0) || ({
-        course_id: classInfo?.openedx_course_id || null,
-        component_key: column.key,
-        component_label: column.name,
-        quiz_number: column.quizNumber || null,
-        start_date: column.availableFrom || null,
-        deadline_date: column.deadlineDate || null,
-        reason: '',
-      } as AcademicQuizDeadlineOverride))
-      setDeadlineRows(merged)
-      setDeadlineModalOpen(true)
-    } catch (error) {
-      setErrorModal(error instanceof Error ? error.message : 'Không tải được cấu hình deadline')
-    }
-  }
-
-  const saveDeadlineRows = async () => {
-    setSavingPolicy(true)
-    try {
-      await saveAcademicClassQuizDeadlineOverrides(jsonHeaders, classId, deadlineRows)
-      setDeadlineModalOpen(false)
-      await refreshStudents()
-      setMessage('Đã lưu deadline quiz thủ công. Điều kiện thi sẽ được tính lại theo deadline mới.')
-    } catch (error) {
-      setErrorModal(error instanceof Error ? error.message : 'Không lưu được deadline quiz')
-    } finally {
-      setSavingPolicy(false)
-    }
-  }
-
   const openAssignmentModal = async () => {
     try {
       const rows = await getAcademicClassAssignmentDefenseScores(headers, classId, classInfo?.openedx_course_id)
@@ -467,13 +427,12 @@ function ClassDetailContent() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (selectedQuiz) setSelectedQuiz(null)
-      else if (deadlineModalOpen) setDeadlineModalOpen(false)
       else if (assignmentModalOpen) setAssignmentModalOpen(false)
       else if (errorModal) setErrorModal('')
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedQuiz, deadlineModalOpen, assignmentModalOpen, errorModal])
+  }, [selectedQuiz, assignmentModalOpen, errorModal])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const counts = summary?.counts || {}
@@ -541,7 +500,7 @@ function ClassDetailContent() {
         <div className="toolbar-actions">
           <button className="btn primary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>
           <button className="btn secondary" type="button" disabled={loading || activeJobRunning} onClick={() => Promise.all([refreshStudents(), refreshSyncJobs()]).catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được dữ liệu'))}>Làm mới</button>
-          <button className="btn secondary" type="button" disabled={!componentColumns.length} onClick={openDeadlineModal}>Cấu hình deadline</button>
+          <Link className="btn secondary" href="/semesters">Cấu hình tuần học</Link>
           <button className="btn secondary" type="button" onClick={openAssignmentModal}>Nhập điểm Assignment</button>
         </div>
       </div>
@@ -583,7 +542,7 @@ function ClassDetailContent() {
       </div>
     </section>
 
-    <section className="card academic-unified-card">
+    <section className="card academic-unified-card student-list-card">
       <div className="section-head">
         <div><h2>Danh sách sinh viên</h2><p>Tiến độ học hiển thị Course completion và điểm tổng hệ 10. Các cột điểm được tạo động từ Detailed grades của Course CMS; mỗi course có bao nhiêu đầu điểm thì bảng tự mở bấy nhiêu cột.</p></div>
         <div className="toolbar-actions">
@@ -599,7 +558,7 @@ function ClassDetailContent() {
           <input className="input compact-input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Tìm mã SV, username, họ tên..." />
         </div>
       </div>
-      <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">
+      <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll">
         <table className="data-table academic-data-table student-grade-table">
           <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Số lần học lại</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
           <tbody>
@@ -634,16 +593,6 @@ function ClassDetailContent() {
       </div>
     </section>
 
-
-    {deadlineModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeadlineModalOpen(false) }}>
-      <div className="card bank-modal academic-confirm-modal wide-policy-modal" role="dialog" aria-modal="true" aria-labelledby="deadline-modal-title">
-        <div className="section-head"><div><h2 id="deadline-modal-title">Cấu hình deadline quiz</h2><p>Nếu block dài hơn 7 tuần do nghỉ/lễ, hãy nhập deadline thủ công để hệ thống xét điều kiện thi.</p></div></div>
-        <div className="policy-edit-table-wrap"><table className="data-table compact-table"><thead><tr><th>Quiz</th><th>Từ ngày</th><th>Deadline</th><th>Ghi chú</th></tr></thead><tbody>
-          {deadlineRows.map((row, index) => <tr key={`${row.quiz_number}-${index}`}><td><b>{row.component_label || `Quiz ${row.quiz_number}`}</b></td><td><input type="date" value={String(row.start_date || '').slice(0,10)} onChange={(event) => setDeadlineRows((items) => items.map((item, idx) => idx === index ? { ...item, start_date: event.target.value } : item))} /></td><td><input type="date" value={String(row.deadline_date || '').slice(0,10)} onChange={(event) => setDeadlineRows((items) => items.map((item, idx) => idx === index ? { ...item, deadline_date: event.target.value } : item))} /></td><td><input value={row.reason || ''} onChange={(event) => setDeadlineRows((items) => items.map((item, idx) => idx === index ? { ...item, reason: event.target.value } : item))} placeholder="Nghỉ lễ, điều chỉnh lịch..." /></td></tr>)}
-        </tbody></table></div>
-        <div className="modal-actions"><button className="btn secondary" onClick={() => setDeadlineModalOpen(false)}>Đóng</button><button className="btn primary" disabled={savingPolicy} onClick={saveDeadlineRows}>{savingPolicy ? 'Đang lưu...' : 'Lưu deadline'}</button></div>
-      </div>
-    </div>}
 
     {assignmentModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssignmentModalOpen(false) }}>
       <div className="card bank-modal academic-confirm-modal wide-policy-modal" role="dialog" aria-modal="true" aria-labelledby="assignment-modal-title">

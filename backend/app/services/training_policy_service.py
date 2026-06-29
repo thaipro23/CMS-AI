@@ -3,12 +3,11 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, time
 from typing import Any
-from zoneinfo import ZoneInfo
-
 from sqlalchemy.orm import Session
 
-VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
-POLICY_VERSION = "v25.9.16.5.58"
+from app.core.timezone import VN_TZ, to_vn_date
+
+POLICY_VERSION = "v25.9.16.5.62"
 
 from app.models.academic import (
     AcademicAssignmentDefenseScore,
@@ -19,30 +18,7 @@ from app.models.academic import (
 
 
 def _date_only(value: Any) -> date | None:
-    if value is None or value == '':
-        return None
-    if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            return value.astimezone(VN_TZ).date()
-        return value.date()
-    if isinstance(value, date):
-        return value
-    raw = str(value).strip()
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(VN_TZ)
-        return dt.date()
-    except Exception:
-        pass
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
-        try:
-            return datetime.strptime(raw[:10], fmt).date()
-        except Exception:
-            continue
-    return None
+    return to_vn_date(value)
 
 
 def _dt_from_date(value: date | datetime | str | None) -> datetime | None:
@@ -156,16 +132,38 @@ class TrainingPolicyService:
             result.setdefault(row.student_id, row)
         return result
 
+
+    def _learning_week_schedule_from_block(self, block: AcademicBlock | None) -> list[dict[str, Any]]:
+        if not block or not isinstance(block.metadata_json, dict):
+            return []
+        raw_weeks = block.metadata_json.get('learning_weeks') or block.metadata_json.get('week_schedule') or []
+        if not isinstance(raw_weeks, list):
+            return []
+        weeks: list[dict[str, Any]] = []
+        for idx, raw in enumerate(raw_weeks, start=1):
+            if not isinstance(raw, dict):
+                continue
+            start = _date_only(raw.get('start_date') or raw.get('from_date') or raw.get('from'))
+            end = _date_only(raw.get('end_date') or raw.get('to_date') or raw.get('to') or raw.get('deadline_date'))
+            if not start or not end:
+                continue
+            weeks.append({'week_number': int(raw.get('week_number') or idx), 'from_date': start.isoformat(), 'due_date': end.isoformat()})
+        weeks.sort(key=lambda item: int(item.get('week_number') or 0))
+        return weeks
+
     def _deadline_mode_for_class(self, cls: AcademicClass | None, block: AcademicBlock | None = None) -> tuple[str, str | None]:
+        configured_weeks = self._learning_week_schedule_from_block(block)
+        if configured_weeks:
+            return 'semester_week_config', None
         start = _date_only(block.start_date if block else None) or _date_only(cls.start_date if cls else None)
         end = _date_only(block.end_date if block else None) or _date_only(cls.end_date if cls else None)
         if not start or not end:
-            return 'manual_required', 'Thiếu ngày bắt đầu/kết thúc block hoặc lớp. Cần cấu hình deadline thủ công.'
+            return 'manual_required', 'Thiếu ngày bắt đầu/kết thúc block hoặc lớp. Hãy cấu hình tuần học tại /semesters.'
         duration = (end - start).days + 1
         if duration > 49:
-            return 'manual_required', 'Block dài hơn 7 tuần. Cần cấu hình deadline thủ công để tránh sai lịch nghỉ/lễ.'
+            return 'manual_required', 'Block dài hơn 7 tuần. Hãy cấu hình tuần học tại /semesters để chia deadline quiz theo lịch nghỉ/lễ.'
         if start.weekday() != 0:
-            return 'manual_required', 'Ngày bắt đầu block/lớp không phải Thứ 2. Cần cấu hình deadline thủ công.'
+            return 'manual_required', 'Ngày bắt đầu block/lớp không phải Thứ 2. Hãy cấu hình tuần học tại /semesters.'
         return 'auto', None
 
     def _manual_required_for_class(self, cls: AcademicClass | None, block: AcademicBlock | None = None) -> bool:
@@ -241,7 +239,7 @@ class TrainingPolicyService:
                 missing_deadline += 1
                 status = 'manual_deadline_required'
                 label = 'Cần chỉnh deadline tay'
-                reasons.append(f'Quiz {number} cần cấu hình deadline thủ công do block dài hơn 7 tuần')
+                reasons.append(f'Quiz {number} cần cấu hình tuần học tại /semesters để chia deadline')
             elif not deadline:
                 missing_deadline += 1
                 status = 'missing_deadline'

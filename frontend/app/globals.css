@@ -5201,3 +5201,20 @@ html[data-theme='dark'] .training-management-page .nested-card {
   min-width: 132px;
   font-variant-numeric: tabular-nums;
 }
+
+/* v25.9.16.5.61 — semester week config + isolated class table scroll */
+.learning-weeks-row td { background: #f8fafc; }
+.learning-weeks-editor { display: grid; gap: 10px; padding: 10px 0; }
+.learning-weeks-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.learning-weeks-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 8px; }
+.learning-week-card { display: grid; gap: 6px; padding: 8px; border: 1px solid rgba(148, 163, 184, .28); border-radius: 10px; background: #fff; }
+.learning-week-card span { font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: .04em; }
+.student-list-card { overflow: hidden; }
+.class-student-table-scroll { max-width: 100%; overflow-x: auto; overflow-y: visible; overscroll-behavior-x: contain; }
+.class-student-table-scroll .student-grade-table { min-width: max-content; width: max-content; }
+.class-student-table-scroll .student-grade-table th,
+.class-student-table-scroll .student-grade-table td { white-space: nowrap; }
+.class-student-table-scroll .student-grade-table td.learning-progress-cell,
+.class-student-table-scroll .student-grade-table td.exam-policy-cell,
+.class-student-table-scroll .student-grade-table td.username-combined-cell { white-space: normal; }
+@media(max-width: 900px){ .learning-weeks-grid { grid-template-columns: 1fr; } }

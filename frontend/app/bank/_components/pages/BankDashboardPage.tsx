@@ -1,5 +1,6 @@
 'use client'
 
+import { daysAgoVNISODate, formatVNDateTime, todayVNISODate } from '../../../../lib/time'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
@@ -28,14 +29,11 @@ function formatNumber(value?: number | null) {
 }
 
 function todayIso() {
-  return new Date().toISOString().slice(0, 10)
+  return todayVNISODate()
 }
 
 function buildDateRange(days: number) {
-  const end = new Date()
-  const start = new Date()
-  start.setDate(end.getDate() - days + 1)
-  return { fromDate: start.toISOString().slice(0, 10), toDate: end.toISOString().slice(0, 10) }
+  return { fromDate: daysAgoVNISODate(Math.max(0, days - 1)), toDate: todayVNISODate() }
 }
 
 function drilldownUrl(drilldown?: DashboardDrilldown | null) {
@@ -303,7 +301,7 @@ export function BankDashboardPage() {
         <div className="dashboard-scope-strip">
           <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
           {data?.cache ? <span className="dashboard-scope-chip subtle">Dữ liệu: {data.cache.hit ? 'đã lưu tạm' : 'mới cập nhật'}</span> : null}
-          {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {new Date(data.generated_at).toLocaleString('vi-VN')}</span> : null}
+          {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {formatVNDateTime(data.generated_at)}</span> : null}
         </div>
       </div>
       <div className="dashboard-hero-actions">

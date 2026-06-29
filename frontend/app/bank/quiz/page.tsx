@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVNDateTime } from '../../../lib/time'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
@@ -322,7 +323,7 @@ export default function BankQuizPage() {
           </div>
           {!courseId.trim() ? <div className="empty-state">Nhập Khóa học ID để xem lịch sử Quiz của đúng khóa học đó.</div> : null}
           {courseId.trim() && historyBusy ? <div className="empty-state">Đang tải lịch sử Quiz...</div> : null}
-          {courseId.trim() ? <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Khóa học</th><th>Trạng thái</th><th>Bài kiểm tra Open edX</th><th>Timer</th><th>Thời gian</th><th></th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td><b>{item.openedx_course_id}</b><small>{item.metadata_json?.quiz_title || item.bank_release_id}</small></td><td><span className={classNames('status', item.status === 'created' ? 'success' : item.status?.includes('khôi phục') || item.status === 'failed' ? 'danger' : 'pending')}>{item.status}</span></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td>{item.metadata_json?.timer_config?.custom_timer_enabled ? <span className="status pending">{item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút</span> : <span className="muted">Không bật</span>}</td><td>{new Date(item.created_at).toLocaleString()}</td><td><button className="btn small secondary" disabled={busy || item.status === 'rolled_back'} onClick={async () => {
+          {courseId.trim() ? <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Khóa học</th><th>Trạng thái</th><th>Bài kiểm tra Open edX</th><th>Timer</th><th>Thời gian</th><th></th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td><b>{item.openedx_course_id}</b><small>{item.metadata_json?.quiz_title || item.bank_release_id}</small></td><td><span className={classNames('status', item.status === 'created' ? 'success' : item.status?.includes('khôi phục') || item.status === 'failed' ? 'danger' : 'pending')}>{item.status}</span></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td>{item.metadata_json?.timer_config?.custom_timer_enabled ? <span className="status pending">{item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút</span> : <span className="muted">Không bật</span>}</td><td>{formatVNDateTime(item.created_at)}</td><td><button className="btn small secondary" disabled={busy || item.status === 'rolled_back'} onClick={async () => {
             setBusy(true)
             try {
               const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử Quiz' })

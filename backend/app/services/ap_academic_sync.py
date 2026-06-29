@@ -15,6 +15,7 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.timezone import to_vn_naive_datetime, vn_now_naive
 from app.models.academic import (
     AcademicCampus,
     AcademicBlock,
@@ -76,21 +77,17 @@ def _parse_date(value: Any) -> datetime | None:
     raw = _clean(value)
     if not raw:
         return None
-    try:
-        raw = raw.replace('Z', '+00:00')
-        parsed = datetime.fromisoformat(raw)
-        if parsed.tzinfo:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    parsed = to_vn_naive_datetime(raw)
+    if parsed is not None:
         return parsed
+    # Excel serial date support for ACMS import-like AP payloads.
+    try:
+        serial = float(raw)
+        if 20000 <= serial <= 70000:
+            return datetime(1899, 12, 30) + timedelta(days=serial)
     except Exception:
-        # Excel serial date support for ACMS import-like AP payloads.
-        try:
-            serial = float(raw)
-            if 20000 <= serial <= 70000:
-                return datetime(1899, 12, 30) + timedelta(days=serial)
-        except Exception:
-            pass
-        return None
+        pass
+    return None
 
 
 
@@ -772,11 +769,8 @@ class AcademicImportService:
         raw_at = _clean(meta.get('ap_term_block_checked_at'))
         if not raw_at:
             return False
-        try:
-            checked_at = datetime.fromisoformat(raw_at.replace('Z', '+00:00'))
-            if checked_at.tzinfo:
-                checked_at = checked_at.astimezone(timezone.utc).replace(tzinfo=None)
-        except Exception:
+        checked_at = to_vn_naive_datetime(raw_at)
+        if checked_at is None:
             return False
         ttl = max(0, int(getattr(settings, 'academic_ap_term_block_refresh_ttl_seconds', 3600) or 0))
         if ttl <= 0:

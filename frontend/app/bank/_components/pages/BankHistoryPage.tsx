@@ -1,12 +1,13 @@
 'use client'
 
+import { formatVNDateTime } from '../../../../lib/time'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { getBankReleases, getCourseQuizInstances, rollbackCourseQuizInstance } from '../../../../lib/api'
 import type { BankRelease, CourseQuizInstance } from '../../../../types'
 import { useBankData, useAsyncMessage, Breadcrumb, statusClass, statusLabel, Modal } from '../shared'
 
-function dateText(value?: string | null) { try { return value ? new Date(value).toLocaleString('vi-VN') : '—' } catch { return value || '—' } }
+function dateText(value?: string | null) { try { return value ? formatVNDateTime(value) : '—' } catch { return value || '—' } }
 function releaseTitle(item: BankRelease) { return item.release_code || item.title || item.id }
 
 export function BankHistoryPage() {

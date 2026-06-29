@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVNDateTime } from '../../../../lib/time'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -824,7 +825,7 @@ ${chunk.content}`).join('\n\n')
           <div className="entity-list compact-list small-chunk-list popup-scroll-list">
             {materials.map((item) => <div className="entity-card" key={item.id}>
               <b>{item.title || item.file_name}</b>
-              <small>{item.file_type} · {new Date(item.created_at).toLocaleString('vi-VN')}</small>
+              <small>{item.file_type} · {formatVNDateTime(item.created_at)}</small>
               <div className="button-row no-margin">
                 <button className="btn small secondary" onClick={() => openMaterial(item)}>Xem</button>
                 {!chapterPublished ? <button className="btn small danger" disabled={isActionBusy('material_delete') || !can('edit_questions')} onClick={() => runAction('material_delete', async () => { await deleteMaterialVersion(headers, item.id) }, 'Hệ thống đã xóa tài liệu khỏi bài.', refreshCurrent, 'Không xóa được tài liệu. Vui lòng thử lại.')}>{isActionBusy('material_delete') ? <BusyLabel text="Đang xóa" /> : 'Xóa'}</button> : null}

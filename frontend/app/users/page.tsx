@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVNDateTime } from '../../lib/time'
 import { ChangeEvent, useEffect, useMemo, useState } from 'react'
 import {
   createRoleAssignment,
@@ -68,7 +69,7 @@ const scopeLabel: Record<string, string> = {
 
 function formatDate(value?: string | null) {
   if (!value) return '—'
-  try { return new Date(value).toLocaleString('vi-VN') } catch { return value }
+  try { return formatVNDateTime(value) } catch { return value }
 }
 
 function resultClass(status: string) {

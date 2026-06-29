@@ -7,13 +7,13 @@ from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal
 from uuid import UUID
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext
+from app.core.timezone import VN_TZ, to_vn_date, to_vn_naive_datetime
 from app.models.academic import (
     AcademicBlock,
     AcademicClass,
@@ -35,8 +35,6 @@ from app.core.config import settings
 from app.models.course import CourseSyncState
 from app.models.question_bank import Subject as BankSubject
 
-
-VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 def _actor_names(user: UserContext) -> set[str]:
     raw = user.raw_claims or {}
@@ -339,10 +337,12 @@ class AcademicService:
         term.term_code = term_code
         term.term_name = term_name
         term.branch = branch
-        term.start_date = payload.get('start_date')
-        term.end_date = payload.get('end_date')
+        term.start_date = to_vn_naive_datetime(payload.get('start_date'))
+        term.end_date = to_vn_naive_datetime(payload.get('end_date'))
         term.active = _boolish(payload.get('active')) is not False
         meta = dict(term.metadata_json or {})
+        if isinstance(payload.get('metadata_json'), dict):
+            meta.update(payload.get('metadata_json') or {})
         meta.update({'source': meta.get('source') or 'manual_ui', 'updated_from': 'terms_page'})
         term.metadata_json = meta
         self.db.flush()
@@ -361,12 +361,30 @@ class AcademicService:
             block.ap_block_id = str(raw_block.get('ap_block_id') or '').strip() or block.ap_block_id
             block.block_code = block_code
             block.block_name = block_name
-            block.start_date = raw_block.get('start_date')
-            block.end_date = raw_block.get('end_date')
+            block.start_date = to_vn_naive_datetime(raw_block.get('start_date'))
+            block.end_date = to_vn_naive_datetime(raw_block.get('end_date'))
             block.sort_order = int(raw_block.get('sort_order') or index)
             block.active = _boolish(raw_block.get('active')) is not False
             block_meta = dict(block.metadata_json or {})
-            block_meta.update({'source': block_meta.get('source') or 'manual_ui', 'updated_from': 'terms_page'})
+            if isinstance(raw_block.get('metadata_json'), dict):
+                block_meta.update(raw_block.get('metadata_json') or {})
+            if isinstance(block_meta.get('learning_weeks'), list):
+                normalized_weeks: list[dict[str, Any]] = []
+                for week in block_meta.get('learning_weeks') or []:
+                    if not isinstance(week, dict):
+                        continue
+                    start_dt = to_vn_naive_datetime(week.get('start_date') or week.get('from_date') or week.get('from'))
+                    end_dt = to_vn_naive_datetime(week.get('end_date') or week.get('to_date') or week.get('to') or week.get('deadline_date'))
+                    if not start_dt or not end_dt:
+                        continue
+                    normalized_weeks.append({
+                        **week,
+                        'week_number': int(week.get('week_number') or len(normalized_weeks) + 1),
+                        'start_date': start_dt.isoformat(),
+                        'end_date': end_dt.isoformat(),
+                    })
+                block_meta['learning_weeks'] = normalized_weeks
+            block_meta.update({'source': block_meta.get('source') or 'manual_ui', 'updated_from': 'terms_page', 'timezone': 'Asia/Ho_Chi_Minh'})
             block.metadata_json = block_meta
             self.db.flush()
             seen_block_ids.add(block.id)
@@ -718,6 +736,20 @@ class AcademicService:
         add(payload)
         return containers
 
+
+    def _is_official_progress_payload(self, payload: dict[str, Any] | None) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        candidates: list[Any] = [payload.get('progress_source'), payload.get('progressSource')]
+        progress = payload.get('progress') if isinstance(payload.get('progress'), dict) else None
+        if progress:
+            candidates.extend([progress.get('source'), progress.get('progress_source'), progress.get('progressSource')])
+        for raw in candidates:
+            text = str(raw or '').strip().replace('_', '').replace('-', '').replace(' ', '').lower()
+            if text in {'coursehomeapi', 'coursehome', 'courseprogressapi', 'learnerdashboard', 'official'} or 'coursehome' in text:
+                return True
+        return False
+
     def _progress_percent_from_payload(self, payload: dict[str, Any]) -> float | None:
         if not isinstance(payload, dict):
             return None
@@ -768,21 +800,11 @@ class AcademicService:
         if not snapshot:
             return None
         payload = self._payload_from_snapshot(snapshot)
-        progress_payload = payload.get('progress') if isinstance(payload.get('progress'), dict) else {}
-        progress_source = str(progress_payload.get('source') or payload.get('progress_source') or payload.get('progressSource') or '').strip().lower()
-        # Old connector fallbacks based on StudentModule/BlockCompletion can disagree
-        # with the official CMS learner Course completion. Do not reuse those
-        # values as Course completion; the UI should show N/A unless the connector
-        # returns an official Course Home/progress completion value.
-        fallback_sources = {'studentmodule', 'student_module', 'blockcompletion', 'block_completion'}
-        if progress_source and progress_source.replace(' ', '').lower() not in fallback_sources:
-            direct = self._percent_display_value(snapshot.progress_percent)
-            if direct is not None:
-                return direct
-        if not progress_source:
-            direct = self._percent_display_value(snapshot.progress_percent)
-            if direct is not None:
-                return direct
+        if not self._is_official_progress_payload(payload):
+            return None
+        direct = self._percent_display_value(snapshot.progress_percent)
+        if direct is not None:
+            return direct
         return self._progress_percent_from_payload(payload)
 
     def _snapshot_grade_percent(self, snapshot: AcademicStudentLearningSnapshot | None) -> float | None:
@@ -988,30 +1010,7 @@ class AcademicService:
 
     @staticmethod
     def _date_only(value: Any) -> date | None:
-        if value is None or value == '':
-            return None
-        if isinstance(value, datetime):
-            if value.tzinfo is not None:
-                return value.astimezone(VN_TZ).date()
-            return value.date()
-        if isinstance(value, date):
-            return value
-        raw = str(value or '').strip()
-        if not raw:
-            return None
-        try:
-            parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-            if parsed.tzinfo is not None:
-                parsed = parsed.astimezone(VN_TZ)
-            return parsed.date()
-        except Exception:
-            pass
-        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
-            try:
-                return datetime.strptime(raw[:10], fmt).date()
-            except Exception:
-                continue
-        return None
+        return to_vn_date(value)
 
     @staticmethod
     def _quiz_numbers_from_text(value: Any) -> list[int]:
@@ -1081,6 +1080,84 @@ class AcademicService:
         if order is not None and 1 <= int(order) <= 200:
             return [int(order)]
         return []
+
+
+    def _learning_week_schedule_from_block(self, block: AcademicBlock | None) -> list[dict[str, Any]]:
+        """Return week schedule configured in /semesters.
+
+        Stored in AcademicBlock.metadata_json.learning_weeks as dd/mm/yyyy-friendly
+        week ranges. This is the source of truth for quiz deadline allocation when
+        the academic calendar is shifted by holidays; class detail refresh and full
+        CMS sync both reload this via DB.
+        """
+        if not block or not isinstance(block.metadata_json, dict):
+            return []
+        raw_weeks = block.metadata_json.get('learning_weeks') or block.metadata_json.get('week_schedule') or []
+        if not isinstance(raw_weeks, list):
+            return []
+        weeks: list[dict[str, Any]] = []
+        for idx, raw in enumerate(raw_weeks, start=1):
+            if not isinstance(raw, dict):
+                continue
+            start = self._date_only(raw.get('start_date') or raw.get('from_date') or raw.get('from'))
+            end = self._date_only(raw.get('end_date') or raw.get('to_date') or raw.get('to') or raw.get('deadline_date'))
+            if not start or not end:
+                continue
+            weeks.append({
+                'week_number': int(raw.get('week_number') or idx),
+                'from_date': start.isoformat(),
+                'due_date': end.isoformat(),
+                'label': str(raw.get('label') or f'Tuần {idx}'),
+                'source': 'semester_week_config',
+            })
+        weeks.sort(key=lambda item: int(item.get('week_number') or 0))
+        return weeks
+
+    def _quiz_deadline_schedule_from_weeks(self, quiz_count: int, weeks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        quiz_count = max(0, int(quiz_count or 0))
+        valid_weeks = [item for item in weeks or [] if item.get('from_date') and item.get('due_date')]
+        if quiz_count <= 0 or not valid_weeks:
+            return []
+        week_count = len(valid_weeks)
+        schedule: list[dict[str, Any]] = []
+        if quiz_count <= week_count:
+            base_weeks = week_count // quiz_count
+            remainder_weeks = week_count % quiz_count
+            cursor = 0
+            for quiz_number in range(1, quiz_count + 1):
+                span = base_weeks + (1 if quiz_number <= remainder_weeks else 0)
+                chunk = valid_weeks[cursor:cursor + span]
+                if not chunk:
+                    break
+                schedule.append({
+                    'week_number': chunk[0].get('week_number') or cursor + 1,
+                    'week_to_number': chunk[-1].get('week_number') or cursor + span,
+                    'label': f'Quiz {quiz_number}',
+                    'quiz_numbers': [quiz_number],
+                    'from_date': chunk[0]['from_date'],
+                    'due_date': chunk[-1]['due_date'],
+                    'source': 'semester_week_config',
+                })
+                cursor += span
+            return schedule
+        base = quiz_count // week_count
+        remainder = quiz_count % week_count
+        quiz_number = 1
+        for index, week in enumerate(valid_weeks):
+            count = base + (1 if index < remainder else 0)
+            if count <= 0:
+                continue
+            numbers = list(range(quiz_number, quiz_number + count))
+            quiz_number += count
+            schedule.append({
+                'week_number': week.get('week_number') or index + 1,
+                'label': f"Quiz {numbers[0]}" if len(numbers) == 1 else f"Quiz {numbers[0]}-{numbers[-1]}",
+                'quiz_numbers': numbers,
+                'from_date': week['from_date'],
+                'due_date': week['due_date'],
+                'source': 'semester_week_config',
+            })
+        return schedule
 
     @staticmethod
     def _quiz_deadline_schedule(quiz_count: int, block_start: date | None) -> list[dict[str, Any]]:
@@ -1154,24 +1231,26 @@ class AcademicService:
         start_date = self._date_only(block.start_date if block else None) or self._date_only(cls.start_date)
         end_date = self._date_only(block.end_date if block else None) or self._date_only(cls.end_date)
         quiz_count = max(quiz_numbers)
-        schedule_items = self._quiz_deadline_schedule(quiz_count, start_date)
+        configured_weeks = self._learning_week_schedule_from_block(block)
+        schedule_items = self._quiz_deadline_schedule_from_weeks(quiz_count, configured_weeks) if configured_weeks else self._quiz_deadline_schedule(quiz_count, start_date)
         manual_required = False
         schedule_warning = None
-        if not start_date or not end_date:
-            manual_required = True
-            schedule_warning = 'Thiếu ngày bắt đầu/kết thúc block hoặc lớp. Cần cấu hình deadline thủ công.'
-        elif (end_date - start_date).days + 1 > 49:
-            manual_required = True
-            schedule_warning = 'Block dài hơn 7 tuần. Cần cấu hình deadline thủ công để xét trễ hạn chính xác.'
-        elif start_date.weekday() != 0:
-            manual_required = True
-            schedule_warning = 'Ngày bắt đầu block/lớp không phải Thứ 2. Cần cấu hình deadline thủ công.'
+        if not configured_weeks:
+            if not start_date or not end_date:
+                manual_required = True
+                schedule_warning = 'Thiếu ngày bắt đầu/kết thúc block hoặc lớp. Hãy cấu hình tuần học tại /semesters.'
+            elif (end_date - start_date).days + 1 > 49:
+                manual_required = True
+                schedule_warning = 'Block dài hơn 7 tuần. Hãy cấu hình tuần học tại /semesters để chia deadline quiz theo lịch nghỉ/lễ.'
+            elif start_date.weekday() != 0:
+                manual_required = True
+                schedule_warning = 'Ngày bắt đầu block/lớp không phải Thứ 2. Hãy cấu hình tuần học tại /semesters.'
         schedule_by_number: dict[int, dict[str, Any]] = {}
         for item in schedule_items:
             for number in item.get('quiz_numbers') or []:
                 schedule_by_number[int(number)] = {
                     **item,
-                    'deadline_mode': 'manual_required' if manual_required else 'auto',
+                    'deadline_mode': 'manual_required' if manual_required else ('semester_week_config' if configured_weeks else 'auto'),
                     'schedule_warning': schedule_warning if manual_required else None,
                 }
         return schedule_by_number
@@ -1272,7 +1351,8 @@ class AcademicService:
                 quiz_count = quiz_component_count
             block = block_by_class.get(class_id)
             block_start = self._date_only(block.start_date if block else None) or self._date_only(cls.start_date)
-            schedule = self._quiz_deadline_schedule(quiz_count, block_start)
+            configured_weeks = self._learning_week_schedule_from_block(block)
+            schedule = self._quiz_deadline_schedule_from_weeks(quiz_count, configured_weeks) if configured_weeks else self._quiz_deadline_schedule(quiz_count, block_start)
             due_numbers: set[int] = set()
             next_item: dict[str, Any] | None = None
             for item in schedule:
@@ -3464,15 +3544,7 @@ class AcademicService:
 
     @staticmethod
     def _dt_or_none(value: Any) -> datetime | None:
-        if isinstance(value, datetime):
-            return value
-        raw = str(value or '').strip()
-        if not raw:
-            return None
-        try:
-            return datetime.fromisoformat(raw.replace('Z', '+00:00')).replace(tzinfo=None)
-        except Exception:
-            return None
+        return to_vn_naive_datetime(value)
 
     def _learning_summary_for_class_course(self, class_id: str, course_id: str | None) -> dict[str, Any]:
         total = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
@@ -3551,9 +3623,12 @@ class AcademicService:
             or ('enrolled' if enrollment.get('is_enrolled') is True else ('not_enrolled' if enrollment.get('is_enrolled') is False else 'unknown'))
         )[:50]
         snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or None
-        snapshot.progress_percent = self._float_or_none(result.get('progress_percent', progress.get('percent')))
-        if snapshot.progress_percent is None:
-            snapshot.progress_percent = self._progress_percent_from_payload(result)
+        if self._is_official_progress_payload(result):
+            snapshot.progress_percent = self._float_or_none(result.get('progress_percent', progress.get('percent')))
+            if snapshot.progress_percent is None:
+                snapshot.progress_percent = self._progress_percent_from_payload(result)
+        else:
+            snapshot.progress_percent = None
         snapshot.grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
         if snapshot.grade_percent is None:
             snapshot.grade_percent = self._grade_percent_from_payload(result)

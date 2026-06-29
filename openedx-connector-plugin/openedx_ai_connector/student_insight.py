@@ -8,10 +8,13 @@ user-resolution APIs.
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import importlib
 import re
 import secrets
 from typing import Any
+
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -721,8 +724,8 @@ def _persistent_grade_snapshot(course_key: Any, users: list[Any]) -> dict[int, d
                 'percent': float(percent) if percent is not None else None,
                 'letter_grade': getattr(row, 'letter_grade', None),
                 'passed': bool(passed_timestamp) if passed_timestamp is not None else None,
-                'passed_timestamp': passed_timestamp.isoformat() if passed_timestamp else None,
-                'modified': getattr(row, 'modified', None).isoformat() if getattr(row, 'modified', None) else None,
+                'passed_timestamp': _datetime_iso(passed_timestamp),
+                'modified': _datetime_iso(getattr(row, 'modified', None)),
             }
     except Exception:
         # Some Open edX installs keep grades computable but not persisted yet.
@@ -737,12 +740,25 @@ def _datetime_iso(value: Any) -> str | None:
     if value is None or value == '':
         return None
     try:
+        if isinstance(value, datetime):
+            dt = value
+            if dt.tzinfo is not None:
+                return dt.astimezone(VN_TZ).isoformat()
+            return dt.replace(tzinfo=VN_TZ).isoformat()
         if hasattr(value, 'isoformat'):
             return value.isoformat()
     except Exception:
         pass
     raw = _safe_str(value)
-    return raw or None
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if dt.tzinfo is not None:
+            return dt.astimezone(VN_TZ).isoformat()
+        return dt.replace(tzinfo=VN_TZ).isoformat()
+    except Exception:
+        return raw
 
 
 def _latest_datetime_iso(left: Any, right: Any) -> Any:
@@ -1210,7 +1226,7 @@ def _completion_snapshot(course_key: Any, users: list[Any]) -> tuple[dict[int, d
             bucket = result.setdefault(uid, {'source': 'BlockCompletion'})
             bucket.setdefault('source', 'BlockCompletion')
             bucket['completed_blocks'] = completed
-            bucket['last_activity_at'] = last_activity.isoformat() if last_activity else bucket.get('last_activity_at')
+            bucket['last_activity_at'] = _datetime_iso(last_activity) or bucket.get('last_activity_at')
     except Exception:
         # Ulmo/Indigo deployments may not have the completion app populated.
         # Do not give up: fall back to StudentModule interaction counts below.
@@ -1257,7 +1273,7 @@ def _completion_snapshot(course_key: Any, users: list[Any]) -> tuple[dict[int, d
                 last_activity = row.get('last_activity')
                 result[uid] = {
                     'completed_blocks': completed,
-                    'last_activity_at': last_activity.isoformat() if last_activity else None,
+                    'last_activity_at': _datetime_iso(last_activity),
                     'source': 'StudentModule',
                 }
         except Exception:

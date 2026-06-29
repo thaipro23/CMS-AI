@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.timezone import to_vn_naive_datetime
+
+
+def _coerce_vn_datetime(value: Any) -> datetime | None:
+    if value is None or value == '':
+        return None
+    parsed = to_vn_naive_datetime(value)
+    return parsed or value
 
 
 class AcademicTermOut(BaseModel):
@@ -14,6 +23,7 @@ class AcademicTermOut(BaseModel):
     start_date: datetime | None = None
     end_date: datetime | None = None
     active: bool
+    metadata_json: dict[str, Any] | None = None
 
     model_config = {'from_attributes': True}
 
@@ -28,6 +38,7 @@ class AcademicBlockOut(BaseModel):
     end_date: datetime | None = None
     sort_order: int
     active: bool
+    metadata_json: dict[str, Any] | None = None
 
     model_config = {'from_attributes': True}
 
@@ -42,6 +53,12 @@ class AcademicBlockUpsertIn(BaseModel):
     end_date: datetime | None = None
     sort_order: int = Field(0, ge=0, le=100)
     active: bool = True
+    metadata_json: dict[str, Any] | None = None
+
+    @field_validator('start_date', 'end_date', mode='before')
+    @classmethod
+    def _normalize_block_dates(cls, value: Any) -> Any:
+        return _coerce_vn_datetime(value)
 
 
 class AcademicTermUpsertIn(BaseModel):
@@ -53,7 +70,13 @@ class AcademicTermUpsertIn(BaseModel):
     start_date: datetime | None = None
     end_date: datetime | None = None
     active: bool = True
+    metadata_json: dict[str, Any] | None = None
     blocks: list[AcademicBlockUpsertIn] = Field(default_factory=list, max_length=8)
+
+    @field_validator('start_date', 'end_date', mode='before')
+    @classmethod
+    def _normalize_term_dates(cls, value: Any) -> Any:
+        return _coerce_vn_datetime(value)
 
 
 class AcademicTermWithBlocksOut(AcademicTermOut):
