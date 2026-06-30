@@ -9,6 +9,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from sqlalchemy import and_, func
@@ -160,27 +161,32 @@ def _safe_payload(value: Any) -> Any:
 
 
 class APAcademicClient:
-    def __init__(self, *, timeout_seconds: int | None = None, base_url: str | None = None, api_key: str | None = None):
+    def __init__(self, *, timeout_seconds: int | None = None, base_url: str | None = None, api_key: str | None = None, cms_base_url: str | None = None):
         self.timeout_seconds = timeout_seconds or settings.academic_ap_request_timeout_seconds
+        # Legacy AP base is still used for /get-data-cms because that endpoint was
+        # not replaced in the new AP CMS master-data contract.
         self.base_url = (base_url or settings.academic_ap_api_base_url or '').rstrip('/')
+        # New AP CMS master-data base. Operators can replace this host from env
+        # without changing source code.
+        self.cms_base_url = (cms_base_url or getattr(settings, 'academic_ap_cms_api_base_url', '') or self.base_url).rstrip('/')
         self.api_key = (api_key or settings.academic_ap_api_key or '').strip()
         self.tls_mode = (getattr(settings, 'academic_ap_tls_mode', 'strict') or 'strict').strip().lower()
         if not settings.academic_ap_sync_enabled:
             raise RuntimeError('AP sync đang bị tắt. Bật ACADEMIC_AP_SYNC_ENABLED=true nếu muốn đồng bộ AP.')
         if not self.base_url:
             raise RuntimeError('Thiếu ACADEMIC_AP_API_BASE_URL cho đồng bộ AP.')
+        if not self.cms_base_url:
+            raise RuntimeError('Thiếu ACADEMIC_AP_CMS_API_BASE_URL cho đồng bộ cơ sở/môn AP.')
         if not self.api_key:
             raise RuntimeError('Thiếu ACADEMIC_AP_API_KEY trong env. Không hardcode API key AP trong source.')
 
 
     def _verify_config(self) -> bool | ssl.SSLContext:
-        """Return httpx TLS verify configuration for the legacy AP API.
+        """Return httpx TLS verify configuration for AP APIs.
 
         strict     -> default httpx verification: CA chain + hostname.
         chain_only -> verify CA chain but skip hostname validation. This is a
-                      controlled compatibility mode for legacy AP hostnames such
-                      as api_v2.poly.edu.vn where the certificate chain is valid
-                      but Python/OpenSSL rejects the underscore hostname.
+                      controlled compatibility mode for legacy AP hostnames.
         off        -> disable all TLS verification. UAT emergency fallback only.
         """
         mode = self.tls_mode
@@ -202,6 +208,70 @@ class APAcademicClient:
             headers['campus'] = campus
         return headers
 
+    def _cms_endpoint(self, configured: str, fallback: str) -> str:
+        endpoint = _clean(configured) or fallback
+        if endpoint.startswith('http://') or endpoint.startswith('https://'):
+            return endpoint
+        return f'{self.cms_base_url}/{endpoint.lstrip("/")}'
+
+    def _cms_endpoint_with_query(self, endpoint: str, extra_params: dict[str, Any]) -> str:
+        """Merge configured endpoint query params with runtime params.
+
+        This intentionally supports operator-configured endpoint templates such as:
+        - /api/cms/get-subject-cms
+        - /api/cms/get-subject-cms?term_name=
+        - /api/cms/get-subject-cms?campus_code=ph&term_name=
+
+        Runtime values override blank or stale template values, while static query
+        params such as campus_code=ph are preserved. We return a fully composed
+        URL and call httpx without a separate params= argument to avoid duplicated
+        query keys like term_name=&term_name=Summer+2026.
+        """
+        split = urlsplit(endpoint)
+        runtime_params = {str(key): '' if value is None else str(value) for key, value in (extra_params or {}).items()}
+        seen: set[str] = set()
+        merged: list[tuple[str, str]] = []
+        for key, value in parse_qsl(split.query, keep_blank_values=True):
+            if key in runtime_params:
+                merged.append((key, runtime_params[key]))
+                seen.add(key)
+            else:
+                merged.append((key, value))
+        for key, value in runtime_params.items():
+            if key not in seen:
+                merged.append((key, value))
+        query = urlencode(merged, doseq=True)
+        return urlunsplit((split.scheme, split.netloc, split.path, query, split.fragment))
+
+    def _cms_product_for_branch(self, branch: str) -> str:
+        normalized = _lower(branch) or 'poly'
+        if normalized == 'ptcd':
+            return _clean(getattr(settings, 'academic_ap_cms_product_ptcd', 'POLY9')) or 'POLY9'
+        return _clean(getattr(settings, 'academic_ap_cms_product_poly', 'POLY')) or 'POLY'
+
+    def _ensure_success_response(self, data: Any, *, label: str) -> None:
+        if not isinstance(data, dict):
+            return
+        status_value = data.get('status')
+        code_value = data.get('code')
+        status_ok = status_value in (None, True, 1, '1', 'success', 'SUCCESS', 'ok', 'OK')
+        code_ok = code_value in (None, 200, '200')
+        if not status_ok or not code_ok:
+            raise RuntimeError(f'{label} failed: {data.get("message") or data.get("error") or status_value or code_value}')
+
+    def _extract_list_response(self, data: Any, *, label: str) -> list[dict[str, Any]]:
+        self._ensure_success_response(data, label=label)
+        root = data.get('data') if isinstance(data, dict) and isinstance(data.get('data'), (dict, list)) else data
+        if isinstance(root, dict):
+            items = root.get('data') or root.get('items') or root.get('campus') or root.get('campuses') or root.get('subjects') or root.get('course') or root.get('courses') or []
+        elif isinstance(root, list):
+            items = root
+        else:
+            items = []
+        if not isinstance(items, list):
+            raise RuntimeError(f'{label} trả dữ liệu không đúng định dạng list.')
+        return [dict(item) for item in items if isinstance(item, dict)]
+
     def _subject_cache_enabled(self) -> bool:
         return bool(getattr(settings, 'academic_ap_get_course_file_cache_enabled', True))
 
@@ -219,46 +289,37 @@ class APAcademicClient:
         raw = _clean(getattr(settings, 'academic_ap_get_course_file_cache_dir', '/tmp/ai-server-ap-cache/get-course'))
         return Path(raw or '/tmp/ai-server-ap-cache/get-course')
 
-    def _subject_cache_file(self, *, branch: str, term_name: str) -> Path:
-        # The AP discovery endpoint always uses branch=poly. The requested branch
-        # is intentionally not part of the file name so ptcd/poly UI choices reuse
-        # the same canonical course catalog and do not create duplicate files.
-        discovery_branch = 'poly'
-        base_hash = hashlib.sha1(self.base_url.encode('utf-8')).hexdigest()[:10]
+    def _subject_cache_file(self, *, branch: str, term_name: str, campus: str | None = None) -> Path:
+        # v25.9.16.5.69: /api/cms/get-subject-cms is term-scoped for the whole
+        # college system, not campus-scoped. Keep branch in the cache key only to
+        # isolate Poly/PTCĐ sync runs; do not include campus_code in the API key.
+        base_hash = hashlib.sha1(self.cms_base_url.encode('utf-8')).hexdigest()[:10]
+        branch_part = _safe_filename_part(_lower(branch) or 'poly', default='branch')
         term_part = _safe_filename_part(term_name, default='term')
-        return self._subject_cache_dir() / f'{discovery_branch}_{term_part}_{base_hash}.json'
+        return self._subject_cache_dir() / f'ap_cms_subjects_{branch_part}_{term_part}_{base_hash}.json'
 
-    def _normalize_subject_items(self, items: Any, *, requested_branch: str) -> list[dict[str, Any]]:
+    def _normalize_subject_items(self, items: Any, *, requested_branch: str, campus: str | None = None) -> list[dict[str, Any]]:
         if not isinstance(items, list):
-            raise RuntimeError('AP get-course trả dữ liệu môn không đúng định dạng list.')
+            raise RuntimeError('AP get-subject-cms trả dữ liệu môn không đúng định dạng list.')
         subjects: list[dict[str, Any]] = []
         for item in items:
             if isinstance(item, dict):
-                code = _clean(item.get('psubject_code') or item.get('subject_code') or item.get('id'))
+                code = _clean(item.get('psubject_code') or item.get('subject_code') or item.get('skill_code') or item.get('id'))
                 if code:
                     normalized = dict(item)
                     normalized.setdefault('subject_code', code)
-                    normalized.setdefault('discovery_branch', 'poly')
+                    normalized.setdefault('psubject_code', code)
+                    normalized.setdefault('discovery_branch', _lower(requested_branch) or 'poly')
                     normalized.setdefault('requested_branch', _lower(requested_branch) or 'poly')
+                    if campus:
+                        normalized.setdefault('campus_code', _lower(campus))
                     subjects.append(normalized)
         return subjects
 
-    def _extract_subject_items_from_response(self, data: Any) -> list[dict[str, Any]]:
-        if isinstance(data, dict) and data.get('status') not in (None, 'success'):
-            raise RuntimeError(f'AP get-course failed: {data.get("message") or data.get("status")}')
-        root = data.get('data') if isinstance(data, dict) and isinstance(data.get('data'), (dict, list)) else data
-        if isinstance(root, dict):
-            items = root.get('course') or root.get('courses') or root.get('data') or []
-        elif isinstance(root, list):
-            items = root
-        else:
-            items = []
-        return items
-
-    def _read_subject_cache(self, *, branch: str, term_name: str) -> list[dict[str, Any]] | None:
+    def _read_subject_cache(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]] | None:
         if not self._subject_cache_enabled() or self._subject_cache_refresh():
             return None
-        path = self._subject_cache_file(branch=branch, term_name=term_name)
+        path = self._subject_cache_file(branch=branch, term_name=term_name, campus=campus)
         if not path.exists():
             return None
         ttl = self._subject_cache_ttl_seconds()
@@ -268,32 +329,32 @@ class APAcademicClient:
             if ttl > 0 and cached_at_ts > 0 and (datetime.now(timezone.utc).timestamp() - cached_at_ts) > ttl:
                 return None
             items = raw.get('subjects') or raw.get('items') or []
-            subjects = self._normalize_subject_items(items, requested_branch=branch)
+            subjects = self._normalize_subject_items(items, requested_branch=branch, campus=campus)
             for item in subjects:
-                item['_catalog_source'] = 'ap.get-course.file-cache'
+                item['_catalog_source'] = 'ap.cms.get-subject-cms.file-cache'
                 item['_catalog_cache_file'] = str(path)
             return subjects or None
         except Exception:
             # Corrupt/stale cache must never break AP sync. Fall back to AP.
             return None
 
-    def _write_subject_cache(self, *, branch: str, term_name: str, subjects: list[dict[str, Any]]) -> None:
+    def _write_subject_cache(self, *, branch: str, term_name: str, campus: str | None = None, subjects: list[dict[str, Any]]) -> None:
         if not self._subject_cache_enabled():
             return
-        path = self._subject_cache_file(branch=branch, term_name=term_name)
+        path = self._subject_cache_file(branch=branch, term_name=term_name, campus=campus)
         payload = {
-            'schema_version': 1,
-            'source': 'ap.get-course',
-            'base_url': self.base_url,
-            'discovery_branch': 'poly',
+            'schema_version': 3,
+            'source': 'ap.cms.get-subject-cms',
+            'source_scope': 'term',
+            'base_url': self.cms_base_url,
             'requested_branch': _lower(branch) or 'poly',
+            # Kept for backward-readable cache diagnostics only. The AP CMS
+            # get-subject-cms runtime request is keyed by term_name. Env may carry temporary static query params.
+            'campus_code': None,
             'term_name': term_name,
             'cached_at': datetime.now(timezone.utc).isoformat(),
             'cached_at_ts': datetime.now(timezone.utc).timestamp(),
             'count': len(subjects),
-            # Store only get-course catalog rows. This file is deliberately not a
-            # DB table, so repeated syncs can reuse the discovery list without
-            # growing academic_subjects/classes.
             'subjects': subjects,
         }
         try:
@@ -302,36 +363,76 @@ class APAcademicClient:
             tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding='utf-8')
             tmp_path.replace(path)
         except Exception:
-            # Cache write is an optimization only; never fail sync because /tmp or
-            # mounted cache storage is not writable.
             return
 
-    def get_subjects(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]]:
-        # ACMS legacy contract: /get-course must always use branch=poly to
-        # discover the canonical subject catalog. Some requested branches
-        # (notably ptcd) return noisy/incorrect subject lists. The requested
-        # branch is still preserved for downstream class/student sync.
-        cached = self._read_subject_cache(branch=branch, term_name=term_name)
-        if cached:
-            return cached
-
-        discovery_branch = 'poly'
-        params = {'branch': discovery_branch, 'term_name': term_name}
+    def get_campuses(self, *, branch: str) -> list[dict[str, Any]]:
+        endpoint = self._cms_endpoint(getattr(settings, 'academic_ap_cms_get_campus_endpoint', '/api/cms/get-campus'), '/api/cms/get-campus')
+        product = self._cms_product_for_branch(branch)
         with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
             response = client.get(
-                f'{self.base_url}/get-course',
+                endpoint,
                 headers=self._headers(),
-                params=params,
+                params={'product': product},
             )
             response.raise_for_status()
             data = response.json()
-        items = self._extract_subject_items_from_response(data)
-        subjects = self._normalize_subject_items(items, requested_branch=branch)
+        items = self._extract_list_response(data, label='AP get-campus')
+        campuses: list[dict[str, Any]] = []
+        for index, item in enumerate(items, start=1):
+            code = _lower(
+                item.get('campus_code') or item.get('campusCode') or item.get('code') or item.get('campus') or
+                item.get('value') or item.get('id') or item.get('ma_coso') or item.get('ma_co_so')
+            )
+            name = _clean(
+                item.get('campus_name') or item.get('campusName') or item.get('name') or item.get('label') or
+                item.get('ten_coso') or item.get('ten_co_so') or item.get('description')
+            )
+            if not code:
+                continue
+            normalized = dict(item)
+            normalized.update({
+                'campus_code': code,
+                'campus_name': name or code.upper(),
+                'branch': _lower(branch) or 'poly',
+                'sort_order': _intish(item.get('sort_order') or item.get('sort') or item.get('order'), index),
+                'product': product,
+                '_catalog_source': 'ap.cms.get-campus',
+            })
+            campuses.append(normalized)
+        if not campuses:
+            raise RuntimeError(f'AP get-campus không trả cơ sở nào cho product={product}, branch={branch}.')
+        return campuses
+
+    def get_subjects(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]]:
+        normalized_term = _clean(term_name)
+        if not normalized_term:
+            raise RuntimeError('Thiếu term_name khi gọi AP get-subject-cms.')
+        # v25.9.16.5.71: get-subject-cms is primarily keyed by term_name.
+        # Some AP CMS environments temporarily require a static query prefix like
+        # ?campus_code=ph&term_name=. Preserve such env-configured query params,
+        # but never inject the selected UI campus as a dynamic campus_code.
+        cached = self._read_subject_cache(branch=branch, term_name=normalized_term, campus=None)
+        if cached:
+            return cached
+
+        endpoint = self._cms_endpoint(getattr(settings, 'academic_ap_cms_get_subject_endpoint', '/api/cms/get-subject-cms'), '/api/cms/get-subject-cms')
+        endpoint = self._cms_endpoint_with_query(endpoint, {'term_name': normalized_term})
+        with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
+            response = client.get(
+                endpoint,
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            data = response.json()
+        items = self._extract_list_response(data, label='AP get-subject-cms')
+        subjects = self._normalize_subject_items(items, requested_branch=branch, campus=None)
         if not subjects:
-            raise RuntimeError(f'AP get-course không trả môn nào cho branch=poly, term={term_name}, requested_branch={branch}.')
+            raise RuntimeError(f'AP get-subject-cms không trả môn nào cho term_name={normalized_term}, requested_branch={branch}.')
         for item in subjects:
-            item['_catalog_source'] = 'ap.get-course'
-        self._write_subject_cache(branch=branch, term_name=term_name, subjects=subjects)
+            item['_catalog_source'] = 'ap.cms.get-subject-cms'
+            item['_catalog_scope'] = 'term'
+            item['_catalog_term_name'] = normalized_term
+        self._write_subject_cache(branch=branch, term_name=normalized_term, campus=None, subjects=subjects)
         return subjects
 
     def get_division(self, *, campus: str, term_name: str, subject_code: str) -> dict[str, Any]:
@@ -1176,6 +1277,57 @@ class AcademicImportService:
             .all()
         )
 
+    def sync_campuses_from_ap(self, *, branch: str = 'poly', client: APAcademicClient | None = None) -> list[AcademicCampus]:
+        """Synchronize campus master data from the new AP CMS get-campus API.
+
+        Poly uses product=POLY; PTCĐ uses product=POLY9 by default. The products
+        and base URL are env-driven so operators can change them without editing
+        code. Existing manual rows are preserved but marked as active when AP
+        returns the same campus code. Rows missing from AP are not deleted; this
+        avoids disabling campuses during a temporary AP outage or partial rollout.
+        """
+        normalized_branch = _lower(branch) or 'poly'
+        client = client or APAcademicClient()
+        rows = client.get_campuses(branch=normalized_branch)
+        campuses: list[AcademicCampus] = []
+        for index, item in enumerate(rows, start=1):
+            code = _lower(item.get('campus_code'))
+            if not code:
+                continue
+            campus = self.db.query(AcademicCampus).filter(
+                AcademicCampus.campus_code == code,
+                AcademicCampus.branch == normalized_branch,
+            ).first()
+            if not campus:
+                campus = AcademicCampus(
+                    id=str(uuid.uuid4()),
+                    campus_code=code,
+                    branch=normalized_branch,
+                    created_at=_now(),
+                    updated_at=_now(),
+                )
+                self.db.add(campus)
+            meta = dict(campus.metadata_json or {})
+            meta.update({
+                'source': 'ap.cms.get-campus',
+                'last_sync_source': 'ap.cms.get-campus',
+                'product': item.get('product'),
+                'raw_keys': sorted(item.keys()),
+            })
+            changed = False
+            changed |= self._set_if_changed(campus, 'campus_name', _clean(item.get('campus_name')) or code.upper(), allow_empty=True)
+            changed |= self._set_if_changed(campus, 'sort_order', _intish(item.get('sort_order'), index))
+            changed |= self._set_if_changed(campus, 'active', True)
+            changed |= self._set_json_if_changed(campus, 'metadata_json', meta)
+            if changed:
+                campus.updated_at = _now()
+            self.db.add(campus)
+            campuses.append(campus)
+        self.db.commit()
+        for campus in campuses:
+            self.db.refresh(campus)
+        return campuses
+
     def _campus_master_values(self, *, branch: str = 'poly', include_env: bool = False, include_seen_classes: bool = False) -> list[dict[str, Any]]:
         normalized_branch = _lower(branch) or 'poly'
         values: dict[str, dict[str, Any]] = {}
@@ -1243,7 +1395,7 @@ class AcademicImportService:
 
 
     def _configured_subject_codes(self) -> list[str]:
-        # Optional fallback/debug catalog only. Normal production flow uses AP get-course.
+        # Optional fallback/debug catalog only. Normal production flow uses AP CMS get-subject-cms.
         return _unique_upper(_parse_csv_codes(settings.academic_ap_subject_codes))
 
     def _subject_code_from_item(self, item: dict[str, Any]) -> str:
@@ -1279,39 +1431,38 @@ class AcademicImportService:
             catalog: list[dict[str, Any]] = []
             warning = None
         else:
-            cache_key = f'{_lower(branch) or "poly"}:{term_name}'
+            cache_key = f'{_lower(branch) or "poly"}:{_clean(term_name)}'
             warning = None
             try:
                 if cache_key not in catalog_cache:
-                    catalog_cache[cache_key] = client.get_subjects(branch=branch, term_name=term_name, campus=campus)
+                    catalog_cache[cache_key] = client.get_subjects(branch=branch, term_name=term_name, campus=None)
                 catalog = catalog_cache[cache_key]
                 codes = _unique_upper([self._subject_code_from_item(item) for item in catalog if isinstance(item, dict)])
-                source = 'ap.get-course'
+                source = 'ap.cms.get-subject-cms'
             except Exception as exc:
                 fallback = self._configured_subject_codes()
                 if not fallback:
                     raise RuntimeError(
-                        f'Không lấy được danh sách môn từ AP cho kỳ {term_name}. '
+                        f'Không lấy được danh sách môn triển khai từ AP cho kỳ {term_name}. '
                         'Hãy kiểm tra API key/kết nối AP hoặc chọn phạm vi Theo môn với mã môn cụ thể. '
                         f'Chi tiết: {exc}'
                     ) from exc
                 catalog = []
                 codes = fallback
                 source = 'ACADEMIC_AP_SUBJECT_CODES_fallback'
-                warning = f'AP get-course lỗi, dùng fallback env: {exc}'
+                warning = f'AP get-subject-cms lỗi, dùng fallback env: {exc}'
         if max_subjects and max_subjects > 0:
             codes = codes[:max_subjects]
         return codes, catalog, source, warning
 
 
-    def get_ap_sync_options(self, *, term_name: str | None = None, branch: str = 'poly', include_subjects: bool = True) -> dict[str, Any]:
+    def get_ap_sync_options(self, *, term_name: str | None = None, branch: str = 'poly', campus: str | None = None, include_subjects: bool = True) -> dict[str, Any]:
         """Return safe dropdown options for AP sync.
 
-        Campuses are resolved only from /premises (academic_campuses).
-        Do not mix in ACADEMIC_AP_CAMPUSES or previously synced classes because
-        those sources can over-count campuses across Poly/PTCĐ branches. Subjects
-        are resolved from AP /get-course when a term is selected, with local DB/env
-        subject fallback to keep the UI usable when AP is temporarily unavailable.
+        Campuses are resolved from academic_campuses, which can now be refreshed
+        from AP CMS /get-campus. Subjects are resolved from AP CMS /get-subject-cms
+        by term_name, with local DB/env fallback to keep the UI usable when AP
+        is temporarily unavailable.
         """
         normalized_branch = _lower(branch) or 'poly'
         warnings: list[str] = []
@@ -1346,9 +1497,11 @@ class AcademicImportService:
             catalog: list[dict[str, Any]] = []
             if term_name and _clean(term_name):
                 try:
-                    catalog = APAcademicClient().get_subjects(branch=normalized_branch, term_name=_clean(term_name))
+                    catalog = APAcademicClient().get_subjects(branch=normalized_branch, term_name=_clean(term_name), campus=None)
                 except Exception as exc:
-                    warnings.append('Không tải được môn từ AP, đang dùng dữ liệu môn đã lưu nếu có.')
+                    warnings.append('Không tải được môn triển khai theo kỳ từ AP get-subject-cms, đang dùng dữ liệu môn đã lưu nếu có.')
+            else:
+                warnings.append('Chưa chọn kỳ nên chưa gọi AP get-subject-cms.')
             if catalog:
                 seen: set[str] = set()
                 for item in catalog:
@@ -1362,7 +1515,7 @@ class AcademicImportService:
                         'value': code,
                         'label': f'{code} — {name}' if name else code,
                         'description': skill or None,
-                        'meta': {'source': 'ap.get-course', 'subject_name': name, 'skill_code': skill},
+                        'meta': {'source': 'ap.cms.get-subject-cms', 'scope': 'term', 'term_name': _clean(term_name), 'subject_name': name, 'skill_code': skill},
                     })
             else:
                 q = self.db.query(AcademicSubject).filter(AcademicSubject.active.is_(True))
@@ -1436,9 +1589,12 @@ class AcademicImportService:
             'campus_count': len(resolved_campuses),
             'max_subjects_per_campus': max_subjects or 0,
             'subject_source': None,
-            'ap_subject_endpoint': '/get-course',
+            'ap_campus_endpoint': '/api/cms/get-campus',
+            'ap_subject_endpoint': '/api/cms/get-subject-cms',
             'ap_division_endpoint': '/get-data-cms',
             'subjects_by_campus': {},
+            'subject_catalog_scope': 'term_name',
+            'subject_catalog_term_name': term_name,
             'warnings': [],
         }
         catalog_cache: dict[str, list[dict[str, Any]]] = {}
@@ -1447,7 +1603,7 @@ class AcademicImportService:
         self.update_run_progress(run, current=0, total=estimated_total, label='Đã đưa job đồng bộ AP vào hàng đợi xử lý', plan=planned, counters=counters)
         try:
             for campus_index, campus_code in enumerate(resolved_campuses, start=1):
-                self.update_run_progress(run, current=max(0, campus_index - 1), total=estimated_total, label=f'Đang lấy danh sách môn từ AP cho cơ sở {campus_code}', plan=planned, counters=counters)
+                self.update_run_progress(run, current=max(0, campus_index - 1), total=estimated_total, label=f'Đang lấy danh sách môn triển khai từ AP cho kỳ {term_name}', plan=planned, counters=counters)
                 codes, catalog, source, warning = self._resolve_subject_codes_for_campus(
                     client,
                     branch=branch,
@@ -1461,9 +1617,9 @@ class AcademicImportService:
                     planned['subject_source'] = source
                 if warning:
                     planned['warnings'].append({'campus': campus_code, 'message': warning})
-                planned['subjects_by_campus'][campus_code] = {'count': len(codes), 'preview': codes[:20], 'source': source}
+                planned['subjects_by_campus'][campus_code] = {'count': len(codes), 'preview': codes[:20], 'source': source, 'catalog_scope': 'term_name', 'term_name': term_name}
                 estimated_total = max(estimated_total, sum(int(item.get('count') or 0) for item in planned['subjects_by_campus'].values()) or len(resolved_campuses))
-                self.update_run_progress(run, current=min(estimated_total - 1, sum(int(item.get('count') or 0) for item in list(planned['subjects_by_campus'].values())[:campus_index - 1])), total=estimated_total, label=f'Đã xác định {len(codes)} môn cho cơ sở {campus_code}', plan=planned, counters=counters)
+                self.update_run_progress(run, current=min(estimated_total - 1, sum(int(item.get('count') or 0) for item in list(planned['subjects_by_campus'].values())[:campus_index - 1])), total=estimated_total, label=f'Đã xác định {len(codes)} môn triển khai cho kỳ {term_name}; đang áp dụng cho cơ sở {campus_code}', plan=planned, counters=counters)
                 if dry_run:
                     continue
                 catalog_key = f'{_lower(branch) or "poly"}:{term_name}:{source}'

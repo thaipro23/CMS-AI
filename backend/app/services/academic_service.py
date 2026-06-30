@@ -706,6 +706,16 @@ class AcademicService:
             )
             if completed is not None and total and total > 0:
                 return round((completed / total) * 100.0, 2)
+            incomplete = self._number_or_none(
+                value.get('incomplete_blocks')
+                or value.get('incomplete_count')
+                or value.get('incomplete')
+                or value.get('not_completed')
+                or value.get('remaining')
+                or value.get('todo')
+            )
+            if completed is not None and incomplete is not None and completed + incomplete > 0:
+                return round((completed / (completed + incomplete)) * 100.0, 2)
             return None
         return self._percent_display_value(value)
 
@@ -746,7 +756,12 @@ class AcademicService:
             candidates.extend([progress.get('source'), progress.get('progress_source'), progress.get('progressSource')])
         for raw in candidates:
             text = str(raw or '').strip().replace('_', '').replace('-', '').replace(' ', '').lower()
-            if text in {'coursehomeapi', 'coursehome', 'courseprogressapi', 'learnerdashboard', 'official'} or 'coursehome' in text:
+            if (
+                text in {'coursehomeapi', 'coursehome', 'courseprogressapi', 'learnerdashboard', 'official', 'completionapi', 'coursecompletionapi'}
+                or 'coursehome' in text
+                or 'completionapi' in text
+                or 'courseprogress' in text
+            ):
                 return True
         return False
 
@@ -768,10 +783,13 @@ class AcademicService:
                 percent = self._percent_from_value(container.get(key), kind='progress')
                 if percent is not None:
                     return percent
-            completed = self._number_or_none(container.get('completed_blocks') or container.get('completed_count') or container.get('completed') or container.get('done') or container.get('visited'))
+            completed = self._number_or_none(container.get('completed_blocks') or container.get('complete_count') or container.get('completed_count') or container.get('completed') or container.get('complete') or container.get('done') or container.get('visited'))
             total = self._number_or_none(container.get('total_blocks') or container.get('total_count') or container.get('block_count') or container.get('total') or container.get('required'))
             if completed is not None and total and total > 0:
                 return round((completed / total) * 100.0, 2)
+            incomplete = self._number_or_none(container.get('incomplete_blocks') or container.get('incomplete_count') or container.get('incomplete') or container.get('not_completed') or container.get('remaining'))
+            if completed is not None and incomplete is not None and completed + incomplete > 0:
+                return round((completed / (completed + incomplete)) * 100.0, 2)
         # Do not infer Course completion from grade/quiz components.
         # Course completion is a distinct CMS/Open edX progress value. If the
         # connector does not return an official progress/completion percentage,
@@ -806,6 +824,25 @@ class AcademicService:
         if direct is not None:
             return direct
         return self._progress_percent_from_payload(payload)
+
+    def _snapshot_progress_source(self, snapshot: AcademicStudentLearningSnapshot | None) -> str | None:
+        if not snapshot:
+            return None
+        payload = self._payload_from_snapshot(snapshot)
+        progress = payload.get('progress') if isinstance(payload.get('progress'), dict) else None
+        for value in (
+            payload.get('progress_source'),
+            payload.get('progressSource'),
+            progress.get('source') if progress else None,
+            progress.get('progress_source') if progress else None,
+            progress.get('progressSource') if progress else None,
+        ):
+            text = str(value or '').strip()
+            if text:
+                return text[:120]
+        if snapshot.completed_blocks is not None or snapshot.total_blocks is not None:
+            return 'diagnostic_counts_only'
+        return None
 
     def _snapshot_grade_percent(self, snapshot: AcademicStudentLearningSnapshot | None) -> float | None:
         if not snapshot:
@@ -2245,6 +2282,7 @@ class AcademicService:
             'learning_enrollment_status': learning.enrollment_status if learning else None,
             'learning_enrollment_mode': learning.enrollment_mode if learning else None,
             'learning_progress_percent': self._snapshot_progress_percent(learning),
+            'learning_progress_source': self._snapshot_progress_source(learning),
             'learning_grade_percent': self._snapshot_grade_percent(learning),
             'learning_passed': learning.passed if learning else None,
             'learning_completed_blocks': learning.completed_blocks if learning else None,

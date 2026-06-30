@@ -333,7 +333,7 @@ class AcademicAPSyncIn(BaseModel):
     campus: str | None = Field(None, description='Mã cơ sở AP dạng pc/pt/hn/hcm...; giữ để tương thích bản cũ')
     campuses: list[str] = Field(default_factory=list, description='Danh sách cơ sở khi sync_scope=all/campus')
     branch: str = 'poly'
-    subject_codes: list[str] = Field(default_factory=list, description='Danh sách mã môn AP psubject_code. Rỗng ở sync_scope=all/campus = backend lấy từ AP /get-course; env ACADEMIC_AP_SUBJECT_CODES chỉ là fallback')
+    subject_codes: list[str] = Field(default_factory=list, description='Danh sách mã môn AP psubject_code. Rỗng ở sync_scope=all/campus = backend lấy danh sách môn triển khai từ AP /api/cms/get-subject-cms theo term_name; env ACADEMIC_AP_SUBJECT_CODES chỉ là fallback')
     max_subjects: int = Field(0, ge=0, le=5000, description='0 = không giới hạn; >0 = giới hạn số môn mỗi cơ sở để chia batch an toàn')
     dry_run: bool = False
 

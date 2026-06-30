@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
-import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions } from '../../lib/api'
+import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions, syncAcademicCampusesFromAp } from '../../lib/api'
 import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult, AcademicSyncRun } from '../../types'
 
 type BranchCode = 'poly' | 'ptcd'
@@ -92,6 +92,7 @@ export default function ApSyncPage() {
   const [selectedBranch, setSelectedBranch] = useState<BranchCode>('poly')
   const [optionsByBranch, setOptionsByBranch] = useState<BranchState>({ poly: EMPTY_OPTIONS, ptcd: EMPTY_OPTIONS })
   const [loadingOptions, setLoadingOptions] = useState(false)
+  const [syncingCampuses, setSyncingCampuses] = useState(false)
   const [running, setRunning] = useState(false)
   const [dryRun, setDryRun] = useState(false)
   const [message, setMessage] = useState('')
@@ -132,6 +133,28 @@ export default function ApSyncPage() {
     const flattened = jobs.flat().filter((item) => isRunActive(item.run))
     setActiveRuns(flattened)
     return flattened
+  }
+
+  const syncCampusesFromAp = async () => {
+    if (!can('manage_settings')) {
+      setMessage('Bạn không có quyền đồng bộ danh sách cơ sở AP.')
+      return
+    }
+    setSyncingCampuses(true)
+    setMessage('')
+    try {
+      const results = await Promise.all(BRANCHES.map(async (branch) => ({
+        branch: branch.value,
+        campuses: await syncAcademicCampusesFromAp(jsonHeaders, branch.value),
+      })))
+      await loadOptions()
+      const summary = results.map((item) => `${BRANCHES.find((branch) => branch.value === item.branch)?.label || item.branch}: ${item.campuses.length} cơ sở`).join(' · ')
+      setMessage(`Đã đồng bộ danh sách cơ sở từ AP và lưu vào /premises. ${summary}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không đồng bộ được danh sách cơ sở từ AP')
+    } finally {
+      setSyncingCampuses(false)
+    }
   }
 
   useEffect(() => {
@@ -239,7 +262,8 @@ export default function ApSyncPage() {
         <p>Trang này dùng để đồng bộ dữ liệu phân công từ AP theo kỳ. Không chia nhỏ theo cơ sở hoặc theo môn trên giao diện nữa.</p>
       </div>
       <div className="hero-actions">
-        <button className="btn secondary" disabled={loadingOptions || running} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới'}</button>
+        <button className="btn secondary" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới'}</button>
+        <button className="btn secondary" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang đồng bộ cơ sở...' : 'Đồng bộ danh sách cơ sở'}</button>
       </div>
     </section>
 
@@ -295,14 +319,14 @@ export default function ApSyncPage() {
         </label>
       </div>
       <div className="toolbar-actions ap-sync-actions ap-sync-actions-primary">
-        <button className="btn" disabled={running || loadingOptions || Boolean(activeRuns.length) || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>
+        <button className="btn" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>
           {running ? 'Đang chạy...' : 'Đồng bộ tất cả'}
         </button>
-        <button className="btn secondary" disabled={running || loadingOptions || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>
+        <button className="btn secondary" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>
           {running ? 'Đang chạy...' : `Đồng bộ theo hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label || ''}`}
         </button>
       </div>
-      {!totalCampuses ? <div className="alert soft-alert">Chưa có cơ sở đang bật. Vào trang Cơ sở để thêm hoặc bật lại cơ sở trước.</div> : null}
+      {!totalCampuses ? <div className="alert soft-alert">Chưa có cơ sở đang bật. Bấm Đồng bộ danh sách cơ sở để lấy từ AP CMS get-campus và lưu vào /premises, hoặc vào trang Cơ sở để thêm thủ công.</div> : null}
     </section>
 
     {lastResults.length ? <section className="card">

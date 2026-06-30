@@ -2181,14 +2181,21 @@ export async function deleteAcademicCampus(headers: HeadersInit, campusId: strin
   return parseResponse(await apiFetch(`${API}/academic/campuses/${encodeURIComponent(campusId)}`, { method: 'DELETE', headers }));
 }
 
-export async function getAcademicApSyncOptions(headers: HeadersInit, filters: { termName?: string; branch?: string; includeSubjects?: boolean } = {}): Promise<AcademicAPSyncOptions> {
+export async function getAcademicApSyncOptions(headers: HeadersInit, filters: { termName?: string; branch?: string; campus?: string; includeSubjects?: boolean } = {}): Promise<AcademicAPSyncOptions> {
   const params = new URLSearchParams();
   if (filters.termName?.trim()) params.set('term_name', filters.termName.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
   if (filters.includeSubjects === false) params.set('include_subjects', 'false');
   return parseResponse(await apiFetch(`${API}/academic/sync/ap/options?${params.toString()}`, { credentials: "include", headers }));
 }
 
+
+export async function syncAcademicCampusesFromAp(headers: HeadersInit, branch = 'poly'): Promise<AcademicCampus[]> {
+  const params = new URLSearchParams();
+  if (branch.trim()) params.set('branch', branch.trim());
+  return parseResponse(await apiFetch(`${API}/academic/campuses/sync-from-ap?${params.toString()}`, { method: 'POST', headers }));
+}
 
 export async function seedAcademicCampusesFromEnv(headers: HeadersInit, branch = 'poly'): Promise<any[]> {
   const params = new URLSearchParams();

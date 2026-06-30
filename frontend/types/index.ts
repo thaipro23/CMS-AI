@@ -1894,6 +1894,7 @@ export type AcademicStudent = {
   learning_enrollment_status?: string | null
   learning_enrollment_mode?: string | null
   learning_progress_percent?: number | null
+  learning_progress_source?: string | null
   learning_grade_percent?: number | null
   learning_passed?: boolean | null
   learning_completed_blocks?: number | null

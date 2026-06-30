@@ -181,6 +181,21 @@ class Settings(BaseSettings):
 
     academic_ap_sync_enabled: bool = True
     academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'
+    # v25.9.16.5.68: AP CMS master-data API for campus and subject catalogs.
+    # Keep this separate from ACADEMIC_AP_API_BASE_URL because /get-data-cms can
+    # still remain on the legacy API while campus/subject master data moves to
+    # the new /api/cms endpoints.
+    academic_ap_cms_api_base_url: str = 'http://apitest.poly.edu.vn'
+    academic_ap_cms_get_campus_endpoint: str = '/api/cms/get-campus'
+    # Can be either a plain path or a query-template path. Examples:
+    # /api/cms/get-subject-cms
+    # /api/cms/get-subject-cms?term_name=
+    # /api/cms/get-subject-cms?campus_code=ph&term_name=
+    academic_ap_cms_get_subject_endpoint: str = '/api/cms/get-subject-cms'
+    # v25.9.16.5.70: AP CMS get-campus product mapping confirmed by AP.
+    # Poly/Cao đẳng FPT uses product=POLY; PTCĐ/Poly 9+ uses product=POLY9.
+    academic_ap_cms_product_poly: str = 'POLY'
+    academic_ap_cms_product_ptcd: str = 'POLY9'
     academic_ap_api_key: str | None = None
     academic_ap_request_timeout_seconds: int = 60
     # TLS verification mode for the legacy AP/ACMS API.
@@ -193,13 +208,13 @@ class Settings(BaseSettings):
     # Prevent AP sync from bloating the DB. In production, empty AP classes
     # (no valid student username in student/students array) are ignored and do
     # not create subject/class/teacher/student rows. The subject catalog from
-    # /get-course is used for discovery only by default; subjects are persisted
+    # AP CMS get-subject-cms with term_name is used for discovery by default; subjects are persisted
     # only when an actual class with students is imported.
     academic_ap_skip_empty_classes: bool = True
     academic_ap_import_catalog_subjects: bool = False
-    # Cache the AP /get-course discovery response into a local JSON file. This
+    # Cache the AP get-subject-cms term_name discovery response into a local JSON file. This
     # lets repeated /get-data-cms syncs reuse the subject-code list without
-    # storing the whole catalog in DB and without calling /get-course on every
+    # storing the whole catalog in DB and without calling get-subject-cms on every
     # sync run. Set refresh=true for one run when the AP catalog changes.
     academic_ap_get_course_file_cache_enabled: bool = True
     academic_ap_get_course_file_cache_dir: str = '/tmp/ai-server-ap-cache/get-course'

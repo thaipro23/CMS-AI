@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Suspense, useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../context/AppContext'
 import {
@@ -16,7 +16,7 @@ import {
   saveAcademicClassAssignmentDefenseScores,
 } from '../../../../lib/api'
 import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
-import { formatVNDate, formatVNDateTime } from '../../../../lib/time'
+import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 
 const PAGE_SIZE = 50
@@ -79,6 +79,24 @@ function learningStatusClass(value?: string | null) {
   if (['low_progress', 'low_grade', 'not_enrolled', 'cms_not_synced', 'sync_error'].includes(status)) return 'status-pill danger'
   if (status === 'no_activity') return 'status-pill warning'
   return 'status-pill neutral'
+}
+function learningStatusSentence(value?: string | null) {
+  const label = learningStatusLabel(value)
+  return label.endsWith('.') ? label : `${label}.`
+}
+function latestTimestamp(values: Array<string | null | undefined>) {
+  let selected: string | null = null
+  let selectedTime = 0
+  values.forEach((value) => {
+    if (!value) return
+    const time = new Date(value).getTime()
+    if (!Number.isFinite(time)) return
+    if (!selected || time > selectedTime) {
+      selected = value
+      selectedTime = time
+    }
+  })
+  return selected
 }
 function componentScoreText(score?: AcademicLearningComponentScore | null) {
   if (!score) return 'N/A'
@@ -221,6 +239,11 @@ function ClassDetailContent() {
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false)
   const [assignmentRows, setAssignmentRows] = useState<AcademicAssignmentDefenseScore[]>([])
   const [savingPolicy, setSavingPolicy] = useState(false)
+  const tableScrollRef = useRef<HTMLDivElement | null>(null)
+  const studentTableRef = useRef<HTMLTableElement | null>(null)
+  const studentTableDragRef = useRef({ active: false, startX: 0, scrollLeft: 0, moved: false, pointerId: -1 })
+  const suppressStudentTableClickRef = useRef(false)
+  const [studentTableDragging, setStudentTableDragging] = useState(false)
 
   const refreshStudents = async () => {
     const [studentPage, nextSummary, nextLearning] = await Promise.all([
@@ -470,6 +493,66 @@ function ClassDetailContent() {
     return Array.from(byIdentity.values()).sort(gradeColumnCompare)
   }, [learningSummary, students])
 
+
+
+  const studentListUpdatedAt = useMemo(() => latestTimestamp([
+    learningSummary?.last_synced_at,
+    ...students.map((student) => student.learning_last_synced_at),
+  ]), [learningSummary?.last_synced_at, students])
+
+  const handleStudentTableWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const container = tableScrollRef.current
+    if (!container) return
+    const hasHorizontalOverflow = container.scrollWidth > container.clientWidth + 2
+    if (!hasHorizontalOverflow) return
+    const shouldScrollHorizontal = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)
+    if (!shouldScrollHorizontal) return
+    const delta = event.shiftKey ? event.deltaY : event.deltaX
+    if (!delta) return
+    container.scrollLeft += delta
+    event.preventDefault()
+  }
+
+  const startStudentTableDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const container = tableScrollRef.current
+    if (!container || container.scrollWidth <= container.clientWidth + 2) return
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    studentTableDragRef.current = { active: true, startX: event.clientX, scrollLeft: container.scrollLeft, moved: false, pointerId: event.pointerId }
+    try { container.setPointerCapture(event.pointerId) } catch {}
+  }
+
+  const moveStudentTableDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const state = studentTableDragRef.current
+    const container = tableScrollRef.current
+    if (!state.active || !container) return
+    const deltaX = event.clientX - state.startX
+    if (Math.abs(deltaX) > 3) {
+      state.moved = true
+      setStudentTableDragging(true)
+      container.scrollLeft = state.scrollLeft - deltaX
+      event.preventDefault()
+    }
+  }
+
+  const endStudentTableDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const state = studentTableDragRef.current
+    const container = tableScrollRef.current
+    if (!state.active) return
+    if (state.moved) {
+      suppressStudentTableClickRef.current = true
+      window.setTimeout(() => { suppressStudentTableClickRef.current = false }, 80)
+    }
+    state.active = false
+    setStudentTableDragging(false)
+    try { container?.releasePointerCapture(event.pointerId) } catch {}
+  }
+
+  const suppressStudentTableClickAfterDrag = (event: MouseEvent<HTMLDivElement>) => {
+    if (!suppressStudentTableClickRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
   const studentComponentScore = (student: AcademicStudent, column: GradeColumn) => {
     return student.learning_component_scores?.find((score) => gradeColumnIdentity(score) === column.key || componentKey(score) === column.key || score.name === column.name) || null
   }
@@ -544,7 +627,7 @@ function ClassDetailContent() {
 
     <section className="card academic-unified-card student-list-card">
       <div className="section-head">
-        <div><h2>Danh sách sinh viên</h2><p>Tiến độ học hiển thị Course completion và điểm tổng hệ 10. Các cột điểm được tạo động từ Detailed grades của Course CMS; mỗi course có bao nhiêu đầu điểm thì bảng tự mở bấy nhiêu cột.</p></div>
+        <div><h2>Danh sách sinh viên</h2><p>{studentListUpdatedAt ? `Cập nhật: ${formatVNTimeDate(studentListUpdatedAt)}` : 'Cập nhật: chưa có dữ liệu đồng bộ học tập'}</p></div>
         <div className="toolbar-actions">
           <select className="input compact-input" value={learningStatus} onChange={(event) => { setLearningStatus(event.target.value); setPage(1) }}>
             <option value="all">Tất cả trạng thái</option>
@@ -558,8 +641,19 @@ function ClassDetailContent() {
           <input className="input compact-input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Tìm mã SV, username, họ tên..." />
         </div>
       </div>
-      <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll">
-        <table className="data-table academic-data-table student-grade-table">
+      <div className="class-student-table-shell">
+        <div className="student-table-scroll-hint">Kéo ngang trực tiếp trong bảng, dùng touchpad, hoặc giữ Shift và lăn chuột để xem các cột Quiz. Chỉ bảng sinh viên cuộn ngang, các thẻ khác giữ nguyên.</div>
+        <div
+          className={`table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll${studentTableDragging ? ' is-dragging' : ''}`}
+          ref={tableScrollRef}
+          onWheel={handleStudentTableWheel}
+          onPointerDown={startStudentTableDrag}
+          onPointerMove={moveStudentTableDrag}
+          onPointerUp={endStudentTableDrag}
+          onPointerCancel={endStudentTableDrag}
+          onClickCapture={suppressStudentTableClickAfterDrag}
+        >
+        <table className="data-table academic-data-table student-grade-table" ref={studentTableRef}>
           <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Số lần học lại</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
           <tbody>
             {loading && <tr><td colSpan={8 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
@@ -571,7 +665,7 @@ function ClassDetailContent() {
               <td className="relearn-count-cell"><b>{student.total_relearn || 0}</b><small>Số lần học lại</small></td>
               <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${formatVNDateTime(student.last_resolved_at)}` : ''}</small></td>
               <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>{student.learning_enrollment_synced_at ? `Kiểm tra: ${formatVNDateTime(student.learning_enrollment_synced_at)}` : ''}</small></td>
-              <td className="learning-progress-cell"><b>Course completion: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{student.learning_last_synced_at ? <small>Cập nhật: {formatVNDateTime(student.learning_last_synced_at)}</small> : null}</td>
+              <td className="learning-progress-cell"><b>Hoàn thành khóa học: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusSentence(student.learning_status)}</span></td>
               <td className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Final test chưa áp dụng rule'}</small><small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small></td>
               {componentColumns.map((column) => {
                 const score = studentComponentScore(student, column)
@@ -585,6 +679,7 @@ function ClassDetailContent() {
             </tr>)}
           </tbody>
         </table>
+        </div>
       </div>
       <div className="pagination-row">
         <button className="btn secondary small" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Trang trước</button>

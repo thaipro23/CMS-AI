@@ -98,6 +98,28 @@ export function formatVNDateTime(value?: string | number | Date | null): string 
   }
 }
 
+export function formatVNTimeDate(value?: string | number | Date | null): string {
+  if (!value) return '—'
+  try {
+    const raw = typeof value === 'string' ? value.trim() : value
+    if (typeof raw === 'string' && isDateOnlyISO(raw)) return normalizeVNDateInput(raw)
+    const parts = new Intl.DateTimeFormat('vi-VN', {
+      timeZone: VIETNAM_TIME_ZONE,
+      hour12: false,
+      year: 'numeric',
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(raw))
+    const get = (type: string) => parts.find((part) => part.type === type)?.value || ''
+    return `${get('hour')}:${get('minute')}:${get('second')} ${get('day')}/${get('month')}/${get('year')}`
+  } catch {
+    return String(value || '—')
+  }
+}
+
 export function formatVNDate(value?: string | number | Date | null): string {
   if (!value) return '—'
   try {

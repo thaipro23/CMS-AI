@@ -5218,3 +5218,86 @@ html[data-theme='dark'] .training-management-page .nested-card {
 .class-student-table-scroll .student-grade-table td.exam-policy-cell,
 .class-student-table-scroll .student-grade-table td.username-combined-cell { white-space: normal; }
 @media(max-width: 900px){ .learning-weeks-grid { grid-template-columns: 1fr; } }
+
+/* v25.9.16.5.65 — native in-table horizontal scroll without global page scroll */
+.class-student-table-shell {
+  max-width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+.student-table-scroll-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(148, 163, 184, .28);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+.class-student-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  cursor: grab;
+  touch-action: pan-y pan-x;
+  scrollbar-gutter: stable;
+  background:
+    linear-gradient(to right, #ffffff 30%, rgba(255,255,255,0)),
+    linear-gradient(to left, #ffffff 30%, rgba(255,255,255,0)) 100% 0,
+    radial-gradient(farthest-side at 0 50%, rgba(15,23,42,.18), rgba(15,23,42,0)),
+    radial-gradient(farthest-side at 100% 50%, rgba(15,23,42,.18), rgba(15,23,42,0)) 100% 0;
+  background-repeat: no-repeat;
+  background-size: 42px 100%, 42px 100%, 14px 100%, 14px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+.class-student-table-scroll.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+.class-student-table-scroll::-webkit-scrollbar { height: 12px; }
+.class-student-table-scroll::-webkit-scrollbar-track { background: #eef2f7; border-radius: 999px; }
+.class-student-table-scroll::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 999px; border: 2px solid #eef2f7; }
+.class-student-table-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
+.class-student-table-scroll .student-grade-table {
+  min-width: max-content;
+  width: max-content;
+}
+.class-student-table-scroll .student-grade-table th,
+.class-student-table-scroll .student-grade-table td {
+  white-space: nowrap;
+}
+.class-student-table-scroll .student-grade-table td.learning-progress-cell,
+.class-student-table-scroll .student-grade-table td.exam-policy-cell,
+.class-student-table-scroll .student-grade-table td.username-combined-cell {
+  white-space: normal;
+}
+.class-student-table-scroll .student-grade-table .sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: #fff;
+  box-shadow: 2px 0 0 rgba(226, 232, 240, .9), 10px 0 18px -16px rgba(15, 23, 42, .45);
+}
+.class-student-table-scroll .student-grade-table th.sticky-col {
+  z-index: 7;
+  background: #f8fafc;
+}
+.class-student-table-scroll .student-grade-table tbody tr:hover .sticky-col {
+  background: #f8fbff;
+}
+@media (max-width: 768px) {
+  .student-table-scroll-hint {
+    border-radius: 10px;
+    align-items: flex-start;
+    line-height: 1.35;
+  }
+  .class-student-table-scroll .student-grade-table {
+    min-width: 1080px;
+  }
+}

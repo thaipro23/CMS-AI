@@ -1346,6 +1346,18 @@ def seed_academic_campuses_from_env(
     return items
 
 
+@router.post('/campuses/sync-from-ap', response_model=list[AcademicCampusOut])
+def sync_academic_campuses_from_ap(
+    branch: str = Query('poly'),
+    user: UserContext = Depends(require_permission('manage_settings')),
+    db: Session = Depends(get_db),
+):
+    _require_academic_admin(db, user)
+    items = AcademicImportService(db).sync_campuses_from_ap(branch=branch)
+    log_audit(db, action='academic.campus.sync_from_ap', status='success', message='Đồng bộ danh sách cơ sở từ AP thành công', user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch, 'count': len(items)})
+    return items
+
+
 @router.delete('/campuses/{campus_id}', response_model=AcademicCampusOut)
 def delete_academic_campus(
     campus_id: str,
@@ -1368,13 +1380,14 @@ def delete_academic_campus(
 
 @router.get('/sync/ap/options', response_model=AcademicAPSyncOptionsOut)
 def get_ap_sync_options(
-    term_name: str = Query('', description='Tên kỳ AP, ví dụ Summer 2026. Có term_name thì backend gọi AP /get-course để lấy môn.'),
+    term_name: str = Query('', description='Tên kỳ AP, ví dụ Summer 2026.'),
     branch: str = Query('poly'),
+    campus: str | None = Query(None, description='Giữ tương thích UI cũ; danh sách môn lấy theo term_name. Nếu AP CMS cần campus_code tạm thời, cấu hình static trong env ACADEMIC_AP_CMS_GET_SUBJECT_ENDPOINT.'),
     include_subjects: bool = Query(True),
     user: UserContext = Depends(require_permission('manage_settings')),
     db: Session = Depends(get_db),
 ):
-    return AcademicImportService(db).get_ap_sync_options(term_name=term_name or None, branch=branch, include_subjects=include_subjects)
+    return AcademicImportService(db).get_ap_sync_options(term_name=term_name or None, branch=branch, campus=campus, include_subjects=include_subjects)
 
 
 @router.post('/sync/from-json', response_model=AcademicImportResultOut)
