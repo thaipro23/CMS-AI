@@ -154,7 +154,7 @@ export function DepartmentsPage() {
     {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel || 'Hệ thống đang xử lý. Bạn có thể tiếp tục xem dữ liệu hiện có.'}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>Danh sách bộ môn</h2><p className="helper">Click vào bộ môn để xem các môn bên trong.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={<button className="btn" disabled={!can('manage_settings')} onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button>} />
+      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={can('manage_settings') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined} />
       <div className="bank-status-legend" aria-label="Chú giải trạng thái">
         <span><i className="dot-empty" />Chưa làm</span><span><i className="dot-incomplete" />Chưa làm hết</span><span><i className="dot-published" />Đã public thư viện</span>
       </div>

@@ -727,23 +727,23 @@ ${chunk.content}`).join('\n\n')
       </div>
       <div className="button-row no-margin">
         <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>
-        {!chapterPublished ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : 'Tạo câu hỏi'}</button> : null}
+        {!chapterPublished && can('generate_questions') ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : 'Tạo câu hỏi'}</button> : null}
         <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? 'Xem câu hỏi' : 'Duyệt câu hỏi'}</button>
         {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={isActionBusy('diff_check') || longOperationBusy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => runAction('diff_check', async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
         }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra thay đổi'}</button> : null}
-        {chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => runAction('release_create', async () => {
+        {can('publish_questions') ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => runAction('release_create', async () => {
           if (!selectedBankVersion) return
           await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
-        }, 'Hệ thống đã chốt bộ đề. Bạn có thể public thư viện khi sẵn sàng.', refreshCurrent, 'Không chốt được bộ đề. Vui lòng kiểm tra câu hỏi còn chờ xử lý.')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy || !can('publish_questions')} onClick={() => runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Hệ thống đã public thư viện lên CMS.', refreshCurrent, 'Không public được thư viện. Vui lòng thử lại.')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Public thư viện'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button>}
+        }, 'Hệ thống đã chốt bộ đề. Bạn có thể public thư viện khi sẵn sàng.', refreshCurrent, 'Không chốt được bộ đề. Vui lòng kiểm tra câu hỏi còn chờ xử lý.')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Hệ thống đã public thư viện lên CMS.', refreshCurrent, 'Không public được thư viện. Vui lòng thử lại.')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Public thư viện'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button>) : null}
       </div>
       {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">
-        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div>{!chapterPublished ? <button className="btn secondary chapter-action-button review" disabled={isActionBusy('bulk_approve') || !can('review_questions') || stats.pending === 0} onClick={() => runAction('bulk_approve', async () => {
+        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div>{!chapterPublished && can('review_questions') ? <button className="btn secondary chapter-action-button review" disabled={isActionBusy('bulk_approve') || stats.pending === 0} onClick={() => runAction('bulk_approve', async () => {
           if (!selectedBankVersion) return
           await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
         }, 'Hệ thống đã duyệt hết câu chờ.', refreshCurrent, 'Không duyệt được câu hỏi. Vui lòng thử lại.')}>{isActionBusy('bulk_approve') ? <BusyLabel text="Đang duyệt" /> : 'Duyệt hết câu chờ'}</button> : null}</div>
@@ -787,13 +787,13 @@ ${chunk.content}`).join('\n\n')
                 <div className="question-control-actions">
                   <div className="box-label">Thao tác</div>
                   <div className="question-actions">
-                    {!chapterPublished && item.status !== 'published' ? <button className="btn small secondary" disabled={isActionBusy('question_review') || !can('review_questions')} onClick={() => startEditQuestion(item)}>Sửa</button> : null}
-                    {!chapterPublished && (item.status === 'pending_review' || item.status === 'needs_review' || item.status === 'rejected') ? <button className="btn small success" disabled={isActionBusy('question_review') || !can('review_questions')} onClick={() => run(async () => {
+                    {!chapterPublished && can('review_questions') && item.status !== 'published' ? <button className="btn small secondary" disabled={isActionBusy('question_review')} onClick={() => startEditQuestion(item)}>Sửa</button> : null}
+                    {!chapterPublished && can('review_questions') && (item.status === 'pending_review' || item.status === 'needs_review' || item.status === 'rejected') ? <button className="btn small success" disabled={isActionBusy('question_review')} onClick={() => run(async () => {
                       if (!selectedBankVersion) return
                       await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' })
                     }, 'Đã duyệt câu hỏi', refreshCurrent)}>{item.status === 'rejected' ? 'Duyệt lại' : 'Duyệt'}</button> : null}
-                    {!chapterPublished && item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={isActionBusy('question_review') || !can('review_questions')} onClick={() => openRejectQuestion(item)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
-                    {!chapterPublished && item.status === 'approved' ? <button className="btn small secondary" disabled={isActionBusy('question_review') || !can('review_questions')} onClick={() => run(async () => {
+                    {!chapterPublished && can('review_questions') && item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={isActionBusy('question_review')} onClick={() => openRejectQuestion(item)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
+                    {!chapterPublished && can('review_questions') && item.status === 'approved' ? <button className="btn small secondary" disabled={isActionBusy('question_review')} onClick={() => run(async () => {
                       if (!selectedBankVersion) return
                       await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' })
                     }, 'Đã đưa câu hỏi về chờ duyệt', refreshCurrent)}>Hoàn tác</button> : null}
@@ -810,14 +810,14 @@ ${chunk.content}`).join('\n\n')
 
     <Modal open={materialManagerOpen} title="Tài liệu của bài" onClose={() => setMaterialManagerOpen(false)} wide>
       <div className="chapter-popup-grid">
-        {!chapterPublished ? <div className="popup-action-panel">
+        {!chapterPublished && can('edit_questions') ? <div className="popup-action-panel">
           <h3>Gắn tài liệu</h3>
           <p className="helper">Tài liệu là nguồn để AI tạo câu hỏi cho đúng bài này. Nếu version clone bị đổi tài liệu, hệ thống sẽ kiểm tra khác biệt.</p>
           {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
           {activeOperation?.type === 'material_upload' ? <div className="alert info" role="status" aria-live="polite"><b>Hệ thống đang xử lý tài liệu.</b> {activeOperation.label}</div> : null}
           <div className="mini-form">
             <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
-            <button className="btn" disabled={materialOperationBusy || generateOperationBusy || isActionBusy('material_upload_enqueue') || !file || !can('edit_questions')} onClick={uploadSelectedMaterial}>{isActionBusy('material_upload_enqueue') || materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : '+ Gắn tài liệu'}</button>
+            <button className="btn" disabled={materialOperationBusy || generateOperationBusy || isActionBusy('material_upload_enqueue') || !file} onClick={uploadSelectedMaterial}>{isActionBusy('material_upload_enqueue') || materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : '+ Gắn tài liệu'}</button>
           </div>
         </div> : <div className="popup-action-panel"><h3>Đã public thư viện</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo bộ đề.</p></div>}
         <div className="popup-list-panel">
@@ -828,7 +828,7 @@ ${chunk.content}`).join('\n\n')
               <small>{item.file_type} · {formatVNDateTime(item.created_at)}</small>
               <div className="button-row no-margin">
                 <button className="btn small secondary" onClick={() => openMaterial(item)}>Xem</button>
-                {!chapterPublished ? <button className="btn small danger" disabled={isActionBusy('material_delete') || !can('edit_questions')} onClick={() => runAction('material_delete', async () => { await deleteMaterialVersion(headers, item.id) }, 'Hệ thống đã xóa tài liệu khỏi bài.', refreshCurrent, 'Không xóa được tài liệu. Vui lòng thử lại.')}>{isActionBusy('material_delete') ? <BusyLabel text="Đang xóa" /> : 'Xóa'}</button> : null}
+                {!chapterPublished && can('edit_questions') ? <button className="btn small danger" disabled={isActionBusy('material_delete')} onClick={() => runAction('material_delete', async () => { await deleteMaterialVersion(headers, item.id) }, 'Hệ thống đã xóa tài liệu khỏi bài.', refreshCurrent, 'Không xóa được tài liệu. Vui lòng thử lại.')}>{isActionBusy('material_delete') ? <BusyLabel text="Đang xóa" /> : 'Xóa'}</button> : null}
               </div>
             </div>)}
             {!materials.length ? <div className="empty-state">Chưa có tài liệu.</div> : null}

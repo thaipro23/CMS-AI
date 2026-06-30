@@ -1600,8 +1600,8 @@ export type SubjectSummary = { subject: Subject; stats: BankReviewStatusStats }
 export type SubjectVersionSummary = { subject_version: SubjectOffering; stats: BankReviewStatusStats }
 export type ChapterSummary = { chapter: SubjectChapter; stats: BankReviewStatusStats }
 
-export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER'
-export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE'
+export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER' | 'CAMPUS_MANAGER'
+export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE' | 'CAMPUS'
 
 export type RBACRole = {
   code: BusinessRoleCode | string
@@ -2079,6 +2079,7 @@ export type AcademicTrainingTeacherReport = {
 }
 
 export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTrainingTeacherReport> & {
+  summary_scope?: 'current_page' | 'filtered' | string
   summary: {
     teacher_count: number
     class_count: number

@@ -171,7 +171,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{subject ? `Danh sách phiên bản của ${subject.code}` : 'Danh sách phiên bản môn'}</h2><p className="helper">Tạo mới hoàn toàn hoặc tạo từ phiên bản cũ của môn.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm phiên bản môn" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button>} />
+      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm phiên bản môn" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ subject_version, stats: rawStats }) => {
           const stats = rawStats || emptyReviewStats()

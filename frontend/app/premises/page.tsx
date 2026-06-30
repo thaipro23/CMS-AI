@@ -73,7 +73,7 @@ export default function PremisesPage() {
     finally { setSaving(false) }
   }
 
-  if (!can('manage_settings')) return <div className="page-stack"><section className="hero-card compact-hero"><div><div className="eyebrow">Premises</div><h1>Cơ sở</h1><p>Bạn không có quyền quản trị cơ sở.</p></div></section></div>
+  if (!(can('manage_training_deadlines') || can('manage_settings'))) return null
 
   return <div className="page-stack premises-page">
     <section className="hero-card compact-hero"><div><div className="eyebrow">AP master data</div><h1>Cơ sở</h1><p>Quản lý danh mục cơ sở dùng cho đồng bộ AP. Dữ liệu đồng bộ từ AP CMS get-campus sẽ được lưu tại đây; vẫn có thể thêm mới và chỉnh sửa bằng popup.</p></div><div className="hero-actions"><button className="btn secondary" disabled={loading} onClick={load}>Làm mới</button><button className="btn" onClick={openCreate}>Thêm cơ sở</button></div></section>

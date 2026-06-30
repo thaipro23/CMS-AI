@@ -40,7 +40,7 @@ services:
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
       - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
       - "api_v2.poly.edu.vn:10.2.1.35"  
-      - "apitest.poly.edu.vn:10.2.9.6"  
+      - "apitest.poly.edu.vn:10.2.5.8"  
 
 
   backend:
@@ -88,7 +88,7 @@ services:
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
       - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
       - "api_v2.poly.edu.vn:10.2.1.35"  
-      - "apitest.poly.edu.vn:10.2.9.6"  
+      - "apitest.poly.edu.vn:10.2.5.8"  
 
   worker:
     build:

@@ -16,12 +16,14 @@ SYSTEM_ADMIN = 'SYSTEM_ADMIN'
 DEPARTMENT_HEAD = 'DEPARTMENT_HEAD'
 SUBJECT_OWNER = 'SUBJECT_OWNER'
 QUESTION_REVIEWER = 'QUESTION_REVIEWER'
+CAMPUS_MANAGER = 'CAMPUS_MANAGER'
 
 ROLE_RANK = {
     SYSTEM_ADMIN: 100,
     DEPARTMENT_HEAD: 70,
     SUBJECT_OWNER: 50,
     QUESTION_REVIEWER: 20,
+    CAMPUS_MANAGER: 60,
 }
 
 ROLE_LABELS = {
@@ -29,6 +31,7 @@ ROLE_LABELS = {
     DEPARTMENT_HEAD: 'Trưởng bộ môn',
     SUBJECT_OWNER: 'Chủ môn',
     QUESTION_REVIEWER: 'Người duyệt câu hỏi',
+    CAMPUS_MANAGER: 'Quản lý cơ sở',
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -37,6 +40,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'subject.assign_owner', 'reviewer.assign', 'course.sync', 'document.manage', 'question.generate',
         'question.edit', 'question.approve', 'question.reject', 'bank.release.create', 'bank.release.publish',
         'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view', 'bank.view',
+        'academic.view', 'academic.manage_campus', 'academic.manage_assignment_scores', 'view_training_reports',
     },
     DEPARTMENT_HEAD: {
         'bank.view', 'subject.create', 'subject.update', 'subject.assign_owner', 'reviewer.assign', 'course.sync',
@@ -49,6 +53,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'quiz.preview', 'quiz.create_openedx', 'audit.view',
     },
     QUESTION_REVIEWER: {'bank.view', 'question.edit', 'question.approve', 'question.reject', 'audit.view'},
+    CAMPUS_MANAGER: {'academic.view', 'academic.manage_campus', 'academic.manage_assignment_scores', 'view_training_reports'},
 }
 
 LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
@@ -67,13 +72,18 @@ LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
     'manage_budget': {'quota.manage'},
     'manage_settings': {'user.manage_all', 'department.manage_all', 'department.assign_head'},
     'view_user_analytics': {'user.manage_all'},
+    'view_training_reports': {'academic.view', 'view_training_reports'},
+    'manage_assignment_scores': {'academic.manage_assignment_scores'},
+    'manage_training_deadlines': {'academic.manage_campus'},
 }
+
 
 ROLE_TO_LEGACY = {
     SYSTEM_ADMIN: 'admin',
     DEPARTMENT_HEAD: 'teacher',
     SUBJECT_OWNER: 'teacher',
     QUESTION_REVIEWER: 'reviewer',
+    CAMPUS_MANAGER: 'teacher',
 }
 LEGACY_RANK = {'viewer': 0, 'reviewer': 20, 'teacher': 50, 'admin': 100}
 
@@ -137,6 +147,10 @@ class BusinessRBACService:
             'quota.manage': 'Quản lý quota',
             'audit.view': 'Xem audit',
             'bank.view': 'Xem ngân hàng đề',
+            'academic.view': 'Xem báo cáo giáo viên/lớp trong cơ sở',
+            'academic.manage_campus': 'Quản lý vận hành đào tạo theo cơ sở',
+            'academic.manage_assignment_scores': 'Nhập/sửa điểm Assignment theo cơ sở',
+            'view_training_reports': 'Xem báo cáo quản lý giáo viên',
         }
         for code, name in permission_names.items():
             perm = self.db.get(RBACPermission, code)
@@ -258,6 +272,8 @@ class BusinessRBACService:
             if scope:
                 return scope
             return EntityScope('CHAPTER', scope_id, chapter_id=scope_id)
+        if normalized == 'CAMPUS':
+            return EntityScope('CAMPUS', scope_id)
         if normalized == 'COURSE':
             return EntityScope('COURSE', scope_id, course_id=scope_id)
         if normalized == 'BANK_VERSION':
@@ -288,6 +304,8 @@ class BusinessRBACService:
             return bool(target.chapter_id and target.chapter_id == assignment_scope.chapter_id)
         if assignment_scope.scope_type == 'COURSE':
             return bool(target.course_id and target.course_id == assignment_scope.course_id)
+        if assignment_scope.scope_type == 'CAMPUS':
+            return target.scope_type == 'CAMPUS' and (assignment_scope.scope_id == '*' or assignment_scope.scope_id.lower() == target.scope_id.lower())
         return assignment_scope.scope_type == target.scope_type and assignment_scope.scope_id == target.scope_id
 
     def has_permission(self, user: Any, permission: str, target: EntityScope | None = None) -> bool:
@@ -321,6 +339,8 @@ class BusinessRBACService:
             return self.has_permission(actor, 'subject.assign_owner', target)
         if role_code == QUESTION_REVIEWER:
             return self.has_permission(actor, 'reviewer.assign', target)
+        if role_code == CAMPUS_MANAGER:
+            return self.is_system_admin(actor)
         return False
 
     def _validate_assignment_scope(self, role_code: str, scope_type: str, scope_id: str) -> None:
@@ -333,7 +353,17 @@ class BusinessRBACService:
             raise HTTPException(status_code=400, detail='SUBJECT_OWNER chỉ được gán ở scope SUBJECT hoặc SUBJECT_VERSION')
         if role_code == QUESTION_REVIEWER and scope_type not in {'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'}:
             raise HTTPException(status_code=400, detail='QUESTION_REVIEWER chỉ được gán ở scope SUBJECT/SUBJECT_VERSION/CHAPTER')
+        if role_code == CAMPUS_MANAGER and scope_type not in {'CAMPUS', 'SYSTEM'}:
+            raise HTTPException(status_code=400, detail='CAMPUS_MANAGER chỉ được gán ở scope CAMPUS hoặc SYSTEM')
         if scope_type == 'SYSTEM':
+            return
+        if scope_type == 'CAMPUS':
+            if scope_id == '*':
+                return
+            from app.models.academic import AcademicCampus
+            exists = self.db.query(AcademicCampus.id).filter(AcademicCampus.campus_code.ilike(scope_id)).first()
+            if not exists:
+                raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở để gán quyền')
             return
         if scope_type == 'DEPARTMENT' and not self.db.get(Department, scope_id):
             raise HTTPException(status_code=404, detail='Không tìm thấy bộ môn để gán quyền')
@@ -445,6 +475,15 @@ class BusinessRBACService:
         if scope_type == 'CHAPTER':
             item = self.db.get(SubjectChapter, scope_id)
             return item.title if item else scope_id
+        if scope_type == 'CAMPUS':
+            if scope_id == '*':
+                return 'Tất cả cơ sở'
+            try:
+                from app.models.academic import AcademicCampus
+                item = self.db.query(AcademicCampus).filter(AcademicCampus.campus_code.ilike(scope_id)).first()
+                return f'{str(item.campus_code).upper()} · {item.campus_name}' if item else str(scope_id).upper()
+            except Exception:
+                return str(scope_id).upper()
         return scope_id
 
     def serialize_assignment(self, item: UserRoleAssignment) -> dict[str, Any]:
@@ -490,6 +529,8 @@ class BusinessRBACService:
             return bool(child.chapter_id and child.chapter_id == parent.chapter_id)
         if parent.scope_type == 'COURSE':
             return bool(child.course_id and child.course_id == parent.course_id)
+        if parent.scope_type == 'CAMPUS':
+            return child.scope_type == 'CAMPUS' and (parent.scope_id == '*' or parent.scope_id.lower() == child.scope_id.lower())
         return False
 
     def is_visible_scope(self, user: Any, scope_type: str, scope_id: str | None = '*') -> bool:
@@ -515,6 +556,43 @@ class BusinessRBACService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f'Bạn không được xem scope {target.scope_type}:{target.scope_id}',
             )
+
+
+    def accessible_campus_codes(self, user: Any) -> set[str] | None:
+        """Academic campus visibility for teacher-management.
+
+        None means all campuses. Empty set means no campus-level grant; the
+        academic service may still expose AP-assigned teacher classes.
+        """
+        if self.is_system_admin(user):
+            return None
+        codes: set[str] = set()
+        for assignment in self.active_assignments_for_actor(user):
+            if assignment.role_code == SYSTEM_ADMIN:
+                return None
+            if assignment.role_code == CAMPUS_MANAGER and assignment.scope_type.upper() in {'SYSTEM', 'CAMPUS'}:
+                scope_id = str(assignment.scope_id or '*').strip()
+                if assignment.scope_type.upper() == 'SYSTEM' or scope_id == '*':
+                    return None
+                codes.add(scope_id.lower())
+        return codes
+
+    def can_manage_assignment_scores_for_campus(self, user: Any, campus_code: str | None) -> bool:
+        if self.is_system_admin(user):
+            return True
+        wanted = str(campus_code or '').strip().lower()
+        if not wanted:
+            return False
+        for assignment in self.active_assignments_for_actor(user):
+            if assignment.role_code != CAMPUS_MANAGER:
+                continue
+            if assignment.scope_type.upper() == 'SYSTEM':
+                return True
+            if assignment.scope_type.upper() == 'CAMPUS':
+                scope_id = str(assignment.scope_id or '').strip().lower()
+                if scope_id == '*' or scope_id == wanted:
+                    return True
+        return False
 
     def _empty_visibility(self) -> ScopeVisibility:
         return ScopeVisibility(

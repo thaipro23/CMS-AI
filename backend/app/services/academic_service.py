@@ -229,6 +229,7 @@ class AccessDecision:
     unrestricted: bool
     teacher_ids: set[str]
     subject_codes: set[str]
+    campus_codes: set[str]
 
 
 class AcademicService:
@@ -238,7 +239,7 @@ class AcademicService:
 
     def access_decision(self, user: UserContext) -> AccessDecision:
         if self.rbac.is_system_admin(user):
-            return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set())
+            return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set(), campus_codes=set())
         names = _actor_names(user)
         teachers = []
         if names:
@@ -252,20 +253,28 @@ class AcademicService:
         try:
             visible_subject_ids = self.rbac.accessible_subject_ids(user)
             if visible_subject_ids is None:
-                return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set())
+                return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set(), campus_codes=set())
             if visible_subject_ids:
                 rows = self.db.query(BankSubject.code).filter(BankSubject.id.in_(visible_subject_ids)).all()
                 subject_codes = {str(row[0] or '').strip().lower() for row in rows if str(row[0] or '').strip()}
         except Exception:
             subject_codes = set()
-        return AccessDecision(unrestricted=False, teacher_ids={item.id for item in teachers}, subject_codes=subject_codes)
+        campus_codes: set[str] = set()
+        try:
+            campus_scope = self.rbac.accessible_campus_codes(user)
+            if campus_scope is None:
+                return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set(), campus_codes=set())
+            campus_codes = set(campus_scope or set())
+        except Exception:
+            campus_codes = set()
+        return AccessDecision(unrestricted=False, teacher_ids={item.id for item in teachers}, subject_codes=subject_codes, campus_codes=campus_codes)
 
     def assert_can_access_class(self, user: UserContext, class_id: str) -> None:
         decision = self.access_decision(user)
         if decision.unrestricted:
             return
-        if not decision.teacher_ids and not decision.subject_codes:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn chưa được phân quyền môn hoặc AP phân công lớp nào trên AI Server')
+        if not decision.teacher_ids and not decision.subject_codes and not decision.campus_codes:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn chưa được phân quyền cơ sở/môn hoặc AP phân công lớp nào trên AI Server')
         exists = None
         if decision.teacher_ids:
             exists = self.db.query(AcademicTeacherAssignment.id).filter(
@@ -282,6 +291,13 @@ class AcademicService:
                 func.lower(AcademicSubject.subject_code).in_(decision.subject_codes),
             ).first()
             if subject_exists:
+                return
+        if decision.campus_codes:
+            campus_exists = self.db.query(AcademicClass.id).filter(
+                AcademicClass.id == class_id,
+                func.lower(AcademicClass.campus).in_(decision.campus_codes),
+            ).first()
+            if campus_exists:
                 return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được phân công hoặc phân quyền xem lớp này')
 
@@ -481,6 +497,8 @@ class AcademicService:
                 access_conditions.append(AcademicClass.id.in_(allowed_class_ids))
             if decision.subject_codes:
                 access_conditions.append(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
+            if decision.campus_codes:
+                access_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
             if not access_conditions:
                 return {'items': [], 'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0, 'has_next': False}
             query = query.filter(or_(*access_conditions))
@@ -491,9 +509,10 @@ class AcademicService:
         if subject_id:
             query = query.filter(AcademicClass.subject_id == subject_id)
         if branch:
-            query = query.filter(AcademicClass.branch == branch.strip().lower())
+            query = query.filter(func.lower(AcademicClass.branch) == branch.strip().lower())
         if campus:
-            query = query.filter(AcademicClass.campus == campus.strip().lower())
+            campus_code = self._campus_filter_value(campus)
+            query = query.filter(func.lower(AcademicClass.campus) == campus_code)
         if search and search.strip():
             like = f"%{search.strip()}%"
             teacher_match_class_ids = self.db.query(AcademicTeacherAssignment.class_id).join(
@@ -578,6 +597,8 @@ class AcademicService:
             access_conditions.append(AcademicClass.id.in_(allowed_class_ids))
         if decision.subject_codes:
             access_conditions.append(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
+        if decision.campus_codes:
+            access_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
         if not access_conditions:
             return query.filter(False)
         return query.filter(or_(*access_conditions))
@@ -621,7 +642,7 @@ class AcademicService:
         if branch:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:
-            query = query.filter(AcademicClass.campus == campus.strip().lower())
+            query = query.filter(func.lower(AcademicClass.campus) == campus.strip().lower())
         rows = query.group_by(AcademicClass.subject_id, OpenEdXUserMapping.match_status).all()
         result: dict[str, dict[str, int]] = {}
         for subject_id, match_status, count in rows:
@@ -2082,7 +2103,7 @@ class AcademicService:
         if branch:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:
-            query = query.filter(AcademicClass.campus == campus.strip().lower())
+            query = query.filter(func.lower(AcademicClass.campus) == campus.strip().lower())
         if search and search.strip():
             like = f"%{search.strip()}%"
             query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
@@ -2407,9 +2428,9 @@ class AcademicService:
         self,
         class_ids: list[str],
         course_by_class: dict[str, str | None],
-    ) -> tuple[dict[str, dict[str, int]], dict[tuple[str, str], AcademicStudentLearningSnapshot]]:
+    ) -> tuple[dict[str, dict[str, int]], dict[tuple[str, str], AcademicStudentLearningSnapshot], dict[tuple[str, str], str]]:
         if not class_ids:
-            return {}, {}
+            return {}, {}, {}
         snapshots = self.db.query(AcademicStudentLearningSnapshot).filter(
             AcademicStudentLearningSnapshot.class_id.in_(class_ids)
         ).all()
@@ -2432,11 +2453,51 @@ class AcademicService:
         ).filter(AcademicClassStudent.class_id.in_(class_ids)).all()
 
         counts_by_class: dict[str, dict[str, int]] = {class_id: {} for class_id in class_ids}
+        status_by_class_student: dict[tuple[str, str], str] = {}
         for class_id, student_id, mapping in rows:
             status_name = self._learning_status_for_snapshot(snapshot_by_class_student.get((class_id, student_id)), mapping)
+            status_by_class_student[(class_id, student_id)] = status_name
             bucket = counts_by_class.setdefault(class_id, {})
             bucket[status_name] = bucket.get(status_name, 0) + 1
-        return counts_by_class, snapshot_by_class_student
+        return counts_by_class, snapshot_by_class_student, status_by_class_student
+
+    @staticmethod
+    def _campus_filter_value(value: Any) -> str:
+        return str(value or '').strip().lower()
+
+    @staticmethod
+    def _risk_status_keys() -> set[str]:
+        # Only buckets that represent an actionable learning/CMS issue.
+        # "exam_insufficient_data" is intentionally excluded: it is a data-quality state,
+        # not a per-learner risk. Counting it as a warning turned missing snapshots into
+        # tens of thousands of false "Cần theo dõi" records on training-management.
+        return {
+            'cms_not_synced',
+            'not_synced',
+            'not_enrolled',
+            'sync_error',
+            'no_activity',
+            'low_progress',
+            'low_grade',
+            'deadline_late',
+            'exam_not_eligible',
+        }
+
+    @classmethod
+    def _bounded_risk_count_from_status_counts(cls, status_counts: dict[str, Any], total_students: int) -> int:
+        """Return a safe non-overlapping warning count for aggregate rows.
+
+        The status buckets are not mutually exclusive after deadline/exam buckets are
+        merged into learning status counts. Summing them can exceed the number of
+        students (for example 52k students -> 105k warnings). For aggregate cards where
+        we do not have row-level ids, cap the warning count and prefer the largest
+        actionable bucket as a conservative approximation.
+        """
+        total = max(0, int(total_students or 0))
+        if total <= 0:
+            return 0
+        actionable_values = [max(0, int(status_counts.get(key, 0) or 0)) for key in cls._risk_status_keys()]
+        return min(total, max(actionable_values) if actionable_values else 0)
 
     def training_teacher_report(
         self,
@@ -2455,6 +2516,36 @@ class AcademicService:
         page, page_size = _page(page, page_size)
         decision = self.access_decision(user)
         status_filter = self._normalize_learning_list_filter(learning_status)
+        if not term_id:
+            return {
+                'items': [],
+                'summary': {
+                    'teacher_count': 0,
+                    'class_count': 0,
+                    'subject_count': 0,
+                    'student_count': 0,
+                    'unique_student_count': 0,
+                    'relearn_student_count': 0,
+                    'total_relearn_count': 0,
+                    'cms_synced_count': 0,
+                    'learning_enrolled_count': 0,
+                    'learning_active_count': 0,
+                    'risk_student_count': 0,
+                    'classes_without_course_count': 0,
+                    'deadline_late_student_count': 0,
+                    'deadline_late_quiz_count': 0,
+                    'exam_eligible_student_count': 0,
+                    'exam_not_eligible_student_count': 0,
+                    'exam_insufficient_data_student_count': 0,
+                    'quiz_failed_count': 0,
+                    'assignment_not_graded_count': 0,
+                },
+                'total': 0,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': 0,
+                'has_next': False,
+            }
         query = self.db.query(
             AcademicTeacher,
             AcademicTeacherAssignment,
@@ -2488,7 +2579,7 @@ class AcademicService:
         if branch:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:
-            query = query.filter(AcademicClass.campus == campus.strip().lower())
+            query = query.filter(func.lower(AcademicClass.campus) == campus.strip().lower())
         if search and search.strip():
             like = f"%{search.strip()}%"
             query = query.filter(or_(
@@ -2506,6 +2597,25 @@ class AcademicService:
             AcademicSubject.subject_code.asc(),
             AcademicClass.class_code.asc(),
         ).all()
+
+        # Performance guard: the default teacher-management overview should not
+        # hydrate students/snapshots/policy for every teacher in every campus.
+        # First resolve the teacher page, then compute class/student aggregates
+        # only for the teachers visible on the current page. Full export and
+        # status-filtered views keep the full scan because they need global rows.
+        fast_page_mode = (not include_all and status_filter == 'all')
+        fast_total: int | None = None
+        if fast_page_mode:
+            ordered_teacher_ids: list[str] = []
+            seen_teacher_ids: set[str] = set()
+            for teacher, *_rest in rows:
+                if teacher.id in seen_teacher_ids:
+                    continue
+                seen_teacher_ids.add(teacher.id)
+                ordered_teacher_ids.append(teacher.id)
+            fast_total = len(ordered_teacher_ids)
+            selected_teacher_ids = set(ordered_teacher_ids[(page - 1) * page_size: page * page_size])
+            rows = [row for row in rows if row[0].id in selected_teacher_ids]
 
         class_by_id: dict[str, AcademicClass] = {}
         block_by_class: dict[str, AcademicBlock | None] = {}
@@ -2552,7 +2662,7 @@ class AcademicService:
             mapping_source_by_class[class_id] = 'class_override' if class_id in override_by_class else ('subject_term_mapping' if mapping else None)
 
         learning_by_class = self._learning_summary_by_class_ids(class_ids, course_by_class)
-        status_counts_by_class, snapshot_by_class_student = self._training_learning_status_counts_by_class(class_ids, course_by_class)
+        status_counts_by_class, snapshot_by_class_student, status_by_class_student = self._training_learning_status_counts_by_class(class_ids, course_by_class)
         deadline_by_class, deadline_by_class_student = self._training_deadline_status_by_class(class_by_id, block_by_class, snapshot_by_class_student)
 
         policy_service = TrainingPolicyService(self.db)
@@ -2574,7 +2684,16 @@ class AcademicService:
             }
             for student_id in student_ids_by_class.get(class_id, set()):
                 snapshot = snapshot_by_class_student.get((class_id, student_id))
-                components = self._enrich_component_scores_for_class(self._component_scores_from_snapshot(snapshot), cls)
+                # Do not evaluate exam eligibility for students/classes without a Course
+                # CMS snapshot. They are already represented by CMS/enrollment/no-data
+                # buckets. Evaluating policy here inflated "thiếu dữ liệu" to every
+                # unsynced student and made /training-management very slow at 30+ campuses.
+                if not course_id or snapshot is None:
+                    continue
+                raw_components = self._component_scores_from_snapshot(snapshot)
+                if not raw_components and student_id not in assignment_scores:
+                    continue
+                components = self._enrich_component_scores_for_class(raw_components, cls)
                 policy = policy_service.evaluate_student(
                     cls=cls,
                     student_id=student_id,
@@ -2590,7 +2709,7 @@ class AcademicService:
                     summary_bucket['exam_eligible_student_count'] += 1
                 elif status_name == 'not_eligible':
                     summary_bucket['exam_not_eligible_student_count'] += 1
-                else:
+                elif raw_components or student_id in assignment_scores:
                     summary_bucket['exam_insufficient_data_student_count'] += 1
                 summary_bucket['quiz_failed_count'] += int(policy.get('quiz_failed_count') or 0)
                 summary_bucket['quiz_late_count'] += int(policy.get('quiz_late_count') or 0)
@@ -2642,6 +2761,7 @@ class AcademicService:
                 'grade_weighted_sum': 0.0,
                 'grade_weight': 0,
                 'status_counts': {},
+                'risk_student_ids': set(),
                 'class_items': [],
                 'last_synced_at': None,
             })
@@ -2692,6 +2812,14 @@ class AcademicService:
             status_counts = status_counts_by_class.get(cls.id, {})
             for status_name, count in status_counts.items():
                 bucket['status_counts'][status_name] = int(bucket['status_counts'].get(status_name, 0) or 0) + int(count or 0)
+            class_risk_student_ids: set[str] = set()
+            for student_id in class_student_ids:
+                # Use the precomputed per-student learning status, including CMS mapping,
+                # so risk counts are precise and each student is counted at most once
+                # for the teacher.
+                status_name = status_by_class_student.get((cls.id, student_id))
+                if status_name in self._risk_status_keys():
+                    class_risk_student_ids.add(student_id)
             last_synced = learning.get('learning_last_synced_at')
             if last_synced and (bucket['last_synced_at'] is None or last_synced > bucket['last_synced_at']):
                 bucket['last_synced_at'] = last_synced
@@ -2707,10 +2835,17 @@ class AcademicService:
                 bucket[policy_key] += int(policy_summary.get(policy_key) or 0)
             if int(policy_summary.get('exam_not_eligible_student_count') or 0):
                 bucket['status_counts']['exam_not_eligible'] = int(bucket['status_counts'].get('exam_not_eligible', 0) or 0) + int(policy_summary.get('exam_not_eligible_student_count') or 0)
+                for (policy_class_id, policy_student_id), policy in policy_by_class_student.items():
+                    if policy_class_id == cls.id and str(policy.get('exam_status') or '') == 'not_eligible':
+                        class_risk_student_ids.add(policy_student_id)
             if int(policy_summary.get('exam_insufficient_data_student_count') or 0):
                 bucket['status_counts']['exam_insufficient_data'] = int(bucket['status_counts'].get('exam_insufficient_data', 0) or 0) + int(policy_summary.get('exam_insufficient_data_student_count') or 0)
             if deadline_late_students:
                 bucket['status_counts']['deadline_late'] = int(bucket['status_counts'].get('deadline_late', 0) or 0) + deadline_late_students
+                for (deadline_class_id, deadline_student_id), deadline_status in deadline_by_class_student.items():
+                    if deadline_class_id == cls.id and int(deadline_status.get('late_quiz_count') or 0) > 0:
+                        class_risk_student_ids.add(deadline_student_id)
+            bucket['risk_student_ids'].update(class_risk_student_ids)
             alerts = list(learning.get('learning_alerts') or [])
             if not course_by_class.get(cls.id) and 'Chưa map Course CMS' not in alerts:
                 alerts.append('Chưa map Course CMS')
@@ -2746,6 +2881,7 @@ class AcademicService:
                 'learning_component_summaries': learning.get('learning_component_summaries') or [],
                 'status_counts': status_counts,
                 'learning_alerts': alerts,
+                'risk_student_count': len(class_risk_student_ids),
                 'deadline_quiz_count': int(deadline.get('quiz_count') or 0),
                 'deadline_due_quiz_count': deadline_due_quizzes,
                 'deadline_completed_due_quiz_count': int(deadline.get('completed_due_quiz_count') or 0),
@@ -2766,12 +2902,14 @@ class AcademicService:
             })
 
         items: list[dict[str, Any]] = []
-        alert_keys = ['cms_not_synced', 'not_synced', 'not_enrolled', 'sync_error', 'no_activity', 'low_progress', 'low_grade', 'deadline_late', 'exam_not_eligible', 'exam_insufficient_data']
+        alert_keys = sorted(self._risk_status_keys())
         for bucket in teacher_buckets.values():
             status_counts = dict(bucket['status_counts'])
             avg_progress = round(bucket['progress_weighted_sum'] / bucket['progress_weight'], 2) if bucket['progress_weight'] else None
             avg_grade = round(bucket['grade_weighted_sum'] / bucket['grade_weight'], 2) if bucket['grade_weight'] else None
-            risk_student_count = int(sum(int(status_counts.get(key, 0) or 0) for key in alert_keys))
+            risk_student_count = len(bucket.get('risk_student_ids') or set())
+            if not risk_student_count:
+                risk_student_count = self._bounded_risk_count_from_status_counts(status_counts, int(bucket.get('student_count') or 0))
             learning_alerts: list[str] = []
             if bucket['classes_without_course_count']:
                 learning_alerts.append(f"{bucket['classes_without_course_count']} lớp chưa map Course CMS")
@@ -2854,13 +2992,20 @@ class AcademicService:
 
         filtered_items = [item for item in items if matches_training_filter(item)]
         filtered_items.sort(key=lambda item: (str(item.get('teacher_name') or ''), str(item.get('teacher_username') or '')))
-        total = len(filtered_items)
-        if include_all:
+        if fast_page_mode:
+            total = int(fast_total or 0)
             page_items = filtered_items
-            total_pages = 1 if total else 0
-        else:
-            page_items = filtered_items[(page - 1) * page_size: page * page_size]
             total_pages = math.ceil(total / page_size) if total else 0
+        else:
+            total = len(filtered_items)
+            if include_all:
+                page_items = filtered_items
+                total_pages = 1 if total else 0
+            else:
+                page_items = filtered_items[(page - 1) * page_size: page * page_size]
+                total_pages = math.ceil(total / page_size) if total else 0
+        # Summary counters intentionally remain teacher-assignment scoped for class/student
+        # workload, but warning counts are bounded and non-overlapping per teacher.
         summary = {
             'teacher_count': total,
             'class_count': sum(int(item.get('class_count') or 0) for item in filtered_items),
@@ -2869,10 +3014,10 @@ class AcademicService:
             'unique_student_count': sum(int(item.get('unique_student_count') or 0) for item in filtered_items),
             'relearn_student_count': sum(int(item.get('relearn_student_count') or 0) for item in filtered_items),
             'total_relearn_count': sum(int(item.get('total_relearn_count') or 0) for item in filtered_items),
-            'cms_synced_count': sum(int(item.get('cms_synced_count') or 0) for item in filtered_items),
-            'learning_enrolled_count': sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items),
-            'learning_active_count': sum(int(item.get('learning_active_count') or 0) for item in filtered_items),
-            'risk_student_count': sum(int(item.get('risk_student_count') or 0) for item in filtered_items),
+            'cms_synced_count': min(sum(int(item.get('cms_synced_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
+            'learning_enrolled_count': min(sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
+            'learning_active_count': min(sum(int(item.get('learning_active_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
+            'risk_student_count': min(sum(int(item.get('risk_student_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
             'classes_without_course_count': sum(int(item.get('classes_without_course_count') or 0) for item in filtered_items),
             'deadline_late_student_count': sum(int(item.get('deadline_late_student_count') or 0) for item in filtered_items),
             'deadline_late_quiz_count': sum(int(item.get('deadline_late_quiz_count') or 0) for item in filtered_items),
@@ -2882,7 +3027,7 @@ class AcademicService:
             'quiz_failed_count': sum(int(item.get('quiz_failed_count') or 0) for item in filtered_items),
             'assignment_not_graded_count': sum(int(item.get('assignment_not_graded_count') or 0) for item in filtered_items),
         }
-        result: dict[str, Any] = {'items': page_items, 'summary': summary, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': (not include_all and page < total_pages)}
+        result: dict[str, Any] = {'items': page_items, 'summary': summary, 'summary_scope': 'current_page' if fast_page_mode else 'filtered', 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': (not include_all and page < total_pages)}
 
         if include_students and class_ids:
             student_query = self.db.query(

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useAppContext } from '../../context/AppContext'
 import { ROLE_LABELS } from '../../types'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
@@ -17,18 +17,18 @@ type NavItem = {
 }
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', desc: 'Số liệu & việc cần xử lý', icon: '⌁', group: 'work' },
-  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, phiên bản', icon: '▦', group: 'work' },
-  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Đưa bài kiểm tra lên CMS', icon: '◈', group: 'work' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Đã tạo & khôi phục', icon: '◷', group: 'work' },
-  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_settings' },
+  { href: '/bank', label: 'Tổng quan', desc: 'Số liệu & việc cần xử lý', icon: '⌁', group: 'work', permission: 'view_questions' },
+  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, phiên bản', icon: '▦', group: 'work', permission: 'view_questions' },
+  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Đưa bài kiểm tra lên CMS', icon: '◈', group: 'work', permission: 'publish_questions' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Đã tạo & khôi phục', icon: '◷', group: 'work', permission: 'publish_questions' },
+  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_training_deadlines' },
   { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'operations', permission: 'manage_settings' },
-  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_settings' },
-  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'operations' },
-  { href: '/training-management', label: 'Quản lý đào tạo', desc: 'Thống kê GV, lớp, tiến độ', icon: '▤', group: 'operations' },
-  { href: '/jobs', label: 'Tiến trình', desc: 'Việc đang xử lý', icon: '⚙', group: 'operations' },
-  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'operations' },
-  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'admin', permission: 'view_questions' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_training_deadlines' },
+  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'operations', permission: 'view_training_reports' },
+  { href: '/teacher-management', label: 'Quản lý giảng viên', desc: 'GV, lớp, tiến độ', icon: '▤', group: 'operations', permission: 'view_training_reports' },
+  { href: '/jobs', label: 'Tiến trình', desc: 'Việc đang xử lý', icon: '⚙', group: 'operations', permission: 'view_jobs' },
+  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'operations', permission: 'view_jobs' },
+  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'admin', permission: 'manage_settings' },
   { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'admin', permission: 'manage_settings' },
 ]
 
@@ -37,6 +37,33 @@ const navGroups: Array<{ key: NavItem['group']; label: string }> = [
   { key: 'operations', label: 'Vận hành' },
   { key: 'admin', label: 'Quản trị' },
 ]
+
+
+function requiredPermissionForPath(pathname: string): string | null {
+  const rules: Array<[RegExp, string]> = [
+    [/^\/bank\/quiz(?:\/|$)/, 'publish_questions'],
+    [/^\/bank\/history(?:\/|$)/, 'publish_questions'],
+    [/^\/bank(?:\/|$)/, 'view_questions'],
+    [/^\/question-bank(?:\/|$)/, 'view_questions'],
+    [/^\/review(?:\/|$)/, 'review_questions'],
+    [/^\/generate(?:\/|$)/, 'generate_questions'],
+    [/^\/export(?:\/|$)/, 'export_questions'],
+    [/^\/workflow(?:\/|$)/, 'view_questions'],
+    [/^\/sync(?:\/|$)/, 'sync_course'],
+    [/^\/dashboard(?:\/|$)/, 'view_dashboard'],
+    [/^\/premises(?:\/|$)/, 'manage_training_deadlines'],
+    [/^\/semesters(?:\/|$)/, 'manage_settings'],
+    [/^\/ap-sync(?:\/|$)/, 'manage_training_deadlines'],
+    [/^\/student-management(?:\/|$)/, 'view_training_reports'],
+    [/^\/teacher-management(?:\/|$)/, 'view_training_reports'],
+    [/^\/training-management(?:\/|$)/, 'view_training_reports'],
+    [/^\/jobs(?:\/|$)/, 'view_jobs'],
+    [/^\/audit(?:\/|$)/, 'view_jobs'],
+    [/^\/users(?:\/|$)/, 'manage_settings'],
+    [/^\/settings(?:\/|$)/, 'manage_settings'],
+  ]
+  return rules.find(([pattern]) => pattern.test(pathname))?.[1] || null
+}
 
 function pageTitle(pathname: string) {
   const exact = navItems.find((item) => pathname === item.href)
@@ -100,6 +127,7 @@ function AppFooter() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const router = useRouter()
   const [topbarSearch, setTopbarSearch] = useState('')
   const {
     courseId,
@@ -111,8 +139,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   } = useAppContext()
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
 
-  const visibleItems = useMemo(() => navItems.filter((item) => !item.permission || can(item.permission)), [can])
+  const visibleItems = useMemo(() => authReady ? navItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, can])
   const currentTitle = pageTitle(pathname)
+  const routePermission = requiredPermissionForPath(pathname)
+  const routeAllowed = !routePermission || (authReady && can(routePermission))
+  const fallbackHref = visibleItems[0]?.href || '/bank'
   const studentTopbar = buildStudentManagementTopbar(pathname, new URLSearchParams(topbarSearch))
 
   useEffect(() => {
@@ -153,6 +184,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setAutoLoginMessage(error instanceof Error ? error.message : 'Không tạo được CMS session bridge URL')
     }
   }, [authReady, courseId, isAuthenticated, pathname])
+
+  useEffect(() => {
+    if (!authReady) return
+    if (routeAllowed) return
+    if (pathname.startsWith('/auth/')) return
+    if (fallbackHref && fallbackHref !== pathname) router.replace(fallbackHref)
+  }, [authReady, fallbackHref, pathname, routeAllowed, router])
+
+  const guardedChildren = routeAllowed ? children : <section className="card empty-state permission-hidden-state">
+    <h2>{authReady ? 'Không có chức năng phù hợp với quyền hiện tại' : 'Đang kiểm tra quyền truy cập'}</h2>
+    <p>{authReady ? 'Hệ thống đã ẩn chức năng này và đang chuyển về màn bạn được phép sử dụng.' : 'Các chức năng sẽ chỉ hiện sau khi hệ thống xác định đúng quyền ACMS/AI Server của tài khoản.'}</p>
+  </section>
 
   return <div className="app-layout product-shell">
     <a className="skip-link" href="#main-content">Bỏ qua menu, tới nội dung chính</a>
@@ -201,7 +244,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{children}</main>
+      <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{guardedChildren}</main>
       <AppFooter />
     </div>
   </div>

@@ -103,6 +103,7 @@ export default function ApSyncPage() {
   const termOptions = useMemo(() => uniqueTermOptions(optionsByBranch), [optionsByBranch])
   const currentBranchOptions = optionsByBranch[selectedBranch] || EMPTY_OPTIONS
   const totalCampuses = BRANCHES.reduce((sum, branch) => sum + (optionsByBranch[branch.value].campuses?.length || 0), 0)
+  const canManageAcademicOps = can('manage_training_deadlines') || can('manage_settings')
 
   const loadOptions = async () => {
     setLoadingOptions(true)
@@ -136,7 +137,7 @@ export default function ApSyncPage() {
   }
 
   const syncCampusesFromAp = async () => {
-    if (!can('manage_settings')) {
+    if (!canManageAcademicOps) {
       setMessage('Bạn không có quyền đồng bộ danh sách cơ sở AP.')
       return
     }
@@ -200,7 +201,7 @@ export default function ApSyncPage() {
   }, [activeRuns.map((item) => item.run.id).join(','), headers])
 
   const requestRunForBranches = (branches: BranchCode[]) => {
-    if (!can('manage_settings')) {
+    if (!canManageAcademicOps) {
       setMessage('Bạn không có quyền đồng bộ AP.')
       return
     }
@@ -263,7 +264,7 @@ export default function ApSyncPage() {
       </div>
       <div className="hero-actions">
         <button className="btn secondary" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới'}</button>
-        <button className="btn secondary" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang đồng bộ cơ sở...' : 'Đồng bộ danh sách cơ sở'}</button>
+        {canManageAcademicOps && <button className="btn secondary" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang đồng bộ cơ sở...' : 'Đồng bộ danh sách cơ sở'}</button>}
       </div>
     </section>
 
@@ -318,14 +319,14 @@ export default function ApSyncPage() {
           Chỉ kiểm tra kế hoạch, chưa ghi dữ liệu
         </label>
       </div>
-      <div className="toolbar-actions ap-sync-actions ap-sync-actions-primary">
+      {canManageAcademicOps && <div className="toolbar-actions ap-sync-actions ap-sync-actions-primary">
         <button className="btn" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>
           {running ? 'Đang chạy...' : 'Đồng bộ tất cả'}
         </button>
         <button className="btn secondary" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>
           {running ? 'Đang chạy...' : `Đồng bộ theo hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label || ''}`}
         </button>
-      </div>
+      </div>}
       {!totalCampuses ? <div className="alert soft-alert">Chưa có cơ sở đang bật. Bấm Đồng bộ danh sách cơ sở để lấy từ AP CMS get-campus và lưu vào /premises, hoặc vào trang Cơ sở để thêm thủ công.</div> : null}
     </section>
 

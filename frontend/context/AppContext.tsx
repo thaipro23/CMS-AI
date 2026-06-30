@@ -47,7 +47,11 @@ const LEGACY_PERMISSION_BRIDGE: Record<string, string[]> = {
   publish_to_openedx: ['bank.release.publish', 'quiz.create_openedx'],
   manage_settings: ['user.manage_all', 'department.manage_all', 'department.assign_head'],
   view_user_analytics: ['user.manage_all'],
+  view_training_reports: ['academic.view', 'view_training_reports'],
+  manage_training_deadlines: ['academic.manage_campus'],
+  manage_assignment_scores: ['academic.manage_assignment_scores'],
 }
+
 
 function hasBusinessPermission(permission: Permission | string, businessPermissions: string[]) {
   if (businessPermissions.includes(permission)) return true
@@ -201,33 +205,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const value = useMemo<AppContextValue>(() => ({
-    authReady,
-    isAuthenticated: !!accessToken.trim() || cookieAuthenticated,
-    courseId,
-    setCourseId,
-    role,
-    setRole,
-    userId,
-    setUserId,
-    accessToken,
-    setAccessToken,
-    businessPermissions,
-    applyAuthSession,
-    can: (permission: Permission | string) => ROLE_PERMISSIONS[role].includes(permission as Permission) || hasBusinessPermission(permission, businessPermissions),
-    authHeaders: (json = false) => {
-      const headers: Record<string, string> = {}
-      const sessionToken = accessToken.trim() || getStoredSession()?.access_token || ''
-      if (sessionToken) {
-        headers.Authorization = `Bearer ${sessionToken}`
-      } else if (!IS_PRODUCTION) {
-        headers['X-User-Role'] = role
-        headers['X-User-Id'] = userId
-      }
-      if (json) headers['Content-Type'] = 'application/json'
-      return headers
-    },
-  }), [authReady, courseId, role, userId, accessToken, businessPermissions, cookieAuthenticated])
+  const value = useMemo<AppContextValue>(() => {
+    const canUseLegacyRoleFallback = !cookieAuthenticated
+    return {
+      authReady,
+      isAuthenticated: !!accessToken.trim() || cookieAuthenticated,
+      courseId,
+      setCourseId,
+      role,
+      setRole,
+      userId,
+      setUserId,
+      accessToken,
+      setAccessToken,
+      businessPermissions,
+      applyAuthSession,
+      can: (permission: Permission | string) => {
+        if (cookieAuthenticated) return hasBusinessPermission(permission, businessPermissions)
+        return (canUseLegacyRoleFallback && ROLE_PERMISSIONS[role].includes(permission as Permission)) || hasBusinessPermission(permission, businessPermissions)
+      },
+      authHeaders: (json = false) => {
+        const headers: Record<string, string> = {}
+        const sessionToken = accessToken.trim() || getStoredSession()?.access_token || ''
+        if (sessionToken) {
+          headers.Authorization = `Bearer ${sessionToken}`
+        } else if (!IS_PRODUCTION) {
+          headers['X-User-Role'] = role
+          headers['X-User-Id'] = userId
+        }
+        if (json) headers['Content-Type'] = 'application/json'
+        return headers
+      },
+    }
+  }, [authReady, courseId, role, userId, accessToken, businessPermissions, cookieAuthenticated])
+
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

@@ -216,9 +216,11 @@ function ClassDetailContent() {
   const params = useParams<{ classId: string }>()
   const searchParams = useSearchParams()
   const classId = decodeURIComponent(String(params.classId || ''))
-  const { authHeaders } = useAppContext()
+  const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
+  const canRunFullCmsSync = can('manage_training_deadlines') || can('manage_settings')
+  const canManageAssignmentScores = can('manage_assignment_scores') || can('manage_settings')
   const [classInfo, setClassInfo] = useState<AcademicClass | null>(null)
   const [students, setStudents] = useState<AcademicStudent[]>([])
   const [summary, setSummary] = useState<AcademicMappingSummary | null>(null)
@@ -391,6 +393,7 @@ function ClassDetailContent() {
 
 
   const openAssignmentModal = async () => {
+    if (!canManageAssignmentScores) return
     try {
       const rows = await getAcademicClassAssignmentDefenseScores(headers, classId, classInfo?.openedx_course_id)
       setAssignmentRows(rows)
@@ -401,6 +404,7 @@ function ClassDetailContent() {
   }
 
   const saveAssignmentRows = async () => {
+    if (!canManageAssignmentScores) return
     setSavingPolicy(true)
     try {
       await saveAcademicClassAssignmentDefenseScores(jsonHeaders, classId, assignmentRows)
@@ -415,6 +419,7 @@ function ClassDetailContent() {
   }
 
   const runFullCmsSync = async () => {
+    if (!canRunFullCmsSync) return
     setSyncingFullFlow(true)
     setMessage('')
     try {
@@ -689,7 +694,7 @@ function ClassDetailContent() {
     </section>
 
 
-    {assignmentModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssignmentModalOpen(false) }}>
+    {canManageAssignmentScores && assignmentModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssignmentModalOpen(false) }}>
       <div className="card bank-modal academic-confirm-modal wide-policy-modal" role="dialog" aria-modal="true" aria-labelledby="assignment-modal-title">
         <div className="section-head"><div><h2 id="assignment-modal-title">Nhập điểm bảo vệ Assignment</h2><p>Điểm này là điểm chính thức sau buổi bảo vệ; điểm Assignment từ CMS chỉ dùng tham khảo.</p></div></div>
         <div className="policy-edit-table-wrap"><table className="data-table compact-table"><thead><tr><th>Sinh viên</th><th>Trạng thái</th><th>Điểm /10</th><th>Ghi chú</th></tr></thead><tbody>

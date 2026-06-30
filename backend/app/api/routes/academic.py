@@ -389,17 +389,35 @@ def _require_academic_sync_permission(
     )
 
 
+
+def _require_academic_view_permission(
+    user: UserContext = Depends(get_user_context),
+    db: Session = Depends(get_db),
+) -> UserContext:
+    """Academic read access for teacher/class operations.
+
+    This keeps campus-management users out of Question Bank read routes while
+    still letting them open terms/campuses/teacher-management.
+    """
+    if {'view_questions', 'manage_settings'}.intersection(set(user.permissions or [])):
+        return user
+    try:
+        service = BusinessRBACService(db)
+        if service.has_any_business_permission(user, 'view_training_reports') or service.has_any_business_permission(user, 'academic.view'):
+            return user
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không có quyền xem dữ liệu đào tạo')
+
+
 def _require_training_write_permission(
     user: UserContext = Depends(get_user_context),
     db: Session = Depends(get_db),
 ) -> UserContext:
-    """Allow deadline/assignment training mutations for training-capable users.
-
-    Keep legacy sync_course/manage_settings compatibility while introducing a
-    narrower permission surface for future RBAC configuration. Class-level
-    access is still checked by AcademicService.assert_can_access_class().
-    """
-    allowed = {'manage_training_deadlines', 'manage_assignment_scores', 'view_training_reports', 'sync_course', 'manage_settings'}
+    """Allow deadline/class training mutations for training-capable users."""
+    allowed = {'manage_training_deadlines', 'view_training_reports', 'sync_course', 'manage_settings'}
     if allowed.intersection(set(user.permissions or [])):
         return user
     try:
@@ -413,8 +431,22 @@ def _require_training_write_permission(
         pass
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail='Bạn không có quyền cấu hình deadline hoặc nhập điểm đào tạo.',
+        detail='Bạn không có quyền cấu hình đào tạo.',
     )
+
+
+def _require_assignment_score_permission_for_class(db: Session, user: UserContext, class_id: str) -> None:
+    """Assignment score input is limited to system admin or campus manager."""
+    service = BusinessRBACService(db)
+    if service.is_system_admin(user):
+        return
+    cls = db.get(AcademicClass, class_id)
+    if not cls:
+        raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
+    if service.can_manage_assignment_scores_for_campus(user, cls.campus):
+        return
+    raise HTTPException(status_code=403, detail='Chỉ Quản trị viên hoặc quyền cơ sở được nhập/sửa điểm Assignment')
+
 
 def _require_academic_admin(db: Session, user: UserContext) -> None:
     service = BusinessRBACService(db)
@@ -446,7 +478,7 @@ def list_training_teacher_report(
     learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).training_teacher_report(
@@ -468,7 +500,7 @@ def export_training_teacher_report(
     campus: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     report = AcademicService(db).training_teacher_report(
@@ -487,7 +519,7 @@ def export_training_teacher_report(
     return StreamingResponse(
         BytesIO(content),
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': 'attachment; filename="training-management-teacher-report.xlsx"'},
+        headers={'Content-Disposition': 'attachment; filename="teacher-management-report.xlsx"'},
     )
 
 
@@ -495,7 +527,7 @@ def export_training_teacher_report(
 def list_terms(
     branch: str | None = None,
     active: bool | None = True,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_terms(branch=branch, active=active)
@@ -566,7 +598,7 @@ def delete_academic_term(
 def list_blocks(
     term_id: str,
     active: bool | None = True,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_blocks(term_id=term_id, active=active)
@@ -578,7 +610,7 @@ def list_subjects(
     block_id: str | None = None,
     search: str | None = None,
     branch: str | None = None,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_subjects(term_id=term_id, block_id=block_id, search=search, branch=branch)
@@ -595,7 +627,7 @@ def list_teacher_classes(
     learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_teacher_classes(
@@ -622,7 +654,7 @@ def list_teacher_subjects(
     learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_teacher_subjects(
@@ -954,10 +986,11 @@ def list_class_assignment_defense_scores(
 def save_class_assignment_defense_scores(
     class_id: str,
     payload: AcademicAssignmentDefenseScoreBulkIn,
-    user: UserContext = Depends(_require_training_write_permission),
+    user: UserContext = Depends(get_user_context),
     db: Session = Depends(get_db),
 ):
     AcademicService(db).assert_can_access_class(user, class_id)
+    _require_assignment_score_permission_for_class(db, user, class_id)
     now = datetime.utcnow()
     saved: list[AcademicAssignmentDefenseScore] = []
     allowed_status = {'not_graded', 'waiting_defense', 'graded', 'absent', 'needs_regrade', 'submitted'}
@@ -1276,7 +1309,7 @@ def import_openedx_user_mappings(
 def list_academic_campuses(
     branch: str | None = Query('poly'),
     active: bool | None = True,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     service = AcademicService(db)
@@ -1302,6 +1335,8 @@ def list_academic_campuses(
             if branch:
                 subject_campuses = subject_campuses.filter(AcademicClass.branch == branch)
             access_conditions.append(AcademicCampus.campus_code.in_(subject_campuses.distinct()))
+        if decision.campus_codes:
+            access_conditions.append(func.lower(AcademicCampus.campus_code).in_(decision.campus_codes))
         if not access_conditions:
             query = query.filter(False)
         else:

@@ -4,6 +4,7 @@ import { formatVNDateTime } from '../../lib/time'
 import { ChangeEvent, useEffect, useMemo, useState } from 'react'
 import {
   createRoleAssignment,
+  getAcademicCampuses,
   downloadRBACImportTemplate,
   getDepartments,
   getEffectiveRBAC,
@@ -28,6 +29,7 @@ import {
   Subject,
   SubjectChapter,
   SubjectOffering,
+  AcademicCampus,
 } from '../../types'
 
 const roleLabels: Record<string, string> = {
@@ -35,6 +37,7 @@ const roleLabels: Record<string, string> = {
   DEPARTMENT_HEAD: 'Trưởng bộ môn',
   SUBJECT_OWNER: 'Chủ môn',
   QUESTION_REVIEWER: 'Người duyệt câu hỏi',
+  CAMPUS_MANAGER: 'Quản lý cơ sở',
 }
 
 const roleSubtitles: Record<string, string> = {
@@ -42,6 +45,7 @@ const roleSubtitles: Record<string, string> = {
   DEPARTMENT_HEAD: 'Quản lý các môn, phiên bản, bài và người duyệt trong một bộ môn.',
   SUBJECT_OWNER: 'Quản lý một môn hoặc một phiên bản/kỳ cụ thể.',
   QUESTION_REVIEWER: 'Chỉ xem, sửa, duyệt hoặc từ chối câu hỏi trong phạm vi được giao.',
+  CAMPUS_MANAGER: 'Toàn quyền vận hành đào tạo trong cơ sở được phân, bao gồm nhập điểm Assignment.',
 }
 
 const roleTone: Record<string, string> = {
@@ -49,6 +53,7 @@ const roleTone: Record<string, string> = {
   DEPARTMENT_HEAD: 'blue',
   SUBJECT_OWNER: 'violet',
   QUESTION_REVIEWER: 'green',
+  CAMPUS_MANAGER: 'orange',
 }
 
 const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
@@ -56,6 +61,7 @@ const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
   DEPARTMENT_HEAD: ['DEPARTMENT'],
   SUBJECT_OWNER: ['SUBJECT', 'SUBJECT_VERSION'],
   QUESTION_REVIEWER: ['SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'],
+  CAMPUS_MANAGER: ['CAMPUS', 'SYSTEM'],
 }
 
 const scopeLabel: Record<string, string> = {
@@ -65,6 +71,7 @@ const scopeLabel: Record<string, string> = {
   SUBJECT_VERSION: 'Version/kỳ môn',
   CHAPTER: 'Bài / chapter',
   COURSE: 'Course Open edX',
+  CAMPUS: 'Cơ sở',
 }
 
 function formatDate(value?: string | null) {
@@ -106,6 +113,7 @@ export default function UsersPage() {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [offerings, setOfferings] = useState<SubjectOffering[]>([])
   const [chapters, setChapters] = useState<SubjectChapter[]>([])
+  const [campuses, setCampuses] = useState<AcademicCampus[]>([])
   const [filterText, setFilterText] = useState('')
   const [includeRevoked, setIncludeRevoked] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
@@ -130,6 +138,7 @@ export default function UsersPage() {
     { code: 'DEPARTMENT_HEAD', name: 'Trưởng bộ môn', description: roleSubtitles.DEPARTMENT_HEAD, rank: 70, status: 'active' },
     { code: 'SUBJECT_OWNER', name: 'Chủ môn', description: roleSubtitles.SUBJECT_OWNER, rank: 50, status: 'active' },
     { code: 'QUESTION_REVIEWER', name: 'Người duyệt câu hỏi', description: roleSubtitles.QUESTION_REVIEWER, rank: 30, status: 'active' },
+    { code: 'CAMPUS_MANAGER', name: 'Quản lý cơ sở', description: roleSubtitles.CAMPUS_MANAGER, rank: 60, status: 'active' },
   ] as RBACRole[], [])
   const visibleRoles = roles.length ? roles : fallbackRoles
   const availableScopes = allowedScopesByRole[form.role_code] || ['SYSTEM']
@@ -141,8 +150,9 @@ export default function UsersPage() {
     if (form.scope_type === 'SUBJECT') return filter(subjects.map((s) => ({ id: s.id, label: `${s.code} · ${s.name}`, path: `Môn / ${s.code}` })))
     if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((o) => ({ id: o.id, label: `${o.code} · ${o.name || o.version_code}`, path: `Version / ${o.code}` })))
     if (form.scope_type === 'CHAPTER') return filter(chapters.map((c) => ({ id: c.id, label: c.title, path: `Bài / ${c.title}` })))
+    if (form.scope_type === 'CAMPUS') return filter([{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }, ...campuses.map((c) => ({ id: c.campus_code, label: `${c.campus_code.toUpperCase()} · ${c.campus_name}`, path: `Cơ sở / ${c.campus_code.toUpperCase()}` }))])
     return []
-  }, [chapters, departments, form.scope_type, offerings, scopeSearch, subjects])
+  }, [campuses, chapters, departments, form.scope_type, offerings, scopeSearch, subjects])
 
   const selectedScopeOption = useMemo(() => scopeOptions.find((item) => item.id === form.scope_id), [form.scope_id, scopeOptions])
 
@@ -166,6 +176,7 @@ export default function UsersPage() {
       heads: active.filter((a) => a.role_code === 'DEPARTMENT_HEAD').length,
       owners: active.filter((a) => a.role_code === 'SUBJECT_OWNER').length,
       reviewers: active.filter((a) => a.role_code === 'QUESTION_REVIEWER').length,
+      campusManagers: active.filter((a) => a.role_code === 'CAMPUS_MANAGER').length,
     }
   }, [assignments])
 
@@ -188,14 +199,22 @@ export default function UsersPage() {
       setRoles(roleRows)
       setAssignments(assignmentRows.items)
       setDepartments(departmentRows)
-      const [subjectRows, offeringRows, chapterRows] = await Promise.all([
+      const [subjectRows, offeringRows, chapterRows, campusPolyRows, campusPtcdRows] = await Promise.all([
         getSubjects(headers),
         getSubjectOfferings(headers),
         getSubjectChapters(headers),
+        getAcademicCampuses(headers, { active: true, branch: 'poly' }),
+        getAcademicCampuses(headers, { active: true, branch: 'ptcd' }),
       ])
       setSubjects(subjectRows)
       setOfferings(offeringRows)
       setChapters(chapterRows)
+      const campusMap = new Map<string, AcademicCampus>()
+      ;[...campusPolyRows, ...campusPtcdRows].forEach((campus) => {
+        const key = campus.campus_code.toLowerCase()
+        if (!campusMap.has(key)) campusMap.set(key, campus)
+      })
+      setCampuses(Array.from(campusMap.values()).sort((a, b) => a.campus_code.localeCompare(b.campus_code)))
       setMessage(null)
     } catch (e) {
       setMessage(toUserError(e, 'Không tải được trang phân quyền. Kiểm tra token, RBAC scope và backend logs.'))
@@ -296,6 +315,7 @@ export default function UsersPage() {
       <div className="access-kpi"><span>Trưởng bộ môn</span><b>{assignmentStats.heads}</b><small>Quản lý bộ môn</small></div>
       <div className="access-kpi"><span>Chủ môn</span><b>{assignmentStats.owners}</b><small>Quản lý môn học</small></div>
       <div className="access-kpi"><span>Người duyệt</span><b>{assignmentStats.reviewers}</b><small>Duyệt câu hỏi</small></div>
+      <div className="access-kpi"><span>Quyền cơ sở</span><b>{assignmentStats.campusManagers}</b><small>Teacher management</small></div>
     </section>
 
     <section className="access-main-grid">

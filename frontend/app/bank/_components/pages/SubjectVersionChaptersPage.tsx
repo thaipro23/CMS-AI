@@ -181,7 +181,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={<button className="btn" disabled={!can('subject.update')} onClick={() => setCreateOpen(true)}>+ Thêm bài</button>} />
+      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ chapter, stats: rawStats }) => {
           const stats = rawStats || emptyReviewStats()

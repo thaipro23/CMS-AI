@@ -40,6 +40,8 @@ ROLE_HINTS = [
     ['QUESTION_REVIEWER', 'SUBJECT', 'SUBJECT_ID', 'Người duyệt toàn môn.'],
     ['QUESTION_REVIEWER', 'SUBJECT_VERSION', 'SUBJECT_VERSION_ID', 'Người duyệt trong một version/kỳ.'],
     ['QUESTION_REVIEWER', 'CHAPTER', 'CHAPTER_ID', 'Người duyệt đúng một bài/chapter.'],
+    ['CAMPUS_MANAGER', 'CAMPUS', 'PH', 'Quản lý cơ sở PH, được nhập/sửa điểm Assignment trong cơ sở.'],
+    ['CAMPUS_MANAGER', 'CAMPUS', '*', 'Quản lý tất cả cơ sở.'],
 ]
 
 
@@ -75,8 +77,8 @@ def _build_import_template() -> bytes:
     widths = [24, 32, 28, 22, 32, 42, 16]
     for idx, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + idx)].width = width
-    role_validation = DataValidation(type='list', formula1='"SYSTEM_ADMIN,DEPARTMENT_HEAD,SUBJECT_OWNER,QUESTION_REVIEWER"', allow_blank=False)
-    scope_validation = DataValidation(type='list', formula1='"SYSTEM,DEPARTMENT,SUBJECT,SUBJECT_VERSION,CHAPTER,COURSE"', allow_blank=False)
+    role_validation = DataValidation(type='list', formula1='"SYSTEM_ADMIN,DEPARTMENT_HEAD,SUBJECT_OWNER,QUESTION_REVIEWER,CAMPUS_MANAGER"', allow_blank=False)
+    scope_validation = DataValidation(type='list', formula1='"SYSTEM,DEPARTMENT,SUBJECT,SUBJECT_VERSION,CHAPTER,COURSE,CAMPUS"', allow_blank=False)
     bool_validation = DataValidation(type='list', formula1='"false,true"', allow_blank=True)
     ws.add_data_validation(role_validation)
     ws.add_data_validation(scope_validation)
@@ -164,12 +166,16 @@ def effective_me(user: UserContext = Depends(get_user_context), db: Session = De
 
 @router.get('/roles', response_model=list[RBACRoleOut])
 def list_roles(user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
-    return BusinessRBACService(db).list_roles()
+    service = BusinessRBACService(db)
+    service.ensure_default_catalog()
+    return service.list_roles()
 
 
 @router.get('/permissions', response_model=list[RBACPermissionOut])
 def list_permissions(user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
-    return BusinessRBACService(db).list_permissions()
+    service = BusinessRBACService(db)
+    service.ensure_default_catalog()
+    return service.list_permissions()
 
 
 @router.get('/assignments', response_model=RoleAssignmentListOut)
@@ -198,6 +204,7 @@ def list_assignments(
 def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     try:
+        service.ensure_default_catalog()
         item = service.create_assignment(actor=user, **payload.model_dump())
         log_audit(
             db,
