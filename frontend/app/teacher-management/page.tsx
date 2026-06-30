@@ -286,21 +286,31 @@ export default function TeacherManagementPage() {
     }
   }
 
-  return <div className="page-stack student-management-page academic-flow-page training-management-page">
-    <section className="card academic-unified-card">
-      <div className="section-head list-card-head">
-        <div>
+  return <div className="page-stack student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
+    <section className="card academic-unified-card ux-surface-card">
+      <div className="teacher-hero-panel">
+        <div className="teacher-hero-copy">
+          <span className="eyebrow">Teacher Management</span>
           <h2>Quản lý giảng viên</h2>
-          <p>Theo dõi giảng viên dạy bao nhiêu lớp, lớp nào, quy mô sinh viên và chỉ số học tập tổng hợp. Mặc định chỉ tải một trang giáo viên để web nhẹ; mở chi tiết mới xem lớp.</p>
+          <p>Theo dõi giảng viên dạy bao nhiêu lớp, lớp nào, quy mô sinh viên và chỉ số học tập tổng hợp. Web chỉ tải danh sách giáo viên theo trang; mở chi tiết mới tải lớp để tránh quét nặng toàn hệ.</p>
+          <div className="teacher-hero-chips">
+            <span>Phạm vi: {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}</span>
+            <span>{selectedTerm?.term_name || 'Chưa chọn kỳ'}</span>
+            <span>{counterText(total, page, PAGE_SIZE)}</span>
+          </div>
         </div>
-        <div className="toolbar-actions">
-          <span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span>
-          <button className="btn secondary" type="button" onClick={() => loadReport()} disabled={loading}>Tải lại</button>
+        <div className="teacher-hero-actions">
+          <button className="btn secondary" type="button" onClick={() => loadReport()} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>
           <button className="btn primary" type="button" onClick={exportExcel} disabled={exporting || loading}>{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button>
         </div>
       </div>
 
-      <div className="academic-filter-bar">
+      <div className="teacher-operator-note">
+        <b>Thiết kế vận hành nhẹ</b>
+        <span>Ưu tiên xem theo cơ sở/kỳ, mỗi trang 50 giảng viên. Báo cáo toàn hệ nên chạy bằng Xuất Excel hoặc job nền thay vì render hết trên trình duyệt.</span>
+      </div>
+
+      <div className="academic-filter-bar ux-filter-grid">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => { setBranch(event.target.value); setCampus(''); setPage(1) }}>
             <option value="poly">Poly</option>
@@ -339,7 +349,7 @@ export default function TeacherManagementPage() {
         </label>
       </div>
 
-      <div className="academic-summary-strip training-summary-strip">
+      <div className="academic-summary-strip training-summary-strip ux-kpi-grid">
         <div><span>Giảng viên</span><b>{countLabel(summary.teacher_count)}</b><small>{summaryScope === 'filtered' ? 'Theo bộ lọc' : 'Trang hiện tại'}</small></div>
         <div><span>Lớp</span><b>{countLabel(summary.class_count)}</b><small>Lượt lớp phân công</small></div>
         <div><span>Sinh viên</span><b>{countLabel(summary.student_count)}</b><small>Lượt SV theo lớp</small></div>
@@ -356,7 +366,7 @@ export default function TeacherManagementPage() {
 
       {message && <div className="academic-inline-error"><b>Thông báo</b><span>{message}</span></div>}
 
-      <div className="table-wrap academic-table-wrap training-table-wrap">
+      <div className="table-wrap academic-table-wrap training-table-wrap ux-table-card">
         <table className="data-table academic-data-table training-teacher-table">
           <thead>
             <tr>
@@ -369,16 +379,16 @@ export default function TeacherManagementPage() {
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={6}>Đang tải báo cáo...</td></tr>}
-            {!loading && !items.length && <tr><td colSpan={6}>Chưa có dữ liệu theo bộ lọc hiện tại.</td></tr>}
+            {loading && Array.from({ length: 6 }).map((_, index) => <tr key={`teacher-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={6}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>)}
+            {!loading && !items.length && <tr><td colSpan={6}><div className="ux-empty-state"><b>Chưa có dữ liệu theo bộ lọc hiện tại</b><span>Đổi cơ sở, học kỳ hoặc xóa từ khóa tìm kiếm để xem danh sách giảng viên.</span><button className="btn secondary small" type="button" onClick={() => { setSearch(''); setLearningStatus('all'); setPage(1) }}>Xóa bộ lọc nhanh</button></div></td></tr>}
             {!loading && items.map((item) => {
               const expanded = expandedTeacherId === item.teacher_id
               const statuses = item.status_counts || {}
-              return <tr key={item.teacher_id} className={expanded ? 'expanded-row' : undefined}>
+              return <tr key={item.teacher_id} className={expanded ? 'expanded-row teacher-row-open' : 'teacher-row-compact'}>
                 <td>
-                  <b>{item.teacher_name || item.teacher_username}</b>
+                  <div className="teacher-identity"><span className="teacher-avatar">{(item.teacher_name || item.teacher_username || 'GV').slice(0, 2).toUpperCase()}</span><div><b>{item.teacher_name || item.teacher_username}</b>
                   <small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ''}</small>
-                  <small>{item.branch?.toUpperCase() || 'N/A'}{item.campus ? ` · ${item.campus.toUpperCase()}` : ''}</small>
+                  <small>{item.branch?.toUpperCase() || 'N/A'}{item.campus ? ` · ${item.campus.toUpperCase()}` : ''}</small></div></div>
                 </td>
                 <td>
                   <b>{item.class_count} lớp · {item.subject_count} môn</b>
@@ -404,7 +414,7 @@ export default function TeacherManagementPage() {
                   <small>{alertText(item.learning_alerts)}</small>
                 </td>
                 <td>
-                  <button className="btn secondary small" type="button" onClick={() => setExpandedTeacherId(expanded ? null : item.teacher_id)}>{expanded ? 'Thu gọn' : 'Xem lớp'}</button>
+                  <button className="btn secondary small teacher-row-action" type="button" onClick={() => setExpandedTeacherId(expanded ? null : item.teacher_id)}>{expanded ? 'Thu gọn' : 'Xem lớp'}</button>
                 </td>
               </tr>
             })}
@@ -412,7 +422,7 @@ export default function TeacherManagementPage() {
         </table>
       </div>
 
-      {expandedTeacherId && <div className="training-class-detail-panel">
+      {expandedTeacherId && <div className="training-class-detail-panel ux-detail-panel">
         {items.filter((item) => item.teacher_id === expandedTeacherId).map((item) => <div key={item.teacher_id} className="academic-unified-card nested-card">
           <div className="section-head list-card-head"><div><h3>Chi tiết lớp của {item.teacher_name}</h3><p>Mỗi lớp hiển thị Course completion, điểm tổng hệ 10, trạng thái CMS/enrollment và cảnh báo deadline quiz theo tuần/block.</p></div></div>
           <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">

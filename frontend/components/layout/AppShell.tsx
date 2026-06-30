@@ -121,7 +121,7 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz trên CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.5.23</span></div>
+    <div className="footer-links"><span>v25.9.16.5.78</span></div>
   </footer>
 }
 
