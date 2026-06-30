@@ -120,8 +120,8 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
-    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Quản lý AP · Quiz trên CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.5.78</span></div>
+    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Vận hành đào tạo · Open edX CMS</span></div>
+    <div className="footer-links"><span>v25.9.16.5.79</span></div>
   </footer>
 }
 
@@ -141,6 +141,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const visibleItems = useMemo(() => authReady ? navItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, can])
   const currentTitle = pageTitle(pathname)
+  const currentNavItem = useMemo(() => {
+    const exact = navItems.find((item) => pathname === item.href)
+    if (exact) return exact
+    return navItems
+      .filter((item) => pathname.startsWith(`${item.href}/`))
+      .sort((a, b) => b.href.length - a.href.length)[0]
+  }, [pathname])
   const routePermission = requiredPermissionForPath(pathname)
   const routeAllowed = !routePermission || (authReady && can(routePermission))
   const fallbackHref = visibleItems[0]?.href || '/bank'
@@ -202,10 +209,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <aside className="sidebar product-sidebar" aria-label="Điều hướng chính">
       <Link href="/bank" className="brand product-brand" aria-label="Open edX AI Server">
         <div className="brand-mark product-brand-mark">AI</div>
-        <div><b>AI Server</b><small>Ngân hàng đề · Open edX</small></div>
+        <div><b>AI Server ACMS</b><small>Question Bank · Training Ops</small></div>
       </Link>
 
       <nav className="side-nav grouped-side-nav product-nav">
+        {!authReady && <div className="nav-loading-stack" aria-label="Đang tải quyền">
+          <span /><span /><span /><span />
+        </div>}
         {navGroups.map((group) => {
           const items = visibleItems.filter((item) => item.group === group.key)
           if (!items.length) return null
@@ -232,15 +242,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </aside>
 
     <div className="main-area product-main">
-      <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar' : 'workspace-topbar workspace-topbar-minimal'}>
-        <div className="workspace-topbar-main">
+      <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar product-command-topbar' : 'workspace-topbar workspace-topbar-minimal product-command-topbar'}>
+        <div className="workspace-topbar-main product-topbar-copy">
+          <span className="topbar-section-label">{currentNavItem?.group === 'admin' ? 'Quản trị hệ thống' : currentNavItem?.group === 'operations' ? 'Vận hành đào tạo' : 'Ngân hàng câu hỏi'}</span>
           <h1>{currentTitle}</h1>
+          <p>{currentNavItem?.desc || 'Không gian vận hành AI Server tích hợp Open edX CMS.'}</p>
           {studentTopbar && <nav className="workspace-breadcrumb" aria-label="Điều hướng Quản lý sinh viên">
             {studentTopbar.map((item, index) => <span key={`${item.label}-${index}`} className="workspace-breadcrumb-item">
               {index > 0 && <span className="workspace-breadcrumb-separator">/</span>}
               {item.href ? <Link href={item.href}>{item.label}</Link> : <b>{item.label}</b>}
             </span>)}
           </nav>}
+        </div>
+        <div className="product-topbar-meta" aria-label="Thông tin phiên làm việc">
+          <span className={isAuthenticated ? 'topbar-session-pill ok' : 'topbar-session-pill wait'}>{isAuthenticated ? 'CMS session active' : 'Đang lấy phiên CMS'}</span>
+          <span className="topbar-role-pill">{ROLE_LABELS[role]}</span>
         </div>
       </header>
 

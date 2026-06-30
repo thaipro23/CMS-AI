@@ -310,6 +310,12 @@ export default function TeacherManagementPage() {
         <span>Ưu tiên xem theo cơ sở/kỳ, mỗi trang 50 giảng viên. Báo cáo toàn hệ nên chạy bằng Xuất Excel hoặc job nền thay vì render hết trên trình duyệt.</span>
       </div>
 
+      <div className="teacher-quality-grid" aria-label="Nguyên tắc vận hành báo cáo">
+        <div><b>01</b><span>Dữ liệu theo phạm vi</span><small>Kỳ {selectedTerm?.term_name || 'chưa chọn'}, hệ {branch.toUpperCase()}, cơ sở {campus ? campus.toUpperCase() : 'tất cả'}.</small></div>
+        <div><b>02</b><span>Drill-down thay vì quét nặng</span><small>Bảng chỉ hiển thị GV trước; lớp và đầu điểm mở ở dòng chi tiết.</small></div>
+        <div><b>03</b><span>Cảnh báo không đếm trùng</span><small>Cần theo dõi là số sinh viên có vấn đề thật, không cộng chồng bucket.</small></div>
+      </div>
+
       <div className="academic-filter-bar ux-filter-grid">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => { setBranch(event.target.value); setCampus(''); setPage(1) }}>

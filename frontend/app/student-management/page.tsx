@@ -223,8 +223,8 @@ export default function StudentManagementSubjectsPage() {
             </tr>
           </thead>
           <tbody>
-            {loading ? <tr><td colSpan={6}>Đang tải danh sách môn...</td></tr> : null}
-            {!loading && !subjects.length ? <tr><td colSpan={6}>Chưa có môn phù hợp hoặc bạn chưa được phân quyền/phân công.</td></tr> : null}
+            {loading ? Array.from({ length: 5 }).map((_, index) => <tr key={`subject-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={6}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>) : null}
+            {!loading && !subjects.length ? <tr><td colSpan={6}><div className="ux-empty-state"><b>Chưa có môn phù hợp</b><span>Đổi học kỳ, cơ sở, trạng thái học tập hoặc xóa từ khóa tìm kiếm. Nếu vẫn trống, kiểm tra phân quyền và dữ liệu AP sync.</span><button className="btn secondary small" type="button" onClick={() => { setSearch(''); setLearningStatus('all'); setPage(1) }}>Xóa bộ lọc nhanh</button></div></td></tr> : null}
             {subjects.map((subject) => <tr key={subject.id}>
               <td className="main-entity-cell"><b>{subject.subject_code}</b><small>{subject.subject_name}</small></td>
               <td>
