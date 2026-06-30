@@ -1353,9 +1353,17 @@ def sync_academic_campuses_from_ap(
     db: Session = Depends(get_db),
 ):
     _require_academic_admin(db, user)
-    items = AcademicImportService(db).sync_campuses_from_ap(branch=branch)
-    log_audit(db, action='academic.campus.sync_from_ap', status='success', message='Đồng bộ danh sách cơ sở từ AP thành công', user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch, 'count': len(items)})
-    return items
+    try:
+        items = AcademicImportService(db).sync_campuses_from_ap(branch=branch)
+        log_audit(db, action='academic.campus.sync_from_ap', status='success', message='Đồng bộ danh sách cơ sở từ AP thành công', user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch, 'count': len(items)})
+        return items
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        message = str(exc) or 'Không đồng bộ được danh sách cơ sở từ AP CMS.'
+        log_audit(db, action='academic.campus.sync_from_ap', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=message, user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch})
+        raise HTTPException(status_code=502, detail=f'Đồng bộ danh sách cơ sở từ AP CMS thất bại: {message}') from exc
 
 
 @router.delete('/campuses/{campus_id}', response_model=AcademicCampusOut)

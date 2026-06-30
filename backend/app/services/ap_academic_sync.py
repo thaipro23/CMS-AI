@@ -169,16 +169,14 @@ class APAcademicClient:
         # New AP CMS master-data base. Operators can replace this host from env
         # without changing source code.
         self.cms_base_url = (cms_base_url or getattr(settings, 'academic_ap_cms_api_base_url', '') or self.base_url).rstrip('/')
-        self.api_key = (api_key or settings.academic_ap_api_key or '').strip()
+        self.api_key = (api_key if api_key is not None else settings.academic_ap_api_key or '').strip()
         self.tls_mode = (getattr(settings, 'academic_ap_tls_mode', 'strict') or 'strict').strip().lower()
         if not settings.academic_ap_sync_enabled:
             raise RuntimeError('AP sync đang bị tắt. Bật ACADEMIC_AP_SYNC_ENABLED=true nếu muốn đồng bộ AP.')
-        if not self.base_url:
-            raise RuntimeError('Thiếu ACADEMIC_AP_API_BASE_URL cho đồng bộ AP.')
+        if not self.cms_base_url and not self.base_url:
+            raise RuntimeError('Thiếu ACADEMIC_AP_CMS_API_BASE_URL hoặc ACADEMIC_AP_API_BASE_URL cho đồng bộ AP.')
         if not self.cms_base_url:
             raise RuntimeError('Thiếu ACADEMIC_AP_CMS_API_BASE_URL cho đồng bộ cơ sở/môn AP.')
-        if not self.api_key:
-            raise RuntimeError('Thiếu ACADEMIC_AP_API_KEY trong env. Không hardcode API key AP trong source.')
 
 
     def _verify_config(self) -> bool | ssl.SSLContext:
@@ -201,9 +199,10 @@ class APAcademicClient:
 
     def _headers(self, campus: str | None = None) -> dict[str, str]:
         headers = {
-            'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json',
         }
+        if self.api_key:
+            headers['Authorization'] = f'Bearer {self.api_key}'
         if campus:
             headers['campus'] = campus
         return headers
@@ -436,6 +435,10 @@ class APAcademicClient:
         return subjects
 
     def get_division(self, *, campus: str, term_name: str, subject_code: str) -> dict[str, Any]:
+        if not self.base_url:
+            raise RuntimeError('Thiếu ACADEMIC_AP_API_BASE_URL khi gọi legacy /get-data-cms.')
+        if not self.api_key:
+            raise RuntimeError('Thiếu ACADEMIC_AP_API_KEY khi gọi legacy /get-data-cms.')
         body = {'campus': campus, 'term_name': term_name, 'subject_code': subject_code}
         with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
             response = client.post(
