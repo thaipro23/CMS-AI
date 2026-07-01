@@ -949,6 +949,11 @@ class AcademicService:
         if enrollment_status != 'enrolled':
             severity = 'blocking'
             notes.append(f'Enrollment CMS hiện là {enrollment_status}; cần Đồng bộ full CMS để enroll trước khi đọc điểm ổn định.')
+        progress_payload = payload.get('progress') if isinstance(payload.get('progress'), dict) else {}
+        sm_raw_rows = self._int_or_none(progress_payload.get('student_module_raw_rows') or payload.get('student_module_raw_rows'))
+        sm_activity_blocks = self._int_or_none(progress_payload.get('student_module_activity_blocks') or payload.get('student_module_activity_blocks') or progress_payload.get('student_module_completed_blocks') or payload.get('student_module_completed_blocks'))
+        sm_ignored_rows = self._int_or_none(progress_payload.get('student_module_ignored_rows') or payload.get('student_module_ignored_rows'))
+        sm_rule = str(progress_payload.get('student_module_fallback_rule') or payload.get('student_module_fallback_rule') or '').strip()
         if not official and not student_module:
             severity = 'warning' if severity == 'ok' else severity
             notes.append('Connector chưa trả Course Home Progress official hoặc StudentModule fallback; Course completion sẽ hiển thị N/A thay vì đoán từ quiz/subsection.')
@@ -957,7 +962,11 @@ class AcademicService:
                 severity = 'warning' if severity == 'ok' else severity
                 notes.append('Connector trả StudentModule nhưng thiếu completed_blocks/total_blocks nên chưa tính được Course completion fallback.')
             else:
-                notes.append('Course completion đang dùng fallback StudentModule = completed_blocks / total_blocks. Nên restart LMS sau khi cập nhật connector để kiểm tra lại Course Home Progress official.')
+                detail = ''
+                if sm_raw_rows is not None or sm_activity_blocks is not None or sm_ignored_rows is not None:
+                    detail = f" StudentModule raw={sm_raw_rows if sm_raw_rows is not None else 'N/A'}, activity={sm_activity_blocks if sm_activity_blocks is not None else 'N/A'}, ignored={sm_ignored_rows if sm_ignored_rows is not None else 'N/A'}."
+                rule = ' Chỉ tính activity rows, không tính row container/state rỗng; từ v88 mẫu số chỉ lấy leaf learning components đang reachable trong LMS.' if sm_rule == 'activity_rows_only_excluding_empty_container_rows' else ''
+                notes.append('Course completion đang dùng fallback StudentModule = completed_blocks / total_blocks.' + detail + rule + ' Nên restart LMS sau khi cập nhật connector để kiểm tra lại Course Home Progress official.')
         elif progress is None:
             severity = 'warning' if severity == 'ok' else severity
             notes.append('Có source official nhưng chưa parse được Course completion percent.')
@@ -976,6 +985,10 @@ class AcademicService:
             'has_progress_percent': progress is not None,
             'completed_blocks': getattr(snapshot, 'completed_blocks', None),
             'total_blocks': getattr(snapshot, 'total_blocks', None),
+            'student_module_raw_rows': sm_raw_rows,
+            'student_module_activity_blocks': sm_activity_blocks,
+            'student_module_ignored_rows': sm_ignored_rows,
+            'student_module_fallback_rule': sm_rule or None,
             'has_grade_percent': grade is not None,
             'has_component_grades': bool(components),
             'progress_source': source,
@@ -4179,7 +4192,7 @@ class AcademicService:
         if diagnostic_counts.get('official_progress'):
             diagnostic_note = 'OK: đã có dữ liệu Course Home Progress official.'
         elif diagnostic_counts.get('student_module_progress'):
-            diagnostic_note = 'Đang dùng StudentModule fallback để tính Course completion = completed_blocks / total_blocks. Sau khi cập nhật connector, hãy restart LMS để kiểm tra lại Course Home Progress official.'
+            diagnostic_note = 'Đang dùng StudentModule fallback để tính Course completion = completed_blocks / total_blocks. Từ v90 chỉ dùng StudentModule type=sequential có state position làm tử số và tổng reachable sequential/subsection làm mẫu số; bỏ hoàn toàn itembank/problem khỏi Course completion để tránh false 15/70 và tránh query nặng. Sau khi cập nhật connector, hãy restart LMS và chạy Cập nhật điểm.'
         else:
             diagnostic_note = 'Chưa có Course Home Progress official hoặc StudentModule fallback; completion sẽ giữ N/A để tránh đoán sai từ quiz/grade.'
         return {
@@ -4238,7 +4251,7 @@ class AcademicService:
             # Do not infer Course completion from quiz/detailed grades. N/A is
             # safer than a false progress percentage when the connector plugin
             # did not return Course Home Progress or the explicit StudentModule
-            # fallback counts introduced in v25.9.16.5.86.
+            # fallback counts introduced in v25.9.16.5.86/v87/v88.
             snapshot.progress_percent = None
         snapshot.grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
         if snapshot.grade_percent is None:
@@ -4616,7 +4629,7 @@ class AcademicService:
             'with_component_grades': int(connector_component_seen),
             'missing_result': int(connector_missing_result),
             'read_only_no_enroll': 1,
-            'plugin_connector_version_ok': 1 if str(connector_plugin_diagnostics.get('connector_version') or '') >= '25.9.16.5.86' else 0,
+            'plugin_connector_version_ok': 1 if str(connector_plugin_diagnostics.get('connector_version') or '') >= '25.9.16.5.88' else 0,
             'plugin_student_module_available': 1 if connector_plugin_diagnostics.get('student_module_model_available') is True else 0,
         }
         if connector_plugin_learning_counts:
