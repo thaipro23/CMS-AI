@@ -414,6 +414,77 @@ class AcademicClassSyncJob(Base):
     )
 
 
+class AcademicTeacherReportSummary(Base):
+    """Materialized teacher-management row for large term/campus scopes.
+
+    One row is one teacher under a requested report scope. Keep the rendered
+    report payload JSON so the list page can read fast without rehydrating
+    class/student/grade policy rows on every request.
+    """
+
+    __tablename__ = 'academic_teacher_report_summaries'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    term_id: Mapped[str] = mapped_column(String, ForeignKey('academic_terms.id'), index=True)
+    branch: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    campus: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    scope_key: Mapped[str] = mapped_column(String(255), index=True)
+    teacher_id: Mapped[str] = mapped_column(String, ForeignKey('academic_teachers.id'), index=True)
+    teacher_username: Mapped[str] = mapped_column(String(255), index=True)
+    teacher_name: Mapped[str] = mapped_column(String(255), default='', index=True)
+    teacher_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    class_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    student_count: Mapped[int] = mapped_column(Integer, default=0)
+    unique_student_count: Mapped[int] = mapped_column(Integer, default=0)
+    risk_student_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    cms_synced_count: Mapped[int] = mapped_column(Integer, default=0)
+    learning_enrolled_count: Mapped[int] = mapped_column(Integer, default=0)
+    learning_avg_progress_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    learning_avg_grade_10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    report_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    source_sync_run_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    built_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('scope_key', 'teacher_id', name='uq_academic_teacher_report_scope_teacher'),
+        Index('ix_academic_teacher_report_scope_built', 'scope_key', 'built_at'),
+        Index('ix_academic_teacher_report_scope_risk', 'scope_key', 'risk_student_count'),
+    )
+
+
+class AcademicTeacherReportJob(Base):
+    __tablename__ = 'academic_teacher_report_jobs'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    job_type: Mapped[str] = mapped_column(String(80), index=True)  # rebuild_cache | export_excel
+    status: Mapped[str] = mapped_column(String(50), default='queued', index=True)
+    term_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_terms.id'), nullable=True, index=True)
+    branch: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    campus: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, default=100)
+    progress_label: Mapped[str] = mapped_column(String(255), default='Đang chờ xử lý')
+    request_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_academic_teacher_report_jobs_scope_status', 'term_id', 'branch', 'campus', 'status'),
+        Index('ix_academic_teacher_report_jobs_actor_created', 'requested_by', 'created_at'),
+    )
+
+
 class AcademicSyncRun(Base):
     __tablename__ = 'academic_sync_runs'
 

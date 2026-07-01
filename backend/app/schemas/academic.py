@@ -231,7 +231,11 @@ class AcademicClassStudentOut(AcademicStudentOut):
     learning_total_blocks: int | None = None
     learning_last_activity_at: datetime | None = None
     learning_last_synced_at: datetime | None = None
+    learning_enrollment_synced_at: datetime | None = None
+    learning_progress_source: str | None = None
     learning_status: str = 'not_synced'
+    learning_sync_note: str | None = None
+    learning_diagnostics: dict[str, Any] | None = None
     learning_component_scores: list[dict[str, Any]] = Field(default_factory=list)
     training_policy: AcademicTrainingPolicyOut | None = None
     exam_eligible: bool | None = None
@@ -428,12 +432,17 @@ class AcademicLearningSummaryOut(BaseModel):
     component_summaries: list[dict[str, Any]] = Field(default_factory=list)
     status_counts: dict[str, int] = Field(default_factory=dict)
     alert_counts: dict[str, int] = Field(default_factory=dict)
+    diagnostic_counts: dict[str, int] = Field(default_factory=dict)
+    source_counts: dict[str, int] = Field(default_factory=dict)
+    diagnostic_note: str | None = None
 
 
 class AcademicLearningSyncOut(AcademicLearningSummaryOut):
     ok: bool
     updated: int
     message: str
+    connector_counts: dict[str, int] = Field(default_factory=dict)
+    connector_diagnostics: dict[str, Any] | None = None
 
 
 class AcademicFullCmsSyncOut(BaseModel):
@@ -464,6 +473,30 @@ class AcademicClassSyncJobOut(BaseModel):
     progress_label: str = 'Đang chờ xử lý'
     request_json: dict[str, Any] | None = None
     result_json: dict[str, Any] | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {'from_attributes': True}
+
+
+class AcademicTeacherReportJobOut(BaseModel):
+    id: str
+    job_type: str
+    status: str
+    term_id: str | None = None
+    branch: str | None = None
+    campus: str | None = None
+    requested_by: str | None = None
+    progress_current: int = 0
+    progress_total: int = 100
+    progress_label: str = 'Đang chờ xử lý'
+    request_json: dict[str, Any] | None = None
+    result_json: dict[str, Any] | None = None
+    file_path: str | None = None
+    file_name: str | None = None
     error_message: str | None = None
     created_at: datetime | None = None
     started_at: datetime | None = None

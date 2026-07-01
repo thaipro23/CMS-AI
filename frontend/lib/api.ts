@@ -99,6 +99,7 @@ import {
   AcademicClassCourseMappingProposal,
   AcademicCourseMappingListResponse,
   AcademicTrainingTeacherReportResponse,
+  AcademicTeacherReportJob,
   AcademicQuizDeadlineOverride,
   AcademicAssignmentDefenseScore,
 } from "../types";
@@ -2002,26 +2003,60 @@ export async function saveAcademicClassAssignmentDefenseScores(headers: HeadersI
   }));
 }
 
-export async function getAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; page?: number; pageSize?: number } = {}): Promise<AcademicTrainingTeacherReportResponse> {
+export async function getAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; teacherId?: string; page?: number; pageSize?: number } = {}): Promise<AcademicTrainingTeacherReportResponse> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
   if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
+  if (filters.teacherId?.trim()) params.set('teacher_id', filters.teacherId.trim());
   params.set('page', String(filters.page || 1));
   params.set('page_size', String(filters.pageSize || 50));
   return parseResponse(await apiFetch(`${API}/academic/training/teachers?${params.toString()}`, { credentials: "include", headers }));
 }
 
-export async function downloadAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string } = {}): Promise<Blob> {
+export async function downloadAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; teacherId?: string } = {}): Promise<Blob> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
   if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
   if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
+  if (filters.teacherId?.trim()) params.set('teacher_id', filters.teacherId.trim());
   const response = await apiFetch(`${API}/academic/training/teachers/export?${params.toString()}`, { credentials: "include", headers });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || response.statusText);
+  }
+  return response.blob();
+}
+
+export async function createAcademicTrainingTeacherCacheJob(headers: HeadersInit, filters: { termId: string; campus?: string; branch?: string }): Promise<AcademicTeacherReportJob> {
+  const params = new URLSearchParams();
+  params.set('term_id', filters.termId);
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  return parseResponse(await apiFetch(`${API}/academic/training/teachers/report-cache/jobs?${params.toString()}`, { method: 'POST', credentials: 'include', headers }));
+}
+
+export async function createAcademicTrainingTeacherExportJob(headers: HeadersInit, filters: { termId: string; campus?: string; branch?: string; search?: string; learningStatus?: string; teacherId?: string }): Promise<AcademicTeacherReportJob> {
+  const params = new URLSearchParams();
+  params.set('term_id', filters.termId);
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
+  if (filters.teacherId?.trim()) params.set('teacher_id', filters.teacherId.trim());
+  return parseResponse(await apiFetch(`${API}/academic/training/teachers/export/jobs?${params.toString()}`, { method: 'POST', credentials: 'include', headers }));
+}
+
+export async function getAcademicTrainingTeacherReportJob(headers: HeadersInit, jobId: string): Promise<AcademicTeacherReportJob> {
+  return parseResponse(await apiFetch(`${API}/academic/training/teachers/report-jobs/${encodeURIComponent(jobId)}`, { credentials: 'include', headers }));
+}
+
+export async function downloadAcademicTrainingTeacherReportJob(headers: HeadersInit, jobId: string): Promise<Blob> {
+  const response = await apiFetch(`${API}/academic/training/teachers/report-jobs/${encodeURIComponent(jobId)}/download`, { credentials: 'include', headers });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || response.statusText);

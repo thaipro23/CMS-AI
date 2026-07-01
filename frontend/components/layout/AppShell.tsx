@@ -121,7 +121,7 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Vận hành đào tạo · Open edX CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.5.79</span></div>
+    <div className="footer-links"><span>v25.9.16.5.86</span></div>
   </footer>
 }
 
@@ -234,19 +234,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         })}
       </nav>
 
-      <div className="sidebar-note product-session-card">
+      <div className="sidebar-note product-session-card product-session-card-compact">
         <span className={isAuthenticated ? 'session-dot ok' : 'session-dot wait'} />
-        <div><b>{isAuthenticated ? 'Đã đăng nhập' : 'Đang lấy phiên CMS'}</b><span>{isAuthenticated ? `${userId || 'user'} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'AI Server sẽ tự nhận phiên từ CMS khi có thể.')}</span></div>
-        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Làm mới' : 'Đăng nhập CMS'}</button>
+        <div><b>{isAuthenticated ? 'CMS OK' : 'Chờ CMS'}</b><span>{isAuthenticated ? (userId || 'user') : (autoLoginMessage || 'Đang lấy phiên')}</span></div>
+        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Làm mới' : 'Đăng nhập'}</button>
       </div>
     </aside>
 
     <div className="main-area product-main">
       <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar product-command-topbar' : 'workspace-topbar workspace-topbar-minimal product-command-topbar'}>
         <div className="workspace-topbar-main product-topbar-copy">
-          <span className="topbar-section-label">{currentNavItem?.group === 'admin' ? 'Quản trị hệ thống' : currentNavItem?.group === 'operations' ? 'Vận hành đào tạo' : 'Ngân hàng câu hỏi'}</span>
           <h1>{currentTitle}</h1>
-          <p>{currentNavItem?.desc || 'Không gian vận hành AI Server tích hợp Open edX CMS.'}</p>
           {studentTopbar && <nav className="workspace-breadcrumb" aria-label="Điều hướng Quản lý sinh viên">
             {studentTopbar.map((item, index) => <span key={`${item.label}-${index}`} className="workspace-breadcrumb-item">
               {index > 0 && <span className="workspace-breadcrumb-separator">/</span>}
@@ -255,7 +253,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>}
         </div>
         <div className="product-topbar-meta" aria-label="Thông tin phiên làm việc">
-          <span className={isAuthenticated ? 'topbar-session-pill ok' : 'topbar-session-pill wait'}>{isAuthenticated ? 'CMS session active' : 'Đang lấy phiên CMS'}</span>
+          <span className={isAuthenticated ? 'topbar-session-pill ok' : 'topbar-session-pill wait'}>{isAuthenticated ? 'CMS OK' : 'Chờ CMS'}</span>
           <span className="topbar-role-pill">{ROLE_LABELS[role]}</span>
         </div>
       </header>

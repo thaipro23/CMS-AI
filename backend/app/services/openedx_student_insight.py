@@ -378,7 +378,14 @@ class OpenEdXConnectorClient:
 
         return None, None, len(exact), 'openedx_connector_api_unavailable_or_not_found'
 
-    def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> list[dict[str, Any]]:
+    def class_analytics_payload(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> dict[str, Any]:
+        """Return raw class analytics envelope plus normalized rows.
+
+        v25.9.16.5.85 keeps connector diagnostics instead of dropping them.
+        The Open edX plugin already returns `learning_counts` and
+        `diagnostics`; AI Server uses these fields to explain why Course
+        completion/grades are N/A without guessing from unrelated data.
+        """
         if not self.configured():
             raise RuntimeError('Chưa cấu hình Open edX Connector/HMAC để lấy tiến độ/điểm CMS')
         body = {'course_id': course_id, 'cohort_name': cohort_name, 'students': students}
@@ -390,10 +397,23 @@ class OpenEdXConnectorClient:
         )
         if isinstance(data, dict):
             rows = data.get('results') or data.get('items') or data.get('students') or []
-            return rows if isinstance(rows, list) else []
+            if not isinstance(rows, list):
+                rows = []
+            return {
+                'ok': data.get('ok', True),
+                'course_id': data.get('course_id') or course_id,
+                'total': data.get('total', len(rows)),
+                'counts': data.get('counts') if isinstance(data.get('counts'), dict) else {},
+                'learning_counts': data.get('learning_counts') if isinstance(data.get('learning_counts'), dict) else {},
+                'diagnostics': data.get('diagnostics') if isinstance(data.get('diagnostics'), dict) else {},
+                'results': rows,
+            }
         if isinstance(data, list):
-            return data
+            return {'ok': True, 'course_id': course_id, 'total': len(data), 'counts': {}, 'learning_counts': {}, 'diagnostics': {}, 'results': data}
         raise RuntimeError('Open edX Connector class analytics trả về dữ liệu không hợp lệ')
+
+    def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> list[dict[str, Any]]:
+        return self.class_analytics_payload(course_id=course_id, students=students, cohort_name=cohort_name).get('results') or []
 
     def enroll_users(self, *, course_id: str, students: list[dict[str, Any]], teachers: list[dict[str, Any]] | None = None, mode: str | None = None, force: bool = False, cohort_name: str | None = None, create_missing: bool = False) -> list[dict[str, Any]]:
         if not self.configured():

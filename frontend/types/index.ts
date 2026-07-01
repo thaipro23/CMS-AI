@@ -1903,6 +1903,8 @@ export type AcademicStudent = {
   learning_last_synced_at?: string | null
   learning_enrollment_synced_at?: string | null
   learning_status?: string
+  learning_sync_note?: string | null
+  learning_diagnostics?: Record<string, any> | null
   learning_component_scores?: AcademicLearningComponentScore[]
   training_policy?: AcademicTrainingPolicy | null
   exam_eligible?: boolean | null
@@ -1925,12 +1927,17 @@ export type AcademicLearningSummary = {
   component_summaries?: AcademicLearningComponentScore[]
   status_counts?: Record<string, number>
   alert_counts?: Record<string, number>
+  diagnostic_counts?: Record<string, number>
+  source_counts?: Record<string, number>
+  diagnostic_note?: string | null
 }
 
 export type AcademicLearningSyncResult = AcademicLearningSummary & {
   ok: boolean
   updated: number
   message: string
+  connector_counts?: Record<string, number>
+  connector_diagnostics?: Record<string, any> | null
 }
 
 export type AcademicEnrollmentSyncResult = {
@@ -2020,6 +2027,7 @@ export type AcademicTrainingClassReport = {
   learning_component_summaries?: AcademicLearningComponentScore[]
   status_counts?: Record<string, number>
   learning_alerts?: string[]
+  risk_student_count?: number | null
   deadline_quiz_count?: number | null
   deadline_due_quiz_count?: number | null
   deadline_completed_due_quiz_count?: number | null
@@ -2079,7 +2087,8 @@ export type AcademicTrainingTeacherReport = {
 }
 
 export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTrainingTeacherReport> & {
-  summary_scope?: 'current_page' | 'filtered' | string
+  summary_scope?: 'current_page' | 'filtered' | 'cached_filtered' | string
+  cache?: { status?: string; scope_key?: string | null; built_at?: string | null; row_count?: number | null }
   summary: {
     teacher_count: number
     class_count: number
@@ -2101,6 +2110,28 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
     quiz_failed_count?: number
     assignment_not_graded_count?: number
   }
+}
+
+export type AcademicTeacherReportJob = {
+  id: string
+  job_type: string
+  status: string
+  term_id?: string | null
+  branch?: string | null
+  campus?: string | null
+  requested_by?: string | null
+  progress_current: number
+  progress_total: number
+  progress_label: string
+  request_json?: Record<string, any> | null
+  result_json?: Record<string, any> | null
+  file_path?: string | null
+  file_name?: string | null
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
 }
 
 export type AcademicClassListResponse = PaginatedResponse<AcademicClass>

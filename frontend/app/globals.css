@@ -6121,3 +6121,447 @@ pre, .message-card pre {
 .teacher-quality-grid span { color: var(--od-text); font-weight: 900; }
 .teacher-quality-grid small { color: var(--od-muted); line-height: 1.35; }
 @media(max-width: 920px){ .teacher-quality-grid { grid-template-columns: 1fr; } }
+
+
+/* v25.9.16.5.80 — Header overlap fix + remove oversized low-value UX blocks.
+   Header is intentionally static so it cannot cover sticky filters/table headers. */
+:root {
+  --od-sidebar-width: 236px;
+  --od-topbar-height: 50px;
+}
+
+.product-shell.app-layout {
+  grid-template-columns: var(--od-sidebar-width) minmax(0, 1fr) !important;
+}
+
+.product-sidebar.sidebar {
+  width: var(--od-sidebar-width) !important;
+  padding: 10px 8px !important;
+  gap: 8px !important;
+}
+
+.product-brand.brand {
+  margin: 0 !important;
+  padding: 6px 8px 10px !important;
+}
+.product-brand.brand::after { content: none !important; display: none !important; }
+.product-brand-mark.brand-mark {
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+.product-brand b { font-size: 13px !important; }
+.product-brand small { display: none !important; }
+
+.product-nav.grouped-side-nav { gap: 8px !important; }
+.product-nav .nav-group-title { padding: 0 8px !important; font-size: 9px !important; }
+.product-nav .nav-group-items { gap: 2px !important; }
+.product-nav .nav-link {
+  min-height: 36px !important;
+  grid-template-columns: 24px minmax(0, 1fr) !important;
+  gap: 6px !important;
+  padding: 6px 8px !important;
+  border-radius: 10px !important;
+}
+.product-nav .nav-icon {
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 8px !important;
+  font-size: 12px !important;
+}
+.product-nav .nav-text b { font-size: 12px !important; }
+.product-nav .nav-text small { display: none !important; }
+
+.product-session-card.product-session-card-compact {
+  grid-template-columns: 9px minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 7px !important;
+  margin: 4px 0 0 !important;
+  padding: 7px 8px !important;
+  border-radius: 10px !important;
+}
+.product-session-card.product-session-card-compact span:not(.session-dot) { display: none !important; }
+.product-session-card.product-session-card-compact .btn {
+  grid-column: auto !important;
+  min-height: 26px !important;
+  padding: 4px 7px !important;
+  font-size: 11px !important;
+}
+.session-dot { width: 8px !important; height: 8px !important; margin-top: 0 !important; }
+
+.product-command-topbar.workspace-topbar,
+.workspace-topbar.product-command-topbar {
+  position: static !important;
+  top: auto !important;
+  min-height: var(--od-topbar-height) !important;
+  padding: 8px 18px !important;
+  gap: 10px !important;
+  align-items: center !important;
+  background: #ffffff !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+  z-index: auto !important;
+}
+.product-topbar-copy .topbar-section-label,
+.product-topbar-copy p { display: none !important; }
+.product-topbar-copy h1 {
+  font-size: 20px !important;
+  line-height: 1.15 !important;
+  letter-spacing: -.035em !important;
+}
+.product-topbar-meta { gap: 6px !important; }
+.topbar-session-pill,
+.topbar-role-pill {
+  min-height: 24px !important;
+  padding: 3px 8px !important;
+  font-size: 11px !important;
+}
+.workspace-breadcrumb { margin-top: 2px !important; font-size: 11px !important; }
+
+.product-content.content-shell {
+  padding: 12px 18px 24px !important;
+}
+.page-stack { gap: 10px !important; }
+
+.academic-filter-bar,
+.academic-filter-bar:not(.ux-filter-grid),
+.ops-filter-card,
+.bank-toolbar,
+.table-toolbar,
+.question-filters {
+  top: 0 !important;
+  padding: 9px !important;
+  border-radius: 12px !important;
+}
+
+.teacher-workspace-card.card,
+.teacher-workspace-card.academic-unified-card {
+  padding: 12px !important;
+}
+.teacher-compact-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--od-border);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.teacher-compact-toolbar b {
+  display: block;
+  color: var(--od-text);
+  font-size: 13px;
+  line-height: 1.25;
+}
+.teacher-compact-toolbar small {
+  display: block;
+  margin-top: 2px;
+  color: var(--od-muted);
+  font-size: 11px;
+}
+.teacher-compact-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.teacher-filter-bar.ux-filter-grid {
+  grid-template-columns: 110px minmax(150px, 1fr) minmax(170px, 1fr) minmax(190px, 1fr) minmax(230px, 1.2fr) !important;
+  margin-bottom: 8px !important;
+}
+.teacher-filter-bar label { font-size: 11px !important; }
+.teacher-filter-bar .input { min-height: 34px !important; padding: 6px 8px !important; margin-top: 4px !important; }
+
+.teacher-management-page .ux-kpi-grid,
+.teacher-management-page .academic-summary-strip {
+  grid-template-columns: repeat(8, minmax(100px, 1fr)) !important;
+  gap: 6px !important;
+  margin: 8px 0 !important;
+}
+.teacher-management-page .ux-kpi-grid > div,
+.teacher-management-page .academic-summary-strip > div {
+  min-height: 58px !important;
+  padding: 8px 9px !important;
+  border-radius: 11px !important;
+}
+.teacher-management-page .ux-kpi-grid span,
+.teacher-management-page .academic-summary-strip span { font-size: 9px !important; }
+.teacher-management-page .ux-kpi-grid b,
+.teacher-management-page .academic-summary-strip b { font-size: 18px !important; }
+.teacher-management-page .ux-kpi-grid small,
+.teacher-management-page .academic-summary-strip small { display: none !important; }
+
+.compact-notice.academic-inline-error {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px !important;
+  border-radius: 10px !important;
+  margin: 6px 0 !important;
+}
+.compact-notice.academic-inline-error b,
+.compact-notice.academic-inline-error span { font-size: 12px !important; }
+
+.teacher-management-page .table-wrap,
+.teacher-management-page .academic-table-wrap {
+  border-radius: 12px !important;
+  margin-top: 8px !important;
+}
+.teacher-management-page .data-table th,
+.teacher-management-page .academic-data-table th {
+  padding: 8px 9px !important;
+  font-size: 10px !important;
+}
+.teacher-management-page .data-table td,
+.teacher-management-page .academic-data-table td {
+  padding: 9px !important;
+}
+.teacher-identity { grid-template-columns: 30px minmax(0,1fr) !important; gap: 8px !important; }
+.teacher-avatar { width: 30px !important; height: 30px !important; border-radius: 9px !important; box-shadow: none !important; }
+.teacher-identity b { font-size: 12px !important; }
+.teacher-identity small,
+.teacher-management-page td small { font-size: 11px !important; }
+.training-class-detail-panel { margin-top: 8px !important; }
+.pagination-row { margin-top: 10px !important; }
+
+@media (max-width: 1200px) {
+  .product-command-topbar.workspace-topbar { position: static !important; }
+  .teacher-filter-bar.ux-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .teacher-management-page .ux-kpi-grid,
+  .teacher-management-page .academic-summary-strip { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+}
+@media (max-width: 760px) {
+  :root { --od-topbar-height: 46px; }
+  .product-content.content-shell { padding: 10px !important; }
+  .product-command-topbar.workspace-topbar { padding: 8px 10px !important; }
+  .product-topbar-meta { display: none !important; }
+  .teacher-compact-toolbar { align-items: stretch; flex-direction: column; }
+  .teacher-filter-bar.ux-filter-grid { grid-template-columns: 1fr !important; }
+  .teacher-management-page .ux-kpi-grid,
+  .teacher-management-page .academic-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+
+/* v25.9.16.5.82 — Full UI density audit pass base + teacher flow split.
+   Rule: page chrome must not cover content, and large decorative hero blocks must not consume operational screen height. */
+.topbar,
+.workspace-topbar,
+.product-command-topbar,
+.product-command-topbar.workspace-topbar,
+.workspace-topbar.product-command-topbar,
+.workspace-student-management-topbar {
+  position: static !important;
+  top: auto !important;
+  z-index: auto !important;
+  min-height: 46px !important;
+  padding: 7px 16px !important;
+  border-bottom: 1px solid #e5e7eb !important;
+  box-shadow: none !important;
+  background: #fff !important;
+  backdrop-filter: none !important;
+}
+.topbar h1,
+.workspace-topbar h1,
+.product-command-topbar h1 {
+  margin: 0 !important;
+  font-size: 19px !important;
+  line-height: 1.15 !important;
+  letter-spacing: -.03em !important;
+}
+.topbar p,
+.workspace-topbar p,
+.product-command-topbar p,
+.product-topbar-copy p,
+.topbar-section-label { display: none !important; }
+.content-shell,
+.product-content.content-shell { padding-top: 10px !important; }
+
+/* Compact repeated page introductions across operational screens. */
+.hero-card,
+.compact-hero,
+.ops-hero.card,
+.ops-hero,
+.dashboard-command-hero,
+.dashboard-search-hero,
+.dashboard-hero.card,
+.dashboard-hero,
+.access-hero,
+.bank-history-hero,
+.quiz-hero,
+.page-intro.card {
+  min-height: 0 !important;
+  padding: 10px 12px !important;
+  border-radius: 13px !important;
+  box-shadow: none !important;
+  background: #fff !important;
+  border: 1px solid #e5e7eb !important;
+  gap: 10px !important;
+}
+.hero-card,
+.compact-hero,
+.ops-hero,
+.dashboard-command-hero,
+.dashboard-search-hero,
+.dashboard-hero,
+.page-intro.card {
+  align-items: center !important;
+}
+.hero-card h1,
+.hero-card h2,
+.compact-hero h1,
+.compact-hero h2,
+.ops-hero h1,
+.dashboard-command-hero h1,
+.dashboard-search-hero h1,
+.dashboard-hero h1,
+.quiz-hero h1,
+.page-intro h1,
+.page-intro h2,
+.access-hero h1,
+.access-hero h2 {
+  margin: 0 !important;
+  font-size: 18px !important;
+  line-height: 1.2 !important;
+  letter-spacing: -.025em !important;
+}
+.hero-card p,
+.compact-hero p,
+.ops-hero p,
+.dashboard-command-hero p,
+.dashboard-search-hero p,
+.dashboard-hero p,
+.quiz-hero p,
+.page-intro p,
+.access-hero p,
+.dashboard-hero-copy p,
+.hero-steps,
+.dashboard-hero-glow,
+.dashboard-hero-actions .helper,
+.ops-hero .helper {
+  display: none !important;
+}
+.hero-actions,
+.dashboard-hero-actions,
+.page-intro .row-actions,
+.ops-hero > .row-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 6px !important;
+  min-width: auto !important;
+  flex-wrap: wrap !important;
+}
+.hero-actions .btn,
+.dashboard-hero-actions .btn,
+.page-intro .btn,
+.ops-hero .btn { min-height: 30px !important; padding: 6px 10px !important; font-size: 12px !important; }
+
+/* Compact common dense objects. */
+.card,
+.academic-unified-card,
+.ops-filter-card,
+.stat-panel,
+.metric-card,
+.list-card {
+  border-radius: 13px !important;
+  box-shadow: none !important;
+}
+.card:not(.teacher-workspace-card),
+.academic-unified-card:not(.teacher-workspace-card),
+.ops-filter-card,
+.stat-panel,
+.metric-card,
+.list-card { padding: 12px !important; }
+.kpi-grid,
+.ops-kpi-grid,
+.metric-grid,
+.dashboard-kpi-grid,
+.access-kpi-grid,
+.summary-grid,
+.training-summary-strip,
+.academic-summary-strip { gap: 8px !important; }
+.kpi-grid > *,
+.ops-kpi-grid > *,
+.metric-grid > *,
+.dashboard-kpi-grid > *,
+.access-kpi-grid > *,
+.summary-grid > *,
+.training-summary-strip > *,
+.academic-summary-strip > * {
+  min-height: 58px !important;
+  padding: 9px 10px !important;
+  border-radius: 12px !important;
+}
+.data-table th,
+.academic-data-table th,
+.ops-data-table th { padding: 8px 10px !important; font-size: 10px !important; }
+.data-table td,
+.academic-data-table td,
+.ops-data-table td { padding: 9px 10px !important; }
+
+/* Sticky elements may exist inside scroll containers, but must not be offset under a global header. */
+.academic-filter-bar,
+.ops-filter-card,
+.bank-toolbar,
+.table-toolbar,
+.question-filters,
+.bank-dashboard-side,
+.quiz-inline-message { top: 0 !important; }
+
+@media (max-width: 900px) {
+  .hero-card,
+  .compact-hero,
+  .ops-hero,
+  .dashboard-command-hero,
+  .dashboard-search-hero,
+  .dashboard-hero,
+  .page-intro.card {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+  .hero-actions,
+  .dashboard-hero-actions,
+  .page-intro .row-actions { justify-content: flex-start !important; }
+}
+
+
+/* v25.9.16.5.82 — Teacher flow split: teacher list -> classes -> class detail. */
+.teacher-breadcrumb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 0 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  color: var(--muted, #64748b);
+  font-size: 12px;
+}
+.teacher-classes-page .teacher-compact-toolbar {
+  margin-bottom: 10px;
+}
+.teacher-classes-page .training-class-grade-table th:last-child,
+.teacher-classes-page .training-class-grade-table td:last-child {
+  min-width: 118px;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .teacher-breadcrumb-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* v25.9.16.5.83 — Assignment defense workflow + correct CMS sync wording. */
+.assignment-workflow-modal { max-width: min(1180px, calc(100vw - 32px)); }
+.assignment-workflow-summary { display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap:10px; margin:10px 0 12px; }
+.assignment-workflow-summary > div { border:1px solid var(--border); border-radius:14px; padding:10px 12px; background:var(--surface-muted); display:grid; gap:4px; }
+.assignment-workflow-summary span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+.assignment-workflow-summary b { font-size:22px; color:var(--text); }
+.assignment-workflow-toolbar { align-items:end; }
+.assignment-workflow-table-wrap { max-height:min(62vh, 680px); overflow:auto; }
+.assignment-workflow-table-wrap .data-table th { position:sticky; top:0; z-index:2; background:var(--surface); }
+.assignment-workflow-table-wrap .score-input { width:92px; }
+.assignment-row-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.btn.tiny { min-height:26px; padding:4px 8px; font-size:12px; border-radius:9px; }
+@media (max-width: 900px) {
+  .assignment-workflow-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .assignment-workflow-toolbar { grid-template-columns: 1fr; }
+}

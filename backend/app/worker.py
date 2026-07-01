@@ -1165,3 +1165,121 @@ def academic_class_sync_task(job_id: str):
         return json_safe_value({'ok': False, 'error': 'academic_class_sync_failed', 'message': str(exc)})
     finally:
         db.close()
+
+@celery_app.task(name='academic_teacher_report_job_task')
+def academic_teacher_report_job_task(job_id: str):
+    """Run teacher-management cache rebuild/export jobs outside request/response."""
+    from pathlib import Path
+    from app.core.config import settings
+    from app.core.json_safe import json_safe_value
+    from app.core.rbac import UserContext
+    from app.models.academic import AcademicTeacherReportJob
+    from app.services.academic_service import AcademicService
+    from app.services.audit_log import AuditErrorType, log_audit
+    from app.api.routes.academic import _build_training_teacher_report_xlsx
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicTeacherReportJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+
+        now = datetime.utcnow()
+        job.status = 'running'
+        job.started_at = job.started_at or now
+        job.updated_at = now
+        job.progress_current = max(job.progress_current or 0, 10)
+        job.progress_label = 'Đang tính lại báo cáo giáo viên' if job.job_type == 'rebuild_cache' else 'Đang dựng file Excel báo cáo giáo viên'
+        db.commit()
+
+        worker_user = UserContext(
+            user_id=job.requested_by or 'teacher-report-worker',
+            username=job.requested_by or 'teacher-report-worker',
+            email=None,
+            role='admin',
+            permissions={'view_questions', 'manage_settings', 'sync_course'},
+            course_ids=None,
+            raw_claims={'source': 'celery_teacher_report_job', 'job_id': job.id},
+        )
+        request = job.request_json if isinstance(job.request_json, dict) else {}
+        service = AcademicService(db)
+        term_id = job.term_id or request.get('term_id')
+        branch = job.branch or request.get('branch')
+        campus = job.campus or request.get('campus')
+
+        if job.job_type == 'rebuild_cache':
+            result = service.rebuild_training_teacher_report_cache(worker_user, term_id=term_id, branch=branch, campus=campus)
+            job.progress_label = 'Đã tính lại cache báo cáo giáo viên'
+            job.file_path = None
+            job.file_name = None
+            action = 'academic.teacher_report.cache_rebuild.async'
+        elif job.job_type == 'export_excel':
+            report = service.training_teacher_report(
+                worker_user,
+                term_id=term_id,
+                branch=branch,
+                campus=campus,
+                search=request.get('search'),
+                learning_status=request.get('learning_status'),
+                teacher_id=request.get('teacher_id'),
+                page=1,
+                page_size=200,
+                include_all=True,
+                include_students=True,
+                use_cache=False,
+            )
+            job.progress_current = 70
+            job.progress_label = 'Đang ghi file Excel báo cáo giáo viên'
+            db.commit()
+            content = _build_training_teacher_report_xlsx(report)
+            root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+            out_dir = root / 'teacher-reports'
+            out_dir.mkdir(parents=True, exist_ok=True)
+            safe_branch = str(branch or 'all').replace('/', '-').replace(' ', '-')
+            safe_campus = str(campus or 'all').replace('/', '-').replace(' ', '-')
+            filename = f'teacher-management-report-{safe_branch}-{safe_campus}-{job.id[:8]}.xlsx'
+            path = out_dir / filename
+            path.write_bytes(content)
+            job.file_path = str(path)
+            job.file_name = filename
+            result = {'ok': True, 'file_name': filename, 'bytes': len(content), 'summary': report.get('summary') or {}}
+            action = 'academic.teacher_report.export_excel.async'
+        else:
+            raise ValueError(f'Unsupported teacher report job_type: {job.job_type}')
+
+        job.status = 'completed'
+        job.progress_current = 100
+        job.progress_total = 100
+        job.result_json = json_safe_value(result)
+        job.error_message = None
+        job.finished_at = datetime.utcnow()
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+        try:
+            log_audit(db, action=action, status='success', message=job.progress_label, user=None, target_type='academic_teacher_report_job', target_id=job.id, metadata=json_safe_value({'term_id': term_id, 'branch': branch, 'campus': campus, 'result': result}))
+        except Exception:
+            pass
+        return json_safe_value(result)
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicTeacherReportJob, job_id)
+        if job:
+            job.status = 'failed'
+            job.progress_total = 100
+            job.progress_label = 'Báo cáo giáo viên thất bại'
+            job.error_message = str(exc)[:4000] or 'Không thể hoàn tất báo cáo giáo viên.'
+            job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(db, action='academic.teacher_report.async', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_teacher_report_job', target_id=job.id, metadata=json_safe_value({'job_type': job.job_type}))
+            except Exception:
+                pass
+        return json_safe_value({'ok': False, 'error': 'academic_teacher_report_failed', 'message': str(exc)})
+    finally:
+        db.close()

@@ -1,14 +1,19 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import {
+  createAcademicTrainingTeacherCacheJob,
+  createAcademicTrainingTeacherExportJob,
   downloadAcademicTrainingTeacherReport,
+  downloadAcademicTrainingTeacherReportJob,
   getAcademicCampuses,
   getAcademicTerms,
   getAcademicTrainingTeacherReport,
+  getAcademicTrainingTeacherReportJob,
 } from '../../lib/api'
-import { AcademicCampus, AcademicLearningComponentScore, AcademicTerm, AcademicTrainingTeacherReport } from '../../types'
+import { AcademicCampus, AcademicLearningComponentScore, AcademicTeacherReportJob, AcademicTerm, AcademicTrainingTeacherReport } from '../../types'
 import { useDebouncedValue } from '../../lib/useDebouncedValue'
 
 const PAGE_SIZE = 50
@@ -151,6 +156,20 @@ function riskTone(item: AcademicTrainingTeacherReport) {
   return 'status-pill success'
 }
 
+
+function formatDateTime(value?: string | null) {
+  if (!value) return 'Chưa có cache'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return String(value)
+  return parsed.toLocaleString('vi-VN', { hour12: false })
+}
+
+function jobPercent(job?: AcademicTeacherReportJob | null) {
+  if (!job) return 0
+  const total = Math.max(1, Number(job.progress_total || 100))
+  return Math.max(0, Math.min(100, Math.round((Number(job.progress_current || 0) / total) * 100)))
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -180,8 +199,10 @@ export default function TeacherManagementPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [cacheInfo, setCacheInfo] = useState<{ status?: string; built_at?: string | null; row_count?: number | null } | null>(null)
+  const [cacheJob, setCacheJob] = useState<AcademicTeacherReportJob | null>(null)
+  const [exportJob, setExportJob] = useState<AcademicTeacherReportJob | null>(null)
   const [message, setMessage] = useState('')
-  const [expandedTeacherId, setExpandedTeacherId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -235,6 +256,7 @@ export default function TeacherManagementPage() {
       setSummary(normalizeSummary(result.summary))
       setSummaryScope(result.summary_scope || 'current_page')
       setTotal(result.total || 0)
+      setCacheInfo(result.cache || null)
     } catch (error) {
       if (!cancelledRef?.cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được báo cáo quản lý đào tạo')
     } finally {
@@ -247,6 +269,33 @@ export default function TeacherManagementPage() {
     loadReport(cancelledRef)
     return () => { cancelledRef.cancelled = true }
   }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page])
+
+
+
+  useEffect(() => {
+    const activeJob = cacheJob && ['queued', 'running'].includes(cacheJob.status) ? cacheJob : exportJob && ['queued', 'running'].includes(exportJob.status) ? exportJob : null
+    if (!activeJob) return
+    const timer = window.setInterval(async () => {
+      try {
+        const latest = await getAcademicTrainingTeacherReportJob(headers, activeJob.id)
+        if (latest.job_type === 'rebuild_cache') {
+          setCacheJob(latest)
+          if (latest.status === 'completed') {
+            setMessage('Đã tính lại báo cáo. Bảng sẽ đọc từ cache mới.')
+            loadReport()
+          }
+        } else {
+          setExportJob(latest)
+          if (latest.status === 'completed') {
+            setMessage('File Excel đã sẵn sàng. Bấm Tải Excel để tải về.')
+          }
+        }
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái job báo cáo')
+      }
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [headers, cacheJob?.id, cacheJob?.status, exportJob?.id, exportJob?.status])
 
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -286,37 +335,66 @@ export default function TeacherManagementPage() {
     }
   }
 
+
+
+  const rebuildCache = async () => {
+    if (!termId) {
+      setMessage('Chọn học kỳ trước khi tính lại báo cáo.')
+      return
+    }
+    setMessage('')
+    try {
+      const job = await createAcademicTrainingTeacherCacheJob(headers, { termId, branch, campus })
+      setCacheJob(job)
+      setMessage('Đã đưa yêu cầu tính lại báo cáo vào hàng đợi.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không tạo được job tính lại báo cáo')
+    }
+  }
+
+  const exportExcelBackground = async () => {
+    if (!termId) {
+      setMessage('Chọn học kỳ trước khi xuất Excel.')
+      return
+    }
+    setMessage('')
+    try {
+      const job = await createAcademicTrainingTeacherExportJob(headers, { termId, branch, campus, search: debouncedSearch, learningStatus })
+      setExportJob(job)
+      setMessage('Đã đưa yêu cầu xuất Excel vào hàng đợi.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không tạo được job xuất Excel')
+    }
+  }
+
+  const downloadBackgroundExcel = async () => {
+    if (!exportJob?.id) return
+    try {
+      const blob = await downloadAcademicTrainingTeacherReportJob(headers, exportJob.id)
+      downloadBlob(blob, exportJob.file_name || `teacher-management-report-${exportJob.id}.xlsx`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không tải được file Excel')
+    }
+  }
+
+
   return <div className="page-stack student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
-    <section className="card academic-unified-card ux-surface-card">
-      <div className="teacher-hero-panel">
-        <div className="teacher-hero-copy">
-          <span className="eyebrow">Teacher Management</span>
-          <h2>Quản lý giảng viên</h2>
-          <p>Theo dõi giảng viên dạy bao nhiêu lớp, lớp nào, quy mô sinh viên và chỉ số học tập tổng hợp. Web chỉ tải danh sách giáo viên theo trang; mở chi tiết mới tải lớp để tránh quét nặng toàn hệ.</p>
-          <div className="teacher-hero-chips">
-            <span>Phạm vi: {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}</span>
-            <span>{selectedTerm?.term_name || 'Chưa chọn kỳ'}</span>
-            <span>{counterText(total, page, PAGE_SIZE)}</span>
-          </div>
+    <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
+      <div className="teacher-compact-toolbar">
+        <div>
+          <b>{selectedTerm?.term_name || 'Chưa chọn kỳ'} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}</b>
+          <small>{counterText(total, page, PAGE_SIZE)} · Bấm Xem lớp để sang trang lớp riêng, không render nặng toàn hệ.</small>
         </div>
-        <div className="teacher-hero-actions">
-          <button className="btn secondary" type="button" onClick={() => loadReport()} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>
-          <button className="btn primary" type="button" onClick={exportExcel} disabled={exporting || loading}>{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button>
+        <div className="teacher-compact-actions">
+          <button className="btn secondary small" type="button" onClick={() => loadReport()} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>
+          <button className="btn secondary small" type="button" onClick={rebuildCache} disabled={!termId || cacheJob?.status === 'queued' || cacheJob?.status === 'running'}>{cacheJob && ['queued', 'running'].includes(cacheJob.status) ? `Đang tính ${jobPercent(cacheJob)}%` : 'Tính lại báo cáo'}</button>
+          <button className="btn secondary small" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === 'queued' || exportJob?.status === 'running'}>{exportJob && ['queued', 'running'].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : 'Xuất Excel nền'}</button>
+          {exportJob?.status === 'completed' && <button className="btn primary small" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button>}
+          <button className="btn ghost small" type="button" onClick={exportExcel} disabled={exporting || loading}>{exporting ? 'Đang xuất...' : 'Xuất trực tiếp'}</button>
         </div>
       </div>
 
-      <div className="teacher-operator-note">
-        <b>Thiết kế vận hành nhẹ</b>
-        <span>Ưu tiên xem theo cơ sở/kỳ, mỗi trang 50 giảng viên. Báo cáo toàn hệ nên chạy bằng Xuất Excel hoặc job nền thay vì render hết trên trình duyệt.</span>
-      </div>
-
-      <div className="teacher-quality-grid" aria-label="Nguyên tắc vận hành báo cáo">
-        <div><b>01</b><span>Dữ liệu theo phạm vi</span><small>Kỳ {selectedTerm?.term_name || 'chưa chọn'}, hệ {branch.toUpperCase()}, cơ sở {campus ? campus.toUpperCase() : 'tất cả'}.</small></div>
-        <div><b>02</b><span>Drill-down thay vì quét nặng</span><small>Bảng chỉ hiển thị GV trước; lớp và đầu điểm mở ở dòng chi tiết.</small></div>
-        <div><b>03</b><span>Cảnh báo không đếm trùng</span><small>Cần theo dõi là số sinh viên có vấn đề thật, không cộng chồng bucket.</small></div>
-      </div>
-
-      <div className="academic-filter-bar ux-filter-grid">
+      <div className="academic-filter-bar ux-filter-grid teacher-filter-bar">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => { setBranch(event.target.value); setCampus(''); setPage(1) }}>
             <option value="poly">Poly</option>
@@ -366,9 +444,12 @@ export default function TeacherManagementPage() {
         <div><span>Không được thi</span><b>{countLabel(summary.exam_not_eligible_student_count)}</b><small>{countLabel(summary.exam_insufficient_data_student_count)} SV có dữ liệu chưa đủ</small></div>
       </div>
 
-      {!campus && <div className="academic-inline-error"><b>Lưu ý hiệu năng</b><span>Đang xem tất cả cơ sở. Dữ liệu toàn hệ có thể rất lớn; nên chọn một cơ sở trước khi tải báo cáo.</span></div>}
 
-      {summaryScope === 'current_page' && <div className="academic-inline-error neutral"><b>Tối ưu tải trang</b><span>Các số tổng quan đang tính trên trang giáo viên hiện tại để tránh quét toàn bộ 33 cơ sở. Dùng Xuất Excel hoặc lọc theo cơ sở/kỳ khi cần báo cáo đầy đủ.</span></div>}
+      <div className="academic-inline-error compact-notice cache-status-notice"><b>Báo cáo:</b><span>{cacheInfo?.status === 'hit' ? `Đang đọc cache cập nhật lúc ${formatDateTime(cacheInfo.built_at || null)} (${cacheInfo.row_count || 0} GV)` : 'Chưa có cache cho bộ lọc này; hệ thống đang tính động. Nên bấm Tính lại báo cáo sau khi đồng bộ AP/CMS.'}</span></div>
+      {cacheJob && ['queued', 'running', 'failed'].includes(cacheJob.status) && <div className="academic-inline-error compact-notice"><b>Job báo cáo:</b><span>{cacheJob.progress_label} · {jobPercent(cacheJob)}%{cacheJob.status === 'failed' ? ` · ${cacheJob.error_message || 'Thất bại'}` : ''}</span></div>}
+      {exportJob && ['queued', 'running', 'failed'].includes(exportJob.status) && <div className="academic-inline-error compact-notice"><b>Job Excel:</b><span>{exportJob.progress_label} · {jobPercent(exportJob)}%{exportJob.status === 'failed' ? ` · ${exportJob.error_message || 'Thất bại'}` : ''}</span></div>}
+
+      {!campus && <div className="academic-inline-error compact-notice"><b>Lưu ý:</b><span>Đang xem tất cả cơ sở; nên lọc cơ sở khi dữ liệu lớn.</span></div>}
 
       {message && <div className="academic-inline-error"><b>Thông báo</b><span>{message}</span></div>}
 
@@ -388,9 +469,14 @@ export default function TeacherManagementPage() {
             {loading && Array.from({ length: 6 }).map((_, index) => <tr key={`teacher-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={6}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>)}
             {!loading && !items.length && <tr><td colSpan={6}><div className="ux-empty-state"><b>Chưa có dữ liệu theo bộ lọc hiện tại</b><span>Đổi cơ sở, học kỳ hoặc xóa từ khóa tìm kiếm để xem danh sách giảng viên.</span><button className="btn secondary small" type="button" onClick={() => { setSearch(''); setLearningStatus('all'); setPage(1) }}>Xóa bộ lọc nhanh</button></div></td></tr>}
             {!loading && items.map((item) => {
-              const expanded = expandedTeacherId === item.teacher_id
               const statuses = item.status_counts || {}
-              return <tr key={item.teacher_id} className={expanded ? 'expanded-row teacher-row-open' : 'teacher-row-compact'}>
+              const teacherClassesParams = new URLSearchParams()
+              if (termId) teacherClassesParams.set('term_id', termId)
+              if (branch) teacherClassesParams.set('branch', branch)
+              if (campus) teacherClassesParams.set('campus', campus)
+              if (selectedTerm?.term_name) teacherClassesParams.set('term_name', selectedTerm.term_name)
+              teacherClassesParams.set('teacher_name', item.teacher_name || item.teacher_username)
+              return <tr key={item.teacher_id} className="teacher-row-compact">
                 <td>
                   <div className="teacher-identity"><span className="teacher-avatar">{(item.teacher_name || item.teacher_username || 'GV').slice(0, 2).toUpperCase()}</span><div><b>{item.teacher_name || item.teacher_username}</b>
                   <small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ''}</small>
@@ -420,46 +506,13 @@ export default function TeacherManagementPage() {
                   <small>{alertText(item.learning_alerts)}</small>
                 </td>
                 <td>
-                  <button className="btn secondary small teacher-row-action" type="button" onClick={() => setExpandedTeacherId(expanded ? null : item.teacher_id)}>{expanded ? 'Thu gọn' : 'Xem lớp'}</button>
+                  <Link className="btn secondary small teacher-row-action" href={`/teacher-management/teachers/${encodeURIComponent(item.teacher_id)}/classes?${teacherClassesParams.toString()}`}>Xem lớp</Link>
                 </td>
               </tr>
             })}
           </tbody>
         </table>
       </div>
-
-      {expandedTeacherId && <div className="training-class-detail-panel ux-detail-panel">
-        {items.filter((item) => item.teacher_id === expandedTeacherId).map((item) => <div key={item.teacher_id} className="academic-unified-card nested-card">
-          <div className="section-head list-card-head"><div><h3>Chi tiết lớp của {item.teacher_name}</h3><p>Mỗi lớp hiển thị Course completion, điểm tổng hệ 10, trạng thái CMS/enrollment và cảnh báo deadline quiz theo tuần/block.</p></div></div>
-          <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap">
-            {(() => {
-              const columns = classComponentColumns(item)
-              return <table className="data-table academic-data-table training-class-grade-table">
-                <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Học lại</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Điều kiện thi</th><th>Cảnh báo</th></tr></thead>
-                <tbody>
-                  {item.classes.map((cls) => <tr key={cls.class_id}>
-                    <td><b>{cls.class_code}</b><small>{cls.term_name}{cls.block_name ? ` · ${cls.block_name}` : ''}</small></td>
-                    <td><b>{cls.subject_code}</b><small>{cls.subject_name}</small></td>
-                    <td>{cls.openedx_course_id ? <><b>{cls.openedx_course_id}</b><small>{cls.openedx_mapping_source}</small></> : <span className="status-pill warning">Chưa map</span>}</td>
-                    <td><b>{cls.student_count} SV</b><small>CMS {ratioLabel(cls.cms_synced_count, cls.student_count)} · Enroll {ratioLabel(cls.learning_enrolled_count, cls.student_count)}</small></td>
-                    <td><b>{countLabel(cls.relearn_student_count)} SV</b><small>{countLabel(cls.total_relearn_count)} lượt học lại</small></td>
-                    <td><b>Course completion {percentLabel(cls.learning_avg_progress_percent)}</b><small>Điểm tổng {score10Label(cls.learning_avg_grade_10)}</small></td>
-                    {columns.map((column) => <td key={`${cls.class_id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(classComponentScore(cls, column))}</b></td>)}
-                    <td>
-                      <b>{countLabel(cls.deadline_late_student_count)} SV trễ</b>
-                      <small>{countLabel(cls.deadline_late_quiz_count)} lượt quiz trễ · Đã đến hạn {countLabel(cls.deadline_due_quiz_count)}/{countLabel(cls.deadline_quiz_count)} quiz</small>
-                      <small>{cls.deadline_next_quiz_label ? `${cls.deadline_next_quiz_label}: ${cls.deadline_next_quiz_from_date || 'N/A'} → ${cls.deadline_next_quiz_due_date || 'N/A'}` : 'Đã qua lịch quiz hoặc chưa có Detailed grades'}</small>
-                    </td>
-                    <td><b>{countLabel(cls.exam_eligible_student_count)} được thi</b><small>{countLabel(cls.exam_not_eligible_student_count)} không được thi · {countLabel(cls.exam_insufficient_data_student_count)} thiếu dữ liệu</small><small>Quiz chưa đạt: {countLabel(cls.quiz_failed_count)} · Assignment chưa chấm: {countLabel(cls.assignment_not_graded_count)}</small></td>
-                    <td><span className={cls.learning_alerts?.length ? 'status-pill warning' : 'status-pill success'}>{cls.learning_alerts?.length ? 'Có cảnh báo' : 'Ổn'}</span><small>{alertText(cls.learning_alerts)}</small></td>
-                  </tr>)}
-                  {!columns.length && <tr><td colSpan={10}>Chưa có cột Detailed grades. Hãy chạy Đồng bộ full CMS cho lớp sau khi Course CMS đã map đúng.</td></tr>}
-                </tbody>
-              </table>
-            })()}
-          </div>
-        </div>)}
-      </div>}
 
       <div className="pagination-row">
         <button className="btn secondary" type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}>Trang trước</button>

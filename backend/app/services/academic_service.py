@@ -25,6 +25,7 @@ from app.models.academic import (
     AcademicSubject,
     AcademicTeacher,
     AcademicTeacherAssignment,
+    AcademicTeacherReportSummary,
     AcademicTerm,
     OpenEdXUserMapping,
 )
@@ -32,6 +33,7 @@ from app.services.business_rbac import BusinessRBACService
 from app.services.openedx_student_insight import OpenEdXConnectorClient, normalize_username, mask_email
 from app.services.training_policy_service import TrainingPolicyService
 from app.core.config import settings
+from app.core.json_safe import json_safe_value
 from app.models.course import CourseSyncState
 from app.models.question_bank import Subject as BankSubject
 
@@ -446,6 +448,7 @@ class AcademicService:
         branch: str | None = None,
         search: str | None = None,
         learning_status: str | None = None,
+        teacher_id: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
@@ -768,15 +771,29 @@ class AcademicService:
         return containers
 
 
-    def _is_official_progress_payload(self, payload: dict[str, Any] | None) -> bool:
+    def _progress_payload_sources(self, payload: dict[str, Any] | None) -> list[str]:
         if not isinstance(payload, dict):
-            return False
-        candidates: list[Any] = [payload.get('progress_source'), payload.get('progressSource')]
+            return []
+        candidates: list[Any] = [payload.get('progress_source'), payload.get('progressSource'), payload.get('source')]
         progress = payload.get('progress') if isinstance(payload.get('progress'), dict) else None
         if progress:
-            candidates.extend([progress.get('source'), progress.get('progress_source'), progress.get('progressSource')])
+            candidates.extend([
+                progress.get('source'),
+                progress.get('progress_source'),
+                progress.get('progressSource'),
+                progress.get('student_module_source'),
+                progress.get('fallback_reason'),
+            ])
+        values: list[str] = []
         for raw in candidates:
-            text = str(raw or '').strip().replace('_', '').replace('-', '').replace(' ', '').lower()
+            text = str(raw or '').strip()
+            if text:
+                values.append(text)
+        return values
+
+    def _is_official_progress_payload(self, payload: dict[str, Any] | None) -> bool:
+        for raw in self._progress_payload_sources(payload):
+            text = raw.replace('_', '').replace('-', '').replace(' ', '').lower()
             if (
                 text in {'coursehomeapi', 'coursehome', 'courseprogressapi', 'learnerdashboard', 'official', 'completionapi', 'coursecompletionapi'}
                 or 'coursehome' in text
@@ -785,6 +802,23 @@ class AcademicService:
             ):
                 return True
         return False
+
+    def _is_student_module_progress_payload(self, payload: dict[str, Any] | None) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        progress = payload.get('progress') if isinstance(payload.get('progress'), dict) else {}
+        if payload.get('progress_source') == 'StudentModule' or progress.get('source') == 'StudentModule':
+            return True
+        if progress.get('has_student_module_fallback') is True or payload.get('has_student_module_fallback') is True:
+            return True
+        for raw in self._progress_payload_sources(payload):
+            text = raw.replace('_', '').replace('-', '').replace(' ', '').lower()
+            if 'studentmodule' in text or 'studentmodulecounts' in text:
+                return True
+        return False
+
+    def _has_accepted_progress_payload(self, payload: dict[str, Any] | None) -> bool:
+        return self._is_official_progress_payload(payload) or self._is_student_module_progress_payload(payload)
 
     def _progress_percent_from_payload(self, payload: dict[str, Any]) -> float | None:
         if not isinstance(payload, dict):
@@ -839,7 +873,7 @@ class AcademicService:
         if not snapshot:
             return None
         payload = self._payload_from_snapshot(snapshot)
-        if not self._is_official_progress_payload(payload):
+        if not self._has_accepted_progress_payload(payload):
             return None
         direct = self._percent_display_value(snapshot.progress_percent)
         if direct is not None:
@@ -872,6 +906,81 @@ class AcademicService:
         if direct is not None:
             return direct
         return self._grade_percent_from_payload(self._payload_from_snapshot(snapshot))
+
+    def _learning_snapshot_diagnostics(self, snapshot: AcademicStudentLearningSnapshot | None, mapping: OpenEdXUserMapping | None = None) -> dict[str, Any]:
+        """Explain the state of one learner's CMS learning snapshot.
+
+        This is intentionally diagnostic metadata, not business policy. It lets
+        the UI distinguish between real learning risk and data-quality issues
+        such as the connector not returning Course Home progress.
+        """
+        if mapping is None or (mapping.match_status or '') != 'matched':
+            return {
+                'status': 'cms_not_synced',
+                'severity': 'blocking',
+                'note': 'Chưa match được user CMS theo AP username nên chưa thể lấy enrollment/progress/grade.',
+                'official_progress': False,
+                'has_progress_percent': False,
+                'has_grade_percent': False,
+                'has_component_grades': False,
+                'progress_source': None,
+            }
+        if not snapshot:
+            return {
+                'status': 'not_synced',
+                'severity': 'warning',
+                'note': 'Chưa có snapshot học tập. Chạy Cập nhật điểm để đọc Course completion/grade từ Open edX.',
+                'official_progress': False,
+                'has_progress_percent': False,
+                'has_grade_percent': False,
+                'has_component_grades': False,
+                'progress_source': None,
+            }
+        payload = self._payload_from_snapshot(snapshot)
+        source = self._snapshot_progress_source(snapshot)
+        official = self._is_official_progress_payload(payload)
+        student_module = self._is_student_module_progress_payload(payload)
+        progress = self._snapshot_progress_percent(snapshot)
+        grade = self._snapshot_grade_percent(snapshot)
+        components = self._component_scores_from_snapshot(snapshot)
+        enrollment_status = str(snapshot.enrollment_status or 'unknown').lower()
+        notes: list[str] = []
+        severity = 'ok'
+        if enrollment_status != 'enrolled':
+            severity = 'blocking'
+            notes.append(f'Enrollment CMS hiện là {enrollment_status}; cần Đồng bộ full CMS để enroll trước khi đọc điểm ổn định.')
+        if not official and not student_module:
+            severity = 'warning' if severity == 'ok' else severity
+            notes.append('Connector chưa trả Course Home Progress official hoặc StudentModule fallback; Course completion sẽ hiển thị N/A thay vì đoán từ quiz/subsection.')
+        elif student_module and not official:
+            if progress is None:
+                severity = 'warning' if severity == 'ok' else severity
+                notes.append('Connector trả StudentModule nhưng thiếu completed_blocks/total_blocks nên chưa tính được Course completion fallback.')
+            else:
+                notes.append('Course completion đang dùng fallback StudentModule = completed_blocks / total_blocks. Nên restart LMS sau khi cập nhật connector để kiểm tra lại Course Home Progress official.')
+        elif progress is None:
+            severity = 'warning' if severity == 'ok' else severity
+            notes.append('Có source official nhưng chưa parse được Course completion percent.')
+        if grade is None:
+            notes.append('Open edX chưa trả điểm tổng course_grade/final_grades.')
+        if not components:
+            notes.append('Open edX chưa trả detailed grades/section scores cho các đầu điểm.')
+        if not notes:
+            notes.append('Snapshot học tập có source/progress/grade đủ để hiển thị.')
+        return {
+            'status': self._learning_status_for_snapshot(snapshot, mapping),
+            'severity': severity,
+            'note': ' '.join(notes)[:1000],
+            'official_progress': bool(official),
+            'student_module_progress': bool(student_module),
+            'has_progress_percent': progress is not None,
+            'completed_blocks': getattr(snapshot, 'completed_blocks', None),
+            'total_blocks': getattr(snapshot, 'total_blocks', None),
+            'has_grade_percent': grade is not None,
+            'has_component_grades': bool(components),
+            'progress_source': source,
+            'last_synced_at': (snapshot.learning_synced_at or snapshot.last_synced_at).isoformat() if (snapshot.learning_synced_at or snapshot.last_synced_at) else None,
+        }
 
     def _normalize_component_score_item(self, item: Any) -> dict[str, Any] | None:
         if not isinstance(item, dict):
@@ -1633,6 +1742,8 @@ class AcademicService:
             'no_activity': 'no_activity',
             'low_progress': 'low_progress', 'low_grade': 'low_grade',
             'deadline_late': 'deadline_late', 'late_deadline': 'deadline_late', 'quiz_deadline_late': 'deadline_late',
+            'exam_not_eligible': 'exam_not_eligible', 'not_eligible': 'exam_not_eligible',
+            'exam_insufficient_data': 'exam_insufficient_data', 'insufficient_data': 'exam_insufficient_data',
             'sync_error': 'sync_error', 'has_alert': 'has_alert', 'warning': 'has_alert',
         }
         return aliases.get(raw, raw or 'all')
@@ -2276,6 +2387,7 @@ class AcademicService:
             assignment_score=assignment_scores.get(student.id),
             overrides=deadline_overrides,
         )
+        learning_diagnostics = self._learning_snapshot_diagnostics(learning, mapping)
         return {
             'class_id': class_id,
             'id': student.id,
@@ -2312,6 +2424,8 @@ class AcademicService:
             'learning_last_synced_at': (learning.learning_synced_at or learning.last_synced_at) if learning else None,
             'learning_enrollment_synced_at': learning.enrollment_synced_at if learning else None,
             'learning_status': self._learning_status_for_snapshot(learning, mapping),
+            'learning_diagnostics': learning_diagnostics,
+            'learning_sync_note': learning_diagnostics.get('note'),
             'learning_component_scores': components,
             'training_policy': training_policy,
             'exam_eligible': training_policy.get('exam_eligible'),
@@ -2499,6 +2613,224 @@ class AcademicService:
         actionable_values = [max(0, int(status_counts.get(key, 0) or 0)) for key in cls._risk_status_keys()]
         return min(total, max(actionable_values) if actionable_values else 0)
 
+    @staticmethod
+    def _teacher_report_scope_key(term_id: str | None, branch: str | None, campus: str | None) -> str:
+        clean_term = str(term_id or '').strip()
+        clean_branch = str(branch or '').strip().lower() or '__all__'
+        clean_campus = str(campus or '').strip().lower() or '__all__'
+        return f"term:{clean_term}|branch:{clean_branch}|campus:{clean_campus}"
+
+    @staticmethod
+    def _teacher_report_search_match(item: dict[str, Any], search: str | None) -> bool:
+        needle = str(search or '').strip().lower()
+        if not needle:
+            return True
+        haystack_values: list[Any] = [
+            item.get('teacher_username'), item.get('teacher_name'), item.get('teacher_email'),
+            item.get('campus'), item.get('branch'), ','.join(item.get('subject_codes') or []),
+        ]
+        for cls in item.get('classes') or []:
+            haystack_values.extend([cls.get('class_code'), cls.get('class_name'), cls.get('subject_code'), cls.get('subject_name'), cls.get('openedx_course_id')])
+        return needle in ' '.join(str(value or '').lower() for value in haystack_values)
+
+    def _teacher_report_item_matches_filter(self, item: dict[str, Any], status_filter: str | None) -> bool:
+        status_filter = self._normalize_learning_list_filter(status_filter)
+        if status_filter == 'all':
+            return True
+        status_counts = item.get('status_counts') or {}
+        if status_filter == 'no_course_map':
+            return int(item.get('classes_without_course_count') or 0) > 0
+        if status_filter == 'cms_not_synced':
+            return int(status_counts.get('cms_not_synced', 0) or 0) > 0 or int(item.get('cms_unsynced_count') or 0) > 0
+        if status_filter == 'not_fully_enrolled':
+            return int(status_counts.get('not_enrolled', 0) or 0) > 0 or int(item.get('learning_enrolled_count') or 0) < int(item.get('student_count') or 0)
+        if status_filter == 'no_learning_data':
+            return int(item.get('learning_synced_count') or 0) == 0 and int(item.get('student_count') or 0) > 0
+        if status_filter in {'no_activity', 'low_progress', 'low_grade', 'sync_error', 'deadline_late', 'exam_not_eligible', 'exam_insufficient_data'}:
+            return int(status_counts.get(status_filter, 0) or 0) > 0
+        if status_filter == 'has_alert':
+            return bool(item.get('learning_alerts')) or int(item.get('risk_student_count') or 0) > 0
+        return True
+
+
+    @staticmethod
+    def _teacher_report_item_allowed_for_decision(item: dict[str, Any], decision: AccessDecision) -> bool:
+        if decision.unrestricted:
+            return True
+        teacher_id = str(item.get('teacher_id') or '').strip()
+        if decision.teacher_ids and teacher_id in set(decision.teacher_ids):
+            return True
+        campuses = {str(code or '').strip().lower() for code in (decision.campus_codes or set()) if str(code or '').strip()}
+        if campuses:
+            item_campuses = {str(item.get('campus') or '').strip().lower()}
+            for cls in item.get('classes') or []:
+                item_campuses.add(str(cls.get('campus') or '').strip().lower())
+            if item_campuses.intersection(campuses):
+                return True
+        subject_codes = {str(code or '').strip().lower() for code in (decision.subject_codes or set()) if str(code or '').strip()}
+        if subject_codes:
+            item_subjects = {str(code or '').strip().lower() for code in (item.get('subject_codes') or [])}
+            for cls in item.get('classes') or []:
+                item_subjects.add(str(cls.get('subject_code') or '').strip().lower())
+            if item_subjects.intersection(subject_codes):
+                return True
+        return False
+
+    def _teacher_report_summary_from_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        total_students = sum(int(item.get('student_count') or 0) for item in items)
+        return {
+            'teacher_count': len(items),
+            'class_count': sum(int(item.get('class_count') or 0) for item in items),
+            'subject_count': len({code for item in items for code in (item.get('subject_codes') or [])}),
+            'student_count': total_students,
+            'unique_student_count': sum(int(item.get('unique_student_count') or 0) for item in items),
+            'relearn_student_count': sum(int(item.get('relearn_student_count') or 0) for item in items),
+            'total_relearn_count': sum(int(item.get('total_relearn_count') or 0) for item in items),
+            'cms_synced_count': min(sum(int(item.get('cms_synced_count') or 0) for item in items), total_students),
+            'learning_enrolled_count': min(sum(int(item.get('learning_enrolled_count') or 0) for item in items), total_students),
+            'learning_active_count': min(sum(int(item.get('learning_active_count') or 0) for item in items), total_students),
+            'risk_student_count': min(sum(int(item.get('risk_student_count') or 0) for item in items), total_students),
+            'classes_without_course_count': sum(int(item.get('classes_without_course_count') or 0) for item in items),
+            'deadline_late_student_count': sum(int(item.get('deadline_late_student_count') or 0) for item in items),
+            'deadline_late_quiz_count': sum(int(item.get('deadline_late_quiz_count') or 0) for item in items),
+            'exam_eligible_student_count': sum(int(item.get('exam_eligible_student_count') or 0) for item in items),
+            'exam_not_eligible_student_count': sum(int(item.get('exam_not_eligible_student_count') or 0) for item in items),
+            'exam_insufficient_data_student_count': sum(int(item.get('exam_insufficient_data_student_count') or 0) for item in items),
+            'quiz_failed_count': sum(int(item.get('quiz_failed_count') or 0) for item in items),
+            'assignment_not_graded_count': sum(int(item.get('assignment_not_graded_count') or 0) for item in items),
+        }
+
+    def _training_teacher_report_from_cache(
+        self,
+        *,
+        term_id: str,
+        branch: str | None,
+        campus: str | None,
+        search: str | None,
+        learning_status: str | None,
+        teacher_id: str | None,
+        decision: AccessDecision,
+        page: int,
+        page_size: int,
+    ) -> dict[str, Any] | None:
+        scope_key = self._teacher_report_scope_key(term_id, branch, campus)
+        rows = self.db.query(AcademicTeacherReportSummary).filter(AcademicTeacherReportSummary.scope_key == scope_key).all()
+        if not rows:
+            return None
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row.report_json or {})
+            if not payload:
+                continue
+            payload.setdefault('teacher_id', row.teacher_id)
+            payload.setdefault('teacher_username', row.teacher_username)
+            payload.setdefault('teacher_name', row.teacher_name)
+            payload['cache_built_at'] = row.built_at
+            if not self._teacher_report_item_allowed_for_decision(payload, decision):
+                continue
+            if teacher_id and str(payload.get('teacher_id')) != str(teacher_id):
+                continue
+            if not self._teacher_report_search_match(payload, search):
+                continue
+            if not self._teacher_report_item_matches_filter(payload, learning_status):
+                continue
+            items.append(payload)
+        items.sort(key=lambda item: (str(item.get('teacher_name') or ''), str(item.get('teacher_username') or '')))
+        total = len(items)
+        total_pages = math.ceil(total / page_size) if total else 0
+        page_items = items[(page - 1) * page_size:page * page_size]
+        latest_built_at = max((row.built_at for row in rows if row.built_at), default=None)
+        return {
+            'items': page_items,
+            'summary': self._teacher_report_summary_from_items(items),
+            'summary_scope': 'cached_filtered',
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
+            'has_next': page < total_pages,
+            'cache': {
+                'status': 'hit',
+                'scope_key': scope_key,
+                'built_at': latest_built_at,
+                'row_count': len(rows),
+            },
+        }
+
+    def rebuild_training_teacher_report_cache(
+        self,
+        user: UserContext,
+        *,
+        term_id: str,
+        branch: str | None = None,
+        campus: str | None = None,
+        source_sync_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not term_id:
+            raise HTTPException(status_code=422, detail='Thiếu học kỳ để tính lại báo cáo giáo viên')
+        scope_key = self._teacher_report_scope_key(term_id, branch, campus)
+        report = self.training_teacher_report(
+            user,
+            term_id=term_id,
+            branch=branch,
+            campus=campus,
+            learning_status='all',
+            page=1,
+            page_size=200,
+            include_all=True,
+            include_students=False,
+            use_cache=False,
+        )
+        now = datetime.utcnow()
+        seen_teacher_ids: set[str] = set()
+        for item in report.get('items') or []:
+            teacher_id = str(item.get('teacher_id') or '').strip()
+            if not teacher_id:
+                continue
+            seen_teacher_ids.add(teacher_id)
+            row = self.db.query(AcademicTeacherReportSummary).filter(
+                AcademicTeacherReportSummary.scope_key == scope_key,
+                AcademicTeacherReportSummary.teacher_id == teacher_id,
+            ).first()
+            if not row:
+                row = AcademicTeacherReportSummary(scope_key=scope_key, term_id=term_id, teacher_id=teacher_id)
+                self.db.add(row)
+            row.term_id = term_id
+            row.branch = str(branch or '').strip().lower() or None
+            row.campus = str(campus or '').strip().lower() or None
+            row.teacher_username = str(item.get('teacher_username') or '')
+            row.teacher_name = str(item.get('teacher_name') or item.get('teacher_username') or '')
+            row.teacher_email = item.get('teacher_email')
+            row.class_count = int(item.get('class_count') or 0)
+            row.student_count = int(item.get('student_count') or 0)
+            row.unique_student_count = int(item.get('unique_student_count') or 0)
+            row.risk_student_count = int(item.get('risk_student_count') or 0)
+            row.cms_synced_count = int(item.get('cms_synced_count') or 0)
+            row.learning_enrolled_count = int(item.get('learning_enrolled_count') or 0)
+            row.learning_avg_progress_percent = item.get('learning_avg_progress_percent')
+            row.learning_avg_grade_10 = item.get('learning_avg_grade_10')
+            row.report_json = json_safe_value(item)
+            row.summary_json = json_safe_value(report.get('summary') or {})
+            row.source_sync_run_id = source_sync_run_id
+            row.built_by = user.user_id
+            row.built_at = now
+            row.updated_at = now
+        if seen_teacher_ids:
+            self.db.query(AcademicTeacherReportSummary).filter(
+                AcademicTeacherReportSummary.scope_key == scope_key,
+                ~AcademicTeacherReportSummary.teacher_id.in_(seen_teacher_ids),
+            ).delete(synchronize_session=False)
+        else:
+            self.db.query(AcademicTeacherReportSummary).filter(AcademicTeacherReportSummary.scope_key == scope_key).delete(synchronize_session=False)
+        self.db.commit()
+        return {
+            'ok': True,
+            'scope_key': scope_key,
+            'built_at': now,
+            'teacher_count': len(seen_teacher_ids),
+            'summary': report.get('summary') or {},
+        }
+
     def training_teacher_report(
         self,
         user: UserContext,
@@ -2508,10 +2840,12 @@ class AcademicService:
         campus: str | None = None,
         search: str | None = None,
         learning_status: str | None = None,
+        teacher_id: str | None = None,
         page: int = 1,
         page_size: int = 50,
         include_all: bool = False,
         include_students: bool = False,
+        use_cache: bool = True,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
         decision = self.access_decision(user)
@@ -2546,6 +2880,20 @@ class AcademicService:
                 'total_pages': 0,
                 'has_next': False,
             }
+        if use_cache and term_id and not include_all and not include_students:
+            cached_report = self._training_teacher_report_from_cache(
+                term_id=term_id,
+                branch=branch,
+                campus=campus,
+                search=search,
+                learning_status=status_filter,
+                teacher_id=teacher_id,
+                decision=decision,
+                page=page,
+                page_size=page_size,
+            )
+            if cached_report is not None:
+                return cached_report
         query = self.db.query(
             AcademicTeacher,
             AcademicTeacherAssignment,
@@ -2580,6 +2928,8 @@ class AcademicService:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:
             query = query.filter(func.lower(AcademicClass.campus) == campus.strip().lower())
+        if teacher_id and str(teacher_id).strip():
+            query = query.filter(AcademicTeacher.id == str(teacher_id).strip())
         if search and search.strip():
             like = f"%{search.strip()}%"
             query = query.filter(or_(
@@ -3027,7 +3377,7 @@ class AcademicService:
             'quiz_failed_count': sum(int(item.get('quiz_failed_count') or 0) for item in filtered_items),
             'assignment_not_graded_count': sum(int(item.get('assignment_not_graded_count') or 0) for item in filtered_items),
         }
-        result: dict[str, Any] = {'items': page_items, 'summary': summary, 'summary_scope': 'current_page' if fast_page_mode else 'filtered', 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': (not include_all and page < total_pages)}
+        result: dict[str, Any] = {'items': page_items, 'summary': summary, 'summary_scope': 'current_page' if fast_page_mode else 'filtered', 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': (not include_all and page < total_pages), 'cache': {'status': 'bypass' if not use_cache else 'miss', 'scope_key': self._teacher_report_scope_key(term_id, branch, campus) if term_id else None}}
 
         if include_students and class_ids:
             student_query = self.db.query(
@@ -3731,8 +4081,33 @@ class AcademicService:
 
     def _learning_summary_for_class_course(self, class_id: str, course_id: str | None) -> dict[str, Any]:
         total = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
+        empty_diagnostics = {
+            'official_progress': 0,
+            'student_module_progress': 0,
+            'with_progress_percent': 0,
+            'with_grade_percent': 0,
+            'with_component_grades': 0,
+            'progress_na': int(total),
+            'grade_na': int(total),
+            'component_na': int(total),
+        }
         if not course_id:
-            return {'class_id': class_id, 'openedx_course_id': None, 'total': int(total), 'counts': {'not_synced': int(total)}, 'active_count': 0, 'avg_progress_percent': None, 'avg_grade_percent': None, 'last_synced_at': None, 'component_summaries': [], 'status_counts': {'not_synced': int(total)}, 'alert_counts': {'not_synced': int(total)}}
+            return {
+                'class_id': class_id,
+                'openedx_course_id': None,
+                'total': int(total),
+                'counts': {'not_synced': int(total)},
+                'active_count': 0,
+                'avg_progress_percent': None,
+                'avg_grade_percent': None,
+                'last_synced_at': None,
+                'component_summaries': [],
+                'status_counts': {'not_synced': int(total)},
+                'alert_counts': {'not_synced': int(total)},
+                'diagnostic_counts': empty_diagnostics,
+                'source_counts': {},
+                'diagnostic_note': 'Lớp chưa map Course CMS nên chưa thể đọc Course Home Progress/grade.',
+            }
         rows = self.db.query(AcademicStudentLearningSnapshot.enrollment_status, func.count(AcademicStudentLearningSnapshot.id)).filter(
             AcademicStudentLearningSnapshot.class_id == class_id,
             AcademicStudentLearningSnapshot.openedx_course_id == course_id,
@@ -3759,11 +4134,54 @@ class AcademicService:
         mapping_rows = self.db.query(AcademicClassStudent.student_id, OpenEdXUserMapping).outerjoin(
             OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
         ).filter(AcademicClassStudent.class_id == class_id).all()
+        diagnostic_counts = {
+            'official_progress': 0,
+            'student_module_progress': 0,
+            'with_progress_percent': 0,
+            'with_grade_percent': 0,
+            'with_component_grades': 0,
+            'progress_na': 0,
+            'grade_na': 0,
+            'component_na': 0,
+            'blocking': 0,
+            'warning': 0,
+            'ok': 0,
+        }
+        source_counts: dict[str, int] = {}
         for student_id, mapping in mapping_rows:
-            status_name = self._learning_status_for_snapshot(snapshot_by_student.get(student_id), mapping)
+            snapshot = snapshot_by_student.get(student_id)
+            status_name = self._learning_status_for_snapshot(snapshot, mapping)
             status_counts[status_name] = status_counts.get(status_name, 0) + 1
             if status_name in alert_counts:
                 alert_counts[status_name] += 1
+            diagnostic = self._learning_snapshot_diagnostics(snapshot, mapping)
+            severity = str(diagnostic.get('severity') or 'warning')
+            diagnostic_counts[severity] = diagnostic_counts.get(severity, 0) + 1
+            if diagnostic.get('official_progress'):
+                diagnostic_counts['official_progress'] += 1
+            if diagnostic.get('student_module_progress'):
+                diagnostic_counts['student_module_progress'] = diagnostic_counts.get('student_module_progress', 0) + 1
+            if diagnostic.get('has_progress_percent'):
+                diagnostic_counts['with_progress_percent'] += 1
+            else:
+                diagnostic_counts['progress_na'] += 1
+            if diagnostic.get('has_grade_percent'):
+                diagnostic_counts['with_grade_percent'] += 1
+            else:
+                diagnostic_counts['grade_na'] += 1
+            if diagnostic.get('has_component_grades'):
+                diagnostic_counts['with_component_grades'] += 1
+            else:
+                diagnostic_counts['component_na'] += 1
+            source = str(diagnostic.get('progress_source') or '').strip()
+            if source:
+                source_counts[source] = source_counts.get(source, 0) + 1
+        if diagnostic_counts.get('official_progress'):
+            diagnostic_note = 'OK: đã có dữ liệu Course Home Progress official.'
+        elif diagnostic_counts.get('student_module_progress'):
+            diagnostic_note = 'Đang dùng StudentModule fallback để tính Course completion = completed_blocks / total_blocks. Sau khi cập nhật connector, hãy restart LMS để kiểm tra lại Course Home Progress official.'
+        else:
+            diagnostic_note = 'Chưa có Course Home Progress official hoặc StudentModule fallback; completion sẽ giữ N/A để tránh đoán sai từ quiz/grade.'
         return {
             'class_id': class_id,
             'openedx_course_id': course_id,
@@ -3776,6 +4194,9 @@ class AcademicService:
             'component_summaries': (self._component_summary_from_snapshots(snapshots, self.db.get(AcademicClass, class_id))),
             'status_counts': status_counts,
             'alert_counts': alert_counts,
+            'diagnostic_counts': diagnostic_counts,
+            'source_counts': source_counts,
+            'diagnostic_note': diagnostic_note,
         }
 
     def learning_summary_for_class(self, user: UserContext, class_id: str) -> dict[str, Any]:
@@ -3798,6 +4219,9 @@ class AcademicService:
         enrollment = result.get('enrollment') if isinstance(result.get('enrollment'), dict) else {}
         progress = result.get('progress') if isinstance(result.get('progress'), dict) else {}
         grade = result.get('grade') if isinstance(result.get('grade'), dict) else {}
+        completion_summary = progress.get('completion_summary') if isinstance(progress.get('completion_summary'), dict) else None
+        if completion_summary is None and isinstance((progress.get('payload') if isinstance(progress, dict) else None), dict):
+            completion_summary = progress.get('payload', {}).get('completion_summary') if isinstance(progress.get('payload', {}).get('completion_summary'), dict) else None
         snapshot.openedx_username = str(result.get('openedx_username') or result.get('username') or student.username or '').strip() or None
         snapshot.openedx_user_id = str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or None
         snapshot.enrollment_status = str(
@@ -3806,11 +4230,15 @@ class AcademicService:
             or ('enrolled' if enrollment.get('is_enrolled') is True else ('not_enrolled' if enrollment.get('is_enrolled') is False else 'unknown'))
         )[:50]
         snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or None
-        if self._is_official_progress_payload(result):
+        if self._has_accepted_progress_payload(result):
             snapshot.progress_percent = self._float_or_none(result.get('progress_percent', progress.get('percent')))
             if snapshot.progress_percent is None:
                 snapshot.progress_percent = self._progress_percent_from_payload(result)
         else:
+            # Do not infer Course completion from quiz/detailed grades. N/A is
+            # safer than a false progress percentage when the connector plugin
+            # did not return Course Home Progress or the explicit StudentModule
+            # fallback counts introduced in v25.9.16.5.86.
             snapshot.progress_percent = None
         snapshot.grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
         if snapshot.grade_percent is None:
@@ -3819,10 +4247,33 @@ class AcademicService:
             snapshot.passed = _boolish(result.get('passed'))
         elif 'passed' in grade:
             snapshot.passed = _boolish(grade.get('passed'))
-        snapshot.completed_blocks = self._int_or_none(result.get('completed_blocks', progress.get('completed_blocks')))
-        snapshot.total_blocks = self._int_or_none(result.get('total_blocks', progress.get('total_blocks')))
+        snapshot.completed_blocks = self._int_or_none(
+            result.get('completed_blocks')
+            or progress.get('completed_blocks')
+            or (completion_summary or {}).get('complete_count')
+            or (completion_summary or {}).get('completed_count')
+        )
+        snapshot.total_blocks = self._int_or_none(
+            result.get('total_blocks')
+            or progress.get('total_blocks')
+            or (
+                (self._int_or_none((completion_summary or {}).get('complete_count')) or 0)
+                + (self._int_or_none((completion_summary or {}).get('incomplete_count')) or 0)
+                if completion_summary else None
+            )
+        )
         snapshot.last_activity_at = self._dt_or_none(result.get('last_activity_at') or progress.get('last_activity_at'))
-        snapshot.raw_json = {'source': source, 'payload': _json_safe_value(result)}
+        diagnostic_payload = {
+            'official_progress': self._is_official_progress_payload(result),
+            'student_module_progress': self._is_student_module_progress_payload(result),
+            'progress_source': result.get('progress_source') or progress.get('source'),
+            'completed_blocks': snapshot.completed_blocks,
+            'total_blocks': snapshot.total_blocks,
+            'has_progress_percent': snapshot.progress_percent is not None,
+            'has_grade_percent': snapshot.grade_percent is not None,
+            'has_component_grades': bool(self._component_scores_from_payload(result)),
+        }
+        snapshot.raw_json = {'source': source, 'payload': _json_safe_value(result), 'learning_diagnostics': _json_safe_value(diagnostic_payload)}
         snapshot.learning_synced_at = now
         snapshot.last_synced_at = now
         snapshot.updated_at = now
@@ -3960,6 +4411,13 @@ class AcademicService:
             results = client.enroll_users(course_id=course_id, cohort_name=cohort_name, students=payload, mode=enrollment_mode, force=force, create_missing=create_missing)
             by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
             by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
+            for key_name, value in batch_learning_counts.items():
+                try:
+                    connector_plugin_learning_counts[key_name] = connector_plugin_learning_counts.get(key_name, 0) + int(value or 0)
+                except Exception:
+                    pass
+            if batch_diagnostics:
+                connector_plugin_diagnostics = batch_diagnostics
             for student, mapping_row, _snapshot in chunk:
                 key = normalize_username(mapping_row.openedx_username or student.username)
                 result = by_username.get(key) or by_username.get(normalize_username(student.username))
@@ -4063,16 +4521,10 @@ class AcademicService:
         course_id = mapping.openedx_course_id
         cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
         limit = max(1, min(500, int(limit or 500)))
-        if getattr(settings, 'academic_auto_enroll_after_cms_sync', True):
-            try:
-                self.sync_class_course_enrollment(user, class_id, force=False, limit=limit)
-            except HTTPException as exc:
-                # Missing course mapping is already handled above; enrollment plugin
-                # failures should not block a read-only progress/grade refresh.
-                if exc.status_code >= 500:
-                    raise
-            except Exception:
-                pass
+        # v25.9.16.5.85: Cập nhật điểm is read-only against CMS/Open edX.
+        # It must not create CMS accounts and must not enroll learners. Full CMS
+        # sync is the only flow that creates/checks users + enrolls + then reads
+        # progress/grades.
         query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
@@ -4098,6 +4550,8 @@ class AcademicService:
         connector_grade_seen = 0
         connector_component_seen = 0
         connector_missing_result = 0
+        connector_plugin_learning_counts: dict[str, int] = {}
+        connector_plugin_diagnostics: dict[str, Any] = {}
         for start in range(0, len(rows), batch_size):
             chunk = rows[start:start + batch_size]
             payload = []
@@ -4110,7 +4564,15 @@ class AcademicService:
                     'email': student.email,
                     'full_name': student.full_name,
                 })
-            results = client.class_analytics(course_id=course_id, cohort_name=cohort_name, students=payload)
+            analytics_payload = client.class_analytics_payload(course_id=course_id, cohort_name=cohort_name, students=payload)
+            results = analytics_payload.get('results') or []
+            batch_learning_counts = analytics_payload.get('learning_counts') if isinstance(analytics_payload.get('learning_counts'), dict) else {}
+            batch_diagnostics = analytics_payload.get('diagnostics') if isinstance(analytics_payload.get('diagnostics'), dict) else {}
+            for key, value in batch_learning_counts.items():
+                if isinstance(value, (int, float)):
+                    connector_plugin_learning_counts[key] = int(connector_plugin_learning_counts.get(key, 0) or 0) + int(value or 0)
+            if batch_diagnostics:
+                connector_plugin_diagnostics = {**connector_plugin_diagnostics, **_json_safe_value(batch_diagnostics)}
             by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
             by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
             for student, mapping_row, _snapshot in chunk:
@@ -4153,12 +4615,29 @@ class AcademicService:
             'with_total_grade': int(connector_grade_seen),
             'with_component_grades': int(connector_component_seen),
             'missing_result': int(connector_missing_result),
+            'read_only_no_enroll': 1,
+            'plugin_connector_version_ok': 1 if str(connector_plugin_diagnostics.get('connector_version') or '') >= '25.9.16.5.86' else 0,
+            'plugin_student_module_available': 1 if connector_plugin_diagnostics.get('student_module_model_available') is True else 0,
         }
+        if connector_plugin_learning_counts:
+            connector_counts['plugin_enrolled'] = int(connector_plugin_learning_counts.get('enrolled') or 0)
+            connector_counts['plugin_with_progress'] = int(connector_plugin_learning_counts.get('with_progress') or 0)
+            connector_counts['plugin_with_progress_percent'] = int(connector_plugin_learning_counts.get('with_progress_percent') or 0)
+            connector_counts['plugin_with_student_module_blocks'] = int(connector_plugin_learning_counts.get('with_student_module_blocks') or 0)
+            connector_counts['plugin_with_total_grade'] = int(connector_plugin_learning_counts.get('with_total_grade') or 0)
+            connector_counts['plugin_with_component_grades'] = int(connector_plugin_learning_counts.get('with_component_grades') or 0)
         if connector_grade_seen or connector_component_seen or connector_progress_seen:
             message = f'Đã cập nhật tiến độ/điểm CMS cho lớp: enrolled {connector_enrolled_seen}/{updated}, progress {connector_progress_seen}, điểm tổng {connector_grade_seen}, điểm thành phần {connector_component_seen}.'
         else:
             message = f'Đã kiểm tra học tập CMS: {connector_enrolled_seen}/{updated} sinh viên đã enrolled nhưng Open edX chưa có progress/grade/subsection grade để hiển thị.'
-        return {'ok': True, 'updated': updated, 'connector_counts': connector_counts, 'message': message, **summary}
+        return {
+            'ok': True,
+            'updated': updated,
+            'connector_counts': connector_counts,
+            'connector_diagnostics': connector_plugin_diagnostics,
+            'message': message,
+            **summary,
+        }
 
 
     def _try_auto_map_course_for_class(self, user: UserContext, cls: AcademicClass) -> dict[str, Any]:

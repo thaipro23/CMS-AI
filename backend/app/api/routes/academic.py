@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ from app.models.academic import (
     AcademicClass,
     AcademicClassStudent,
     AcademicClassSyncJob,
+    AcademicTeacherReportJob,
     AcademicQuizDeadlineOverride,
     AcademicAssignmentDefenseScore,
     AcademicStudent,
@@ -34,6 +36,7 @@ from app.schemas.academic import (
     AcademicBlockOut,
     AcademicClassListOut,
     AcademicClassSyncJobOut,
+    AcademicTeacherReportJobOut,
     AcademicClassOut,
     AcademicClassCourseMappingCreateIn,
     AcademicClassCourseMappingOut,
@@ -78,6 +81,7 @@ from app.services.ap_academic_sync import AcademicImportService
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
 from app.core.json_safe import json_safe_value
+from app.core.config import settings
 
 
 def _safe_error_message(message: str = 'academic_operation_failed') -> dict[str, str]:
@@ -434,6 +438,119 @@ def _require_training_write_permission(
         detail='Bạn không có quyền cấu hình đào tạo.',
     )
 
+def _enqueue_teacher_report_job(
+    *,
+    db: Session,
+    user: UserContext,
+    job_type: str,
+    term_id: str,
+    branch: str | None = None,
+    campus: str | None = None,
+    search: str | None = None,
+    learning_status: str | None = None,
+    teacher_id: str | None = None,
+) -> AcademicTeacherReportJob:
+    if not term_id:
+        raise HTTPException(status_code=422, detail='Thiếu học kỳ để chạy báo cáo giáo viên')
+    # Cache rebuild is idempotent by scope; export jobs are allowed to differ by search/status.
+    if job_type == 'rebuild_cache':
+        active = db.query(AcademicTeacherReportJob).filter(
+            AcademicTeacherReportJob.job_type == job_type,
+            AcademicTeacherReportJob.term_id == term_id,
+            AcademicTeacherReportJob.branch == (branch.strip().lower() if branch else None),
+            AcademicTeacherReportJob.campus == (campus.strip().lower() if campus else None),
+            AcademicTeacherReportJob.status.in_(['queued', 'running']),
+        ).order_by(AcademicTeacherReportJob.created_at.desc()).first()
+        if active:
+            return active
+    job = AcademicTeacherReportJob(
+        job_type=job_type,
+        status='queued',
+        term_id=term_id,
+        branch=branch.strip().lower() if branch else None,
+        campus=campus.strip().lower() if campus else None,
+        requested_by=user.user_id,
+        progress_current=0,
+        progress_total=100,
+        progress_label='Đang chờ xử lý',
+        request_json=json_safe_value({
+            'term_id': term_id,
+            'branch': branch,
+            'campus': campus,
+            'search': search,
+            'learning_status': learning_status,
+            'teacher_id': teacher_id,
+        }),
+        result_json={},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    from app.worker import academic_teacher_report_job_task
+    academic_teacher_report_job_task.delay(job.id)
+    return job
+
+
+@router.post('/training/teachers/report-cache/jobs', response_model=AcademicTeacherReportJobOut)
+def enqueue_training_teacher_cache_job(
+    term_id: str = Query(...),
+    branch: str | None = Query(None),
+    campus: str | None = Query(None),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    return _enqueue_teacher_report_job(db=db, user=user, job_type='rebuild_cache', term_id=term_id, branch=branch, campus=campus)
+
+
+@router.post('/training/teachers/export/jobs', response_model=AcademicTeacherReportJobOut)
+def enqueue_training_teacher_export_job(
+    term_id: str = Query(...),
+    branch: str | None = Query(None),
+    campus: str | None = Query(None),
+    search: str | None = Query(None),
+    learning_status: str | None = Query(None),
+    teacher_id: str | None = Query(None),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    return _enqueue_teacher_report_job(db=db, user=user, job_type='export_excel', term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, teacher_id=teacher_id)
+
+
+@router.get('/training/teachers/report-jobs/{job_id}', response_model=AcademicTeacherReportJobOut)
+def get_training_teacher_report_job(
+    job_id: str,
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    job = db.get(AcademicTeacherReportJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy job báo cáo giáo viên')
+    return job
+
+
+@router.get('/training/teachers/report-jobs/{job_id}/download')
+def download_training_teacher_report_job_file(
+    job_id: str,
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    job = db.get(AcademicTeacherReportJob, job_id)
+    if not job or job.status != 'completed' or not job.file_path:
+        raise HTTPException(status_code=404, detail='File báo cáo chưa sẵn sàng')
+    root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+    path = Path(job.file_path).expanduser().resolve()
+    if root not in path.parents and path != root:
+        raise HTTPException(status_code=403, detail='Đường dẫn file báo cáo không hợp lệ')
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail='File báo cáo không còn tồn tại')
+    filename = job.file_name or path.name
+    return StreamingResponse(
+        path.open('rb'),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
+
+
 
 def _require_assignment_score_permission_for_class(db: Session, user: UserContext, class_id: str) -> None:
     """Assignment score input is limited to system admin or campus manager."""
@@ -476,6 +593,7 @@ def list_training_teacher_report(
     campus: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
+    teacher_id: str | None = Query(None, description='Lọc đúng một giáo viên để mở trang lớp'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(_require_academic_view_permission),
@@ -488,6 +606,7 @@ def list_training_teacher_report(
         campus=campus,
         search=search,
         learning_status=learning_status,
+        teacher_id=teacher_id,
         page=page,
         page_size=page_size,
     )
@@ -500,6 +619,7 @@ def export_training_teacher_report(
     campus: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
+    teacher_id: str | None = Query(None, description='Lọc đúng một giáo viên để xuất lớp'),
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
@@ -510,6 +630,7 @@ def export_training_teacher_report(
         campus=campus,
         search=search,
         learning_status=learning_status,
+        teacher_id=teacher_id,
         page=1,
         page_size=200,
         include_all=True,
@@ -1018,9 +1139,13 @@ def save_class_assignment_defense_scores(
         old_score = row.score_10
         old_status = row.defense_status
         row.assignment_label = (item.assignment_label or 'Assignment').strip()
-        row.score_10 = item.score_10
         status_value = (item.defense_status or 'not_graded').strip().lower()
-        row.defense_status = status_value if status_value in allowed_status else 'not_graded'
+        if status_value not in allowed_status:
+            status_value = 'not_graded'
+        if status_value == 'graded' and item.score_10 is None:
+            raise HTTPException(status_code=422, detail='Trạng thái Đã chấm bắt buộc có điểm Assignment /10')
+        row.score_10 = None if status_value in {'not_graded', 'absent'} else item.score_10
+        row.defense_status = status_value
         row.graded_by = user.user_id if row.defense_status == 'graded' else row.graded_by
         row.graded_at = now if row.defense_status == 'graded' else row.graded_at
         row.note = (item.note or '').strip()
@@ -1034,7 +1159,12 @@ def save_class_assignment_defense_scores(
                 'new_status': row.defense_status,
             })
         row.updated_at = now
-        row.metadata_json = {'source': 'manual_ui'}
+        history = []
+        if isinstance(row.metadata_json, dict):
+            history = list(row.metadata_json.get('history') or [])[-20:]
+        if audit_changes and (old_score != row.score_10 or old_status != row.defense_status):
+            history.append({'at': now.isoformat(), 'by': user.user_id, 'old_score': old_score, 'new_score': row.score_10, 'old_status': old_status, 'new_status': row.defense_status})
+        row.metadata_json = {'source': 'manual_ui_assignment_defense_workflow', 'history': history[-20:]}
         saved.append(row)
     db.commit()
     for row in saved:
