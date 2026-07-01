@@ -67,7 +67,7 @@ services:
         condition: service_healthy
     volumes:
       - runtime_data:/app/.runtime
-      - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/opt/openedx/data/lms/logs}:/openedx-data/lms/logs:ro
+      - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/home/thaitx3/.local/share/tutor/data/lms/logs}:/openedx-data/lms/logs:ro
     healthcheck:
       test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()\nPY"]
       interval: 15s
@@ -106,7 +106,7 @@ services:
         condition: service_healthy
     volumes:
       - runtime_data:/app/.runtime
-      - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/opt/openedx/data/lms/logs}:/openedx-data/lms/logs:ro
+      - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/home/thaitx3/.local/share/tutor/data/lms/logs}:/openedx-data/lms/logs:ro
     networks:
       - ai_internal
       - openedx_shared
@@ -119,6 +119,27 @@ services:
       - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
       - "api_v2.poly.edu.vn:10.2.1.35"  
       - "apitest.poly.edu.vn:10.2.5.8"  
+  beat:
+    build:
+      context: ./backend
+    container_name: ai-beat
+    env_file: .env.production
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
+    restart: unless-stopped
+    command: celery -A app.worker.celery_app beat --loglevel=INFO --pidfile=/tmp/celerybeat.pid --schedule=/app/.runtime/celerybeat-schedule
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime_data:/app/.runtime
+      - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/home/thaitx3/.local/share/tutor/data/lms/logs}:/openedx-data/lms/logs:ro
+    networks:
+      - ai_internal
+      - openedx_shared
+  
   frontend:
     build:
       context: ./frontend
