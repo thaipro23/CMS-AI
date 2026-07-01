@@ -46,8 +46,6 @@ services:
       context: ./backend
     container_name: ai-backend
     env_file: .env.production
-    extra_hosts:
-      - "${ACADEMIC_AP_API_EXTRA_HOST:-api_v2.poly.edu.vn:10.2.1.35}"
     environment:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     restart: unless-stopped
@@ -95,8 +93,6 @@ services:
       context: ./backend
     container_name: ai-worker
     env_file: .env.production
-    extra_hosts:
-      - "${ACADEMIC_AP_API_EXTRA_HOST:-api_v2.poly.edu.vn:10.2.1.35}"
     environment:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     restart: unless-stopped
