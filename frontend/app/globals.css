@@ -5244,7 +5244,7 @@ html[data-theme='dark'] .training-management-page .nested-card {
   overflow-y: visible;
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
-  cursor: grab;
+  cursor: default;
   touch-action: pan-y pan-x;
   scrollbar-gutter: stable;
   background:
@@ -5257,7 +5257,7 @@ html[data-theme='dark'] .training-management-page .nested-card {
   background-attachment: local, local, scroll, scroll;
 }
 .class-student-table-scroll.is-dragging {
-  cursor: grabbing;
+  cursor: default;
   user-select: none;
 }
 .class-student-table-scroll::-webkit-scrollbar { height: 12px; }
@@ -7008,4 +7008,88 @@ th:has(+ .sticky-col) {
 html[data-ai-theme='dark'] .student-grade-table .stt-col,
 html[data-ai-theme='dark'] .student-grade-table .stt-cell {
   background: var(--card-bg, #0f172a);
+}
+
+
+/* v25.9.16.7.2.4 — production test UX sweep: table-only horizontal scroll + no ugly underlines */
+html, body { max-width: 100%; overflow-x: hidden; }
+.main-content, .content-area, .page-stack, .academic-page, .analytics-learning-page { min-width: 0; max-width: 100%; }
+.student-list-card { min-width: 0; max-width: 100%; overflow: hidden; }
+.student-list-card .section-head { min-width: 0; }
+.class-student-table-shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+  border-radius: 16px;
+}
+.class-student-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto !important;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
+  cursor: default;
+  scrollbar-gutter: stable both-edges;
+  border: 1px solid rgba(219, 227, 239, .9);
+  border-radius: 16px;
+  background: #fff;
+}
+.class-student-table-scroll .student-grade-table {
+  min-width: max-content;
+  width: max-content;
+  margin: 0;
+}
+.class-student-table-scroll.is-dragging { cursor: default; user-select: auto; }
+.class-student-table-scroll::-webkit-scrollbar { height: 12px; }
+.class-student-table-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 999px; }
+.class-student-table-scroll::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 999px; border: 2px solid #f1f5f9; }
+.class-student-table-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
+.student-list-card .academic-data-table th,
+.student-list-card .academic-data-table td,
+.analytics-learning-page .academic-data-table th,
+.analytics-learning-page .academic-data-table td {
+  border-bottom: 0 !important;
+}
+.student-list-card .academic-data-table tbody tr,
+.analytics-learning-page .academic-data-table tbody tr {
+  box-shadow: inset 0 -1px 0 rgba(226, 232, 240, .35);
+}
+.student-list-card .academic-data-table tbody tr:last-child,
+.analytics-learning-page .academic-data-table tbody tr:last-child {
+  box-shadow: none;
+}
+.student-list-card a,
+.analytics-learning-page a,
+.academic-breadcrumb a,
+.workspace-breadcrumb a,
+.footer-links a,
+.breadcrumb-row a {
+  text-decoration: none !important;
+}
+.student-list-card a:hover,
+.analytics-learning-page a:hover,
+.academic-breadcrumb a:hover,
+.workspace-breadcrumb a:hover,
+.footer-links a:hover,
+.breadcrumb-row a:hover {
+  text-decoration: none !important;
+}
+.analytics-quality-issues {
+  border-style: solid;
+  border-width: 1px;
+  box-shadow: none;
+}
+.analytics-quality-issues span {
+  display: block;
+  white-space: normal;
+  line-height: 1.45;
+}
+@media (prefers-color-scheme: dark) {
+  .class-student-table-scroll { background: #111827; border-color: rgba(51,65,85,.9); }
+  .student-list-card .academic-data-table tbody tr,
+  .analytics-learning-page .academic-data-table tbody tr { box-shadow: inset 0 -1px 0 rgba(51,65,85,.45); }
 }

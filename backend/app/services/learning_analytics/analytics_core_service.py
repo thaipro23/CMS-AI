@@ -38,7 +38,7 @@ class LearningAnalyticsCoreService:
     def schema_inspect(self) -> dict[str, Any]:
         """Phase 0 report: what is reused and what the analytics core adds."""
         return {
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'principle': 'Tái sử dụng schema hiện có, chỉ bổ sung bảng thiếu cho raw normalized events và analytics snapshot.',
             'reused_models': [
                 'AcademicTerm / AcademicBlock: nguồn học kỳ, block, deadline 6 tuần nếu đã cấu hình ở /semesters',
@@ -729,7 +729,7 @@ class LearningAnalyticsCoreService:
             warnings.append({'code': 'ROLLOUT_SCOPE_HAS_INCOMPLETE_MAPPING', 'message': 'Một số lớp trong phạm vi rollout còn thiếu mapping course/session.', 'action': 'Backfill/rebuild trước khi mở rộng toàn kỳ.'})
         rollout_status = 'DISABLED' if not enabled else ('READY' if not blockers and not warnings else 'READY_WITH_WARNINGS')
         return {
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'rollout_status': rollout_status,
             'enabled': enabled,
             'mode': mode.upper(),
@@ -815,7 +815,7 @@ class LearningAnalyticsCoreService:
         warning_count = len([i for i in issues if i.get('severity') == 'warning'])
         monitoring_status = 'BLOCKED' if blocker_count else ('WARNING' if warning_count else 'OK')
         return {
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'monitoring_status': monitoring_status,
             'ready_for_rollout': monitoring_status in {'OK', 'WARNING'} and bool(getattr(settings, 'analytics_rollout_enabled', True)),
             'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
@@ -948,7 +948,7 @@ class LearningAnalyticsCoreService:
 
         return {
             'status': 'ok',
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'readiness': readiness,
             'class_id': class_id,
             'course_id': resolved_course_id,
@@ -1011,12 +1011,15 @@ class LearningAnalyticsCoreService:
             if student_count <= 0:
                 reasons.append('NO_CLASS_STUDENTS')
             if mapped_course_id and session_count <= 0:
-                reasons.append('MISSING_SESSION_STRUCTURE')
+                # Do not block test-production backfill only because session mapping
+                # is missing. Recalculate still creates safe INSUFFICIENT_DATA
+                # snapshots for the class, so UI no longer stays at Snapshot=0.
+                reasons.append('MISSING_SESSION_STRUCTURE_BUT_CAN_SNAPSHOT_INSUFFICIENT_DATA')
             if mapped_course_id and student_count > 0 and behavior_count < student_count:
                 reasons.append('MISSING_OR_PARTIAL_BEHAVIOR_SNAPSHOT')
             if active_job:
                 reasons.append('JOB_ALREADY_ACTIVE')
-            can_enqueue = bool(mapped_course_id and student_count > 0 and session_count > 0 and not active_job)
+            can_enqueue = bool(mapped_course_id and student_count > 0 and not active_job)
             if can_enqueue:
                 counters['enqueueable'] += 1
             if not mapped_course_id:
@@ -1041,10 +1044,11 @@ class LearningAnalyticsCoreService:
                 'can_enqueue': can_enqueue,
                 'reasons': reasons,
                 'recommended_action': 'Tính lại học online' if can_enqueue else 'Kiểm tra mapping/dữ liệu trước khi backfill',
+                'safe_note': 'Nếu thiếu Bài/Session, hệ thống vẫn tạo snapshot Chưa đủ dữ liệu để giáo viên không bị màn hình 0 dữ liệu.',
             })
         return {
             'status': 'ok',
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'filters': {'campus': campus, 'branch': branch, 'class_id': class_id, 'course_id': course_id, 'limit': limit},
             'total': len(items),
             'counters': dict(counters),
@@ -1160,7 +1164,7 @@ class LearningAnalyticsCoreService:
         warning_count = len([i for i in issues if str(i.get('severity')).upper() == 'WARNING'])
         ready = blocker_count == 0
         return {
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'ready_for_production': ready,
             'readiness': 'PRODUCTION_READY' if ready else 'NOT_READY',
             'blocker_count': blocker_count,
@@ -1354,7 +1358,7 @@ class LearningAnalyticsCoreService:
         ]
 
         return {
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'pilot_status': pilot_status,
             'ready_for_pilot': pilot_status in {'PASS', 'PASS_WITH_WARNINGS'},
             'ready_for_broad_production': bool(production.get('ready_for_production')) and pilot_status == 'PASS',
@@ -1412,7 +1416,7 @@ class LearningAnalyticsCoreService:
         monitoring = self.analytics_monitoring_report()
         production = self.production_readiness_report()
         return {
-            'version': '25.9.16.7.2.3',
+            'version': '25.9.16.7.2.4',
             'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
             'ingest': ingest,
             'active_recalculate_jobs': int(active_recalc or 0),
@@ -1475,6 +1479,15 @@ class LearningAnalyticsCoreService:
         return q
 
     def _course_for_class(self, class_id: str | None, preferred_course_id: str | None = None) -> str | None:
+        """Resolve the Open edX course for a class using existing mapping tables.
+
+        Class detail may inherit the course from subject/term/campus scope rather
+        than having an explicit AcademicClassCourseMapping row. Older analytics
+        code only checked the class override table, so dashboard/backfill showed
+        "Chưa map course" even when the class page already displayed Course CMS.
+        Keep this read-only and reuse existing schema; do not create rollout or
+        analytics mapping tables.
+        """
         if preferred_course_id:
             return preferred_course_id
         if not class_id:
@@ -1483,7 +1496,42 @@ class LearningAnalyticsCoreService:
             AcademicClassCourseMapping.class_id == class_id,
             AcademicClassCourseMapping.active.is_(True),
         ).first()
-        return mapping.openedx_course_id if mapping else None
+        if mapping and mapping.openedx_course_id:
+            return mapping.openedx_course_id
+
+        cls = self.db.query(AcademicClass).filter(AcademicClass.id == class_id).first()
+        if not cls:
+            return None
+
+        q = self.db.query(AcademicCourseMapping).filter(
+            AcademicCourseMapping.term_id == cls.term_id,
+            AcademicCourseMapping.subject_id == cls.subject_id,
+            AcademicCourseMapping.active.is_(True),
+        )
+        # Prefer exact block/campus/branch scope, then gracefully fall back to the
+        # broader subject-term mapping used by existing student/class screens.
+        candidates = q.all()
+        if not candidates:
+            return None
+
+        def score(item: AcademicCourseMapping) -> tuple[int, datetime]:
+            value = 0
+            if (item.block_id or None) == (cls.block_id or None):
+                value += 8
+            elif item.block_id is None:
+                value += 2
+            if (item.campus or '').strip().lower() == (cls.campus or '').strip().lower():
+                value += 4
+            elif not item.campus:
+                value += 1
+            if (item.branch or '').strip().lower() == (cls.branch or '').strip().lower():
+                value += 4
+            elif not item.branch:
+                value += 1
+            return (value, item.updated_at or item.created_at or datetime.min)
+
+        best = sorted(candidates, key=score, reverse=True)[0]
+        return best.openedx_course_id if best and best.openedx_course_id else None
 
     def _class_student_usernames(self, class_id: str | None) -> set[str]:
         if not class_id:

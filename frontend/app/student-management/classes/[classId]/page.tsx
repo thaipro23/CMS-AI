@@ -417,11 +417,9 @@ function ClassDetailContent() {
   const handleStudentTableWheel = (event: WheelEvent<HTMLDivElement>) => {
     const shell = tableScrollRef.current
     if (!shell || shell.scrollWidth <= shell.clientWidth) return
-    // v25.9.16.7.2.3: when the pointer is in the student table, any horizontal
-    // wheel/trackpad movement scrolls the whole table area. A plain mouse wheel
-    // also moves the table horizontally so users do not need to drag the bottom
-    // scrollbar while reviewing middle rows.
-    const delta = Math.abs(event.deltaX) > 0 ? event.deltaX : event.deltaY
+    // v25.9.16.7.2.4: only horizontal wheel/trackpad or Shift+wheel scrolls
+    // the student table horizontally. Plain vertical wheel still scrolls the page.
+    const delta = Math.abs(event.deltaX) > 0 ? event.deltaX : (event.shiftKey ? event.deltaY : 0)
     if (!delta) return
     const before = shell.scrollLeft
     shell.scrollLeft += delta

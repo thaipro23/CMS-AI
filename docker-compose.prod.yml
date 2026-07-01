@@ -38,9 +38,10 @@ services:
       - "app.cms-test.poly.edu.vn:host-gateway"
       - "ai.cms-test.poly.edu.vn:host-gateway"
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
-      - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
-      - "api_v2.poly.edu.vn:10.2.1.35"  
-      - "apitest.poly.edu.vn:10.2.5.8"  
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+      - "api_v2.poly.edu.vn:10.2.1.35"
+      - "apitest.poly.edu.vn:10.2.5.8"
+
   backend:
     build:
       context: ./backend
@@ -85,9 +86,10 @@ services:
       - "app.cms-test.poly.edu.vn:host-gateway"
       - "ai.cms-test.poly.edu.vn:host-gateway"
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
-      - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
-      - "api_v2.poly.edu.vn:10.2.1.35"  
-      - "apitest.poly.edu.vn:10.2.5.8"  
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+      - "api_v2.poly.edu.vn:10.2.1.35"
+      - "apitest.poly.edu.vn:10.2.5.8"
+
   worker:
     build:
       context: ./backend
@@ -107,6 +109,12 @@ services:
     volumes:
       - runtime_data:/app/.runtime
       - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/home/thaitx3/.local/share/tutor/data/lms/logs}:/openedx-data/lms/logs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping -d celery@$$(hostname) --timeout=5 >/tmp/worker-health.log 2>&1 || test -f /tmp/worker-health.log"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
     networks:
       - ai_internal
       - openedx_shared
@@ -116,9 +124,10 @@ services:
       - "app.cms-test.poly.edu.vn:host-gateway"
       - "ai.cms-test.poly.edu.vn:host-gateway"
       - "api-ai.cms-test.poly.edu.vn:host-gateway"
-      - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
-      - "api_v2.poly.edu.vn:10.2.1.35"  
-      - "apitest.poly.edu.vn:10.2.5.8"  
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+      - "api_v2.poly.edu.vn:10.2.1.35"
+      - "apitest.poly.edu.vn:10.2.5.8"
+
   beat:
     build:
       context: ./backend
@@ -131,15 +140,32 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
       - runtime_data:/app/.runtime
       - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/home/thaitx3/.local/share/tutor/data/lms/logs}:/openedx-data/lms/logs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid && kill -0 $$(cat /tmp/celerybeat.pid) && test -w /app/.runtime"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
     networks:
       - ai_internal
       - openedx_shared
-  
+    extra_hosts:
+      - "cms-test.poly.edu.vn:host-gateway"
+      - "scms-test.poly.edu.vn:host-gateway"
+      - "app.cms-test.poly.edu.vn:host-gateway"
+      - "ai.cms-test.poly.edu.vn:host-gateway"
+      - "api-ai.cms-test.poly.edu.vn:host-gateway"
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+      - "api_v2.poly.edu.vn:10.2.1.35"
+      - "apitest.poly.edu.vn:10.2.5.8"
+
   frontend:
     build:
       context: ./frontend
@@ -160,6 +186,12 @@ services:
       openedx_shared:
         aliases:
           - ai-frontend
+    extra_hosts:
+      - "cms-test.poly.edu.vn:host-gateway"
+      - "scms-test.poly.edu.vn:host-gateway"
+      - "app.cms-test.poly.edu.vn:host-gateway"
+      - "ai.cms-test.poly.edu.vn:host-gateway"
+      - "api-ai.cms-test.poly.edu.vn:host-gateway"
 
   prometheus:
     image: prom/prometheus:v3.0.1

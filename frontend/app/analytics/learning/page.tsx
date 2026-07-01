@@ -38,6 +38,19 @@ function duration(seconds?: number | null) {
   return remain ? `${hours} giờ ${remain} phút` : `${hours} giờ`
 }
 
+
+function compactIssue(issue: { code?: string | null; message?: string | null; action?: string | null }) {
+  const code = String(issue?.code || '').toUpperCase()
+  if (code.includes('NO_BEHAVIOR') || code.includes('SNAPSHOT')) return 'Chưa có snapshot học online → bấm Backfill học online.'
+  if (code.includes('MISSING_SESSION')) return 'Thiếu mapping Bài/Session → vẫn có thể backfill để tạo Chưa đủ dữ liệu, sau đó rebuild mapping.'
+  if (code.includes('TRACKING_LOG')) return 'Tracking log đã mount/chưa mount → kiểm tra doctor nếu cần.'
+  if (code.includes('NO_TRACKING_EVENTS')) return 'Chưa ingest event học online → chờ scheduler hoặc chạy ingest thủ công.'
+  if (code.includes('COURSE_MAPPING')) return 'Có lớp thiếu Course CMS → kiểm tra map course.'
+  const text = String(issue?.message || 'Cần kiểm tra dữ liệu học online')
+  const action = String(issue?.action || '')
+  return action ? `${text} → ${action}` : text
+}
+
 function actionText(value?: string | null) {
   const raw = String(value || '')
   if (!raw) return 'Kiểm tra lại sau'
@@ -269,15 +282,15 @@ export default function AnalyticsLearningPage() {
       </div>
       {!!productionReadiness?.issues?.length && <div className="alert warning compact-alert analytics-quality-issues">
         <b>Cần xử lý trước production</b>
-        <span>{productionReadiness.issues.slice(0, 4).map((issue) => `${issue.message}${issue.action ? ` → ${issue.action}` : ''}`).join(' | ')}</span>
+        <span>{Array.from(new Set(productionReadiness.issues.slice(0, 4).map(compactIssue))).join(' | ')}</span>
       </div>}
       {!!rolloutControl?.issues?.length && <div className="alert warning compact-alert analytics-quality-issues">
         <b>Rollout cần kiểm tra</b>
-        <span>{rolloutControl.issues.slice(0, 4).map((issue) => `${issue.message}${issue.action ? ` → ${issue.action}` : ''}`).join(' | ')}</span>
+        <span>{Array.from(new Set(rolloutControl.issues.slice(0, 4).map(compactIssue))).join(' | ')}</span>
       </div>}
       {!!monitoring?.issues?.length && <div className="alert warning compact-alert analytics-quality-issues">
         <b>Monitoring cần kiểm tra</b>
-        <span>{monitoring.issues.slice(0, 4).map((issue) => `${issue.message}${issue.action ? ` → ${issue.action}` : ''}`).join(' | ')}</span>
+        <span>{Array.from(new Set(monitoring.issues.slice(0, 4).map(compactIssue))).join(' | ')}</span>
       </div>}
       {!!pilotAcceptance?.classes?.length && <div className="table-wrap analytics-dashboard-table-wrap pilot-acceptance-table-wrap">
         <table className="data-table academic-data-table analytics-pilot-table">
