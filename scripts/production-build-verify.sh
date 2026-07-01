@@ -55,7 +55,7 @@ done
 echo "\n[5/6] backend identity + db"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T backend python - <<'PY'
 import json, urllib.request
-for path in ['/api/health/build', '/api/health/db', '/api/health/openedx-connector/config']:
+for path in ['/api/health/build', '/api/health/db', '/api/health/openedx-connector/config', '/api/health/analytics']:
     with urllib.request.urlopen('http://127.0.0.1:8000' + path, timeout=10) as r:
         data = json.loads(r.read().decode('utf-8'))
     print(path, json.dumps(data, ensure_ascii=False, sort_keys=True))

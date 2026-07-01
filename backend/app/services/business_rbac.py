@@ -57,7 +57,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 }
 
 LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
-    'view_dashboard': {'bank.view', 'audit.view'},
+    'view_dashboard': {'bank.view', 'audit.view', 'academic.view', 'view_training_reports'},
     'view_questions': {'bank.view', 'question.edit', 'question.approve', 'question.reject'},
     'view_jobs': {'bank.view', 'audit.view'},
     'sync_course': {'course.sync'},

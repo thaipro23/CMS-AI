@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   getAcademicApSyncJobs,
   getAcademicTrainingTeacherReportJobs,
+  getAnalyticsOpsStatus,
   getBankOperationJobs,
   getCourseQuizInstances,
   getRecentAcademicClassSyncJobs,
@@ -19,7 +20,7 @@ function dateText(v?: string | null) { return formatVNDateTime(v) }
 function shortId(v?: string | null) { return v ? v.slice(0, 8) : '—' }
 function statusText(v: string) { return ({ queued: 'Đang chờ', running: 'Đang chạy', completed: 'Hoàn tất', failed: 'Thất bại', canceled: 'Đã hủy' } as Record<string,string>)[v] || v }
 function jobLabel(v: string) { return ({ material_extract: 'Tách tài liệu', bank_generate: 'Tạo câu hỏi', release_publish: 'Đưa bộ đề lên CMS', quiz_create: 'Tạo Quiz' } as Record<string,string>)[v] || v }
-function academicJobLabel(v: string) { return ({ cms_sync_check: 'Kiểm tra CMS', cms_enrollment_sync: 'Enroll CMS', learning_sync: 'Cập nhật điểm', full_cms_sync: 'Đồng bộ full CMS' } as Record<string,string>)[v] || v }
+function academicJobLabel(v: string) { return ({ cms_sync_check: 'Kiểm tra CMS', cms_enrollment_sync: 'Enroll CMS', learning_sync: 'Cập nhật điểm', full_cms_sync: 'Đồng bộ full CMS', learning_analytics_recalculate: 'Tính lại học online' } as Record<string,string>)[v] || v }
 function reportJobLabel(v: string) { return ({ rebuild_cache: 'Tính lại báo cáo GV', export_excel: 'Xuất Excel GV' } as Record<string,string>)[v] || v }
 function safeNumber(v: unknown) { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 function progressPercent(current?: number, total?: number, explicit?: number) {
@@ -50,7 +51,7 @@ function Popup({ open, title, children, onClose }: { open: boolean; title: strin
 
 type OperationRow = {
   id: string
-  group: 'bank' | 'class_sync' | 'ap_sync' | 'teacher_report'
+  group: 'bank' | 'class_sync' | 'ap_sync' | 'teacher_report' | 'analytics'
   label: string
   status: string
   progressCurrent: number
@@ -73,6 +74,7 @@ export default function JobsPage() {
   const [teacherReportJobs, setTeacherReportJobs] = useState<AcademicTeacherReportJob[]>([])
   const [quizInstances, setQuizInstances] = useState<CourseQuizInstance[]>([])
   const [academicRuns, setAcademicRuns] = useState<AcademicSyncRun[]>([])
+  const [analyticsOps, setAnalyticsOps] = useState<Record<string, any> | null>(null)
   const [status, setStatus] = useState('active')
   const [operationGroup, setOperationGroup] = useState('all')
   const [q, setQ] = useState('')
@@ -86,18 +88,20 @@ export default function JobsPage() {
       setMessage(null)
       const headers = authHeaders()
       const statusParam = status === 'all' ? 'all' : status
-      const [opJobs, nextQuizInstances, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs] = await Promise.all([
+      const [opJobs, nextQuizInstances, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs, nextAnalyticsOps] = await Promise.all([
         getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }).catch(() => ({ items: [] } as any)),
         getCourseQuizInstances(headers, { limit: 100 }).catch(() => [] as CourseQuizInstance[]),
         getAcademicApSyncJobs(headers, { status: statusParam as any, limit: 50 }).catch(() => [] as AcademicSyncRun[]),
         getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 80 }).catch(() => [] as AcademicClassSyncJob[]),
         getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicTeacherReportJob[]),
+        getAnalyticsOpsStatus(headers).catch(() => null),
       ])
       setOperationJobs(opJobs.items || [])
       setQuizInstances(nextQuizInstances)
       setAcademicRuns(nextAcademicRuns || [])
       setClassSyncJobs(nextClassSyncJobs || [])
       setTeacherReportJobs(nextTeacherReportJobs || [])
+      setAnalyticsOps(nextAnalyticsOps)
     } catch (error) {
       setMessage(toUserError(error))
     } finally {
@@ -141,7 +145,7 @@ export default function JobsPage() {
     }))
     const classRows = classSyncJobs.map((job): OperationRow => ({
       id: job.id,
-      group: 'class_sync',
+      group: job.job_type === 'learning_analytics_recalculate' ? 'analytics' : 'class_sync',
       label: academicJobLabel(job.job_type),
       status: job.status,
       progressCurrent: safeNumber(job.progress_current),
@@ -194,9 +198,30 @@ export default function JobsPage() {
       rawType: job.job_type,
       canRetry: false,
     }))
-    return [...classRows, ...apRows, ...reportRows, ...bankRows]
+    const analyticsRows: OperationRow[] = []
+    if (analyticsOps) {
+      const ingest = (analyticsOps.ingest || {}) as Record<string, any>
+      analyticsRows.push({
+        id: 'analytics-ingest',
+        group: 'analytics',
+        label: 'Ingest học online',
+        status: ingest.last_status === 'running' ? 'running' : (ingest.last_status === 'failed' ? 'failed' : 'completed'),
+        progressCurrent: safeNumber(ingest.total_events_inserted),
+        progressTotal: Math.max(1, safeNumber(ingest.total_lines_read) || 1),
+        progressPercent: ingest.last_status === 'running' ? 50 : 100,
+        scope: 'Tracking log',
+        scopeDetail: ingest.file_exists ? 'Đã mount log' : 'Chưa thấy file log',
+        requestedBy: 'Hệ thống',
+        createdAt: ingest.last_run_at,
+        message: `Events ${safeNumber(ingest.total_events_inserted)} · lỗi parse ${safeNumber(ingest.total_parse_errors)}`,
+        error: ingest.last_error || null,
+        rawType: 'analytics_ingest',
+        canRetry: false,
+      })
+    }
+    return [...analyticsRows, ...classRows, ...apRows, ...reportRows, ...bankRows]
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-  }, [operationJobs, classSyncJobs, academicRuns, teacherReportJobs])
+  }, [operationJobs, classSyncJobs, academicRuns, teacherReportJobs, analyticsOps])
 
   const filteredRows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -218,7 +243,7 @@ export default function JobsPage() {
     </section>
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>Quiz đã tạo</span><b>{quizInstances.length}</b></div></section>
-    <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="active">Đang chạy</option><option value="all">Tất cả</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => setOperationGroup(e.target.value)}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="bank">Bank / Quiz</option></select></label></div></section>
+    <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="active">Đang chạy</option><option value="all">Tất cả</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => setOperationGroup(e.target.value)}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="analytics">Học online</option><option value="bank">Bank / Quiz</option></select></label></div></section>
     <section className="card"><div className="section-head"><div><h2>Danh sách việc</h2></div></div>
       <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>Việc</th><th>Trạng thái</th><th>Tiến độ</th><th>Phạm vi</th><th>Người tạo</th><th>Thời điểm</th><th>Nội dung</th><th>Thao tác</th></tr></thead><tbody>{filteredRows.length ? filteredRows.map((job) => <tr key={`${job.group}-${job.id}`} className={`row-${job.status}`}><td><b>{job.label}</b><small>ID {shortId(job.id)}</small></td><td><StatusBadge status={job.status} /><small>{statusText(job.status)}</small></td><td><div className="job-progress table-progress"><i style={{ width: `${job.progressPercent}%` }} /></div><small>{Math.round(job.progressPercent)}% · {job.progressCurrent}/{job.progressTotal || 100}</small></td><td><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></td><td>{job.requestedBy || 'Hệ thống'}</td><td><small>{dateText(job.createdAt)}</small></td><td><span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error || job.message || 'Đang chờ xử lý'}</span></td><td>{job.canRetry ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span>}</td></tr>) : <tr><td colSpan={8}><div className="empty-state">Không có việc phù hợp.</div></td></tr>}</tbody></table></div>
     </section>

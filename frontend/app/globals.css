@@ -6639,3 +6639,342 @@ pre, .message-card pre {
 .student-management-page .student-table-scroll-hint {
   display: none !important;
 }
+
+/* v25.9.16.6.4 — compact student table + online learning minimal UI */
+.student-management-page .online-learning-card {
+  display: grid;
+  gap: 10px;
+}
+.student-management-page .online-learning-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.student-management-page .online-learning-summary-strip > div {
+  display: grid;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+.student-management-page .online-learning-summary-strip span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: .035em;
+}
+.student-management-page .online-learning-summary-strip b {
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: -.035em;
+}
+.student-management-page .online-learning-disclaimer {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(245, 158, 11, .25);
+  border-radius: 12px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12.5px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+.student-management-page .student-list-card {
+  overflow: visible !important;
+}
+.student-management-page .class-student-table-shell {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable both-edges;
+  border: 1px solid var(--od-border, #dbe3ef);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--od-shadow-1, 0 1px 2px rgba(15, 23, 42, .05));
+}
+.student-management-page .class-student-table-scroll {
+  width: max-content !important;
+  max-width: none !important;
+  min-width: 100%;
+  overflow: visible !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  margin: 0 !important;
+}
+.student-management-page .class-student-table-scroll .student-grade-table {
+  min-width: max-content;
+  width: max-content;
+}
+.student-management-page .student-grade-table .compact-student-identity-cell {
+  min-width: 260px;
+  max-width: 310px;
+  white-space: normal !important;
+}
+.student-management-page .student-grade-table .compact-student-identity-cell small {
+  display: block;
+  margin-top: 3px;
+  max-width: 290px;
+  overflow: hidden;
+  color: #64748b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.student-management-page .student-grade-table td.compact-learning-progress-cell {
+  min-width: 220px;
+  white-space: normal !important;
+}
+.student-management-page .student-grade-table td.compact-learning-progress-cell b,
+.student-management-page .student-grade-table td.compact-learning-progress-cell small,
+.student-management-page .student-grade-table td.compact-learning-progress-cell .status-pill,
+.student-management-page .student-grade-table td.compact-learning-progress-cell .cms-full-sync-hint {
+  display: block;
+  margin: 0;
+}
+.student-management-page .student-grade-table td.compact-learning-progress-cell small {
+  margin-top: 3px;
+  color: #64748b;
+}
+.student-management-page .student-grade-table td.compact-learning-progress-cell .status-pill {
+  width: max-content;
+  margin-top: 5px;
+}
+.student-management-page .cms-full-sync-hint {
+  width: fit-content;
+  margin-top: 6px !important;
+  padding: 5px 8px;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.student-management-page .online-behavior-cell {
+  min-width: 210px;
+  white-space: normal !important;
+}
+.student-management-page .online-behavior-button {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.student-management-page .online-behavior-button small {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.student-management-page .online-behavior-button:hover .status-pill {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+}
+.online-behavior-modal {
+  width: min(840px, calc(100vw - 28px));
+}
+.online-behavior-evidence {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, .24);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+.online-behavior-evidence b { color: #0f172a; }
+.online-behavior-evidence p {
+  margin: 0 0 6px;
+  color: #475569;
+  line-height: 1.45;
+}
+@media (max-width: 1100px) {
+  .student-management-page .online-learning-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .student-management-page .online-learning-summary-strip { grid-template-columns: 1fr; }
+}
+html[data-theme='dark'] .student-management-page .online-learning-summary-strip > div,
+html[data-ai-theme='dark'] .student-management-page .online-learning-summary-strip > div,
+body.ai-theme-dark .student-management-page .online-learning-summary-strip > div,
+html[data-theme='dark'] .student-management-page .online-behavior-evidence,
+html[data-ai-theme='dark'] .student-management-page .online-behavior-evidence,
+body.ai-theme-dark .student-management-page .online-behavior-evidence {
+  background: #111827 !important;
+  border-color: #243045 !important;
+}
+html[data-theme='dark'] .student-management-page .online-learning-summary-strip b,
+html[data-ai-theme='dark'] .student-management-page .online-learning-summary-strip b,
+body.ai-theme-dark .student-management-page .online-learning-summary-strip b,
+html[data-theme='dark'] .online-behavior-evidence b,
+html[data-ai-theme='dark'] .online-behavior-evidence b,
+body.ai-theme-dark .online-behavior-evidence b {
+  color: #f8fafc !important;
+}
+html[data-theme='dark'] .student-management-page .class-student-table-shell,
+html[data-ai-theme='dark'] .student-management-page .class-student-table-shell,
+body.ai-theme-dark .student-management-page .class-student-table-shell {
+  background: #0f172a !important;
+  border-color: #243045 !important;
+}
+html[data-theme='dark'] .student-management-page .online-learning-disclaimer,
+html[data-ai-theme='dark'] .student-management-page .online-learning-disclaimer,
+body.ai-theme-dark .student-management-page .online-learning-disclaimer {
+  background: rgba(251, 191, 36, .12) !important;
+  border-color: rgba(251, 191, 36, .28) !important;
+  color: #fbbf24 !important;
+}
+
+/* v25.9.16.6.5 — online learning drawer by Bài/Deadline, using configured Quiz deadlines first. */
+.online-behavior-deadline-modal {
+  width: min(1060px, calc(100vw - 28px));
+  max-height: min(92vh, 920px);
+  overflow: auto;
+}
+.online-deadline-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.online-deadline-section h3 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -.025em;
+}
+.online-week-timeline {
+  display: grid;
+  gap: 10px;
+}
+.online-week-card {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid rgba(148, 163, 184, .24);
+  border-radius: 16px;
+  background: #f8fafc;
+}
+.online-week-card h4 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 950;
+}
+.online-session-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+.online-session-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 14px;
+  background: #fff;
+}
+.online-session-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.online-session-head b {
+  color: #0f172a;
+  line-height: 1.25;
+}
+.online-session-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 8px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.online-session-card small {
+  color: #64748b;
+  line-height: 1.35;
+}
+html[data-theme='dark'] .online-week-card,
+html[data-ai-theme='dark'] .online-week-card,
+body.ai-theme-dark .online-week-card,
+html[data-theme='dark'] .online-session-card,
+html[data-ai-theme='dark'] .online-session-card,
+body.ai-theme-dark .online-session-card {
+  background: #111827 !important;
+  border-color: #243045 !important;
+}
+html[data-theme='dark'] .online-week-card h4,
+html[data-ai-theme='dark'] .online-week-card h4,
+body.ai-theme-dark .online-week-card h4,
+html[data-theme='dark'] .online-session-head b,
+html[data-ai-theme='dark'] .online-session-head b,
+body.ai-theme-dark .online-session-head b {
+  color: #f8fafc !important;
+}
+html[data-theme='dark'] .online-session-metrics,
+html[data-ai-theme='dark'] .online-session-metrics,
+body.ai-theme-dark .online-session-metrics,
+html[data-theme='dark'] .online-session-card small,
+html[data-ai-theme='dark'] .online-session-card small,
+body.ai-theme-dark .online-session-card small {
+  color: #cbd5e1 !important;
+}
+
+/* v25.9.16.6.8 analytics production ops */
+.analytics-learning-page .analytics-learning-filters {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.analytics-learning-page .analytics-summary-strip {
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+}
+.analytics-dashboard-table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.analytics-learning-table {
+  min-width: 1120px;
+}
+.analytics-class-table {
+  min-width: 940px;
+}
+.academic-mini-lines {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.compact-alert {
+  margin-top: 12px;
+  font-size: 12px;
+}
+.empty-state.compact {
+  padding: 12px;
+  font-size: 13px;
+}
+
+/* v25.9.16.6.8 analytics data quality guard */
+.analytics-quality-strip {
+  align-items: stretch;
+}
+.analytics-quality-strip > div b .status-pill {
+  display: inline-flex;
+  width: fit-content;
+}
+.analytics-quality-issues span {
+  line-height: 1.45;
+}

@@ -2135,6 +2135,369 @@ export type AcademicTeacherReportJob = {
 }
 
 export type AcademicClassListResponse = PaginatedResponse<AcademicClass>
+
+
+export type AnalyticsLearningBehaviorClassification =
+  | 'LIKELY_REAL_LEARNING'
+  | 'POSSIBLE_IDLE'
+  | 'POSSIBLE_CHEATING'
+  | 'INSUFFICIENT_DATA'
+  | 'NORMAL'
+  | string
+
+export type AnalyticsLearningBehaviorSummary = {
+  total_students: number
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  data_quality_breakdown?: Record<string, number>
+  current_week?: number | null
+  due_sessions_this_week?: number[] | null
+  overdue_sessions?: number[] | null
+  disclaimer?: string
+}
+
+export type AnalyticsLearningBehaviorRow = {
+  username: string
+  user_id?: string | null
+  course_id: string
+  class_id?: string | null
+  classification: AnalyticsLearningBehaviorClassification
+  display_label?: string | null
+  confidence_score: number
+  real_learning_score: number
+  idle_score: number
+  suspicious_score: number
+  deadline_compliance_percent?: number | null
+  crammed_session_count?: number
+  quiz_before_video_count?: number
+  reason_codes?: string[]
+  human_readable_summary?: string | null
+  recommended_action?: string | null
+  data_quality?: string | null
+  calculated_at?: string | null
+  last_activity_at?: string | null
+}
+
+export type AnalyticsLearningBehaviorListResponse = {
+  total: number
+  items: AnalyticsLearningBehaviorRow[]
+}
+
+
+export type AnalyticsStudentSessionProgress = {
+  session_index: number
+  session_title?: string | null
+  week_index?: number | null
+  deadline_at?: string | null
+  deadline_source?: string | null
+  total_videos: number
+  videos_seen: number
+  videos_completed: number
+  avg_video_completion_percent?: number | null
+  estimated_watch_seconds?: number | null
+  quiz_attempted?: boolean
+  quiz_completed?: boolean
+  quiz_score?: number | null
+  started_at?: string | null
+  last_activity_at?: string | null
+  completed_before_deadline?: boolean | null
+  completed_late?: boolean | null
+  session_learning_status?: string | null
+  reason_codes?: string[]
+  evidence?: Record<string, any>
+}
+
+export type AnalyticsStudentVideoProgress = {
+  video_id: string
+  video_code?: string | null
+  session_index?: number | null
+  component_title?: string | null
+  duration_seconds?: number | null
+  max_position_seconds?: number | null
+  completion_percent?: number | null
+  estimated_watch_seconds?: number | null
+  estimated_watch_percent?: number | null
+  play_count?: number
+  pause_count?: number
+  stop_count?: number
+  seek_count?: number
+  is_completed?: boolean
+  is_suspicious?: boolean
+  suspicious_reason?: string | null
+  first_played_at?: string | null
+  last_event_at?: string | null
+}
+
+export type AnalyticsStudentLearningBehaviorDetail = {
+  behavior?: AnalyticsLearningBehaviorRow | null
+  sessions: AnalyticsStudentSessionProgress[]
+  videos: AnalyticsStudentVideoProgress[]
+  timeline_weeks?: { week_index: number; sessions: number[] }[]
+  disclaimer?: string
+}
+
+
+
+export type AnalyticsDataQualityIssue = {
+  severity: 'error' | 'warning' | 'info' | string
+  code: string
+  message: string
+  action?: string | null
+}
+
+export type AnalyticsDataQualityReport = {
+  status: string
+  version?: string
+  readiness: 'READY' | 'NEEDS_BACKFILL' | 'CONFIG_NEEDED' | 'NO_SCOPE' | string
+  class_id?: string | null
+  course_id?: string | null
+  counts?: Record<string, number>
+  deadline_sources?: Record<string, number>
+  latest_behavior_calculated_at?: string | null
+  ingest?: Record<string, any>
+  issues?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  safe_policy?: string
+  disclaimer?: string
+}
+
+export type AnalyticsProductionReadinessReport = {
+  version?: string
+  ready_for_production: boolean
+  readiness: 'PRODUCTION_READY' | 'NOT_READY' | string
+  blocker_count: number
+  warning_count: number
+  issue_count: number
+  issues?: AnalyticsDataQualityIssue[]
+  checks?: Record<string, any>
+  next_actions?: string[]
+  safe_policy?: string
+  disclaimer?: string
+}
+
+
+
+export type AnalyticsRolloutClass = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count?: number
+  session_count?: number
+  behavior_snapshot_count?: number
+  in_rollout: boolean
+  rollout_reasons?: string[]
+  recommended_action?: string | null
+}
+
+export type AnalyticsRolloutControlReport = {
+  version?: string
+  rollout_status: 'READY' | 'READY_WITH_WARNINGS' | 'DISABLED' | string
+  enabled: boolean
+  mode: string
+  allow_backfill: boolean
+  allow_export: boolean
+  scope?: Record<string, string[]>
+  counters?: Record<string, number>
+  blocker_count: number
+  warning_count: number
+  issues?: AnalyticsDataQualityIssue[]
+  items?: AnalyticsRolloutClass[]
+  next_actions?: string[]
+  safe_policy?: string
+  disclaimer?: string
+}
+
+export type AnalyticsMonitoringReport = {
+  version?: string
+  monitoring_status: 'OK' | 'WARNING' | 'BLOCKED' | string
+  ready_for_rollout: boolean
+  scheduler_enabled: boolean
+  seconds_since_last_ingest?: number | null
+  active_analytics_jobs: number
+  stuck_analytics_job_count: number
+  stuck_jobs?: { id: string; class_id?: string | null; status?: string | null; created_at?: string | null; progress_label?: string | null }[]
+  snapshot_count: number
+  stale_snapshot_count: number
+  latest_behavior_calculated_at?: string | null
+  ingest?: Record<string, any>
+  issue_count: number
+  blocker_count: number
+  warning_count: number
+  issues?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  safe_policy?: string
+}
+
+export type AnalyticsPilotAcceptanceClass = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count: number
+  behavior_snapshot_count: number
+  session_count: number
+  session_progress_count: number
+  video_progress_count: number
+  classification_breakdown?: Record<string, number>
+  data_quality_breakdown?: Record<string, number>
+  latest_behavior_calculated_at?: string | null
+  acceptance_status: 'PASS' | 'WARN' | 'FAIL' | string
+  reasons?: string[]
+  recommended_action?: string | null
+}
+
+export type AnalyticsPilotAcceptanceStudent = {
+  class_id: string
+  course_id: string
+  username: string
+  classification?: string | null
+  display_label?: string | null
+  confidence_score?: number | null
+  real_learning_score?: number | null
+  idle_score?: number | null
+  suspicious_score?: number | null
+  reason_codes?: string[]
+  summary?: string | null
+  recommended_action?: string | null
+  data_quality?: string | null
+  calculated_at?: string | null
+}
+
+export type AnalyticsPilotAcceptanceReport = {
+  version?: string
+  pilot_status: 'PASS' | 'PASS_WITH_WARNINGS' | 'FAIL' | string
+  ready_for_pilot: boolean
+  ready_for_broad_production: boolean
+  blocker_count: number
+  warning_count: number
+  blocker_codes?: string[]
+  warning_codes?: string[]
+  filters?: Record<string, any>
+  checks?: Record<string, any>
+  checklist?: { key: string; label: string; passed: boolean }[]
+  classes?: AnalyticsPilotAcceptanceClass[]
+  sample_students?: AnalyticsPilotAcceptanceStudent[]
+  next_actions?: string[]
+  production_readiness?: AnalyticsProductionReadinessReport
+  data_quality?: AnalyticsDataQualityReport
+  backfill_plan?: AnalyticsBackfillPlanResponse
+  safe_policy?: string
+  disclaimer?: string
+}
+
+export type AnalyticsBackfillPlanItem = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count: number
+  session_count: number
+  behavior_snapshot_count: number
+  latest_behavior_calculated_at?: string | null
+  can_enqueue: boolean
+  reasons?: string[]
+  recommended_action?: string | null
+}
+
+export type AnalyticsBackfillPlanResponse = {
+  status: string
+  version?: string
+  filters?: Record<string, any>
+  total: number
+  counters?: Record<string, number>
+  items: AnalyticsBackfillPlanItem[]
+  safe_policy?: string
+}
+
+export type AnalyticsBackfillJobsResponse = {
+  status: string
+  queued_jobs: number
+  skipped_count: number
+  jobs: Array<{ job_id: string; class_id?: string | null; course_id?: string | null; status?: string | null; progress_label?: string | null }>
+  skipped: Array<{ class_id?: string | null; class_code?: string | null; reasons?: string[] }>
+  safe_policy?: string
+}
+
+export type AnalyticsLearningDashboardStudent = AnalyticsLearningBehaviorRow & {
+  class_code?: string | null
+  campus?: string | null
+}
+
+export type AnalyticsLearningDashboardClassItem = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  total_students: number
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  avg_confidence_score?: number | null
+  avg_deadline_compliance_percent?: number | null
+}
+
+export type AnalyticsLearningDashboardResponse = AnalyticsLearningBehaviorSummary & {
+  filters?: Record<string, any>
+  class_items?: AnalyticsLearningDashboardClassItem[]
+  top_possible_suspicious?: AnalyticsLearningDashboardStudent[]
+  top_possible_idle?: AnalyticsLearningDashboardStudent[]
+  deadline_attention?: AnalyticsLearningDashboardStudent[]
+}
+
+export type AnalyticsClassVideoSummary = {
+  class_id?: string | null
+  course_id?: string | null
+  total_students: number
+  students_with_video_activity: number
+  students_without_video_activity: number
+  avg_completion_percent?: number | null
+  avg_watch_seconds?: number | null
+  completed_video_count: number
+  low_activity_student_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  likely_real_learning_count: number
+  insufficient_data_count: number
+  disclaimer?: string
+}
+
+export type AnalyticsClassSessionProgressItem = {
+  session_index: number
+  session_title?: string | null
+  week_index?: number | null
+  deadline_at?: string | null
+  deadline_source?: string | null
+  total_students: number
+  completed_before_deadline_count: number
+  completed_late_count: number
+  not_started_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  avg_video_completion_percent?: number | null
+  avg_watch_seconds?: number | null
+}
+
+export type AnalyticsClassSessionProgressResponse = {
+  class_id?: string | null
+  course_id?: string | null
+  total: number
+  items: AnalyticsClassSessionProgressItem[]
+}
+
 export type AcademicStudentListResponse = PaginatedResponse<AcademicStudent>
 
 

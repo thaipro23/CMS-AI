@@ -21,6 +21,15 @@ from app.services.audit_log import AuditErrorType, log_audit
 apply_runtime_settings()
 celery_app = Celery('ai_openedx_worker', broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.broker_connection_retry_on_startup = True
+if getattr(settings, 'analytics_ingest_scheduler_enabled', False):
+    celery_app.conf.beat_schedule = {
+        **getattr(celery_app.conf, 'beat_schedule', {}),
+        'analytics-ingest-openedx-tracking-log': {
+            'task': 'analytics_ingest_task',
+            'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
+            'args': (None, None),
+        },
+    }
 
 
 @celery_app.task(name='generate_questions_task')
@@ -1281,5 +1290,147 @@ def academic_teacher_report_job_task(job_id: str):
             except Exception:
                 pass
         return json_safe_value({'ok': False, 'error': 'academic_teacher_report_failed', 'message': str(exc)})
+    finally:
+        db.close()
+
+
+@celery_app.task(name='analytics_ingest_task')
+def analytics_ingest_task(file_path: str | None = None, max_lines: int | None = None):
+    """Ingest Open edX tracking.log incrementally outside HTTP requests."""
+    from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        result = LearningAnalyticsCoreService(db).run_ingest(file_path=file_path, max_lines=max_lines)
+        try:
+            log_audit(
+                db,
+                action='analytics.ingest.async',
+                status='success',
+                message='Ingest tracking log học online hoàn tất',
+                user=None,
+                target_type='learning_analytics',
+                metadata=json_safe_value({'result': result, 'signals_only_not_violation': True}),
+            )
+        except Exception:
+            pass
+        return json_safe_value(result)
+    except Exception as exc:
+        db.rollback()
+        try:
+            log_audit(
+                db,
+                action='analytics.ingest.async',
+                status='failed',
+                error_type=AuditErrorType.SYSTEM_ERROR,
+                message=str(exc),
+                user=None,
+                target_type='learning_analytics',
+                metadata=json_safe_value({'file_path': file_path}),
+            )
+        except Exception:
+            pass
+        return json_safe_value({'ok': False, 'error': 'analytics_ingest_failed', 'message': str(exc)})
+    finally:
+        db.close()
+
+
+@celery_app.task(name='analytics_class_recalculate_task')
+def analytics_class_recalculate_task(job_id: str):
+    """Recalculate online-learning signals for one class using the existing job table."""
+    from app.models.academic import AcademicClassSyncJob
+    from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicClassSyncJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+        if job.job_type != 'learning_analytics_recalculate':
+            raise RuntimeError(f'Unsupported analytics job_type: {job.job_type}')
+        request = job.request_json if isinstance(job.request_json, dict) else {}
+        course_id = str(request.get('course_id') or '').strip()
+        username = str(request.get('username') or '').strip() or None
+        if not course_id:
+            raise RuntimeError('Thiếu course_id để tính lại học online')
+        now = datetime.utcnow()
+        job.status = 'running'
+        job.started_at = job.started_at or now
+        job.updated_at = now
+        job.progress_current = 10
+        job.progress_total = 100
+        job.progress_label = 'Đang tính lại học online'
+        db.add(job)
+        db.commit()
+
+        service = LearningAnalyticsCoreService(db)
+        video_result = service.recalculate_course_video_progress(course_id=course_id, username=username)
+        job.progress_current = 45
+        job.progress_label = 'Đang tổng hợp theo Bài/Deadline'
+        db.add(job)
+        db.commit()
+        session_result = service.recalculate_student_session_progress(class_id=job.class_id, course_id=course_id, username=username)
+        job.progress_current = 75
+        job.progress_label = 'Đang phân loại tín hiệu học online'
+        db.add(job)
+        db.commit()
+        behavior_result = service.recalculate_learning_behavior(class_id=job.class_id, course_id=course_id, username=username)
+
+        result = json_safe_value({
+            'ok': True,
+            'class_id': job.class_id,
+            'course_id': course_id,
+            'username': username,
+            'video': video_result,
+            'session': session_result,
+            'behavior': behavior_result,
+            'signals_only_not_violation': True,
+        })
+        job.status = 'completed'
+        job.progress_current = 100
+        job.progress_total = 100
+        job.progress_label = 'Hoàn tất học online'
+        job.result_json = result
+        job.error_message = None
+        job.finished_at = datetime.utcnow()
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+        try:
+            log_audit(
+                db,
+                action='analytics.learning_behavior.recalculate.async',
+                status='success',
+                message='Hoàn tất tính lại học online theo tín hiệu mềm',
+                user=None,
+                course_id=course_id,
+                target_type='academic_class_sync_job',
+                target_id=job.id,
+                metadata=json_safe_value({'class_id': job.class_id, 'username': username, 'result': behavior_result, 'signals_only_not_violation': True}),
+            )
+        except Exception:
+            pass
+        return result
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicClassSyncJob, job_id)
+        if job:
+            job.status = 'failed'
+            job.progress_label = 'Tính lại học online thất bại'
+            job.error_message = str(exc)[:4000]
+            job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(db, action='analytics.learning_behavior.recalculate.async', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_class_sync_job', target_id=job.id, metadata=json_safe_value({'class_id': job.class_id, 'signals_only_not_violation': True}))
+            except Exception:
+                pass
+        return json_safe_value({'ok': False, 'error': 'analytics_class_recalculate_failed', 'message': str(exc)})
     finally:
         db.close()

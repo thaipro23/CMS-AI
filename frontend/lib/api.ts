@@ -102,6 +102,19 @@ import {
   AcademicTeacherReportJob,
   AcademicQuizDeadlineOverride,
   AcademicAssignmentDefenseScore,
+  AnalyticsLearningBehaviorSummary,
+  AnalyticsLearningBehaviorListResponse,
+  AnalyticsStudentLearningBehaviorDetail,
+  AnalyticsLearningDashboardResponse,
+  AnalyticsClassVideoSummary,
+  AnalyticsClassSessionProgressResponse,
+  AnalyticsDataQualityReport,
+  AnalyticsBackfillPlanResponse,
+  AnalyticsBackfillJobsResponse,
+  AnalyticsProductionReadinessReport,
+  AnalyticsPilotAcceptanceReport,
+  AnalyticsRolloutControlReport,
+  AnalyticsMonitoringReport,
 } from "../types";
 
 const rawApiBase =
@@ -2143,6 +2156,135 @@ export async function getAcademicClassLearningSummary(headers: HeadersInit, clas
 }
 
 
+
+
+
+
+export async function getAnalyticsDataQualityReport(headers: HeadersInit, filters: { classId?: string; courseId?: string } = {}): Promise<AnalyticsDataQualityReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  return parseResponse(await apiFetch(`${API}/analytics/ops/data-quality?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsProductionReadiness(headers: HeadersInit): Promise<AnalyticsProductionReadinessReport> {
+  return parseResponse(await apiFetch(`${API}/analytics/ops/production-readiness`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsRolloutControl(headers: HeadersInit, filters: { classId?: string; courseId?: string; campus?: string; branch?: string; limit?: number } = {}): Promise<AnalyticsRolloutControlReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  params.set('limit', String(Math.max(1, Math.min(500, filters.limit || 100))));
+  return parseResponse(await apiFetch(`${API}/analytics/ops/rollout-control?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsMonitoring(headers: HeadersInit, filters: { classId?: string; courseId?: string } = {}): Promise<AnalyticsMonitoringReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  return parseResponse(await apiFetch(`${API}/analytics/ops/monitoring?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsPilotAcceptance(headers: HeadersInit, filters: { classId?: string; courseId?: string; campus?: string; branch?: string; sampleLimit?: number } = {}): Promise<AnalyticsPilotAcceptanceReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  params.set('sample_limit', String(Math.max(1, Math.min(20, filters.sampleLimit || 5))));
+  return parseResponse(await apiFetch(`${API}/analytics/ops/pilot-acceptance?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsBackfillPlan(headers: HeadersInit, filters: { campus?: string; branch?: string; classId?: string; courseId?: string; limit?: number } = {}): Promise<AnalyticsBackfillPlanResponse> {
+  const params = new URLSearchParams();
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  params.set('limit', String(Math.max(1, Math.min(200, filters.limit || 50))));
+  return parseResponse(await apiFetch(`${API}/analytics/backfill/plan?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function enqueueAnalyticsBackfillJobs(headers: HeadersInit, filters: { campus?: string; branch?: string; classId?: string; courseId?: string; limit?: number } = {}): Promise<AnalyticsBackfillJobsResponse> {
+  const params = new URLSearchParams();
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  params.set('limit', String(Math.max(1, Math.min(50, filters.limit || 20))));
+  return parseResponse(await apiFetch(`${API}/analytics/backfill/jobs?${params.toString()}`, { credentials: 'include', method: 'POST', headers }));
+}
+
+export async function getAnalyticsLearningDashboard(headers: HeadersInit, filters: { campus?: string; branch?: string; courseId?: string; classId?: string; classification?: string; dateFrom?: string; dateTo?: string; limit?: number } = {}): Promise<AnalyticsLearningDashboardResponse> {
+  const params = new URLSearchParams();
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.classification?.trim() && filters.classification !== 'all') params.set('classification', filters.classification.trim());
+  if (filters.dateFrom?.trim()) params.set('date_from', filters.dateFrom.trim());
+  if (filters.dateTo?.trim()) params.set('date_to', filters.dateTo.trim());
+  params.set('limit', String(Math.max(1, Math.min(200, filters.limit || 50))));
+  return parseResponse(await apiFetch(`${API}/analytics/learning/dashboard?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export function buildAnalyticsLearningExportUrl(filters: { campus?: string; branch?: string; courseId?: string; classId?: string; classification?: string; dateFrom?: string; dateTo?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  if (filters.classification?.trim() && filters.classification !== 'all') params.set('classification', filters.classification.trim());
+  if (filters.dateFrom?.trim()) params.set('date_from', filters.dateFrom.trim());
+  if (filters.dateTo?.trim()) params.set('date_to', filters.dateTo.trim());
+  return `${API}/analytics/learning/export.csv?${params.toString()}`;
+}
+
+export async function getAnalyticsClassVideoSummary(headers: HeadersInit, classId: string, courseId?: string | null): Promise<AnalyticsClassVideoSummary> {
+  const params = new URLSearchParams();
+  if (courseId?.trim()) params.set('course_id', courseId.trim());
+  return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/video-summary?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsClassSessionsProgress(headers: HeadersInit, classId: string, courseId?: string | null): Promise<AnalyticsClassSessionProgressResponse> {
+  const params = new URLSearchParams();
+  if (courseId?.trim()) params.set('course_id', courseId.trim());
+  return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/sessions/progress?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsClassLearningBehaviorSummary(headers: HeadersInit, classId: string, courseId?: string | null): Promise<AnalyticsLearningBehaviorSummary> {
+  const params = new URLSearchParams();
+  if (courseId?.trim()) params.set('course_id', courseId.trim());
+  return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/learning-behavior/summary?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAnalyticsClassLearningBehavior(headers: HeadersInit, classId: string, filters: { courseId?: string | null; classification?: string; limit?: number; offset?: number } = {}): Promise<AnalyticsLearningBehaviorListResponse> {
+  const params = new URLSearchParams();
+  if (filters.courseId?.trim()) params.set('course_id', filters.courseId.trim());
+  if (filters.classification?.trim() && filters.classification !== 'all') params.set('classification', filters.classification.trim());
+  params.set('limit', String(Math.max(1, Math.min(200, filters.limit || 100))));
+  params.set('offset', String(Math.max(0, filters.offset || 0)));
+  return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/learning-behavior?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+
+export async function getAnalyticsStudentLearningBehaviorDetail(headers: HeadersInit, classId: string, username: string, courseId?: string | null): Promise<AnalyticsStudentLearningBehaviorDetail> {
+  const params = new URLSearchParams();
+  if (courseId?.trim()) params.set('course_id', courseId.trim());
+  return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/students/${encodeURIComponent(username)}/learning-behavior?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function recalculateAnalyticsClassLearningBehavior(headers: HeadersInit, classId: string, courseId: string, username?: string | null): Promise<Record<string, any>> {
+  const params = new URLSearchParams();
+  params.set('course_id', courseId);
+  if (username?.trim()) params.set('username', username.trim());
+  return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/learning-behavior/recalculate?${params.toString()}`, { method: 'POST', credentials: 'include', headers }));
+}
+
+
 export async function syncAcademicClassEnrollment(headers: HeadersInit, classId: string, payload: { force?: boolean; limit?: number; mode?: string } = {}): Promise<AcademicEnrollmentSyncResult> {
   return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/cms-enrollment-sync`, {
     method: 'POST',
@@ -2329,3 +2471,23 @@ export async function saveAcademicClassCourseMapping(headers: HeadersInit, class
   return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/course-mapping`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
+
+export async function getAnalyticsOpsStatus(headers: HeadersInit): Promise<Record<string, any>> {
+  return parseResponse(await apiFetch(`${API}/analytics/ops/status`, { credentials: 'include', headers }));
+}
+
+export async function enqueueAnalyticsIngestJob(headers: HeadersInit, payload: { filePath?: string | null; maxLines?: number | null } = {}): Promise<Record<string, any>> {
+  const params = new URLSearchParams();
+  if (payload.filePath?.trim()) params.set('file_path', payload.filePath.trim());
+  if (payload.maxLines) params.set('max_lines', String(payload.maxLines));
+  return parseResponse(await apiFetch(`${API}/analytics/ingest/jobs?${params.toString()}`, { method: 'POST', credentials: 'include', headers }));
+}
+
+export async function enqueueAnalyticsClassLearningBehaviorJob(headers: HeadersInit, classId: string, courseId: string, payload: { username?: string | null; force?: boolean; limit?: number | null } = {}): Promise<AcademicClassSyncJob> {
+  const params = new URLSearchParams();
+  params.set('course_id', courseId);
+  if (payload.username?.trim()) params.set('username', payload.username.trim());
+  if (payload.force) params.set('force', 'true');
+  if (payload.limit) params.set('limit', String(payload.limit));
+  return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/learning-behavior/jobs?${params.toString()}`, { method: 'POST', credentials: 'include', headers }));
+}

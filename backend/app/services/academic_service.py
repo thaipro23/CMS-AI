@@ -1804,6 +1804,26 @@ class AcademicService:
                 'deadline_date': bucket.get('deadline_date'),
                 'available_from': bucket.get('available_from'),
             })
+        # v25.9.16.6.5: quiz deadlines may already be configured explicitly
+        # in academic_quiz_deadline_overrides. Prefer those over inferred schedule
+        # before the frontend builds Quiz columns, otherwise UI can show
+        # "Cần chỉnh deadline tay" even though the class already has deadlines.
+        if cls and results:
+            course_id = next((snapshot.openedx_course_id for snapshot in snapshots if snapshot.openedx_course_id), None)
+            overrides = TrainingPolicyService(self.db).deadline_overrides_for_class(cls.id, course_id)
+            for item in results:
+                numbers = self._quiz_numbers_from_component_item(item)
+                if not numbers:
+                    continue
+                override = overrides.get(numbers[0])
+                if not override:
+                    continue
+                if override.deadline_date:
+                    item['deadline_date'] = override.deadline_date.isoformat()
+                    item['deadline_mode'] = 'quiz_deadline_configured'
+                    item['schedule_warning'] = None
+                if override.start_date:
+                    item['available_from'] = override.start_date.isoformat()
         results = self._enrich_component_scores_for_class(results, cls)
         results.sort(key=lambda item: self._component_sort_key(item))
         return results[:80]
@@ -2598,6 +2618,18 @@ class AcademicService:
         for _student, _class_student, _mapping, learning in rows:
             page_component_scores.extend(self._component_scores_from_snapshot(learning))
         quiz_schedule_by_number = self._quiz_schedule_map_for_class(cls, page_component_scores) if cls else {}
+        for number, override in (deadline_overrides or {}).items():
+            if not override:
+                continue
+            existing = quiz_schedule_by_number.get(int(number), {})
+            quiz_schedule_by_number[int(number)] = {
+                **existing,
+                'quiz_numbers': existing.get('quiz_numbers') or [int(number)],
+                'from_date': override.start_date.isoformat() if override.start_date else existing.get('from_date'),
+                'due_date': override.deadline_date.isoformat() if override.deadline_date else existing.get('due_date'),
+                'deadline_mode': 'quiz_deadline_configured' if override.deadline_date else existing.get('deadline_mode'),
+                'schedule_warning': None if override.deadline_date else existing.get('schedule_warning'),
+            }
         items = [
             self._student_mapping_item(
                 class_id,

@@ -26,6 +26,7 @@ const navItems: NavItem[] = [
   { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_training_deadlines' },
   { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'operations', permission: 'view_training_reports' },
   { href: '/teacher-management', label: 'Quản lý giảng viên', desc: 'GV, lớp, tiến độ', icon: '▤', group: 'operations', permission: 'view_training_reports' },
+  { href: '/analytics/learning', label: 'Học online', desc: 'Tín hiệu học theo log', icon: '◌', group: 'operations', permission: 'view_dashboard' },
   { href: '/jobs', label: 'Tiến trình', desc: 'Việc đang xử lý', icon: '⚙', group: 'operations', permission: 'view_jobs' },
   { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'operations', permission: 'view_jobs' },
   { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'admin', permission: 'manage_settings' },
@@ -55,6 +56,7 @@ function requiredPermissionForPath(pathname: string): string | null {
     [/^\/semesters(?:\/|$)/, 'manage_settings'],
     [/^\/ap-sync(?:\/|$)/, 'manage_training_deadlines'],
     [/^\/student-management(?:\/|$)/, 'view_training_reports'],
+    [/^\/analytics(?:\/|$)/, 'view_dashboard'],
     [/^\/teacher-management(?:\/|$)/, 'view_training_reports'],
     [/^\/training-management(?:\/|$)/, 'view_training_reports'],
     [/^\/jobs(?:\/|$)/, 'view_jobs'],
@@ -121,7 +123,7 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Vận hành đào tạo · Open edX CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.5.98</span></div>
+    <div className="footer-links"><span>v25.9.16.6.9</span></div>
   </footer>
 }
 

@@ -41,13 +41,13 @@ services:
       - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
       - "api_v2.poly.edu.vn:10.2.1.35"  
       - "apitest.poly.edu.vn:10.2.5.8"  
-
-
   backend:
     build:
       context: ./backend
     container_name: ai-backend
     env_file: .env.production
+    extra_hosts:
+      - "${ACADEMIC_AP_API_EXTRA_HOST:-api_v2.poly.edu.vn:10.2.1.35}"
     environment:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     restart: unless-stopped
@@ -69,6 +69,7 @@ services:
         condition: service_healthy
     volumes:
       - runtime_data:/app/.runtime
+      - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/opt/openedx/data/lms/logs}:/openedx-data/lms/logs:ro
     healthcheck:
       test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()\nPY"]
       interval: 15s
@@ -89,12 +90,13 @@ services:
       - "meilisearch.cms-test.poly.edu.vn:host-gateway"        
       - "api_v2.poly.edu.vn:10.2.1.35"  
       - "apitest.poly.edu.vn:10.2.5.8"  
-
   worker:
     build:
       context: ./backend
     container_name: ai-worker
     env_file: .env.production
+    extra_hosts:
+      - "${ACADEMIC_AP_API_EXTRA_HOST:-api_v2.poly.edu.vn:10.2.1.35}"
     environment:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     restart: unless-stopped
@@ -108,6 +110,7 @@ services:
         condition: service_healthy
     volumes:
       - runtime_data:/app/.runtime
+      - ${OPENEDX_TRACKING_LOG_HOST_DIR:-/opt/openedx/data/lms/logs}:/openedx-data/lms/logs:ro
     networks:
       - ai_internal
       - openedx_shared

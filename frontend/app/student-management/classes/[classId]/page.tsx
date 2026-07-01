@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { Suspense, useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import type { WheelEvent } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../context/AppContext'
 import {
@@ -15,8 +16,12 @@ import {
   getAcademicClassSyncJobs,
   getAcademicClassAssignmentDefenseScores,
   saveAcademicClassAssignmentDefenseScores,
+  getAnalyticsClassLearningBehaviorSummary,
+  getAnalyticsClassLearningBehavior,
+  enqueueAnalyticsClassLearningBehaviorJob,
+  getAnalyticsStudentLearningBehaviorDetail,
 } from '../../../../lib/api'
-import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent } from '../../../../types'
+import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent, AnalyticsLearningBehaviorRow, AnalyticsLearningBehaviorSummary, AnalyticsStudentLearningBehaviorDetail, AnalyticsStudentSessionProgress } from '../../../../types'
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 
@@ -124,6 +129,73 @@ function enrollmentClass(value?: string | null) {
   if (status === 'enrolled') return 'status-pill success'
   if (['not_enrolled', 'missing_user', 'inactive'].includes(status)) return 'status-pill danger'
   return 'status-pill neutral'
+}
+
+function shouldSuggestFullCmsSync(student: AcademicStudent) {
+  const match = String(student.match_status || 'not_checked').toLowerCase()
+  const enrollment = String(student.learning_enrollment_status || 'unknown').toLowerCase()
+  const learning = String(student.learning_status || 'not_synced').toLowerCase()
+  return match !== 'matched' || enrollment !== 'enrolled' || ['cms_not_synced', 'not_synced', 'not_enrolled', 'sync_error'].includes(learning)
+}
+function safeBehaviorLabel(row?: AnalyticsLearningBehaviorRow | null) {
+  const classification = String(row?.classification || '').toUpperCase()
+  if (classification === 'LIKELY_REAL_LEARNING') return 'Có dấu hiệu học thật'
+  if (classification === 'POSSIBLE_IDLE') return 'Có khả năng treo máy'
+  if (classification === 'POSSIBLE_CHEATING') return 'Dấu hiệu bất thường cần kiểm tra'
+  if (classification === 'NORMAL') return 'Chưa thấy bất thường rõ'
+  return 'Chưa đủ dữ liệu'
+}
+function behaviorStatusClass(row?: AnalyticsLearningBehaviorRow | null) {
+  const classification = String(row?.classification || '').toUpperCase()
+  if (classification === 'LIKELY_REAL_LEARNING') return 'status-pill success'
+  if (classification === 'POSSIBLE_IDLE') return 'status-pill warning'
+  if (classification === 'POSSIBLE_CHEATING') return 'status-pill danger'
+  if (classification === 'NORMAL') return 'status-pill neutral'
+  return 'status-pill neutral'
+}
+function recommendedActionLabel(value?: string | null) {
+  const action = String(value || '').toUpperCase()
+  if (action === 'NO_ACTION') return 'Không cần xử lý'
+  if (action === 'REMIND_STUDENT') return 'Nhắc sinh viên'
+  if (action === 'TEACHER_REVIEW') return 'Giáo viên xem lại'
+  if (action === 'CHECK_WITH_STUDENT') return 'Trao đổi thêm'
+  if (action === 'REQUIRE_ADDITIONAL_ACTIVITY') return 'Yêu cầu học bổ sung'
+  return 'Kiểm tra lại sau'
+}
+function compactDuration(seconds?: number | null) {
+  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds <= 0) return 'N/A'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} phút`
+  const hours = Math.floor(minutes / 60)
+  const remain = minutes % 60
+  return remain ? `${hours} giờ ${remain} phút` : `${hours} giờ`
+}
+
+function sessionStatusLabel(value?: string | null) {
+  const status = String(value || '').toUpperCase()
+  if (status === 'LIKELY_COMPLETED') return 'Có dấu hiệu học thật'
+  if (status === 'COMPLETED_LATE') return 'Hoàn thành muộn'
+  if (status === 'POSSIBLE_IDLE') return 'Có khả năng treo máy'
+  if (status === 'POSSIBLE_SUSPICIOUS') return 'Dấu hiệu bất thường cần kiểm tra'
+  if (status === 'IN_PROGRESS') return 'Đang học'
+  if (status === 'NOT_STARTED') return 'Chưa học'
+  return 'Chưa đủ dữ liệu'
+}
+function sessionStatusClass(value?: string | null) {
+  const status = String(value || '').toUpperCase()
+  if (status === 'LIKELY_COMPLETED') return 'status-pill success'
+  if (status === 'COMPLETED_LATE') return 'status-pill warning'
+  if (status === 'POSSIBLE_SUSPICIOUS') return 'status-pill danger'
+  if (status === 'POSSIBLE_IDLE') return 'status-pill warning'
+  return 'status-pill neutral'
+}
+function deadlineSourceLabel(value?: string | null) {
+  const source = String(value || '').toUpperCase()
+  if (source === 'QUIZ_DEADLINE' || source === 'QUIZ_DEADLINE_CONFIGURED') return 'Deadline Quiz'
+  if (source === 'SEMESTER_WEEK_CONFIG') return 'Tuần học'
+  if (source === 'MANUAL') return 'Cấu hình tay'
+  if (source === 'INFERRED') return 'Suy luận 6 tuần'
+  return source || 'N/A'
 }
 
 function formatDateOnly(value?: string | null) {
@@ -257,6 +329,16 @@ function ClassDetailContent() {
   const [assignmentStatusFilter, setAssignmentStatusFilter] = useState('all')
   const [assignmentBulkStatus, setAssignmentBulkStatus] = useState('waiting_defense')
   const [savingPolicy, setSavingPolicy] = useState(false)
+  const [onlineSummary, setOnlineSummary] = useState<AnalyticsLearningBehaviorSummary | null>(null)
+  const [onlineRows, setOnlineRows] = useState<AnalyticsLearningBehaviorRow[]>([])
+  const [onlineLoading, setOnlineLoading] = useState(false)
+  const [onlineRecalculating, setOnlineRecalculating] = useState(false)
+  const [onlineMessage, setOnlineMessage] = useState('')
+  const [selectedBehavior, setSelectedBehavior] = useState<AnalyticsLearningBehaviorRow | null>(null)
+  const [selectedBehaviorDetail, setSelectedBehaviorDetail] = useState<AnalyticsStudentLearningBehaviorDetail | null>(null)
+  const [selectedBehaviorLoading, setSelectedBehaviorLoading] = useState(false)
+  const tableScrollRef = useRef<HTMLDivElement | null>(null)
+  const effectiveCourseId = learningSummary?.openedx_course_id || classInfo?.openedx_course_id || ''
 
   const refreshStudentPage = async () => {
     const studentPage = await getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE })
@@ -277,6 +359,69 @@ function ClassDetailContent() {
 
   const refreshAfterDataChange = async () => {
     await Promise.all([refreshClassOverview(), refreshStudentPage()])
+    if (effectiveCourseId) refreshOnlineAnalytics().catch(() => undefined)
+  }
+
+  const refreshOnlineAnalytics = async () => {
+    if (!effectiveCourseId) {
+      setOnlineSummary(null)
+      setOnlineRows([])
+      return
+    }
+    setOnlineLoading(true)
+    try {
+      const [nextSummary, nextRows] = await Promise.all([
+        getAnalyticsClassLearningBehaviorSummary(headers, classId, effectiveCourseId),
+        getAnalyticsClassLearningBehavior(headers, classId, { courseId: effectiveCourseId, limit: 200, offset: 0 }),
+      ])
+      setOnlineSummary(nextSummary)
+      setOnlineRows(nextRows.items || [])
+    } finally {
+      setOnlineLoading(false)
+    }
+  }
+
+  const recalculateOnlineAnalytics = async () => {
+    if (!effectiveCourseId) {
+      setOnlineMessage('Chưa map Course CMS cho lớp này.')
+      return
+    }
+    setOnlineRecalculating(true)
+    setOnlineMessage('')
+    try {
+      const job = await enqueueAnalyticsClassLearningBehaviorJob(headers, classId, effectiveCourseId)
+      setOnlineMessage(`Đã đưa tính lại học online vào hàng đợi: ${job.id?.slice(0, 8) || 'đang xử lý'}.`)
+      await refreshOnlineAnalytics()
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không tính lại được học online')
+    } finally {
+      setOnlineRecalculating(false)
+    }
+  }
+
+  const openBehaviorDetail = async (behavior: AnalyticsLearningBehaviorRow) => {
+    setSelectedBehavior(behavior)
+    setSelectedBehaviorDetail(null)
+    if (!effectiveCourseId || !behavior.username) return
+    setSelectedBehaviorLoading(true)
+    try {
+      const detail = await getAnalyticsStudentLearningBehaviorDetail(headers, classId, behavior.username, effectiveCourseId)
+      setSelectedBehaviorDetail(detail)
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không tải được chi tiết học online')
+    } finally {
+      setSelectedBehaviorLoading(false)
+    }
+  }
+
+  const handleStudentTableWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const shell = tableScrollRef.current
+    if (!shell || shell.scrollWidth <= shell.clientWidth) return
+    const hasHorizontalIntent = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+    const delta = hasHorizontalIntent ? event.deltaX : (event.shiftKey ? event.deltaY : 0)
+    if (!delta) return
+    shell.scrollLeft += delta
+    event.preventDefault()
   }
 
   const isJobActive = (job?: AcademicClassSyncJob | null) => {
@@ -342,6 +487,33 @@ function ClassDetailContent() {
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [headers, classId, debouncedSearch, learningStatus, page])
+
+
+  useEffect(() => {
+    let cancelled = false
+    if (!effectiveCourseId) {
+      setOnlineSummary(null)
+      setOnlineRows([])
+      return () => { cancelled = true }
+    }
+    setOnlineLoading(true)
+    Promise.all([
+      getAnalyticsClassLearningBehaviorSummary(headers, classId, effectiveCourseId),
+      getAnalyticsClassLearningBehavior(headers, classId, { courseId: effectiveCourseId, limit: 200, offset: 0 }),
+    ])
+      .then(([nextSummary, nextRows]) => {
+        if (cancelled) return
+        setOnlineSummary(nextSummary)
+        setOnlineRows(nextRows.items || [])
+      })
+      .catch(() => {
+        if (cancelled) return
+        setOnlineSummary(null)
+        setOnlineRows([])
+      })
+      .finally(() => { if (!cancelled) setOnlineLoading(false) })
+    return () => { cancelled = true }
+  }, [headers, classId, effectiveCourseId])
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
   const waitForSyncJob = async (job: AcademicClassSyncJob): Promise<AcademicClassSyncJob> => {
@@ -554,12 +726,13 @@ function ClassDetailContent() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (selectedQuiz) setSelectedQuiz(null)
+      else if (selectedBehavior) { setSelectedBehavior(null); setSelectedBehaviorDetail(null) }
       else if (assignmentModalOpen) setAssignmentModalOpen(false)
       else if (errorModal) setErrorModal('')
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedQuiz, assignmentModalOpen, errorModal])
+  }, [selectedQuiz, selectedBehavior, assignmentModalOpen, errorModal])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const counts = summary?.counts || {}
@@ -602,6 +775,18 @@ function ClassDetailContent() {
     learningSummary?.last_synced_at,
     ...students.map((student) => student.learning_last_synced_at),
   ]), [learningSummary?.last_synced_at, students])
+
+  const onlineBehaviorByUsername = useMemo(() => {
+    const map = new Map<string, AnalyticsLearningBehaviorRow>()
+    onlineRows.forEach((row) => {
+      if (row.username) map.set(row.username, row)
+    })
+    return map
+  }, [onlineRows])
+
+  const studentBehavior = (student: AcademicStudent) => {
+    return onlineBehaviorByUsername.get(student.username || '') || onlineBehaviorByUsername.get(student.openedx_username || '') || null
+  }
 
   const studentComponentScore = (student: AcademicStudent, column: GradeColumn) => {
     return student.learning_component_scores?.find((score) => gradeColumnIdentity(score) === column.key || componentKey(score) === column.key || score.name === column.name) || null
@@ -674,6 +859,28 @@ function ClassDetailContent() {
 
     </section>
 
+    <section className="card academic-unified-card online-learning-card">
+      <div className="section-head compact-section-head">
+        <div>
+          <h2>Học online</h2>
+          <p>Nhận định dựa trên log hệ thống, chỉ là tín hiệu hỗ trợ giáo viên xác minh.</p>
+        </div>
+        <div className="toolbar-actions">
+          <button className="btn secondary small" type="button" disabled={onlineRecalculating || !effectiveCourseId} onClick={recalculateOnlineAnalytics}>{onlineRecalculating ? 'Đang tính...' : 'Tính lại học online'}</button>
+        </div>
+      </div>
+      <div className="online-learning-summary-strip">
+        <div><span>Tổng đánh giá</span><b>{onlineSummary?.total_students || 0}</b></div>
+        <div><span>Có dấu hiệu học thật</span><b>{onlineSummary?.likely_real_learning_count || 0}</b></div>
+        <div><span>Có khả năng treo máy</span><b>{onlineSummary?.possible_idle_count || 0}</b></div>
+        <div><span>Dấu hiệu cần kiểm tra</span><b>{onlineSummary?.possible_suspicious_count || 0}</b></div>
+        <div><span>Chưa đủ dữ liệu</span><b>{onlineSummary?.insufficient_data_count || 0}</b></div>
+      </div>
+      <p className="online-learning-disclaimer">Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.</p>
+      {onlineLoading && <p className="form-message">Đang tải học online...</p>}
+      {onlineMessage && <p className="form-message">{onlineMessage}</p>}
+    </section>
+
     <section className="card academic-unified-card student-list-card">
       <div className="section-head">
         <div><h2>Danh sách sinh viên</h2><p>{studentListUpdatedAt ? `Cập nhật: ${formatVNTimeDate(studentListUpdatedAt)}` : 'Cập nhật: chưa có dữ liệu đồng bộ học tập'}</p></div>
@@ -690,21 +897,36 @@ function ClassDetailContent() {
           <input className="input compact-input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Tìm mã SV, username, họ tên..." />
         </div>
       </div>
-      <div className="class-student-table-shell">
+      <div className="class-student-table-shell" ref={tableScrollRef} onWheel={handleStudentTableWheel}>
         <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll">
         <table className="data-table academic-data-table student-grade-table">
-          <thead><tr><th className="sticky-col">Sinh viên</th><th>Username</th><th>Email</th><th>Số lần học lại</th><th>Đồng bộ CMS</th><th>Đã enroll</th><th>Tiến độ học</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
+          <thead><tr><th className="sticky-col">Sinh viên</th><th>Tiến độ học</th><th>Học online</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={8 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={8 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
-            {students.map((student) => <tr key={student.id}>
-              <td className="main-entity-cell sticky-col"><b>{student.student_code || '—'}</b><small>{student.full_name}</small></td>
-              <td className="username-combined-cell"><b>{student.username || 'N/A'}</b>{student.openedx_username && student.openedx_username !== student.username ? <small>CMS: {student.openedx_username}</small> : null}</td>
-              <td>{student.email || 'N/A'}</td>
-              <td className="relearn-count-cell"><b>{student.total_relearn || 0}</b><small>Số lần học lại</small></td>
-              <td><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.last_resolved_at ? `Kiểm tra: ${formatVNDateTime(student.last_resolved_at)}` : ''}</small></td>
-              <td><span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span><small>{student.learning_enrollment_synced_at ? `Kiểm tra: ${formatVNDateTime(student.learning_enrollment_synced_at)}` : ''}</small></td>
-              <td className="learning-progress-cell"><b>Hoàn thành khóa học: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span></td>
+            {loading && <tr><td colSpan={4 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
+            {!loading && !students.length && <tr><td colSpan={4 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
+            {students.map((student) => {
+              const behavior = studentBehavior(student)
+              return <tr key={student.id}>
+              <td className="main-entity-cell sticky-col compact-student-identity-cell">
+                <b>{student.student_code || '—'}</b>
+                <small>{student.full_name}</small>
+                <small>Username: {student.username || 'N/A'}{student.openedx_username && student.openedx_username !== student.username ? ` · CMS: ${student.openedx_username}` : ''}</small>
+                <small>Email: {student.email || 'N/A'}</small>
+                <small>Học lại: {student.total_relearn || 0}</small>
+              </td>
+              <td className="learning-progress-cell compact-learning-progress-cell">
+                <b>Hoàn thành khóa học: {percentLabel(student.learning_progress_percent)}</b>
+                <small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small>
+                <span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>
+                {shouldSuggestFullCmsSync(student) ? <em className="cms-full-sync-hint">Hãy bấm Đồng bộ full CMS</em> : null}
+              </td>
+              <td className="online-behavior-cell">
+                {behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}>
+                  <span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span>
+                  <small>Độ tin cậy: {Math.round(behavior.confidence_score || 0)}%</small>
+                  <small>{recommendedActionLabel(behavior.recommended_action)}</small>
+                </button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span>}
+              </td>
               <td className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Chưa đủ dữ liệu'}</small><small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small></td>
               {componentColumns.map((column) => {
                 const score = studentComponentScore(student, column)
@@ -715,7 +937,8 @@ function ClassDetailContent() {
                   </button>
                 </td>
               })}
-            </tr>)}
+            </tr>
+            })}
           </tbody>
         </table>
         </div>
@@ -753,6 +976,75 @@ function ClassDetailContent() {
           {!filteredAssignmentRows.length && <tr><td colSpan={5}>Không có sinh viên theo trạng thái đang lọc.</td></tr>}
         </tbody></table></div>
         <div className="modal-actions"><button className="btn secondary" onClick={() => setAssignmentModalOpen(false)}>Đóng</button><button className="btn primary" disabled={savingPolicy} onClick={saveAssignmentRows}>{savingPolicy ? 'Đang lưu...' : 'Lưu workflow Assignment'}</button></div>
+      </div>
+    </div>}
+
+    {selectedBehavior && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSelectedBehavior(null); setSelectedBehaviorDetail(null) } }}>
+      <div className="card bank-modal academic-confirm-modal online-behavior-modal online-behavior-deadline-modal" role="dialog" aria-modal="true" aria-labelledby="online-behavior-modal-title">
+        <div className="section-head">
+          <div>
+            <h2 id="online-behavior-modal-title">Chi tiết học online</h2>
+            <p>{selectedBehavior.username}</p>
+          </div>
+        </div>
+        <div className="quiz-detail-grid online-behavior-grid">
+          <div><span>Nhận định</span><b>{safeBehaviorLabel(selectedBehavior)}</b></div>
+          <div><span>Độ tin cậy</span><b>{Math.round(selectedBehavior.confidence_score || 0)}%</b></div>
+          <div><span>Điểm học thật</span><b>{Math.round(selectedBehavior.real_learning_score || 0)}%</b></div>
+          <div><span>Điểm treo máy</span><b>{Math.round(selectedBehavior.idle_score || 0)}%</b></div>
+          <div><span>Điểm bất thường</span><b>{Math.round(selectedBehavior.suspicious_score || 0)}%</b></div>
+          <div><span>Chất lượng dữ liệu</span><b>{selectedBehavior.data_quality || 'MISSING'}</b></div>
+          <div><span>Lần học cuối</span><b>{selectedBehavior.last_activity_at ? formatVNDateTime(selectedBehavior.last_activity_at) : 'N/A'}</b></div>
+          <div><span>Tính lúc</span><b>{selectedBehavior.calculated_at ? formatVNDateTime(selectedBehavior.calculated_at) : 'N/A'}</b></div>
+        </div>
+        <div className="online-behavior-evidence">
+          <b>Tóm tắt</b>
+          <p>{selectedBehavior.human_readable_summary || 'Chưa đủ dữ liệu để tóm tắt.'}</p>
+          <b>Dấu hiệu chính</b>
+          <p>{selectedBehavior.reason_codes?.length ? selectedBehavior.reason_codes.join(', ') : 'Chưa có dấu hiệu nổi bật.'}</p>
+          <b>Hành động đề xuất</b>
+          <p>{recommendedActionLabel(selectedBehavior.recommended_action)}</p>
+        </div>
+
+        <div className="online-deadline-section">
+          <div className="section-head compact-section-head">
+            <div>
+              <h3>Theo Bài / Deadline</h3>
+              <p>Deadline ưu tiên lấy từ cấu hình Quiz đã có; chỉ suy luận 6 tuần khi thật sự thiếu.</p>
+            </div>
+          </div>
+          {selectedBehaviorLoading && <p className="form-message">Đang tải timeline học online...</p>}
+          {!selectedBehaviorLoading && selectedBehaviorDetail?.sessions?.length ? <div className="online-week-timeline">
+            {[1, 2, 3, 4, 5, 6].map((week) => {
+              const sessions = selectedBehaviorDetail.sessions.filter((item) => Number(item.week_index || 0) === week)
+              if (!sessions.length) return null
+              return <div key={week} className="online-week-card">
+                <h4>Tuần {week}</h4>
+                <div className="online-session-list">
+                  {sessions.map((session: AnalyticsStudentSessionProgress) => <div key={`${session.session_index}-${session.session_title}`} className="online-session-card">
+                    <div className="online-session-head">
+                      <b>{session.session_title || `Bài ${session.session_index}`}</b>
+                      <span className={sessionStatusClass(session.session_learning_status)}>{sessionStatusLabel(session.session_learning_status)}</span>
+                    </div>
+                    <div className="online-session-metrics">
+                      <span>Video: {session.videos_completed || 0}/{session.total_videos || 0}</span>
+                      <span>Hoàn thành TB: {percentLabel(session.avg_video_completion_percent)}</span>
+                      <span>Thời gian xem: {compactDuration(session.estimated_watch_seconds)}</span>
+                      <span>Quiz cuối Bài: {session.quiz_completed ? 'Đạt' : session.quiz_attempted ? 'Đã làm' : 'Chưa làm'}</span>
+                      <span>Deadline: {formatDateOnly(session.deadline_at)} · {deadlineSourceLabel(session.deadline_source)}</span>
+                    </div>
+                    <small>{session.completed_before_deadline ? 'Hoàn thành trước deadline' : session.completed_late ? 'Hoàn thành sau deadline' : 'Chưa xác nhận hoàn thành theo deadline'}</small>
+                    {session.reason_codes?.length ? <small>Dấu hiệu: {session.reason_codes.slice(0, 4).join(', ')}</small> : null}
+                  </div>)}
+                </div>
+              </div>
+            })}
+          </div> : null}
+          {!selectedBehaviorLoading && selectedBehaviorDetail && !selectedBehaviorDetail.sessions?.length ? <p className="form-message">Chưa có dữ liệu theo Bài/Session. Hãy chạy ingest và Tính lại học online.</p> : null}
+        </div>
+
+        <p className="online-learning-disclaimer">Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.</p>
+        <div className="modal-actions"><button className="btn primary" type="button" onClick={() => { setSelectedBehavior(null); setSelectedBehaviorDetail(null) }}>Đóng</button></div>
       </div>
     </div>}
 

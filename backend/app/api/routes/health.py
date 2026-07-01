@@ -72,3 +72,42 @@ def openedx_connector_config_health():
         'course_search_endpoint': client.course_search_endpoint,
         'timeout_seconds': client.timeout_seconds,
     }
+
+
+@router.get('/health/analytics')
+def analytics_health():
+    """Read-only analytics runtime check for production smoke tests."""
+    from pathlib import Path
+    from app.db.session import SessionLocal
+    from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
+
+    db = SessionLocal()
+    try:
+        status_payload = LearningAnalyticsCoreService(db).ops_status()
+        file_path = status_payload.get('ingest', {}).get('file_path') or settings.openedx_tracking_log_path
+        file_exists = Path(str(file_path)).exists()
+        return {
+            'status': 'ok',
+            'version': settings.app_version,
+            'analytics_ingest_enabled': settings.analytics_ingest_enabled,
+            'analytics_ingest_scheduler_enabled': settings.analytics_ingest_scheduler_enabled,
+            'tracking_log_path': file_path,
+            'tracking_log_exists': file_exists,
+            'tracking_event_count': status_payload.get('tracking_event_count', 0),
+            'behavior_snapshot_count': status_payload.get('behavior_snapshot_count', 0),
+            'active_recalculate_jobs': status_payload.get('active_recalculate_jobs', 0),
+            'data_quality_readiness': status_payload.get('data_quality_readiness'),
+            'data_quality_issue_count': status_payload.get('data_quality_issue_count'),
+            'production_readiness': status_payload.get('production_readiness'),
+            'ready_for_production': status_payload.get('ready_for_production'),
+            'production_blocker_count': status_payload.get('production_blocker_count'),
+            'production_warning_count': status_payload.get('production_warning_count'),
+            'rollout_status': status_payload.get('rollout_status'),
+            'rollout_mode': status_payload.get('rollout_mode'),
+            'monitoring_status': status_payload.get('monitoring_status'),
+            'stuck_analytics_job_count': status_payload.get('stuck_analytics_job_count'),
+            'stale_snapshot_count': status_payload.get('stale_snapshot_count'),
+            'safe_policy': 'signals_only_not_violation',
+        }
+    finally:
+        db.close()

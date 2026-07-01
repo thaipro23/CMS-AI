@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.5.98'
+    app_version: str = '25.9.16.7.2'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -178,6 +178,46 @@ class Settings(BaseSettings):
     openedx_student_insight_shared_secret: str | None = None
     openedx_student_insight_timeout_seconds: int = 30
     openedx_student_insight_max_batch_size: int = 100
+
+    # v25.9.16.6.3 Learning Behavior Analytics / Aspects-lite.
+    # AI Server reads a mounted Open edX tracking.log incrementally. It never
+    # scans the full log from request handlers and every result is a soft signal,
+    # not a disciplinary conclusion.
+    openedx_tracking_log_path: str = '/openedx-data/lms/logs/tracking.log'
+    analytics_ingest_enabled: bool = True
+    analytics_ingest_scheduler_enabled: bool = False
+    analytics_ingest_interval_seconds: int = 60
+    analytics_max_lines_per_run: int = 50000
+    analytics_recalculate_max_students_per_job: int = 500
+    analytics_dashboard_max_page_size: int = 200
+    analytics_video_complete_threshold: float = 0.9
+    analytics_suspicious_watch_ratio: float = 0.25
+    analytics_max_passive_segment_seconds: int = 600
+    analytics_enable_problem_correlation: bool = True
+    analytics_snapshot_stale_hours: int = 168
+    # v25.9.16.7.2 production safety gates for analytics operations.
+    analytics_backfill_max_jobs_per_request: int = 25
+    analytics_backfill_max_active_jobs: int = 20
+    analytics_recalculate_enqueue_cooldown_seconds: int = 300
+    analytics_ingest_enqueue_cooldown_seconds: int = 120
+    analytics_export_max_rows: int = 50000
+    analytics_production_min_events: int = 1
+    analytics_production_min_snapshots: int = 1
+    analytics_pilot_sample_limit: int = 5
+    # v25.9.16.7.2 rollout/monitoring controls. These are env-only guards
+    # to avoid creating rollout tables while still allowing safe production rollout.
+    analytics_rollout_enabled: bool = True
+    analytics_rollout_mode: str = 'production'  # off | pilot | production
+    analytics_rollout_campuses: str = ''
+    analytics_rollout_branches: str = ''
+    analytics_rollout_class_ids: str = ''
+    analytics_rollout_course_ids: str = ''
+    analytics_rollout_allow_backfill: bool = True
+    analytics_rollout_allow_export: bool = True
+    analytics_monitoring_stale_ingest_seconds: int = 900
+    analytics_monitoring_stuck_job_minutes: int = 60
+    analytics_monitoring_snapshot_stale_hours: int = 168
+    analytics_monitoring_warning_active_jobs: int = 10
 
     academic_ap_sync_enabled: bool = True
     academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'
