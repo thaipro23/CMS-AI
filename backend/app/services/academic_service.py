@@ -235,9 +235,85 @@ class AccessDecision:
 
 
 class AcademicService:
+    CONNECTOR_MIN_CONTRACT_VERSION = 'learning-sync/v25.9.16.5.98'
+    CONNECTOR_MIN_RUNTIME_VERSION = '25.9.16.5.98'
+
     def __init__(self, db: Session):
         self.db = db
         self.rbac = BusinessRBACService(db)
+
+    @staticmethod
+    def _version_tuple(value: Any) -> tuple[int, ...]:
+        parts = []
+        for token in re.findall(r'\d+', str(value or '')):
+            try:
+                parts.append(int(token))
+            except Exception:
+                parts.append(0)
+        return tuple(parts or [0])
+
+    @classmethod
+    def _version_at_least(cls, actual: Any, expected: Any) -> bool:
+        a = list(cls._version_tuple(actual))
+        e = list(cls._version_tuple(expected))
+        width = max(len(a), len(e))
+        a.extend([0] * (width - len(a)))
+        e.extend([0] * (width - len(e)))
+        return tuple(a) >= tuple(e)
+
+    def _validate_connector_learning_contract(self, payload: dict[str, Any], *, course_id: str) -> None:
+        """Fail fast when LMS connector is too old or returns unsafe completion contract.
+
+        This prevents an older connector from writing `NULL`, raw StudentModule row
+        counts, or the old 70-block denominator over good snapshots.
+        """
+        if not isinstance(payload, dict):
+            raise RuntimeError('Open edX Connector class-analytics trả về payload không hợp lệ')
+        if payload.get('ok') is False:
+            raise RuntimeError(str(payload.get('message') or payload.get('detail') or 'Open edX Connector báo lỗi khi lấy dữ liệu học tập'))
+        version = payload.get('connector_version') or (payload.get('diagnostics') or {}).get('connector_version')
+        contract = payload.get('connector_contract_version') or (payload.get('diagnostics') or {}).get('connector_contract_version')
+        progress_contract = payload.get('progress_contract') if isinstance(payload.get('progress_contract'), dict) else {}
+        if not version or not self._version_at_least(version, self.CONNECTOR_MIN_RUNTIME_VERSION):
+            raise RuntimeError(
+                f'Open edX Connector đang thiếu hoặc cũ hơn {self.CONNECTOR_MIN_RUNTIME_VERSION} cho Course {course_id}. '
+                'Hãy cập nhật plugin, restart lms/cms/lms-worker/cms-worker, rồi kiểm tra CONNECTOR_VERSION trước khi Cập nhật điểm.'
+            )
+        if contract and str(contract) != self.CONNECTOR_MIN_CONTRACT_VERSION:
+            raise RuntimeError(
+                f'Open edX Connector contract không khớp ({contract}). Yêu cầu {self.CONNECTOR_MIN_CONTRACT_VERSION}. '
+                'Dừng ghi snapshot để tránh ghi đè dữ liệu đúng bằng payload sai contract.'
+            )
+        if not progress_contract:
+            raise RuntimeError('Open edX Connector không trả progress_contract. Dừng sync để tránh dùng lại rule completion cũ.')
+        denominator = str(progress_contract.get('denominator') or '')
+        numerator = str(progress_contract.get('numerator') or '')
+        ignored = {str(item).lower() for item in (progress_contract.get('ignored_studentmodule_types') or [])}
+        if denominator != 'reachable_sequential_subsections' or numerator != 'studentmodule_sequential_position_rows' or 'itembank' not in ignored:
+            raise RuntimeError(
+                'Open edX Connector progress_contract không an toàn. Yêu cầu denominator=reachable_sequential_subsections, '
+                'numerator=studentmodule_sequential_position_rows và phải bỏ itembank/problem/video khỏi Course completion.'
+            )
+
+    def _invalidate_teacher_report_cache_for_class(self, class_id: str, *, reason: str) -> int:
+        """Invalidate teacher report materialized rows affected by one class.
+
+        Deleting scoped cache is safer than trying to patch aggregate rows. The next
+        teacher-management request falls back to live data or the operator rebuilds
+        the report job.
+        """
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls or not cls.term_id:
+            return 0
+        branch = str(cls.branch or '').strip().lower()
+        campus = str(cls.campus or '').strip().lower()
+        query = self.db.query(AcademicTeacherReportSummary).filter(AcademicTeacherReportSummary.term_id == cls.term_id)
+        if branch:
+            query = query.filter(or_(AcademicTeacherReportSummary.branch.is_(None), func.lower(AcademicTeacherReportSummary.branch) == branch))
+        if campus:
+            query = query.filter(or_(AcademicTeacherReportSummary.campus.is_(None), func.lower(AcademicTeacherReportSummary.campus) == campus))
+        deleted = query.delete(synchronize_session=False)
+        return int(deleted or 0)
 
     def access_decision(self, user: UserContext) -> AccessDecision:
         if self.rbac.is_system_admin(user):
@@ -1475,9 +1551,14 @@ class AcademicService:
             return 'late_not_100'
         return 'not_100'
 
-    def _enrich_component_scores_for_class(self, items: list[dict[str, Any]], cls: AcademicClass | None) -> list[dict[str, Any]]:
+    def _enrich_component_scores_for_class(
+        self,
+        items: list[dict[str, Any]],
+        cls: AcademicClass | None,
+        schedule_by_number: dict[int, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         normalized = list(items or [])
-        schedule_by_number = self._quiz_schedule_map_for_class(cls, normalized)
+        schedule_by_number = schedule_by_number if schedule_by_number is not None else self._quiz_schedule_map_for_class(cls, normalized)
         enriched: list[dict[str, Any]] = []
         for item in normalized:
             row = dict(item)
@@ -2381,10 +2462,11 @@ class AcademicService:
         assignment_scores: dict[str, Any] | None = None,
         deadline_overrides: dict[int, Any] | None = None,
         course_id: str | None = None,
+        quiz_schedule_by_number: dict[int, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         cls = cls or self.db.get(AcademicClass, class_id)
         block = block if block is not None else (self._block_for_class(cls) if cls else None)
-        components = self._enrich_component_scores_for_class(self._component_scores_from_snapshot(learning), cls)
+        components = self._enrich_component_scores_for_class(self._component_scores_from_snapshot(learning), cls, quiz_schedule_by_number)
         course_id = course_id or (learning.openedx_course_id if learning else None)
         policy_service = policy_service or TrainingPolicyService(self.db)
         if assignment_scores is None:
@@ -2400,7 +2482,6 @@ class AcademicService:
             assignment_score=assignment_scores.get(student.id),
             overrides=deadline_overrides,
         )
-        learning_diagnostics = self._learning_snapshot_diagnostics(learning, mapping)
         return {
             'class_id': class_id,
             'id': student.id,
@@ -2437,8 +2518,11 @@ class AcademicService:
             'learning_last_synced_at': (learning.learning_synced_at or learning.last_synced_at) if learning else None,
             'learning_enrollment_synced_at': learning.enrollment_synced_at if learning else None,
             'learning_status': self._learning_status_for_snapshot(learning, mapping),
-            'learning_diagnostics': learning_diagnostics,
-            'learning_sync_note': learning_diagnostics.get('note'),
+            # Keep the hot class-detail API lean. Full diagnostic text is no longer
+            # returned per student because the UI does not display it and it adds
+            # measurable JSON/CPU overhead on large classes.
+            'learning_diagnostics': None,
+            'learning_sync_note': None,
             'learning_component_scores': components,
             'training_policy': training_policy,
             'exam_eligible': training_policy.get('exam_eligible'),
@@ -2503,8 +2587,17 @@ class AcademicService:
         rows = query.order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).offset((page - 1) * page_size).limit(page_size).all()
         block = self._block_for_class(cls) if cls else None
         policy_service = TrainingPolicyService(self.db)
-        assignment_scores = policy_service.assignment_scores_for_class(class_id, course_id)
+        page_student_ids = [student.id for student, _class_student, _mapping, _learning in rows]
+        assignment_scores = policy_service.assignment_scores_for_class(class_id, course_id, page_student_ids)
         deadline_overrides = policy_service.deadline_overrides_for_class(class_id, course_id)
+        # v25.9.16.5.94: precompute the quiz deadline schedule once per visible
+        # page. Previously every student row recomputed the same /semesters
+        # schedule, reloaded the block, and reparsed component labels. That was
+        # correct but wasteful on 50-row pages with many Quiz columns.
+        page_component_scores: list[dict[str, Any]] = []
+        for _student, _class_student, _mapping, learning in rows:
+            page_component_scores.extend(self._component_scores_from_snapshot(learning))
+        quiz_schedule_by_number = self._quiz_schedule_map_for_class(cls, page_component_scores) if cls else {}
         items = [
             self._student_mapping_item(
                 class_id,
@@ -2519,6 +2612,7 @@ class AcademicService:
                 assignment_scores=assignment_scores,
                 deadline_overrides=deadline_overrides,
                 course_id=course_id,
+                quiz_schedule_by_number=quiz_schedule_by_number,
             )
             for student, class_student, mapping, learning in rows
         ]
@@ -3868,9 +3962,17 @@ class AcademicService:
         mapping.active = True
         mapping.updated_at = now
         self.db.add(mapping)
+        # v25.9.16.5.98: course mapping changes make old learning snapshots and
+        # teacher report cache stale. Remove class snapshots so the UI does not
+        # show progress/grades from a previous Course CMS mapping.
+        self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id == class_id).delete(synchronize_session=False)
+        cache_invalidated = self._invalidate_teacher_report_cache_for_class(class_id, reason='course_mapping_changed')
         self.db.commit()
         self.db.refresh(mapping)
-        return self._class_course_mapping_item(mapping)
+        result = self._class_course_mapping_item(mapping)
+        result['cache_invalidated'] = {'teacher_report_rows': cache_invalidated, 'reason': 'course_mapping_changed'}
+        result['learning_snapshots_cleared'] = True
+        return result
 
     def deactivate_class_course_mapping(self, user: UserContext, class_id: str) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
@@ -3881,8 +3983,13 @@ class AcademicService:
         mapping.updated_by = user.user_id
         mapping.updated_at = datetime.utcnow()
         self.db.add(mapping)
+        self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id == class_id).delete(synchronize_session=False)
+        cache_invalidated = self._invalidate_teacher_report_cache_for_class(class_id, reason='course_mapping_deactivated')
         self.db.commit()
-        return self._class_course_mapping_item(mapping)
+        result = self._class_course_mapping_item(mapping)
+        result['cache_invalidated'] = {'teacher_report_rows': cache_invalidated, 'reason': 'course_mapping_deactivated'}
+        result['learning_snapshots_cleared'] = True
+        return result
 
     def mapping_summary_for_class(self, user: UserContext, class_id: str) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
@@ -4156,9 +4263,6 @@ class AcademicService:
             'progress_na': 0,
             'grade_na': 0,
             'component_na': 0,
-            'blocking': 0,
-            'warning': 0,
-            'ok': 0,
         }
         source_counts: dict[str, int] = {}
         for student_id, mapping in mapping_rows:
@@ -4167,34 +4271,30 @@ class AcademicService:
             status_counts[status_name] = status_counts.get(status_name, 0) + 1
             if status_name in alert_counts:
                 alert_counts[status_name] += 1
-            diagnostic = self._learning_snapshot_diagnostics(snapshot, mapping)
-            severity = str(diagnostic.get('severity') or 'warning')
-            diagnostic_counts[severity] = diagnostic_counts.get(severity, 0) + 1
-            if diagnostic.get('official_progress'):
-                diagnostic_counts['official_progress'] += 1
-            if diagnostic.get('student_module_progress'):
-                diagnostic_counts['student_module_progress'] = diagnostic_counts.get('student_module_progress', 0) + 1
-            if diagnostic.get('has_progress_percent'):
+            progress_percent = self._snapshot_progress_percent(snapshot)
+            grade_percent = self._snapshot_grade_percent(snapshot)
+            components = self._component_scores_from_snapshot(snapshot)
+            source = self._snapshot_progress_source(snapshot) or ''
+            source_l = source.lower()
+            if progress_percent is not None:
                 diagnostic_counts['with_progress_percent'] += 1
             else:
                 diagnostic_counts['progress_na'] += 1
-            if diagnostic.get('has_grade_percent'):
+            if grade_percent is not None:
                 diagnostic_counts['with_grade_percent'] += 1
             else:
                 diagnostic_counts['grade_na'] += 1
-            if diagnostic.get('has_component_grades'):
+            if components:
                 diagnostic_counts['with_component_grades'] += 1
             else:
                 diagnostic_counts['component_na'] += 1
-            source = str(diagnostic.get('progress_source') or '').strip()
+            if 'studentmodule' in source_l:
+                diagnostic_counts['student_module_progress'] += 1
+            if 'coursehome' in source_l or 'completion_summary' in source_l:
+                diagnostic_counts['official_progress'] += 1
             if source:
                 source_counts[source] = source_counts.get(source, 0) + 1
-        if diagnostic_counts.get('official_progress'):
-            diagnostic_note = 'OK: đã có dữ liệu Course Home Progress official.'
-        elif diagnostic_counts.get('student_module_progress'):
-            diagnostic_note = 'Đang dùng StudentModule fallback để tính Course completion = completed_blocks / total_blocks. Từ v90 chỉ dùng StudentModule type=sequential có state position làm tử số và tổng reachable sequential/subsection làm mẫu số; bỏ hoàn toàn itembank/problem khỏi Course completion để tránh false 15/70 và tránh query nặng. Sau khi cập nhật connector, hãy restart LMS và chạy Cập nhật điểm.'
-        else:
-            diagnostic_note = 'Chưa có Course Home Progress official hoặc StudentModule fallback; completion sẽ giữ N/A để tránh đoán sai từ quiz/grade.'
+        diagnostic_note = None
         return {
             'class_id': class_id,
             'openedx_course_id': course_id,
@@ -4229,6 +4329,11 @@ class AcademicService:
         ).first()
         if not snapshot:
             snapshot = AcademicStudentLearningSnapshot(class_id=class_id, student_id=student.id, openedx_course_id=course_id, created_at=now)
+        previous_progress_percent = snapshot.progress_percent
+        previous_grade_percent = snapshot.grade_percent
+        previous_completed_blocks = snapshot.completed_blocks
+        previous_total_blocks = snapshot.total_blocks
+        previous_raw_json = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
         enrollment = result.get('enrollment') if isinstance(result.get('enrollment'), dict) else {}
         progress = result.get('progress') if isinstance(result.get('progress'), dict) else {}
         grade = result.get('grade') if isinstance(result.get('grade'), dict) else {}
@@ -4243,30 +4348,30 @@ class AcademicService:
             or ('enrolled' if enrollment.get('is_enrolled') is True else ('not_enrolled' if enrollment.get('is_enrolled') is False else 'unknown'))
         )[:50]
         snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or None
-        if self._has_accepted_progress_payload(result):
+        accepted_progress_payload = self._has_accepted_progress_payload(result)
+        if accepted_progress_payload:
             snapshot.progress_percent = self._float_or_none(result.get('progress_percent', progress.get('percent')))
             if snapshot.progress_percent is None:
                 snapshot.progress_percent = self._progress_percent_from_payload(result)
         else:
-            # Do not infer Course completion from quiz/detailed grades. N/A is
-            # safer than a false progress percentage when the connector plugin
-            # did not return Course Home Progress or the explicit StudentModule
-            # fallback counts introduced in v25.9.16.5.86/v87/v88.
-            snapshot.progress_percent = None
-        snapshot.grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
-        if snapshot.grade_percent is None:
-            snapshot.grade_percent = self._grade_percent_from_payload(result)
+            # v25.9.16.5.97: never overwrite a previously-good progress value
+            # with a connector payload that lacks the locked progress contract.
+            snapshot.progress_percent = previous_progress_percent
+        incoming_grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
+        if incoming_grade_percent is None:
+            incoming_grade_percent = self._grade_percent_from_payload(result)
+        snapshot.grade_percent = incoming_grade_percent if incoming_grade_percent is not None else previous_grade_percent
         if 'passed' in result:
             snapshot.passed = _boolish(result.get('passed'))
         elif 'passed' in grade:
             snapshot.passed = _boolish(grade.get('passed'))
-        snapshot.completed_blocks = self._int_or_none(
+        incoming_completed_blocks = self._int_or_none(
             result.get('completed_blocks')
             or progress.get('completed_blocks')
             or (completion_summary or {}).get('complete_count')
             or (completion_summary or {}).get('completed_count')
         )
-        snapshot.total_blocks = self._int_or_none(
+        incoming_total_blocks = self._int_or_none(
             result.get('total_blocks')
             or progress.get('total_blocks')
             or (
@@ -4275,6 +4380,8 @@ class AcademicService:
                 if completion_summary else None
             )
         )
+        snapshot.completed_blocks = incoming_completed_blocks if incoming_completed_blocks is not None else previous_completed_blocks
+        snapshot.total_blocks = incoming_total_blocks if incoming_total_blocks is not None else previous_total_blocks
         snapshot.last_activity_at = self._dt_or_none(result.get('last_activity_at') or progress.get('last_activity_at'))
         diagnostic_payload = {
             'official_progress': self._is_official_progress_payload(result),
@@ -4286,7 +4393,13 @@ class AcademicService:
             'has_grade_percent': snapshot.grade_percent is not None,
             'has_component_grades': bool(self._component_scores_from_payload(result)),
         }
-        snapshot.raw_json = {'source': source, 'payload': _json_safe_value(result), 'learning_diagnostics': _json_safe_value(diagnostic_payload)}
+        snapshot.raw_json = {
+            'source': source,
+            'payload': _json_safe_value(result),
+            'learning_diagnostics': _json_safe_value(diagnostic_payload),
+            'previous_preserved': bool((not accepted_progress_payload and previous_progress_percent is not None) or (incoming_grade_percent is None and previous_grade_percent is not None)),
+            'previous_source': previous_raw_json.get('source'),
+        }
         snapshot.learning_synced_at = now
         snapshot.last_synced_at = now
         snapshot.updated_at = now
@@ -4578,9 +4691,16 @@ class AcademicService:
                     'full_name': student.full_name,
                 })
             analytics_payload = client.class_analytics_payload(course_id=course_id, cohort_name=cohort_name, students=payload)
+            self._validate_connector_learning_contract(analytics_payload, course_id=course_id)
             results = analytics_payload.get('results') or []
             batch_learning_counts = analytics_payload.get('learning_counts') if isinstance(analytics_payload.get('learning_counts'), dict) else {}
             batch_diagnostics = analytics_payload.get('diagnostics') if isinstance(analytics_payload.get('diagnostics'), dict) else {}
+            batch_diagnostics = {
+                **batch_diagnostics,
+                'connector_version': analytics_payload.get('connector_version'),
+                'connector_contract_version': analytics_payload.get('connector_contract_version'),
+                'progress_contract': analytics_payload.get('progress_contract') if isinstance(analytics_payload.get('progress_contract'), dict) else {},
+            }
             for key, value in batch_learning_counts.items():
                 if isinstance(value, (int, float)):
                     connector_plugin_learning_counts[key] = int(connector_plugin_learning_counts.get(key, 0) or 0) + int(value or 0)
@@ -4621,6 +4741,9 @@ class AcademicService:
         if updated > 0 and connector_enrolled_seen <= 0:
             raise RuntimeError('Cập nhật tiến độ/điểm không có sinh viên nào được connector xác nhận enrolled trên Open edX. Hãy chạy lại Enrollment Course CMS và kiểm tra CourseEnrollment trước khi lấy điểm.')
         summary = self._learning_summary_for_class_course(class_id, course_id)
+        teacher_report_cache_invalidated = self._invalidate_teacher_report_cache_for_class(class_id, reason='learning_sync')
+        if teacher_report_cache_invalidated:
+            self.db.commit()
         connector_counts = {
             'checked': int(updated),
             'enrolled_seen': int(connector_enrolled_seen),
@@ -4629,7 +4752,7 @@ class AcademicService:
             'with_component_grades': int(connector_component_seen),
             'missing_result': int(connector_missing_result),
             'read_only_no_enroll': 1,
-            'plugin_connector_version_ok': 1 if str(connector_plugin_diagnostics.get('connector_version') or '') >= '25.9.16.5.88' else 0,
+            'plugin_connector_version_ok': 1 if self._version_at_least(connector_plugin_diagnostics.get('connector_version'), self.CONNECTOR_MIN_RUNTIME_VERSION) else 0,
             'plugin_student_module_available': 1 if connector_plugin_diagnostics.get('student_module_model_available') is True else 0,
         }
         if connector_plugin_learning_counts:
@@ -4648,6 +4771,7 @@ class AcademicService:
             'updated': updated,
             'connector_counts': connector_counts,
             'connector_diagnostics': connector_plugin_diagnostics,
+            'cache_invalidated': {'teacher_report_rows': teacher_report_cache_invalidated, 'reason': 'learning_sync'},
             'message': message,
             **summary,
         }
@@ -4781,6 +4905,9 @@ class AcademicService:
                 counts[f'learning_{key}'] = int(value or 0)
 
         summary = self._learning_summary_for_class_course(class_id, course_id)
+        teacher_report_cache_invalidated = self._invalidate_teacher_report_cache_for_class(class_id, reason='full_cms_sync')
+        if teacher_report_cache_invalidated:
+            self.db.commit()
         message = 'Full CMS sync hoàn tất: đã tạo/kiểm tra user CMS, enroll Course CMS và cập nhật tiến độ/điểm.' if learning_result else 'Full CMS sync hoàn tất: đã tạo/kiểm tra user CMS và enroll Course CMS.'
         return {
             'ok': True,
@@ -4794,6 +4921,7 @@ class AcademicService:
             'learning': learning_result,
             'counts': counts,
             'learning_summary': summary,
+            'cache_invalidated': {'teacher_report_rows': teacher_report_cache_invalidated, 'reason': 'full_cms_sync'},
         }
 
 

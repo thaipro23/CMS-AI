@@ -512,7 +512,9 @@ def list_bank_operation_jobs(
         query = query.filter(BankOperationJob.target_type == target_type)
     if target_id:
         query = query.filter(BankOperationJob.target_id == target_id)
-    if status_filter:
+    if status_filter == 'active':
+        query = query.filter(BankOperationJob.status.in_(['queued', 'running']))
+    elif status_filter:
         query = query.filter(BankOperationJob.status == status_filter)
     page_data = _paginate(query.order_by(BankOperationJob.created_at.desc(), BankOperationJob.id.desc()), page=page, page_size=page_size, max_page_size=100)
     page_data['items'] = [_job_out(item) for item in page_data['items']]

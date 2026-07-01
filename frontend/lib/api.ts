@@ -2055,6 +2055,14 @@ export async function getAcademicTrainingTeacherReportJob(headers: HeadersInit, 
   return parseResponse(await apiFetch(`${API}/academic/training/teachers/report-jobs/${encodeURIComponent(jobId)}`, { credentials: 'include', headers }));
 }
 
+
+export async function getAcademicTrainingTeacherReportJobs(headers: HeadersInit, filters: { status?: 'active' | 'queued' | 'running' | 'completed' | 'failed' | 'all' | string; limit?: number } = {}): Promise<AcademicTeacherReportJob[]> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  params.set('limit', String(Math.max(1, Math.min(80, filters.limit || 20))));
+  return parseResponse(await apiFetch(`${API}/academic/training/teachers/report-jobs?${params.toString()}`, { credentials: 'include', headers }));
+}
+
 export async function downloadAcademicTrainingTeacherReportJob(headers: HeadersInit, jobId: string): Promise<Blob> {
   const response = await apiFetch(`${API}/academic/training/teachers/report-jobs/${encodeURIComponent(jobId)}/download`, { credentials: 'include', headers });
   if (!response.ok) {
@@ -2199,6 +2207,15 @@ export async function getAcademicClassSyncJobs(headers: HeadersInit, classId: st
   const params = new URLSearchParams();
   params.set('limit', String(Math.max(1, Math.min(50, limit))));
   return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/sync-jobs?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+
+export async function getRecentAcademicClassSyncJobs(headers: HeadersInit, filters: { status?: 'active' | 'queued' | 'running' | 'completed' | 'failed' | 'all' | string; classId?: string; limit?: number } = {}): Promise<AcademicClassSyncJob[]> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  params.set('limit', String(Math.max(1, Math.min(100, filters.limit || 30))));
+  return parseResponse(await apiFetch(`${API}/academic/sync/class-jobs?${params.toString()}`, { credentials: 'include', headers }));
 }
 
 export async function getAcademicCampuses(headers: HeadersInit, filters: { branch?: string; active?: boolean | null } = {}): Promise<AcademicCampus[]> {

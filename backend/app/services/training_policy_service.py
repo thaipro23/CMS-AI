@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.timezone import VN_TZ, to_vn_date
 
-POLICY_VERSION = "v25.9.16.5.62"
+POLICY_VERSION = "v25.9.16.5.95"
 
 from app.models.academic import (
     AcademicAssignmentDefenseScore,
@@ -122,8 +122,13 @@ class TrainingPolicyService:
                 result[int(row.quiz_number)] = row
         return result
 
-    def assignment_scores_for_class(self, class_id: str, course_id: str | None = None) -> dict[str, AcademicAssignmentDefenseScore]:
+    def assignment_scores_for_class(self, class_id: str, course_id: str | None = None, student_ids: list[str] | None = None) -> dict[str, AcademicAssignmentDefenseScore]:
         query = self.db.query(AcademicAssignmentDefenseScore).filter(AcademicAssignmentDefenseScore.class_id == class_id)
+        if student_ids is not None:
+            ids = [str(item).strip() for item in student_ids if str(item or '').strip()]
+            if not ids:
+                return {}
+            query = query.filter(AcademicAssignmentDefenseScore.student_id.in_(ids))
         if course_id:
             query = query.filter((AcademicAssignmentDefenseScore.course_id == course_id) | (AcademicAssignmentDefenseScore.course_id.is_(None)))
         rows = query.order_by(AcademicAssignmentDefenseScore.updated_at.desc().nullslast()).all()
@@ -262,22 +267,25 @@ class TrainingPolicyService:
                     status = 'not_attempted'
                     label = 'Chưa làm'
                     reasons.append(f'Quiz {number} chưa làm')
+            elif score < 100:
+                # A score below 100% is already enough to block exam eligibility.
+                # Do not downgrade this to "insufficient data" just because
+                # Open edX/Detailed Grades omitted a submitted_at timestamp.
+                failed += 1
+                status = 'not_100'
+                label = 'Chưa đạt 100%'
+                reasons.append(f'Quiz {number} đạt {round(score, 2)}%, yêu cầu 100%')
             elif submitted is None:
                 missing_deadline += 1
                 status = 'missing_submission_time'
                 label = 'Thiếu thời gian làm'
-                reasons.append(f'Quiz {number} đạt {round(score, 2)}% nhưng thiếu thời gian làm/nộp để xét deadline')
+                reasons.append(f'Quiz {number} đạt 100% nhưng thiếu thời gian làm/nộp để xét deadline')
             elif deadline and submitted > deadline:
                 late += 1
                 failed += 1
                 status = 'late'
                 label = 'Làm sau deadline'
                 reasons.append(f'Quiz {number} làm sau deadline')
-            elif score < 100:
-                failed += 1
-                status = 'not_100'
-                label = 'Chưa đạt 100%'
-                reasons.append(f'Quiz {number} đạt {round(score, 2)}%, yêu cầu 100%')
             else:
                 passed += 1
                 status = 'passed'

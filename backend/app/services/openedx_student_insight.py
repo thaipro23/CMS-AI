@@ -388,7 +388,17 @@ class OpenEdXConnectorClient:
         """
         if not self.configured():
             raise RuntimeError('Chưa cấu hình Open edX Connector/HMAC để lấy tiến độ/điểm CMS')
-        body = {'course_id': course_id, 'cohort_name': cohort_name, 'students': students}
+        body = {
+            'course_id': course_id,
+            'cohort_name': cohort_name,
+            'students': students,
+            # v25.9.16.5.92: production class detail only needs compact
+            # completion/grade rows. Keep heavy connector diagnostics out of the
+            # hot path to reduce LMS JSON size and backend parse time.
+            'compact': True,
+            'include_diagnostics': False,
+            'skip_course_home_progress': True,
+        }
         data = self._post_json(
             path=self.class_analytics_endpoint,
             body=body,
@@ -402,6 +412,9 @@ class OpenEdXConnectorClient:
             return {
                 'ok': data.get('ok', True),
                 'course_id': data.get('course_id') or course_id,
+                'connector_version': data.get('connector_version'),
+                'connector_contract_version': data.get('connector_contract_version'),
+                'progress_contract': data.get('progress_contract') if isinstance(data.get('progress_contract'), dict) else {},
                 'total': data.get('total', len(rows)),
                 'counts': data.get('counts') if isinstance(data.get('counts'), dict) else {},
                 'learning_counts': data.get('learning_counts') if isinstance(data.get('learning_counts'), dict) else {},
@@ -409,7 +422,7 @@ class OpenEdXConnectorClient:
                 'results': rows,
             }
         if isinstance(data, list):
-            return {'ok': True, 'course_id': course_id, 'total': len(data), 'counts': {}, 'learning_counts': {}, 'diagnostics': {}, 'results': data}
+            return {'ok': True, 'course_id': course_id, 'connector_version': None, 'connector_contract_version': None, 'progress_contract': {}, 'total': len(data), 'counts': {}, 'learning_counts': {}, 'diagnostics': {}, 'results': data}
         raise RuntimeError('Open edX Connector class analytics trả về dữ liệu không hợp lệ')
 
     def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> list[dict[str, Any]]:

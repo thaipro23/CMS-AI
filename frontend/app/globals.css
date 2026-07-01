@@ -6565,3 +6565,77 @@ pre, .message-card pre {
   .assignment-workflow-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .assignment-workflow-toolbar { grid-template-columns: 1fr; }
 }
+
+/* v25.9.16.5.92 — class detail cleanup: remove helper copy, breadcrumbs, diagnostics noise. */
+.student-management-page .clean-breadcrumb-row {
+  justify-content: flex-start;
+  padding: 0;
+  margin: 0 0 8px;
+  border-bottom: 0 !important;
+}
+.student-management-page .clean-sync-action-strip {
+  justify-content: flex-start;
+  padding: 0;
+  margin-bottom: 10px;
+}
+.student-management-page .clean-sync-action-strip .toolbar-actions {
+  width: 100%;
+  justify-content: flex-start;
+}
+.student-management-page .learning-progress-cell small {
+  margin-top: 2px;
+}
+
+/* v25.9.16.5.92 — class detail table polish: clean progress text + native student-list scroll only. */
+.student-management-page .student-list-card {
+  overflow: hidden;
+}
+.student-management-page .class-student-table-shell {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+.student-management-page .class-student-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  cursor: default;
+  touch-action: auto;
+  scrollbar-gutter: stable both-edges;
+  background: #fff;
+}
+.student-management-page .class-student-table-scroll.is-dragging {
+  cursor: default;
+  user-select: auto;
+}
+.student-management-page .class-student-table-scroll .student-grade-table {
+  min-width: max-content;
+  width: max-content;
+}
+.student-management-page .student-grade-table td.learning-progress-cell {
+  min-width: 190px;
+  line-height: 1.35;
+}
+.student-management-page .student-grade-table td.learning-progress-cell b,
+.student-management-page .student-grade-table td.learning-progress-cell small,
+.student-management-page .student-grade-table td.learning-progress-cell .status-pill {
+  display: block;
+  margin: 0;
+}
+.student-management-page .student-grade-table td.learning-progress-cell small {
+  margin-top: 3px;
+  color: #64748b;
+}
+.student-management-page .student-grade-table td.learning-progress-cell .status-pill {
+  width: max-content;
+  max-width: 100%;
+  margin-top: 5px;
+  white-space: nowrap;
+}
+.student-management-page .student-table-scroll-hint {
+  display: none !important;
+}

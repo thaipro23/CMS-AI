@@ -1068,10 +1068,10 @@ def academic_class_sync_task(job_id: str):
         job.updated_at = now
         job.progress_current = max(job.progress_current or 0, 10)
         labels = {
-            'cms_sync_check': 'Đang kiểm tra/tạo user CMS',
-            'cms_enrollment_sync': 'Đang enrollment sinh viên và gán Course Staff',
-            'learning_sync': 'Đang cập nhật tiến độ/điểm CMS',
-            'full_cms_sync': 'Đang chạy full flow: map Course CMS → tạo user → enroll → điểm CMS',
+            'cms_sync_check': 'Đang kiểm tra CMS',
+            'cms_enrollment_sync': 'Đang enroll CMS',
+            'learning_sync': 'Đang cập nhật điểm',
+            'full_cms_sync': 'Đang đồng bộ CMS',
         }
         job.progress_label = labels.get(job.job_type, 'Đang đồng bộ học vụ')
         db.commit()
@@ -1094,15 +1094,15 @@ def academic_class_sync_task(job_id: str):
         if job.job_type == 'cms_sync_check':
             result = service.resolve_class_openedx_users(worker_user, job.class_id, force=force, limit=limit)
             action = 'academic.cms_sync_check.class.async'
-            label = 'Đã kiểm tra đồng bộ CMS'
+            label = 'Hoàn tất kiểm tra CMS'
         elif job.job_type == 'cms_enrollment_sync':
             result = service.sync_class_course_enrollment(worker_user, job.class_id, force=force, limit=limit, mode=job.mode)
             action = 'academic.cms_enrollment_sync.class.async'
-            label = 'Đã enrollment Course CMS'
+            label = 'Hoàn tất enroll CMS'
         elif job.job_type == 'learning_sync':
             result = service.sync_class_learning_insight(worker_user, job.class_id, force=force, limit=limit)
             action = 'academic.learning_sync.class.async'
-            label = 'Đã cập nhật tiến độ/điểm CMS'
+            label = 'Hoàn tất cập nhật điểm'
         elif job.job_type == 'full_cms_sync':
             request_json = job.request_json if isinstance(job.request_json, dict) else {}
             result = service.sync_class_full_cms_flow(
@@ -1115,7 +1115,7 @@ def academic_class_sync_task(job_id: str):
                 sync_learning=bool(request_json.get('sync_learning', True)),
             )
             action = 'academic.full_cms_sync.class.async'
-            label = 'Đã chạy full flow CMS'
+            label = 'Hoàn tất đồng bộ CMS'
         else:
             raise ValueError(f'Unsupported academic class sync job_type: {job.job_type}')
 
@@ -1152,7 +1152,7 @@ def academic_class_sync_task(job_id: str):
             job.progress_current = job.progress_current or 0
             job.progress_total = 100
             job.progress_label = 'Đồng bộ thất bại'
-            job.error_message = str(exc)[:4000] or 'Không thể hoàn tất đồng bộ lớp. Vui lòng kiểm tra Course CMS mapping, plugin Open edX và HMAC.'
+            job.error_message = str(exc)[:4000] or 'Không thể hoàn tất đồng bộ lớp.'
             job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()

@@ -516,6 +516,22 @@ def enqueue_training_teacher_export_job(
     return _enqueue_teacher_report_job(db=db, user=user, job_type='export_excel', term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, teacher_id=teacher_id)
 
 
+
+@router.get('/training/teachers/report-jobs', response_model=list[AcademicTeacherReportJobOut])
+def list_training_teacher_report_jobs(
+    status_filter: str = Query('all', alias='status'),
+    limit: int = Query(20, ge=1, le=80),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    query = db.query(AcademicTeacherReportJob)
+    if status_filter == 'active':
+        query = query.filter(AcademicTeacherReportJob.status.in_(['queued', 'running']))
+    elif status_filter and status_filter != 'all':
+        query = query.filter(AcademicTeacherReportJob.status == status_filter)
+    return query.order_by(AcademicTeacherReportJob.created_at.desc()).limit(limit).all()
+
+
 @router.get('/training/teachers/report-jobs/{job_id}', response_model=AcademicTeacherReportJobOut)
 def get_training_teacher_report_job(
     job_id: str,
@@ -1221,6 +1237,37 @@ def enqueue_class_full_cms_sync(
         auto_map_course=payload.auto_map_course,
         sync_learning=payload.sync_learning,
     )
+
+
+
+@router.get('/sync/class-jobs', response_model=list[AcademicClassSyncJobOut])
+def list_recent_class_sync_jobs(
+    class_id: str | None = Query(None),
+    status_filter: str = Query('all', alias='status'),
+    limit: int = Query(30, ge=1, le=100),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    service = AcademicService(db)
+    query = db.query(AcademicClassSyncJob)
+    if class_id:
+        service.assert_can_access_class(user, class_id)
+        query = query.filter(AcademicClassSyncJob.class_id == class_id)
+    if status_filter == 'active':
+        query = query.filter(AcademicClassSyncJob.status.in_(['queued', 'running']))
+    elif status_filter and status_filter != 'all':
+        query = query.filter(AcademicClassSyncJob.status == status_filter)
+    candidates = query.order_by(AcademicClassSyncJob.created_at.desc()).limit(max(limit, 30)).all()
+    visible: list[AcademicClassSyncJob] = []
+    for row in candidates:
+        try:
+            service.assert_can_access_class(user, row.class_id)
+            visible.append(row)
+        except Exception:
+            continue
+        if len(visible) >= limit:
+            break
+    return visible
 
 
 @router.get('/classes/{class_id}/sync-jobs/{job_id}', response_model=AcademicClassSyncJobOut)

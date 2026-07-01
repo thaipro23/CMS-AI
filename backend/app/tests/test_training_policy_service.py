@@ -112,3 +112,21 @@ def test_quiz_usage_key_number_does_not_create_phantom_quiz():
     assert result['quiz_total'] == 0
     assert result['exam_status'] == 'insufficient_data'
 
+
+
+def test_quiz_below_100_without_submitted_at_is_not_eligible_not_insufficient():
+    result = _service().evaluate_student(cls=_cls(), student_id='s1', components=[_quiz(1, 80, None)], overrides={})
+    assert result['exam_status'] == 'not_eligible'
+    assert result['quiz_failed_count'] == 1
+    assert result['quiz_missing_deadline_count'] == 0
+
+
+def test_quiz_itembank_shell_without_quiz_number_is_ignored_for_policy():
+    result = _service().evaluate_student(
+        cls=_cls(),
+        student_id='s1',
+        components=[{'name': 'Problem Bank EASY', 'category': 'itembank', 'percent': None}],
+        overrides={},
+    )
+    assert result['quiz_total'] == 0
+    assert result['exam_status'] == 'insufficient_data'

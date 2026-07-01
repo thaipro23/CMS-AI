@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.db.session import engine
+from app.services.openedx_student_insight import OpenEdXConnectorClient
 
 router = APIRouter()
 
@@ -43,3 +44,31 @@ def db_health():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={'status': 'error', 'database': 'unreachable', 'error_type': exc.__class__.__name__},
         )
+
+
+@router.get('/health/build')
+def build_health():
+    """Build/runtime identity used by smoke tests after deployment."""
+    return {
+        'status': 'ok',
+        'app_name': settings.app_name,
+        'version': settings.app_version,
+        'app_env': settings.app_env,
+        'debug': settings.debug,
+    }
+
+
+@router.get('/health/openedx-connector/config')
+def openedx_connector_config_health():
+    """Safe connector configuration summary; never expose secrets."""
+    client = OpenEdXConnectorClient()
+    return {
+        'status': 'ok' if client.configured() else 'not_configured',
+        'configured': client.configured(),
+        'base_url_set': bool(client.base_url),
+        'hmac_secret_set': bool(client.connector_secret),
+        'class_analytics_endpoint': client.class_analytics_endpoint,
+        'users_resolve_endpoint': client.users_resolve_endpoint,
+        'course_search_endpoint': client.course_search_endpoint,
+        'timeout_seconds': client.timeout_seconds,
+    }
