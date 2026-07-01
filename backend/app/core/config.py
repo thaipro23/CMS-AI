@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.7.2'
+    app_version: str = '25.9.16.7.2.3'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -185,7 +185,7 @@ class Settings(BaseSettings):
     # not a disciplinary conclusion.
     openedx_tracking_log_path: str = '/openedx-data/lms/logs/tracking.log'
     analytics_ingest_enabled: bool = True
-    analytics_ingest_scheduler_enabled: bool = False
+    analytics_ingest_scheduler_enabled: bool = True
     analytics_ingest_interval_seconds: int = 60
     analytics_max_lines_per_run: int = 50000
     analytics_recalculate_max_students_per_job: int = 500
@@ -195,7 +195,7 @@ class Settings(BaseSettings):
     analytics_max_passive_segment_seconds: int = 600
     analytics_enable_problem_correlation: bool = True
     analytics_snapshot_stale_hours: int = 168
-    # v25.9.16.7.2 production safety gates for analytics operations.
+    # v25.9.16.7.2.3 production-test safety gates for analytics operations.
     analytics_backfill_max_jobs_per_request: int = 25
     analytics_backfill_max_active_jobs: int = 20
     analytics_recalculate_enqueue_cooldown_seconds: int = 300
@@ -204,7 +204,7 @@ class Settings(BaseSettings):
     analytics_production_min_events: int = 1
     analytics_production_min_snapshots: int = 1
     analytics_pilot_sample_limit: int = 5
-    # v25.9.16.7.2 rollout/monitoring controls. These are env-only guards
+    # v25.9.16.7.2.3 rollout/monitoring controls. These are env-only guards
     # to avoid creating rollout tables while still allowing safe production rollout.
     analytics_rollout_enabled: bool = True
     analytics_rollout_mode: str = 'production'  # off | pilot | production

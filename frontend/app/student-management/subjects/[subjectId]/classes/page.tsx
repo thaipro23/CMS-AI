@@ -161,11 +161,12 @@ function SubjectClassesContent() {
 
       <div className="table-wrap academic-table-wrap">
         <table className="data-table academic-data-table class-table">
-          <thead><tr><th>Lớp</th><th>Cơ sở / Block</th><th>Giảng viên</th><th>Sinh viên</th><th>Course CMS</th><th>Học tập CMS</th><th>Thao tác</th></tr></thead>
+          <thead><tr><th>STT</th><th>Lớp</th><th>Cơ sở / Block</th><th>Giảng viên</th><th>Sinh viên</th><th>Course CMS</th><th>Học tập CMS</th><th>Thao tác</th></tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={7}>Đang tải danh sách lớp...</td></tr>}
-            {!loading && !classes.length && <tr><td colSpan={7}>Không có lớp phù hợp.</td></tr>}
-            {classes.map((item) => <tr key={item.id}>
+            {loading && <tr><td colSpan={8}>Đang tải danh sách lớp...</td></tr>}
+            {!loading && !classes.length && <tr><td colSpan={8}>Không có lớp phù hợp.</td></tr>}
+            {classes.map((item, index) => <tr key={item.id}>
+              <td className="stt-cell">{(page - 1) * PAGE_SIZE + index + 1}</td>
               <td className="main-entity-cell"><b>{item.class_code}</b><small>{item.class_name || item.subject_name}</small></td>
               <td><b>{item.campus?.toUpperCase() || '—'}</b><small>{item.block_name || '—'}</small></td>
               <td><b>{item.teacher_name || '—'}</b><small>{item.teacher_username || ''}</small></td>

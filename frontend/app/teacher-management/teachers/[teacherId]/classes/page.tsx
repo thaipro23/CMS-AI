@@ -197,7 +197,7 @@ export default function TeacherClassesPage() {
 
       <div className="table-wrap academic-table-wrap training-table-wrap ux-table-card">
         <table className="data-table academic-data-table training-class-grade-table">
-          <thead><tr><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Học lại</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Điều kiện thi</th><th>Cảnh báo</th><th>Thao tác</th></tr></thead>
+          <thead><tr><th>STT</th><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Học lại</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Điều kiện thi</th><th>Cảnh báo</th><th>Thao tác</th></tr></thead>
           <tbody>
             {loading && Array.from({ length: 5 }).map((_, index) => <tr key={`class-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={11 + columns.length}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>)}
             {!loading && !classes.length && <tr><td colSpan={11 + columns.length}><div className="ux-empty-state"><b>Chưa có lớp theo bộ lọc hiện tại</b><span>Đổi trạng thái hoặc quay lại trang giáo viên để chọn giáo viên khác.</span></div></td></tr>}

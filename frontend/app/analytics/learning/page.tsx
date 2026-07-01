@@ -51,6 +51,7 @@ function StudentRows({ rows, emptyText }: { rows?: AnalyticsLearningDashboardStu
     <table className="data-table academic-data-table analytics-learning-table">
       <thead>
         <tr>
+          <th>STT</th>
           <th>Sinh viên</th>
           <th>Lớp</th>
           <th>Nhận định</th>
@@ -62,7 +63,8 @@ function StudentRows({ rows, emptyText }: { rows?: AnalyticsLearningDashboardStu
         </tr>
       </thead>
       <tbody>
-        {items.map((row) => <tr key={`${row.class_id}-${row.course_id}-${row.username}`}>
+        {items.map((row, index) => <tr key={`${row.class_id}-${row.course_id}-${row.username}`}>
+          <td className="stt-cell">{index + 1}</td>
           <td>
             <b>{row.username}</b>
             <small>{row.course_id}</small>
@@ -280,10 +282,11 @@ export default function AnalyticsLearningPage() {
       {!!pilotAcceptance?.classes?.length && <div className="table-wrap analytics-dashboard-table-wrap pilot-acceptance-table-wrap">
         <table className="data-table academic-data-table analytics-pilot-table">
           <thead>
-            <tr><th>Lớp pilot</th><th>Trạng thái</th><th>Sinh viên</th><th>Snapshot</th><th>Session</th><th>Video</th><th>Việc cần làm</th></tr>
+            <tr><th>STT</th><th>Lớp pilot</th><th>Trạng thái</th><th>Sinh viên</th><th>Snapshot</th><th>Session</th><th>Video</th><th>Việc cần làm</th></tr>
           </thead>
           <tbody>
-            {pilotAcceptance.classes.slice(0, 3).map((row) => <tr key={row.class_id}>
+            {pilotAcceptance.classes.slice(0, 3).map((row, index) => <tr key={row.class_id}>
+              <td className="stt-cell">{index + 1}</td>
               <td><b>{row.class_code || row.class_id}</b><small>{row.course_id || 'Chưa map course'}</small></td>
               <td><span className={row.acceptance_status === 'PASS' ? 'status-pill success' : row.acceptance_status === 'WARN' ? 'status-pill warning' : 'status-pill danger'}>{row.acceptance_status === 'PASS' ? 'Đạt pilot' : row.acceptance_status === 'WARN' ? 'Có cảnh báo' : 'Chưa đạt'}</span></td>
               <td>{row.student_count}</td>
@@ -318,6 +321,7 @@ export default function AnalyticsLearningPage() {
         <table className="data-table academic-data-table analytics-class-table">
           <thead>
             <tr>
+              <th>STT</th>
               <th>Lớp</th>
               <th>Course</th>
               <th>Sinh viên</th>
@@ -330,7 +334,8 @@ export default function AnalyticsLearningPage() {
             </tr>
           </thead>
           <tbody>
-            {(data?.class_items || []).map((row) => <tr key={row.class_id}>
+            {(data?.class_items || []).map((row, index) => <tr key={row.class_id}>
+              <td className="stt-cell">{index + 1}</td>
               <td><b>{row.class_code || row.class_id}</b><small>{row.campus || ''} {row.class_name || ''}</small></td>
               <td><small>{row.course_id || 'N/A'}</small></td>
               <td>{row.total_students}</td>
@@ -341,7 +346,7 @@ export default function AnalyticsLearningPage() {
               <td>{percent(row.avg_deadline_compliance_percent)}</td>
               <td><Link className="btn secondary small" href={`/student-management/classes/${encodeURIComponent(row.class_id)}`}>Mở lớp</Link></td>
             </tr>)}
-            {!data?.class_items?.length && <tr><td colSpan={9}><div className="empty-state compact">Chưa có snapshot học online. Hãy ingest log và tính lại học online cho lớp.</div></td></tr>}
+            {!data?.class_items?.length && <tr><td colSpan={10}><div className="empty-state compact">Chưa có snapshot học online. Hãy ingest log và tính lại học online cho lớp.</div></td></tr>}
           </tbody>
         </table>
       </div>

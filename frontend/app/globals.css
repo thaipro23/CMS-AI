@@ -6978,3 +6978,34 @@ body.ai-theme-dark .online-session-card small {
 .analytics-quality-issues span {
   line-height: 1.45;
 }
+
+/* v25.9.16.7.2.3: readable row numbers for operational tables */
+.stt-cell,
+.stt-col,
+th:has(+ .sticky-col) {
+  width: 52px;
+  min-width: 52px;
+  max-width: 64px;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--muted, #64748b);
+  font-weight: 700;
+}
+.stt-cell {
+  font-variant-numeric: tabular-nums;
+}
+.student-grade-table .stt-col,
+.student-grade-table .stt-cell {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background: var(--card-bg, #fff);
+  border-right: 1px solid var(--border, #e2e8f0);
+}
+.student-grade-table .sticky-col {
+  left: 52px;
+}
+html[data-ai-theme='dark'] .student-grade-table .stt-col,
+html[data-ai-theme='dark'] .student-grade-table .stt-cell {
+  background: var(--card-bg, #0f172a);
+}

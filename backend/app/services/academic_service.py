@@ -4569,13 +4569,6 @@ class AcademicService:
             results = client.enroll_users(course_id=course_id, cohort_name=cohort_name, students=payload, mode=enrollment_mode, force=force, create_missing=create_missing)
             by_username = {normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('ap_username') or item.get('username') or item.get('openedx_username'))}
             by_code = {str(item.get('student_code') or '').strip().lower(): item for item in results if str(item.get('student_code') or '').strip()}
-            for key_name, value in batch_learning_counts.items():
-                try:
-                    connector_plugin_learning_counts[key_name] = connector_plugin_learning_counts.get(key_name, 0) + int(value or 0)
-                except Exception:
-                    pass
-            if batch_diagnostics:
-                connector_plugin_diagnostics = batch_diagnostics
             for student, mapping_row, _snapshot in chunk:
                 key = normalize_username(mapping_row.openedx_username or student.username)
                 result = by_username.get(key) or by_username.get(normalize_username(student.username))

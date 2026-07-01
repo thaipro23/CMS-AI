@@ -214,6 +214,7 @@ export default function StudentManagementSubjectsPage() {
         <table className="data-table academic-data-table subject-table">
           <thead>
             <tr>
+              <th>STT</th>
               <th>Môn</th>
               <th>Quy mô</th>
               <th>Đồng bộ CMS</th>
@@ -223,9 +224,10 @@ export default function StudentManagementSubjectsPage() {
             </tr>
           </thead>
           <tbody>
-            {loading ? Array.from({ length: 5 }).map((_, index) => <tr key={`subject-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={6}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>) : null}
-            {!loading && !subjects.length ? <tr><td colSpan={6}><div className="ux-empty-state"><b>Chưa có môn phù hợp</b><span>Đổi học kỳ, cơ sở, trạng thái học tập hoặc xóa từ khóa tìm kiếm. Nếu vẫn trống, kiểm tra phân quyền và dữ liệu AP sync.</span><button className="btn secondary small" type="button" onClick={() => { setSearch(''); setLearningStatus('all'); setPage(1) }}>Xóa bộ lọc nhanh</button></div></td></tr> : null}
-            {subjects.map((subject) => <tr key={subject.id}>
+            {loading ? Array.from({ length: 5 }).map((_, index) => <tr key={`subject-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={7}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>) : null}
+            {!loading && !subjects.length ? <tr><td colSpan={7}><div className="ux-empty-state"><b>Chưa có môn phù hợp</b><span>Đổi học kỳ, cơ sở, trạng thái học tập hoặc xóa từ khóa tìm kiếm. Nếu vẫn trống, kiểm tra phân quyền và dữ liệu AP sync.</span><button className="btn secondary small" type="button" onClick={() => { setSearch(''); setLearningStatus('all'); setPage(1) }}>Xóa bộ lọc nhanh</button></div></td></tr> : null}
+            {subjects.map((subject, index) => <tr key={subject.id}>
+              <td className="stt-cell">{(page - 1) * PAGE_SIZE + index + 1}</td>
               <td className="main-entity-cell"><b>{subject.subject_code}</b><small>{subject.subject_name}</small></td>
               <td>
                 <b>{subject.class_count} lớp</b>

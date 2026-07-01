@@ -300,9 +300,9 @@ export default function BankQuizPage() {
           {autoMap.warnings?.length ? <div className="alert warning"><b>Cảnh báo</b><ul>{autoMap.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
           <div className="table-wrap quiz-map-table-wrap">
             <table className="data-table compact-table quiz-map-table">
-              <thead><tr><th>Bài trong ngân hàng</th><th>Mục trong khóa học</th><th>Bộ đề</th><th>Khớp</th><th>Trạng thái</th><th></th></tr></thead>
-              <tbody>{autoMap.mappings.map((item) => <tr key={item.chapter_id} className={item.ready ? 'row-ready' : 'row-blocked'}>
-                <td><b>{item.chapter_title}</b></td>
+              <thead><tr><th>STT</th><th>Bài trong ngân hàng</th><th>Mục trong khóa học</th><th>Bộ đề</th><th>Khớp</th><th>Trạng thái</th><th></th></tr></thead>
+              <tbody>{autoMap.mappings.map((item, index) => <tr key={item.chapter_id} className={item.ready ? 'row-ready' : 'row-blocked'}>
+                <td className="stt-cell">{index + 1}</td><td><b>{item.chapter_title}</b></td>
                 <td>{item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small><code>{item.openedx_section_id}</code></small></> : <span className="status danger">Chưa tìm thấy</span>}</td>
                 <td>{item.release_code ? <><b>{item.release_code}</b><small>{item.openedx_library_key}</small></> : <span className="status danger">Chưa publish</span>}</td>
                 <td>{percent(item.match_score)}<small>{item.match_reason}</small></td>
@@ -323,7 +323,7 @@ export default function BankQuizPage() {
           </div>
           {!courseId.trim() ? <div className="empty-state">Nhập Khóa học ID để xem lịch sử Quiz của đúng khóa học đó.</div> : null}
           {courseId.trim() && historyBusy ? <div className="empty-state">Đang tải lịch sử Quiz...</div> : null}
-          {courseId.trim() ? <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Khóa học</th><th>Trạng thái</th><th>Bài kiểm tra Open edX</th><th>Timer</th><th>Thời gian</th><th></th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td><b>{item.openedx_course_id}</b><small>{item.metadata_json?.quiz_title || item.bank_release_id}</small></td><td><span className={classNames('status', item.status === 'created' ? 'success' : item.status?.includes('khôi phục') || item.status === 'failed' ? 'danger' : 'pending')}>{item.status}</span></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td>{item.metadata_json?.timer_config?.custom_timer_enabled ? <span className="status pending">{item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút</span> : <span className="muted">Không bật</span>}</td><td>{formatVNDateTime(item.created_at)}</td><td><button className="btn small secondary" disabled={busy || item.status === 'rolled_back'} onClick={async () => {
+          {courseId.trim() ? <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>STT</th><th>Khóa học</th><th>Trạng thái</th><th>Bài kiểm tra Open edX</th><th>Timer</th><th>Thời gian</th><th></th></tr></thead><tbody>{history.map((item, index) => <tr key={item.id}><td className="stt-cell">{index + 1}</td><td><b>{item.openedx_course_id}</b><small>{item.metadata_json?.quiz_title || item.bank_release_id}</small></td><td><span className={classNames('status', item.status === 'created' ? 'success' : item.status?.includes('khôi phục') || item.status === 'failed' ? 'danger' : 'pending')}>{item.status}</span></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td>{item.metadata_json?.timer_config?.custom_timer_enabled ? <span className="status pending">{item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút</span> : <span className="muted">Không bật</span>}</td><td>{formatVNDateTime(item.created_at)}</td><td><button className="btn small secondary" disabled={busy || item.status === 'rolled_back'} onClick={async () => {
             setBusy(true)
             try {
               const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử Quiz' })

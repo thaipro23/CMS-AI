@@ -457,6 +457,7 @@ export default function TeacherManagementPage() {
         <table className="data-table academic-data-table training-teacher-table">
           <thead>
             <tr>
+              <th>STT</th>
               <th>Giảng viên</th>
               <th>Quy mô đào tạo</th>
               <th>Đồng bộ CMS</th>
@@ -466,9 +467,9 @@ export default function TeacherManagementPage() {
             </tr>
           </thead>
           <tbody>
-            {loading && Array.from({ length: 6 }).map((_, index) => <tr key={`teacher-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={6}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>)}
-            {!loading && !items.length && <tr><td colSpan={6}><div className="ux-empty-state"><b>Chưa có dữ liệu theo bộ lọc hiện tại</b><span>Đổi cơ sở, học kỳ hoặc xóa từ khóa tìm kiếm để xem danh sách giảng viên.</span><button className="btn secondary small" type="button" onClick={() => { setSearch(''); setLearningStatus('all'); setPage(1) }}>Xóa bộ lọc nhanh</button></div></td></tr>}
-            {!loading && items.map((item) => {
+            {loading && Array.from({ length: 6 }).map((_, index) => <tr key={`teacher-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={7}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>)}
+            {!loading && !items.length && <tr><td colSpan={7}><div className="ux-empty-state"><b>Chưa có dữ liệu theo bộ lọc hiện tại</b><span>Đổi cơ sở, học kỳ hoặc xóa từ khóa tìm kiếm để xem danh sách giảng viên.</span><button className="btn secondary small" type="button" onClick={() => { setSearch(''); setLearningStatus('all'); setPage(1) }}>Xóa bộ lọc nhanh</button></div></td></tr>}
+            {!loading && items.map((item, index) => {
               const statuses = item.status_counts || {}
               const teacherClassesParams = new URLSearchParams()
               if (termId) teacherClassesParams.set('term_id', termId)
@@ -477,6 +478,7 @@ export default function TeacherManagementPage() {
               if (selectedTerm?.term_name) teacherClassesParams.set('term_name', selectedTerm.term_name)
               teacherClassesParams.set('teacher_name', item.teacher_name || item.teacher_username)
               return <tr key={item.teacher_id} className="teacher-row-compact">
+                <td className="stt-cell">{(page - 1) * PAGE_SIZE + index + 1}</td>
                 <td>
                   <div className="teacher-identity"><span className="teacher-avatar">{(item.teacher_name || item.teacher_username || 'GV').slice(0, 2).toUpperCase()}</span><div><b>{item.teacher_name || item.teacher_username}</b>
                   <small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ''}</small>

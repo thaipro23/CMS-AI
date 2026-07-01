@@ -417,11 +417,15 @@ function ClassDetailContent() {
   const handleStudentTableWheel = (event: WheelEvent<HTMLDivElement>) => {
     const shell = tableScrollRef.current
     if (!shell || shell.scrollWidth <= shell.clientWidth) return
-    const hasHorizontalIntent = Math.abs(event.deltaX) > Math.abs(event.deltaY)
-    const delta = hasHorizontalIntent ? event.deltaX : (event.shiftKey ? event.deltaY : 0)
+    // v25.9.16.7.2.3: when the pointer is in the student table, any horizontal
+    // wheel/trackpad movement scrolls the whole table area. A plain mouse wheel
+    // also moves the table horizontally so users do not need to drag the bottom
+    // scrollbar while reviewing middle rows.
+    const delta = Math.abs(event.deltaX) > 0 ? event.deltaX : event.deltaY
     if (!delta) return
+    const before = shell.scrollLeft
     shell.scrollLeft += delta
-    event.preventDefault()
+    if (shell.scrollLeft !== before) event.preventDefault()
   }
 
   const isJobActive = (job?: AcademicClassSyncJob | null) => {
@@ -900,13 +904,14 @@ function ClassDetailContent() {
       <div className="class-student-table-shell" ref={tableScrollRef} onWheel={handleStudentTableWheel}>
         <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll">
         <table className="data-table academic-data-table student-grade-table">
-          <thead><tr><th className="sticky-col">Sinh viên</th><th>Tiến độ học</th><th>Học online</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
+          <thead><tr><th className="stt-col">STT</th><th className="sticky-col">Sinh viên</th><th>Tiến độ học</th><th>Học online</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={4 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={4 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
-            {students.map((student) => {
+            {loading && <tr><td colSpan={5 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
+            {!loading && !students.length && <tr><td colSpan={5 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
+            {students.map((student, index) => {
               const behavior = studentBehavior(student)
               return <tr key={student.id}>
+              <td className="stt-cell">{(page - 1) * PAGE_SIZE + index + 1}</td>
               <td className="main-entity-cell sticky-col compact-student-identity-cell">
                 <b>{student.student_code || '—'}</b>
                 <small>{student.full_name}</small>
@@ -971,9 +976,9 @@ function ClassDetailContent() {
           </select></label>
           <button className="btn secondary" type="button" onClick={applyAssignmentBulkStatus}>Áp dụng cho danh sách đang lọc</button>
         </div>
-        <div className="policy-edit-table-wrap assignment-workflow-table-wrap"><table className="data-table compact-table"><thead><tr><th>Sinh viên</th><th>Trạng thái bảo vệ</th><th>Điểm /10</th><th>Ghi chú vận hành</th><th>Kiểm soát</th></tr></thead><tbody>
+        <div className="policy-edit-table-wrap assignment-workflow-table-wrap"><table className="data-table compact-table"><thead><tr><th>STT</th><th>Sinh viên</th><th>Trạng thái bảo vệ</th><th>Điểm /10</th><th>Ghi chú vận hành</th><th>Kiểm soát</th></tr></thead><tbody>
           {filteredAssignmentRows.map((row) => <tr key={row.student_id}><td><b>{row.student_code || row.student_username}</b><small>{row.student_name}</small></td><td><select className="input" value={row.defense_status || 'not_graded'} onChange={(event) => updateAssignmentRow(row.student_id, { defense_status: event.target.value })}>{DEFENSE_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className={defenseStatusClass(row.defense_status)}>{defenseStatusLabel(row.defense_status)}</span></td><td><input className="input score-input" type="number" min="0" max="10" step="0.1" value={row.score_10 ?? ''} onChange={(event) => updateAssignmentRow(row.student_id, { score_10: event.target.value === '' ? null : Number(event.target.value) })} /><small>{row.defense_status === 'graded' && typeof row.score_10 !== 'number' ? 'Bắt buộc nhập điểm khi đã chấm' : '0 → 10'}</small></td><td><input className="input" value={row.note || ''} placeholder="VD: vắng bảo vệ, cần chấm lại, đã bảo vệ ca 2..." onChange={(event) => updateAssignmentRow(row.student_id, { note: event.target.value })} /></td><td><div className="assignment-row-actions"><button className="btn tiny secondary" type="button" onClick={() => updateAssignmentRow(row.student_id, { defense_status: 'waiting_defense' })}>Chờ BV</button><button className="btn tiny secondary" type="button" onClick={() => updateAssignmentRow(row.student_id, { defense_status: 'graded' })}>Đã chấm</button><button className="btn tiny danger" type="button" onClick={() => updateAssignmentRow(row.student_id, { defense_status: 'absent', score_10: null })}>Vắng</button></div></td></tr>)}
-          {!filteredAssignmentRows.length && <tr><td colSpan={5}>Không có sinh viên theo trạng thái đang lọc.</td></tr>}
+          {!filteredAssignmentRows.length && <tr><td colSpan={6}>Không có sinh viên theo trạng thái đang lọc.</td></tr>}
         </tbody></table></div>
         <div className="modal-actions"><button className="btn secondary" onClick={() => setAssignmentModalOpen(false)}>Đóng</button><button className="btn primary" disabled={savingPolicy} onClick={saveAssignmentRows}>{savingPolicy ? 'Đang lưu...' : 'Lưu workflow Assignment'}</button></div>
       </div>

@@ -66,6 +66,7 @@ function SearchResultTable({ items }: { items: BankSearchResult[] }) {
     <table className="ops-data-table drilldown-question-table">
       <thead>
         <tr>
+          <th>STT</th>
           <th>Câu hỏi</th>
           <th>Trạng thái</th>
           <th>Độ khó</th>
@@ -82,6 +83,7 @@ function SearchResultTable({ items }: { items: BankSearchResult[] }) {
           const isRejected = item.status === 'rejected'
           const note = isRejected ? (item.reject_reason || item.review_note) : item.review_note
           return <tr key={`${item.type}-${item.id || item.question_id || index}`} className={`row-${item.status || 'draft'}`}>
+            <td className="stt-cell">{index + 1}</td>
             <td className="question-cell">
               <b>{truncate(item.title, 220)}</b>
               <small>ID: {item.question_id || item.id || '—'}</small>
