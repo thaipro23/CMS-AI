@@ -199,9 +199,10 @@ export default function TeacherClassesPage() {
         <table className="data-table academic-data-table training-class-grade-table">
           <thead><tr><th>STT</th><th>Lớp</th><th>Môn</th><th>Course CMS</th><th>Sinh viên</th><th>Học lại</th><th>Tiến độ học</th>{columns.map((column) => <th key={column.key} className="component-grade-th">{column.name}</th>)}<th>Deadline quiz</th><th>Điều kiện thi</th><th>Cảnh báo</th><th>Thao tác</th></tr></thead>
           <tbody>
-            {loading && Array.from({ length: 5 }).map((_, index) => <tr key={`class-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={11 + columns.length}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>)}
-            {!loading && !classes.length && <tr><td colSpan={11 + columns.length}><div className="ux-empty-state"><b>Chưa có lớp theo bộ lọc hiện tại</b><span>Đổi trạng thái hoặc quay lại trang giáo viên để chọn giáo viên khác.</span></div></td></tr>}
-            {!loading && classes.map((cls) => <tr key={cls.class_id}>
+            {loading && Array.from({ length: 5 }).map((_, index) => <tr key={`class-skeleton-${index}`} className="ux-skeleton-row"><td colSpan={12 + columns.length}><span className="ux-skeleton-line wide" /><span className="ux-skeleton-line" /></td></tr>)}
+            {!loading && !classes.length && <tr><td colSpan={12 + columns.length}><div className="ux-empty-state"><b>Chưa có lớp theo bộ lọc hiện tại</b><span>Đổi trạng thái hoặc quay lại trang giáo viên để chọn giáo viên khác.</span></div></td></tr>}
+            {!loading && classes.map((cls, index) => <tr key={cls.class_id}>
+              <td className="stt-cell">{index + 1}</td>
               <td><b>{cls.class_code}</b><small>{cls.term_name}{cls.block_name ? ` · ${cls.block_name}` : ''}</small></td>
               <td><b>{cls.subject_code}</b><small>{cls.subject_name}</small></td>
               <td>{cls.openedx_course_id ? <><b>{cls.openedx_course_id}</b><small>{cls.openedx_mapping_source}</small></> : <span className="status-pill warning">Chưa map</span>}</td>

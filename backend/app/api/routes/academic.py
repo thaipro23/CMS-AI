@@ -1602,7 +1602,7 @@ def delete_academic_campus(
 def get_ap_sync_options(
     term_name: str = Query('', description='Tên kỳ AP, ví dụ Summer 2026.'),
     branch: str = Query('poly'),
-    campus: str | None = Query(None, description='Giữ tương thích UI cũ; danh sách môn lấy theo term_name. Nếu AP CMS cần campus_code tạm thời, cấu hình static trong env ACADEMIC_AP_CMS_GET_SUBJECT_ENDPOINT.'),
+    campus: str | None = Query(None, description='Giữ tương thích UI cũ; danh sách môn lấy từ AP CMS /api/cms/get-subject-cms. Nếu có term_name thì backend gửi thêm term_name; nếu AP CMS cần campus_code tạm thời, cấu hình static trong env ACADEMIC_AP_CMS_GET_SUBJECT_ENDPOINT.'),
     include_subjects: bool = Query(True),
     user: UserContext = Depends(require_permission('manage_settings')),
     db: Session = Depends(get_db),

@@ -340,7 +340,8 @@ export default function ApSyncPage() {
       <div className="table-wrap">
         <table className="data-table compact-table">
           <thead><tr><th>STT</th><th>Hệ</th><th>Trạng thái</th><th>Kết quả</th><th>Run ID</th></tr></thead>
-          <tbody>{lastResults.map(({ branch, result }) => <tr key={`${branch}-${result.sync_run?.id}`}>
+          <tbody>{lastResults.map(({ branch, result }, index) => <tr key={`${branch}-${result.sync_run?.id}`}>
+            <td className="stt-cell">{index + 1}</td>
             <td><b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b></td>
             <td><span className={result.sync_run?.status === 'completed' ? 'status-pill success' : 'status-pill danger'}>{result.sync_run?.status || 'unknown'}</span></td>
             <td>{summarizeCounters(result)}{result.sync_run?.error_message ? <small>{result.sync_run.error_message}</small> : null}</td>

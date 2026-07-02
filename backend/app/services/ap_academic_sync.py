@@ -261,40 +261,89 @@ class APAcademicClient:
     def _extract_list_response(self, data: Any, *, label: str) -> list[dict[str, Any]]:
         self._ensure_success_response(data, label=label)
         root = data.get('data') if isinstance(data, dict) and isinstance(data.get('data'), (dict, list)) else data
+
+        if isinstance(root, list):
+            return [dict(item) for item in root if isinstance(item, dict)]
+
         if isinstance(root, dict):
-            items = root.get('data') or root.get('items') or root.get('campus') or root.get('campuses') or root.get('subjects') or root.get('course') or root.get('courses') or []
-        elif isinstance(root, list):
-            items = root
-        else:
-            items = []
-        if not isinstance(items, list):
-            raise RuntimeError(f'{label} trả dữ liệu không đúng định dạng list.')
-        return [dict(item) for item in items if isinstance(item, dict)]
+            for key in ('data', 'items', 'campus', 'campuses', 'subjects', 'course', 'courses'):
+                value = root.get(key)
+                if isinstance(value, list):
+                    return [dict(item) for item in value if isinstance(item, dict)]
+
+            # AP CMS get-campus currently returns a compact object map:
+            #   {"ph": "CĐ Hà Nội", "ps": "CĐ Hồ Chí Minh", ...}
+            # Older code only accepted list payloads, so valid AP responses were
+            # normalized to an empty list and sync_from_ap logged a false failure.
+            if 'campus' in label.lower():
+                normalized: list[dict[str, Any]] = []
+                for key, value in root.items():
+                    code = _lower(key)
+                    if not code or code in {'status', 'code', 'message', 'error'}:
+                        continue
+                    if isinstance(value, dict):
+                        item = dict(value)
+                        item.setdefault('campus_code', code)
+                        item.setdefault('code', code)
+                        item.setdefault('value', code)
+                        name = _clean(item.get('campus_name') or item.get('name') or item.get('label') or item.get('description'))
+                        if name:
+                            item.setdefault('campus_name', name)
+                            item.setdefault('name', name)
+                            item.setdefault('label', name)
+                    else:
+                        name = _clean(value) or code.upper()
+                        item = {
+                            'campus_code': code,
+                            'campus_name': name,
+                            'code': code,
+                            'name': name,
+                            'value': code,
+                            'label': name,
+                        }
+                    normalized.append(item)
+                return normalized
+
+            return []
+
+        return []
+
+    def _settings_value(self, primary: str, deprecated: str, default: Any) -> Any:
+        value = getattr(settings, primary, None)
+        if value is not None:
+            return value
+        old_value = getattr(settings, deprecated, None)
+        return default if old_value is None else old_value
 
     def _subject_cache_enabled(self) -> bool:
-        return bool(getattr(settings, 'academic_ap_get_course_file_cache_enabled', True))
+        return bool(self._settings_value('academic_ap_subject_cms_file_cache_enabled', 'academic_ap_get_course_file_cache_enabled', True))
 
     def _subject_cache_refresh(self) -> bool:
-        return bool(getattr(settings, 'academic_ap_get_course_file_cache_refresh', False))
+        return bool(self._settings_value('academic_ap_subject_cms_file_cache_refresh', 'academic_ap_get_course_file_cache_refresh', False))
 
     def _subject_cache_ttl_seconds(self) -> int:
-        raw = getattr(settings, 'academic_ap_get_course_file_cache_ttl_seconds', 86400)
+        raw = self._settings_value('academic_ap_subject_cms_file_cache_ttl_seconds', 'academic_ap_get_course_file_cache_ttl_seconds', 86400)
         try:
             return max(0, int(raw))
         except Exception:
             return 86400
 
     def _subject_cache_dir(self) -> Path:
-        raw = _clean(getattr(settings, 'academic_ap_get_course_file_cache_dir', '/tmp/ai-server-ap-cache/get-course'))
-        return Path(raw or '/tmp/ai-server-ap-cache/get-course')
+        raw = _clean(self._settings_value('academic_ap_subject_cms_file_cache_dir', 'academic_ap_get_course_file_cache_dir', '/tmp/ai-server-ap-cache/get-subject-cms'))
+        return Path(raw or '/tmp/ai-server-ap-cache/get-subject-cms')
 
-    def _subject_cache_file(self, *, branch: str, term_name: str, campus: str | None = None) -> Path:
-        # v25.9.16.5.69: /api/cms/get-subject-cms is term-scoped for the whole
-        # college system, not campus-scoped. Keep branch in the cache key only to
-        # isolate Poly/PTCĐ sync runs; do not include campus_code in the API key.
-        base_hash = hashlib.sha1(self.cms_base_url.encode('utf-8')).hexdigest()[:10]
+    def _subject_cache_file(self, *, branch: str, term_name: str | None, campus: str | None = None) -> Path:
+        # /api/cms/get-subject-cms is the subject catalog endpoint. It may be
+        # campus-filtered and term-filtered depending on AP CMS deployment. Keep
+        # the configured endpoint template in the cache key so switching env from
+        # ?campus_code=ph&term_name= to ?term_name= never reuses a stale
+        # campus-scoped cache file. The UI campus argument is still not injected
+        # dynamically; AP's temporary required campus is controlled by env only.
+        endpoint_template = _clean(getattr(settings, 'academic_ap_cms_get_subject_endpoint', '/api/cms/get-subject-cms'))
+        cache_scope = f'{self.cms_base_url}|{endpoint_template}'
+        base_hash = hashlib.sha1(cache_scope.encode('utf-8')).hexdigest()[:12]
         branch_part = _safe_filename_part(_lower(branch) or 'poly', default='branch')
-        term_part = _safe_filename_part(term_name, default='term')
+        term_part = _safe_filename_part(term_name or 'all-terms', default='all-terms')
         return self._subject_cache_dir() / f'ap_cms_subjects_{branch_part}_{term_part}_{base_hash}.json'
 
     def _normalize_subject_items(self, items: Any, *, requested_branch: str, campus: str | None = None) -> list[dict[str, Any]]:
@@ -315,7 +364,7 @@ class APAcademicClient:
                     subjects.append(normalized)
         return subjects
 
-    def _read_subject_cache(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]] | None:
+    def _read_subject_cache(self, *, branch: str, term_name: str | None, campus: str | None = None) -> list[dict[str, Any]] | None:
         if not self._subject_cache_enabled() or self._subject_cache_refresh():
             return None
         path = self._subject_cache_file(branch=branch, term_name=term_name, campus=campus)
@@ -337,20 +386,22 @@ class APAcademicClient:
             # Corrupt/stale cache must never break AP sync. Fall back to AP.
             return None
 
-    def _write_subject_cache(self, *, branch: str, term_name: str, campus: str | None = None, subjects: list[dict[str, Any]]) -> None:
+    def _write_subject_cache(self, *, branch: str, term_name: str | None, campus: str | None = None, subjects: list[dict[str, Any]]) -> None:
         if not self._subject_cache_enabled():
             return
         path = self._subject_cache_file(branch=branch, term_name=term_name, campus=campus)
         payload = {
             'schema_version': 3,
             'source': 'ap.cms.get-subject-cms',
-            'source_scope': 'term',
+            'source_scope': 'term' if _clean(term_name) else 'global',
             'base_url': self.cms_base_url,
+            'endpoint_template': _clean(getattr(settings, 'academic_ap_cms_get_subject_endpoint', '/api/cms/get-subject-cms')),
             'requested_branch': _lower(branch) or 'poly',
             # Kept for backward-readable cache diagnostics only. The AP CMS
-            # get-subject-cms runtime request is keyed by term_name. Env may carry temporary static query params.
+            # get-subject-cms runtime request never injects the UI campus; env may
+            # carry temporary static query params if AP requires them.
             'campus_code': None,
-            'term_name': term_name,
+            'term_name': _clean(term_name) or None,
             'cached_at': datetime.now(timezone.utc).isoformat(),
             'cached_at_ts': datetime.now(timezone.utc).timestamp(),
             'count': len(subjects),
@@ -402,20 +453,23 @@ class APAcademicClient:
             raise RuntimeError(f'AP get-campus không trả cơ sở nào cho product={product}, branch={branch}.')
         return campuses
 
-    def get_subjects(self, *, branch: str, term_name: str, campus: str | None = None) -> list[dict[str, Any]]:
+    def get_subjects(self, *, branch: str, term_name: str | None = None, campus: str | None = None) -> list[dict[str, Any]]:
         normalized_term = _clean(term_name)
-        if not normalized_term:
-            raise RuntimeError('Thiếu term_name khi gọi AP get-subject-cms.')
-        # v25.9.16.5.71: get-subject-cms is primarily keyed by term_name.
-        # Some AP CMS environments temporarily require a static query prefix like
-        # ?campus_code=ph&term_name=. Preserve such env-configured query params,
-        # but never inject the selected UI campus as a dynamic campus_code.
-        cached = self._read_subject_cache(branch=branch, term_name=normalized_term, campus=None)
+        # get-subject-cms replaces the old get-course subject-discovery flow.
+        # AP UAT currently requires a static campus_code query parameter, so the
+        # production env should keep:
+        #   /api/cms/get-subject-cms?campus_code=ph&term_name=
+        # When AP removes that requirement, ops only changes env to:
+        #   /api/cms/get-subject-cms?term_name=
+        # Preserve env-configured query params and fill term_name when provided.
+        # Do not inject the selected UI campus dynamically.
+        cached = self._read_subject_cache(branch=branch, term_name=normalized_term or None, campus=None)
         if cached:
             return cached
 
         endpoint = self._cms_endpoint(getattr(settings, 'academic_ap_cms_get_subject_endpoint', '/api/cms/get-subject-cms'), '/api/cms/get-subject-cms')
-        endpoint = self._cms_endpoint_with_query(endpoint, {'term_name': normalized_term})
+        if normalized_term:
+            endpoint = self._cms_endpoint_with_query(endpoint, {'term_name': normalized_term})
         with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config()) as client:
             response = client.get(
                 endpoint,
@@ -426,12 +480,13 @@ class APAcademicClient:
         items = self._extract_list_response(data, label='AP get-subject-cms')
         subjects = self._normalize_subject_items(items, requested_branch=branch, campus=None)
         if not subjects:
-            raise RuntimeError(f'AP get-subject-cms không trả môn nào cho term_name={normalized_term}, requested_branch={branch}.')
+            scope = f'term_name={normalized_term}' if normalized_term else 'global catalog'
+            raise RuntimeError(f'AP get-subject-cms không trả môn nào cho {scope}, requested_branch={branch}.')
         for item in subjects:
             item['_catalog_source'] = 'ap.cms.get-subject-cms'
-            item['_catalog_scope'] = 'term'
-            item['_catalog_term_name'] = normalized_term
-        self._write_subject_cache(branch=branch, term_name=normalized_term, campus=None, subjects=subjects)
+            item['_catalog_scope'] = 'term' if normalized_term else 'global'
+            item['_catalog_term_name'] = normalized_term or None
+        self._write_subject_cache(branch=branch, term_name=normalized_term or None, campus=None, subjects=subjects)
         return subjects
 
     def get_division(self, *, campus: str, term_name: str, subject_code: str) -> dict[str, Any]:
@@ -1498,13 +1553,10 @@ class AcademicImportService:
         subjects: list[dict[str, Any]] = []
         if include_subjects:
             catalog: list[dict[str, Any]] = []
-            if term_name and _clean(term_name):
-                try:
-                    catalog = APAcademicClient().get_subjects(branch=normalized_branch, term_name=_clean(term_name), campus=None)
-                except Exception as exc:
-                    warnings.append('Không tải được môn triển khai theo kỳ từ AP get-subject-cms, đang dùng dữ liệu môn đã lưu nếu có.')
-            else:
-                warnings.append('Chưa chọn kỳ nên chưa gọi AP get-subject-cms.')
+            try:
+                catalog = APAcademicClient().get_subjects(branch=normalized_branch, term_name=_clean(term_name) or None, campus=None)
+            except Exception as exc:
+                warnings.append('Không tải được danh sách môn từ AP get-subject-cms, đang dùng dữ liệu môn đã lưu nếu có.')
             if catalog:
                 seen: set[str] = set()
                 for item in catalog:
@@ -1518,7 +1570,7 @@ class AcademicImportService:
                         'value': code,
                         'label': f'{code} — {name}' if name else code,
                         'description': skill or None,
-                        'meta': {'source': 'ap.cms.get-subject-cms', 'scope': 'term', 'term_name': _clean(term_name), 'subject_name': name, 'skill_code': skill},
+                        'meta': {'source': 'ap.cms.get-subject-cms', 'scope': 'term' if _clean(term_name) else 'global', 'term_name': _clean(term_name) or None, 'subject_name': name, 'skill_code': skill},
                     })
             else:
                 q = self.db.query(AcademicSubject).filter(AcademicSubject.active.is_(True))
@@ -1596,8 +1648,8 @@ class AcademicImportService:
             'ap_subject_endpoint': '/api/cms/get-subject-cms',
             'ap_division_endpoint': '/get-data-cms',
             'subjects_by_campus': {},
-            'subject_catalog_scope': 'term_name',
-            'subject_catalog_term_name': term_name,
+            'subject_catalog_scope': 'term_name' if _clean(term_name) else 'global',
+            'subject_catalog_term_name': _clean(term_name) or None,
             'warnings': [],
         }
         catalog_cache: dict[str, list[dict[str, Any]]] = {}
@@ -1620,7 +1672,7 @@ class AcademicImportService:
                     planned['subject_source'] = source
                 if warning:
                     planned['warnings'].append({'campus': campus_code, 'message': warning})
-                planned['subjects_by_campus'][campus_code] = {'count': len(codes), 'preview': codes[:20], 'source': source, 'catalog_scope': 'term_name', 'term_name': term_name}
+                planned['subjects_by_campus'][campus_code] = {'count': len(codes), 'preview': codes[:20], 'source': source, 'catalog_scope': 'term_name' if _clean(term_name) else 'global', 'term_name': _clean(term_name) or None}
                 estimated_total = max(estimated_total, sum(int(item.get('count') or 0) for item in planned['subjects_by_campus'].values()) or len(resolved_campuses))
                 self.update_run_progress(run, current=min(estimated_total - 1, sum(int(item.get('count') or 0) for item in list(planned['subjects_by_campus'].values())[:campus_index - 1])), total=estimated_total, label=f'Đã xác định {len(codes)} môn triển khai cho kỳ {term_name}; đang áp dụng cho cơ sở {campus_code}', plan=planned, counters=counters)
                 if dry_run:

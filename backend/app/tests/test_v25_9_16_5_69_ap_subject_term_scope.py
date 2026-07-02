@@ -49,17 +49,17 @@ def _client(monkeypatch):
     return ap_academic_sync.APAcademicClient()
 
 
-def test_get_subjects_uses_term_name_not_campus_code(monkeypatch):
+def test_get_subjects_uses_env_static_campus_code_and_term_name(monkeypatch):
     client = _client(monkeypatch)
 
-    subjects = client.get_subjects(branch="poly", term_name="Summer 2026", campus="ph")
+    subjects = client.get_subjects(branch="poly", term_name="Summer 2026", campus="ps")
 
     assert subjects[0]["subject_code"] == "ACC106"
     request = _FakeHttpClient.last_request
     assert request["endpoint"].startswith("http://apitest.poly.edu.vn/api/cms/get-subject-cms")
+    assert "campus_code=ph" in request["endpoint"]
     assert "term_name=Summer+2026" in request["endpoint"]
     assert request["params"] == {}
-    assert "campus_code" not in request["endpoint"]
     assert "campus" not in request["headers"]
 
 

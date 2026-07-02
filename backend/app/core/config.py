@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.7.2.4'
+    app_version: str = '25.9.16.7.2.10'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -228,10 +228,10 @@ class Settings(BaseSettings):
     academic_ap_cms_api_base_url: str = 'http://apitest.poly.edu.vn'
     academic_ap_cms_get_campus_endpoint: str = '/api/cms/get-campus'
     # Can be either a plain path or a query-template path. Examples:
+    # /api/cms/get-subject-cms?campus_code=ph&term_name=   # UAT/current AP requirement
+    # /api/cms/get-subject-cms?term_name=                  # future AP when campus_code is no longer required
     # /api/cms/get-subject-cms
-    # /api/cms/get-subject-cms?term_name=
-    # /api/cms/get-subject-cms?campus_code=ph&term_name=
-    academic_ap_cms_get_subject_endpoint: str = '/api/cms/get-subject-cms'
+    academic_ap_cms_get_subject_endpoint: str = '/api/cms/get-subject-cms?campus_code=ph&term_name='
     # v25.9.16.5.70: AP CMS get-campus product mapping confirmed by AP.
     # Poly/Cao đẳng FPT uses product=POLY; PTCĐ/Poly 9+ uses product=POLY9.
     academic_ap_cms_product_poly: str = 'POLY'
@@ -252,14 +252,20 @@ class Settings(BaseSettings):
     # only when an actual class with students is imported.
     academic_ap_skip_empty_classes: bool = True
     academic_ap_import_catalog_subjects: bool = False
-    # Cache the AP get-subject-cms term_name discovery response into a local JSON file. This
+    # Cache the AP get-subject-cms discovery response into a local JSON file.
     # lets repeated /get-data-cms syncs reuse the subject-code list without
     # storing the whole catalog in DB and without calling get-subject-cms on every
     # sync run. Set refresh=true for one run when the AP catalog changes.
-    academic_ap_get_course_file_cache_enabled: bool = True
-    academic_ap_get_course_file_cache_dir: str = '/tmp/ai-server-ap-cache/get-course'
-    academic_ap_get_course_file_cache_ttl_seconds: int = 86400
-    academic_ap_get_course_file_cache_refresh: bool = False
+    academic_ap_subject_cms_file_cache_enabled: bool | None = None
+    academic_ap_subject_cms_file_cache_dir: str | None = None
+    academic_ap_subject_cms_file_cache_ttl_seconds: int | None = None
+    academic_ap_subject_cms_file_cache_refresh: bool | None = None
+    # Backward-compatible deprecated aliases from older builds. Do not use these
+    # in new env files; they are kept so existing UAT .env.production keeps working.
+    academic_ap_get_course_file_cache_enabled: bool | None = None
+    academic_ap_get_course_file_cache_dir: str | None = None
+    academic_ap_get_course_file_cache_ttl_seconds: int | None = None
+    academic_ap_get_course_file_cache_refresh: bool | None = None
     academic_ap_campuses: str = ''
     academic_ap_subject_codes: str = ''
 
