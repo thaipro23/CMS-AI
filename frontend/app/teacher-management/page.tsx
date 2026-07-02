@@ -139,6 +139,15 @@ function ratioLabel(done?: number | null, total?: number | null) {
   return `${cleanDone}/${cleanTotal}`
 }
 
+function syncTone(done?: number | null, total?: number | null) {
+  const cleanDone = Number(done || 0)
+  const cleanTotal = Number(total || 0)
+  if (cleanTotal <= 0) return 'status-pill neutral'
+  if (cleanDone >= cleanTotal) return 'status-pill success'
+  if (cleanDone > 0) return 'status-pill warning'
+  return 'status-pill danger'
+}
+
 function alertText(alerts?: string[]) {
   return alerts?.length ? alerts.slice(0, 3).join(', ') : 'Không có cảnh báo lớn'
 }
@@ -299,6 +308,9 @@ export default function TeacherManagementPage() {
 
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const reportScopeText = summaryScope === 'cached_filtered' || summaryScope === 'filtered'
+    ? 'Toàn bộ bộ lọc'
+    : 'Trang hiện tại'
 
   const classComponentColumns = (item: AcademicTrainingTeacherReport) => {
     const columns: Array<{ key: string; name: string }> = []
@@ -382,11 +394,11 @@ export default function TeacherManagementPage() {
     <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
       <div className="teacher-compact-toolbar">
         <div>
-          <b>{selectedTerm?.term_name || 'Chưa chọn kỳ'} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}</b>
-          <small>{counterText(total, page, PAGE_SIZE)} · Bấm Xem lớp để sang trang lớp riêng, không render nặng toàn hệ.</small>
+          <b>Báo cáo giảng viên theo phân công · {selectedTerm?.term_name || 'Chưa chọn kỳ'} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}</b>
+          <small>Đang hiển thị {counterText(total, page, PAGE_SIZE)} giảng viên. KPI bên dưới là tổng theo bộ lọc khi đã có cache báo cáo.</small>
         </div>
         <div className="teacher-compact-actions">
-          <button className="btn secondary small" type="button" onClick={() => loadReport()} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>
+          <button className="btn secondary small" type="button" onClick={() => loadReport()} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại báo cáo'}</button>
           <button className="btn secondary small" type="button" onClick={rebuildCache} disabled={!termId || cacheJob?.status === 'queued' || cacheJob?.status === 'running'}>{cacheJob && ['queued', 'running'].includes(cacheJob.status) ? `Đang tính ${jobPercent(cacheJob)}%` : 'Tính lại báo cáo'}</button>
           <button className="btn secondary small" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === 'queued' || exportJob?.status === 'running'}>{exportJob && ['queued', 'running'].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : 'Xuất Excel nền'}</button>
           {exportJob?.status === 'completed' && <button className="btn primary small" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button>}
@@ -434,18 +446,19 @@ export default function TeacherManagementPage() {
       </div>
 
       <div className="academic-summary-strip training-summary-strip ux-kpi-grid">
-        <div><span>Giảng viên</span><b>{countLabel(summary.teacher_count)}</b><small>{summaryScope === 'filtered' ? 'Theo bộ lọc' : 'Trang hiện tại'}</small></div>
-        <div><span>Lớp</span><b>{countLabel(summary.class_count)}</b><small>Lượt lớp phân công</small></div>
-        <div><span>Sinh viên</span><b>{countLabel(summary.student_count)}</b><small>Lượt SV theo lớp</small></div>
-        <div><span>Đã đồng bộ CMS</span><b>{countLabel(summary.cms_synced_count)}</b><small>User CMS đã match</small></div>
-        <div><span>Đã enroll</span><b>{countLabel(summary.learning_enrolled_count)}</b><small>Enrollment CMS</small></div>
-        <div><span>Cần theo dõi</span><b>{countLabel(summary.risk_student_count)}</b><small>SV cảnh báo, không đếm trùng</small></div>
+        <div><span>GV theo bộ lọc</span><b>{countLabel(summary.teacher_count)}</b><small>{reportScopeText}</small></div>
+        <div><span>Lượt lớp phân công</span><b>{countLabel(summary.class_count)}</b><small>Tổng lớp theo phân công giảng viên</small></div>
+        <div><span>Lượt SV theo phân công</span><b>{countLabel(summary.student_count)}</b><small>Tổng SV-lớp theo GV phụ trách</small></div>
+        <div><span>User CMS match</span><b>{countLabel(summary.cms_synced_count)}</b><small>{reportScopeText}</small></div>
+        <div><span>Enrollment CMS</span><b>{countLabel(summary.learning_enrolled_count)}</b><small>{reportScopeText}</small></div>
+        <div><span>Cần theo dõi</span><b>{countLabel(summary.risk_student_count)}</b><small>Nhãn mềm, cần GV xác minh</small></div>
         <div><span>Trễ deadline</span><b>{countLabel(summary.deadline_late_student_count)}</b><small>{countLabel(summary.deadline_late_quiz_count)} lượt quiz trễ</small></div>
-        <div><span>Không được thi</span><b>{countLabel(summary.exam_not_eligible_student_count)}</b><small>{countLabel(summary.exam_insufficient_data_student_count)} SV có dữ liệu chưa đủ</small></div>
+        <div><span>Không được thi</span><b>{countLabel(summary.exam_not_eligible_student_count)}</b><small>{countLabel(summary.exam_insufficient_data_student_count)} SV chưa đủ dữ liệu xét thi</small></div>
       </div>
 
 
-      <div className="academic-inline-error compact-notice cache-status-notice"><b>Báo cáo:</b><span>{cacheInfo?.status === 'hit' ? `Đang đọc cache cập nhật lúc ${formatDateTime(cacheInfo.built_at || null)} (${cacheInfo.row_count || 0} GV)` : 'Chưa có cache cho bộ lọc này; hệ thống đang tính động. Nên bấm Tính lại báo cáo sau khi đồng bộ AP/CMS.'}</span></div>
+      <div className="academic-inline-error compact-notice cache-status-notice"><b>Báo cáo:</b><span>{cacheInfo?.status === 'hit' ? `Đang đọc cache toàn bộ bộ lọc cập nhật lúc ${formatDateTime(cacheInfo.built_at || null)} (${cacheInfo.row_count || 0} GV)` : 'Chưa có cache cho bộ lọc này; KPI có thể đang là trang hiện tại. Nên bấm Tính lại báo cáo sau khi đồng bộ AP/CMS.'}</span></div>
+      <div className="academic-inline-error compact-notice"><b>Cách đọc số liệu:</b><span>Trang này nhóm theo giảng viên. KPI là tổng theo bộ lọc khi cache sẵn sàng; nếu một lớp có nhiều giảng viên thì lượt lớp/SV được tính theo từng phân công.</span></div>
       {cacheJob && ['queued', 'running', 'failed'].includes(cacheJob.status) && <div className="academic-inline-error compact-notice"><b>Job báo cáo:</b><span>{cacheJob.progress_label} · {jobPercent(cacheJob)}%{cacheJob.status === 'failed' ? ` · ${cacheJob.error_message || 'Thất bại'}` : ''}</span></div>}
       {exportJob && ['queued', 'running', 'failed'].includes(exportJob.status) && <div className="academic-inline-error compact-notice"><b>Job Excel:</b><span>{exportJob.progress_label} · {jobPercent(exportJob)}%{exportJob.status === 'failed' ? ` · ${exportJob.error_message || 'Thất bại'}` : ''}</span></div>}
 
@@ -491,8 +504,8 @@ export default function TeacherManagementPage() {
                   <small>Học lại: {countLabel(item.relearn_student_count)} SV · {countLabel(item.total_relearn_count)} lượt</small>
                 </td>
                 <td>
-                  <span className="status-pill success">Đã đồng bộ CMS {ratioLabel(item.cms_synced_count, item.student_count)}</span>
-                  <small>Đã enroll {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>
+                  <span className={syncTone(item.cms_synced_count, item.student_count)}>User CMS match {ratioLabel(item.cms_synced_count, item.student_count)}</span>
+                  <small>Enrollment CMS {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>
                   {item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa map Course CMS</small> : <small>Course CMS đã map cho các lớp có dữ liệu</small>}
                 </td>
                 <td>

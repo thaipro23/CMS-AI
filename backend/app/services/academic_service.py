@@ -2334,27 +2334,44 @@ class AcademicService:
             query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
         query = query.group_by(AcademicSubject.id)
         ordered = query.order_by(AcademicSubject.subject_code.asc())
-        base_total = query.count()
-        rows = ordered.all() if needs_status_filter else ordered.offset((page - 1) * page_size).limit(page_size).all()
-        subject_ids = [row[0].id for row in rows]
-        mapping_rows = []
-        if subject_ids and term_id:
-            mapping_query = self.db.query(AcademicCourseMapping).filter(
+
+        # The subject screen is intentionally a compact subject list, but its KPI
+        # cards must represent the whole current filter. The number of subjects in
+        # one branch/campus/term is small enough to aggregate once here and avoids
+        # the misleading "page only" totals that made the student/teacher pages
+        # look inconsistent after a report rebuild.
+        all_rows = ordered.all()
+        base_total = len(all_rows)
+        all_subject_ids = [row[0].id for row in all_rows]
+
+        mapping_rows_all = []
+        if all_subject_ids and term_id:
+            mapping_query_all = self.db.query(AcademicCourseMapping).filter(
                 AcademicCourseMapping.term_id == term_id,
-                AcademicCourseMapping.subject_id.in_(subject_ids),
+                AcademicCourseMapping.subject_id.in_(all_subject_ids),
                 AcademicCourseMapping.active.is_(True),
                 AcademicCourseMapping.block_id.is_(None),
                 AcademicCourseMapping.campus.is_(None),
             )
             if branch:
-                mapping_query = mapping_query.filter(AcademicCourseMapping.branch == branch.strip().lower())
-            mapping_rows = mapping_query.all()
-        mapping_by_subject = {item.subject_id: item for item in mapping_rows}
-        sync_summary = self._student_sync_summary_for_subjects(user, term_id, subject_ids, branch=branch, campus=campus, decision=decision)
-        items: list[dict[str, Any]] = []
-        for row in rows:
+                mapping_query_all = mapping_query_all.filter(AcademicCourseMapping.branch == branch.strip().lower())
+            mapping_rows_all = mapping_query_all.all()
+        mapping_by_subject_all = {item.subject_id: item for item in mapping_rows_all}
+
+        sync_summary_all = self._student_sync_summary_for_subjects(user, term_id, all_subject_ids, branch=branch, campus=campus, decision=decision)
+        learning_all = self._learning_summary_by_subject_ids(
+            all_subject_ids,
+            term_id=term_id,
+            branch=branch,
+            campus=campus,
+            course_by_subject={subject_id: mapping_by_subject_all.get(subject_id).openedx_course_id if mapping_by_subject_all.get(subject_id) else None for subject_id in all_subject_ids},
+            decision=decision,
+            user=user,
+        )
+
+        def build_entry(row: Any) -> dict[str, Any]:
             subject = row[0]
-            mapping = mapping_by_subject.get(subject.id)
+            mapping = mapping_by_subject_all.get(subject.id)
             suggested = self.suggested_course_id_for_scope(term_id, subject.id) if term_id else None
             candidate, candidate_count, candidate_title, _candidate_source = self._find_exact_openedx_course_candidate(suggested or '', allow_external=False)
             if mapping:
@@ -2375,8 +2392,8 @@ class AcademicService:
                 status_value = 'not_found'
                 status_label = 'Chưa tìm thấy course'
                 effective_course_id = None
-            counts = sync_summary.get(subject.id, {})
-            items.append({
+            counts = sync_summary_all.get(subject.id, {})
+            entry = {
                 'id': subject.id,
                 'ap_subject_id': subject.ap_subject_id,
                 'subject_code': subject.subject_code,
@@ -2397,26 +2414,36 @@ class AcademicService:
                 'openedx_course_title': mapping.openedx_course_title if mapping else candidate_title,
                 'openedx_mapping_id': mapping.id if mapping else None,
                 'suggested_openedx_course_id': suggested,
-            })
-        learning_by_subject = self._learning_summary_by_subject_ids(
-            subject_ids,
-            term_id=term_id,
-            branch=branch,
-            campus=campus,
-            course_by_subject={item['id']: item.get('openedx_course_id') for item in items},
-            decision=decision,
-            user=user,
-        )
-        for entry in items:
-            entry.update(learning_by_subject.get(entry['id'], {}))
+            }
+            entry.update(learning_all.get(subject.id, {}))
+            return entry
+
+        all_items = [build_entry(row) for row in all_rows]
         if needs_status_filter:
-            items = [entry for entry in items if self._entry_matches_learning_list_filter(entry, status_filter)]
-            total = len(items)
-            items = items[(page - 1) * page_size:page * page_size]
+            filtered_items = [entry for entry in all_items if self._entry_matches_learning_list_filter(entry, status_filter)]
         else:
-            total = base_total
+            filtered_items = all_items
+        total = len(filtered_items) if needs_status_filter else base_total
+        items = filtered_items[(page - 1) * page_size:page * page_size]
         total_pages = math.ceil(total / page_size) if total else 0
-        return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
+
+        summary_source = filtered_items if needs_status_filter else all_items
+        summary = {
+            'subject_count': int(total),
+            'class_count': int(sum(item.get('class_count') or 0 for item in summary_source)),
+            'student_count': int(sum(item.get('student_count') or 0 for item in summary_source)),
+            'teacher_count': int(sum(item.get('teacher_count') or 0 for item in summary_source)),
+            'cms_synced_count': int(sum(item.get('cms_synced_count') or 0 for item in summary_source)),
+            'cms_unsynced_count': int(sum(item.get('cms_unsynced_count') or 0 for item in summary_source)),
+            'course_mapped_count': int(sum(1 for item in summary_source if str(item.get('course_mapping_status') or '').lower() in {'mapped', 'already_mapped', 'auto_mapped'})),
+            'course_missing_count': int(sum(1 for item in summary_source if str(item.get('course_mapping_status') or '').lower() in {'not_found', 'multiple_candidates'})),
+            'learning_enrolled_count': int(sum(item.get('learning_enrolled_count') or 0 for item in summary_source)),
+            'learning_active_count': int(sum(item.get('learning_active_count') or 0 for item in summary_source)),
+            'learning_synced_count': int(sum(item.get('learning_synced_count') or 0 for item in summary_source)),
+            'alert_subject_count': int(sum(1 for item in summary_source if item.get('learning_alerts'))),
+            'scope_label': 'Toàn bộ bộ lọc',
+        }
+        return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages, 'summary': summary}
 
     def get_class_detail(self, user: UserContext, class_id: str) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)

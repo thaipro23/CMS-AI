@@ -121,6 +121,22 @@ class AcademicSubjectManagementOut(AcademicSubjectOut):
 
 
 
+class AcademicSubjectManagementSummaryOut(BaseModel):
+    subject_count: int = 0
+    class_count: int = 0
+    student_count: int = 0
+    teacher_count: int = 0
+    cms_synced_count: int = 0
+    cms_unsynced_count: int = 0
+    course_mapped_count: int = 0
+    course_missing_count: int = 0
+    learning_enrolled_count: int = 0
+    learning_active_count: int = 0
+    learning_synced_count: int = 0
+    alert_subject_count: int = 0
+    scope_label: str = 'Toàn bộ bộ lọc'
+
+
 class AcademicSubjectManagementListOut(BaseModel):
     items: list[AcademicSubjectManagementOut]
     total: int
@@ -128,6 +144,7 @@ class AcademicSubjectManagementListOut(BaseModel):
     page_size: int = 50
     total_pages: int = 1
     has_next: bool = False
+    summary: AcademicSubjectManagementSummaryOut = Field(default_factory=AcademicSubjectManagementSummaryOut)
 
 
 class AcademicClassOut(BaseModel):

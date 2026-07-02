@@ -9,9 +9,49 @@ import {
   getAcademicTeacherSubjects,
   getAcademicTerms,
 } from '../../lib/api'
-import { AcademicCampus, AcademicLearningComponentScore, AcademicSubjectManagement, AcademicTerm } from '../../types'
+import { AcademicCampus, AcademicLearningComponentScore, AcademicSubjectManagement, AcademicSubjectManagementSummary, AcademicTerm } from '../../types'
 
 const PAGE_SIZE = 50
+
+const EMPTY_SUBJECT_SUMMARY: AcademicSubjectManagementSummary = {
+  subject_count: 0,
+  class_count: 0,
+  student_count: 0,
+  teacher_count: 0,
+  cms_synced_count: 0,
+  cms_unsynced_count: 0,
+  course_mapped_count: 0,
+  course_missing_count: 0,
+  learning_enrolled_count: 0,
+  learning_active_count: 0,
+  learning_synced_count: 0,
+  alert_subject_count: 0,
+  scope_label: 'Toàn bộ bộ lọc',
+}
+
+function normalizeSubjectSummary(value?: Partial<AcademicSubjectManagementSummary> | null): AcademicSubjectManagementSummary {
+  return {
+    ...EMPTY_SUBJECT_SUMMARY,
+    ...(value || {}),
+    subject_count: Number(value?.subject_count || 0),
+    class_count: Number(value?.class_count || 0),
+    student_count: Number(value?.student_count || 0),
+    teacher_count: Number(value?.teacher_count || 0),
+    cms_synced_count: Number(value?.cms_synced_count || 0),
+    cms_unsynced_count: Number(value?.cms_unsynced_count || 0),
+    course_mapped_count: Number(value?.course_mapped_count || 0),
+    course_missing_count: Number(value?.course_missing_count || 0),
+    learning_enrolled_count: Number(value?.learning_enrolled_count || 0),
+    learning_active_count: Number(value?.learning_active_count || 0),
+    learning_synced_count: Number(value?.learning_synced_count || 0),
+    alert_subject_count: Number(value?.alert_subject_count || 0),
+    scope_label: value?.scope_label || 'Toàn bộ bộ lọc',
+  }
+}
+
+function countLabel(value?: number | null) {
+  return String(value || 0)
+}
 
 
 function statusClass(status?: string | null) {
@@ -75,6 +115,7 @@ export default function StudentManagementSubjectsPage() {
   const [learningStatus, setLearningStatus] = useState('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [summary, setSummary] = useState<AcademicSubjectManagementSummary>(EMPTY_SUBJECT_SUMMARY)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [mappingSubjectId, setMappingSubjectId] = useState('')
@@ -114,6 +155,7 @@ export default function StudentManagementSubjectsPage() {
       if (cancelledRef?.cancelled) return
       setSubjects(result.items)
       setTotal(result.total)
+      setSummary(normalizeSubjectSummary(result.summary))
     } catch (error) {
       if (!cancelledRef?.cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được danh sách môn')
     } finally {
@@ -129,13 +171,7 @@ export default function StudentManagementSubjectsPage() {
 
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const aggregate = useMemo(() => subjects.reduce((acc, item) => {
-    acc.classes += item.class_count || 0
-    acc.students += item.student_count || 0
-    acc.mapped += ['mapped', 'already_mapped', 'auto_mapped'].includes(String(item.course_mapping_status || '').toLowerCase()) ? 1 : 0
-    acc.alerts += item.learning_alerts?.length ? 1 : 0
-    return acc
-  }, { classes: 0, students: 0, mapped: 0, alerts: 0 }), [subjects])
+
 
   const runAutoMap = async (subject: AcademicSubjectManagement) => {
     if (!termId) {
@@ -150,6 +186,7 @@ export default function StudentManagementSubjectsPage() {
       const refreshed = await getAcademicTeacherSubjects(headers, { termId, branch, campus, search, learningStatus, page, pageSize: PAGE_SIZE })
       setSubjects(refreshed.items)
       setTotal(refreshed.total)
+      setSummary(normalizeSubjectSummary(refreshed.summary))
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Không tự động map được course CMS')
     } finally {
@@ -161,8 +198,8 @@ export default function StudentManagementSubjectsPage() {
     <section className="card academic-unified-card">
       <div className="section-head list-card-head">
         <div>
-          <h2>Danh sách môn</h2>
-          <p>Admin xem toàn bộ môn đã có lớp/sinh viên; giảng viên chỉ thấy môn được phân công.</p>
+          <h2>Sinh viên & lớp theo môn</h2>
+          <p>Tổng hợp môn, lớp và sinh viên theo đúng hệ · học kỳ · cơ sở đang chọn.</p>
         </div>
         <span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span>
       </div>
@@ -201,12 +238,14 @@ export default function StudentManagementSubjectsPage() {
       </div>
 
       <div className="academic-summary-strip">
-        <div><span>Môn hiển thị</span><b>{total}</b><small>Theo bộ lọc hiện tại</small></div>
-        <div><span>Lớp</span><b>{aggregate.classes}</b><small>Chỉ lớp có sinh viên</small></div>
-        <div><span>Sinh viên</span><b>{aggregate.students}</b><small>Đã sync từ AP</small></div>
-        <div><span>Course CMS</span><b>{aggregate.mapped}/{subjects.length}</b><small>Môn đã map trong trang này</small></div>
-        <div><span>Cảnh báo</span><b>{aggregate.alerts}</b><small>Môn có vấn đề học tập</small></div>
+        <div><span>Môn theo bộ lọc</span><b>{countLabel(summary.subject_count)}</b><small>{counterText(total, page, PAGE_SIZE)}</small></div>
+        <div><span>Lớp theo bộ lọc</span><b>{countLabel(summary.class_count)}</b><small>Tổng lớp thực tế của các môn trong bộ lọc</small></div>
+        <div><span>Sinh viên theo bộ lọc</span><b>{countLabel(summary.student_count)}</b><small>Tổng lượt SV-lớp, cùng cách đếm với báo cáo GV</small></div>
+        <div><span>Course CMS đã map</span><b>{countLabel(summary.course_mapped_count)}/{countLabel(summary.subject_count)}</b><small>{countLabel(summary.course_missing_count)} môn chưa tìm thấy/map course</small></div>
+        <div><span>Cảnh báo theo bộ lọc</span><b>{countLabel(summary.alert_subject_count)}</b><small>Môn có vấn đề học tập cần kiểm tra</small></div>
       </div>
+
+      <div className="academic-inline-error compact-notice"><b>Cách đọc số liệu:</b><span>Trang này nhóm theo môn nhưng KPI phía trên đã là tổng toàn bộ bộ lọc {selectedTerm?.term_name || ''} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'tất cả cơ sở'}, không còn chỉ tính riêng 50 môn đang hiển thị.</span></div>
 
       {message && <div className="academic-inline-error"><b>Không tải được dữ liệu</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Thử lại</button></div>}
 
