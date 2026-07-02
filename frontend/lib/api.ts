@@ -84,6 +84,7 @@ import {
   AcademicClass,
   AcademicClassListResponse,
   AcademicClassSyncJob,
+  AcademicBulkOperationJob,
   AcademicStudentListResponse,
   AcademicSyncResult,
   AcademicSyncRun,
@@ -2166,6 +2167,18 @@ export async function autoMapAllAcademicSubjectCoursesAndSync(headers: HeadersIn
       mode: payload.mode || null,
     }),
   }));
+}
+
+
+export async function getAcademicBulkOperationJobs(headers: HeadersInit, filters: { status?: 'active' | 'queued' | 'running' | 'completed' | 'failed' | 'all' | string; limit?: number } = {}): Promise<AcademicBulkOperationJob[]> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  params.set('limit', String(Math.max(1, Math.min(100, filters.limit || 50))));
+  return parseResponse(await apiFetch(`${API}/academic/bulk-operation-jobs?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+export async function getAcademicBulkOperationJob(headers: HeadersInit, jobId: string): Promise<AcademicBulkOperationJob> {
+  return parseResponse(await apiFetch(`${API}/academic/bulk-operation-jobs/${encodeURIComponent(jobId)}`, { credentials: 'include', headers }));
 }
 
 export async function autoMapAcademicSubjectCourse(headers: HeadersInit, subjectId: string, filters: { termId: string; branch?: string } ): Promise<AcademicSubjectCourseAutoMapResult> {

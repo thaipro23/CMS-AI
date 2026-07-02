@@ -422,6 +422,42 @@ class AcademicClassSyncJob(Base):
     )
 
 
+class AcademicBulkOperationJob(Base):
+    """Persistent bulk academic operation visible to every operator in /jobs.
+
+    Bulk actions such as auto-mapping all Course CMS entries can touch thousands
+    of subjects/classes and must not run inside a browser request. Store one
+    parent job here, let Celery update progress, and enqueue child class-sync
+    jobs as durable records.
+    """
+
+    __tablename__ = 'academic_bulk_operation_jobs'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    job_type: Mapped[str] = mapped_column(String(80), index=True)  # subject_auto_map_all_sync
+    status: Mapped[str] = mapped_column(String(50), default='queued', index=True)  # queued | running | completed | failed
+    term_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_terms.id'), nullable=True, index=True)
+    branch: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    campus: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, default=100)
+    progress_label: Mapped[str] = mapped_column(String(255), default='Đang chờ xử lý')
+    request_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_academic_bulk_operation_scope_status', 'job_type', 'term_id', 'branch', 'campus', 'status'),
+        Index('ix_academic_bulk_operation_actor_created', 'requested_by', 'created_at'),
+        Index('ix_academic_bulk_operation_type_created', 'job_type', 'created_at'),
+    )
+
+
 class AcademicTeacherReportSummary(Base):
     """Materialized teacher-management row for large term/campus scopes.
 

@@ -1,16 +1,18 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../context/AppContext'
 import {
   autoMapAcademicSubjectCourse,
   autoMapAllAcademicSubjectCoursesAndSync,
+  getAcademicBulkOperationJobs,
   getAcademicCampuses,
   getAcademicTeacherSubjects,
   getAcademicTerms,
 } from '../../lib/api'
-import { AcademicCampus, AcademicLearningComponentScore, AcademicSubjectManagement, AcademicSubjectManagementSummary, AcademicTerm } from '../../types'
+import { AcademicBulkOperationJob, AcademicCampus, AcademicLearningComponentScore, AcademicSubjectManagement, AcademicSubjectManagementSummary, AcademicTerm } from '../../types'
 
 const PAGE_SIZE = 50
 
@@ -102,17 +104,18 @@ function buildSubjectClassesHref(subject: AcademicSubjectManagement, context: { 
   return `/student-management/subjects/${encodeURIComponent(subject.id)}/classes${qs ? `?${qs}` : ''}`
 }
 
-export default function StudentManagementSubjectsPage() {
+function StudentManagementSubjectsContent() {
+  const searchParams = useSearchParams()
   const { authHeaders } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [campuses, setCampuses] = useState<AcademicCampus[]>([])
   const [subjects, setSubjects] = useState<AcademicSubjectManagement[]>([])
-  const [termId, setTermId] = useState('')
-  const [branch, setBranch] = useState('poly')
-  const [campus, setCampus] = useState('')
-  const [search, setSearch] = useState('')
+  const [termId, setTermId] = useState(searchParams.get('term_id') || '')
+  const [branch, setBranch] = useState(searchParams.get('branch') || 'poly')
+  const [campus, setCampus] = useState(searchParams.get('campus') === 'all' ? '' : (searchParams.get('campus') || ''))
+  const [search, setSearch] = useState(searchParams.get('search') || '')
   const [learningStatus, setLearningStatus] = useState('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -121,6 +124,8 @@ export default function StudentManagementSubjectsPage() {
   const [message, setMessage] = useState('')
   const [mappingSubjectId, setMappingSubjectId] = useState('')
   const [bulkMapping, setBulkMapping] = useState(false)
+  const [bulkJobs, setBulkJobs] = useState<AcademicBulkOperationJob[]>([])
+  const [currentBulkJobId, setCurrentBulkJobId] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -171,10 +176,33 @@ export default function StudentManagementSubjectsPage() {
     return () => { cancelledRef.cancelled = true }
   }, [headers, termId, branch, campus, search, learningStatus, page])
 
+
+  const loadBulkJobs = async () => {
+    try {
+      const items = await getAcademicBulkOperationJobs(headers, { status: 'active', limit: 20 })
+      setBulkJobs(items.filter((job) => {
+        const request = job.request_json || {}
+        const sameTerm = !termId || job.term_id === termId || request.term_id === termId
+        const sameBranch = !branch || job.branch === branch || request.branch === branch
+        const sameCampus = !campus || job.campus === campus || request.campus === campus
+        return job.job_type === 'subject_auto_map_all_sync' && sameTerm && sameBranch && sameCampus
+      }))
+    } catch {
+      setBulkJobs([])
+    }
+  }
+
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
 
+
+
+  useEffect(() => {
+    loadBulkJobs()
+    const timer = window.setInterval(() => loadBulkJobs(), 10000)
+    return () => window.clearInterval(timer)
+  }, [headers, termId, branch, campus])
 
   const runAutoMapAllAndSync = async () => {
     if (!termId) {
@@ -183,7 +211,7 @@ export default function StudentManagementSubjectsPage() {
     }
     if (!confirm('Auto map tất cả môn trong bộ lọc hiện tại. Môn nào map được sẽ được đưa các lớp vào hàng đợi đồng bộ user CMS + enroll + điểm học tập. Tiếp tục?')) return
     setBulkMapping(true)
-    setMessage('Đang auto map tất cả và đưa lớp vào hàng đợi đồng bộ...')
+    setMessage('Đang tạo job Auto map tất cả...')
     try {
       const result = await autoMapAllAcademicSubjectCoursesAndSync(jsonHeaders, {
         termId,
@@ -196,10 +224,11 @@ export default function StudentManagementSubjectsPage() {
         syncLearning: true,
         maxClasses: 3000,
       })
-      setMessage(result.message || `Đã xử lý ${result.subject_total} môn, đưa ${result.jobs_queued} lớp vào hàng đợi đồng bộ.`)
-      await loadSubjects()
+      setCurrentBulkJobId(result.job_id || '')
+      setMessage(result.message || `Đã tạo job Auto map tất cả. Xem tiến trình ở /jobs.`)
+      await loadBulkJobs()
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không auto map tất cả được')
+      setMessage(error instanceof Error ? error.message : 'Không tạo được job Auto map tất cả')
     } finally {
       setBulkMapping(false)
     }
@@ -235,7 +264,7 @@ export default function StudentManagementSubjectsPage() {
         </div>
         <div className="toolbar-actions">
           <span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span>
-          <button className="btn primary small" type="button" disabled={!termId || bulkMapping || loading} onClick={runAutoMapAllAndSync}>{bulkMapping ? 'Đang auto map tất cả...' : 'Auto map tất cả'}</button>
+          <button className="btn primary small" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? 'Đang tạo job...' : 'Auto map tất cả'}</button>
         </div>
       </div>
 
@@ -280,7 +309,11 @@ export default function StudentManagementSubjectsPage() {
         <div><span>Cần kiểm tra</span><b>{countLabel(summary.alert_subject_count)}</b><small>Môn có vấn đề học tập cần kiểm tra</small></div>
       </div>
 
-      {message && <div className="academic-inline-error"><b>Thông báo</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Làm mới</button></div>}
+
+      {bulkJobs.length ? <div className="academic-inline-error success"><b>Auto map đang chạy nền</b><span>{bulkJobs.length} job đang xử lý cho bộ lọc này. Bạn có thể F5, chuyển màn hình hoặc mở Jobs để theo dõi.</span><Link className="btn secondary small" href="/jobs">Xem Jobs</Link></div> : null}
+      {currentBulkJobId ? <div className="academic-inline-error success"><b>Đã tạo job</b><span>ID {currentBulkJobId.slice(0, 8)} · tiến trình chạy trong worker, không phụ thuộc trình duyệt.</span><Link className="btn secondary small" href="/jobs">Xem Jobs</Link></div> : null}
+
+            {message && <div className="academic-inline-error"><b>Thông báo</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Làm mới</button></div>}
 
       <div className="table-wrap academic-table-wrap">
         <table className="data-table academic-data-table subject-table">
@@ -337,4 +370,8 @@ export default function StudentManagementSubjectsPage() {
       </div>
     </section>
   </div>
+}
+
+export default function StudentManagementSubjectsPage() {
+  return <Suspense fallback={<div className="card">Đang tải quản lý sinh viên...</div>}><StudentManagementSubjectsContent /></Suspense>
 }

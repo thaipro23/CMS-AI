@@ -1176,6 +1176,236 @@ def academic_class_sync_task(job_id: str):
     finally:
         db.close()
 
+
+def _enqueue_academic_class_sync_child_job(
+    db,
+    *,
+    requested_by: str | None,
+    class_id: str,
+    force: bool,
+    limit: int,
+    mode: str | None,
+    auto_map_course: bool,
+    sync_learning: bool,
+):
+    """Create/reuse a durable per-class full CMS sync job from a parent bulk job."""
+    from app.models.academic import AcademicClassSyncJob
+
+    existing = (
+        db.query(AcademicClassSyncJob)
+        .filter(
+            AcademicClassSyncJob.class_id == class_id,
+            AcademicClassSyncJob.status.in_(['queued', 'running']),
+        )
+        .order_by(AcademicClassSyncJob.created_at.desc())
+        .first()
+    )
+    if existing:
+        return existing, True
+
+    clean_limit = max(1, min(500, int(limit or 500)))
+    job = AcademicClassSyncJob(
+        job_type='full_cms_sync',
+        status='queued',
+        class_id=class_id,
+        requested_by=requested_by or 'academic-bulk-worker',
+        force=bool(force),
+        limit=clean_limit,
+        mode=mode,
+        progress_current=0,
+        progress_total=100,
+        progress_label='Đang chờ đồng bộ từ Auto map tất cả',
+        request_json=json_safe_value({
+            'force': bool(force),
+            'limit': clean_limit,
+            'mode': mode,
+            'auto_map_course': auto_map_course,
+            'sync_learning': sync_learning,
+            'parent_job_type': 'subject_auto_map_all_sync',
+        }),
+        result_json={},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    academic_class_sync_task.delay(job.id)
+    return job, False
+
+
+@celery_app.task(name='academic_subject_auto_map_all_sync_task')
+def academic_subject_auto_map_all_sync_task(job_id: str):
+    """Run heavy /student-management Auto map tất cả inside Celery.
+
+    The HTTP request only creates this parent job. This worker job performs safe
+    subject Course CMS auto-mapping, then enqueues child full_cms_sync jobs for
+    mapped classes so every user can see progress in /jobs and F5 is safe.
+    """
+    from app.core.rbac import UserContext
+    from app.models.academic import AcademicBulkOperationJob
+    from app.services.academic_service import AcademicService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+
+        request_json = job.request_json if isinstance(job.request_json, dict) else {}
+        now = datetime.utcnow()
+        job.status = 'running'
+        job.started_at = job.started_at or now
+        job.updated_at = now
+        job.progress_current = max(job.progress_current or 0, 5)
+        job.progress_total = 100
+        job.progress_label = 'Đang auto map Course CMS theo bộ lọc'
+        db.add(job)
+        db.commit()
+
+        worker_user = UserContext(
+            user_id=job.requested_by or 'academic-bulk-worker',
+            username=job.requested_by or 'academic-bulk-worker',
+            email=None,
+            role='admin',
+            permissions={'view_questions', 'sync_course', 'manage_settings'},
+            course_ids=None,
+            raw_claims={'source': 'celery_academic_bulk_operation_job', 'job_id': job.id},
+        )
+        service = AcademicService(db)
+        prepared = service.auto_map_subject_courses_for_filter(
+            worker_user,
+            term_id=str(request_json.get('term_id') or job.term_id or ''),
+            branch=request_json.get('branch') or job.branch,
+            campus=request_json.get('campus') or job.campus,
+            search=request_json.get('search'),
+            learning_status=request_json.get('learning_status'),
+            max_classes=int(request_json.get('max_classes') or 3000),
+        )
+
+        class_ids = list(prepared.get('class_ids') or [])
+        class_total = int(prepared.get('class_total') or len(class_ids) or 0)
+        result_json = dict(prepared)
+        result_json.update({'jobs_queued': 0, 'jobs_reused': 0, 'jobs_skipped': 0, 'job_ids': []})
+        job.result_json = json_safe_value(result_json)
+        job.progress_current = 40
+        job.progress_total = 100
+        job.progress_label = f"Đã map môn; đang đưa {len(class_ids)}/{class_total} lớp vào hàng đợi đồng bộ"
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+
+        jobs_queued = 0
+        jobs_reused = 0
+        jobs_skipped = 0
+        child_job_ids: list[str] = []
+        total_children = max(len(class_ids), 1)
+        for index, class_id in enumerate(class_ids, start=1):
+            try:
+                child_job, reused = _enqueue_academic_class_sync_child_job(
+                    db,
+                    requested_by=job.requested_by,
+                    class_id=str(class_id),
+                    force=bool(request_json.get('force', True)),
+                    limit=int(request_json.get('limit') or 500),
+                    mode=request_json.get('mode'),
+                    auto_map_course=True,
+                    sync_learning=bool(request_json.get('sync_learning', True)),
+                )
+                child_job_ids.append(child_job.id)
+                if reused:
+                    jobs_reused += 1
+                else:
+                    jobs_queued += 1
+            except Exception:
+                jobs_skipped += 1
+            if index == 1 or index % 20 == 0 or index == len(class_ids):
+                current = 40 + int((index / total_children) * 50)
+                job = db.get(AcademicBulkOperationJob, job_id)
+                if job:
+                    next_result = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+                    next_result.update({
+                        'jobs_queued': jobs_queued,
+                        'jobs_reused': jobs_reused,
+                        'jobs_skipped': jobs_skipped,
+                        'job_ids': child_job_ids[:200],
+                    })
+                    job.result_json = json_safe_value(next_result)
+                    job.progress_current = min(95, current)
+                    job.progress_total = 100
+                    job.progress_label = f'Đã đưa {index}/{len(class_ids)} lớp vào hàng đợi đồng bộ CMS/enroll'
+                    job.updated_at = datetime.utcnow()
+                    db.add(job)
+                    db.commit()
+
+        final_result = dict(prepared)
+        final_result.update({
+            'jobs_queued': jobs_queued,
+            'jobs_reused': jobs_reused,
+            'jobs_skipped': jobs_skipped,
+            'job_ids': child_job_ids[:200],
+        })
+        message = (
+            f"Đã auto map {prepared.get('subject_mapped', 0)} môn mới; "
+            f"{prepared.get('subject_already_mapped', 0)} môn đã map sẵn; "
+            f"đã đưa {jobs_queued} lớp vào hàng đợi đồng bộ CMS/enroll"
+        )
+        if jobs_reused:
+            message += f'; {jobs_reused} lớp đang có job chạy nên dùng lại'
+        if prepared.get('subject_failed'):
+            message += f"; {prepared.get('subject_failed')} môn chưa map được"
+        if prepared.get('capped'):
+            message += f"; đã giới hạn {len(class_ids)}/{prepared.get('class_total', 0)} lớp để tránh quá tải"
+        final_result['message'] = message
+
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if job:
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = message[:255]
+            job.result_json = json_safe_value(final_result)
+            job.error_message = None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+        try:
+            log_audit(
+                db,
+                action='academic.subject_course_mapping.auto_all_sync_job.finish',
+                status='success',
+                message=message,
+                user=None,
+                target_type='academic_bulk_operation_job',
+                target_id=job_id,
+                metadata=json_safe_value(final_result),
+            )
+        except Exception:
+            pass
+        return json_safe_value({'ok': True, **final_result})
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if job:
+            job.status = 'failed'
+            job.error_message = str(exc)[:4000] or 'Không thể Auto map tất cả.'
+            job.progress_label = 'Auto map tất cả thất bại'
+            job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(db, action='academic.subject_course_mapping.auto_all_sync_job.failed', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_bulk_operation_job', target_id=job_id, metadata=json_safe_value({'request_json': job.request_json}))
+            except Exception:
+                pass
+        return json_safe_value({'ok': False, 'error': 'academic_bulk_auto_map_failed', 'message': str(exc)})
+    finally:
+        db.close()
+
+
 @celery_app.task(name='academic_teacher_report_job_task')
 def academic_teacher_report_job_task(job_id: str):
     """Run teacher-management cache rebuild/export jobs outside request/response."""

@@ -101,6 +101,7 @@ function classDetailHref(cls: AcademicTrainingClassReport, teacher: AcademicTrai
   if (filters.termId) params.set('term_id', filters.termId)
   if (filters.branch) params.set('branch', filters.branch)
   if (filters.campus) params.set('campus', filters.campus)
+  params.set('list_campus', filters.campus || 'all')
   if (filters.termName) params.set('term_name', filters.termName)
   if (cls.subject_id) params.set('subject_id', cls.subject_id)
   if (cls.subject_code) params.set('subject_code', cls.subject_code)
@@ -174,7 +175,7 @@ export default function TeacherClassesPage() {
           <small>{termName || termId || 'Chưa rõ kỳ'} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'Tất cả cơ sở'} · {classes.length} lớp</small>
         </div>
         <div className="teacher-compact-actions">
-          <Link className="btn secondary small" href={`/teacher-management?term_id=${encodeURIComponent(termId)}&branch=${encodeURIComponent(branch)}&campus=${encodeURIComponent(campus)}`}>Về trang giáo viên</Link>
+          <Link className="btn secondary small" href={`/teacher-management?term_id=${encodeURIComponent(termId)}&branch=${encodeURIComponent(branch)}${campus ? `&campus=${encodeURIComponent(campus)}` : ''}`}>Về trang giáo viên</Link>
           <button className="btn secondary small" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại lớp'}</button>
         </div>
       </div>

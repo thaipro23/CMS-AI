@@ -798,7 +798,12 @@ function ClassDetailContent() {
   const subjectBackParams = new URLSearchParams()
   const backTermId = searchParams.get('term_id') || classInfo?.term_id || ''
   const backBranch = searchParams.get('branch') || classInfo?.branch || 'poly'
-  const backCampus = searchParams.get('campus') || classInfo?.campus || ''
+  const listCampusParam = searchParams.get('list_campus')
+  const cameFromScopedList = listCampusParam !== null
+  const backCampus = cameFromScopedList
+    ? (listCampusParam && listCampusParam !== 'all' ? listCampusParam : '')
+    : (searchParams.get('campus') || classInfo?.campus || '')
+  const classCampus = classInfo?.campus || searchParams.get('campus') || ''
   const backTermName = searchParams.get('term_name') || classInfo?.term_name || ''
   const backSubjectCode = searchParams.get('subject_code') || classInfo?.subject_code || ''
   const backSubjectName = searchParams.get('subject_name') || classInfo?.subject_name || ''
@@ -821,7 +826,7 @@ function ClassDetailContent() {
   const behaviorParams = new URLSearchParams()
   if (backBranch) behaviorParams.set('branch', backBranch)
   if (backTermId) behaviorParams.set('term_id', backTermId)
-  if (backCampus) behaviorParams.set('campus', backCampus)
+  if (classCampus) behaviorParams.set('campus', classCampus)
   if (subjectIdForBack) behaviorParams.set('subject_id', subjectIdForBack)
   if (classId) behaviorParams.set('class_id', classId)
   behaviorParams.set('classification', 'all')
@@ -910,16 +915,16 @@ function ClassDetailContent() {
       </div>
       <div className="class-student-table-shell" ref={tableScrollRef} onWheel={handleStudentTableWheel}>
         <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll">
-        <table className="data-table academic-data-table student-grade-table">
-          <thead><tr><th className="stt-col">STT</th><th className="sticky-col">Sinh viên</th><th>Tiến độ học</th><th>Học online</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
+        <table className="data-table academic-data-table student-grade-table two-col-sticky-table">
+          <thead><tr><th className="stt-col sticky-index-col">STT</th><th className="sticky-col student-sticky-col">Sinh viên</th><th>Tiến độ học</th><th>Học online</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
           <tbody>
             {loading && <tr><td colSpan={5 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
             {!loading && !students.length && <tr><td colSpan={5 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
             {students.map((student, index) => {
               const behavior = studentBehavior(student)
               return <tr key={student.id}>
-              <td className="stt-cell">{(page - 1) * PAGE_SIZE + index + 1}</td>
-              <td className="main-entity-cell sticky-col compact-student-identity-cell">
+              <td className="stt-cell sticky-index-col">{(page - 1) * PAGE_SIZE + index + 1}</td>
+              <td className="main-entity-cell sticky-col student-sticky-col compact-student-identity-cell">
                 <b>{student.student_code || '—'}</b>
                 <small>{student.full_name}</small>
                 <small>Username: {student.username || 'N/A'}{student.openedx_username && student.openedx_username !== student.username ? ` · CMS: ${student.openedx_username}` : ''}</small>

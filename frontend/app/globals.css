@@ -7460,3 +7460,82 @@ html[data-ai-theme='dark'] .analytics-class-overview-table tr.analytics-class-se
 html[data-ai-theme='dark'] .analytics-class-overview-card .alert.info {
   background: rgba(14, 165, 233, .12);
 }
+
+.academic-inline-error.success {
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+  color: #047857;
+}
+.academic-inline-error.success span { color: #065f46; }
+
+/* v25.9.16.7.2.23 — keep STT + Sinh viên locked together during horizontal scroll */
+.two-col-sticky-table {
+  --sticky-stt-width: 56px;
+  --sticky-student-width: 280px;
+}
+.two-col-sticky-table .sticky-index-col,
+.two-col-sticky-table .stt-cell.sticky-index-col,
+.two-col-sticky-table th.sticky-index-col {
+  position: sticky !important;
+  left: 0 !important;
+  width: var(--sticky-stt-width) !important;
+  min-width: var(--sticky-stt-width) !important;
+  max-width: var(--sticky-stt-width) !important;
+  z-index: 11;
+  background: var(--card-bg, #fff);
+  box-shadow: 1px 0 0 rgba(226, 232, 240, .95);
+}
+.two-col-sticky-table th.sticky-index-col {
+  z-index: 16;
+  background: #f8fafc;
+}
+.two-col-sticky-table .student-sticky-col,
+.class-student-table-scroll .student-grade-table.two-col-sticky-table .student-sticky-col,
+.class-student-table-scroll .student-grade-table.two-col-sticky-table .sticky-col.student-sticky-col {
+  position: sticky !important;
+  left: var(--sticky-stt-width) !important;
+  width: var(--sticky-student-width);
+  min-width: var(--sticky-student-width);
+  max-width: var(--sticky-student-width);
+  z-index: 10;
+  background: var(--card-bg, #fff);
+  box-shadow: 2px 0 0 rgba(226, 232, 240, .95), 12px 0 20px -18px rgba(15, 23, 42, .5);
+}
+.two-col-sticky-table th.student-sticky-col,
+.class-student-table-scroll .student-grade-table.two-col-sticky-table th.student-sticky-col,
+.class-student-table-scroll .student-grade-table.two-col-sticky-table th.sticky-col.student-sticky-col {
+  z-index: 15;
+  background: #f8fafc;
+}
+.two-col-sticky-table tbody tr:hover .sticky-index-col,
+.two-col-sticky-table tbody tr:hover .student-sticky-col,
+.class-student-table-scroll .student-grade-table.two-col-sticky-table tbody tr:hover .sticky-col.student-sticky-col {
+  background: #f8fbff;
+}
+.class-student-table-scroll .student-grade-table.two-col-sticky-table {
+  --sticky-stt-width: 56px;
+  --sticky-student-width: 292px;
+}
+.analytics-two-col-sticky-table {
+  --sticky-stt-width: 56px;
+  --sticky-student-width: 240px;
+  min-width: 760px;
+}
+.analytics-student-identity-cell b,
+.analytics-student-identity-cell small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html[data-ai-theme='dark'] .two-col-sticky-table .sticky-index-col,
+html[data-ai-theme='dark'] .two-col-sticky-table .student-sticky-col,
+body.ai-theme-dark .two-col-sticky-table .sticky-index-col,
+body.ai-theme-dark .two-col-sticky-table .student-sticky-col {
+  background: var(--card-bg, #0f172a);
+}
+html[data-ai-theme='dark'] .two-col-sticky-table th.sticky-index-col,
+html[data-ai-theme='dark'] .two-col-sticky-table th.student-sticky-col,
+body.ai-theme-dark .two-col-sticky-table th.sticky-index-col,
+body.ai-theme-dark .two-col-sticky-table th.student-sticky-col {
+  background: #111827;
+}

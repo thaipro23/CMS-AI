@@ -2169,6 +2169,27 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
   }
 }
 
+
+export type AcademicBulkOperationJob = {
+  id: string
+  job_type: string
+  status: string
+  term_id?: string | null
+  branch?: string | null
+  campus?: string | null
+  requested_by?: string | null
+  progress_current: number
+  progress_total: number
+  progress_label: string
+  request_json?: Record<string, any> | null
+  result_json?: Record<string, any> | null
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+}
+
 export type AcademicTeacherReportJob = {
   id: string
   job_type: string
@@ -2191,7 +2212,21 @@ export type AcademicTeacherReportJob = {
   updated_at?: string | null
 }
 
-export type AcademicClassListResponse = PaginatedResponse<AcademicClass>
+export type AcademicClassListSummary = {
+  class_count?: number
+  student_count?: number
+  cms_synced_count?: number
+  cms_unsynced_count?: number
+  learning_enrolled_count?: number
+  learning_synced_count?: number
+  learning_active_count?: number
+  course_mapped_count?: number
+  course_missing_count?: number
+  alert_class_count?: number
+  scope_label?: string
+}
+
+export type AcademicClassListResponse = PaginatedResponse<AcademicClass> & { summary?: AcademicClassListSummary }
 
 
 export type AnalyticsLearningBehaviorClassification =
@@ -2736,6 +2771,8 @@ export type AcademicSubjectManagementListResponse = PaginatedResponse<AcademicSu
 export type AcademicSubjectAutoMapAllSyncResult = {
   ok: boolean
   message: string
+  job_id?: string | null
+  status?: string | null
   term_id: string
   branch?: string | null
   campus?: string | null

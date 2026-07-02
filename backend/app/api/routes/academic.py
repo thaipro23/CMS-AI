@@ -19,6 +19,7 @@ from app.models.academic import (
     AcademicClass,
     AcademicClassStudent,
     AcademicClassSyncJob,
+    AcademicBulkOperationJob,
     AcademicTeacherReportJob,
     AcademicQuizDeadlineOverride,
     AcademicAssignmentDefenseScore,
@@ -36,6 +37,7 @@ from app.schemas.academic import (
     AcademicBlockOut,
     AcademicClassListOut,
     AcademicClassSyncJobOut,
+    AcademicBulkOperationJobOut,
     AcademicTeacherReportJobOut,
     AcademicClassOut,
     AcademicClassCourseMappingCreateIn,
@@ -809,107 +811,153 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
     user: UserContext = Depends(_require_academic_sync_permission),
     db: Session = Depends(get_db),
 ):
-    """Auto-map every safe subject in /student-management and enqueue full CMS sync.
+    """Create a durable worker-backed bulk auto-map + full CMS sync job.
 
-    The operation is intentionally best-effort: subjects that cannot be safely
-    mapped are reported and skipped, while mapped subjects/classes are queued
-    through the existing per-class job system to avoid a long blocking request.
+    Auto-map all can touch thousands of subjects/classes and can enqueue many
+    child class-sync jobs. It must behave like question-generation jobs: return
+    immediately, survive F5, and be visible to other operators in /jobs.
     """
-    service = AcademicService(db)
-    prepared = service.auto_map_subject_courses_for_filter(
-        user,
-        term_id=payload.term_id,
-        branch=payload.branch,
-        campus=payload.campus,
-        search=payload.search,
-        learning_status=payload.learning_status,
-        max_classes=payload.max_classes,
-    )
-    job_ids: list[str] = []
-    jobs_queued = 0
-    jobs_reused = 0
-    jobs_skipped = 0
-    for class_id in prepared.get('class_ids') or []:
-        existing = (
-            db.query(AcademicClassSyncJob)
-            .filter(
-                AcademicClassSyncJob.class_id == class_id,
-                AcademicClassSyncJob.status.in_(['queued', 'running']),
-            )
-            .order_by(AcademicClassSyncJob.created_at.desc())
-            .first()
-        )
-        try:
-            job = _enqueue_class_sync_job(
-                db=db,
-                user=user,
-                class_id=class_id,
-                job_type='full_cms_sync',
-                force=payload.force,
-                limit=payload.limit,
-                mode=payload.mode,
-                auto_map_course=True,
-                sync_learning=payload.sync_learning,
-            )
-        except Exception:
-            jobs_skipped += 1
-            continue
-        job_ids.append(job.id)
-        if existing and existing.id == job.id:
-            jobs_reused += 1
-        else:
-            jobs_queued += 1
-    message = (
-        f"Đã auto map {prepared.get('subject_mapped', 0)} môn mới; "
-        f"{prepared.get('subject_already_mapped', 0)} môn đã map sẵn; "
-        f"đã đưa {jobs_queued} lớp vào hàng đợi đồng bộ CMS/enroll"
-    )
-    if jobs_reused:
-        message += f"; {jobs_reused} lớp đang có job chạy nên dùng lại"
-    if prepared.get('subject_failed'):
-        message += f"; {prepared.get('subject_failed')} môn chưa map được"
-    if prepared.get('capped'):
-        message += f"; đã giới hạn {len(prepared.get('class_ids') or [])}/{prepared.get('class_total', 0)} lớp để tránh quá tải"
-    result = {
-        'ok': True,
-        'message': message,
+    if not payload.term_id:
+        raise HTTPException(status_code=422, detail='Thiếu học kỳ để auto map tất cả')
+    branch_value = payload.branch.strip().lower() if payload.branch and payload.branch.strip() else None
+    campus_value = payload.campus.strip().lower() if payload.campus and payload.campus.strip() else None
+    request_json = json_safe_value({
         'term_id': payload.term_id,
-        'branch': prepared.get('branch'),
-        'campus': prepared.get('campus'),
-        'subject_total': prepared.get('subject_total', 0),
-        'subject_mapped': prepared.get('subject_mapped', 0),
-        'subject_already_mapped': prepared.get('subject_already_mapped', 0),
-        'subject_failed': prepared.get('subject_failed', 0),
-        'class_total': prepared.get('class_total', 0),
-        'jobs_queued': jobs_queued,
-        'jobs_reused': jobs_reused,
-        'jobs_skipped': jobs_skipped,
-        'capped': bool(prepared.get('capped')),
-        'subject_results': prepared.get('subject_results') or [],
-        'job_ids': job_ids[:200],
-    }
+        'branch': branch_value,
+        'campus': campus_value,
+        'search': payload.search,
+        'learning_status': payload.learning_status,
+        'force': bool(payload.force),
+        'limit': max(1, min(500, int(payload.limit or 500))),
+        'mode': payload.mode,
+        'sync_learning': bool(payload.sync_learning),
+        'max_classes': max(1, min(5000, int(payload.max_classes or 3000))),
+    })
+
+    active_candidates = (
+        db.query(AcademicBulkOperationJob)
+        .filter(
+            AcademicBulkOperationJob.job_type == 'subject_auto_map_all_sync',
+            AcademicBulkOperationJob.term_id == payload.term_id,
+            AcademicBulkOperationJob.branch == branch_value,
+            AcademicBulkOperationJob.campus == campus_value,
+            AcademicBulkOperationJob.status.in_(['queued', 'running']),
+        )
+        .order_by(AcademicBulkOperationJob.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    active = None
+    for candidate in active_candidates:
+        candidate_request = candidate.request_json if isinstance(candidate.request_json, dict) else {}
+        if (
+            (candidate_request.get('search') or None) == (payload.search or None)
+            and (candidate_request.get('learning_status') or None) == (payload.learning_status or None)
+            and bool(candidate_request.get('force', True)) == bool(payload.force)
+            and bool(candidate_request.get('sync_learning', True)) == bool(payload.sync_learning)
+        ):
+            active = candidate
+            break
+    if active:
+        message = 'Đang có job Auto map tất cả chạy cho bộ lọc này. Hệ thống dùng lại job hiện có, F5 không làm mất tiến trình.'
+        return {
+            'ok': True,
+            'message': message,
+            'job_id': active.id,
+            'status': active.status,
+            'term_id': payload.term_id,
+            'branch': branch_value,
+            'campus': campus_value,
+            'subject_total': int((active.result_json or {}).get('subject_total') or 0) if isinstance(active.result_json, dict) else 0,
+            'subject_mapped': int((active.result_json or {}).get('subject_mapped') or 0) if isinstance(active.result_json, dict) else 0,
+            'subject_already_mapped': int((active.result_json or {}).get('subject_already_mapped') or 0) if isinstance(active.result_json, dict) else 0,
+            'subject_failed': int((active.result_json or {}).get('subject_failed') or 0) if isinstance(active.result_json, dict) else 0,
+            'class_total': int((active.result_json or {}).get('class_total') or 0) if isinstance(active.result_json, dict) else 0,
+            'jobs_queued': int((active.result_json or {}).get('jobs_queued') or 0) if isinstance(active.result_json, dict) else 0,
+            'jobs_reused': int((active.result_json or {}).get('jobs_reused') or 0) if isinstance(active.result_json, dict) else 0,
+            'jobs_skipped': int((active.result_json or {}).get('jobs_skipped') or 0) if isinstance(active.result_json, dict) else 0,
+            'capped': bool((active.result_json or {}).get('capped')) if isinstance(active.result_json, dict) else False,
+            'subject_results': [],
+            'job_ids': [],
+        }
+
+    job = AcademicBulkOperationJob(
+        job_type='subject_auto_map_all_sync',
+        status='queued',
+        term_id=payload.term_id,
+        branch=branch_value,
+        campus=campus_value,
+        requested_by=user.user_id,
+        progress_current=0,
+        progress_total=100,
+        progress_label='Đã đưa Auto map tất cả vào hàng đợi',
+        request_json=request_json,
+        result_json={},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    from app.worker import academic_subject_auto_map_all_sync_task
+    academic_subject_auto_map_all_sync_task.delay(job.id)
+    message = 'Đã tạo job Auto map tất cả. Bạn có thể F5 hoặc chuyển màn hình; tiến trình vẫn chạy trong worker và hiển thị ở /jobs.'
     log_audit(
         db,
-        action='academic.subject_course_mapping.auto_all_sync_jobs',
-        status='success',
+        action='academic.subject_course_mapping.auto_all_sync_job.enqueue',
+        status='queued',
         message=message,
         user=user,
-        target_type='academic_subject_filter',
-        metadata=json_safe_value({
-            'term_id': payload.term_id,
-            'branch': payload.branch,
-            'campus': payload.campus,
-            'subject_total': result['subject_total'],
-            'subject_mapped': result['subject_mapped'],
-            'subject_failed': result['subject_failed'],
-            'class_total': result['class_total'],
-            'jobs_queued': jobs_queued,
-            'jobs_reused': jobs_reused,
-            'jobs_skipped': jobs_skipped,
-            'capped': result['capped'],
-        }),
+        target_type='academic_bulk_operation_job',
+        target_id=job.id,
+        metadata=json_safe_value(request_json),
     )
-    return result
+    return {
+        'ok': True,
+        'message': message,
+        'job_id': job.id,
+        'status': job.status,
+        'term_id': payload.term_id,
+        'branch': branch_value,
+        'campus': campus_value,
+        'subject_total': 0,
+        'subject_mapped': 0,
+        'subject_already_mapped': 0,
+        'subject_failed': 0,
+        'class_total': 0,
+        'jobs_queued': 0,
+        'jobs_reused': 0,
+        'jobs_skipped': 0,
+        'capped': False,
+        'subject_results': [],
+        'job_ids': [],
+    }
+
+
+@router.get('/bulk-operation-jobs', response_model=list[AcademicBulkOperationJobOut])
+def list_academic_bulk_operation_jobs(
+    status_filter: str | None = Query(None, alias='status'),
+    limit: int = Query(50, ge=1, le=100),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    query = db.query(AcademicBulkOperationJob)
+    if status_filter and status_filter != 'all':
+        if status_filter == 'active':
+            query = query.filter(AcademicBulkOperationJob.status.in_(['queued', 'running']))
+        else:
+            query = query.filter(AcademicBulkOperationJob.status == status_filter)
+    return query.order_by(AcademicBulkOperationJob.created_at.desc()).limit(limit).all()
+
+
+@router.get('/bulk-operation-jobs/{job_id}', response_model=AcademicBulkOperationJobOut)
+def get_academic_bulk_operation_job(
+    job_id: str,
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    job = db.get(AcademicBulkOperationJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy job xử lý hàng loạt')
+    return job
 
 @router.get('/subjects/{subject_id}/classes', response_model=AcademicClassListOut)
 def list_subject_classes(

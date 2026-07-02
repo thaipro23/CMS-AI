@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getAcademicApSyncJobs,
+  getAcademicBulkOperationJobs,
   getAcademicTrainingTeacherReportJobs,
   getAnalyticsOpsStatus,
   getBankOperationJobs,
@@ -12,7 +13,7 @@ import {
 } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
-import { AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
+import { AcademicBulkOperationJob, AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { formatVNDateTime } from '../../lib/time'
 
@@ -22,6 +23,7 @@ function statusText(v: string) { return ({ queued: 'Đang chờ', running: 'Đan
 function jobLabel(v: string) { return ({ material_extract: 'Tách tài liệu', bank_generate: 'Tạo câu hỏi', release_publish: 'Đưa bộ đề lên CMS', quiz_create: 'Tạo Quiz' } as Record<string,string>)[v] || v }
 function academicJobLabel(v: string) { return ({ cms_sync_check: 'Kiểm tra CMS', cms_enrollment_sync: 'Enroll CMS', learning_sync: 'Cập nhật điểm', full_cms_sync: 'Đồng bộ full CMS', learning_analytics_recalculate: 'Tính lại học online' } as Record<string,string>)[v] || v }
 function reportJobLabel(v: string) { return ({ rebuild_cache: 'Tính lại báo cáo GV', export_excel: 'Xuất Excel GV' } as Record<string,string>)[v] || v }
+function bulkJobLabel(v: string) { return ({ subject_auto_map_all_sync: 'Auto map tất cả + đồng bộ CMS' } as Record<string,string>)[v] || v }
 function safeNumber(v: unknown) { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 function progressPercent(current?: number, total?: number, explicit?: number) {
   if (typeof explicit === 'number' && Number.isFinite(explicit)) return Math.max(0, Math.min(100, explicit))
@@ -51,7 +53,7 @@ function Popup({ open, title, children, onClose }: { open: boolean; title: strin
 
 type OperationRow = {
   id: string
-  group: 'bank' | 'class_sync' | 'ap_sync' | 'teacher_report' | 'analytics'
+  group: 'bank' | 'class_sync' | 'ap_sync' | 'teacher_report' | 'analytics' | 'bulk_sync'
   label: string
   status: string
   progressCurrent: number
@@ -81,6 +83,7 @@ export default function JobsPage() {
   const { authHeaders, can } = useAppContext()
   const [operationJobs, setOperationJobs] = useState<BankOperationJob[]>([])
   const [classSyncJobs, setClassSyncJobs] = useState<AcademicClassSyncJob[]>([])
+  const [bulkOperationJobs, setBulkOperationJobs] = useState<AcademicBulkOperationJob[]>([])
   const [teacherReportJobs, setTeacherReportJobs] = useState<AcademicTeacherReportJob[]>([])
   const [quizInstances, setQuizInstances] = useState<CourseQuizInstance[]>([])
   const [academicRuns, setAcademicRuns] = useState<AcademicSyncRun[]>([])
@@ -98,12 +101,13 @@ export default function JobsPage() {
       setMessage(null)
       const headers = authHeaders()
       const statusParam = (status === 'all' ? 'all' : status) as JobsStatusFilter
-      const [opJobs, nextQuizInstances, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs, nextAnalyticsOps] = await Promise.all([
+      const [opJobs, nextQuizInstances, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs, nextBulkOperationJobs, nextAnalyticsOps] = await Promise.all([
         getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }).catch(() => ({ items: [] as BankOperationJob[] })),
         getCourseQuizInstances(headers, { limit: 100 }).catch(() => [] as CourseQuizInstance[]),
         getAcademicApSyncJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicSyncRun[]),
         getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 80 }).catch(() => [] as AcademicClassSyncJob[]),
         getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicTeacherReportJob[]),
+        getAcademicBulkOperationJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicBulkOperationJob[]),
         getAnalyticsOpsStatus(headers).catch(() => null),
       ])
       setOperationJobs(opJobs.items || [])
@@ -111,6 +115,7 @@ export default function JobsPage() {
       setAcademicRuns(nextAcademicRuns || [])
       setClassSyncJobs(nextClassSyncJobs || [])
       setTeacherReportJobs(nextTeacherReportJobs || [])
+      setBulkOperationJobs(nextBulkOperationJobs || [])
       setAnalyticsOps(nextAnalyticsOps)
     } catch (error) {
       setMessage(toUserError(error))
@@ -170,6 +175,33 @@ export default function JobsPage() {
       rawType: job.job_type,
       canRetry: false,
     }))
+    const bulkRows = bulkOperationJobs.map((job): OperationRow => {
+      const request = jsonObject(job.request_json)
+      const result = jsonObject(job.result_json)
+      const scopeText = [job.branch || request.branch || null, job.campus || request.campus || null].filter(Boolean).join(' · ') || 'Theo bộ lọc'
+      const mapped = safeNumber(result.subject_mapped)
+      const already = safeNumber(result.subject_already_mapped)
+      const queued = safeNumber(result.jobs_queued)
+      const reused = safeNumber(result.jobs_reused)
+      const skipped = safeNumber(result.jobs_skipped)
+      return {
+        id: job.id,
+        group: 'bulk_sync',
+        label: bulkJobLabel(job.job_type),
+        status: job.status,
+        progressCurrent: safeNumber(job.progress_current),
+        progressTotal: safeNumber(job.progress_total),
+        progressPercent: progressPercent(job.progress_current, job.progress_total),
+        scope: job.term_id || 'Auto map tất cả',
+        scopeDetail: scopeText,
+        requestedBy: job.requested_by || 'Hệ thống',
+        createdAt: job.created_at,
+        message: job.progress_label || `Map ${mapped}+${already} môn · queue ${queued} lớp · reuse ${reused} · bỏ qua ${skipped}`,
+        error: job.error_message,
+        rawType: job.job_type,
+        canRetry: false,
+      }
+    })
     const apRows = academicRuns.map((run): OperationRow => {
       const counters = run.counters_json || {}
       const progress = jsonObject(counters.progress)
@@ -229,9 +261,9 @@ export default function JobsPage() {
         canRetry: false,
       })
     }
-    return [...analyticsRows, ...classRows, ...apRows, ...reportRows, ...bankRows]
+    return [...analyticsRows, ...bulkRows, ...classRows, ...apRows, ...reportRows, ...bankRows]
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-  }, [operationJobs, classSyncJobs, academicRuns, teacherReportJobs, analyticsOps])
+  }, [operationJobs, classSyncJobs, academicRuns, teacherReportJobs, bulkOperationJobs, analyticsOps])
 
   const filteredRows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -253,7 +285,7 @@ export default function JobsPage() {
     </section>
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>AP sync gần đây</span><b>{academicRuns.length}</b></div></section>
-    <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">Tất cả</option><option value="active">Đang chạy</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => setOperationGroup(e.target.value)}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="analytics">Học online</option><option value="bank">Bank / Quiz</option></select></label></div></section>
+    <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">Tất cả</option><option value="active">Đang chạy</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => setOperationGroup(e.target.value)}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="analytics">Học online</option><option value="bulk_sync">Auto map / đồng bộ hàng loạt</option><option value="bank">Bank / Quiz</option></select></label></div></section>
     <section className="card"><div className="section-head"><div><h2>Danh sách việc</h2></div></div>
       <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>STT</th><th>Việc</th><th>Trạng thái</th><th>Tiến độ</th><th>Phạm vi</th><th>Người tạo</th><th>Thời điểm</th><th>Nội dung</th><th>Thao tác</th></tr></thead><tbody>{filteredRows.length ? filteredRows.map((job, index) => <tr key={`${job.group}-${job.id}`} className={`row-${job.status}`}><td className="stt-cell">{index + 1}</td><td><b>{job.label}</b><small>ID {shortId(job.id)}</small></td><td><StatusBadge status={job.status} /><small>{statusText(job.status)}</small></td><td><div className="job-progress table-progress"><i style={{ width: `${job.progressPercent}%` }} /></div><small>{Math.round(job.progressPercent)}% · {job.progressCurrent}/{job.progressTotal || 100}</small></td><td><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></td><td>{job.requestedBy || 'Hệ thống'}</td><td><small>{dateText(job.createdAt)}</small></td><td><span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error || job.message || 'Đang chờ xử lý'}</span></td><td>{job.canRetry ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span>}</td></tr>) : <tr><td colSpan={9}><div className="empty-state">Không có việc phù hợp.</div></td></tr>}</tbody></table></div>
     </section>

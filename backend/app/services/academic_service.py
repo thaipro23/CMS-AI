@@ -605,8 +605,11 @@ class AcademicService:
                 AcademicClass.id.in_(teacher_match_class_ids),
             ))
         ordered = query.order_by(AcademicTerm.start_date.desc().nullslast(), AcademicBlock.sort_order.asc().nullslast(), AcademicSubject.subject_code.asc(), AcademicClass.class_code.asc())
-        base_total = query.count()
-        rows = ordered.all() if needs_status_filter else ordered.offset((page - 1) * page_size).limit(page_size).all()
+        # Production rule: management KPI cards must be calculated from the full current filter,
+        # not from the current page. The previous page-only aggregate made a subject opened as
+        # "Tất cả cơ sở" shrink to one campus after returning from class detail. Keep the page
+        # small for rendering, but compute totals from all filtered classes.
+        rows = ordered.all()
         items: list[dict[str, Any]] = []
         for row in rows:
             item = row[0]
@@ -656,13 +659,26 @@ class AcademicService:
         for entry in items:
             entry.update(learning_by_class.get(entry['id'], {}))
         if needs_status_filter:
-            items = [entry for entry in items if self._entry_matches_learning_list_filter(entry, status_filter)]
-            total = len(items)
-            items = items[(page - 1) * page_size:page * page_size]
+            filtered_items = [entry for entry in items if self._entry_matches_learning_list_filter(entry, status_filter)]
         else:
-            total = base_total
+            filtered_items = items
+        total = len(filtered_items)
         total_pages = math.ceil(total / page_size) if total else 0
-        return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages}
+        page_items = filtered_items[(page - 1) * page_size:page * page_size]
+        summary = {
+            'class_count': int(total),
+            'student_count': int(sum(int(item.get('student_count') or 0) for item in filtered_items)),
+            'cms_synced_count': int(sum(int(item.get('cms_synced_count') or 0) for item in filtered_items)),
+            'cms_unsynced_count': int(sum(int(item.get('cms_unsynced_count') or 0) for item in filtered_items)),
+            'learning_enrolled_count': int(sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items)),
+            'learning_synced_count': int(sum(int(item.get('learning_synced_count') or 0) for item in filtered_items)),
+            'learning_active_count': int(sum(int(item.get('learning_active_count') or 0) for item in filtered_items)),
+            'course_mapped_count': int(sum(1 for item in filtered_items if item.get('openedx_course_id'))),
+            'course_missing_count': int(sum(1 for item in filtered_items if not item.get('openedx_course_id'))),
+            'alert_class_count': int(sum(1 for item in filtered_items if item.get('learning_alerts'))),
+            'scope_label': 'Toàn bộ bộ lọc',
+        }
+        return {'items': page_items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages, 'summary': summary}
 
     def _apply_academic_access_filter(self, query, user: UserContext, decision: AccessDecision | None = None):
         decision = decision or self.access_decision(user)
@@ -3252,7 +3268,10 @@ class AcademicService:
         # First resolve the teacher page, then compute class/student aggregates
         # only for the teachers visible on the current page. Full export and
         # status-filtered views keep the full scan because they need global rows.
-        fast_page_mode = (not include_all and status_filter == 'all')
+        # Production rule: teacher KPI cards must be totals for the full current filter.
+        # The previous fast page mode calculated summary from only visible teachers, which
+        # made one-campus totals look larger than all-campus totals depending on page 1.
+        fast_page_mode = False
         fast_total: int | None = None
         if fast_page_mode:
             ordered_teacher_ids: list[str] = []

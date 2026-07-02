@@ -57,6 +57,7 @@ function SubjectClassesContent() {
   const [search, setSearch] = useState('')
   const [learningStatus, setLearningStatus] = useState('all')
   const [classes, setClasses] = useState<AcademicClass[]>([])
+  const [summary, setSummary] = useState({ class_count: 0, student_count: 0, cms_synced_count: 0, learning_enrolled_count: 0, course_mapped_count: 0 })
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -81,6 +82,13 @@ function SubjectClassesContent() {
       if (cancelledRef?.cancelled) return
       setClasses(result.items)
       setTotal(result.total)
+      setSummary({
+        class_count: Number(result.summary?.class_count ?? result.total ?? 0),
+        student_count: Number(result.summary?.student_count ?? 0),
+        cms_synced_count: Number(result.summary?.cms_synced_count ?? 0),
+        learning_enrolled_count: Number(result.summary?.learning_enrolled_count ?? 0),
+        course_mapped_count: Number(result.summary?.course_mapped_count ?? 0),
+      })
     } catch (error) {
       if (!cancelledRef?.cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được danh sách lớp')
     } finally {
@@ -95,21 +103,20 @@ function SubjectClassesContent() {
   }, [headers, subjectId, termId, branch, campus, blockId, search, learningStatus, page])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const listHref = '/student-management'
-  const aggregate = useMemo(() => classes.reduce((acc, item) => {
-    acc.students += item.student_count || 0
-    acc.synced += item.cms_synced_count || 0
-    acc.enrolled += item.learning_enrolled_count || 0
-    acc.mapped += item.openedx_course_id ? 1 : 0
-    acc.alerts += item.learning_alerts?.length ? 1 : 0
-    return acc
-  }, { students: 0, synced: 0, enrolled: 0, mapped: 0, alerts: 0 }), [classes])
+  const listParams = new URLSearchParams()
+  if (termId) listParams.set('term_id', termId)
+  if (branch) listParams.set('branch', branch)
+  if (campus) listParams.set('campus', campus)
+  if (termName) listParams.set('term_name', termName)
+  if (subjectCode) listParams.set('search', subjectCode)
+  const listHref = `/student-management${listParams.toString() ? `?${listParams.toString()}` : ''}`
 
   function classDetailHref(item: AcademicClass) {
     const detailParams = new URLSearchParams()
     if (termId) detailParams.set('term_id', termId)
     if (branch) detailParams.set('branch', branch)
     if (campus) detailParams.set('campus', campus)
+    detailParams.set('list_campus', campus || 'all')
     if (termName) detailParams.set('term_name', termName)
     if (subjectCode) detailParams.set('subject_code', subjectCode)
     if (subjectName) detailParams.set('subject_name', subjectName)
@@ -123,12 +130,23 @@ function SubjectClassesContent() {
       <div className="section-head list-card-head">
         <div>
           <h2>Lớp của môn {subjectCode || ''}</h2>
-          <p>Chỉ hiển thị lớp có sinh viên đã sync từ AP. Admin xem toàn bộ; giảng viên xem lớp được phân công.</p>
+          <p>Phạm vi: {branch.toUpperCase()} · {termName || termId || 'Chưa rõ kỳ'} · {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}. Admin xem toàn bộ; giảng viên xem lớp được phân công.</p>
         </div>
         <span className="status-pill neutral">{total} lớp</span>
       </div>
 
+      <div className="teacher-breadcrumb-row clean-breadcrumb-row"><Link className="btn secondary small" href={listHref}>← Quay lại danh sách môn</Link></div>
+
       <div className="academic-filter-bar class-filter-bar">
+        <label>Hệ
+          <input className="input" value={branch.toUpperCase()} readOnly />
+        </label>
+        <label>Học kỳ
+          <input className="input" value={termName || termId || 'Chưa rõ kỳ'} readOnly />
+        </label>
+        <label>Cơ sở
+          <input className="input" value={campus ? campus.toUpperCase() : 'Tất cả cơ sở'} readOnly />
+        </label>
         <label>Block
           <select className="input" value={blockId} onChange={(event) => { setBlockId(event.target.value); setPage(1) }}>
             <option value="">Tất cả block</option>
@@ -150,11 +168,11 @@ function SubjectClassesContent() {
       </div>
 
       <div className="academic-summary-strip">
-        <div><span>Lớp hiển thị</span><b>{total}</b><small>Theo bộ lọc hiện tại</small></div>
-        <div><span>Sinh viên</span><b>{aggregate.students}</b><small>Tổng trong trang</small></div>
-        <div><span>Đồng bộ CMS</span><b>{aggregate.synced}</b><small>Sinh viên đã match user CMS</small></div>
-        <div><span>Enrollment</span><b>{aggregate.enrolled}</b><small>Đã enroll CMS</small></div>
-        <div><span>Course CMS</span><b>{aggregate.mapped}/{classes.length}</b><small>Lớp có mapping hiệu lực</small></div>
+        <div><span>Tổng số lớp</span><b>{summary.class_count || total}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>Tổng số sinh viên</span><b>{summary.student_count}</b><small>Không phụ thuộc trang đang xem</small></div>
+        <div><span>Đồng bộ CMS</span><b>{summary.cms_synced_count}</b><small>Sinh viên đã match user CMS</small></div>
+        <div><span>Enrollment</span><b>{summary.learning_enrolled_count}</b><small>Đã enroll CMS</small></div>
+        <div><span>Course CMS</span><b>{summary.course_mapped_count}/{summary.class_count || total}</b><small>Lớp có mapping hiệu lực</small></div>
       </div>
 
       {message && <div className="academic-inline-error"><b>Không tải được danh sách lớp</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadClasses()}>Thử lại</button></div>}
@@ -173,7 +191,7 @@ function SubjectClassesContent() {
               <td><b>{item.student_count}</b><small>{item.cms_synced_count || 0}/{item.student_count} đã đồng bộ CMS</small></td>
               <td><span className={mappingClass(item.openedx_mapping_source)}>{mappingSourceLabel(item.openedx_mapping_source)}</span><small>{item.openedx_course_id || 'N/A'}</small></td>
               <td className="learning-cell"><b>{item.learning_enrolled_count || 0}/{item.student_count} enroll</b><small>Dữ liệu: {item.learning_synced_count || 0}/{item.student_count} · Đã học: {item.learning_active_count || 0}/{item.student_count}</small><small>Tiến độ TB: {percentLabel(item.learning_avg_progress_percent)} · Điểm tổng TB: {percentLabel(item.learning_avg_grade_percent)}</small><small>TP: {componentSummaryLine(item.learning_component_summaries)}</small><small>{alertText(item.learning_alerts)}</small></td>
-              <td><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết lớp</Link></td>
+              <td><div className="teacher-row-actions-stack"><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết lớp</Link><Link className="btn small secondary" href={`/analytics/learning?branch=${encodeURIComponent(branch)}&term_id=${encodeURIComponent(termId)}&campus=${encodeURIComponent(item.campus || campus || '')}&subject_id=${encodeURIComponent(subjectId)}&class_id=${encodeURIComponent(item.id)}&classification=all`}>Hành vi học</Link></div></td>
             </tr>)}
           </tbody>
         </table>

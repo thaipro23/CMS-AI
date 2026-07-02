@@ -522,11 +522,11 @@ export default function AnalyticsLearningPage() {
       </div>
 
       <div className="table-wrap analytics-dashboard-table-wrap">
-        <table className="data-table academic-data-table analytics-learning-table analytics-result-table">
+        <table className="data-table academic-data-table analytics-learning-table analytics-result-table two-col-sticky-table analytics-two-col-sticky-table">
           <thead>
             <tr>
-              <th>STT</th>
-              <th>Sinh viên</th>
+              <th className="stt-col sticky-index-col">STT</th>
+              <th className="student-sticky-col">Sinh viên</th>
               <th>Kết quả</th>
               <th>Độ tin cậy</th>
               <th>Lần học cuối</th>
@@ -534,8 +534,8 @@ export default function AnalyticsLearningPage() {
           </thead>
           <tbody>
             {rows.map((row, index) => <tr key={`${row.class_id}-${row.course_id}-${row.username}`}>
-              <td className="stt-cell">{index + 1}</td>
-              <td><b>{row.username}</b><small>{row.course_id || effectiveCourseId || 'Course CMS N/A'}</small></td>
+              <td className="stt-cell sticky-index-col">{index + 1}</td>
+              <td className="student-sticky-col analytics-student-identity-cell"><b>{row.username}</b><small>{row.course_id || effectiveCourseId || 'Course CMS N/A'}</small></td>
               <td>
                 <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}>
                   <span className={resultClass(row.classification)}>{resultLabel(row.classification, row.display_label)}</span>

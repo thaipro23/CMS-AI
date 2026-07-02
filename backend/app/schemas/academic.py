@@ -270,6 +270,7 @@ class AcademicClassListOut(BaseModel):
     page_size: int = 50
     total_pages: int = 1
     has_next: bool = False
+    summary: dict[str, Any] | None = None
 
 
 class AcademicStudentListOut(BaseModel):
@@ -624,6 +625,8 @@ class AcademicSubjectAutoMapAllSyncIn(BaseModel):
 class AcademicSubjectAutoMapAllSyncOut(BaseModel):
     ok: bool
     message: str
+    job_id: str | None = None
+    status: str | None = None
     term_id: str
     branch: str | None = None
     campus: str | None = None
@@ -638,6 +641,28 @@ class AcademicSubjectAutoMapAllSyncOut(BaseModel):
     capped: bool = False
     subject_results: list[dict[str, Any]] = Field(default_factory=list)
     job_ids: list[str] = Field(default_factory=list)
+
+
+class AcademicBulkOperationJobOut(BaseModel):
+    id: str
+    job_type: str
+    status: str
+    term_id: str | None = None
+    branch: str | None = None
+    campus: str | None = None
+    requested_by: str | None = None
+    progress_current: int = 0
+    progress_total: int = 100
+    progress_label: str = 'Đang chờ xử lý'
+    request_json: dict[str, Any] | None = None
+    result_json: dict[str, Any] | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {'from_attributes': True}
 
 
 class AcademicSubjectCourseAutoMapOut(BaseModel):

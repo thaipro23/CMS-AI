@@ -44,9 +44,12 @@ def test_backend_bulk_auto_map_sync_is_best_effort_and_queues_full_cms_jobs():
     assert 'class AcademicSubjectAutoMapAllSyncIn' in schemas
     assert 'class AcademicSubjectAutoMapAllSyncOut' in schemas
     assert "@router.post('/subjects/course-mapping/auto-all-sync/jobs'" in route
-    assert "job_type='full_cms_sync'" in route
-    assert 'auto_map_course=True' in route
-    assert 'sync_learning=payload.sync_learning' in route
+    worker = (ROOT / 'backend/app/worker.py').read_text(encoding='utf-8')
+    assert 'AcademicBulkOperationJob' in route
+    assert 'academic_subject_auto_map_all_sync_task.delay(job.id)' in route
+    assert "job_type='full_cms_sync'" in worker
+    assert 'auto_map_course=True' in worker
+    assert "sync_learning=bool(request_json.get('sync_learning', True))" in worker
     assert 'auto_map_subject_courses_for_filter' in service
     assert 'page_size=200' in service
     assert 'class_ids' in service

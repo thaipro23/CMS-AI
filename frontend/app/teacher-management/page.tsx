@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../context/AppContext'
 import {
   createAcademicTrainingTeacherExportJob,
@@ -182,16 +183,17 @@ function downloadBlob(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export default function TeacherManagementPage() {
+function TeacherManagementContent() {
+  const searchParams = useSearchParams()
   const { authHeaders } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [campuses, setCampuses] = useState<AcademicCampus[]>([])
   const [items, setItems] = useState<AcademicTrainingTeacherReport[]>([])
   const [summary, setSummary] = useState<TrainingSummary>(EMPTY_SUMMARY)
-  const [termId, setTermId] = useState('')
-  const [branch, setBranch] = useState('poly')
-  const [campus, setCampus] = useState('')
+  const [termId, setTermId] = useState(searchParams.get('term_id') || '')
+  const [branch, setBranch] = useState(searchParams.get('branch') || 'poly')
+  const [campus, setCampus] = useState(searchParams.get('campus') === 'all' ? '' : (searchParams.get('campus') || ''))
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search, 350)
   const [learningStatus, setLearningStatus] = useState('all')
@@ -226,7 +228,7 @@ export default function TeacherManagementPage() {
         setCampuses(data)
         setCampus((current) => {
           if (current && data.some((item) => item.campus_code === current)) return current
-          return data[0]?.campus_code || ''
+          return ''
         })
       })
       .catch(() => setCampuses([]))
@@ -442,6 +444,7 @@ export default function TeacherManagementPage() {
               if (termId) teacherClassesParams.set('term_id', termId)
               if (branch) teacherClassesParams.set('branch', branch)
               if (campus) teacherClassesParams.set('campus', campus)
+              teacherClassesParams.set('list_campus', campus || 'all')
               if (selectedTerm?.term_name) teacherClassesParams.set('term_name', selectedTerm.term_name)
               teacherClassesParams.set('teacher_name', item.teacher_name || item.teacher_username)
               return <tr key={item.teacher_id} className="teacher-row-compact">
@@ -490,4 +493,8 @@ export default function TeacherManagementPage() {
       </div>
     </section>
   </div>
+}
+
+export default function TeacherManagementPage() {
+  return <Suspense fallback={<div className="card">Đang tải quản lý giảng viên...</div>}><TeacherManagementContent /></Suspense>
 }
