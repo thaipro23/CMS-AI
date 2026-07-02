@@ -2309,12 +2309,23 @@ export type AnalyticsClassBehaviorOverviewSummary = {
   not_calculated_class_count: number
 }
 
+export type AnalyticsLearningPermissionScope = {
+  mode?: 'all' | 'scoped' | string
+  unrestricted?: boolean
+  teacher_ids?: string[]
+  subject_codes?: string[]
+  campus_codes?: string[]
+  enforced_by_backend?: boolean
+  label?: string
+}
+
 export type AnalyticsClassBehaviorOverviewResponse = {
   total: number
   items: AnalyticsClassBehaviorOverviewItem[]
   summary: AnalyticsClassBehaviorOverviewSummary
   classification_filter: string
   safe_policy?: string
+  permission_scope?: AnalyticsLearningPermissionScope
 }
 
 export type AnalyticsLearningBehaviorListResponse = {

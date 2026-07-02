@@ -7539,3 +7539,51 @@ body.ai-theme-dark .two-col-sticky-table th.sticky-index-col,
 body.ai-theme-dark .two-col-sticky-table th.student-sticky-col {
   background: #111827;
 }
+
+/* v25.9.16.7.2.25 — analytics learning mirrors student-management as 3 separate screens */
+.analytics-three-step-flow-page .analytics-stepper {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0 10px;
+}
+.analytics-three-step-flow-page .analytics-stepper button {
+  border: 1px solid #dbe4ef;
+  background: #fff;
+  color: #334155;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.analytics-three-step-flow-page .analytics-stepper button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.analytics-three-step-flow-page .analytics-stepper button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.analytics-three-step-flow-page .compact-filter-row {
+  grid-template-columns: minmax(260px, 420px);
+  margin-bottom: 12px;
+}
+.analytics-subject-picker-table small,
+.analytics-class-overview-table small {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+}
+html[data-ai-theme='dark'] .analytics-three-step-flow-page .analytics-stepper button,
+body.ai-theme-dark .analytics-three-step-flow-page .analytics-stepper button {
+  background: #0f172a;
+  border-color: #334155;
+  color: #cbd5e1;
+}
+html[data-ai-theme='dark'] .analytics-three-step-flow-page .analytics-stepper button.active,
+body.ai-theme-dark .analytics-three-step-flow-page .analytics-stepper button.active {
+  background: rgba(37, 99, 235, .16);
+  border-color: #60a5fa;
+  color: #bfdbfe;
+}

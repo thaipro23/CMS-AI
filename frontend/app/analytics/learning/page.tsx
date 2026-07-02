@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../context/AppContext'
 import {
   getAcademicCampuses,
@@ -27,6 +27,8 @@ import { formatVNDateTime } from '../../../lib/time'
 const PAGE_SIZE = 200
 const API_PAGE_SIZE = 200
 const CLASS_OVERVIEW_PAGE_SIZE = 200
+
+type AnalyticsFlowStep = 'subjects' | 'classes' | 'results'
 
 const CLASSIFICATION_OPTIONS = [
   { value: 'all', label: 'Tất cả kết quả' },
@@ -59,6 +61,16 @@ const EMPTY_CLASS_OVERVIEW_SUMMARY: AnalyticsClassBehaviorOverviewSummary = {
   not_calculated_class_count: 0,
 }
 
+const EMPTY_SUBJECT_SUMMARY = {
+  subject_count: 0,
+  class_count: 0,
+  student_count: 0,
+  course_mapped_count: 0,
+  learning_enrolled_count: 0,
+  learning_synced_count: 0,
+  alert_subject_count: 0,
+}
+
 function percent(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A'
   return `${Math.round(value * 10) / 10}%`
@@ -86,19 +98,23 @@ function resultClass(value?: string | null) {
 function compactSubjectLabel(item: AcademicSubjectManagement) {
   const code = item.subject_code || item.skill_code || 'Môn'
   const name = item.subject_name || item.subject_name_en || ''
-  const suffix = typeof item.class_count === 'number' ? ` · ${item.class_count} lớp` : ''
-  return `${code}${name ? ` — ${name}` : ''}${suffix}`
+  return `${code}${name ? ` — ${name}` : ''}`
 }
 
 function classDataStatusLabel(item: AnalyticsClassBehaviorOverviewItem) {
   if (item.data_status === 'not_calculated') return 'Chưa có kết quả'
-  if (item.snapshot_count < item.student_count) return `${item.snapshot_count}/${item.student_count} SV có kết quả`
   return `${item.snapshot_count}/${item.student_count} SV có kết quả`
+}
+
+function campusLabel(campus: string, campuses: AcademicCampus[]) {
+  if (!campus) return 'Tất cả cơ sở'
+  const found = campuses.find((item) => item.campus_code === campus)
+  return found ? `${found.campus_code?.toUpperCase()} · ${found.campus_name}` : campus.toUpperCase()
 }
 
 async function loadAllSubjects(
   headers: HeadersInit,
-  filters: { termId: string; branch: string; campus: string },
+  filters: { termId: string; branch: string; campus: string; search?: string; learningStatus?: string },
 ): Promise<AcademicSubjectManagement[]> {
   const items: AcademicSubjectManagement[] = []
   let page = 1
@@ -106,7 +122,7 @@ async function loadAllSubjects(
   while (hasNext) {
     const result = await getAcademicTeacherSubjects(headers, { ...filters, page, pageSize: API_PAGE_SIZE })
     items.push(...(result.items || []))
-    hasNext = Boolean(result.has_next) && page < 20
+    hasNext = Boolean(result.has_next) && page < 40
     page += 1
   }
   return items
@@ -122,6 +138,13 @@ function reasonText(code?: string | null) {
   if (value.includes('QUIZ')) return 'Thứ tự/tín hiệu quiz cần kiểm tra thêm.'
   if (value.includes('REAL') || value.includes('NORMAL')) return 'Tín hiệu học tập ổn định hơn nhóm cần theo dõi.'
   return code || ''
+}
+
+function normalizeStep(value?: string | null): AnalyticsFlowStep {
+  const normalized = String(value || '').toLowerCase()
+  if (normalized === 'results') return 'results'
+  if (normalized === 'classes') return 'classes'
+  return 'subjects'
 }
 
 function DetailDrawer({
@@ -219,12 +242,16 @@ function DetailDrawer({
 
 export default function AnalyticsLearningPage() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const queryBranch = searchParams.get('branch') || 'poly'
   const queryTermId = searchParams.get('term_id') || ''
-  const queryCampus = searchParams.get('campus') || ''
+  const queryCampusRaw = searchParams.get('campus') || ''
+  const queryCampus = queryCampusRaw === 'all' ? '' : queryCampusRaw
   const querySubjectId = searchParams.get('subject_id') || ''
   const queryClassId = searchParams.get('class_id') || ''
   const queryClassification = searchParams.get('classification') || 'all'
+  const initialStep = queryClassId ? 'results' : (querySubjectId ? normalizeStep(searchParams.get('step') || 'classes') : 'subjects')
+
   const { authHeaders } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const [terms, setTerms] = useState<AcademicTerm[]>([])
@@ -238,9 +265,10 @@ export default function AnalyticsLearningPage() {
   const [campus, setCampus] = useState(queryCampus)
   const [subjectId, setSubjectId] = useState(querySubjectId)
   const [classId, setClassId] = useState(queryClassId)
-  const [directClassFilter, setDirectClassFilter] = useState(queryClassId)
-  const [classOverviewPage, setClassOverviewPage] = useState(1)
   const [classification, setClassification] = useState(queryClassification)
+  const [step, setStep] = useState<AnalyticsFlowStep>(initialStep)
+  const [subjectSearch, setSubjectSearch] = useState(searchParams.get('search') || '')
+  const [classOverviewPage, setClassOverviewPage] = useState(1)
   const [summary, setSummary] = useState<AnalyticsLearningBehaviorSummary>(EMPTY_SUMMARY)
   const [rows, setRows] = useState<AnalyticsLearningBehaviorRow[]>([])
   const [totalRows, setTotalRows] = useState(0)
@@ -249,6 +277,7 @@ export default function AnalyticsLearningPage() {
   const [loadingClassOverview, setLoadingClassOverview] = useState(false)
   const [loadingResults, setLoadingResults] = useState(false)
   const [message, setMessage] = useState('')
+  const [permissionScope, setPermissionScope] = useState<Record<string, unknown> | null>(null)
   const [selectedRow, setSelectedRow] = useState<AnalyticsLearningBehaviorRow | null>(null)
   const [detail, setDetail] = useState<AnalyticsStudentLearningBehaviorDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -257,6 +286,58 @@ export default function AnalyticsLearningPage() {
   const selectedSubject = useMemo(() => subjects.find((item) => item.id === subjectId) || null, [subjects, subjectId])
   const selectedClassOverview = useMemo(() => classOverview.find((item) => item.class_id === classId) || null, [classOverview, classId])
   const effectiveCourseId = selectedClassOverview?.openedx_course_id || null
+  const subjectSummary = useMemo(() => {
+    return subjects.reduce((acc, item) => {
+      acc.subject_count += 1
+      acc.class_count += Number(item.class_count || 0)
+      acc.student_count += Number(item.student_count || 0)
+      acc.course_mapped_count += String(item.course_mapping_status || '').toLowerCase() === 'mapped' ? 1 : 0
+      acc.learning_enrolled_count += Number(item.learning_enrolled_count || 0)
+      acc.learning_synced_count += Number(item.learning_synced_count || 0)
+      acc.alert_subject_count += item.learning_alerts?.length ? 1 : 0
+      return acc
+    }, { ...EMPTY_SUBJECT_SUMMARY })
+  }, [subjects])
+
+  const updateUrl = (next: Partial<{ step: AnalyticsFlowStep; branch: string; termId: string; campus: string; subjectId: string; classId: string; classification: string; search: string }>) => {
+    const nextStep = next.step ?? step
+    const nextBranch = next.branch ?? branch
+    const nextTermId = next.termId ?? termId
+    const nextCampus = next.campus ?? campus
+    const nextSubjectId = next.subjectId ?? subjectId
+    const nextClassId = next.classId ?? classId
+    const nextClassification = next.classification ?? classification
+    const nextSearch = next.search ?? subjectSearch
+    const params = new URLSearchParams()
+    params.set('step', nextStep)
+    if (nextBranch) params.set('branch', nextBranch)
+    if (nextTermId) params.set('term_id', nextTermId)
+    params.set('campus', nextCampus || 'all')
+    if (nextSubjectId) params.set('subject_id', nextSubjectId)
+    if (nextClassId && nextStep === 'results') params.set('class_id', nextClassId)
+    if (nextClassification && nextClassification !== 'all') params.set('classification', nextClassification)
+    if (nextSearch) params.set('search', nextSearch)
+    router.replace(`/analytics/learning?${params.toString()}`, { scroll: false })
+  }
+
+  const setFlowStep = (nextStep: AnalyticsFlowStep, overrides: Partial<{ subjectId: string; classId: string }> = {}) => {
+    const nextSubjectId = overrides.subjectId ?? subjectId
+    const nextClassId = overrides.classId ?? (nextStep === 'results' ? classId : '')
+    setStep(nextStep)
+    setSubjectId(nextSubjectId)
+    setClassId(nextClassId)
+    if (nextStep === 'subjects') {
+      setClassOverview([])
+      setRows([])
+      setSummary(EMPTY_SUMMARY)
+    }
+    if (nextStep === 'classes') {
+      setRows([])
+      setSummary(EMPTY_SUMMARY)
+      setClassOverviewPage(1)
+    }
+    updateUrl({ step: nextStep, subjectId: nextSubjectId, classId: nextClassId })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -279,79 +360,80 @@ export default function AnalyticsLearningPage() {
       .then((items) => {
         if (cancelled) return
         setCampuses(items)
-        setCampus((current) => items.some((item) => item.campus_code === current) ? current : (items[0]?.campus_code || ''))
+        setCampus((current) => current && !items.some((item) => item.campus_code === current) ? '' : current)
       })
       .catch(() => { if (!cancelled) setCampuses([]) })
     return () => { cancelled = true }
   }, [headers, branch])
 
   useEffect(() => {
-    if (!termId || !campus) {
+    if (!termId) {
       setSubjects([])
       setSubjectId('')
       return
     }
     let cancelled = false
     setLoadingSubjects(true)
-    setSubjects([])
-    setSubjectId('')
-    setClassId('')
-    setRows([])
-    setTotalRows(0)
-    setSummary(EMPTY_SUMMARY)
-    setClassOverview([])
-    setClassOverviewTotal(0)
-    setClassOverviewSummary(EMPTY_CLASS_OVERVIEW_SUMMARY)
-    loadAllSubjects(headers, { termId, branch, campus })
+    setMessage('')
+    loadAllSubjects(headers, { termId, branch, campus, search: subjectSearch, learningStatus: 'all' })
       .then((items) => {
         if (cancelled) return
         setSubjects(items)
-        setSubjectId((current) => items.some((item) => item.id === current) ? current : (items[0]?.id || ''))
+        setSubjectId((current) => items.some((item) => item.id === current) ? current : '')
       })
       .catch((error) => { if (!cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được môn') })
       .finally(() => { if (!cancelled) setLoadingSubjects(false) })
     return () => { cancelled = true }
-  }, [headers, termId, campus, branch])
+  }, [headers, termId, campus, branch, subjectSearch])
 
   useEffect(() => {
-    setClassId(directClassFilter || '')
     setClassOverviewPage(1)
-  }, [subjectId, directClassFilter])
+  }, [subjectId, classification, campus, branch, termId])
 
   useEffect(() => {
-    if (!subjectId) {
+    if (!subjectId || step === 'subjects') {
       setClassOverview([])
       setClassOverviewTotal(0)
       setClassOverviewSummary(EMPTY_CLASS_OVERVIEW_SUMMARY)
-      setClassId('')
       return
     }
     let cancelled = false
+    const exactClassId = step === 'results' && classId ? classId : undefined
     setLoadingClassOverview(true)
-    getAnalyticsSubjectClassBehaviorOverview(headers, subjectId, { termId, campus, branch, classification, classId: directClassFilter || undefined, limit: CLASS_OVERVIEW_PAGE_SIZE, offset: (classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE })
+    getAnalyticsSubjectClassBehaviorOverview(headers, subjectId, {
+      termId,
+      campus,
+      branch,
+      classification,
+      classId: exactClassId,
+      limit: CLASS_OVERVIEW_PAGE_SIZE,
+      offset: step === 'classes' ? (classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE : 0,
+    })
       .then((result) => {
         if (cancelled) return
         const items = result.items || []
         setClassOverview(items)
         setClassOverviewTotal(result.total || 0)
         setClassOverviewSummary(result.summary || EMPTY_CLASS_OVERVIEW_SUMMARY)
-        setClassId((current) => items.some((item) => item.class_id === current) ? current : (items[0]?.class_id || ''))
+        setPermissionScope(result.permission_scope || null)
+        if (step === 'results' && classId && !items.some((item) => item.class_id === classId)) {
+          setMessage('Bạn không có quyền xem lớp này hoặc lớp không còn trong bộ lọc hiện tại.')
+        }
       })
       .catch((error) => {
         if (!cancelled) {
           setClassOverview([])
           setClassOverviewTotal(0)
           setClassOverviewSummary(EMPTY_CLASS_OVERVIEW_SUMMARY)
-          setClassId('')
-          setMessage(error instanceof Error ? error.message : 'Không tải được danh sách lớp theo kết quả')
+          setMessage(error instanceof Error ? error.message : 'Không tải được danh sách lớp theo quyền')
         }
       })
       .finally(() => { if (!cancelled) setLoadingClassOverview(false) })
     return () => { cancelled = true }
-  }, [headers, subjectId, termId, campus, branch, classification, directClassFilter, classOverviewPage])
+  }, [headers, subjectId, termId, campus, branch, classification, classOverviewPage, step, classId])
 
   useEffect(() => {
-    if (!classId) {
+    if (step !== 'results' || !classId) {
       setSummary(EMPTY_SUMMARY)
       setRows([])
       setTotalRows(0)
@@ -380,7 +462,26 @@ export default function AnalyticsLearningPage() {
       })
       .finally(() => { if (!cancelled) setLoadingResults(false) })
     return () => { cancelled = true }
-  }, [headers, classId, effectiveCourseId, classification])
+  }, [headers, classId, effectiveCourseId, classification, step])
+
+  const resetScope = (next: Partial<{ branch: string; termId: string; campus: string; classification: string; search: string }>) => {
+    const nextBranch = next.branch ?? branch
+    const nextTermId = next.termId ?? termId
+    const nextCampus = next.campus ?? campus
+    const nextClassification = next.classification ?? classification
+    const nextSearch = next.search ?? subjectSearch
+    setBranch(nextBranch)
+    setTermId(nextTermId)
+    setCampus(nextCampus)
+    setClassification(nextClassification)
+    setSubjectSearch(nextSearch)
+    setSubjectId('')
+    setClassId('')
+    setStep('subjects')
+    setRows([])
+    setClassOverview([])
+    updateUrl({ step: 'subjects', branch: nextBranch, termId: nextTermId, campus: nextCampus, subjectId: '', classId: '', classification: nextClassification, search: nextSearch })
+  }
 
   const openReason = async (row: AnalyticsLearningBehaviorRow) => {
     setSelectedRow(row)
@@ -396,64 +497,111 @@ export default function AnalyticsLearningPage() {
     }
   }
 
-  return <div className="page-stack analytics-learning-page analytics-learning-result-only-page">
+  const scopeMode = String(permissionScope?.['mode'] || '')
+  const permissionText = scopeMode === 'all'
+    ? 'Quyền xem: toàn hệ thống.'
+    : 'Quyền xem: hệ thống đã lọc theo phân quyền cơ sở, môn hoặc lớp AP được phân công.'
+
+  return <div className="page-stack analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
     <section className="card academic-unified-card">
       <div className="section-head list-card-head">
         <div>
           <h2>Phân tích hành vi học</h2>
-          <p>Giáo viên chọn kỳ, cơ sở, môn rồi xem từng lớp. Màn chính chỉ hiện kết quả; bấm vào kết quả sinh viên mới xem lý do.</p>
+          <p>Luồng quản lý tách 3 màn: chọn môn → chọn lớp → xem kết quả. Backend luôn lọc theo phân quyền thật, không chỉ ẩn trên giao diện.</p>
         </div>
       </div>
 
       <div className="academic-filter-bar analytics-learning-flow-filters">
         <label>Hệ
-          <select className="input" value={branch} onChange={(event) => { setBranch(event.target.value); setDirectClassFilter(''); setClassOverviewPage(1) }}>
+          <select className="input" value={branch} onChange={(event) => resetScope({ branch: event.target.value })}>
             <option value="poly">Poly</option>
             <option value="ptcd">PTCĐ</option>
           </select>
         </label>
         <label>Học kỳ
-          <select className="input" value={termId} onChange={(event) => { setTermId(event.target.value); setDirectClassFilter(''); setClassOverviewPage(1) }} disabled={loadingTerms}>
+          <select className="input" value={termId} onChange={(event) => resetScope({ termId: event.target.value })} disabled={loadingTerms}>
             {terms.map((item) => <option key={item.id} value={item.id}>{item.term_name}</option>)}
           </select>
         </label>
         <label>Cơ sở
-          <select className="input" value={campus} onChange={(event) => { setCampus(event.target.value); setDirectClassFilter(''); setClassOverviewPage(1) }}>
+          <select className="input" value={campus} onChange={(event) => resetScope({ campus: event.target.value })}>
+            <option value="">Tất cả cơ sở</option>
             {campuses.map((item) => <option key={item.id || item.campus_code} value={item.campus_code}>{item.campus_code?.toUpperCase()} · {item.campus_name}</option>)}
           </select>
         </label>
-        <label>Môn
-          <select className="input" value={subjectId} onChange={(event) => { setSubjectId(event.target.value); setDirectClassFilter(''); setClassOverviewPage(1) }} disabled={loadingSubjects || !campus || !termId}>
-            {subjects.map((item) => <option key={item.id} value={item.id}>{compactSubjectLabel(item)}</option>)}
-          </select>
-        </label>
         <label>Kết quả
-          <select className="input" value={classification} onChange={(event) => { setClassification(event.target.value); setClassOverviewPage(1) }} disabled={!subjectId}>
+          <select className="input" value={classification} onChange={(event) => { setClassification(event.target.value); updateUrl({ classification: event.target.value }) }}>
             {CLASSIFICATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </label>
       </div>
 
+      <div className="analytics-stepper" aria-label="Luồng phân tích hành vi học">
+        <button className={step === 'subjects' ? 'active' : ''} type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>1. Môn</button>
+        <button className={step === 'classes' ? 'active' : ''} type="button" disabled={!subjectId} onClick={() => setFlowStep('classes', { classId: '' })}>2. Lớp</button>
+        <button className={step === 'results' ? 'active' : ''} type="button" disabled={!classId} onClick={() => setFlowStep('results')}>3. Xem kết quả</button>
+      </div>
+
       <div className="analytics-flow-context">
         <span>{selectedTerm?.term_name || 'Chưa chọn kỳ'}</span>
-        <span>{campus ? campus.toUpperCase() : 'Chưa chọn cơ sở'}</span>
+        <span>{campusLabel(campus, campuses)}</span>
         <span>{selectedSubject?.subject_code || 'Chưa chọn môn'}</span>
         <span>{selectedClassOverview?.class_code || 'Chưa chọn lớp'}</span>
       </div>
 
-      {directClassFilter && <div className="alert info compact-alert">Đang mở trực tiếp một lớp từ trang giảng viên. Bấm “Xem tất cả lớp của môn” để quay lại danh sách đầy đủ.</div>}
+      <div className="alert info compact-alert">{permissionText}</div>
       {message && <div className="academic-inline-error"><b>Cần kiểm tra</b><span>{message}</span></div>}
-      {!effectiveCourseId && classId && <div className="alert warning compact-alert">Lớp này chưa map Course CMS nên kết quả học online có thể chưa đủ. Giáo viên vẫn xem được trạng thái Chưa đủ dữ liệu.</div>}
+      {!effectiveCourseId && step === 'results' && classId && <div className="alert warning compact-alert">Lớp này chưa map Course CMS nên kết quả học online có thể chưa đủ. Giáo viên vẫn xem được trạng thái Chưa đủ dữ liệu.</div>}
     </section>
 
-    <section className="card academic-unified-card analytics-class-overview-card">
+    {step === 'subjects' && <section className="card academic-unified-card analytics-subject-picker-card">
       <div className="section-head list-card-head">
         <div>
-          <h3>Danh sách lớp cần quản lý</h3>
-          <p>{selectedSubject ? `${selectedSubject.subject_code || 'Môn'} · ${classOverviewSummary.total_classes || 0} lớp · ${classOverviewSummary.total_students || 0} sinh viên` : 'Chọn môn để xem lớp.'}</p>
+          <h3>Môn</h3>
+          <p>Chọn môn trước, sau đó mới sang màn danh sách lớp.</p>
+        </div>
+        <span className="status-pill neutral">{subjects.length} môn theo quyền</span>
+      </div>
+      <div className="academic-filter-bar compact-filter-row">
+        <label>Tìm môn
+          <input className="input" value={subjectSearch} onChange={(event) => resetScope({ search: event.target.value })} placeholder="COM1071, Tin học..." />
+        </label>
+      </div>
+      <div className="academic-summary-strip analytics-class-overview-summary">
+        <div><span>Môn</span><b>{subjectSummary.subject_count}</b></div>
+        <div><span>Lớp</span><b>{subjectSummary.class_count}</b></div>
+        <div><span>Sinh viên</span><b>{subjectSummary.student_count}</b></div>
+        <div><span>Course CMS</span><b>{subjectSummary.course_mapped_count}/{subjectSummary.subject_count}</b></div>
+        <div><span>Enrollment</span><b>{subjectSummary.learning_enrolled_count}</b></div>
+      </div>
+      <div className="table-wrap analytics-dashboard-table-wrap">
+        <table className="data-table academic-data-table analytics-subject-picker-table">
+          <thead>
+            <tr><th>STT</th><th>Môn</th><th>Lớp</th><th>Sinh viên</th><th>Course CMS</th><th>Thao tác</th></tr>
+          </thead>
+          <tbody>
+            {subjects.map((item, index) => <tr key={item.id}>
+              <td className="stt-cell">{index + 1}</td>
+              <td><b>{compactSubjectLabel(item)}</b><small>{item.branch?.toUpperCase() || branch.toUpperCase()}</small></td>
+              <td>{item.class_count || 0}</td>
+              <td>{item.student_count || 0}</td>
+              <td><span className={item.openedx_course_id ? 'status-pill success' : 'status-pill warning'}>{item.openedx_course_id ? 'Đã map' : 'Chưa map'}</span></td>
+              <td><button className="btn small primary" type="button" onClick={() => setFlowStep('classes', { subjectId: item.id, classId: '' })}>Xem lớp</button></td>
+            </tr>)}
+            {!subjects.length && <tr><td colSpan={6}><div className="empty-state compact">{loadingSubjects ? 'Đang tải môn theo phân quyền...' : 'Không có môn nào trong phân quyền/bộ lọc hiện tại.'}</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>}
+
+    {step === 'classes' && <section className="card academic-unified-card analytics-class-overview-card">
+      <div className="section-head list-card-head">
+        <div>
+          <h3>Lớp của môn {selectedSubject?.subject_code || ''}</h3>
+          <p>{selectedSubject ? `${compactSubjectLabel(selectedSubject)} · ${classOverviewSummary.total_classes || 0} lớp · ${classOverviewSummary.total_students || 0} sinh viên` : 'Chọn môn để xem lớp.'}</p>
         </div>
         <div className="teacher-compact-actions">
-          {directClassFilter && <button className="btn secondary small" type="button" onClick={() => { setDirectClassFilter(''); setClassOverviewPage(1) }}>Xem tất cả lớp của môn</button>}
+          <button className="btn secondary small" type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>Quay lại môn</button>
           <span className="status-pill neutral">{classOverviewTotal ? `${(classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE + 1}-${Math.min(classOverviewTotal, classOverviewPage * CLASS_OVERVIEW_PAGE_SIZE)} / ${classOverviewTotal}` : '0 lớp'}</span>
         </div>
       </div>
@@ -472,6 +620,7 @@ export default function AnalyticsLearningPage() {
             <tr>
               <th>STT</th>
               <th>Lớp</th>
+              <th>Cơ sở</th>
               <th>Kết quả lớp</th>
               <th>Học thật</th>
               <th>Cần xem</th>
@@ -480,36 +629,41 @@ export default function AnalyticsLearningPage() {
             </tr>
           </thead>
           <tbody>
-            {classOverview.map((item, index) => <tr key={item.class_id} className={item.class_id === classId ? 'analytics-class-selected-row' : ''}>
+            {classOverview.map((item, index) => <tr key={item.class_id}>
               <td className="stt-cell">{(classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE + index + 1}</td>
               <td>
                 <b>{item.class_code || item.class_name || item.class_id}</b>
                 <small>{classDataStatusLabel(item)}{item.openedx_course_id ? ` · ${item.openedx_course_id}` : ' · Chưa map Course CMS'}</small>
               </td>
+              <td>{item.campus?.toUpperCase() || 'N/A'}</td>
               <td><span className={resultClass(item.dominant_classification)}>{item.data_status === 'not_calculated' ? 'Chưa có kết quả' : resultLabel(item.dominant_classification, item.dominant_label)}</span></td>
               <td>{item.likely_real_learning_count || 0}</td>
               <td>{(item.possible_idle_count || 0) + (item.possible_suspicious_count || 0)}</td>
               <td>{item.insufficient_data_count || 0}</td>
-              <td><button className="btn small primary" type="button" onClick={() => setClassId(item.class_id)}>Xem kết quả</button></td>
+              <td><button className="btn small primary" type="button" onClick={() => setFlowStep('results', { classId: item.class_id })}>Xem kết quả</button></td>
             </tr>)}
-            {!classOverview.length && <tr><td colSpan={7}><div className="empty-state compact">{loadingClassOverview ? 'Đang tải danh sách lớp...' : subjectId ? 'Chưa có lớp phù hợp với bộ lọc kết quả.' : 'Chọn môn để xem lớp.'}</div></td></tr>}
+            {!classOverview.length && <tr><td colSpan={8}><div className="empty-state compact">{loadingClassOverview ? 'Đang tải lớp theo phân quyền...' : subjectId ? 'Không có lớp phù hợp với phân quyền/bộ lọc kết quả.' : 'Chọn môn để xem lớp.'}</div></td></tr>}
           </tbody>
         </table>
       </div>
-      {!directClassFilter && classOverviewTotal > CLASS_OVERVIEW_PAGE_SIZE && <div className="pagination-row">
+      {classOverviewTotal > CLASS_OVERVIEW_PAGE_SIZE && <div className="pagination-row">
         <button className="btn secondary" type="button" disabled={classOverviewPage <= 1 || loadingClassOverview} onClick={() => setClassOverviewPage((value) => Math.max(1, value - 1))}>Trang trước</button>
         <span>Trang {classOverviewPage}/{Math.max(1, Math.ceil(classOverviewTotal / CLASS_OVERVIEW_PAGE_SIZE))}</span>
         <button className="btn secondary" type="button" disabled={classOverviewPage >= Math.ceil(classOverviewTotal / CLASS_OVERVIEW_PAGE_SIZE) || loadingClassOverview} onClick={() => setClassOverviewPage((value) => value + 1)}>Trang sau</button>
       </div>}
-    </section>
+    </section>}
 
-    <section className="card academic-unified-card">
+    {step === 'results' && <section className="card academic-unified-card">
       <div className="section-head list-card-head">
         <div>
-          <h3>Chi tiết lớp</h3>
-          <p>{selectedClassOverview ? `${selectedClassOverview.class_code} · ${selectedSubject?.subject_code || ''} · ${campus.toUpperCase()} · ${selectedClassOverview.snapshot_count}/${selectedClassOverview.student_count} SV có kết quả` : 'Chọn lớp ở bảng trên để xem kết quả.'}</p>
+          <h3>Xem kết quả lớp</h3>
+          <p>{selectedClassOverview ? `${selectedClassOverview.class_code} · ${selectedSubject?.subject_code || ''} · ${selectedClassOverview.campus?.toUpperCase() || campusLabel(campus, campuses)} · ${selectedClassOverview.snapshot_count}/${selectedClassOverview.student_count} SV có kết quả` : 'Đang tải lớp đã chọn.'}</p>
         </div>
-        <span className="status-pill neutral">{totalRows ? `1-${Math.min(totalRows, PAGE_SIZE)} / ${totalRows}` : '0 sinh viên'}</span>
+        <div className="teacher-compact-actions">
+          <button className="btn secondary small" type="button" onClick={() => setFlowStep('classes', { classId: '' })}>Quay lại lớp</button>
+          <button className="btn secondary small" type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>Quay lại môn</button>
+          <span className="status-pill neutral">{totalRows ? `1-${Math.min(totalRows, PAGE_SIZE)} / ${totalRows}` : '0 sinh viên'}</span>
+        </div>
       </div>
 
       <div className="academic-summary-strip analytics-summary-strip analytics-result-only-summary">
@@ -548,7 +702,7 @@ export default function AnalyticsLearningPage() {
           </tbody>
         </table>
       </div>
-    </section>
+    </section>}
 
     <DetailDrawer row={selectedRow} detail={detail} loading={detailLoading} onClose={() => { setSelectedRow(null); setDetail(null) }} />
   </div>

@@ -49,6 +49,37 @@ def _allowed_class_ids_for_analytics(db: Session, user: UserContext) -> set[str]
     return {str(r[0]) for r in rows if r[0]}
 
 
+
+
+def _analytics_permission_scope(db: Session, user: UserContext) -> dict[str, Any]:
+    """Small, user-safe explanation of the effective analytics visibility.
+
+    The enforcement is done by AcademicService.assert_can_access_class and by
+    passing allowed_class_ids into aggregate queries. This payload is only for UI
+    transparency so teachers understand why they see a subset of data.
+    """
+    service = AcademicService(db)
+    decision = service.access_decision(user)
+    if decision.unrestricted:
+        return {
+            'mode': 'all',
+            'unrestricted': True,
+            'teacher_ids': [],
+            'subject_codes': [],
+            'campus_codes': [],
+            'enforced_by_backend': True,
+            'label': 'Toàn hệ thống',
+        }
+    return {
+        'mode': 'scoped',
+        'unrestricted': False,
+        'teacher_ids': sorted(str(item) for item in (decision.teacher_ids or set())),
+        'subject_codes': sorted(str(item) for item in (decision.subject_codes or set())),
+        'campus_codes': sorted(str(item) for item in (decision.campus_codes or set())),
+        'enforced_by_backend': True,
+        'label': 'Đã lọc theo phân quyền cơ sở, môn hoặc lớp AP được phân công',
+    }
+
 def _assert_analytics_class_access(db: Session, user: UserContext, class_id: str | None) -> None:
     if not class_id:
         return
@@ -442,7 +473,7 @@ def subject_class_behavior_overview(
     user: UserContext = Depends(require_permission('view_dashboard')),
 ):
     allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
-    return LearningAnalyticsCoreService(db).class_behavior_overview(
+    result = LearningAnalyticsCoreService(db).class_behavior_overview(
         subject_id=subject_id,
         term_id=term_id,
         campus=campus,
@@ -453,6 +484,8 @@ def subject_class_behavior_overview(
         limit=limit,
         offset=offset,
     )
+    result['permission_scope'] = _analytics_permission_scope(db, user)
+    return result
 
 @router.get('/classes/{class_id}/learning-behavior/summary')
 def class_behavior_summary(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
