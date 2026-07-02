@@ -112,7 +112,7 @@ export function buildChapterTitle(value: string) {
 export function statusLabel(status?: string | null) {
   const value = status || 'draft'
   const labels: Record<string, string> = {
-    active: 'Đang dùng', draft: 'Bản nháp', approved: 'Đã duyệt', published: 'Đã public thư viện', ready: 'Sẵn sàng',
+    active: 'Đang dùng', draft: 'Bản nháp', approved: 'Đã duyệt', published: 'Đã đưa lên CMS', ready: 'Sẵn sàng',
     pending_review: 'Chờ duyệt', rejected: 'Đã bỏ', failed: 'Lỗi', created: 'Đã tạo', rolled_back: 'Đã khôi phục', indexed: 'Đã xử lý', deleted: 'Đã xóa',
   }
   return labels[value] || value
@@ -271,19 +271,21 @@ export function matchesSearch(text: string, search: string) {
 export function reviewStatusText(status?: string | null) {
   const value = status || 'empty'
   const labels: Record<string, string> = {
-    published: 'Đã public thư viện',
-    ready: 'Chưa public thư viện',
-    needs_review: 'Chưa làm hết',
-    needs_fix: 'Chưa làm hết',
-    empty: 'Chưa làm',
-    not_ready: 'Chưa làm hết',
+    published: 'Đã đưa lên CMS',
+    ready: 'Sẵn sàng chốt',
+    needs_review: 'Cần xử lý tiếp',
+    needs_fix: 'Cần sửa câu hỏi',
+    empty: 'Chưa có dữ liệu',
+    not_ready: 'Cần hoàn thiện',
   }
-  return labels[value] || 'Chưa làm hết'
+  return labels[value] || 'Cần hoàn thiện'
 }
 
 export function reviewStatusClass(status?: string | null) {
   const value = status || 'empty'
   if (value === 'published') return 'bank-status-card status-published'
+  if (value === 'ready') return 'bank-status-card status-ready'
+  if (value === 'needs_fix') return 'bank-status-card status-danger'
   if (value === 'empty') return 'bank-status-card status-empty'
   return 'bank-status-card status-incomplete'
 }

@@ -16,12 +16,20 @@ const actionLabel: Record<string, string> = {
   'question_bank.bank_version.generate.job': 'Đưa việc tạo câu hỏi vào hàng đợi',
   'question_bank.release.publish_openedx': 'Đưa bộ đề lên CMS',
   'question_bank.release.quiz.create': 'Tạo Quiz trên CMS',
+  'academic.sync.ap.job': 'Đưa đồng bộ AP vào hàng đợi',
+  'academic.sync.ap.run': 'Chạy đồng bộ AP',
+  'academic.class_sync.async': 'Đồng bộ lớp/CMS',
+  'academic.class_sync.job': 'Đưa đồng bộ lớp vào hàng đợi',
+  'academic.learning_sync.job': 'Đưa cập nhật điểm vào hàng đợi',
+  'analytics.ingest.job': 'Đưa ingest học online vào hàng đợi',
+  'analytics.learning_behavior.job': 'Đưa tính lại học online vào hàng đợi',
+  'analytics.learning_behavior.recalculate': 'Tính lại học online',
   'question_bank.version.question.review': 'Duyệt/Từ chối câu hỏi',
   'question_bank.version.question.update': 'Sửa câu hỏi',
   'rbac.assignment.create': 'Gán quyền',
   'rbac.assignment.revoke': 'Thu hồi quyền',
 }
-function actionText(value: string) { return actionLabel[value] || value.replace('question_bank.', 'Bank · ').replace('rbac.', 'Phân quyền · ') }
+function actionText(value: string) { return actionLabel[value] || value.replace('question_bank.', 'Bank · ').replace('academic.', 'Đào tạo · ').replace('analytics.', 'Học online · ').replace('rbac.', 'Phân quyền · ') }
 function errorText(v?: string | null) {
   return v === 'USER_ERROR' ? 'Do người dùng/cấu hình' : v === 'SYSTEM_ERROR' ? 'Do hệ thống' : v === 'EXTERNAL_SERVICE_ERROR' ? 'Dịch vụ ngoài' : v === 'VALIDATION_ERROR' ? 'Dữ liệu đầu vào' : v === 'AUTH_ERROR' ? 'Phân quyền' : '—'
 }
@@ -70,7 +78,7 @@ export default function AuditPage() {
   if (!can('view_jobs')) return <div className="card empty-state">Bạn không có quyền xem nhật ký hoạt động.</div>
   return <div className="page-stack ops-console audit-console">
     <section className="ops-hero card">
-      <div><span className="eyebrow">Nhật ký</span><h1>Nhật ký hoạt động</h1><p>Đối soát các thao tác quan trọng. Tiến trình xử lý xem riêng ở trang Jobs.</p></div>
+      <div><span className="eyebrow">Nhật ký</span><h1>Audit / Nhật ký hoạt động</h1><p>Đối soát thao tác và lỗi nghiệp vụ. Job chạy nền, AP sync và tiến độ xử lý xem riêng ở trang Jobs.</p></div>
       <button className="btn secondary" onClick={() => load(1, pageSize)} disabled={loading}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
     </section>
     <ActionMessage message={message} onClose={() => setMessage(null)} />

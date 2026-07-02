@@ -716,7 +716,7 @@ ${chunk.content}`).join('\n\n')
       <div><span>Câu chờ duyệt</span><b>{stats.pending}</b></div>
       <div><span>Câu bị loại</span><b>{stats.rejected}</b></div>
       <div><span>Nhóm kiến thức</span><b>{stats.families}</b></div>
-      <div><span>Bộ đề</span><b>{publishedRelease ? 'Đã public thư viện' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b><small>{nextReleaseText(publishedRelease || latestRelease)}</small></div>
+      <div><span>Bộ đề</span><b>{publishedRelease ? 'Đã đưa lên CMS' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b><small>{nextReleaseText(publishedRelease || latestRelease)}</small></div>
     </section>
 
     <section className="card chapter-command-bar">
@@ -733,10 +733,10 @@ ${chunk.content}`).join('\n\n')
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
         }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra thay đổi'}</button> : null}
-        {can('publish_questions') ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => runAction('release_create', async () => {
+        {can('publish_questions') ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => runAction('release_create', async () => {
           if (!selectedBankVersion) return
           await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
-        }, 'Hệ thống đã chốt bộ đề. Bạn có thể public thư viện khi sẵn sàng.', refreshCurrent, 'Không chốt được bộ đề. Vui lòng kiểm tra câu hỏi còn chờ xử lý.')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Hệ thống đã public thư viện lên CMS.', refreshCurrent, 'Không public được thư viện. Vui lòng thử lại.')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Public thư viện'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã public thư viện</button>) : null}
+        }, 'Hệ thống đã chốt bộ đề. Bạn có thể đưa lên CMS khi sẵn sàng.', refreshCurrent, 'Không chốt được bộ đề. Vui lòng kiểm tra câu hỏi còn chờ xử lý.')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Hệ thống đã đưa lên CMS lên CMS.', refreshCurrent, 'Không public được thư viện. Vui lòng thử lại.')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
       </div>
       {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
@@ -748,7 +748,7 @@ ${chunk.content}`).join('\n\n')
           await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
         }, 'Hệ thống đã duyệt hết câu chờ.', refreshCurrent, 'Không duyệt được câu hỏi. Vui lòng thử lại.')}>{isActionBusy('bulk_approve') ? <BusyLabel text="Đang duyệt" /> : 'Duyệt hết câu chờ'}</button> : null}</div>
         <div className="question-filter-bar">
-          <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => setQuestionStatusFilter(event.target.value)}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã public thư viện</option></select></label>
+          <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => setQuestionStatusFilter(event.target.value)}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã đưa lên CMS</option></select></label>
           <label>Độ khó<select className="input" value={questionDifficultyFilter} onChange={(event) => setQuestionDifficultyFilter(event.target.value)}><option value="all">Tất cả</option><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
           <label>Sắp xếp<select className="input" value={questionSort} onChange={(event) => setQuestionSort(event.target.value)}><option value="needs_review">Cần xử lý trước</option><option value="difficulty">Theo độ khó</option><option value="quality_low">Điểm chất lượng thấp trước</option><option value="quality_high">Điểm chất lượng cao trước</option></select></label>
           <button className="btn secondary" type="button" onClick={() => { setQuestionStatusFilter('all'); setQuestionDifficultyFilter('all'); setQuestionSort('needs_review') }}>Xóa lọc</button>
@@ -819,7 +819,7 @@ ${chunk.content}`).join('\n\n')
             <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
             <button className="btn" disabled={materialOperationBusy || generateOperationBusy || isActionBusy('material_upload_enqueue') || !file} onClick={uploadSelectedMaterial}>{isActionBusy('material_upload_enqueue') || materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : '+ Gắn tài liệu'}</button>
           </div>
-        </div> : <div className="popup-action-panel"><h3>Đã public thư viện</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo bộ đề.</p></div>}
+        </div> : <div className="popup-action-panel"><h3>Đã đưa lên CMS</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo bộ đề.</p></div>}
         <div className="popup-list-panel">
           <h3>Tài liệu đã gắn</h3>
           <div className="entity-list compact-list small-chunk-list popup-scroll-list">

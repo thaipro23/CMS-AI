@@ -178,7 +178,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
           const hasPublished = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published')
           return <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
             <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditSubjectVersion(subject_version)} onDelete={() => setDeleteTarget(subject_version)} />
-            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã public thư viện' : reviewStatusText(stats.status)}</span></div>
+            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></div>
             <small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small>
             <StatLine label="Bài" value={stats.chapter_count || 0} />
             <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))}`} />

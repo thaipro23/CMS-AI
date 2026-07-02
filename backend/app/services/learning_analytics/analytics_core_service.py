@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot
+from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot
 from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
@@ -38,7 +38,7 @@ class LearningAnalyticsCoreService:
     def schema_inspect(self) -> dict[str, Any]:
         """Phase 0 report: what is reused and what the analytics core adds."""
         return {
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'principle': 'Tái sử dụng schema hiện có, chỉ bổ sung bảng thiếu cho raw normalized events và analytics snapshot.',
             'reused_models': [
                 'AcademicTerm / AcademicBlock: nguồn học kỳ, block, deadline 6 tuần nếu đã cấu hình ở /semesters',
@@ -729,7 +729,7 @@ class LearningAnalyticsCoreService:
             warnings.append({'code': 'ROLLOUT_SCOPE_HAS_INCOMPLETE_MAPPING', 'message': 'Một số lớp trong phạm vi rollout còn thiếu mapping course/session.', 'action': 'Backfill/rebuild trước khi mở rộng toàn kỳ.'})
         rollout_status = 'DISABLED' if not enabled else ('READY' if not blockers and not warnings else 'READY_WITH_WARNINGS')
         return {
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'rollout_status': rollout_status,
             'enabled': enabled,
             'mode': mode.upper(),
@@ -815,7 +815,7 @@ class LearningAnalyticsCoreService:
         warning_count = len([i for i in issues if i.get('severity') == 'warning'])
         monitoring_status = 'BLOCKED' if blocker_count else ('WARNING' if warning_count else 'OK')
         return {
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'monitoring_status': monitoring_status,
             'ready_for_rollout': monitoring_status in {'OK', 'WARNING'} and bool(getattr(settings, 'analytics_rollout_enabled', True)),
             'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
@@ -948,7 +948,7 @@ class LearningAnalyticsCoreService:
 
         return {
             'status': 'ok',
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'readiness': readiness,
             'class_id': class_id,
             'course_id': resolved_course_id,
@@ -1048,7 +1048,7 @@ class LearningAnalyticsCoreService:
             })
         return {
             'status': 'ok',
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'filters': {'campus': campus, 'branch': branch, 'class_id': class_id, 'course_id': course_id, 'limit': limit},
             'total': len(items),
             'counters': dict(counters),
@@ -1164,7 +1164,7 @@ class LearningAnalyticsCoreService:
         warning_count = len([i for i in issues if str(i.get('severity')).upper() == 'WARNING'])
         ready = blocker_count == 0
         return {
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'ready_for_production': ready,
             'readiness': 'PRODUCTION_READY' if ready else 'NOT_READY',
             'blocker_count': blocker_count,
@@ -1358,7 +1358,7 @@ class LearningAnalyticsCoreService:
         ]
 
         return {
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'pilot_status': pilot_status,
             'ready_for_pilot': pilot_status in {'PASS', 'PASS_WITH_WARNINGS'},
             'ready_for_broad_production': bool(production.get('ready_for_production')) and pilot_status == 'PASS',
@@ -1416,7 +1416,7 @@ class LearningAnalyticsCoreService:
         monitoring = self.analytics_monitoring_report()
         production = self.production_readiness_report()
         return {
-            'version': '25.9.16.7.2.4',
+            'version': '25.9.16.7.2.6',
             'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
             'ingest': ingest,
             'active_recalculate_jobs': int(active_recalc or 0),

@@ -919,7 +919,7 @@ class VersionedQuestionBankService:
             'quiz_instances': 'Quiz Open edX đã tạo',
         }
         parts = [f"{human.get(key, key)}: {value}" for key, value in used.items()]
-        return f'Không thể xóa {entity_label} vì bên trong chưa trống ({"; ".join(parts)}). Hãy xóa nội dung con trước.'
+        return f'Không thể xóa {entity_label} vì vẫn còn dữ liệu liên kết ({"; ".join(parts)}). Hãy xóa tài liệu, câu hỏi, release, mapping hoặc quiz trước rồi thử lại.'
 
     def update_department(self, department_id: str, *, code: str | None = None, name: str | None = None, description: str | None = None) -> Department:
         item = self.db.get(Department, department_id)
@@ -1277,33 +1277,41 @@ class VersionedQuestionBankService:
         return removed
 
     def _delete_empty_bank_versions_for_chapter(self, chapter_id: str) -> int:
-        """Remove shell bank versions that were auto-created by opening the workspace.
+        """Remove shell bank versions that do not contain real bank content.
 
-        A newly-created chapter can get a draft v1.0 bank version before any
-        material/question/release exists. That shell is not user content and
-        must not block deleting the empty chapter. Real child content still
-        blocks deletion.
+        Opening a chapter workspace can create a v1.0 shell. Clone/diff/runtime
+        flows can also leave metadata rows pointing to that shell. Those records
+        are not user-facing content and must not block deletion of a truly empty
+        chapter. Only real materials, chunks, concepts, families, questions or
+        releases keep the chapter protected.
         """
         removed = 0
         versions = self.db.query(QuestionBankVersion).filter(QuestionBankVersion.chapter_id == chapter_id).all()
+        real_content_keys = {'materials', 'chunks', 'concepts', 'families', 'questions', 'releases'}
         for version in versions:
             counts = self._bank_version_content_counts(version.id)
-            # Operational jobs/search documents are derived/runtime records. They
-            # must not turn an auto-created empty bank version into real content.
-            # Detach jobs first, then delete the shell version if no user-facing
-            # content depends on it.
-            blocking_counts = {
-                key: int(value or 0)
-                for key, value in counts.items()
-                if key not in {'jobs'} and int(value or 0) > 0
+            real_counts = {
+                key: int(counts.get(key) or 0)
+                for key in real_content_keys
+                if int(counts.get(key) or 0) > 0
             }
-            if blocking_counts:
+            if real_counts:
                 continue
+
+            # Runtime/derived rows are safe to detach from an otherwise empty
+            # shell. Keeping them would surface the confusing empty-bank-version delete blocker even when the chapter has no actual content.
             self.db.query(BankOperationJob).filter(BankOperationJob.bank_version_id == version.id).update(
                 {BankOperationJob.bank_version_id: None},
                 synchronize_session=False,
             )
             self.db.query(QuestionSearchDocument).filter(QuestionSearchDocument.bank_version_id == version.id).delete(synchronize_session=False)
+            self.db.query(BankVersionDiff).filter(
+                or_(BankVersionDiff.from_bank_version_id == version.id, BankVersionDiff.to_bank_version_id == version.id)
+            ).delete(synchronize_session=False)
+            self.db.query(QuestionBankVersion).filter(QuestionBankVersion.based_on_version_id == version.id).update(
+                {QuestionBankVersion.based_on_version_id: None},
+                synchronize_session=False,
+            )
             self.db.delete(version)
             removed += 1
         if removed:

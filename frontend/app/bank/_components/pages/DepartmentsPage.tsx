@@ -156,7 +156,7 @@ export function DepartmentsPage() {
       <div className="section-head"><div><h2>Danh sách bộ môn</h2><p className="helper">Click vào bộ môn để xem các môn bên trong.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={can('manage_settings') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined} />
       <div className="bank-status-legend" aria-label="Chú giải trạng thái">
-        <span><i className="dot-empty" />Chưa làm</span><span><i className="dot-incomplete" />Chưa làm hết</span><span><i className="dot-published" />Đã public thư viện</span>
+        <span><i className="dot-empty" />Chưa có dữ liệu</span><span><i className="dot-incomplete" />Cần hoàn thiện</span><span><i className="dot-published" />Đã đưa lên CMS</span>
       </div>
       <div className="entity-list horizontal multipage-list">
         {visible.map(({ department, stats: rawStats }) => {

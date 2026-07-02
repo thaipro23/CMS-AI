@@ -188,12 +188,12 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
           const hasPublished = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0)
           return <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
             <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} />
-            <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{hasPublished ? 'Đã public thư viện' : reviewStatusText(stats.status)}</span></div>
+            <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></div>
             <StatLine label="Tài liệu" value={stats.material_count || 0} />
             <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
             <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
             <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
-            <StatLine label="Bộ đề" value={hasPublished ? 'Đã public thư viện' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
+            <StatLine label="Bộ đề" value={hasPublished ? 'Đã đưa lên CMS' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
             {hasPublished ? <span className="status success">Đã khóa chỉnh sửa</span> : stats.ready_to_release ? <span className="status success">Sẵn sàng chốt bộ đề</span> : null}
           </Link>
         })}

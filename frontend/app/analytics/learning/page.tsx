@@ -138,22 +138,32 @@ export default function AnalyticsLearningPage() {
     setLoading(true)
     setMessage('')
     try {
+      const softErrors: string[] = []
+      const optional = async <T,>(label: string, promise: Promise<T>): Promise<T | null> => {
+        try {
+          return await promise
+        } catch (error) {
+          softErrors.push(label)
+          return null
+        }
+      }
       const [result, quality, plan, production, pilot, rollout, monitor] = await Promise.all([
-        getAnalyticsLearningDashboard(headers, filters),
-        getAnalyticsDataQualityReport(headers, { classId, courseId }),
-        getAnalyticsBackfillPlan(headers, { campus, branch, classId, courseId, limit: 20 }),
-        getAnalyticsProductionReadiness(headers),
-        getAnalyticsPilotAcceptance(headers, { campus, branch, classId, courseId, sampleLimit: 5 }),
-        getAnalyticsRolloutControl(headers, { campus, branch, classId, courseId, limit: 100 }),
-        getAnalyticsMonitoring(headers, { classId, courseId }),
+        optional('Dashboard học online', getAnalyticsLearningDashboard(headers, filters)),
+        optional('Chất lượng dữ liệu', getAnalyticsDataQualityReport(headers, { classId, courseId })),
+        optional('Kế hoạch backfill', getAnalyticsBackfillPlan(headers, { campus, branch, classId, courseId, limit: 20 })),
+        optional('Production readiness', getAnalyticsProductionReadiness(headers)),
+        optional('Pilot acceptance', getAnalyticsPilotAcceptance(headers, { campus, branch, classId, courseId, sampleLimit: 5 })),
+        optional('Rollout control', getAnalyticsRolloutControl(headers, { campus, branch, classId, courseId, limit: 100 })),
+        optional('Monitoring', getAnalyticsMonitoring(headers, { classId, courseId })),
       ])
-      setData(result)
-      setDataQuality(quality)
-      setBackfillPlan(plan)
-      setProductionReadiness(production)
-      setPilotAcceptance(pilot)
-      setRolloutControl(rollout)
-      setMonitoring(monitor)
+      if (result) setData(result)
+      if (quality) setDataQuality(quality)
+      if (plan) setBackfillPlan(plan)
+      if (production) setProductionReadiness(production)
+      if (pilot) setPilotAcceptance(pilot)
+      if (rollout) setRolloutControl(rollout)
+      if (monitor) setMonitoring(monitor)
+      if (softErrors.length) setMessage(`Một số khối chưa tải được: ${softErrors.join(', ')}. Các khối còn lại vẫn hiển thị.`)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Không tải được dữ liệu học online')
     } finally {

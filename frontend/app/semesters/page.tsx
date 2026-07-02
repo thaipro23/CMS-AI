@@ -26,6 +26,32 @@ function defaultLearningWeeks(startDate = ''): LearningWeekForm[] {
     note: '',
   }))
 }
+
+function blockNoHint(block?: AcademicBlock | null) {
+  const raw = `${block?.sort_order ?? ''} ${block?.block_code || ''} ${block?.block_name || ''}`.toLowerCase()
+  const explicit = raw.match(/(?:^|\D)([12])(?:\D|$)/)
+  if (explicit) return Number(explicit[1])
+  return null
+}
+function pickBlocksForTermForm(blocks?: AcademicBlock[] | null): Array<AcademicBlock | null> {
+  const source = (blocks || []).slice().filter(Boolean)
+  const ranked = source.sort((a, b) => {
+    const activeDelta = Number(b.active !== false) - Number(a.active !== false)
+    if (activeDelta) return activeDelta
+    const aHint = blockNoHint(a) || Number(a.sort_order || 0) || 99
+    const bHint = blockNoHint(b) || Number(b.sort_order || 0) || 99
+    if (aHint !== bHint) return aHint - bHint
+    return String(a.block_name || a.block_code || '').localeCompare(String(b.block_name || b.block_code || ''), 'vi')
+  })
+  const used = new Set<string>()
+  return [1, 2].map((wanted) => {
+    const exact = ranked.find((block) => !used.has(block.id) && (Number(block.sort_order || 0) === wanted || blockNoHint(block) === wanted))
+    const fallback = exact || ranked.find((block) => !used.has(block.id)) || null
+    if (fallback?.id) used.add(fallback.id)
+    return fallback
+  })
+}
+
 function learningWeeksFromMetadata(block?: AcademicBlock | null, startDate = ''): LearningWeekForm[] {
   const raw = Array.isArray(block?.metadata_json?.learning_weeks) ? block?.metadata_json?.learning_weeks : []
   const rows = raw.map((item: any, index: number) => ({
@@ -77,7 +103,7 @@ export default function SemestersPage() {
     setSaving(true); setMessage('')
     try {
       const full = await getAcademicTermWithBlocks(headers, item.id) as TermRow
-      const sourceBlocks = (full.blocks || []).slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.block_name || a.block_code || '').localeCompare(String(b.block_name || b.block_code || ''))).slice(0, 2)
+      const sourceBlocks = pickBlocksForTermForm(full.blocks || [])
       const nextBlocks = [0, 1].map((index) => {
         const block = sourceBlocks[index]
         return block ? { id: block.id, block_code: block.block_code || `Block ${index + 1}`, block_name: block.block_name || `Block ${index + 1}`, start_date: toDateInput(block.start_date), end_date: toDateInput(block.end_date), active: block.active, learning_weeks: learningWeeksFromMetadata(block, toDateInput(block.start_date)) } : defaultBlocks()[index]

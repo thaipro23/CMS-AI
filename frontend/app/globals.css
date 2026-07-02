@@ -7093,3 +7093,86 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .student-list-card .academic-data-table tbody tr,
   .analytics-learning-page .academic-data-table tbody tr { box-shadow: inset 0 -1px 0 rgba(51,65,85,.45); }
 }
+
+/* v25.9.16.7.2.6 — fixed sidebar + global underline cleanup */
+@media (min-width: 1201px) {
+  :root { --od-sidebar-width: 236px; }
+  .product-shell.app-layout {
+    grid-template-columns: var(--od-sidebar-width) minmax(0, 1fr) !important;
+  }
+  .product-sidebar.sidebar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: var(--od-sidebar-width) !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    z-index: 40 !important;
+  }
+  .product-main.main-area {
+    grid-column: 2 !important;
+    min-width: 0 !important;
+  }
+}
+
+a,
+a:visited,
+a:hover,
+a:focus,
+a:active {
+  text-decoration: none !important;
+}
+
+.footer-links a:hover,
+.academic-breadcrumb a:hover,
+.workspace-breadcrumb a:hover,
+.breadcrumb-row a:hover,
+.bank-multipage .breadcrumb-row a:hover,
+.landing-nav a:hover {
+  text-decoration: none !important;
+}
+
+/* v25.9.16.7.2.6 — Bank status wording + visible card borders */
+.bank-multipage .entity-card.bank-status-card.status-published,
+.entity-card.bank-status-card.status-published {
+  border-color: #86efac !important;
+  border-left: 6px solid #16a34a !important;
+  background: linear-gradient(180deg, #ffffff, #ecfdf5) !important;
+  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, .18), 0 10px 26px rgba(22, 163, 74, .08) !important;
+}
+.bank-multipage .entity-card.bank-status-card.status-ready,
+.entity-card.bank-status-card.status-ready {
+  border-color: #93c5fd !important;
+  border-left: 6px solid #2563eb !important;
+  background: linear-gradient(180deg, #ffffff, #eff6ff) !important;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .16), 0 10px 26px rgba(37, 99, 235, .07) !important;
+}
+.bank-multipage .entity-card.bank-status-card.status-incomplete,
+.entity-card.bank-status-card.status-incomplete {
+  border-color: #fdba74 !important;
+  border-left: 6px solid #f97316 !important;
+  background: linear-gradient(180deg, #ffffff, #fff7ed) !important;
+  box-shadow: inset 0 0 0 1px rgba(249, 115, 22, .18), 0 10px 26px rgba(249, 115, 22, .07) !important;
+}
+.bank-multipage .entity-card.bank-status-card.status-danger,
+.entity-card.bank-status-card.status-danger {
+  border-color: #fca5a5 !important;
+  border-left: 6px solid #ef4444 !important;
+  background: linear-gradient(180deg, #ffffff, #fef2f2) !important;
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, .16), 0 10px 26px rgba(239, 68, 68, .07) !important;
+}
+.bank-multipage .entity-card.bank-status-card.status-empty,
+.entity-card.bank-status-card.status-empty {
+  border-color: #cbd5e1 !important;
+  border-left: 6px solid #64748b !important;
+  background: linear-gradient(180deg, #ffffff, #f8fafc) !important;
+  box-shadow: inset 0 0 0 1px rgba(100, 116, 139, .16) !important;
+}
+.status-ready .status-pill { background: #dbeafe !important; color: #1d4ed8 !important; border-color: #93c5fd !important; }
+.status-danger .status-pill { background: #fee2e2 !important; color: #b91c1c !important; border-color: #fecaca !important; }
+
+/* Keep a stable vertical scrollbar gutter so pages do not lose the scroll rail after route/modal transitions. */
+html { overflow-y: scroll; scrollbar-gutter: stable; }
+body { min-height: 100dvh; }
