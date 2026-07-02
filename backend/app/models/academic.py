@@ -186,7 +186,15 @@ class AcademicClass(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint('term_id', 'block_id', 'subject_id', 'class_code', name='uq_academic_classes_term_block_subject_code'),
+        # A class code/name is only unique inside its full AP operating scope.
+        # Different campus/branch/term/subject/block rows are distinct classes even
+        # when AP shows the same visible class name.
+        Index(
+            'uq_academic_classes_active_scope_code',
+            'term_id', 'block_id', 'subject_id', 'class_code', 'campus', 'branch',
+            unique=True,
+            postgresql_where=text('active IS TRUE'),
+        ),
         Index('ix_academic_classes_teacher_lookup', 'term_id', 'block_id', 'subject_id', 'active'),
         Index('ix_academic_classes_campus_branch', 'campus', 'branch'),
     )

@@ -718,21 +718,42 @@ class AcademicImportService:
         subject: AcademicSubject,
         class_code: str,
         ap_class_id: str | None,
+        campus: str | None,
+        branch: str,
         counters: SyncCounters,
     ) -> tuple[AcademicClass, bool]:
+        # Natural identity of an AP class is not class_code alone. The same visible
+        # class name/code can legitimately exist in another campus, branch, term,
+        # block, or subject. Earlier builds resolved only by term/block/subject/code,
+        # so AP sync could silently merge or skip classes that were distinct in AP.
         target_block_id = block.id if block else None
-        target_cls = self.db.query(AcademicClass).filter(
+        target_campus = _lower(campus) or None
+        target_branch = _lower(branch) or 'poly'
+        scope_filters = (
             AcademicClass.term_id == term.id,
             AcademicClass.block_id == target_block_id,
             AcademicClass.subject_id == subject.id,
             AcademicClass.class_code == class_code,
-        ).first()
+            AcademicClass.campus == target_campus,
+            AcademicClass.branch == target_branch,
+        )
+
+        target_cls = (
+            self.db.query(AcademicClass)
+            .filter(*scope_filters)
+            .order_by(AcademicClass.active.desc(), AcademicClass.updated_at.desc().nullslast())
+            .first()
+        )
 
         ap_cls = None
         if ap_class_id:
             ap_cls = (
                 self.db.query(AcademicClass)
-                .filter(AcademicClass.ap_class_id == ap_class_id)
+                .filter(
+                    AcademicClass.ap_class_id == ap_class_id,
+                    AcademicClass.campus == target_campus,
+                    AcademicClass.branch == target_branch,
+                )
                 .order_by(AcademicClass.active.desc(), AcademicClass.updated_at.desc().nullslast())
                 .first()
             )
@@ -745,14 +766,14 @@ class AcademicImportService:
         if ap_cls:
             # Defensive check: if a duplicate natural-key row appeared between the
             # first lookup and the AP-id lookup, use that row instead of updating
-            # ap_cls into a unique-constraint violation.
-            conflict = self.db.query(AcademicClass).filter(
-                AcademicClass.term_id == term.id,
-                AcademicClass.block_id == target_block_id,
-                AcademicClass.subject_id == subject.id,
-                AcademicClass.class_code == class_code,
-                AcademicClass.id != ap_cls.id,
-            ).first()
+            # ap_cls into a unique-index violation. The conflict check is scoped by
+            # campus/branch on purpose; same class_code in another campus is valid.
+            conflict = (
+                self.db.query(AcademicClass)
+                .filter(*scope_filters, AcademicClass.id != ap_cls.id)
+                .order_by(AcademicClass.active.desc(), AcademicClass.updated_at.desc().nullslast())
+                .first()
+            )
             if conflict:
                 self._merge_duplicate_class_relations(ap_cls, conflict)
                 return conflict, False
@@ -764,6 +785,8 @@ class AcademicImportService:
             block_id=target_block_id,
             subject_id=subject.id,
             class_code=class_code,
+            campus=target_campus,
+            branch=target_branch,
             created_at=_now(),
             updated_at=_now(),
         )
@@ -1205,6 +1228,8 @@ class AcademicImportService:
                         subject=subject,
                         class_code=class_code,
                         ap_class_id=ap_class_id,
+                        campus=campus,
+                        branch=branch,
                         counters=counters,
                     )
 
