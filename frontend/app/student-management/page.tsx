@@ -238,14 +238,12 @@ export default function StudentManagementSubjectsPage() {
       </div>
 
       <div className="academic-summary-strip">
-        <div><span>Môn theo bộ lọc</span><b>{countLabel(summary.subject_count)}</b><small>{counterText(total, page, PAGE_SIZE)}</small></div>
-        <div><span>Lớp theo bộ lọc</span><b>{countLabel(summary.class_count)}</b><small>Tổng lớp thực tế của các môn trong bộ lọc</small></div>
-        <div><span>Sinh viên theo bộ lọc</span><b>{countLabel(summary.student_count)}</b><small>Tổng lượt SV-lớp, cùng cách đếm với báo cáo GV</small></div>
+        <div><span>Tổng số môn</span><b>{countLabel(summary.subject_count)}</b><small>{counterText(total, page, PAGE_SIZE)}</small></div>
+        <div><span>Tổng số lớp</span><b>{countLabel(summary.class_count)}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>Tổng số sinh viên theo bộ lọc</span><b>{countLabel(summary.student_count)}</b><small>Theo hệ · học kỳ · cơ sở đang chọn</small></div>
         <div><span>Course CMS đã map</span><b>{countLabel(summary.course_mapped_count)}/{countLabel(summary.subject_count)}</b><small>{countLabel(summary.course_missing_count)} môn chưa tìm thấy/map course</small></div>
-        <div><span>Cảnh báo theo bộ lọc</span><b>{countLabel(summary.alert_subject_count)}</b><small>Môn có vấn đề học tập cần kiểm tra</small></div>
+        <div><span>Cần kiểm tra</span><b>{countLabel(summary.alert_subject_count)}</b><small>Môn có vấn đề học tập cần kiểm tra</small></div>
       </div>
-
-      <div className="academic-inline-error compact-notice"><b>Cách đọc số liệu:</b><span>Trang này nhóm theo môn nhưng KPI phía trên đã là tổng toàn bộ bộ lọc {selectedTerm?.term_name || ''} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'tất cả cơ sở'}, không còn chỉ tính riêng 50 môn đang hiển thị.</span></div>
 
       {message && <div className="academic-inline-error"><b>Không tải được dữ liệu</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Thử lại</button></div>}
 

@@ -31,10 +31,10 @@ def test_student_management_uses_total_kpis_not_current_page_wording():
     assert 'summary?: AcademicSubjectManagementSummary' in types
     assert 'const [summary, setSummary]' in page
     assert 'setSummary(normalizeSubjectSummary(result.summary))' in page
-    assert 'Lớp theo bộ lọc' in page
-    assert 'Sinh viên theo bộ lọc' in page
+    assert 'Tổng số lớp' in page
+    assert 'Tổng số sinh viên theo bộ lọc' in page
     assert 'Course CMS đã map' in page
-    assert 'KPI phía trên đã là tổng toàn bộ bộ lọc' in page
+    assert 'Tổng số môn' in page
     assert 'Lớp trong trang' not in page
     assert 'Sinh viên trong trang' not in page
     assert 'Course CMS trong trang' not in page
@@ -43,8 +43,8 @@ def test_student_management_uses_total_kpis_not_current_page_wording():
 def test_teacher_management_titles_are_scope_explicit():
     page = read('frontend/app/teacher-management/page.tsx')
 
-    assert 'Báo cáo giảng viên theo phân công' in page
-    assert 'GV theo bộ lọc' in page
-    assert 'Lượt lớp phân công' in page
-    assert 'Lượt SV theo phân công' in page
-    assert 'KPI là tổng theo bộ lọc khi cache sẵn sàng' in page
+    assert 'Quản lý giảng viên' in page
+    assert 'Tổng giảng viên' in page
+    assert 'Tổng số lớp' in page
+    assert 'Tổng số sinh viên' in page
+    assert 'Các số tổng tính theo bộ lọc hiện tại' in page

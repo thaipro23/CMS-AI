@@ -625,6 +625,7 @@ def list_training_teacher_report(
         teacher_id=teacher_id,
         page=page,
         page_size=page_size,
+        use_cache=False,
     )
 
 

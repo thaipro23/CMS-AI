@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import {
-  createAcademicTrainingTeacherCacheJob,
   createAcademicTrainingTeacherExportJob,
   downloadAcademicTrainingTeacherReport,
   downloadAcademicTrainingTeacherReportJob,
@@ -166,13 +165,6 @@ function riskTone(item: AcademicTrainingTeacherReport) {
 }
 
 
-function formatDateTime(value?: string | null) {
-  if (!value) return 'Chưa có cache'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return String(value)
-  return parsed.toLocaleString('vi-VN', { hour12: false })
-}
-
 function jobPercent(job?: AcademicTeacherReportJob | null) {
   if (!job) return 0
   const total = Math.max(1, Number(job.progress_total || 100))
@@ -197,7 +189,6 @@ export default function TeacherManagementPage() {
   const [campuses, setCampuses] = useState<AcademicCampus[]>([])
   const [items, setItems] = useState<AcademicTrainingTeacherReport[]>([])
   const [summary, setSummary] = useState<TrainingSummary>(EMPTY_SUMMARY)
-  const [summaryScope, setSummaryScope] = useState<string>('current_page')
   const [termId, setTermId] = useState('')
   const [branch, setBranch] = useState('poly')
   const [campus, setCampus] = useState('')
@@ -208,8 +199,6 @@ export default function TeacherManagementPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [cacheInfo, setCacheInfo] = useState<{ status?: string; built_at?: string | null; row_count?: number | null } | null>(null)
-  const [cacheJob, setCacheJob] = useState<AcademicTeacherReportJob | null>(null)
   const [exportJob, setExportJob] = useState<AcademicTeacherReportJob | null>(null)
   const [message, setMessage] = useState('')
 
@@ -263,9 +252,7 @@ export default function TeacherManagementPage() {
       if (cancelledRef?.cancelled) return
       setItems(result.items || [])
       setSummary(normalizeSummary(result.summary))
-      setSummaryScope(result.summary_scope || 'current_page')
       setTotal(result.total || 0)
-      setCacheInfo(result.cache || null)
     } catch (error) {
       if (!cancelledRef?.cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được báo cáo quản lý đào tạo')
     } finally {
@@ -282,35 +269,23 @@ export default function TeacherManagementPage() {
 
 
   useEffect(() => {
-    const activeJob = cacheJob && ['queued', 'running'].includes(cacheJob.status) ? cacheJob : exportJob && ['queued', 'running'].includes(exportJob.status) ? exportJob : null
-    if (!activeJob) return
+    if (!exportJob || !['queued', 'running'].includes(exportJob.status)) return
     const timer = window.setInterval(async () => {
       try {
-        const latest = await getAcademicTrainingTeacherReportJob(headers, activeJob.id)
-        if (latest.job_type === 'rebuild_cache') {
-          setCacheJob(latest)
-          if (latest.status === 'completed') {
-            setMessage('Đã tính lại báo cáo. Bảng sẽ đọc từ cache mới.')
-            loadReport()
-          }
-        } else {
-          setExportJob(latest)
-          if (latest.status === 'completed') {
-            setMessage('File Excel đã sẵn sàng. Bấm Tải Excel để tải về.')
-          }
+        const latest = await getAcademicTrainingTeacherReportJob(headers, exportJob.id)
+        setExportJob(latest)
+        if (latest.status === 'completed') {
+          setMessage('File Excel đã sẵn sàng. Bấm Tải Excel để tải về.')
         }
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái job báo cáo')
+        setMessage(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái xuất Excel')
       }
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [headers, cacheJob?.id, cacheJob?.status, exportJob?.id, exportJob?.status])
+  }, [headers, exportJob?.id, exportJob?.status])
 
   const selectedTerm = terms.find((item) => item.id === termId)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const reportScopeText = summaryScope === 'cached_filtered' || summaryScope === 'filtered'
-    ? 'Toàn bộ bộ lọc'
-    : 'Trang hiện tại'
 
   const classComponentColumns = (item: AcademicTrainingTeacherReport) => {
     const columns: Array<{ key: string; name: string }> = []
@@ -349,21 +324,6 @@ export default function TeacherManagementPage() {
 
 
 
-  const rebuildCache = async () => {
-    if (!termId) {
-      setMessage('Chọn học kỳ trước khi tính lại báo cáo.')
-      return
-    }
-    setMessage('')
-    try {
-      const job = await createAcademicTrainingTeacherCacheJob(headers, { termId, branch, campus })
-      setCacheJob(job)
-      setMessage('Đã đưa yêu cầu tính lại báo cáo vào hàng đợi.')
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không tạo được job tính lại báo cáo')
-    }
-  }
-
   const exportExcelBackground = async () => {
     if (!termId) {
       setMessage('Chọn học kỳ trước khi xuất Excel.')
@@ -394,12 +354,10 @@ export default function TeacherManagementPage() {
     <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
       <div className="teacher-compact-toolbar">
         <div>
-          <b>Báo cáo giảng viên theo phân công · {selectedTerm?.term_name || 'Chưa chọn kỳ'} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}</b>
-          <small>Đang hiển thị {counterText(total, page, PAGE_SIZE)} giảng viên. KPI bên dưới là tổng theo bộ lọc khi đã có cache báo cáo.</small>
+          <b>Quản lý giảng viên · {selectedTerm?.term_name || 'Chưa chọn kỳ'} · {branch.toUpperCase()} · {campus ? campus.toUpperCase() : 'Tất cả cơ sở'}</b>
+          <small>Đang hiển thị {counterText(total, page, PAGE_SIZE)} giảng viên. Các số tổng tính theo bộ lọc hiện tại.</small>
         </div>
         <div className="teacher-compact-actions">
-          <button className="btn secondary small" type="button" onClick={() => loadReport()} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại báo cáo'}</button>
-          <button className="btn secondary small" type="button" onClick={rebuildCache} disabled={!termId || cacheJob?.status === 'queued' || cacheJob?.status === 'running'}>{cacheJob && ['queued', 'running'].includes(cacheJob.status) ? `Đang tính ${jobPercent(cacheJob)}%` : 'Tính lại báo cáo'}</button>
           <button className="btn secondary small" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === 'queued' || exportJob?.status === 'running'}>{exportJob && ['queued', 'running'].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : 'Xuất Excel nền'}</button>
           {exportJob?.status === 'completed' && <button className="btn primary small" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button>}
           <button className="btn ghost small" type="button" onClick={exportExcel} disabled={exporting || loading}>{exporting ? 'Đang xuất...' : 'Xuất trực tiếp'}</button>
@@ -446,20 +404,16 @@ export default function TeacherManagementPage() {
       </div>
 
       <div className="academic-summary-strip training-summary-strip ux-kpi-grid">
-        <div><span>GV theo bộ lọc</span><b>{countLabel(summary.teacher_count)}</b><small>{reportScopeText}</small></div>
-        <div><span>Lượt lớp phân công</span><b>{countLabel(summary.class_count)}</b><small>Tổng lớp theo phân công giảng viên</small></div>
-        <div><span>Lượt SV theo phân công</span><b>{countLabel(summary.student_count)}</b><small>Tổng SV-lớp theo GV phụ trách</small></div>
-        <div><span>User CMS match</span><b>{countLabel(summary.cms_synced_count)}</b><small>{reportScopeText}</small></div>
-        <div><span>Enrollment CMS</span><b>{countLabel(summary.learning_enrolled_count)}</b><small>{reportScopeText}</small></div>
+        <div><span>Tổng giảng viên</span><b>{countLabel(summary.teacher_count)}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>Tổng số lớp</span><b>{countLabel(summary.class_count)}</b><small>Theo hệ · học kỳ · cơ sở đang chọn</small></div>
+        <div><span>Tổng số sinh viên</span><b>{countLabel(summary.student_count)}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>User CMS match</span><b>{countLabel(summary.cms_synced_count)}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>Enrollment CMS</span><b>{countLabel(summary.learning_enrolled_count)}</b><small>Theo bộ lọc hiện tại</small></div>
         <div><span>Cần theo dõi</span><b>{countLabel(summary.risk_student_count)}</b><small>Nhãn mềm, cần GV xác minh</small></div>
         <div><span>Trễ deadline</span><b>{countLabel(summary.deadline_late_student_count)}</b><small>{countLabel(summary.deadline_late_quiz_count)} lượt quiz trễ</small></div>
         <div><span>Không được thi</span><b>{countLabel(summary.exam_not_eligible_student_count)}</b><small>{countLabel(summary.exam_insufficient_data_student_count)} SV chưa đủ dữ liệu xét thi</small></div>
       </div>
 
-
-      <div className="academic-inline-error compact-notice cache-status-notice"><b>Báo cáo:</b><span>{cacheInfo?.status === 'hit' ? `Đang đọc cache toàn bộ bộ lọc cập nhật lúc ${formatDateTime(cacheInfo.built_at || null)} (${cacheInfo.row_count || 0} GV)` : 'Chưa có cache cho bộ lọc này; KPI có thể đang là trang hiện tại. Nên bấm Tính lại báo cáo sau khi đồng bộ AP/CMS.'}</span></div>
-      <div className="academic-inline-error compact-notice"><b>Cách đọc số liệu:</b><span>Trang này nhóm theo giảng viên. KPI là tổng theo bộ lọc khi cache sẵn sàng; nếu một lớp có nhiều giảng viên thì lượt lớp/SV được tính theo từng phân công.</span></div>
-      {cacheJob && ['queued', 'running', 'failed'].includes(cacheJob.status) && <div className="academic-inline-error compact-notice"><b>Job báo cáo:</b><span>{cacheJob.progress_label} · {jobPercent(cacheJob)}%{cacheJob.status === 'failed' ? ` · ${cacheJob.error_message || 'Thất bại'}` : ''}</span></div>}
       {exportJob && ['queued', 'running', 'failed'].includes(exportJob.status) && <div className="academic-inline-error compact-notice"><b>Job Excel:</b><span>{exportJob.progress_label} · {jobPercent(exportJob)}%{exportJob.status === 'failed' ? ` · ${exportJob.error_message || 'Thất bại'}` : ''}</span></div>}
 
       {!campus && <div className="academic-inline-error compact-notice"><b>Lưu ý:</b><span>Đang xem tất cả cơ sở; nên lọc cơ sở khi dữ liệu lớn.</span></div>}
