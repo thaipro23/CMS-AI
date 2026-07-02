@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 from sqlalchemy import Boolean, DateTime, Float, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,7 +36,7 @@ class AnalyticsIngestCheckpoint(Base):
     total_events_inserted: Mapped[int] = mapped_column(Integer, default=0)
     total_duplicate_events: Mapped[int] = mapped_column(Integer, default=0)
     total_parse_errors: Mapped[int] = mapped_column(Integer, default=0)
-    stats_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    stats_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -61,9 +62,9 @@ class AnalyticsTrackingEvent(Base):
     current_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     referer: Mapped[str | None] = mapped_column(Text, nullable=True)
-    raw_event: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
-    raw_context: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
-    raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    raw_event: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
+    raw_context: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
+    raw_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     __table_args__ = (
@@ -90,7 +91,7 @@ class AnalyticsCourseSession(Base):
     total_parts: Mapped[int] = mapped_column(Integer, default=0)
     total_videos: Mapped[int] = mapped_column(Integer, default=0)
     quiz_usage_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
-    components_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    components_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
     source: Mapped[str] = mapped_column(String(80), default='manual_or_sync', index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     rebuilt_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
@@ -128,7 +129,7 @@ class AnalyticsStudentVideoProgress(Base):
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_suspicious: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     suspicious_reason: Mapped[str] = mapped_column(Text, default='')
-    evidence_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
     first_played_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     last_event_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
@@ -165,8 +166,8 @@ class AnalyticsStudentSessionProgress(Base):
     completed_before_deadline: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     completed_late: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     session_learning_status: Mapped[str] = mapped_column(String(50), default='INSUFFICIENT_DATA', index=True)
-    reason_codes: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=list)
-    evidence_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    reason_codes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
+    evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
     calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     __table_args__ = (
@@ -192,11 +193,11 @@ class AnalyticsLearningBehaviorSnapshot(Base):
     deadline_compliance_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     crammed_session_count: Mapped[int] = mapped_column(Integer, default=0)
     quiz_before_video_count: Mapped[int] = mapped_column(Integer, default=0)
-    reason_codes: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=list)
+    reason_codes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
     human_readable_summary: Mapped[str] = mapped_column(Text, default='')
     recommended_action: Mapped[str] = mapped_column(String(80), default='INSUFFICIENT_DATA_RECHECK_LATER')
     data_quality: Mapped[str] = mapped_column(String(50), default='MISSING', index=True)
-    evidence_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 

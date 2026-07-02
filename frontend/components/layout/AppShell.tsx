@@ -123,7 +123,7 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 function AppFooter() {
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Vận hành đào tạo · Open edX CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.7.2.6</span></div>
+    <div className="footer-links"><span>v25.9.16.7.2.7</span></div>
   </footer>
 }
 
@@ -239,7 +239,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="sidebar-note product-session-card product-session-card-compact">
         <span className={isAuthenticated ? 'session-dot ok' : 'session-dot wait'} />
         <div><b>{isAuthenticated ? 'CMS OK' : 'Chờ CMS'}</b><span>{isAuthenticated ? (userId || 'user') : (autoLoginMessage || 'Đang lấy phiên')}</span></div>
-        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Làm mới' : 'Đăng nhập'}</button>
+        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Kết nối lại CMS' : 'Đăng nhập CMS'}</button>
       </div>
     </aside>
 

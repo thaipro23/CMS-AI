@@ -27,7 +27,7 @@ def test_analytics_routes_have_job_endpoints_and_scope_guards():
 
 def test_analytics_dashboard_service_accepts_scope_filter_and_ops_status():
     service = (_root() / 'backend' / 'app' / 'services' / 'learning_analytics' / 'analytics_core_service.py').read_text(encoding='utf-8')
-    assert "'version': '25.9.16.7.2.6'" in service
+    assert "'version': '25.9.16.7.2.7'" in service
     assert 'def ops_status' in service
     assert 'safe_policy' in service
     assert 'allowed_class_ids: set[str] | None = None' in service

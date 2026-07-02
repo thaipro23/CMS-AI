@@ -115,6 +115,10 @@ import {
   AnalyticsPilotAcceptanceReport,
   AnalyticsRolloutControlReport,
   AnalyticsMonitoringReport,
+  AnalyticsOpsStatus,
+  AnalyticsIngestJobResponse,
+  JsonObject,
+  JsonValue,
 } from "../types";
 
 const rawApiBase =
@@ -146,19 +150,30 @@ function withoutContentType(headers: HeadersInit): HeadersInit {
   return next;
 }
 
-function normalizeApiErrorMessage(response: Response, data: any): string {
-  const errorEnvelope = data?.error;
-  const rawMessage = data?.detail?.message || errorEnvelope?.message || data?.detail || data?.message || response.statusText;
-  const code = errorEnvelope?.code || data?.detail?.code || data?.code || '';
-  const mapOne = (item: any): string => {
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringFromJson(value: JsonValue | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function normalizeApiErrorMessage(response: Response, data: unknown): string {
+  const root = isJsonObject(data) ? data : {};
+  const detail = isJsonObject(root.detail) ? root.detail : undefined;
+  const errorEnvelope = isJsonObject(root.error) ? root.error : undefined;
+  const rawMessage = detail?.message || errorEnvelope?.message || root.detail || root.message || response.statusText;
+  const code = stringFromJson(errorEnvelope?.code) || stringFromJson(detail?.code) || stringFromJson(root.code) || '';
+  const mapOne = (item: JsonValue | undefined): string => {
     if (!item) return 'Dữ liệu không hợp lệ';
     if (typeof item === 'string') return item;
-    return item?.msg || item?.message || item?.detail || 'Dữ liệu không hợp lệ';
+    if (isJsonObject(item)) return stringFromJson(item.msg) || stringFromJson(item.message) || stringFromJson(item.detail) || 'Dữ liệu không hợp lệ';
+    return 'Dữ liệu không hợp lệ';
   };
   let message = '';
   if (typeof rawMessage === 'string') message = rawMessage;
-  else if (Array.isArray(rawMessage)) message = rawMessage.map(mapOne).join('; ');
-  else if (rawMessage && typeof rawMessage === 'object') message = mapOne(rawMessage);
+  else if (Array.isArray(rawMessage)) message = rawMessage.map((item) => mapOne(item)).join('; ');
+  else if (isJsonObject(rawMessage)) message = mapOne(rawMessage);
   else message = 'Có lỗi xảy ra từ máy chủ. Vui lòng thử lại.';
 
   const lower = message.toLowerCase();
@@ -176,7 +191,7 @@ function normalizeApiErrorMessage(response: Response, data: any): string {
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
-  let data: any = null;
+  let data: unknown = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
@@ -1064,7 +1079,7 @@ export async function previewFamilyBankPlan(
 
 export async function publishFamilyBankPlan(
   courseId: string,
-  plan: any,
+  plan: JsonObject,
   headers: HeadersInit,
   mode: "publish_new" | "replace" | "delete_reimport" = "publish_new",
   idempotencyKey?: string,
@@ -1080,7 +1095,7 @@ export async function publishFamilyBankPlan(
 
 export async function createCmsQuizNode(
   courseId: string,
-  payload: { parent_node_id: string; quiz_title: string; unit_title: string; plan?: any },
+  payload: { parent_node_id: string; quiz_title: string; unit_title: string; plan?: JsonObject },
   headers: HeadersInit,
   idempotencyKey?: string,
 ) {
@@ -1095,7 +1110,7 @@ export async function createCmsQuizNode(
 
 export async function insertCmsProblemBanks(
   courseId: string,
-  payload: { unit_node_id: string; plan: any; strict_component_selection?: boolean },
+  payload: { unit_node_id: string; plan: JsonObject; strict_component_selection?: boolean },
   headers: HeadersInit,
   idempotencyKey?: string,
 ) {
@@ -1959,15 +1974,15 @@ export async function getAcademicTerms(headers: HeadersInit, filters: string | {
   return parseResponse(await apiFetch(`${API}/academic/terms?${params.toString()}`, { credentials: "include", headers }));
 }
 
-export async function saveAcademicTerm(headers: HeadersInit, payload: { id?: string | null; ap_term_id?: string | null; term_code: string; term_name: string; branch?: string; start_date?: string | null; end_date?: string | null; active?: boolean; blocks?: Array<{ id?: string | null; block_code: string; block_name: string; start_date?: string | null; end_date?: string | null; sort_order?: number; active?: boolean }> }): Promise<any> {
+export async function saveAcademicTerm(headers: HeadersInit, payload: { id?: string | null; ap_term_id?: string | null; term_code: string; term_name: string; branch?: string; start_date?: string | null; end_date?: string | null; active?: boolean; blocks?: Array<{ id?: string | null; block_code: string; block_name: string; start_date?: string | null; end_date?: string | null; sort_order?: number; active?: boolean }> }): Promise<AcademicTerm> {
   return parseResponse(await apiFetch(`${API}/academic/terms`, { method: 'POST', headers, body: JSON.stringify(payload) }));
 }
 
-export async function getAcademicTermWithBlocks(headers: HeadersInit, termId: string): Promise<any> {
+export async function getAcademicTermWithBlocks(headers: HeadersInit, termId: string): Promise<AcademicTerm & { blocks?: AcademicBlock[] }> {
   return parseResponse(await apiFetch(`${API}/academic/terms/${encodeURIComponent(termId)}/with-blocks`, { credentials: "include", headers }));
 }
 
-export async function deleteAcademicTerm(headers: HeadersInit, termId: string): Promise<any> {
+export async function deleteAcademicTerm(headers: HeadersInit, termId: string): Promise<AcademicTerm> {
   return parseResponse(await apiFetch(`${API}/academic/terms/${encodeURIComponent(termId)}`, { method: 'DELETE', headers }));
 }
 
@@ -2277,7 +2292,7 @@ export async function getAnalyticsStudentLearningBehaviorDetail(headers: Headers
   return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/students/${encodeURIComponent(username)}/learning-behavior?${params.toString()}`, { credentials: 'include', headers }));
 }
 
-export async function recalculateAnalyticsClassLearningBehavior(headers: HeadersInit, classId: string, courseId: string, username?: string | null): Promise<Record<string, any>> {
+export async function recalculateAnalyticsClassLearningBehavior(headers: HeadersInit, classId: string, courseId: string, username?: string | null): Promise<JsonObject> {
   const params = new URLSearchParams();
   params.set('course_id', courseId);
   if (username?.trim()) params.set('username', username.trim());
@@ -2391,7 +2406,7 @@ export async function syncAcademicCampusesFromAp(headers: HeadersInit, branch = 
   return parseResponse(await apiFetch(`${API}/academic/campuses/sync-from-ap?${params.toString()}`, { method: 'POST', headers }));
 }
 
-export async function seedAcademicCampusesFromEnv(headers: HeadersInit, branch = 'poly'): Promise<any[]> {
+export async function seedAcademicCampusesFromEnv(headers: HeadersInit, branch = 'poly'): Promise<AcademicCampus[]> {
   const params = new URLSearchParams();
   if (branch.trim()) params.set('branch', branch.trim());
   return parseResponse(await apiFetch(`${API}/academic/campuses/seed-from-env?${params.toString()}`, { method: 'POST', headers }));
@@ -2472,15 +2487,20 @@ export async function saveAcademicClassCourseMapping(headers: HeadersInit, class
 }
 
 
-export async function getAnalyticsOpsStatus(headers: HeadersInit): Promise<Record<string, any>> {
+export async function getAnalyticsOpsStatus(headers: HeadersInit): Promise<AnalyticsOpsStatus> {
   return parseResponse(await apiFetch(`${API}/analytics/ops/status`, { credentials: 'include', headers }));
 }
 
-export async function enqueueAnalyticsIngestJob(headers: HeadersInit, payload: { filePath?: string | null; maxLines?: number | null } = {}): Promise<Record<string, any>> {
-  const params = new URLSearchParams();
-  if (payload.filePath?.trim()) params.set('file_path', payload.filePath.trim());
-  if (payload.maxLines) params.set('max_lines', String(payload.maxLines));
-  return parseResponse(await apiFetch(`${API}/analytics/ingest/jobs?${params.toString()}`, { method: 'POST', credentials: 'include', headers }));
+export async function enqueueAnalyticsIngestJob(headers: HeadersInit, payload: { filePath?: string | null; maxLines?: number | null } = {}): Promise<AnalyticsIngestJobResponse> {
+  return parseResponse(await apiFetch(`${API}/analytics/ingest/jobs`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      file_path: payload.filePath?.trim() || null,
+      max_lines: payload.maxLines ?? null,
+    }),
+  }));
 }
 
 export async function enqueueAnalyticsClassLearningBehaviorJob(headers: HeadersInit, classId: string, courseId: string, payload: { username?: string | null; force?: boolean; limit?: number | null } = {}): Promise<AcademicClassSyncJob> {

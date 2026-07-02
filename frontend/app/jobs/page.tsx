@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getAcademicApSyncJobs,
   getAcademicTrainingTeacherReportJobs,
@@ -12,7 +12,7 @@ import {
 } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
-import { AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, BankOperationJob, CourseQuizInstance } from '../../types'
+import { AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { formatVNDateTime } from '../../lib/time'
 
@@ -67,6 +67,16 @@ type OperationRow = {
   canRetry?: boolean
 }
 
+type JobsStatusFilter = 'active' | 'queued' | 'running' | 'completed' | 'failed' | 'all'
+
+function jsonObject(value: unknown): JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as JsonObject : {}
+}
+
+function jsonText(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
 export default function JobsPage() {
   const { authHeaders, can } = useAppContext()
   const [operationJobs, setOperationJobs] = useState<BankOperationJob[]>([])
@@ -74,7 +84,7 @@ export default function JobsPage() {
   const [teacherReportJobs, setTeacherReportJobs] = useState<AcademicTeacherReportJob[]>([])
   const [quizInstances, setQuizInstances] = useState<CourseQuizInstance[]>([])
   const [academicRuns, setAcademicRuns] = useState<AcademicSyncRun[]>([])
-  const [analyticsOps, setAnalyticsOps] = useState<Record<string, any> | null>(null)
+  const [analyticsOps, setAnalyticsOps] = useState<AnalyticsOpsStatus | null>(null)
   const [status, setStatus] = useState('all')
   const [operationGroup, setOperationGroup] = useState('all')
   const [q, setQ] = useState('')
@@ -82,16 +92,16 @@ export default function JobsPage() {
   const [message, setMessage] = useState<ActionMessageData | null>(null)
   const [quizOpen, setQuizOpen] = useState(false)
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       setMessage(null)
       const headers = authHeaders()
-      const statusParam = status === 'all' ? 'all' : status
+      const statusParam = (status === 'all' ? 'all' : status) as JobsStatusFilter
       const [opJobs, nextQuizInstances, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs, nextAnalyticsOps] = await Promise.all([
-        getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }).catch(() => ({ items: [] } as any)),
+        getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }).catch(() => ({ items: [] as BankOperationJob[] })),
         getCourseQuizInstances(headers, { limit: 100 }).catch(() => [] as CourseQuizInstance[]),
-        getAcademicApSyncJobs(headers, { status: statusParam as any, limit: 50 }).catch(() => [] as AcademicSyncRun[]),
+        getAcademicApSyncJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicSyncRun[]),
         getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 80 }).catch(() => [] as AcademicClassSyncJob[]),
         getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicTeacherReportJob[]),
         getAnalyticsOpsStatus(headers).catch(() => null),
@@ -107,9 +117,9 @@ export default function JobsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [authHeaders, status])
 
-  async function retryJob(jobId: string) {
+  const retryJob = useCallback(async (jobId: string) => {
     setLoading(true)
     try {
       const nextJob = await retryBankOperationJob(authHeaders(), jobId)
@@ -121,9 +131,9 @@ export default function JobsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [authHeaders, load])
 
-  useEffect(() => { load() }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [load])
 
   const rows = useMemo<OperationRow[]>(() => {
     const bankRows = operationJobs.map((job): OperationRow => ({
@@ -161,8 +171,8 @@ export default function JobsPage() {
       canRetry: false,
     }))
     const apRows = academicRuns.map((run): OperationRow => {
-      const counters = (run.counters_json || {}) as Record<string, any>
-      const progress = (counters.progress || {}) as Record<string, any>
+      const counters = run.counters_json || {}
+      const progress = jsonObject(counters.progress)
       return {
         id: run.id,
         group: 'ap_sync',
@@ -175,7 +185,7 @@ export default function JobsPage() {
         scopeDetail: [run.branch || null, run.campus || null].filter(Boolean).join(' · ') || null,
         requestedBy: run.requested_by || 'Hệ thống',
         createdAt: run.created_at || run.started_at,
-        message: String(progress.label || ''),
+        message: jsonText(progress.label),
         error: run.error_message,
         rawType: run.mode,
         canRetry: false,
@@ -200,7 +210,7 @@ export default function JobsPage() {
     }))
     const analyticsRows: OperationRow[] = []
     if (analyticsOps) {
-      const ingest = (analyticsOps.ingest || {}) as Record<string, any>
+      const ingest = jsonObject(analyticsOps.ingest)
       analyticsRows.push({
         id: 'analytics-ingest',
         group: 'analytics',
@@ -212,9 +222,9 @@ export default function JobsPage() {
         scope: 'Tracking log',
         scopeDetail: ingest.file_exists ? 'Đã mount log' : 'Chưa thấy file log',
         requestedBy: 'Hệ thống',
-        createdAt: ingest.last_run_at,
+        createdAt: jsonText(ingest.last_run_at) || null,
         message: `Events ${safeNumber(ingest.total_events_inserted)} · lỗi parse ${safeNumber(ingest.total_parse_errors)}`,
-        error: ingest.last_error || null,
+        error: jsonText(ingest.last_error) || null,
         rawType: 'analytics_ingest',
         canRetry: false,
       })
@@ -239,7 +249,7 @@ export default function JobsPage() {
   return <div className="page-stack ops-console jobs-console">
     <section className="ops-hero card">
       <div><span className="eyebrow">Tiến trình</span><h1>Jobs / Việc xử lý</h1><p>Theo dõi job chạy nền: đồng bộ lớp, đồng bộ AP, báo cáo giáo viên, học online, tạo câu hỏi và Quiz. Nhật ký thao tác xem riêng ở Audit.</p></div>
-      <div className="button-row no-margin"><button className="btn secondary" onClick={() => setQuizOpen(true)}>Quiz gần đây</button><button className="btn" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Làm mới'}</button></div>
+      <div className="button-row no-margin"><button className="btn secondary" onClick={() => setQuizOpen(true)}>Quiz gần đây</button><button className="btn" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại danh sách việc'}</button></div>
     </section>
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>AP sync gần đây</span><b>{academicRuns.length}</b></div></section>

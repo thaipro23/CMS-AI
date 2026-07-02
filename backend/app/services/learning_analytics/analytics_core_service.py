@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from app.services.learning_analytics.video_watch_calculator import VideoEventInp
 
 VIDEO_EVENT_TYPES = {'play_video', 'pause_video', 'stop_video', 'seek_video', 'edx.video.position.changed'}
 PROBLEM_EVENT_TYPES = {'problem_check', 'problem_graded', 'problem_save'}
+ANALYTICS_INGEST_LOCK_ID = 2591672601
 
 
 class LearningAnalyticsCoreService:
@@ -38,7 +39,7 @@ class LearningAnalyticsCoreService:
     def schema_inspect(self) -> dict[str, Any]:
         """Phase 0 report: what is reused and what the analytics core adds."""
         return {
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'principle': 'Tái sử dụng schema hiện có, chỉ bổ sung bảng thiếu cho raw normalized events và analytics snapshot.',
             'reused_models': [
                 'AcademicTerm / AcademicBlock: nguồn học kỳ, block, deadline 6 tuần nếu đã cấu hình ở /semesters',
@@ -71,8 +72,38 @@ class LearningAnalyticsCoreService:
             'safety_policy': 'Frontend/API chỉ trả nhãn mềm: dấu hiệu nghi vấn, không kết luận vi phạm.',
         }
 
+    def _is_postgres(self) -> bool:
+        bind = self.db.get_bind()
+        return bool(bind is not None and getattr(bind.dialect, 'name', '') == 'postgresql')
+
+    def _try_acquire_ingest_lock(self) -> bool:
+        # PostgreSQL session-level advisory lock prevents beat/manual ingest overlap.
+        # Non-PostgreSQL test databases do not support advisory locks, so they run
+        # single-process without the lock.
+        if not self._is_postgres():
+            return True
+        return bool(
+            self.db.execute(
+                text('SELECT pg_try_advisory_lock(:lock_id)'),
+                {'lock_id': ANALYTICS_INGEST_LOCK_ID},
+            ).scalar()
+        )
+
+    def _release_ingest_lock(self) -> None:
+        if not self._is_postgres():
+            return
+        self.db.execute(
+            text('SELECT pg_advisory_unlock(:lock_id)'),
+            {'lock_id': ANALYTICS_INGEST_LOCK_ID},
+        )
+
     def _get_checkpoint(self, key: str, file_path: str) -> AnalyticsIngestCheckpoint:
-        cp = self.db.query(AnalyticsIngestCheckpoint).filter(AnalyticsIngestCheckpoint.checkpoint_key == key).first()
+        cp = (
+            self.db.query(AnalyticsIngestCheckpoint)
+            .filter(AnalyticsIngestCheckpoint.checkpoint_key == key)
+            .with_for_update()
+            .first()
+        )
         if cp:
             if file_path and cp.file_path != file_path:
                 cp.file_path = file_path
@@ -104,59 +135,73 @@ class LearningAnalyticsCoreService:
     def run_ingest(self, *, file_path: str | None = None, max_lines: int | None = None) -> dict[str, Any]:
         if not bool(getattr(settings, 'analytics_ingest_enabled', True)):
             return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_INGEST_ENABLED=false'}
-        path = file_path or getattr(settings, 'openedx_tracking_log_path', '/openedx-data/lms/logs/tracking.log')
-        cp = self._get_checkpoint('openedx_tracking_log', path)
-        reader = TrackingLogReader(path, max_lines=max_lines or getattr(settings, 'analytics_max_lines_per_run', 50000))
-        result = reader.read_from(last_offset=cp.last_offset, last_inode=cp.file_inode)
-        stats = Counter()
-        stats['lines_read'] = len(result.lines)
-        if not result.file_exists:
-            cp.last_status = 'missing_file'
-            cp.last_error = 'tracking_log_not_found'
-            cp.last_run_at = datetime.utcnow()
-            cp.stats_json = dict(stats)
-            self.db.commit()
-            return {'status': 'missing_file', 'file_path': path, 'file_exists': False, **dict(stats)}
-        event_type_counts: Counter[str] = Counter()
-        for line in result.lines:
-            try:
-                parsed = parse_tracking_log_line(line)
-            except TrackingParseError:
-                stats['parse_errors'] += 1
-                continue
-            if parsed is None:
-                stats['ignored_events'] += 1
-                continue
-            event_type_counts[parsed.event_type] += 1
-            existing = self.db.query(AnalyticsTrackingEvent.id).filter(AnalyticsTrackingEvent.raw_line_hash == parsed.raw_line_hash).first()
-            if existing:
-                stats['duplicate_events'] += 1
-                continue
-            self.db.add(AnalyticsTrackingEvent(**parsed.as_model_kwargs()))
-            stats['events_inserted'] += 1
-            if parsed.event_type in VIDEO_EVENT_TYPES:
-                stats['video_events'] += 1
-            if parsed.event_type in PROBLEM_EVENT_TYPES:
-                stats['problem_events'] += 1
-            try:
+        if not self._try_acquire_ingest_lock():
+            return {
+                'enabled': True,
+                'status': 'skipped_locked',
+                'message': 'Một lượt ingest tracking log khác đang chạy.',
+                'safe_policy': 'signals_only_not_violation',
+            }
+        try:
+            path = file_path or getattr(settings, 'openedx_tracking_log_path', '/openedx-data/lms/logs/tracking.log')
+            cp = self._get_checkpoint('openedx_tracking_log', path)
+            reader = TrackingLogReader(path, max_lines=max_lines or getattr(settings, 'analytics_max_lines_per_run', 50000))
+            result = reader.read_from(last_offset=cp.last_offset, last_inode=cp.file_inode)
+            stats = Counter()
+            stats['lines_read'] = len(result.lines)
+            if not result.file_exists:
+                cp.last_status = 'missing_file'
+                cp.last_error = 'tracking_log_not_found'
+                cp.last_run_at = datetime.utcnow()
+                cp.stats_json = dict(stats)
+                self.db.commit()
+                return {'status': 'missing_file', 'file_path': path, 'file_exists': False, **dict(stats)}
+            event_type_counts: Counter[str] = Counter()
+            for line in result.lines:
+                try:
+                    parsed = parse_tracking_log_line(line)
+                except TrackingParseError:
+                    stats['parse_errors'] += 1
+                    continue
+                if parsed is None:
+                    stats['ignored_events'] += 1
+                    continue
+                event_type_counts[parsed.event_type] += 1
+                existing = self.db.query(AnalyticsTrackingEvent.id).filter(AnalyticsTrackingEvent.raw_line_hash == parsed.raw_line_hash).first()
+                if existing:
+                    stats['duplicate_events'] += 1
+                    continue
+                self.db.add(AnalyticsTrackingEvent(**parsed.as_model_kwargs()))
+                stats['events_inserted'] += 1
+                if parsed.event_type in VIDEO_EVENT_TYPES:
+                    stats['video_events'] += 1
+                if parsed.event_type in PROBLEM_EVENT_TYPES:
+                    stats['problem_events'] += 1
                 if (stats['events_inserted'] % 500) == 0:
-                    self.db.flush()
-            except IntegrityError:
-                self.db.rollback()
-                stats['duplicate_events'] += 1
-        cp.file_inode = result.file_inode
-        cp.file_size = result.file_size
-        cp.last_offset = result.end_offset
-        cp.last_run_at = datetime.utcnow()
-        cp.last_status = 'completed'
-        cp.last_error = None
-        cp.total_lines_read = int(cp.total_lines_read or 0) + int(stats['lines_read'])
-        cp.total_events_inserted = int(cp.total_events_inserted or 0) + int(stats['events_inserted'])
-        cp.total_duplicate_events = int(cp.total_duplicate_events or 0) + int(stats['duplicate_events'])
-        cp.total_parse_errors = int(cp.total_parse_errors or 0) + int(stats['parse_errors'])
-        cp.stats_json = {**dict(stats), 'event_type_counts': dict(event_type_counts), 'start_offset': result.start_offset, 'end_offset': result.end_offset, 'rotated': result.rotated}
-        self.db.commit()
-        return {'enabled': True, 'status': 'completed', 'file_path': path, 'file_exists': True, 'last_offset': result.end_offset, **cp.stats_json}
+                    try:
+                        self.db.flush()
+                    except IntegrityError:
+                        # Race safety: the advisory lock should prevent this in
+                        # normal flow, but keep ingest resilient if a duplicate
+                        # row was inserted by an older worker or manual process.
+                        self.db.rollback()
+                        cp = self._get_checkpoint('openedx_tracking_log', path)
+                        stats['duplicate_events'] += 1
+            cp.file_inode = result.file_inode
+            cp.file_size = result.file_size
+            cp.last_offset = result.end_offset
+            cp.last_run_at = datetime.utcnow()
+            cp.last_status = 'completed'
+            cp.last_error = None
+            cp.total_lines_read = int(cp.total_lines_read or 0) + int(stats['lines_read'])
+            cp.total_events_inserted = int(cp.total_events_inserted or 0) + int(stats['events_inserted'])
+            cp.total_duplicate_events = int(cp.total_duplicate_events or 0) + int(stats['duplicate_events'])
+            cp.total_parse_errors = int(cp.total_parse_errors or 0) + int(stats['parse_errors'])
+            cp.stats_json = {**dict(stats), 'event_type_counts': dict(event_type_counts), 'start_offset': result.start_offset, 'end_offset': result.end_offset, 'rotated': result.rotated}
+            self.db.commit()
+            return {'enabled': True, 'status': 'completed', 'file_path': path, 'file_exists': True, 'last_offset': result.end_offset, **cp.stats_json}
+        finally:
+            self._release_ingest_lock()
 
     def rebuild_session_structure_from_blocks(
         self,
@@ -335,8 +380,13 @@ class LearningAnalyticsCoreService:
             return [username]
         users: set[str] = set()
         if class_id:
-            rows = self.db.query(AcademicStudent).join(AcademicClassStudent, AcademicClassStudent.student_id == AcademicStudent.id).filter(AcademicClassStudent.class_id == class_id).all()
-            users.update(str(row.username) for row in rows if row.username)
+            rows = (
+                self.db.query(AcademicStudent.username)
+                .join(AcademicClassStudent, AcademicClassStudent.student_id == AcademicStudent.id)
+                .filter(AcademicClassStudent.class_id == class_id)
+                .all()
+            )
+            return sorted({str(row[0]) for row in rows if row and row[0]})
         video_users = self.db.query(AnalyticsStudentVideoProgress.username).filter(AnalyticsStudentVideoProgress.course_id == course_id).distinct().all()
         users.update(str(item[0]) for item in video_users if item and item[0])
         event_users = self.db.query(AnalyticsTrackingEvent.username).filter(AnalyticsTrackingEvent.course_id == course_id).distinct().all()
@@ -356,6 +406,53 @@ class LearningAnalyticsCoreService:
             & (AcademicStudentLearningSnapshot.openedx_course_id == course_id),
         ).filter(AcademicClassStudent.class_id == class_id).all()
         return {str(username): snapshot for username, snapshot in rows if username and snapshot}
+
+
+    def _events_count_by_username(self, *, course_id: str, usernames: list[str]) -> dict[str, int]:
+        if not usernames:
+            return {}
+        rows = (
+            self.db.query(AnalyticsTrackingEvent.username, func.count(AnalyticsTrackingEvent.id))
+            .filter(
+                AnalyticsTrackingEvent.course_id == course_id,
+                AnalyticsTrackingEvent.username.in_(usernames),
+            )
+            .group_by(AnalyticsTrackingEvent.username)
+            .all()
+        )
+        return {str(user): int(count or 0) for user, count in rows if user}
+
+    def _video_progress_by_username(self, *, course_id: str, usernames: list[str]) -> dict[str, list[AnalyticsStudentVideoProgress]]:
+        if not usernames:
+            return {}
+        rows = (
+            self.db.query(AnalyticsStudentVideoProgress)
+            .filter(
+                AnalyticsStudentVideoProgress.course_id == course_id,
+                AnalyticsStudentVideoProgress.username.in_(usernames),
+            )
+            .all()
+        )
+        grouped: dict[str, list[AnalyticsStudentVideoProgress]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row.username)].append(row)
+        return grouped
+
+    def _session_progress_by_username(self, *, course_id: str, usernames: list[str]) -> dict[str, list[AnalyticsStudentSessionProgress]]:
+        if not usernames:
+            return {}
+        rows = (
+            self.db.query(AnalyticsStudentSessionProgress)
+            .filter(
+                AnalyticsStudentSessionProgress.course_id == course_id,
+                AnalyticsStudentSessionProgress.username.in_(usernames),
+            )
+            .all()
+        )
+        grouped: dict[str, list[AnalyticsStudentSessionProgress]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row.username)].append(row)
+        return grouped
 
     @staticmethod
     def _as_datetime(value: Any) -> datetime | None:
@@ -503,32 +600,31 @@ class LearningAnalyticsCoreService:
 
     def recalculate_learning_behavior(self, *, class_id: str | None, course_id: str, username: str | None = None) -> dict[str, Any]:
         self.recalculate_student_session_progress(class_id=class_id, course_id=course_id, username=username)
-        video_q = self.db.query(AnalyticsStudentVideoProgress).filter(AnalyticsStudentVideoProgress.course_id == course_id)
-        if username:
-            video_q = video_q.filter(AnalyticsStudentVideoProgress.username == username)
-        video_rows = video_q.all()
         users = self._student_usernames_for_class(class_id=class_id, course_id=course_id, username=username)
         if not users and username:
             users = [username]
+
+        events_by_user = self._events_count_by_username(course_id=course_id, usernames=users)
+        videos_by_user = self._video_progress_by_username(course_id=course_id, usernames=users)
+        sessions_by_user = self._session_progress_by_username(course_id=course_id, usernames=users)
+
         now = datetime.utcnow()
         counts = Counter()
         for user in users:
-            rows = [v for v in video_rows if v.username == user]
-            events_count = self.db.query(AnalyticsTrackingEvent).filter(AnalyticsTrackingEvent.course_id == course_id, AnalyticsTrackingEvent.username == user).count()
-            session_rows = self.db.query(AnalyticsStudentSessionProgress).filter(AnalyticsStudentSessionProgress.course_id == course_id, AnalyticsStudentSessionProgress.username == user).all()
+            rows = videos_by_user.get(user, [])
+            events_count = events_by_user.get(user, 0)
+            session_rows = sessions_by_user.get(user, [])
             completed = [r for r in rows if r.is_completed]
             suspicious = [r for r in rows if r.is_suspicious]
-            avg_completion = round(sum([r.completion_percent or 0 for r in rows]) / len(rows), 2) if rows else None
-            avg_watch = round(sum([r.estimated_watch_percent or 0 for r in rows]) / len(rows), 2) if rows else None
+            avg_completion = round(sum((r.completion_percent or 0) for r in rows) / len(rows), 2) if rows else None
+            avg_watch = round(sum((r.estimated_watch_percent or 0) for r in rows) / len(rows), 2) if rows else None
             deadline_known = [r for r in session_rows if r.deadline_at]
             on_time = len([r for r in session_rows if r.completed_before_deadline is True])
             late = len([r for r in session_rows if r.completed_late is True])
             quiz_before = len([r for r in session_rows if 'QUIZ_BEFORE_VIDEO' in (r.reason_codes or [])])
-            crammed = 0
             late_completion_dates = [r.last_activity_at.date() for r in session_rows if r.last_activity_at and r.completed_late]
-            if late_completion_dates:
-                crammed = max(Counter(late_completion_dates).values()) if late_completion_dates else 0
-                crammed = crammed if crammed >= 3 else 0
+            crammed = max(Counter(late_completion_dates).values()) if late_completion_dates else 0
+            crammed = crammed if crammed >= 3 else 0
             inp = BehaviorInput(
                 total_events=events_count,
                 total_sessions=len(session_rows) or len({r.session_index for r in rows if r.session_index}) or 0,
@@ -541,7 +637,7 @@ class LearningAnalyticsCoreService:
                 total_videos_seen=len(rows),
                 total_videos_completed=len(completed),
                 avg_video_completion_percent=avg_completion,
-                total_estimated_watch_seconds=sum([r.estimated_watch_seconds or 0 for r in rows]),
+                total_estimated_watch_seconds=sum((r.estimated_watch_seconds or 0) for r in rows),
                 avg_estimated_watch_percent=avg_watch,
                 suspicious_video_count=len(suspicious),
                 missing_duration_count=len([r for r in rows if not r.duration_seconds]),
@@ -560,7 +656,7 @@ class LearningAnalyticsCoreService:
                 snap = AnalyticsLearningBehaviorSnapshot(class_id=class_id, course_id=course_id, username=user)
                 self.db.add(snap)
             snap.classification = result.classification
-            snap.display_label = result.display_label
+            snap.display_label = self._safe_label(result.classification, result.display_label)
             snap.confidence_score = result.confidence_score
             snap.real_learning_score = result.real_learning_score
             snap.idle_score = result.idle_score
@@ -578,6 +674,7 @@ class LearningAnalyticsCoreService:
             counts[result.classification] += 1
         self.db.commit()
         return {'class_id': class_id, 'course_id': course_id, 'processed': len(users), 'counts': dict(counts)}
+
 
 
     @staticmethod
@@ -729,7 +826,7 @@ class LearningAnalyticsCoreService:
             warnings.append({'code': 'ROLLOUT_SCOPE_HAS_INCOMPLETE_MAPPING', 'message': 'Một số lớp trong phạm vi rollout còn thiếu mapping course/session.', 'action': 'Backfill/rebuild trước khi mở rộng toàn kỳ.'})
         rollout_status = 'DISABLED' if not enabled else ('READY' if not blockers and not warnings else 'READY_WITH_WARNINGS')
         return {
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'rollout_status': rollout_status,
             'enabled': enabled,
             'mode': mode.upper(),
@@ -815,7 +912,7 @@ class LearningAnalyticsCoreService:
         warning_count = len([i for i in issues if i.get('severity') == 'warning'])
         monitoring_status = 'BLOCKED' if blocker_count else ('WARNING' if warning_count else 'OK')
         return {
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'monitoring_status': monitoring_status,
             'ready_for_rollout': monitoring_status in {'OK', 'WARNING'} and bool(getattr(settings, 'analytics_rollout_enabled', True)),
             'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
@@ -948,7 +1045,7 @@ class LearningAnalyticsCoreService:
 
         return {
             'status': 'ok',
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'readiness': readiness,
             'class_id': class_id,
             'course_id': resolved_course_id,
@@ -1048,7 +1145,7 @@ class LearningAnalyticsCoreService:
             })
         return {
             'status': 'ok',
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'filters': {'campus': campus, 'branch': branch, 'class_id': class_id, 'course_id': course_id, 'limit': limit},
             'total': len(items),
             'counters': dict(counters),
@@ -1164,7 +1261,7 @@ class LearningAnalyticsCoreService:
         warning_count = len([i for i in issues if str(i.get('severity')).upper() == 'WARNING'])
         ready = blocker_count == 0
         return {
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'ready_for_production': ready,
             'readiness': 'PRODUCTION_READY' if ready else 'NOT_READY',
             'blocker_count': blocker_count,
@@ -1358,7 +1455,7 @@ class LearningAnalyticsCoreService:
         ]
 
         return {
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'pilot_status': pilot_status,
             'ready_for_pilot': pilot_status in {'PASS', 'PASS_WITH_WARNINGS'},
             'ready_for_broad_production': bool(production.get('ready_for_production')) and pilot_status == 'PASS',
@@ -1416,7 +1513,7 @@ class LearningAnalyticsCoreService:
         monitoring = self.analytics_monitoring_report()
         production = self.production_readiness_report()
         return {
-            'version': '25.9.16.7.2.6',
+            'version': '25.9.16.7.2.7',
             'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
             'ingest': ingest,
             'active_recalculate_jobs': int(active_recalc or 0),

@@ -1300,14 +1300,25 @@ class VersionedQuestionBankService:
 
             # Runtime/derived rows are safe to detach from an otherwise empty
             # shell. Keeping them would surface the confusing empty-bank-version delete blocker even when the chapter has no actual content.
+            diff_ids = [
+                row[0]
+                for row in self.db.query(BankVersionDiff.id).filter(
+                    or_(BankVersionDiff.from_bank_version_id == version.id, BankVersionDiff.to_bank_version_id == version.id)
+                ).all()
+                if row and row[0]
+            ]
+            if diff_ids:
+                # Diff items do not always have DB-level ON DELETE CASCADE on old
+                # production databases. Delete children first to avoid FK failures
+                # when removing empty shell bank versions.
+                self.db.query(BankVersionDiffItem).filter(BankVersionDiffItem.diff_id.in_(diff_ids)).delete(synchronize_session=False)
+                self.db.query(BankVersionDiff).filter(BankVersionDiff.id.in_(diff_ids)).delete(synchronize_session=False)
+
             self.db.query(BankOperationJob).filter(BankOperationJob.bank_version_id == version.id).update(
                 {BankOperationJob.bank_version_id: None},
                 synchronize_session=False,
             )
             self.db.query(QuestionSearchDocument).filter(QuestionSearchDocument.bank_version_id == version.id).delete(synchronize_session=False)
-            self.db.query(BankVersionDiff).filter(
-                or_(BankVersionDiff.from_bank_version_id == version.id, BankVersionDiff.to_bank_version_id == version.id)
-            ).delete(synchronize_session=False)
             self.db.query(QuestionBankVersion).filter(QuestionBankVersion.based_on_version_id == version.id).update(
                 {QuestionBankVersion.based_on_version_id: None},
                 synchronize_session=False,

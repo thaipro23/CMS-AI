@@ -52,14 +52,31 @@ function pickBlocksForTermForm(blocks?: AcademicBlock[] | null): Array<AcademicB
   })
 }
 
+type LearningWeekMetadata = {
+  week_number?: number | string | null
+  start_date?: string | null
+  from_date?: string | null
+  from?: string | null
+  end_date?: string | null
+  to_date?: string | null
+  to?: string | null
+  deadline_date?: string | null
+  note?: string | null
+}
+
+function isLearningWeekMetadata(value: unknown): value is LearningWeekMetadata {
+  return typeof value === 'object' && value !== null
+}
+
 function learningWeeksFromMetadata(block?: AcademicBlock | null, startDate = ''): LearningWeekForm[] {
-  const raw = Array.isArray(block?.metadata_json?.learning_weeks) ? block?.metadata_json?.learning_weeks : []
-  const rows = raw.map((item: any, index: number) => ({
-    week_number: Number(item?.week_number || index + 1),
-    start_date: toDateInput(item?.start_date || item?.from_date || item?.from),
-    end_date: toDateInput(item?.end_date || item?.to_date || item?.to || item?.deadline_date),
-    note: String(item?.note || ''),
-  })).filter((item: LearningWeekForm) => item.start_date || item.end_date)
+  const rawValue = block?.metadata_json?.learning_weeks
+  const raw = Array.isArray(rawValue) ? rawValue.filter(isLearningWeekMetadata) : []
+  const rows = raw.map((item, index): LearningWeekForm => ({
+    week_number: Number(item.week_number || index + 1),
+    start_date: toDateInput(item.start_date || item.from_date || item.from),
+    end_date: toDateInput(item.end_date || item.to_date || item.to || item.deadline_date),
+    note: String(item.note || ''),
+  })).filter((item) => item.start_date || item.end_date)
   return rows.length ? rows : defaultLearningWeeks(startDate)
 }
 function normalizeLearningWeeks(weeks: LearningWeekForm[]) {

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from fastapi.responses import Response
@@ -114,6 +115,22 @@ class RebuildSessionStructureRequest(BaseModel):
     course_start_at: str | None = None
 
 
+class AnalyticsIngestRequest(BaseModel):
+    file_path: str | None = None
+    max_lines: int | None = Field(default=None, ge=1, le=200000)
+
+    @model_validator(mode='after')
+    def validate_file_path(self) -> 'AnalyticsIngestRequest':
+        if not self.file_path:
+            return self
+        configured = Path(getattr(settings, 'openedx_tracking_log_path', '/openedx-data/lms/logs/tracking.log')).resolve()
+        requested = Path(self.file_path).resolve()
+        if requested != configured:
+            raise ValueError('Chỉ được ingest tracking.log đã cấu hình trong OPENEDX_TRACKING_LOG_PATH.')
+        self.file_path = str(requested)
+        return self
+
+
 @router.get('/learning/schema-inspect')
 def learning_schema_inspect(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
     return LearningAnalyticsCoreService(db).schema_inspect()
@@ -121,12 +138,12 @@ def learning_schema_inspect(db: Session = Depends(get_db), user: UserContext = D
 
 @router.post('/ingest/run')
 def run_ingest(
-    file_path: str | None = None,
-    max_lines: int | None = Query(default=None, ge=1, le=200000),
+    payload: AnalyticsIngestRequest | None = None,
     db: Session = Depends(get_db),
     user: UserContext = Depends(require_permission('manage_settings')),
 ):
-    result = LearningAnalyticsCoreService(db).run_ingest(file_path=file_path, max_lines=max_lines)
+    payload = payload or AnalyticsIngestRequest()
+    result = LearningAnalyticsCoreService(db).run_ingest(file_path=payload.file_path, max_lines=payload.max_lines)
     log_audit(db, action='analytics.ingest.run', status='success', message='Chạy ingest tracking log học online', user=user, target_type='learning_analytics', metadata={'result': result})
     return result
 
@@ -138,18 +155,19 @@ def ingest_status(db: Session = Depends(get_db), user: UserContext = Depends(req
 
 @router.post('/ingest/jobs')
 def enqueue_ingest_job(
-    file_path: str | None = None,
-    max_lines: int | None = Query(default=None, ge=1, le=200000),
+    payload: AnalyticsIngestRequest | None = None,
     db: Session = Depends(get_db),
     user: UserContext = Depends(require_permission('manage_settings')),
 ):
+    payload = payload or AnalyticsIngestRequest()
     guard = LearningAnalyticsCoreService(db).analytics_ingest_enqueue_guard()
     if not guard.get('allowed'):
         raise HTTPException(status_code=409, detail=guard)
-    safe_max_lines = max(1, min(int(max_lines or getattr(settings, 'analytics_max_lines_per_run', 50000)), int(getattr(settings, 'analytics_max_lines_per_run', 50000))))
+    max_allowed = int(getattr(settings, 'analytics_max_lines_per_run', 50000) or 50000)
+    safe_max_lines = max(1, min(int(payload.max_lines or max_allowed), max_allowed))
     from app.worker import analytics_ingest_task
-    async_result = analytics_ingest_task.delay(file_path, safe_max_lines)
-    log_audit(db, action='analytics.ingest.enqueue', status='success', message='Đưa ingest tracking log học online vào hàng đợi', user=user, target_type='learning_analytics', metadata={'task_name': 'analytics_ingest_task', 'celery_task_id': getattr(async_result, 'id', None), 'file_path': file_path, 'max_lines': safe_max_lines, 'guard': guard})
+    async_result = analytics_ingest_task.delay(payload.file_path, safe_max_lines)
+    log_audit(db, action='analytics.ingest.enqueue', status='success', message='Đưa ingest tracking log học online vào hàng đợi', user=user, target_type='learning_analytics', metadata={'task_name': 'analytics_ingest_task', 'celery_task_id': getattr(async_result, 'id', None), 'file_path': payload.file_path, 'max_lines': safe_max_lines, 'guard': guard})
     return {'status': 'queued', 'task_name': 'analytics_ingest_task', 'celery_task_id': getattr(async_result, 'id', None), 'max_lines': safe_max_lines, 'message': 'Đã đưa ingest tracking log vào hàng đợi.', 'safe_policy': 'signals_only_not_violation'}
 
 

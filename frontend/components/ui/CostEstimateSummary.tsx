@@ -1,6 +1,6 @@
 'use client'
 
-type EstimateLike = Record<string, any>
+import { CostEstimateLike } from '../../types'
 
 function money(value: unknown) {
   const num = Number(value || 0)
@@ -15,7 +15,7 @@ function tokens(value: unknown) {
   return Number(value || 0).toLocaleString('vi-VN')
 }
 
-export function CostEstimateSummary({ estimate }: { estimate: EstimateLike | null }) {
+export function CostEstimateSummary({ estimate }: { estimate: CostEstimateLike | null }) {
   if (!estimate) return <p className="helper">Nên estimate cost trước khi generate.</p>
   return <div className="estimate-summary">
     <div><span>Token input</span><b>{tokens(estimate.estimated_input_tokens)}</b><small>Đã cache: {tokens(estimate.estimated_cached_input_tokens)}</small></div>

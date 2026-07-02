@@ -1,3 +1,7 @@
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | undefined | JsonValue[] | { [key: string]: JsonValue }
+export type JsonObject = { [key: string]: JsonValue }
+
 export type Role = 'admin' | 'teacher' | 'reviewer' | 'viewer'
 
 export type Permission =
@@ -47,6 +51,27 @@ export type CursorPaginatedResponse<T> = {
   has_next: boolean
   next_cursor?: { created_at?: string | null; id?: string | null } | null
   total?: number | null
+}
+
+export type CostEstimateOutputCalibration = {
+  strategy?: string | null
+  multiplier?: number | null
+  sample_size?: number | null
+}
+
+export type CostEstimateLike = {
+  estimated_input_tokens?: number | null
+  estimated_cached_input_tokens?: number | null
+  estimated_output_tokens?: number | null
+  estimated_output_tokens_per_question?: number | null
+  estimated_raw_cost_usd?: number | null
+  estimated_cost_usd?: number | null
+  estimated_cost_vnd?: number | null
+  model_name?: string | null
+  token_source?: string | null
+  estimate_token_source?: string | null
+  quota_message?: string | null
+  output_calibration?: CostEstimateOutputCalibration | null
 }
 
 export type QuestionStatus = 'pending_review' | 'approved' | 'rejected' | 'published' | 'draft_error' | string
@@ -2276,6 +2301,22 @@ export type AnalyticsProductionReadinessReport = {
   next_actions?: string[]
   safe_policy?: string
   disclaimer?: string
+}
+
+export type AnalyticsOpsStatus = Record<string, unknown> & {
+  ingest?: Record<string, unknown>
+  events?: Record<string, unknown>
+  snapshots?: Record<string, unknown>
+  status?: string
+}
+
+export type AnalyticsIngestJobResponse = {
+  status: string
+  task_name?: string
+  celery_task_id?: string | null
+  max_lines?: number
+  message?: string
+  safe_policy?: string
 }
 
 

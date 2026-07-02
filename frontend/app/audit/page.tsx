@@ -79,7 +79,7 @@ export default function AuditPage() {
   return <div className="page-stack ops-console audit-console">
     <section className="ops-hero card">
       <div><span className="eyebrow">Nhật ký</span><h1>Audit / Nhật ký hoạt động</h1><p>Đối soát thao tác và lỗi nghiệp vụ. Job chạy nền, AP sync và tiến độ xử lý xem riêng ở trang Jobs.</p></div>
-      <button className="btn secondary" onClick={() => load(1, pageSize)} disabled={loading}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
+      <button className="btn secondary" onClick={() => load(1, pageSize)} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại nhật ký'}</button>
     </section>
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <section className="ops-kpi-grid"><div><span>Tổng log trang này</span><b>{rows.length}</b></div><div><span>Thành công</span><b>{successCount}</b></div><div><span>Thất bại</span><b>{failedCount}</b></div><div><span>Đang xem</span><b>{total}</b></div></section>

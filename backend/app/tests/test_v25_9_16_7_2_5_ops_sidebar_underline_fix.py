@@ -10,7 +10,7 @@ def test_analytics_course_mapping_fallback_import_is_present():
     assert 'AcademicCourseMapping' in service
     assert 'from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping' in service
     assert 'self.db.query(AcademicCourseMapping)' in service
-    assert "'version': '25.9.16.7.2.6'" in service
+    assert "'version': '25.9.16.7.2.7'" in service
 
 
 def test_analytics_learning_page_soft_loads_ops_cards():
@@ -27,8 +27,10 @@ def test_frontend_sidebar_fixed_and_links_have_no_underline():
     css = (_root() / 'frontend' / 'app' / 'globals.css').read_text(encoding='utf-8')
     assert 'v25.9.16.7.2.6 — fixed sidebar + global underline cleanup' in css
     assert '.product-sidebar.sidebar {' in css
-    assert 'position: fixed !important;' in css
-    assert 'height: 100dvh !important;' in css
-    assert 'overflow-y: auto !important;' in css
+    assert 'position: fixed;' in css
+    assert 'height: 100dvh;' in css
+    assert 'overflow-y: auto;' in css
     assert 'a:visited,' in css
-    assert 'text-decoration: none !important;' in css
+    assert 'text-decoration: none;' in css
+    assert '!important' not in css
+    assert 'focus-visible' in css
