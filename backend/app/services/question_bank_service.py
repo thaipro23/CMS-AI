@@ -3626,6 +3626,40 @@ class VersionedQuestionBankService:
             'details': details,
         }
 
+    @staticmethod
+    def _quiz_action_for_chapter_title(title: str | None) -> str:
+        text = normalize_title_match(title)
+        if re.search(r'\bassignment\b|\basm\b|bai tap|do an|nop bai', text):
+            return 'assignment'
+        if re.search(r'\bfinal\b|final test|thi cuoi|cuoi ky', text):
+            return 'skip'
+        return 'quiz'
+
+    @staticmethod
+    def _normalize_quiz_chapter_plan(chapter_plan: list[dict] | None) -> dict[str, str]:
+        allowed = {'quiz', 'skip', 'assignment', 'final_test'}
+        plan: dict[str, str] = {}
+        for item in chapter_plan or []:
+            chapter_id = str((item or {}).get('chapter_id') or '').strip()
+            action = str((item or {}).get('action') or 'quiz').strip().lower()
+            if chapter_id and action in allowed:
+                plan[chapter_id] = action
+        return plan
+
+    @staticmethod
+    def _quiz_action_requires_release(action: str | None) -> bool:
+        return str(action or '').lower() in {'quiz', 'final_test'}
+
+    @staticmethod
+    def _quiz_action_label(action: str | None) -> str:
+        labels = {
+            'quiz': 'Tạo Quiz',
+            'final_test': 'Tạo Final test',
+            'assignment': 'Không tạo quiz: Assignment/nội dung',
+            'skip': 'Không tạo quiz',
+        }
+        return labels.get(str(action or '').lower(), 'Tạo Quiz')
+
     async def _load_openedx_sections_for_quiz(self, course_id: str) -> tuple[list[dict], list[str]]:
         warnings: list[str] = []
         blocks: list[dict] = []
@@ -3693,9 +3727,8 @@ class VersionedQuestionBankService:
             'chapter_count': item.get('chapter_count', 0),
             'ready_chapter_count': item.get('ready_chapter_count', 0),
             'missing_chapters': missing,
-            'disabled_reason': None if item.get('all_ready') else (
-                'Chưa publish Release đủ tất cả bài' if item.get('chapter_count') else 'Version môn chưa có bài'
-            ),
+            'disabled_reason': None,
+            'selection_note': 'Có thể chọn; chỉ những bài đánh dấu tạo Quiz/Final test mới cần Release published.',
         }
 
     def _select_offering_for_course(
@@ -3731,31 +3764,31 @@ class VersionedQuestionBankService:
                 'course_run_match': code_match or term_match or contains_run,
                 **release_status,
             })
-        candidates.sort(key=lambda item: (item['all_ready'], item['course_run_match'], item['score']), reverse=True)
+        candidates.sort(key=lambda item: (item['course_run_match'], item['score'], item['ready_chapter_count']), reverse=True)
         selected = None
         explicit_selection = bool(selected_subject_offering_id)
         if selected_subject_offering_id:
             selected_item = next((item for item in candidates if item.get('offering_id') == selected_subject_offering_id), None)
             if not selected_item:
                 warnings.append('Version môn được chọn không thuộc môn trong Course ID.')
-            elif not selected_item.get('all_ready'):
-                warnings.append('Version môn được chọn chưa có Release published đủ tất cả bài nên chưa thể tạo Quiz.')
             else:
+                if not selected_item.get('all_ready'):
+                    warnings.append('Version môn được chọn chưa publish đủ tất cả bài. Hệ thống vẫn cho chọn; các bài không tạo Quiz/Final test sẽ không chặn luồng.')
                 selected = selected_item['offering']
-        if not selected and not explicit_selection:
-            for item in candidates:
-                if item['all_ready'] and (item['course_run_match'] or not selected):
-                    selected = item['offering']
-                    break
+        if not selected and not explicit_selection and candidates:
+            selected = candidates[0]['offering']
+            if not candidates[0].get('all_ready'):
+                warnings.append('Version môn được tự chọn chưa publish đủ tất cả bài. Hệ thống sẽ chỉ yêu cầu Release cho các bài được đánh dấu tạo Quiz/Final test.')
         if not selected and candidates:
-            warnings.append('Không có phiên bản môn nào có Release published đủ tất cả bài.')
+            warnings.append('Không chọn được version môn phù hợp.')
         return selected, candidates, warnings
 
-    async def preview_quiz_auto_map(self, *, openedx_course_id: str, selected_subject_offering_id: str | None = None) -> dict:
+    async def preview_quiz_auto_map(self, *, openedx_course_id: str, selected_subject_offering_id: str | None = None, chapter_plan: list[dict] | None = None) -> dict:
         course_id = (openedx_course_id or '').strip()
         parsed = parse_openedx_course_id(course_id)
         blocking_errors: list[str] = []
         warnings: list[str] = []
+        plan_by_chapter = self._normalize_quiz_chapter_plan(chapter_plan)
         if not parsed.get('ok'):
             return {'ok': False, 'openedx_course_id': course_id, 'mode': 'preview', 'subject': None, 'offering': None, 'course_mapping': None, 'summary': {}, 'sections': [], 'mappings': [], 'warnings': [], 'blocking_errors': ['Course ID phải có dạng course-v1:ORG+COURSE+RUN.'], 'can_apply': False, 'message': 'Course ID không hợp lệ.'}
         subject = self.db.query(Subject).filter(func.lower(Subject.code) == str(parsed.get('course_code')).lower()).first()
@@ -3769,7 +3802,7 @@ class VersionedQuestionBankService:
         offering, candidates, candidate_warnings = self._select_offering_for_course(course_id=course_id, subject=subject, selected_subject_offering_id=selected_subject_offering_id)
         warnings.extend(candidate_warnings)
         if not offering:
-            blocking_errors.append('Chưa có phiên bản môn phù hợp có Release published đủ tất cả các bài. Hãy chốt/publish Release cho toàn bộ bài trước khi tạo Quiz.')
+            blocking_errors.append('Chưa có phiên bản môn phù hợp với Course ID. Hãy chọn version môn thủ công nếu hệ thống gợi ý chưa đúng.')
             return {
                 'ok': False,
                 'openedx_course_id': course_id,
@@ -3783,7 +3816,7 @@ class VersionedQuestionBankService:
                 'warnings': warnings,
                 'blocking_errors': blocking_errors,
                 'can_apply': False,
-                'message': 'Chưa đủ Release published để tự map course.',
+                'message': 'Chưa chọn được version môn để map course.',
             }
         release_status = self._offering_published_release_status(offering)
         sections, section_warnings = await self._load_openedx_sections_for_quiz(course_id)
@@ -3798,18 +3831,23 @@ class VersionedQuestionBankService:
             SubjectChapter.status == 'active',
         ).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
         for chapter in chapters:
+            chapter_title = self._chapter_display_name(chapter)
+            action = plan_by_chapter.get(chapter.id) or self._quiz_action_for_chapter_title(chapter_title)
+            requires_release = self._quiz_action_requires_release(action)
             section, score, reason = self._match_chapter_to_section(chapter, sections, used_sections)
             if section:
                 used_sections.add(str(section.get('block_id') or ''))
             release_info = release_by_chapter.get(chapter.id) or {}
-            ready = bool(section and release_info.get('ready'))
-            if not section:
-                blocking_errors.append(f'{self._chapter_display_name(chapter)} chưa tìm thấy Section cùng tên trong course.')
-            if not release_info.get('ready'):
-                blocking_errors.append(f'{self._chapter_display_name(chapter)} chưa có Release published đủ component.')
+            ready = bool(requires_release and section and release_info.get('ready'))
+            if requires_release and not section:
+                blocking_errors.append(f'{chapter_title} đang chọn {self._quiz_action_label(action)} nhưng chưa tìm thấy Section cùng tên trong course.')
+            if requires_release and not release_info.get('ready'):
+                blocking_errors.append(f'{chapter_title} đang chọn {self._quiz_action_label(action)} nhưng chưa có Release published đủ component.')
+            if not requires_release and not section:
+                warnings.append(f'{chapter_title} đang để không tạo Quiz; chưa tìm thấy Section cùng tên nên chỉ lưu course/version, không lưu mapping tạo Quiz.')
             mappings.append({
                 'chapter_id': chapter.id,
-                'chapter_title': self._chapter_display_name(chapter),
+                'chapter_title': chapter_title,
                 'release_id': release_info.get('release_id'),
                 'release_code': release_info.get('release_code'),
                 'openedx_library_key': release_info.get('openedx_library_key'),
@@ -3817,13 +3855,23 @@ class VersionedQuestionBankService:
                 'openedx_section_title': section.get('display_name') if section else None,
                 'match_score': round(float(score or 0), 4),
                 'match_reason': reason,
+                'action': action,
+                'action_label': self._quiz_action_label(action),
+                'requires_quiz': requires_release,
+                'skipped': not requires_release,
                 'ready': ready,
+                'can_create': ready,
                 'course_chapter_mapping_id': None,
+                'recommended_quiz_title': 'Final test' if action == 'final_test' else f'Quiz {self._chapter_quiz_suffix(chapter)}'.strip(),
+                'recommended_unit_title': 'Final test' if action == 'final_test' else 'Quiz',
             })
         existing = self.db.query(EdxCourseMapping).filter(EdxCourseMapping.openedx_course_id == course_id).first()
         if existing and existing.subject_id != subject.id:
             blocking_errors.append('Course này đã được map sang môn khác. Không tự ghi đè để tránh gắn nhầm đề.')
-        can_apply = not blocking_errors and bool(mappings)
+        selected_quiz_count = len([item for item in mappings if item.get('requires_quiz')])
+        ready_quiz_count = len([item for item in mappings if item.get('can_create')])
+        skipped_chapter_count = len([item for item in mappings if item.get('skipped')])
+        can_apply = not blocking_errors and bool(chapters)
         return {
             'ok': can_apply,
             'openedx_course_id': course_id,
@@ -3836,6 +3884,9 @@ class VersionedQuestionBankService:
                 'course_run': parsed.get('run'),
                 'chapter_count': len(chapters),
                 'published_release_count': release_status['ready_chapter_count'],
+                'selected_quiz_count': selected_quiz_count,
+                'ready_quiz_count': ready_quiz_count,
+                'skipped_chapter_count': skipped_chapter_count,
                 'section_count': len(sections),
                 'matched_count': len([item for item in mappings if item.get('openedx_section_id')]),
                 'candidates': [self._format_offering_candidate(item) for item in candidates],
@@ -3846,11 +3897,11 @@ class VersionedQuestionBankService:
             'warnings': list(dict.fromkeys(warnings)),
             'blocking_errors': list(dict.fromkeys(blocking_errors)),
             'can_apply': can_apply,
-            'message': 'Đã tự tìm được version môn và Section phù hợp. Có thể lưu mapping.' if can_apply else 'Chưa thể tự map. Hãy xử lý các lỗi bên dưới.',
+            'message': f'Đã tự tìm được version môn. Có thể lưu cấu hình: {ready_quiz_count}/{selected_quiz_count} bài kiểm tra sẵn sàng, {skipped_chapter_count} bài không tạo Quiz.' if can_apply else 'Chưa thể lưu cấu hình. Hãy xử lý các lỗi bên dưới hoặc đổi bài sang Không tạo quiz/Assignment.',
         }
 
-    async def apply_quiz_auto_map(self, *, openedx_course_id: str, selected_subject_offering_id: str | None = None, actor: str | None = None) -> dict:
-        preview = await self.preview_quiz_auto_map(openedx_course_id=openedx_course_id, selected_subject_offering_id=selected_subject_offering_id)
+    async def apply_quiz_auto_map(self, *, openedx_course_id: str, selected_subject_offering_id: str | None = None, chapter_plan: list[dict] | None = None, actor: str | None = None) -> dict:
+        preview = await self.preview_quiz_auto_map(openedx_course_id=openedx_course_id, selected_subject_offering_id=selected_subject_offering_id, chapter_plan=chapter_plan)
         if not preview.get('can_apply'):
             raise ValueError(preview.get('message') or 'Chưa đủ điều kiện tự map course.')
         subject = preview.get('subject') or {}
@@ -3885,6 +3936,11 @@ class VersionedQuestionBankService:
             self.db.flush()
         saved_mappings: list[dict] = []
         for item in preview.get('mappings') or []:
+            if not item.get('requires_quiz'):
+                saved_mappings.append({**item, 'course_chapter_mapping_id': None, 'mapping_status': 'skipped_no_quiz'})
+                continue
+            if not item.get('ready'):
+                raise ValueError(f'{item.get("chapter_title") or "Bài"} chưa sẵn sàng để tạo Quiz/Final test.')
             existing = self.db.query(EdxCourseChapterMapping).filter(
                 EdxCourseChapterMapping.course_mapping_id == mapping.id,
                 EdxCourseChapterMapping.subject_chapter_id == item['chapter_id'],
@@ -3933,7 +3989,7 @@ class VersionedQuestionBankService:
             'course_mapping': {'id': mapping.id, 'openedx_course_id': mapping.openedx_course_id, 'status': mapping.status},
             'mappings': saved_mappings,
             'can_apply': True,
-            'message': f'Đã tự map {len(saved_mappings)} Section Open edX vào {len(saved_mappings)} bài của {offering.get("code")}.',
+            'message': f'Đã lưu cấu hình version {offering.get("code")}: {len([item for item in saved_mappings if item.get("requires_quiz")])} bài có thể tạo Quiz/Final test, {len([item for item in saved_mappings if item.get("skipped")])} bài không tạo Quiz.',
         }
 
     def _validation_result(self, checks: list[dict]) -> dict:
@@ -4326,6 +4382,7 @@ class VersionedQuestionBankService:
         auto_submit_on_timeout: bool = True,
         lock_after_timeout: bool = True,
         native_timed_exam: bool = False,
+        assessment_type: str = 'quiz',
         actor: str | None = None,
         expected_bank_release_id: str | None = None,
     ) -> dict:
@@ -4380,13 +4437,13 @@ class VersionedQuestionBankService:
         chapter = self.db.get(SubjectChapter, release.chapter_id)
         connector = get_openedx_connector()
         course_id = course_mapping.openedx_course_id
-        # FPT convention: if the source Section/Chapter is "Bài 1" then the created
-        # Subsection is "Quiz 1" and the Unit is always "Quiz". Keep this as a
-        # backend rule so old frontends or API callers cannot accidentally create
-        # "AI Learning Check" / "Quiz tự luyện" names anymore.
+        assessment_type = 'final_test' if str(assessment_type or '').lower() == 'final_test' else 'quiz'
         quiz_suffix = self._chapter_quiz_suffix(chapter)
-        final_quiz_title = f'Quiz {quiz_suffix}'.strip()
-        final_unit_title = 'Quiz'
+        default_quiz_title = 'Final test' if assessment_type == 'final_test' else f'Quiz {quiz_suffix}'.strip()
+        default_unit_title = 'Final test' if assessment_type == 'final_test' else 'Quiz'
+        final_quiz_title = (quiz_title or default_quiz_title).strip() or default_quiz_title
+        final_unit_title = (unit_title or default_unit_title).strip() or default_unit_title
+        grade_as = 'Final Exam' if assessment_type == 'final_test' else 'Quiz'
         timer_config = {
             'custom_timer_enabled': bool(custom_timer_enabled),
             'time_limit_minutes': int(time_limit_minutes or 15),
@@ -4408,7 +4465,7 @@ class VersionedQuestionBankService:
             bank_release_id=release.id,
             quiz_blueprint_id=None,
             status='creating',
-            metadata_json={'plan': plan, 'validation': validation, 'actor': actor, 'created_from': 'bank_release', 'timer_config': timer_config},
+            metadata_json={'plan': plan, 'validation': validation, 'actor': actor, 'created_from': 'bank_release', 'assessment_type': assessment_type, 'timer_config': timer_config},
         )
         self.db.add(instance)
         self.db.commit()
@@ -4428,8 +4485,8 @@ class VersionedQuestionBankService:
                     'timer_config': timer_config,
                     'sequential_title': final_quiz_title,
                     'unit_title': final_unit_title,
-                    'grade_as': 'Quiz',
-                    'format': 'Quiz',
+                    'grade_as': grade_as,
+                    'format': grade_as,
                     'graded': True,
                 },
             )
@@ -4497,6 +4554,7 @@ class VersionedQuestionBankService:
                 **(instance.metadata_json or {}),
                 'quiz_title': final_quiz_title,
                 'unit_title': final_unit_title,
+                'assessment_type': assessment_type,
                 'quiz_result': quiz_result,
                 'problem_bank_result': insert_result,
                 'timer_config': {
@@ -4523,7 +4581,7 @@ class VersionedQuestionBankService:
                 'quiz_result': quiz_result,
                 'problem_bank_result': insert_result,
                 'timer_config': instance.metadata_json.get('timer_config') or timer_config,
-                'message': 'Đã tạo Quiz và native Problem Bank từ Bank Release trên Open edX.',
+                'message': 'Đã tạo Final test và native Problem Bank từ Bank Release trên Open edX.' if assessment_type == 'final_test' else 'Đã tạo Quiz và native Problem Bank từ Bank Release trên Open edX.',
             }
         except Exception as exc:
             instance.status = 'failed'

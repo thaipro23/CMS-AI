@@ -1389,6 +1389,13 @@ export type CourseQuizInstance = {
 
 
 
+export type QuizChapterAction = 'quiz' | 'skip' | 'assignment' | 'final_test'
+
+export type QuizChapterPlanItem = {
+  chapter_id: string
+  action: QuizChapterAction
+}
+
 export type QuizAutoMapCandidate = {
   offering_id: string
   offering_code: string
@@ -1403,6 +1410,7 @@ export type QuizAutoMapCandidate = {
   ready_chapter_count: number
   missing_chapters: string[]
   disabled_reason?: string | null
+  selection_note?: string | null
 }
 
 export type QuizAutoMapResult = {
@@ -1424,7 +1432,15 @@ export type QuizAutoMapResult = {
     openedx_section_title?: string | null
     match_score: number
     match_reason: string
+    action?: QuizChapterAction
+    action_label?: string
+    requires_quiz?: boolean
+    skipped?: boolean
     ready: boolean
+    can_create?: boolean
+    recommended_quiz_title?: string | null
+    recommended_unit_title?: string | null
+    mapping_status?: string | null
     course_chapter_mapping_id?: string | null
   }>
   warnings: string[]

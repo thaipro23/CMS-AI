@@ -1738,7 +1738,7 @@ export async function retireBankQuestions(
 
 export async function previewQuizAutoMap(
   headers: HeadersInit,
-  payload: { openedx_course_id: string; selected_subject_offering_id?: string | null; total_questions?: number; difficulty_easy?: number; difficulty_medium?: number; difficulty_hard?: number; max_families_per_bank?: number },
+  payload: { openedx_course_id: string; selected_subject_offering_id?: string | null; total_questions?: number; difficulty_easy?: number; difficulty_medium?: number; difficulty_hard?: number; max_families_per_bank?: number; chapter_plan?: Array<{ chapter_id: string; action: 'quiz' | 'skip' | 'assignment' | 'final_test' }> },
 ) {
   return parseResponse<QuizAutoMapResult>(
     await apiFetch(`${API}/question-bank-v2/quiz/auto-map/preview`, {
@@ -1751,7 +1751,7 @@ export async function previewQuizAutoMap(
 
 export async function applyQuizAutoMap(
   headers: HeadersInit,
-  payload: { openedx_course_id: string; selected_subject_offering_id?: string | null; total_questions?: number; difficulty_easy?: number; difficulty_medium?: number; difficulty_hard?: number; max_families_per_bank?: number },
+  payload: { openedx_course_id: string; selected_subject_offering_id?: string | null; total_questions?: number; difficulty_easy?: number; difficulty_medium?: number; difficulty_hard?: number; max_families_per_bank?: number; chapter_plan?: Array<{ chapter_id: string; action: 'quiz' | 'skip' | 'assignment' | 'final_test' }> },
 ) {
   return parseResponse<QuizAutoMapResult>(
     await apiFetch(`${API}/question-bank-v2/quiz/auto-map/apply`, {
@@ -1779,7 +1779,7 @@ export async function previewQuizFromBankRelease(
 export async function createQuizFromBankRelease(
   headers: HeadersInit,
   releaseId: string,
-  payload: { course_chapter_mapping_id: string; quiz_title?: string; unit_title?: string; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number; custom_timer_enabled?: boolean; time_limit_minutes?: number; retake_cooldown_minutes?: number; auto_submit_on_timeout?: boolean; lock_after_timeout?: boolean; native_timed_exam?: boolean },
+  payload: { course_chapter_mapping_id: string; quiz_title?: string; unit_title?: string; assessment_type?: 'quiz' | 'final_test'; total_questions: number; difficulty_easy: number; difficulty_medium: number; difficulty_hard: number; max_families_per_bank?: number; custom_timer_enabled?: boolean; time_limit_minutes?: number; retake_cooldown_minutes?: number; auto_submit_on_timeout?: boolean; lock_after_timeout?: boolean; native_timed_exam?: boolean },
 ) {
   const queued = await parseResponse<BankOperationJobQueued>(
     await apiFetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/quiz/create-job`, {

@@ -1735,6 +1735,7 @@ async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCrea
             auto_submit_on_timeout=payload.auto_submit_on_timeout,
             lock_after_timeout=payload.lock_after_timeout,
             native_timed_exam=payload.native_timed_exam,
+            assessment_type=payload.assessment_type,
             actor=user.user_id,
             expected_bank_release_id=release_id,
         )
@@ -1755,7 +1756,7 @@ async def preview_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depen
     if payload.selected_subject_offering_id:
         _require_business(db, user, 'quiz.preview', 'SUBJECT_VERSION', payload.selected_subject_offering_id)
     try:
-        result = await VersionedQuestionBankService(db).preview_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id)
+        result = await VersionedQuestionBankService(db).preview_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id, chapter_plan=[item.model_dump() for item in payload.chapter_plan])
         log_audit(db, action='question_bank.quiz.auto_map.preview', status='success' if result.get('ok') else 'failed', error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR, message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'blocking_errors': result.get('blocking_errors')})
         return result
     except Exception as exc:
@@ -1768,7 +1769,7 @@ async def apply_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends
     if payload.selected_subject_offering_id:
         _require_business(db, user, 'quiz.create_openedx', 'SUBJECT_VERSION', payload.selected_subject_offering_id)
     try:
-        result = await VersionedQuestionBankService(db).apply_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id, actor=user.user_id)
+        result = await VersionedQuestionBankService(db).apply_quiz_auto_map(openedx_course_id=payload.openedx_course_id, selected_subject_offering_id=payload.selected_subject_offering_id, chapter_plan=[item.model_dump() for item in payload.chapter_plan], actor=user.user_id)
         log_audit(db, action='question_bank.quiz.auto_map.apply', status='success', message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'mapping_count': len(result.get('mappings') or [])})
         return result
     except ValueError as exc:

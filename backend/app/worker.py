@@ -948,6 +948,7 @@ def bank_quiz_create_task(job_id: str):
                 auto_submit_on_timeout=bool(payload.get('custom_timer_enabled', True)),
                 lock_after_timeout=bool(payload.get('custom_timer_enabled', True)),
                 native_timed_exam=bool(payload.get('native_timed_exam', False)),
+                assessment_type=str(payload.get('assessment_type') or 'quiz'),
                 actor=job.requested_by,
                 expected_bank_release_id=str(job.release_id or payload.get('release_id')),
             )

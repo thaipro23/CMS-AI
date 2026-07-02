@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 T = TypeVar('T')
@@ -707,6 +707,7 @@ class BankReleaseQuizCreateRequest(BankReleaseQuizPreviewRequest):
     course_chapter_mapping_id: str
     quiz_title: str = Field(default='', max_length=255)
     unit_title: str = Field(default='Quiz', max_length=255)
+    assessment_type: Literal['quiz', 'final_test'] = 'quiz'
     custom_timer_enabled: bool = True
     time_limit_minutes: int = Field(default=15, ge=1, le=300)
     retake_cooldown_minutes: int = Field(default=5, ge=0, le=10080)
@@ -784,6 +785,11 @@ class CourseQuizRollbackOut(BaseModel):
     message: str
 
 
+class QuizChapterPlanItem(BaseModel):
+    chapter_id: str = Field(min_length=1, max_length=255)
+    action: Literal['quiz', 'skip', 'assignment', 'final_test'] = 'quiz'
+
+
 class QuizAutoMapRequest(BaseModel):
     openedx_course_id: str = Field(min_length=1, max_length=255)
     selected_subject_offering_id: str | None = None
@@ -792,6 +798,7 @@ class QuizAutoMapRequest(BaseModel):
     difficulty_medium: int = Field(default=30, ge=0, le=100)
     difficulty_hard: int = Field(default=20, ge=0, le=100)
     max_families_per_bank: int = Field(default=2, ge=1, le=10)
+    chapter_plan: list[QuizChapterPlanItem] = Field(default_factory=list)
 
 
 class QuizAutoMapOut(BaseModel):
