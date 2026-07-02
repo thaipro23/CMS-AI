@@ -818,13 +818,22 @@ function ClassDetailContent() {
   if (searchParams.get('teacher_name')) teacherBackParams.set('teacher_name', searchParams.get('teacher_name') || '')
   const backToTeacherClassesHref = teacherIdForBack ? `/teacher-management/teachers/${encodeURIComponent(teacherIdForBack)}/classes?${teacherBackParams.toString()}` : ''
   const operationalBackHref = backToTeacherClassesHref || backToClassesHref
+  const behaviorParams = new URLSearchParams()
+  if (backBranch) behaviorParams.set('branch', backBranch)
+  if (backTermId) behaviorParams.set('term_id', backTermId)
+  if (backCampus) behaviorParams.set('campus', backCampus)
+  if (subjectIdForBack) behaviorParams.set('subject_id', subjectIdForBack)
+  if (classId) behaviorParams.set('class_id', classId)
+  behaviorParams.set('classification', 'all')
+  const behaviorHref = `/analytics/learning?${behaviorParams.toString()}`
 
   return <div className="page-stack student-management-page academic-flow-page class-detail-flow">
     <section className="card academic-unified-card">
       <div className="teacher-breadcrumb-row clean-breadcrumb-row"><Link className="btn secondary small" href={operationalBackHref}>← Quay lại danh sách lớp</Link></div>
       <div className="class-action-row compact-sync-action-strip clean-sync-action-strip">
         <div className="toolbar-actions">
-          <button className="btn primary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>
+          <Link className="btn primary" href={behaviorHref}>Hành vi học</Link>
+          <button className="btn secondary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>
           <button className="btn secondary" type="button" disabled={actionBusy} onClick={runScoreUpdate}>{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>
           <Link className="btn secondary" href="/semesters">Cấu hình tuần học</Link>
           {canManageAssignmentScores ? <button className="btn secondary" type="button" onClick={openAssignmentModal}>Workflow Assignment</button> : null}

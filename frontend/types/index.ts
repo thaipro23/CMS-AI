@@ -2238,6 +2238,50 @@ export type AnalyticsLearningBehaviorRow = {
   last_activity_at?: string | null
 }
 
+
+export type AnalyticsClassBehaviorOverviewItem = {
+  class_id: string
+  class_code: string
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  openedx_course_id?: string | null
+  openedx_mapping_source?: string | null
+  student_count: number
+  snapshot_count: number
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  focus_count: number
+  dominant_classification: AnalyticsLearningBehaviorClassification
+  dominant_label?: string | null
+  data_status: 'ready' | 'not_calculated' | string
+  last_activity_at?: string | null
+  calculated_at?: string | null
+}
+
+export type AnalyticsClassBehaviorOverviewSummary = {
+  total_classes: number
+  total_students: number
+  snapshot_count: number
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  not_calculated_class_count: number
+}
+
+export type AnalyticsClassBehaviorOverviewResponse = {
+  total: number
+  items: AnalyticsClassBehaviorOverviewItem[]
+  summary: AnalyticsClassBehaviorOverviewSummary
+  classification_filter: string
+  safe_policy?: string
+}
+
 export type AnalyticsLearningBehaviorListResponse = {
   total: number
   items: AnalyticsLearningBehaviorRow[]
@@ -2687,6 +2731,26 @@ export type AcademicClassCourseMappingProposal = {
 
 export type AcademicCourseMappingListResponse = PaginatedResponse<AcademicCourseMapping>
 export type AcademicSubjectManagementListResponse = PaginatedResponse<AcademicSubjectManagement> & { summary?: AcademicSubjectManagementSummary }
+
+
+export type AcademicSubjectAutoMapAllSyncResult = {
+  ok: boolean
+  message: string
+  term_id: string
+  branch?: string | null
+  campus?: string | null
+  subject_total: number
+  subject_mapped: number
+  subject_already_mapped: number
+  subject_failed: number
+  class_total: number
+  jobs_queued: number
+  jobs_reused: number
+  jobs_skipped: number
+  capped?: boolean
+  subject_results?: Array<Record<string, any>>
+  job_ids?: string[]
+}
 
 export type AcademicSubjectCourseAutoMapResult = {
   ok: boolean

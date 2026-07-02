@@ -108,6 +108,18 @@ function classDetailHref(cls: AcademicTrainingClassReport, teacher: AcademicTrai
   return `/teacher-management/classes/${encodeURIComponent(cls.class_id)}?${params.toString()}`
 }
 
+function learningBehaviorHref(cls: AcademicTrainingClassReport, filters: { termId: string; branch: string; campus: string; termName: string }) {
+  const params = new URLSearchParams()
+  if (filters.termId) params.set('term_id', filters.termId)
+  if (filters.branch) params.set('branch', filters.branch)
+  if (filters.campus || cls.campus) params.set('campus', filters.campus || cls.campus || '')
+  if (filters.termName) params.set('term_name', filters.termName)
+  if (cls.subject_id) params.set('subject_id', cls.subject_id)
+  if (cls.class_id) params.set('class_id', cls.class_id)
+  params.set('classification', 'all')
+  return `/analytics/learning?${params.toString()}`
+}
+
 export default function TeacherClassesPage() {
   const params = useParams<{ teacherId: string }>()
   const searchParams = useSearchParams()
@@ -213,7 +225,7 @@ export default function TeacherClassesPage() {
               <td><b>{countLabel(cls.deadline_late_student_count)} SV trễ</b><small>{countLabel(cls.deadline_late_quiz_count)} lượt quiz trễ · Đã đến hạn {countLabel(cls.deadline_due_quiz_count)}/{countLabel(cls.deadline_quiz_count)} quiz</small><small>{cls.deadline_next_quiz_label ? `${cls.deadline_next_quiz_label}: ${cls.deadline_next_quiz_from_date || 'N/A'} → ${cls.deadline_next_quiz_due_date || 'N/A'}` : 'Đã qua lịch quiz hoặc chưa có Detailed grades'}</small></td>
               <td><b>{countLabel(cls.exam_eligible_student_count)} được thi</b><small>{countLabel(cls.exam_not_eligible_student_count)} không được thi · {countLabel(cls.exam_insufficient_data_student_count)} thiếu dữ liệu</small><small>Quiz chưa đạt: {countLabel(cls.quiz_failed_count)} · Assignment chưa chấm: {countLabel(cls.assignment_not_graded_count)}</small></td>
               <td><span className={riskTone(cls)}>{cls.learning_alerts?.length ? 'Có cảnh báo' : 'Ổn'}</span><small>{alertText(cls.learning_alerts)}</small></td>
-              <td><Link className="btn primary small" href={classDetailHref(cls, teacher, filters)}>Chi tiết lớp</Link></td>
+              <td><div className="teacher-row-actions-stack"><Link className="btn primary small" href={classDetailHref(cls, teacher, filters)}>Chi tiết lớp</Link><Link className="btn secondary small" href={learningBehaviorHref(cls, filters)}>Hành vi học</Link></div></td>
             </tr>)}
           </tbody>
         </table>

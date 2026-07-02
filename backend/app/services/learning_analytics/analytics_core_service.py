@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, text
+from sqlalchemy import case, func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1977,6 +1977,217 @@ class LearningAnalyticsCoreService:
         for week in sorted(k for k in by_week if k > 0):
             result.append({'week_index': week, 'sessions': [r.session_index for r in sorted(by_week[week], key=lambda item: item.session_index)]})
         return result
+
+
+    def class_behavior_overview(
+        self,
+        *,
+        subject_id: str,
+        term_id: str | None = None,
+        campus: str | None = None,
+        branch: str | None = None,
+        classification: str | None = None,
+        class_id: str | None = None,
+        allowed_class_ids: set[str] | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return result-first class overview for the learning behavior flow.
+
+        This endpoint intentionally summarizes by class first so the UI can follow
+        the operational path: term -> campus -> subject -> class -> student result.
+        It reads only snapshot/aggregate tables; it never scans raw tracking logs.
+        """
+        class_q = self.db.query(AcademicClass).filter(
+            AcademicClass.subject_id == subject_id,
+            AcademicClass.active.is_(True),
+        )
+        if term_id:
+            class_q = class_q.filter(AcademicClass.term_id == term_id)
+        if campus:
+            class_q = class_q.filter(func.lower(AcademicClass.campus) == campus.strip().lower())
+        if branch:
+            class_q = class_q.filter(func.lower(AcademicClass.branch) == branch.strip().lower())
+        if class_id:
+            class_q = class_q.filter(AcademicClass.id == class_id)
+        if allowed_class_ids is not None:
+            if not allowed_class_ids:
+                return {
+                    'total': 0,
+                    'items': [],
+                    'summary': self._empty_class_behavior_overview_summary(),
+                    'classification_filter': classification or 'all',
+                    'safe_policy': 'signals_only_not_violation',
+                }
+            class_q = class_q.filter(AcademicClass.id.in_(allowed_class_ids))
+
+        classes = class_q.order_by(AcademicClass.class_code.asc(), AcademicClass.class_name.asc()).all()
+        class_ids = [str(item.id) for item in classes if item.id]
+        if not class_ids:
+            return {
+                'total': 0,
+                'items': [],
+                'summary': self._empty_class_behavior_overview_summary(),
+                'classification_filter': classification or 'all',
+                'safe_policy': 'signals_only_not_violation',
+            }
+
+        student_counts = {
+            str(class_id): int(count or 0)
+            for class_id, count in self.db.query(
+                AcademicClassStudent.class_id,
+                func.count(func.distinct(AcademicClassStudent.student_id)),
+            ).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(AcademicClassStudent.class_id).all()
+        }
+
+        class_overrides = self.db.query(AcademicClassCourseMapping).filter(
+            AcademicClassCourseMapping.class_id.in_(class_ids),
+            AcademicClassCourseMapping.active.is_(True),
+        ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast()).all()
+        override_by_class: dict[str, AcademicClassCourseMapping] = {}
+        for mapping in class_overrides:
+            override_by_class.setdefault(str(mapping.class_id), mapping)
+        inherited_by_class = AcademicService(self.db).inherited_course_mappings_for_classes(classes)
+
+        behavior_rows = self.db.query(
+            AnalyticsLearningBehaviorSnapshot.class_id,
+            func.count(AnalyticsLearningBehaviorSnapshot.id).label('total_students'),
+            func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'LIKELY_REAL_LEARNING', 1), else_=0)).label('likely_real_learning_count'),
+            func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'POSSIBLE_IDLE', 1), else_=0)).label('possible_idle_count'),
+            func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'POSSIBLE_CHEATING', 1), else_=0)).label('possible_suspicious_count'),
+            func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'INSUFFICIENT_DATA', 1), else_=0)).label('insufficient_data_count'),
+            func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'NORMAL', 1), else_=0)).label('normal_count'),
+            func.max(AnalyticsLearningBehaviorSnapshot.last_activity_at).label('last_activity_at'),
+            func.max(AnalyticsLearningBehaviorSnapshot.calculated_at).label('calculated_at'),
+        ).filter(
+            AnalyticsLearningBehaviorSnapshot.class_id.in_(class_ids),
+        ).group_by(AnalyticsLearningBehaviorSnapshot.class_id).all()
+
+        behavior_by_class: dict[str, dict[str, Any]] = {}
+        for row in behavior_rows:
+            class_id = str(row.class_id)
+            behavior_by_class[class_id] = {
+                'total_students': int(row.total_students or 0),
+                'likely_real_learning_count': int(row.likely_real_learning_count or 0),
+                'possible_idle_count': int(row.possible_idle_count or 0),
+                'possible_suspicious_count': int(row.possible_suspicious_count or 0),
+                'insufficient_data_count': int(row.insufficient_data_count or 0),
+                'normal_count': int(row.normal_count or 0),
+                'last_activity_at': row.last_activity_at.isoformat() if row.last_activity_at else None,
+                'calculated_at': row.calculated_at.isoformat() if row.calculated_at else None,
+            }
+
+        normalized_filter = (classification or 'all').strip().upper()
+        if normalized_filter == 'ALL':
+            normalized_filter = 'all'
+
+        items: list[dict[str, Any]] = []
+        totals = Counter()
+        for klass in classes:
+            class_id = str(klass.id)
+            behavior = behavior_by_class.get(class_id) or self._empty_class_behavior_overview_summary()
+            focus_count = self._class_behavior_focus_count(behavior, normalized_filter)
+            if normalized_filter != 'all' and focus_count <= 0:
+                continue
+            student_count = int(student_counts.get(class_id, 0))
+            dominant = self._dominant_classification(behavior)
+            data_status = 'ready' if int(behavior.get('total_students') or 0) > 0 else 'not_calculated'
+            mapping = override_by_class.get(class_id) or inherited_by_class.get(class_id)
+            item = {
+                'class_id': class_id,
+                'class_code': klass.class_code,
+                'class_name': klass.class_name,
+                'campus': klass.campus,
+                'branch': klass.branch,
+                'openedx_course_id': mapping.openedx_course_id if mapping else None,
+                'openedx_mapping_source': 'class_override' if class_id in override_by_class else ('subject_term_mapping' if mapping else None),
+                'student_count': student_count,
+                'snapshot_count': int(behavior.get('total_students') or 0),
+                'likely_real_learning_count': int(behavior.get('likely_real_learning_count') or 0),
+                'possible_idle_count': int(behavior.get('possible_idle_count') or 0),
+                'possible_suspicious_count': int(behavior.get('possible_suspicious_count') or 0),
+                'insufficient_data_count': int(behavior.get('insufficient_data_count') or 0),
+                'normal_count': int(behavior.get('normal_count') or 0),
+                'focus_count': int(focus_count),
+                'dominant_classification': dominant,
+                'dominant_label': self._safe_label(dominant, ''),
+                'data_status': data_status,
+                'last_activity_at': behavior.get('last_activity_at'),
+                'calculated_at': behavior.get('calculated_at'),
+            }
+            items.append(item)
+            totals['total_classes'] += 1
+            totals['total_students'] += student_count
+            totals['snapshot_count'] += item['snapshot_count']
+            totals['likely_real_learning_count'] += item['likely_real_learning_count']
+            totals['possible_idle_count'] += item['possible_idle_count']
+            totals['possible_suspicious_count'] += item['possible_suspicious_count']
+            totals['insufficient_data_count'] += item['insufficient_data_count']
+            totals['normal_count'] += item['normal_count']
+            totals['not_calculated_class_count'] += 1 if data_status == 'not_calculated' else 0
+
+        total = len(items)
+        safe_limit = min(max(1, int(limit or 500)), 500)
+        safe_offset = max(0, int(offset or 0))
+        return {
+            'total': total,
+            'items': items[safe_offset:safe_offset + safe_limit],
+            'summary': {
+                'total_classes': int(totals.get('total_classes', 0)),
+                'total_students': int(totals.get('total_students', 0)),
+                'snapshot_count': int(totals.get('snapshot_count', 0)),
+                'likely_real_learning_count': int(totals.get('likely_real_learning_count', 0)),
+                'possible_idle_count': int(totals.get('possible_idle_count', 0)),
+                'possible_suspicious_count': int(totals.get('possible_suspicious_count', 0)),
+                'insufficient_data_count': int(totals.get('insufficient_data_count', 0)),
+                'normal_count': int(totals.get('normal_count', 0)),
+                'not_calculated_class_count': int(totals.get('not_calculated_class_count', 0)),
+            },
+            'classification_filter': normalized_filter,
+            'safe_policy': 'signals_only_not_violation',
+        }
+
+    @staticmethod
+    def _empty_class_behavior_overview_summary() -> dict[str, Any]:
+        return {
+            'total_classes': 0,
+            'total_students': 0,
+            'snapshot_count': 0,
+            'likely_real_learning_count': 0,
+            'possible_idle_count': 0,
+            'possible_suspicious_count': 0,
+            'insufficient_data_count': 0,
+            'normal_count': 0,
+            'not_calculated_class_count': 0,
+            'last_activity_at': None,
+            'calculated_at': None,
+        }
+
+    @staticmethod
+    def _class_behavior_focus_count(behavior: dict[str, Any], classification: str) -> int:
+        if classification == 'LIKELY_REAL_LEARNING':
+            return int(behavior.get('likely_real_learning_count') or 0)
+        if classification == 'POSSIBLE_IDLE':
+            return int(behavior.get('possible_idle_count') or 0)
+        if classification == 'POSSIBLE_CHEATING':
+            return int(behavior.get('possible_suspicious_count') or 0)
+        if classification == 'INSUFFICIENT_DATA':
+            return int(behavior.get('insufficient_data_count') or 0)
+        if classification == 'NORMAL':
+            return int(behavior.get('normal_count') or 0)
+        return int(behavior.get('total_students') or 0)
+
+    @staticmethod
+    def _dominant_classification(behavior: dict[str, Any]) -> str:
+        candidates = [
+            ('POSSIBLE_CHEATING', int(behavior.get('possible_suspicious_count') or 0)),
+            ('POSSIBLE_IDLE', int(behavior.get('possible_idle_count') or 0)),
+            ('INSUFFICIENT_DATA', int(behavior.get('insufficient_data_count') or 0)),
+            ('LIKELY_REAL_LEARNING', int(behavior.get('likely_real_learning_count') or 0)),
+            ('NORMAL', int(behavior.get('normal_count') or 0)),
+        ]
+        label, count = max(candidates, key=lambda item: item[1])
+        return label if count > 0 else 'INSUFFICIENT_DATA'
 
     def behavior_summary(self, *, class_id: str | None, course_id: str | None = None) -> dict[str, Any]:
         q = self.db.query(AnalyticsLearningBehaviorSnapshot)

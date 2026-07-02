@@ -427,6 +427,33 @@ def video_students(video_id: str, course_id: str | None = None, class_id: str | 
             return {'video_id': video_id, 'course_id': course_id, 'total': 0, 'items': [], 'message': 'Cần truyền class_id để xem danh sách sinh viên theo phân quyền.'}
     return LearningAnalyticsCoreService(db).video_students(video_id=video_id, course_id=course_id, limit=limit, offset=offset)
 
+
+@router.get('/subjects/{subject_id}/classes/learning-behavior/overview')
+def subject_class_behavior_overview(
+    subject_id: str,
+    term_id: str | None = None,
+    campus: str | None = None,
+    branch: str | None = None,
+    classification: str | None = None,
+    class_id: str | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_dashboard')),
+):
+    allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
+    return LearningAnalyticsCoreService(db).class_behavior_overview(
+        subject_id=subject_id,
+        term_id=term_id,
+        campus=campus,
+        branch=branch,
+        classification=classification,
+        class_id=class_id,
+        allowed_class_ids=allowed_class_ids,
+        limit=limit,
+        offset=offset,
+    )
+
 @router.get('/classes/{class_id}/learning-behavior/summary')
 def class_behavior_summary(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
     _assert_analytics_class_access(db, user, class_id)

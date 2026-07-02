@@ -16,7 +16,7 @@ def test_learning_page_is_result_first_hierarchy_flow():
     assert 'getAcademicTerms' in text
     assert 'getAcademicCampuses' in text
     assert 'getAcademicTeacherSubjects' in text
-    assert 'getAcademicSubjectClasses' in text
+    assert 'getAcademicSubjectClasses' not in text
     assert 'getAnalyticsClassLearningBehavior' in text
     assert 'getAnalyticsStudentLearningBehaviorDetail' in text
 
@@ -50,7 +50,7 @@ def test_result_click_opens_reason_detail_not_reason_columns():
 
 def test_css_has_drawer_and_result_flow_styles():
     text = CSS.read_text(encoding='utf-8')
-    assert 'v25.9.16.7.2.16 — Learning behavior result-first flow' in text
+    assert 'analytics-result-drawer-backdrop' in text
     assert '.analytics-result-drawer-backdrop' in text
     assert '.analytics-learning-flow-filters' in text
     assert '.analytics-result-button:focus-visible' in text

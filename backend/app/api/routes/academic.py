@@ -65,6 +65,8 @@ from app.schemas.academic import (
     AcademicStudentListOut,
     AcademicSubjectOut,
     AcademicSubjectManagementListOut,
+    AcademicSubjectAutoMapAllSyncIn,
+    AcademicSubjectAutoMapAllSyncOut,
     AcademicSubjectCourseAutoMapOut,
     AcademicSyncCounters,
     AcademicSyncRunOut,
@@ -799,6 +801,115 @@ def list_teacher_subjects(
         user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, page=page, page_size=page_size
     )
 
+
+
+@router.post('/subjects/course-mapping/auto-all-sync/jobs', response_model=AcademicSubjectAutoMapAllSyncOut)
+def auto_map_all_subject_courses_and_enqueue_sync_jobs(
+    payload: AcademicSubjectAutoMapAllSyncIn,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    """Auto-map every safe subject in /student-management and enqueue full CMS sync.
+
+    The operation is intentionally best-effort: subjects that cannot be safely
+    mapped are reported and skipped, while mapped subjects/classes are queued
+    through the existing per-class job system to avoid a long blocking request.
+    """
+    service = AcademicService(db)
+    prepared = service.auto_map_subject_courses_for_filter(
+        user,
+        term_id=payload.term_id,
+        branch=payload.branch,
+        campus=payload.campus,
+        search=payload.search,
+        learning_status=payload.learning_status,
+        max_classes=payload.max_classes,
+    )
+    job_ids: list[str] = []
+    jobs_queued = 0
+    jobs_reused = 0
+    jobs_skipped = 0
+    for class_id in prepared.get('class_ids') or []:
+        existing = (
+            db.query(AcademicClassSyncJob)
+            .filter(
+                AcademicClassSyncJob.class_id == class_id,
+                AcademicClassSyncJob.status.in_(['queued', 'running']),
+            )
+            .order_by(AcademicClassSyncJob.created_at.desc())
+            .first()
+        )
+        try:
+            job = _enqueue_class_sync_job(
+                db=db,
+                user=user,
+                class_id=class_id,
+                job_type='full_cms_sync',
+                force=payload.force,
+                limit=payload.limit,
+                mode=payload.mode,
+                auto_map_course=True,
+                sync_learning=payload.sync_learning,
+            )
+        except Exception:
+            jobs_skipped += 1
+            continue
+        job_ids.append(job.id)
+        if existing and existing.id == job.id:
+            jobs_reused += 1
+        else:
+            jobs_queued += 1
+    message = (
+        f"Đã auto map {prepared.get('subject_mapped', 0)} môn mới; "
+        f"{prepared.get('subject_already_mapped', 0)} môn đã map sẵn; "
+        f"đã đưa {jobs_queued} lớp vào hàng đợi đồng bộ CMS/enroll"
+    )
+    if jobs_reused:
+        message += f"; {jobs_reused} lớp đang có job chạy nên dùng lại"
+    if prepared.get('subject_failed'):
+        message += f"; {prepared.get('subject_failed')} môn chưa map được"
+    if prepared.get('capped'):
+        message += f"; đã giới hạn {len(prepared.get('class_ids') or [])}/{prepared.get('class_total', 0)} lớp để tránh quá tải"
+    result = {
+        'ok': True,
+        'message': message,
+        'term_id': payload.term_id,
+        'branch': prepared.get('branch'),
+        'campus': prepared.get('campus'),
+        'subject_total': prepared.get('subject_total', 0),
+        'subject_mapped': prepared.get('subject_mapped', 0),
+        'subject_already_mapped': prepared.get('subject_already_mapped', 0),
+        'subject_failed': prepared.get('subject_failed', 0),
+        'class_total': prepared.get('class_total', 0),
+        'jobs_queued': jobs_queued,
+        'jobs_reused': jobs_reused,
+        'jobs_skipped': jobs_skipped,
+        'capped': bool(prepared.get('capped')),
+        'subject_results': prepared.get('subject_results') or [],
+        'job_ids': job_ids[:200],
+    }
+    log_audit(
+        db,
+        action='academic.subject_course_mapping.auto_all_sync_jobs',
+        status='success',
+        message=message,
+        user=user,
+        target_type='academic_subject_filter',
+        metadata=json_safe_value({
+            'term_id': payload.term_id,
+            'branch': payload.branch,
+            'campus': payload.campus,
+            'subject_total': result['subject_total'],
+            'subject_mapped': result['subject_mapped'],
+            'subject_failed': result['subject_failed'],
+            'class_total': result['class_total'],
+            'jobs_queued': jobs_queued,
+            'jobs_reused': jobs_reused,
+            'jobs_skipped': jobs_skipped,
+            'capped': result['capped'],
+        }),
+    )
+    return result
 
 @router.get('/subjects/{subject_id}/classes', response_model=AcademicClassListOut)
 def list_subject_classes(

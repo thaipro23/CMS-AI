@@ -606,6 +606,40 @@ class AcademicCourseMappingListOut(BaseModel):
     has_next: bool = False
 
 
+
+
+class AcademicSubjectAutoMapAllSyncIn(BaseModel):
+    term_id: str
+    branch: str | None = None
+    campus: str | None = None
+    search: str | None = None
+    learning_status: str | None = None
+    force: bool = True
+    limit: int = Field(500, ge=1, le=500)
+    mode: str | None = Field(None, max_length=50, description='Enrollment mode CMS/Open edX, mặc định audit')
+    sync_learning: bool = True
+    max_classes: int = Field(3000, ge=1, le=5000)
+
+
+class AcademicSubjectAutoMapAllSyncOut(BaseModel):
+    ok: bool
+    message: str
+    term_id: str
+    branch: str | None = None
+    campus: str | None = None
+    subject_total: int = 0
+    subject_mapped: int = 0
+    subject_already_mapped: int = 0
+    subject_failed: int = 0
+    class_total: int = 0
+    jobs_queued: int = 0
+    jobs_reused: int = 0
+    jobs_skipped: int = 0
+    capped: bool = False
+    subject_results: list[dict[str, Any]] = Field(default_factory=list)
+    job_ids: list[str] = Field(default_factory=list)
+
+
 class AcademicSubjectCourseAutoMapOut(BaseModel):
     ok: bool
     status: str

@@ -79,6 +79,7 @@ import {
   AcademicSubject,
   AcademicSubjectManagementListResponse,
   AcademicSubjectCourseAutoMapResult,
+  AcademicSubjectAutoMapAllSyncResult,
   AcademicCampus,
   AcademicClass,
   AcademicClassListResponse,
@@ -104,6 +105,7 @@ import {
   AcademicAssignmentDefenseScore,
   AnalyticsLearningBehaviorSummary,
   AnalyticsLearningBehaviorListResponse,
+  AnalyticsClassBehaviorOverviewResponse,
   AnalyticsStudentLearningBehaviorDetail,
   AnalyticsLearningDashboardResponse,
   AnalyticsClassVideoSummary,
@@ -2031,6 +2033,13 @@ export async function saveAcademicClassAssignmentDefenseScores(headers: HeadersI
   }));
 }
 
+
+function clampAcademicPageSize(value?: number | null, fallback = 50): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(200, Math.floor(parsed)));
+}
+
 export async function getAcademicTrainingTeacherReport(headers: HeadersInit, filters: { termId?: string; campus?: string; branch?: string; search?: string; learningStatus?: string; teacherId?: string; page?: number; pageSize?: number } = {}): Promise<AcademicTrainingTeacherReportResponse> {
   const params = new URLSearchParams();
   if (filters.termId) params.set('term_id', filters.termId);
@@ -2040,7 +2049,7 @@ export async function getAcademicTrainingTeacherReport(headers: HeadersInit, fil
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
   if (filters.teacherId?.trim()) params.set('teacher_id', filters.teacherId.trim());
   params.set('page', String(filters.page || 1));
-  params.set('page_size', String(filters.pageSize || 50));
+  params.set('page_size', String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(await apiFetch(`${API}/academic/training/teachers?${params.toString()}`, { credentials: "include", headers }));
 }
 
@@ -2110,7 +2119,7 @@ export async function getAcademicTeacherClasses(headers: HeadersInit, filters: {
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
-  params.set('page_size', String(filters.pageSize || 50));
+  params.set('page_size', String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(await apiFetch(`${API}/academic/teacher/classes?${params.toString()}`, { credentials: "include", headers }));
 }
 
@@ -2122,7 +2131,7 @@ export async function getAcademicTeacherSubjects(headers: HeadersInit, filters: 
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
-  params.set('page_size', String(filters.pageSize || 50));
+  params.set('page_size', String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(await apiFetch(`${API}/academic/teacher/subjects?${params.toString()}`, { credentials: "include", headers }));
 }
 
@@ -2135,8 +2144,28 @@ export async function getAcademicSubjectClasses(headers: HeadersInit, subjectId:
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== 'all') params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
-  params.set('page_size', String(filters.pageSize || 50));
+  params.set('page_size', String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(await apiFetch(`${API}/academic/subjects/${encodeURIComponent(subjectId)}/classes?${params.toString()}`, { credentials: "include", headers }));
+}
+
+
+export async function autoMapAllAcademicSubjectCoursesAndSync(headers: HeadersInit, payload: { termId: string; branch?: string; campus?: string; search?: string; learningStatus?: string; force?: boolean; limit?: number; syncLearning?: boolean; maxClasses?: number; mode?: string | null }): Promise<AcademicSubjectAutoMapAllSyncResult> {
+  return parseResponse(await apiFetch(`${API}/academic/subjects/course-mapping/auto-all-sync/jobs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      term_id: payload.termId,
+      branch: payload.branch || null,
+      campus: payload.campus || null,
+      search: payload.search || null,
+      learning_status: payload.learningStatus && payload.learningStatus !== 'all' ? payload.learningStatus : null,
+      force: payload.force !== false,
+      limit: Math.max(1, Math.min(500, payload.limit || 500)),
+      sync_learning: payload.syncLearning !== false,
+      max_classes: Math.max(1, Math.min(5000, payload.maxClasses || 3000)),
+      mode: payload.mode || null,
+    }),
+  }));
 }
 
 export async function autoMapAcademicSubjectCourse(headers: HeadersInit, subjectId: string, filters: { termId: string; branch?: string } ): Promise<AcademicSubjectCourseAutoMapResult> {
@@ -2151,7 +2180,7 @@ export async function getAcademicClassStudents(headers: HeadersInit, classId: st
   if (filters.search?.trim()) params.set('search', filters.search.trim());
   if (filters.learningStatus?.trim()) params.set('learning_status', filters.learningStatus.trim());
   params.set('page', String(filters.page || 1));
-  params.set('page_size', String(filters.pageSize || 50));
+  params.set('page_size', String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(await apiFetch(`${API}/academic/classes/${encodeURIComponent(classId)}/students?${params.toString()}`, { credentials: "include", headers }));
 }
 
@@ -2268,6 +2297,23 @@ export async function getAnalyticsClassSessionsProgress(headers: HeadersInit, cl
   const params = new URLSearchParams();
   if (courseId?.trim()) params.set('course_id', courseId.trim());
   return parseResponse(await apiFetch(`${API}/analytics/classes/${encodeURIComponent(classId)}/sessions/progress?${params.toString()}`, { credentials: 'include', headers }));
+}
+
+
+export async function getAnalyticsSubjectClassBehaviorOverview(
+  headers: HeadersInit,
+  subjectId: string,
+  filters: { termId?: string | null; campus?: string | null; branch?: string | null; classification?: string; classId?: string | null; limit?: number; offset?: number } = {},
+): Promise<AnalyticsClassBehaviorOverviewResponse> {
+  const params = new URLSearchParams();
+  if (filters.termId?.trim()) params.set('term_id', filters.termId.trim());
+  if (filters.campus?.trim()) params.set('campus', filters.campus.trim());
+  if (filters.branch?.trim()) params.set('branch', filters.branch.trim());
+  if (filters.classification?.trim() && filters.classification !== 'all') params.set('classification', filters.classification.trim());
+  if (filters.classId?.trim()) params.set('class_id', filters.classId.trim());
+  params.set('limit', String(Math.max(1, Math.min(500, filters.limit || 200))));
+  params.set('offset', String(Math.max(0, filters.offset || 0)));
+  return parseResponse(await apiFetch(`${API}/analytics/subjects/${encodeURIComponent(subjectId)}/classes/learning-behavior/overview?${params.toString()}`, { credentials: 'include', headers }));
 }
 
 export async function getAnalyticsClassLearningBehaviorSummary(headers: HeadersInit, classId: string, courseId?: string | null): Promise<AnalyticsLearningBehaviorSummary> {

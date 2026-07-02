@@ -2297,6 +2297,139 @@ class AcademicService:
             'mapping': self._course_mapping_item(mapping),
         }
 
+
+    def auto_map_subject_courses_for_filter(
+        self,
+        user: UserContext,
+        *,
+        term_id: str,
+        branch: str | None = None,
+        campus: str | None = None,
+        search: str | None = None,
+        learning_status: str | None = None,
+        max_classes: int = 3000,
+    ) -> dict[str, Any]:
+        """Auto-map every safe subject in the current student-management filter.
+
+        This method only creates safe subject-level Course CMS mappings and
+        returns the classes that can now run the existing full CMS sync flow.
+        The route enqueues class jobs so job de-duplication remains centralized.
+        """
+        term = self.db.get(AcademicTerm, term_id)
+        if not term:
+            raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ AP')
+        branch_value = (branch or term.branch or '').strip().lower() or None
+        campus_value = campus.strip().lower() if campus and campus.strip() else None
+        max_classes_value = max(1, min(5000, int(max_classes or 3000)))
+
+        page = 1
+        subjects: list[dict[str, Any]] = []
+        while True:
+            batch = self.list_teacher_subjects(
+                user,
+                term_id=term_id,
+                branch=branch_value,
+                campus=campus_value,
+                search=search,
+                learning_status=learning_status,
+                page=page,
+                page_size=200,
+            )
+            subjects.extend(batch.get('items') or [])
+            if not batch.get('has_next'):
+                break
+            page += 1
+            if page > 50:
+                break
+
+        mapped_subject_ids: set[str] = set()
+        subject_results: list[dict[str, Any]] = []
+        already_mapped = 0
+        auto_mapped = 0
+        failed = 0
+        for item in subjects:
+            subject_id = str(item.get('id') or '')
+            if not subject_id:
+                continue
+            status_value = str(item.get('course_mapping_status') or '').lower()
+            if status_value in {'mapped', 'already_mapped', 'auto_mapped'}:
+                mapped_subject_ids.add(subject_id)
+                already_mapped += 1
+                subject_results.append({
+                    'subject_id': subject_id,
+                    'subject_code': item.get('subject_code'),
+                    'status': 'already_mapped',
+                    'ok': True,
+                    'openedx_course_id': item.get('openedx_course_id'),
+                    'message': 'Môn đã có Course CMS.',
+                })
+                continue
+            try:
+                result = self.auto_map_subject_course(user, term_id=term_id, subject_id=subject_id, branch=branch_value)
+            except Exception as exc:  # keep bulk operation best-effort
+                failed += 1
+                subject_results.append({
+                    'subject_id': subject_id,
+                    'subject_code': item.get('subject_code'),
+                    'status': 'failed',
+                    'ok': False,
+                    'message': str(exc),
+                })
+                continue
+            ok = bool(result.get('ok'))
+            if ok:
+                mapped_subject_ids.add(subject_id)
+                if result.get('status') == 'already_mapped':
+                    already_mapped += 1
+                else:
+                    auto_mapped += 1
+            else:
+                failed += 1
+            mapping = result.get('mapping') if isinstance(result.get('mapping'), dict) else None
+            subject_results.append({
+                'subject_id': subject_id,
+                'subject_code': item.get('subject_code'),
+                'status': result.get('status'),
+                'ok': ok,
+                'openedx_course_id': (mapping or {}).get('openedx_course_id') or item.get('openedx_course_id'),
+                'message': result.get('message'),
+            })
+
+        class_ids: list[str] = []
+        class_total = 0
+        capped = False
+        if mapped_subject_ids:
+            decision = self.access_decision(user)
+            class_query = self.db.query(AcademicClass).filter(
+                AcademicClass.active.is_(True),
+                AcademicClass.term_id == term_id,
+                AcademicClass.subject_id.in_(list(mapped_subject_ids)),
+            )
+            if branch_value:
+                class_query = class_query.filter(func.lower(AcademicClass.branch) == branch_value)
+            if campus_value:
+                class_query = class_query.filter(func.lower(AcademicClass.campus) == campus_value)
+            class_query = self._apply_academic_access_filter(class_query, user, decision)
+            class_total = class_query.count()
+            capped = class_total > max_classes_value
+            classes = class_query.order_by(AcademicClass.subject_id.asc(), AcademicClass.class_code.asc()).limit(max_classes_value).all()
+            class_ids = [cls.id for cls in classes]
+
+        return {
+            'ok': True,
+            'term_id': term_id,
+            'branch': branch_value,
+            'campus': campus_value,
+            'subject_total': len(subjects),
+            'subject_mapped': auto_mapped,
+            'subject_already_mapped': already_mapped,
+            'subject_failed': failed,
+            'class_total': class_total,
+            'class_ids': class_ids,
+            'capped': capped,
+            'subject_results': subject_results,
+        }
+
     def list_teacher_subjects(
         self,
         user: UserContext,

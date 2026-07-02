@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import {
   autoMapAcademicSubjectCourse,
+  autoMapAllAcademicSubjectCoursesAndSync,
   getAcademicCampuses,
   getAcademicTeacherSubjects,
   getAcademicTerms,
@@ -119,6 +120,7 @@ export default function StudentManagementSubjectsPage() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [mappingSubjectId, setMappingSubjectId] = useState('')
+  const [bulkMapping, setBulkMapping] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -173,6 +175,36 @@ export default function StudentManagementSubjectsPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
 
+
+  const runAutoMapAllAndSync = async () => {
+    if (!termId) {
+      setMessage('Cần chọn học kỳ trước khi auto map tất cả.')
+      return
+    }
+    if (!confirm('Auto map tất cả môn trong bộ lọc hiện tại. Môn nào map được sẽ được đưa các lớp vào hàng đợi đồng bộ user CMS + enroll + điểm học tập. Tiếp tục?')) return
+    setBulkMapping(true)
+    setMessage('Đang auto map tất cả và đưa lớp vào hàng đợi đồng bộ...')
+    try {
+      const result = await autoMapAllAcademicSubjectCoursesAndSync(jsonHeaders, {
+        termId,
+        branch,
+        campus,
+        search,
+        learningStatus,
+        force: true,
+        limit: 500,
+        syncLearning: true,
+        maxClasses: 3000,
+      })
+      setMessage(result.message || `Đã xử lý ${result.subject_total} môn, đưa ${result.jobs_queued} lớp vào hàng đợi đồng bộ.`)
+      await loadSubjects()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không auto map tất cả được')
+    } finally {
+      setBulkMapping(false)
+    }
+  }
+
   const runAutoMap = async (subject: AcademicSubjectManagement) => {
     if (!termId) {
       setMessage('Cần chọn học kỳ trước khi tự động map course CMS.')
@@ -201,7 +233,10 @@ export default function StudentManagementSubjectsPage() {
           <h2>Sinh viên & lớp theo môn</h2>
           <p>Tổng hợp môn, lớp và sinh viên theo đúng hệ · học kỳ · cơ sở đang chọn.</p>
         </div>
-        <span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span>
+        <div className="toolbar-actions">
+          <span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span>
+          <button className="btn primary small" type="button" disabled={!termId || bulkMapping || loading} onClick={runAutoMapAllAndSync}>{bulkMapping ? 'Đang auto map tất cả...' : 'Auto map tất cả'}</button>
+        </div>
       </div>
 
       <div className="academic-filter-bar">
@@ -245,7 +280,7 @@ export default function StudentManagementSubjectsPage() {
         <div><span>Cần kiểm tra</span><b>{countLabel(summary.alert_subject_count)}</b><small>Môn có vấn đề học tập cần kiểm tra</small></div>
       </div>
 
-      {message && <div className="academic-inline-error"><b>Không tải được dữ liệu</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Thử lại</button></div>}
+      {message && <div className="academic-inline-error"><b>Thông báo</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Làm mới</button></div>}
 
       <div className="table-wrap academic-table-wrap">
         <table className="data-table academic-data-table subject-table">
