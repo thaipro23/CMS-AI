@@ -1,7 +1,7 @@
 """v25.9.16.7.2.21 bulk academic jobs
 
 Revision ID: 0051_v25_9_16_7_2_21
-Revises: 0050_v25_9_16_7_2_12
+Revises: 0050_v25_9_16_7_2_12_class_scope
 Create Date: 2026-07-02 09:10:00
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = '0051_v25_9_16_7_2_21'
-down_revision = '0050_v25_9_16_7_2_12'
+down_revision = '0050_v25_9_16_7_2_12_class_scope'
 branch_labels = None
 depends_on = None
 
