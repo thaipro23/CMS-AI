@@ -10,9 +10,9 @@ import { AcademicBlock, AcademicClass, AcademicLearningComponentScore } from '..
 const PAGE_SIZE = 50
 
 function mappingSourceLabel(source?: string | null) {
-  if (source === 'subject_term_mapping') return 'Map theo môn'
+  if (source === 'subject_term_mapping') return 'Ghép theo môn'
   if (source === 'class_override') return 'Map riêng lớp'
-  return 'Chưa map'
+  return 'Chưa ghép'
 }
 function mappingClass(source?: string | null) {
   if (source === 'subject_term_mapping') return 'status-pill success'
@@ -171,7 +171,7 @@ function SubjectClassesContent() {
         <div><span>Tổng số lớp</span><b>{summary.class_count || total}</b><small>Theo bộ lọc hiện tại</small></div>
         <div><span>Tổng số sinh viên</span><b>{summary.student_count}</b><small>Không phụ thuộc trang đang xem</small></div>
         <div><span>Đồng bộ CMS</span><b>{summary.cms_synced_count}</b><small>Sinh viên đã match user CMS</small></div>
-        <div><span>Enrollment</span><b>{summary.learning_enrolled_count}</b><small>Đã enroll CMS</small></div>
+        <div><span>Ghi danh CMS</span><b>{summary.learning_enrolled_count}</b><small>Đã ghi danh CMS</small></div>
         <div><span>Course CMS</span><b>{summary.course_mapped_count}/{summary.class_count || total}</b><small>Lớp có mapping hiệu lực</small></div>
       </div>
 

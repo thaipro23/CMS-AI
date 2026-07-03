@@ -2324,6 +2324,7 @@ class AcademicService:
         search: str | None = None,
         learning_status: str | None = None,
         max_classes: int = 3000,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Auto-map every safe subject in the current student-management filter.
 
@@ -2358,7 +2359,8 @@ class AcademicService:
             if page > 50:
                 break
 
-        mapped_subject_ids: set[str] = set()
+        visible_subject_ids = [str(item.get('id') or '') for item in subjects if str(item.get('id') or '')]
+        mapped_subject_ids: set[str] = set(visible_subject_ids) if dry_run else set()
         subject_results: list[dict[str, Any]] = []
         already_mapped = 0
         auto_mapped = 0
@@ -2366,6 +2368,16 @@ class AcademicService:
         for item in subjects:
             subject_id = str(item.get('id') or '')
             if not subject_id:
+                continue
+            if dry_run:
+                subject_results.append({
+                    'subject_id': subject_id,
+                    'subject_code': item.get('subject_code'),
+                    'status': 'scope_only',
+                    'ok': True,
+                    'openedx_course_id': item.get('openedx_course_id'),
+                    'message': 'Môn nằm trong phạm vi được phân quyền.',
+                })
                 continue
             status_value = str(item.get('course_mapping_status') or '').lower()
             if status_value in {'mapped', 'already_mapped', 'auto_mapped'}:
@@ -2444,6 +2456,7 @@ class AcademicService:
             'class_ids': class_ids,
             'capped': capped,
             'subject_results': subject_results,
+            'subject_ids': visible_subject_ids,
         }
 
     def list_teacher_subjects(

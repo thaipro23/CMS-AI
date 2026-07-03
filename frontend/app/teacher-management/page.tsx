@@ -388,7 +388,7 @@ function TeacherManagementContent() {
         <label>Trạng thái
           <select className="input" value={learningStatus} onChange={(event) => { setLearningStatus(event.target.value); setPage(1) }}>
             <option value="all">Tất cả giáo viên</option>
-            <option value="no_course_map">Có lớp chưa map course</option>
+            <option value="no_course_map">Có lớp chưa ghép Course CMS</option>
             <option value="cms_not_synced">Có SV chưa đồng bộ CMS</option>
             <option value="not_fully_enrolled">Có SV chưa enroll</option>
             <option value="no_activity">Có SV chưa học</option>
@@ -410,7 +410,7 @@ function TeacherManagementContent() {
         <div><span>Tổng số lớp</span><b>{countLabel(summary.class_count)}</b><small>Theo hệ · học kỳ · cơ sở đang chọn</small></div>
         <div><span>Tổng số sinh viên</span><b>{countLabel(summary.student_count)}</b><small>Theo bộ lọc hiện tại</small></div>
         <div><span>User CMS match</span><b>{countLabel(summary.cms_synced_count)}</b><small>Theo bộ lọc hiện tại</small></div>
-        <div><span>Enrollment CMS</span><b>{countLabel(summary.learning_enrolled_count)}</b><small>Theo bộ lọc hiện tại</small></div>
+        <div><span>Ghi danh CMS</span><b>{countLabel(summary.learning_enrolled_count)}</b><small>Theo bộ lọc hiện tại</small></div>
         <div><span>Cần theo dõi</span><b>{countLabel(summary.risk_student_count)}</b><small>Nhãn mềm, cần GV xác minh</small></div>
         <div><span>Trễ deadline</span><b>{countLabel(summary.deadline_late_student_count)}</b><small>{countLabel(summary.deadline_late_quiz_count)} lượt quiz trễ</small></div>
         <div><span>Không được thi</span><b>{countLabel(summary.exam_not_eligible_student_count)}</b><small>{countLabel(summary.exam_insufficient_data_student_count)} SV chưa đủ dữ liệu xét thi</small></div>
@@ -462,8 +462,8 @@ function TeacherManagementContent() {
                 </td>
                 <td>
                   <span className={syncTone(item.cms_synced_count, item.student_count)}>User CMS match {ratioLabel(item.cms_synced_count, item.student_count)}</span>
-                  <small>Enrollment CMS {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>
-                  {item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa map Course CMS</small> : <small>Course CMS đã map cho các lớp có dữ liệu</small>}
+                  <small>Ghi danh CMS {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>
+                  {item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa ghép Course CMS</small> : <small>Course CMS đã map cho các lớp có dữ liệu</small>}
                 </td>
                 <td>
                   <b>Completion {percentLabel(item.learning_avg_progress_percent)}</b>

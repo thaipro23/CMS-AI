@@ -209,9 +209,9 @@ function StudentManagementSubjectsContent() {
       setMessage('Cần chọn học kỳ trước khi auto map tất cả.')
       return
     }
-    if (!confirm('Auto map tất cả môn trong bộ lọc hiện tại. Môn nào map được sẽ được đưa các lớp vào hàng đợi đồng bộ user CMS + enroll + điểm học tập. Tiếp tục?')) return
+    if (!confirm('Tự động ghép Course CMS môn trong bộ lọc hiện tại. Môn nào ghép được sẽ được đưa các lớp vào hàng đợi đồng bộ user CMS + ghi danh CMS + điểm học tập. Tiếp tục?')) return
     setBulkMapping(true)
-    setMessage('Đang tạo job Auto map tất cả...')
+    setMessage('Đang tạo job Tự động ghép Course CMS...')
     try {
       const result = await autoMapAllAcademicSubjectCoursesAndSync(jsonHeaders, {
         termId,
@@ -225,10 +225,10 @@ function StudentManagementSubjectsContent() {
         maxClasses: 3000,
       })
       setCurrentBulkJobId(result.job_id || '')
-      setMessage(result.message || `Đã tạo job Auto map tất cả. Xem tiến trình ở /jobs.`)
+      setMessage(result.message || `Đã tạo job Tự động ghép Course CMS. Xem tiến trình ở /jobs.`)
       await loadBulkJobs()
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không tạo được job Auto map tất cả')
+      setMessage(error instanceof Error ? error.message : 'Không tạo được job Tự động ghép Course CMS')
     } finally {
       setBulkMapping(false)
     }
@@ -236,7 +236,7 @@ function StudentManagementSubjectsContent() {
 
   const runAutoMap = async (subject: AcademicSubjectManagement) => {
     if (!termId) {
-      setMessage('Cần chọn học kỳ trước khi tự động map course CMS.')
+      setMessage('Cần chọn học kỳ trước khi tự động ghép Course CMS.')
       return
     }
     setMappingSubjectId(subject.id)
@@ -249,7 +249,7 @@ function StudentManagementSubjectsContent() {
       setTotal(refreshed.total)
       setSummary(normalizeSubjectSummary(refreshed.summary))
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không tự động map được course CMS')
+      setMessage(error instanceof Error ? error.message : 'Không tự động ghép được course CMS')
     } finally {
       setMappingSubjectId('')
     }
@@ -264,7 +264,7 @@ function StudentManagementSubjectsContent() {
         </div>
         <div className="toolbar-actions">
           <span className="status-pill neutral">{counterText(total, page, PAGE_SIZE)}</span>
-          <button className="btn primary small" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? 'Đang tạo job...' : 'Auto map tất cả'}</button>
+          <button className="btn primary small" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? 'Đang tạo job...' : 'Tự động ghép Course CMS'}</button>
         </div>
       </div>
 
@@ -290,7 +290,7 @@ function StudentManagementSubjectsContent() {
         <label>Trạng thái học tập
           <select className="input" value={learningStatus} onChange={(event) => { setLearningStatus(event.target.value); setPage(1) }}>
             <option value="all">Tất cả môn</option>
-            <option value="no_course_map">Chưa map course</option>
+            <option value="no_course_map">Chưa ghép course</option>
             <option value="cms_not_synced">Chưa đồng bộ CMS</option>
             <option value="no_learning_data">Chưa có progress</option>
             <option value="has_alert">Có cảnh báo</option>
@@ -305,12 +305,12 @@ function StudentManagementSubjectsContent() {
         <div><span>Tổng số môn</span><b>{countLabel(summary.subject_count)}</b><small>{counterText(total, page, PAGE_SIZE)}</small></div>
         <div><span>Tổng số lớp</span><b>{countLabel(summary.class_count)}</b><small>Theo bộ lọc hiện tại</small></div>
         <div><span>Tổng số sinh viên theo bộ lọc</span><b>{countLabel(summary.student_count)}</b><small>Theo hệ · học kỳ · cơ sở đang chọn</small></div>
-        <div><span>Course CMS đã map</span><b>{countLabel(summary.course_mapped_count)}/{countLabel(summary.subject_count)}</b><small>{countLabel(summary.course_missing_count)} môn chưa tìm thấy/map course</small></div>
+        <div><span>Course CMS đã ghép</span><b>{countLabel(summary.course_mapped_count)}/{countLabel(summary.subject_count)}</b><small>{countLabel(summary.course_missing_count)} môn chưa tìm thấy/ghép Course CMS</small></div>
         <div><span>Cần kiểm tra</span><b>{countLabel(summary.alert_subject_count)}</b><small>Môn có vấn đề học tập cần kiểm tra</small></div>
       </div>
 
 
-      {bulkJobs.length ? <div className="academic-inline-error success"><b>Auto map đang chạy nền</b><span>{bulkJobs.length} job đang xử lý cho bộ lọc này. Bạn có thể F5, chuyển màn hình hoặc mở Jobs để theo dõi.</span><Link className="btn secondary small" href="/jobs">Xem Jobs</Link></div> : null}
+      {bulkJobs.length ? <div className="academic-inline-error success"><b>Tự động ghép Course CMS đang chạy nền</b><span>{bulkJobs.length} tác vụ nền đang xử lý cho bộ lọc này. Bạn có thể F5, chuyển màn hình hoặc mở trang Tác vụ nền để theo dõi.</span><Link className="btn secondary small" href="/jobs">Xem tác vụ nền</Link></div> : null}
       {currentBulkJobId ? <div className="academic-inline-error success"><b>Đã tạo job</b><span>ID {currentBulkJobId.slice(0, 8)} · tiến trình chạy trong worker, không phụ thuộc trình duyệt.</span><Link className="btn secondary small" href="/jobs">Xem Jobs</Link></div> : null}
 
             {message && <div className="academic-inline-error"><b>Thông báo</b><span>{message}</span><button className="btn secondary small" type="button" onClick={() => loadSubjects()}>Làm mới</button></div>}
@@ -356,7 +356,7 @@ function StudentManagementSubjectsContent() {
               <td>
                 <div className="row-actions">
                   <Link className="btn small primary" href={buildSubjectClassesHref(subject, { termId, termName: selectedTerm?.term_name, branch, campus })}>Xem lớp</Link>
-                  {!['mapped', 'already_mapped', 'auto_mapped'].includes(String(subject.course_mapping_status || '').toLowerCase()) && <button className="btn small secondary" type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? 'Đang map...' : 'Auto map'}</button>}
+                  {!['mapped', 'already_mapped', 'auto_mapped'].includes(String(subject.course_mapping_status || '').toLowerCase()) && <button className="btn small secondary" type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? 'Đang ghép...' : 'Tự động ghép'}</button>}
                 </div>
               </td>
             </tr>)}

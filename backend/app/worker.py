@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from collections import defaultdict
 from celery import Celery
+from sqlalchemy import text
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.core.json_safe import json_safe_value
@@ -1056,6 +1057,39 @@ def academic_ap_sync_task(run_id: str):
         db.close()
 
 
+
+def _worker_user_from_request_json(request_json: dict | None, *, fallback_user_id: str | None, source: str, job_id: str):
+    """Rebuild a safe user context for worker-side RBAC checks.
+
+    Tokens/cookies are intentionally not stored. Business RBAC is read from DB
+    using user_id/username; legacy permissions are only the ones captured at
+    enqueue time, never broader than the requester.
+    """
+    from app.core.rbac import UserContext
+
+    data = (request_json or {}).get('requester_context') if isinstance(request_json, dict) else None
+    data = data if isinstance(data, dict) else {}
+    permissions = data.get('permissions') if isinstance(data.get('permissions'), list) else []
+    course_ids = data.get('course_ids') if isinstance(data.get('course_ids'), list) else None
+    return UserContext(
+        user_id=str(data.get('user_id') or fallback_user_id or 'academic-worker'),
+        username=str(data.get('username') or data.get('user_id') or fallback_user_id or 'academic-worker'),
+        email=data.get('email'),
+        role=str(data.get('role') or 'viewer'),
+        permissions={str(item) for item in permissions},
+        course_ids=[str(item) for item in course_ids] if course_ids is not None else None,
+        raw_claims={'source': source, 'job_id': job_id, 'worker_scope_recheck': True},
+    )
+
+
+def _advisory_xact_lock_for_key(db, key: str) -> None:
+    try:
+        bind = db.get_bind()
+        if bind and bind.dialect.name == 'postgresql':
+            db.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'), {'key': key})
+    except Exception:
+        pass
+
 @celery_app.task(name='academic_class_sync_task')
 def academic_class_sync_task(job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
@@ -1086,18 +1120,22 @@ def academic_class_sync_task(job_id: str):
         job.progress_label = labels.get(job.job_type, 'Đang đồng bộ học vụ')
         db.commit()
 
-        # Access was checked before enqueue. The worker runs with a synthetic admin
-        # context to avoid depending on stale browser/session credentials.
-        worker_user = UserContext(
-            user_id=job.requested_by or 'academic-sync-worker',
-            username=job.requested_by or 'academic-sync-worker',
-            email=None,
-            role='admin',
-            permissions={'view_questions', 'sync_course', 'manage_settings'},
-            course_ids=None,
-            raw_claims={'source': 'celery_academic_class_sync_job', 'job_id': job.id},
+        request_json = job.request_json if isinstance(job.request_json, dict) else {}
+        approved_class_id = str(request_json.get('approved_class_id') or '')
+        if approved_class_id and approved_class_id != str(job.class_id):
+            raise PermissionError('Job đồng bộ lớp vượt ngoài phạm vi đã được duyệt khi enqueue.')
+
+        worker_user = _worker_user_from_request_json(
+            request_json,
+            fallback_user_id=job.requested_by,
+            source='celery_academic_class_sync_job',
+            job_id=job.id,
         )
         service = AcademicService(db)
+        # Re-check RBAC inside worker. For normal jobs this catches stale or
+        # tampered job rows; for bulk child jobs the approved_class_id above
+        # additionally freezes the scope authorized at parent enqueue time.
+        service.assert_can_access_class(worker_user, job.class_id)
         force = bool(job.force)
         limit = max(1, min(500, int(job.limit or 500)))
 
@@ -1114,7 +1152,6 @@ def academic_class_sync_task(job_id: str):
             action = 'academic.learning_sync.class.async'
             label = 'Hoàn tất cập nhật điểm'
         elif job.job_type == 'full_cms_sync':
-            request_json = job.request_json if isinstance(job.request_json, dict) else {}
             result = service.sync_class_full_cms_flow(
                 worker_user,
                 job.class_id,
@@ -1187,9 +1224,13 @@ def _enqueue_academic_class_sync_child_job(
     mode: str | None,
     auto_map_course: bool,
     sync_learning: bool,
+    requester_context: dict | None = None,
+    parent_job_id: str | None = None,
 ):
     """Create/reuse a durable per-class full CMS sync job from a parent bulk job."""
     from app.models.academic import AcademicClassSyncJob
+
+    _advisory_xact_lock_for_key(db, f'academic-class-sync:{class_id}')
 
     existing = (
         db.query(AcademicClassSyncJob)
@@ -1222,6 +1263,9 @@ def _enqueue_academic_class_sync_child_job(
             'auto_map_course': auto_map_course,
             'sync_learning': sync_learning,
             'parent_job_type': 'subject_auto_map_all_sync',
+            'parent_job_id': parent_job_id,
+            'requester_context': requester_context or {},
+            'approved_class_id': class_id,
         }),
         result_json={},
     )
@@ -1264,15 +1308,15 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         db.add(job)
         db.commit()
 
-        worker_user = UserContext(
-            user_id=job.requested_by or 'academic-bulk-worker',
-            username=job.requested_by or 'academic-bulk-worker',
-            email=None,
-            role='admin',
-            permissions={'view_questions', 'sync_course', 'manage_settings'},
-            course_ids=None,
-            raw_claims={'source': 'celery_academic_bulk_operation_job', 'job_id': job.id},
+        worker_user = _worker_user_from_request_json(
+            request_json,
+            fallback_user_id=job.requested_by,
+            source='celery_academic_bulk_operation_job',
+            job_id=job.id,
         )
+        approved_class_ids = {str(item) for item in (request_json.get('approved_class_ids') or []) if str(item)}
+        if not approved_class_ids:
+            raise PermissionError('Job Auto map tất cả không có phạm vi lớp đã được duyệt; dừng để tránh mở rộng quyền.')
         service = AcademicService(db)
         prepared = service.auto_map_subject_courses_for_filter(
             worker_user,
@@ -1284,10 +1328,12 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             max_classes=int(request_json.get('max_classes') or 3000),
         )
 
-        class_ids = list(prepared.get('class_ids') or [])
+        raw_class_ids = [str(item) for item in (prepared.get('class_ids') or [])]
+        class_ids = [item for item in raw_class_ids if item in approved_class_ids]
+        blocked_class_ids = [item for item in raw_class_ids if item not in approved_class_ids]
         class_total = int(prepared.get('class_total') or len(class_ids) or 0)
         result_json = dict(prepared)
-        result_json.update({'jobs_queued': 0, 'jobs_reused': 0, 'jobs_skipped': 0, 'job_ids': []})
+        result_json.update({'jobs_queued': 0, 'jobs_reused': 0, 'jobs_skipped': 0, 'job_ids': [], 'scope_blocked_class_count': len(blocked_class_ids), 'approved_class_count': len(approved_class_ids)})
         job.result_json = json_safe_value(result_json)
         job.progress_current = 40
         job.progress_total = 100
@@ -1312,6 +1358,8 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                     mode=request_json.get('mode'),
                     auto_map_course=True,
                     sync_learning=bool(request_json.get('sync_learning', True)),
+                    requester_context=request_json.get('requester_context') if isinstance(request_json.get('requester_context'), dict) else {},
+                    parent_job_id=job.id,
                 )
                 child_job_ids.append(child_job.id)
                 if reused:
@@ -1345,6 +1393,8 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             'jobs_reused': jobs_reused,
             'jobs_skipped': jobs_skipped,
             'job_ids': child_job_ids[:200],
+            'scope_blocked_class_count': len(blocked_class_ids),
+            'approved_class_count': len(approved_class_ids),
         })
         message = (
             f"Đã auto map {prepared.get('subject_mapped', 0)} môn mới; "

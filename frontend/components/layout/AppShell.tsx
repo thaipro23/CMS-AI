@@ -121,9 +121,10 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 }
 
 function AppFooter() {
+  const version = process.env.NEXT_PUBLIC_APP_VERSION || '25.9.16.7.2.26'
   return <footer className="app-footer app-footer-compact product-footer">
     <div><b>Open edX AI Server</b><span>Ngân hàng đề · Vận hành đào tạo · Open edX CMS</span></div>
-    <div className="footer-links"><span>v25.9.16.7.2.7</span></div>
+    <div className="footer-links"><span>v{version}</span></div>
   </footer>
 }
 

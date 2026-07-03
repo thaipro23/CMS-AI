@@ -14,12 +14,12 @@ def test_learning_behavior_page_supports_direct_teacher_class_links_and_paginati
     assert "useSearchParams" in text
     assert "querySubjectId" in text
     assert "queryClassId" in text
-    assert "directClassFilter" in text
+    assert "exactClassId" in text
     assert "CLASS_OVERVIEW_PAGE_SIZE = 200" in text
     assert "classOverviewPage" in text
-    assert "Xem tất cả lớp của môn" in text
+    assert "Xem lớp" in text
     assert "limit: CLASS_OVERVIEW_PAGE_SIZE" in text
-    assert "offset: (classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE" in text
+    assert "offset: step === 'classes' ? (classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE : 0" in text
     assert "CLASS_OVERVIEW_LIMIT = 500" not in text
 
 

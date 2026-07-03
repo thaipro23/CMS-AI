@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, text
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -321,6 +321,33 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
     return raw.getvalue()
 
 
+
+def _requester_context_json(user: UserContext) -> dict[str, Any]:
+    """Store enough requester identity for Celery to re-check real RBAC.
+
+    Do not store bearer tokens or cookies. The worker can reconstruct a
+    UserContext from this identity and the current DB business-RBAC assignments.
+    """
+    return json_safe_value({
+        'user_id': user.user_id,
+        'username': user.username,
+        'email': user.email,
+        'role': user.role,
+        'permissions': sorted(list(user.permissions or set())),
+        'course_ids': list(user.course_ids or []) if user.course_ids is not None else None,
+    })
+
+
+def _advisory_xact_lock_for_key(db: Session, key: str) -> None:
+    """Best-effort PostgreSQL transaction lock; no-op on SQLite tests."""
+    try:
+        bind = db.get_bind()
+        if bind and bind.dialect.name == 'postgresql':
+            db.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'), {'key': key})
+    except Exception:
+        # Never fail an operator action only because the defensive lock is unavailable.
+        pass
+
 def _enqueue_class_sync_job(
     *,
     db: Session,
@@ -336,6 +363,8 @@ def _enqueue_class_sync_job(
     service = AcademicService(db)
     service.assert_can_access_class(user, class_id)
     clean_limit = max(1, min(500, int(limit or 500)))
+
+    _advisory_xact_lock_for_key(db, f'academic-class-sync:{class_id}')
 
     # Class sync jobs mutate the same CMS/Open edX and snapshot rows. Returning
     # the existing active job makes the operation idempotent across refresh/F5
@@ -363,7 +392,7 @@ def _enqueue_class_sync_job(
         progress_current=0,
         progress_total=100,
         progress_label='Đang chờ xử lý',
-        request_json=json_safe_value({'force': bool(force), 'limit': clean_limit, 'mode': mode, 'auto_map_course': auto_map_course, 'sync_learning': sync_learning}),
+        request_json=json_safe_value({'force': bool(force), 'limit': clean_limit, 'mode': mode, 'auto_map_course': auto_map_course, 'sync_learning': sync_learning, 'requester_context': _requester_context_json(user), 'approved_class_id': class_id}),
         result_json={},
     )
     db.add(job)
@@ -832,6 +861,8 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         'mode': payload.mode,
         'sync_learning': bool(payload.sync_learning),
         'max_classes': max(1, min(5000, int(payload.max_classes or 3000))),
+        'requester_context': _requester_context_json(user),
+        'scope_enforced_in_worker': True,
     })
 
     active_candidates = (
@@ -880,6 +911,26 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
             'subject_results': [],
             'job_ids': [],
         }
+
+    # Snapshot the exact class scope that was authorized at enqueue time.
+    # The worker will only enqueue child jobs for these class IDs, so a replayed
+    # or modified parent job cannot widen itself to other campuses/subjects.
+    try:
+        approved_preview = AcademicService(db).auto_map_subject_courses_for_filter(
+            user,
+            term_id=payload.term_id,
+            branch=branch_value,
+            campus=campus_value,
+            search=payload.search,
+            learning_status=payload.learning_status,
+            max_classes=max(1, min(5000, int(payload.max_classes or 3000))),
+            dry_run=True,
+        )
+        request_json['approved_class_ids'] = list(approved_preview.get('class_ids') or [])
+        request_json['approved_class_total'] = int(approved_preview.get('class_total') or 0)
+        request_json['approved_subject_ids'] = list(approved_preview.get('subject_ids') or [])
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail=f'Không thể xác định phạm vi được phân quyền cho Auto map tất cả: {exc}')
 
     job = AcademicBulkOperationJob(
         job_type='subject_auto_map_all_sync',

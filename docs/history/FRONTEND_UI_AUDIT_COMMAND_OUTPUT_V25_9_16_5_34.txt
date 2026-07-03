@@ -1,0 +1,25 @@
+=== v34 verification ===
+Thu Jun 25 05:08:34 UTC 2026
+--- typecheck ---
+typecheck OK
+--- python compile ---
+python compile OK
+--- token presence ---
+OK #06050A
+OK #19182A
+OK #2B2A39
+OK #F1F0FA
+OK #B7B5C9
+OK #8B899C
+OK #6366F1
+OK #A78BFA
+OK #3B82F6
+OK #10B981
+OK #FBBF24
+OK #EF4444
+OK #EC4899
+OK #22D3EE
+--- hard hex outside globals ---
+OK none
+--- box-shadow app/components ---
+OK none

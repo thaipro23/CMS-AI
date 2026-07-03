@@ -184,7 +184,7 @@ export default function TeacherClassesPage() {
         <label>Trạng thái lớp
           <select className="input" value={learningStatus} onChange={(event) => setLearningStatus(event.target.value)}>
             <option value="all">Tất cả lớp</option>
-            <option value="no_course_map">Lớp chưa map course</option>
+            <option value="no_course_map">Lớp chưa ghép Course CMS</option>
             <option value="cms_not_synced">Có SV chưa đồng bộ CMS</option>
             <option value="not_fully_enrolled">Có SV chưa enroll</option>
             <option value="no_activity">Có SV chưa học</option>
@@ -201,7 +201,7 @@ export default function TeacherClassesPage() {
         <div><span>Lớp</span><b>{countLabel(teacher.class_count)}</b><small>{teacher.subject_count} môn</small></div>
         <div><span>Sinh viên</span><b>{countLabel(teacher.student_count)}</b><small>{countLabel(teacher.unique_student_count)} SV riêng biệt</small></div>
         <div><span>Đã đồng bộ CMS</span><b>{ratioLabel(teacher.cms_synced_count, teacher.student_count)}</b><small>User CMS đã match</small></div>
-        <div><span>Đã enroll</span><b>{ratioLabel(teacher.learning_enrolled_count, teacher.student_count)}</b><small>Enrollment CMS</small></div>
+        <div><span>Đã enroll</span><b>{ratioLabel(teacher.learning_enrolled_count, teacher.student_count)}</b><small>Ghi danh CMS</small></div>
         <div><span>Course completion TB</span><b>{percentLabel(teacher.learning_avg_progress_percent)}</b><small>Điểm tổng {score10Label(teacher.learning_avg_grade_10)}</small></div>
         <div><span>Cần theo dõi</span><b>{countLabel(teacher.risk_student_count)}</b><small>Không đếm trùng SV</small></div>
       </div>}
@@ -218,8 +218,8 @@ export default function TeacherClassesPage() {
               <td className="stt-cell">{index + 1}</td>
               <td><b>{cls.class_code}</b><small>{cls.term_name}{cls.block_name ? ` · ${cls.block_name}` : ''}</small></td>
               <td><b>{cls.subject_code}</b><small>{cls.subject_name}</small></td>
-              <td>{cls.openedx_course_id ? <><b>{cls.openedx_course_id}</b><small>{cls.openedx_mapping_source}</small></> : <span className="status-pill warning">Chưa map</span>}</td>
-              <td><b>{cls.student_count} SV</b><small>CMS {ratioLabel(cls.cms_synced_count, cls.student_count)} · Enroll {ratioLabel(cls.learning_enrolled_count, cls.student_count)}</small></td>
+              <td>{cls.openedx_course_id ? <><b>{cls.openedx_course_id}</b><small>{cls.openedx_mapping_source}</small></> : <span className="status-pill warning">Chưa ghép</span>}</td>
+              <td><b>{cls.student_count} SV</b><small>CMS {ratioLabel(cls.cms_synced_count, cls.student_count)} · Ghi danh {ratioLabel(cls.learning_enrolled_count, cls.student_count)}</small></td>
               <td><b>{countLabel(cls.relearn_student_count)} SV</b><small>{countLabel(cls.total_relearn_count)} lượt học lại</small></td>
               <td><b>Course completion {percentLabel(cls.learning_avg_progress_percent)}</b><small>Điểm tổng {score10Label(cls.learning_avg_grade_10)}</small></td>
               {columns.map((column) => <td key={`${cls.class_id}-${column.key}`} className="component-grade-cell"><b>{componentScoreText(classComponentScore(cls, column))}</b></td>)}

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
+from app.core.rbac import UserContext, require_permission
 from app.db.session import engine
 from app.services.openedx_student_insight import OpenEdXConnectorClient
 
@@ -17,7 +18,7 @@ def health():
 
 
 @router.get('/health/db')
-def db_health():
+def db_health(user: UserContext = Depends(require_permission('manage_settings'))):
     """Lightweight DB readiness check for production deploy verification.
 
     Do not expose secrets or raw connection URLs. The pool status string is useful
@@ -59,7 +60,7 @@ def build_health():
 
 
 @router.get('/health/openedx-connector/config')
-def openedx_connector_config_health():
+def openedx_connector_config_health(user: UserContext = Depends(require_permission('manage_settings'))):
     """Safe connector configuration summary; never expose secrets."""
     client = OpenEdXConnectorClient()
     return {
@@ -75,7 +76,7 @@ def openedx_connector_config_health():
 
 
 @router.get('/health/analytics')
-def analytics_health():
+def analytics_health(user: UserContext = Depends(require_permission('view_jobs'))):
     """Read-only analytics runtime check for production smoke tests."""
     from pathlib import Path
     from app.db.session import SessionLocal

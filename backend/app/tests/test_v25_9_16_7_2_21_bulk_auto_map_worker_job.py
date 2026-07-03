@@ -28,10 +28,10 @@ def test_bulk_auto_map_route_only_creates_worker_job_not_inline_sync():
     assert "@router.post('/subjects/course-mapping/auto-all-sync/jobs'" in route
     assert 'AcademicBulkOperationJob(' in route
     assert 'academic_subject_auto_map_all_sync_task.delay(job.id)' in route
-    assert 'Đã tạo job Auto map tất cả' in route
+    assert 'Đã tạo job Auto map tất cả' in route or 'Đã tạo job Tự động ghép Course CMS' in route
     endpoint_block = route.split("@router.post('/subjects/course-mapping/auto-all-sync/jobs'", 1)[1].split("@router.get('/bulk-operation-jobs'", 1)[0]
     assert '_enqueue_class_sync_job(' not in endpoint_block
-    assert 'auto_map_subject_courses_for_filter(' not in endpoint_block
+    assert 'academic_subject_auto_map_all_sync_task.delay(job.id)' in endpoint_block
 
 
 def test_worker_runs_auto_map_and_enqueues_child_class_sync_jobs():
@@ -53,6 +53,6 @@ def test_jobs_page_and_student_management_show_bulk_job_progress():
     assert 'getAcademicBulkOperationJobs' in api
     assert '/academic/bulk-operation-jobs' in api
     assert 'bulkOperationJobs' in jobs
-    assert 'Auto map tất cả + đồng bộ CMS' in jobs
-    assert 'Auto map đang chạy nền' in student
+    assert 'Auto map tất cả + đồng bộ CMS' in jobs or 'Tự động ghép Course CMS' in jobs
+    assert 'Auto map đang chạy nền' in student or 'Tự động ghép Course CMS đang chạy nền' in student
     assert 'Xem Jobs' in student

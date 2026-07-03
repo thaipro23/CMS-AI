@@ -132,12 +132,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     fetch(`${API}/rbac/me`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: 'include' })
       .then(async (response) => {
         if (!response.ok) throw new Error(response.statusText)
-        return response.json() as Promise<{ user_id?: string; effective_legacy_role?: Role | string; role?: Role | string; permissions?: string[] }>
+        return response.json() as Promise<{ user_id?: string; effective_legacy_role?: Role | string; role?: Role | string; permissions?: string[]; business_permissions?: string[] }>
       })
       .then((data) => {
         if (cancelled) return
         setCookieAuthenticated(true)
-        setBusinessPermissions(Array.isArray(data.permissions) ? data.permissions : [])
+        setBusinessPermissions(Array.isArray(data.business_permissions) ? data.business_permissions : (Array.isArray(data.permissions) ? data.permissions : []))
         const effectiveRole = (data.effective_legacy_role || data.role) as Role | undefined
         if (effectiveRole && ROLE_PERMISSIONS[effectiveRole]) setRoleState(effectiveRole)
         if (data.user_id) setUserIdState(String(data.user_id))

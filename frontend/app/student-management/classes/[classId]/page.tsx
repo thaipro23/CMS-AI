@@ -48,7 +48,7 @@ function cmsSyncClass(status?: string | null) {
 function mappingSourceLabel(source?: string | null) {
   if (source === 'subject_term_mapping') return 'Kế thừa từ môn'
   if (source === 'class_override') return 'Map riêng lớp'
-  return 'Chưa map'
+  return 'Chưa ghép'
 }
 function normalizePercentValue(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) return null
@@ -119,7 +119,7 @@ function componentDisplayName(score: AcademicLearningComponentScore) {
 function enrollmentLabel(value?: string | null) {
   const status = (value || 'unknown').toLowerCase()
   if (status === 'enrolled') return 'Đã enroll'
-  if (status === 'inactive') return 'Enroll inactive'
+  if (status === 'inactive') return 'Ghi danh inactive'
   if (status === 'not_enrolled') return 'Chưa enroll'
   if (status === 'missing_user') return 'Chưa có user CMS'
   return 'Chưa cập nhật'
@@ -383,7 +383,7 @@ function ClassDetailContent() {
 
   const recalculateOnlineAnalytics = async () => {
     if (!effectiveCourseId) {
-      setOnlineMessage('Chưa map Course CMS cho lớp này.')
+      setOnlineMessage('Chưa ghép Course CMS cho lớp này.')
       return
     }
     setOnlineRecalculating(true)
@@ -435,7 +435,7 @@ function ClassDetailContent() {
     if (type === 'full_cms_sync') return 'Đồng bộ full CMS'
     if (type === 'learning_sync') return 'Cập nhật điểm'
     if (type === 'cms_sync_check') return 'Kiểm tra tài khoản CMS'
-    if (type === 'cms_enrollment_sync') return 'Kiểm tra enroll CMS'
+    if (type === 'cms_enrollment_sync') return 'Kiểm tra ghi danh CMS'
     return 'Đồng bộ CMS'
   }
 

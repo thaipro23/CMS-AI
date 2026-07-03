@@ -22,7 +22,7 @@ def test_student_management_has_auto_map_all_button_and_api_call():
     text = STUDENT_PAGE.read_text(encoding='utf-8')
     assert 'autoMapAllAcademicSubjectCoursesAndSync' in text
     assert 'runAutoMapAllAndSync' in text
-    assert 'Auto map tất cả' in text
+    assert 'Tự động ghép Course CMS' in text
     assert 'syncLearning: true' in text
     assert 'maxClasses: 3000' in text
 
