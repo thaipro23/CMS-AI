@@ -44,13 +44,15 @@ def test_student_management_total_kpi_labels_are_plain() -> None:
     assert 'Tổng số môn' in source
     assert 'Tổng số lớp' in source
     assert 'Tổng số sinh viên theo bộ lọc' in source
-    assert 'Course CMS đã map' in source
+    assert 'Course CMS đã ghép' in source
     assert 'Cần kiểm tra' in source
 
 
-def test_teacher_report_endpoint_bypasses_stale_cache_for_dynamic_counts() -> None:
+def test_teacher_report_endpoint_uses_cache_unless_fresh_requested() -> None:
     source = read('backend/app/api/routes/academic.py')
     route_start = source.index("@router.get('/training/teachers')")
     route_end = source.index("@router.get('/training/teachers/export')")
     route = source[route_start:route_end]
-    assert 'use_cache=False' in route
+    assert 'fresh: bool = Query(False' in route
+    assert 'include_classes: bool = Query(False' in route
+    assert 'use_cache=not fresh' in route

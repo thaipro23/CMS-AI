@@ -19,6 +19,7 @@ class SessionComponent:
 @dataclass(slots=True)
 class CourseSessionMapping:
     session_index: int
+    session_type: str
     session_key: str
     session_title: str
     week_index: int
@@ -74,6 +75,22 @@ def infer_deadline(start_date: datetime | None, week_index: int) -> datetime | N
     return start_date + timedelta(days=7 * week_index) - timedelta(seconds=1)
 
 
+def classify_session_type(title: str | None, block_type: str | None = None, components: list[SessionComponent] | None = None) -> str:
+    text = str(title or '').strip().lower()
+    if re.search(r'(final\s*test|final|thi\s*cuối|kiem\s*tra\s*cuoi|kiểm\s*tra\s*cuối)', text, re.I):
+        return 'FINAL_TEST'
+    if re.search(r'(assignment|asm|bài\s*tập\s*lớn|bai\s*tap\s*lon)', text, re.I):
+        return 'ASSIGNMENT'
+    comps = components or []
+    has_video = any(c.block_type == 'video' for c in comps)
+    has_quiz = any(c.block_type in {'problem', 'quiz', 'sequential_quiz'} for c in comps)
+    if has_video or has_quiz or re.search(r'(?:bài|bai|session|lesson)\s*\d+', text, re.I):
+        return 'LEARNING_SESSION'
+    if comps:
+        return 'SUPPLEMENTARY'
+    return 'UNKNOWN'
+
+
 def _natural_session_sort_key(title: str, index: int) -> tuple[int, int, str]:
     m = re.search(r'(?:bài|bai|session|lesson)\s*(\d+)', (title or '').lower())
     return (int(m.group(1)) if m else 10_000 + index, index, title or '')
@@ -124,5 +141,6 @@ def build_session_mappings_from_blocks(
                 part_index=child_idx if btype == 'video' else None,
                 metadata=child,
             ))
-        mappings.append(CourseSessionMapping(one_based, usage_key, title, week, deadline, source, quality, components))
+        session_type = classify_session_type(title, str(block.get('block_type') or block.get('type') or ''), components)
+        mappings.append(CourseSessionMapping(one_based, session_type, usage_key, title, week, deadline, source, quality, components))
     return mappings

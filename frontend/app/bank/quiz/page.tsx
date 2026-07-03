@@ -51,8 +51,8 @@ function isErrorMessage(message: string) {
 function defaultActionFromMapping(item: QuizMapping): QuizChapterAction {
   if (item.action) return item.action
   const title = String(item.chapter_title || '').toLowerCase()
-  if (title.includes('assignment') || title.includes('asm')) return 'assignment'
-  if (title.includes('final')) return 'skip'
+  if (title.includes('final')) return 'final_test'
+  if (title.includes('assignment') || title.includes('asm')) return 'skip'
   return 'quiz'
 }
 
@@ -60,8 +60,8 @@ function actionLabel(action: QuizChapterAction) {
   switch (action) {
     case 'quiz': return 'Tạo Quiz'
     case 'final_test': return 'Tạo Final test'
-    case 'assignment': return 'Không tạo quiz · Assignment'
-    default: return 'Không tạo quiz'
+    case 'assignment': return 'Không tạo'
+    default: return 'Không tạo'
   }
 }
 
@@ -75,7 +75,7 @@ function actionStatusClass(item: EffectiveQuizMapping) {
 }
 
 function actionStatusText(item: EffectiveQuizMapping) {
-  if (!item.effectiveRequiresQuiz) return item.action === 'assignment' ? 'Chỉ nội dung/Assignment' : 'Không tạo quiz'
+  if (!item.effectiveRequiresQuiz) return 'Không tạo'
   if (item.effectiveReady) return item.action === 'final_test' ? 'Sẵn sàng tạo Final test' : 'Sẵn sàng tạo Quiz'
   return 'Cần Release + Section'
 }
@@ -364,7 +364,7 @@ export default function BankQuizPage() {
       <div>
         <div className="eyebrow">Open edX assessment</div>
         <h1>Map khóa học và chọn bài cần tạo Quiz</h1>
-        <p>Không bắt buộc mọi bài đều có Quiz. Bài Assignment/nội dung có thể bỏ qua; Final test có cấu hình riêng và tạo riêng khi cần.</p>
+        <p>Không bắt buộc mọi bài đều tạo bài kiểm tra. Ở cột Trạng thái, chọn Tạo Quiz, Tạo Final test hoặc Không tạo.</p>
       </div>
       <div className="button-row">
         <Link className="btn secondary" href="/bank">Tổng quan</Link>
@@ -380,7 +380,7 @@ export default function BankQuizPage() {
           <div>
             <div className="eyebrow">Cấu hình</div>
             <h2>Version và phạm vi tạo</h2>
-            <p>Chọn version môn, sau đó đánh dấu từng bài: tạo Quiz, tạo Final test hoặc không tạo quiz.</p>
+            <p>Chọn version môn, sau đó đặt Trạng thái cho từng bài: Tạo Quiz, Tạo Final test hoặc Không tạo.</p>
           </div>
           {applied ? <span className="status success">Đã lưu cấu hình</span> : autoMap ? <span className="status warning">Preview</span> : <span className="status pending">Chưa kiểm tra</span>}
         </div>
@@ -434,7 +434,7 @@ export default function BankQuizPage() {
           <div className="section-heading result-heading">
             <div>
               <h2>Kết quả map</h2>
-              <p className="muted">Chỉ các dòng chọn Tạo Quiz/Final test mới cần Release published. Assignment/nội dung không chặn lưu cấu hình.</p>
+              <p className="muted">Chỉ các dòng chọn Tạo Quiz hoặc Tạo Final test mới cần Release published. Dòng Không tạo không chặn lưu cấu hình.</p>
             </div>
             <span className={classNames('status', autoMap.can_apply ? 'success' : 'warning')}>{autoMap.can_apply ? 'Có thể lưu cấu hình' : 'Cần xử lý'}</span>
           </div>
@@ -442,26 +442,25 @@ export default function BankQuizPage() {
           {autoMap.warnings?.length ? <div className="alert warning"><b>Cảnh báo</b><ul>{autoMap.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
           <div className="table-wrap quiz-map-table-wrap">
             <table className="data-table compact-table quiz-map-table">
-              <thead><tr><th>STT</th><th>Bài trong ngân hàng</th><th>Tạo gì</th><th>Mục trong khóa học</th><th>Bộ đề</th><th>Khớp</th><th>Trạng thái</th><th></th></tr></thead>
+              <thead><tr><th>STT</th><th>Bài trong ngân hàng</th><th>Mục trong khóa học</th><th>Bộ đề</th><th>Khớp</th><th>Trạng thái</th><th></th></tr></thead>
               <tbody>{effectiveMappings.map((item, index) => <tr key={item.chapter_id} className={item.effectiveReady || !item.effectiveRequiresQuiz ? 'row-ready' : 'row-blocked'}>
                 <td className="stt-cell">{index + 1}</td>
                 <td><b>{item.chapter_title}</b></td>
-                <td>
-                  <select className="input compact-select" value={item.action} disabled={busy || Boolean(creatingKey)} onChange={(event) => {
-                    const next = event.target.value as QuizChapterAction
-                    setChapterActions((current) => ({ ...current, [item.chapter_id]: next }))
-                  }} aria-label={`Chọn cách xử lý ${item.chapter_title}`}>
-                    <option value="quiz">Tạo Quiz</option>
-                    <option value="skip">Không tạo quiz</option>
-                    <option value="assignment">Assignment/nội dung</option>
-                    <option value="final_test">Tạo Final test</option>
-                  </select>
-                  <small>{actionLabel(item.action)}</small>
-                </td>
                 <td>{item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small><code>{item.openedx_section_id}</code></small></> : <span className="status danger">Chưa tìm thấy</span>}</td>
                 <td>{item.release_code ? <><b>{item.release_code}</b><small>{item.openedx_library_key}</small></> : item.effectiveRequiresQuiz ? <span className="status danger">Chưa publish</span> : <span className="muted">Không cần Release</span>}</td>
                 <td>{percent(item.match_score)}<small>{item.match_reason}</small></td>
-                <td><span className={classNames('status', actionStatusClass(item))}>{actionStatusText(item)}</span>{item.course_chapter_mapping_id ? <small>Đã lưu cấu hình</small> : applied && item.effectiveRequiresQuiz ? <small>Cần bấm Lưu cấu hình</small> : null}</td>
+                <td>
+                  <select className="input compact-select" value={item.action === 'assignment' ? 'skip' : item.action} disabled={busy || Boolean(creatingKey)} onChange={(event) => {
+                    const next = event.target.value as QuizChapterAction
+                    setChapterActions((current) => ({ ...current, [item.chapter_id]: next }))
+                  }} aria-label={`Chọn trạng thái ${item.chapter_title}`}>
+                    <option value="quiz">Tạo Quiz</option>
+                    <option value="final_test">Tạo Final test</option>
+                    <option value="skip">Không tạo</option>
+                  </select>
+                  <span className={classNames('status', actionStatusClass(item))}>{actionStatusText(item)}</span>
+                  {item.course_chapter_mapping_id ? <small>Đã lưu cấu hình</small> : applied && item.effectiveRequiresQuiz ? <small>Cần bấm Lưu cấu hình</small> : null}
+                </td>
                 <td><button className="btn small" disabled={!item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final test' : 'Tạo Quiz'}</button></td>
               </tr>)}</tbody>
             </table>
@@ -501,7 +500,7 @@ export default function BankQuizPage() {
           <div>
             <div className="eyebrow">Cấu hình tạo bài kiểm tra</div>
             <h2>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : `${actionLabel(createModal.item.action)} cho ${createModal.item.chapter_title}`}</h2>
-            <p className="muted">Quiz tự luyện và Final test có cấu hình riêng. Assignment/nội dung không tạo từ màn này.</p>
+            <p className="muted">Quiz tự luyện và Final test có cấu hình riêng. Dòng Không tạo sẽ được bỏ qua.</p>
           </div>
           <button className="btn secondary" type="button" onClick={() => setCreateModal(null)}>Đóng</button>
         </div>

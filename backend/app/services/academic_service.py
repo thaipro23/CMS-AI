@@ -3004,6 +3004,21 @@ class AcademicService:
                 return True
         return False
 
+    @staticmethod
+    def _teacher_report_public_item(item: dict[str, Any], *, include_classes: bool) -> dict[str, Any]:
+        """Return a UI-safe teacher row.
+
+        The teacher-management list page does not render per-class payloads.
+        Keeping thousands of nested classes in every response made the API
+        return hundreds of thousands of JSON lines for large all-campus scopes.
+        Class details are returned only when the caller explicitly requests
+        include_classes=true, e.g. the teacher drill-down page.
+        """
+        payload = dict(item or {})
+        if not include_classes:
+            payload.pop('classes', None)
+        return payload
+
     def _teacher_report_summary_from_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         total_students = sum(int(item.get('student_count') or 0) for item in items)
         return {
@@ -3040,6 +3055,7 @@ class AcademicService:
         decision: AccessDecision,
         page: int,
         page_size: int,
+        include_classes: bool = False,
     ) -> dict[str, Any] | None:
         scope_key = self._teacher_report_scope_key(term_id, branch, campus)
         rows = self.db.query(AcademicTeacherReportSummary).filter(AcademicTeacherReportSummary.scope_key == scope_key).all()
@@ -3066,7 +3082,7 @@ class AcademicService:
         items.sort(key=lambda item: (str(item.get('teacher_name') or ''), str(item.get('teacher_username') or '')))
         total = len(items)
         total_pages = math.ceil(total / page_size) if total else 0
-        page_items = items[(page - 1) * page_size:page * page_size]
+        page_items = [self._teacher_report_public_item(item, include_classes=include_classes) for item in items[(page - 1) * page_size:page * page_size]]
         latest_built_at = max((row.built_at for row in rows if row.built_at), default=None)
         return {
             'items': page_items,
@@ -3107,6 +3123,7 @@ class AcademicService:
             page_size=200,
             include_all=True,
             include_students=False,
+            include_classes=True,
             use_cache=False,
         )
         now = datetime.utcnow()
@@ -3173,6 +3190,7 @@ class AcademicService:
         page_size: int = 50,
         include_all: bool = False,
         include_students: bool = False,
+        include_classes: bool = False,
         use_cache: bool = True,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
@@ -3219,6 +3237,7 @@ class AcademicService:
                 decision=decision,
                 page=page,
                 page_size=page_size,
+                include_classes=include_classes or bool(teacher_id),
             )
             if cached_report is not None:
                 return cached_report
@@ -3649,8 +3668,10 @@ class AcademicService:
                 'status_counts': status_counts,
                 'learning_alerts': learning_alerts,
                 'last_synced_at': bucket['last_synced_at'],
-                'classes': sorted(bucket['class_items'], key=lambda item: (str(item.get('subject_code') or ''), str(item.get('class_code') or ''))),
             }
+            if include_classes or include_students or include_all:
+                item['classes'] = sorted(bucket['class_items'], key=lambda item: (str(item.get('subject_code') or ''), str(item.get('class_code') or '')))
+
             items.append(item)
 
         def matches_training_filter(item: dict[str, Any]) -> bool:
@@ -3683,7 +3704,7 @@ class AcademicService:
                 page_items = filtered_items
                 total_pages = 1 if total else 0
             else:
-                page_items = filtered_items[(page - 1) * page_size: page * page_size]
+                page_items = [self._teacher_report_public_item(item, include_classes=include_classes or bool(teacher_id)) for item in filtered_items[(page - 1) * page_size: page * page_size]]
                 total_pages = math.ceil(total / page_size) if total else 0
         # Summary counters intentionally remain teacher-assignment scoped for class/student
         # workload, but warning counts are bounded and non-overlapping per teacher.

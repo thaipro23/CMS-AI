@@ -63,8 +63,8 @@ def test_bank_quiz_frontend_has_action_selector_and_separate_final_config():
 
     assert "QuizChapterAction" in page
     assert "Tạo Final test" in page
-    assert "Assignment/nội dung" in page
-    assert "Không tạo quiz" in page
+    assert "Assignment/nội dung" not in page
+    assert "Không tạo" in page
     assert "finalConfig" in page
     assert "quizConfig" in page
     assert "chapter_plan: actionPlan" in page

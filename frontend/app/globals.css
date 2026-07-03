@@ -7587,3 +7587,102 @@ body.ai-theme-dark .analytics-three-step-flow-page .analytics-stepper button.act
   border-color: #60a5fa;
   color: #bfdbfe;
 }
+
+/* v25.9.16.7.2.29 — unified notices + equal action buttons */
+.notice,
+.academic-inline-notice,
+.academic-inline-error {
+  border-radius: 12px;
+  padding: 9px 11px;
+  line-height: 1.35;
+  box-shadow: none;
+}
+.notice strong,
+.academic-inline-notice b,
+.academic-inline-error b {
+  font-size: 12px;
+  line-height: 1.25;
+}
+.notice p,
+.academic-inline-notice span,
+.academic-inline-error span {
+  font-size: 12px;
+  line-height: 1.35;
+}
+.notice-success,
+.academic-inline-notice.success,
+.academic-inline-error.success,
+.alert.success {
+  border-color: #86efac !important;
+  background: #f0fdf4 !important;
+  color: #166534 !important;
+}
+.notice-success p,
+.academic-inline-notice.success span,
+.academic-inline-error.success span { color: #166534 !important; }
+.notice-error,
+.academic-inline-notice.error,
+.academic-inline-error.error,
+.alert.danger,
+.alert.error {
+  border-color: #fca5a5 !important;
+  background: #fef2f2 !important;
+  color: #991b1b !important;
+}
+.notice-error p,
+.academic-inline-notice.error span,
+.academic-inline-error.error span { color: #991b1b !important; }
+.notice-warning,
+.academic-inline-notice.warning,
+.academic-inline-error.warning,
+.alert.warning {
+  border-color: #fde68a !important;
+  background: #fffbeb !important;
+  color: #92400e !important;
+}
+.notice-info,
+.academic-inline-notice.info,
+.academic-inline-error.info,
+.alert.info {
+  border-color: #bfdbfe !important;
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+}
+.academic-inline-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.academic-inline-notice span { flex: 1; min-width: 180px; }
+.notice-action-btn { min-width: 112px; }
+.subject-table .row-actions,
+.teacher-row-actions-stack,
+.teacher-management-page td:last-child,
+.student-management-page td:last-child {
+  align-items: stretch;
+}
+.subject-table .row-actions,
+.teacher-row-actions-stack {
+  display: grid;
+  gap: 7px;
+  width: 112px;
+  min-width: 112px;
+}
+.subject-table .row-actions .btn,
+.teacher-row-actions-stack .btn,
+.teacher-row-action,
+.notice-action-btn {
+  width: 100%;
+  min-height: 34px;
+  justify-content: center;
+  text-align: center;
+  padding-left: 10px;
+  padding-right: 10px;
+  white-space: nowrap;
+}
+.subject-table td:last-child,
+.teacher-management-page td:last-child { width: 136px; }

@@ -643,6 +643,8 @@ def list_training_teacher_report(
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
     teacher_id: str | None = Query(None, description='Lọc đúng một giáo viên để mở trang lớp'),
+    include_classes: bool = Query(False, description='Chỉ bật khi mở chi tiết giảng viên để tránh payload lớn ở danh sách'),
+    fresh: bool = Query(False, description='Bỏ cache khi cần đối soát số liệu mới nhất'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(_require_academic_view_permission),
@@ -658,7 +660,8 @@ def list_training_teacher_report(
         teacher_id=teacher_id,
         page=page,
         page_size=page_size,
-        use_cache=False,
+        include_classes=include_classes or bool(teacher_id),
+        use_cache=not fresh,
     )
 
 

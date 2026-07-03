@@ -407,7 +407,7 @@ def learning_dashboard(
     _assert_analytics_class_access(db, user, class_id)
     allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
     result = LearningAnalyticsCoreService(db).learning_dashboard(campus=campus, branch=branch, course_id=course_id, class_id=class_id, classification=classification, date_from=date_from, date_to=date_to, limit=limit, allowed_class_ids=allowed_class_ids)
-    if classification == 'POSSIBLE_CHEATING':
+    if classification == 'POSSIBLE_ANOMALY':
         log_audit(db, action='analytics.learning_behavior.view_attention_list', status='success', message='Xem danh sách dấu hiệu bất thường cần kiểm tra', user=user, course_id=course_id, target_type='learning_analytics', target_id=class_id, metadata={'classification_note': 'signals_only_not_violation', 'filters': result.get('filters')})
     return result
 

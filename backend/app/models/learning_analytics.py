@@ -92,6 +92,7 @@ class AnalyticsCourseSession(Base):
     total_videos: Mapped[int] = mapped_column(Integer, default=0)
     quiz_usage_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     components_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
+    session_type: Mapped[str] = mapped_column(String(50), default='LEARNING_SESSION', index=True)
     source: Mapped[str] = mapped_column(String(80), default='manual_or_sync', index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     rebuilt_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
@@ -122,6 +123,11 @@ class AnalyticsStudentVideoProgress(Base):
     completion_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     estimated_watch_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     estimated_watch_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    consistency_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    video_quality_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    long_passive_segment_count: Mapped[int] = mapped_column(Integer, default=0)
+    long_passive_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    passive_watch_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     play_count: Mapped[int] = mapped_column(Integer, default=0)
     pause_count: Mapped[int] = mapped_column(Integer, default=0)
     stop_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -165,6 +171,10 @@ class AnalyticsStudentSessionProgress(Base):
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     completed_before_deadline: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     completed_late: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    session_type: Mapped[str] = mapped_column(String(50), default='LEARNING_SESSION', index=True)
+    avg_video_quality_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    passive_watch_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    long_passive_video_count: Mapped[int] = mapped_column(Integer, default=0)
     session_learning_status: Mapped[str] = mapped_column(String(50), default='INSUFFICIENT_DATA', index=True)
     reason_codes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
     evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
@@ -173,6 +183,60 @@ class AnalyticsStudentSessionProgress(Base):
     __table_args__ = (
         UniqueConstraint('course_id', 'username', 'session_index', name='uq_analytics_student_session'),
         Index('ix_analytics_session_progress_course_user_week', 'course_id', 'username', 'week_index'),
+    )
+
+
+
+class AnalyticsQuizAttempt(Base):
+    __tablename__ = 'analytics_quiz_attempts'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    course_id: Mapped[str] = mapped_column(String(255), index=True)
+    username: Mapped[str] = mapped_column(String(255), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    sequence_usage_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    unit_usage_key: Mapped[str] = mapped_column(String(512), index=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    unit_reset_nonce: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    reset_count: Mapped[int] = mapped_column(Integer, default=0)
+    submission_count: Mapped[int] = mapped_column(Integer, default=0)
+    assigned_problem_usage_keys_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
+    itembank_locations_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
+    score_earned: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_possible: Mapped[float | None] = mapped_column(Float, nullable=True)
+    median_time_per_question_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    repeat_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    suspicious_quiz_speed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    fishing_pattern: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    showanswer_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_submission_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_submission_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    low_confidence_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=dict)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('course_id', 'username', 'unit_usage_key', 'attempt_no', name='uq_analytics_quiz_attempt_user_unit_no'),
+        Index('ix_analytics_quiz_attempt_course_user_time', 'course_id', 'username', 'started_at'),
+    )
+
+
+class AnalyticsSessionOverride(Base):
+    __tablename__ = 'analytics_session_overrides'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    course_id: Mapped[str] = mapped_column(String(255), index=True)
+    block_usage_key: Mapped[str] = mapped_column(String(512), index=True)
+    forced_session_type: Mapped[str] = mapped_column(String(50), default='LEARNING_SESSION', index=True)
+    forced_session_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('course_id', 'block_usage_key', name='uq_analytics_session_override_course_block'),
     )
 
 

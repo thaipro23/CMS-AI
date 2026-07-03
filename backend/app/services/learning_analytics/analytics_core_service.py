@@ -16,6 +16,7 @@ from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
     AnalyticsLearningBehaviorSnapshot,
+    AnalyticsQuizAttempt,
     AnalyticsStudentSessionProgress,
     AnalyticsStudentVideoProgress,
     AnalyticsTrackingEvent,
@@ -24,11 +25,16 @@ from app.services.learning_analytics.learning_behavior_classifier import Behavio
 from app.services.learning_analytics.session_deadline_mapper import build_session_mappings_from_blocks, week_for_session
 from app.services.academic_service import AcademicService
 from app.services.learning_analytics.tracking_event_parser import TrackingParseError, parse_tracking_log_line
+from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
 from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress
 
-VIDEO_EVENT_TYPES = {'play_video', 'pause_video', 'stop_video', 'seek_video', 'edx.video.position.changed'}
-PROBLEM_EVENT_TYPES = {'problem_check', 'problem_graded', 'problem_save'}
+VIDEO_EVENT_TYPES = {'play_video', 'pause_video', 'stop_video', 'seek_video', 'edx.video.played', 'edx.video.paused', 'edx.video.stopped', 'edx.video.position.changed'}
+PROBLEM_EVENT_TYPES = {'problem_check', 'problem_graded', 'problem_save', 'edx.grades.problem.submitted', 'edx.completion.block_completion.changed'}
+QUIZ_SESSION_EVENT_TYPES = {'/api/unit-reset/v1/quiz-session/start', '/api/unit-reset/v1/quiz-session/status', '/api/unit-reset/v1/quiz-session/reset'}
+ITEMBANK_EVENT_TYPES = {'edx.itembankblock.content.assigned'}
+ANSWER_REVEAL_EVENT_TYPES = {'problem_show', 'showanswer'}
+QUIZ_ANALYTICS_EVENT_TYPES = PROBLEM_EVENT_TYPES | QUIZ_SESSION_EVENT_TYPES | ITEMBANK_EVENT_TYPES | ANSWER_REVEAL_EVENT_TYPES
 ANALYTICS_INGEST_LOCK_ID = 2591672601
 
 
@@ -231,6 +237,7 @@ class LearningAnalyticsCoreService:
             row.total_videos = len([c for c in mapping.components if c.block_type == 'video'])
             row.quiz_usage_key = mapping.quiz.usage_key if mapping.quiz else None
             row.components_json = {'components': [asdict(c) for c in mapping.components]}
+            row.session_type = mapping.session_type
             row.source = 'blocks_adapter'
             row.active = True
             row.rebuilt_at = now
@@ -272,6 +279,7 @@ class LearningAnalyticsCoreService:
                 'session_index': r.session_index,
                 'session_key': r.session_key,
                 'session_title': r.session_title,
+                'session_type': getattr(r, 'session_type', 'LEARNING_SESSION') or 'LEARNING_SESSION',
                 'week_index': r.week_index,
                 'deadline_at': deadline_at.isoformat() if deadline_at else None,
                 'deadline_source': source,
@@ -360,6 +368,11 @@ class LearningAnalyticsCoreService:
             row.completion_percent = result.completion_percent
             row.estimated_watch_seconds = result.estimated_watch_seconds
             row.estimated_watch_percent = result.estimated_watch_percent
+            row.consistency_percent = result.consistency_percent
+            row.video_quality_percent = result.video_quality_percent
+            row.long_passive_segment_count = result.long_passive_segment_count
+            row.long_passive_seconds = result.long_passive_seconds
+            row.passive_watch_seconds = result.passive_watch_seconds
             row.play_count = result.play_count
             row.pause_count = result.pause_count
             row.stop_count = result.stop_count
@@ -374,6 +387,94 @@ class LearningAnalyticsCoreService:
             saved += 1
         self.db.commit()
         return {'course_id': course_id, 'username': username, 'video_progress_rows': saved}
+
+    def recalculate_course_quiz_attempts(self, *, course_id: str, username: str | None = None) -> dict[str, Any]:
+        query = self.db.query(AnalyticsTrackingEvent).filter(
+            AnalyticsTrackingEvent.course_id == course_id,
+            AnalyticsTrackingEvent.event_type.in_(list(QUIZ_ANALYTICS_EVENT_TYPES)),
+        )
+        if username:
+            query = query.filter(AnalyticsTrackingEvent.username == username)
+        rows = query.order_by(AnalyticsTrackingEvent.username.asc(), AnalyticsTrackingEvent.event_time.asc()).all()
+        features = build_quiz_attempt_features([
+            EventLike(
+                event_type=r.event_type,
+                event_source=r.event_source,
+                event_time=r.event_time,
+                user_id=r.user_id,
+                username=r.username,
+                course_id=r.course_id,
+                page_url=r.page_url,
+                raw_event=r.raw_event or {},
+                raw_context=r.raw_context or {},
+                raw_json=r.raw_json or {},
+            )
+            for r in rows
+        ])
+        now = datetime.utcnow()
+        saved = 0
+        for feat in features:
+            row = self.db.query(AnalyticsQuizAttempt).filter(
+                AnalyticsQuizAttempt.course_id == feat.course_id,
+                AnalyticsQuizAttempt.username == feat.username,
+                AnalyticsQuizAttempt.unit_usage_key == feat.unit_usage_key,
+                AnalyticsQuizAttempt.attempt_no == feat.attempt_no,
+            ).first()
+            if not row:
+                row = AnalyticsQuizAttempt(course_id=feat.course_id, username=feat.username, unit_usage_key=feat.unit_usage_key, attempt_no=feat.attempt_no)
+                self.db.add(row)
+            row.user_id = feat.user_id
+            row.sequence_usage_key = feat.sequence_usage_key
+            row.unit_reset_nonce = feat.unit_reset_nonce
+            row.started_at = feat.started_at
+            row.ended_at = feat.ended_at
+            row.reset_count = int(feat.reset_count or 0)
+            row.submission_count = len(feat.submissions)
+            row.assigned_problem_usage_keys_json = feat.assigned_problem_usage_keys
+            row.itembank_locations_json = feat.itembank_locations
+            row.score_earned = feat.score_earned
+            row.score_possible = feat.score_possible
+            row.median_time_per_question_seconds = feat.median_time_per_question_seconds
+            row.repeat_rate = feat.repeat_rate
+            row.suspicious_quiz_speed = bool(feat.suspicious_quiz_speed)
+            row.fishing_pattern = bool(feat.fishing_pattern)
+            row.showanswer_count = int(feat.showanswer_count or 0)
+            row.first_submission_at = feat.first_submission_at
+            row.last_submission_at = feat.last_submission_at
+            row.low_confidence_reason = feat.low_confidence_reason
+            row.evidence_json = feat.evidence
+            row.calculated_at = now
+            saved += 1
+        self.db.commit()
+        return {'course_id': course_id, 'username': username, 'quiz_attempt_rows': saved}
+
+    @staticmethod
+    def _key_match(left: str | None, right: str | None) -> bool:
+        a = str(left or '').strip()
+        b = str(right or '').strip()
+        if not a or not b:
+            return False
+        return a == b or a in b or b in a
+
+    def _quiz_attempts_for_user(self, *, course_id: str, username: str) -> list[AnalyticsQuizAttempt]:
+        return self.db.query(AnalyticsQuizAttempt).filter(
+            AnalyticsQuizAttempt.course_id == course_id,
+            AnalyticsQuizAttempt.username == username,
+        ).order_by(AnalyticsQuizAttempt.started_at.asc().nullslast(), AnalyticsQuizAttempt.attempt_no.asc()).all()
+
+    def _quiz_attempt_for_session(self, *, attempts: list[AnalyticsQuizAttempt], session: dict[str, Any]) -> AnalyticsQuizAttempt | None:
+        quiz_key = session.get('quiz_usage_key')
+        session_key = session.get('session_key')
+        components = session.get('components') if isinstance(session.get('components'), list) else []
+        candidate_keys = [str(quiz_key or ''), str(session_key or '')]
+        candidate_keys.extend(str(item.get('usage_key') or item.get('id') or '') for item in components if isinstance(item, dict))
+        for attempt in reversed(attempts):
+            if any(self._key_match(attempt.unit_usage_key, key) or self._key_match(attempt.sequence_usage_key, key) for key in candidate_keys if key):
+                return attempt
+            assigned = attempt.assigned_problem_usage_keys_json or []
+            if any(any(self._key_match(value, key) for key in candidate_keys if key) for value in assigned):
+                return attempt
+        return None
 
     def _student_usernames_for_class(self, *, class_id: str | None, course_id: str, username: str | None = None) -> list[str]:
         if username:
@@ -482,11 +583,13 @@ class LearningAnalyticsCoreService:
         if not sessions:
             return {'class_id': class_id, 'course_id': course_id, 'processed': 0, 'sessions': 0, 'message': 'Chưa có cấu trúc Bài/Session. Hãy rebuild session structure trước.'}
         users = self._student_usernames_for_class(class_id=class_id, course_id=course_id, username=username)
+        self.recalculate_course_quiz_attempts(course_id=course_id, username=username)
         snapshots = self._learning_snapshots_by_username(class_id=class_id, course_id=course_id)
         academic_service = AcademicService(self.db)
         now = datetime.utcnow()
         saved = 0
         for user in users:
+            quiz_attempts = self._quiz_attempts_for_user(course_id=course_id, username=user)
             video_rows = self.db.query(AnalyticsStudentVideoProgress).filter(AnalyticsStudentVideoProgress.course_id == course_id, AnalyticsStudentVideoProgress.username == user).all()
             videos_by_session: dict[int, list[AnalyticsStudentVideoProgress]] = defaultdict(list)
             for row in video_rows:
@@ -504,12 +607,20 @@ class LearningAnalyticsCoreService:
                 if session_index <= 0:
                     continue
                 rows = videos_by_session.get(session_index, [])
+                session_type = str(session.get('session_type') or 'LEARNING_SESSION')
                 quiz_item = self._quiz_item_for_session(components=components, session_index=session_index, academic_service=academic_service)
+                raw_attempt = self._quiz_attempt_for_session(attempts=quiz_attempts, session=session)
                 quiz_score = None
                 quiz_attempted = False
                 quiz_completed = False
                 quiz_submitted_at = None
-                if quiz_item:
+                if raw_attempt:
+                    quiz_attempted = bool((raw_attempt.submission_count or 0) > 0 or raw_attempt.started_at)
+                    quiz_completed = bool((raw_attempt.submission_count or 0) > 0)
+                    quiz_submitted_at = raw_attempt.first_submission_at
+                    if raw_attempt.score_possible and raw_attempt.score_possible > 0 and raw_attempt.score_earned is not None:
+                        quiz_score = round((float(raw_attempt.score_earned) / float(raw_attempt.score_possible)) * 10.0, 2)
+                if quiz_item and not raw_attempt:
                     try:
                         score_percent = academic_service._component_score_percent(quiz_item)  # type: ignore[attr-defined]
                     except Exception:
@@ -528,15 +639,27 @@ class LearningAnalyticsCoreService:
                 videos_completed = len([r for r in rows if r.is_completed])
                 avg_completion = round(sum([r.completion_percent or 0 for r in rows]) / len(rows), 2) if rows else None
                 watch_seconds = float(sum([r.estimated_watch_seconds or 0 for r in rows]))
+                avg_video_quality = round(sum([r.video_quality_percent or 0 for r in rows]) / len(rows), 2) if rows else None
+                passive_watch_seconds = float(sum([r.passive_watch_seconds or 0 for r in rows]))
+                long_passive_video_count = len([r for r in rows if (r.long_passive_segment_count or 0) > 0])
                 reason_codes: list[str] = []
                 if not deadline_at:
                     reason_codes.append('MISSING_DEADLINE_MAPPING')
                 if quiz_submitted_at and first_video_at and quiz_submitted_at < first_video_at:
                     reason_codes.append('QUIZ_BEFORE_VIDEO')
+                if raw_attempt and raw_attempt.suspicious_quiz_speed:
+                    reason_codes.append('SUSPICIOUS_QUIZ_SPEED')
+                if raw_attempt and raw_attempt.fishing_pattern:
+                    reason_codes.append('FISHING_PATTERN')
+                if raw_attempt and (raw_attempt.showanswer_count or 0) > 0:
+                    reason_codes.append('SHOWANSWER_USED_NEUTRAL')
                 if any(r.is_suspicious for r in rows):
                     reason_codes.extend([code for r in rows for code in str(r.suspicious_reason or '').split(',') if code])
                 completed_before_deadline: bool | None = None
                 completed_late: bool | None = None
+                low_video_quality = bool(avg_video_quality is not None and avg_video_quality < 35)
+                if session_type != 'LEARNING_SESSION':
+                    reason_codes.append(f'SESSION_TYPE_{session_type}')
                 enough_video = total_videos <= 0 or (videos_completed >= total_videos)
                 likely_done = enough_video and (quiz_completed or quiz_attempted or videos_completed > 0)
                 if likely_done and deadline_at and last_activity_at:
@@ -549,7 +672,7 @@ class LearningAnalyticsCoreService:
                 status = 'INSUFFICIENT_DATA'
                 if not started_at:
                     status = 'NOT_STARTED'
-                elif 'QUIZ_BEFORE_VIDEO' in reason_codes or any(code in reason_codes for code in ('HIGH_COMPLETION_LOW_WATCH_TIME', 'LARGE_SEEK_JUMP')):
+                elif 'QUIZ_BEFORE_VIDEO' in reason_codes or any(code in reason_codes for code in ('HIGH_COMPLETION_LOW_WATCH_TIME', 'LARGE_SEEK_JUMP', 'SUSPICIOUS_QUIZ_SPEED', 'FISHING_PATTERN')):
                     status = 'POSSIBLE_SUSPICIOUS'
                 elif completed_late:
                     status = 'COMPLETED_LATE'
@@ -571,11 +694,15 @@ class LearningAnalyticsCoreService:
                 row.week_index = session.get('week_index')
                 row.deadline_at = deadline_at
                 row.deadline_source = session.get('deadline_source') or 'INFERRED'
+                row.session_type = session_type
                 row.total_videos = total_videos
                 row.videos_seen = videos_seen
                 row.videos_completed = videos_completed
                 row.avg_video_completion_percent = avg_completion
+                row.avg_video_quality_percent = avg_video_quality
                 row.estimated_watch_seconds = watch_seconds
+                row.passive_watch_seconds = passive_watch_seconds
+                row.long_passive_video_count = long_passive_video_count
                 row.quiz_attempted = quiz_attempted
                 row.quiz_completed = quiz_completed
                 row.quiz_score = quiz_score
@@ -591,6 +718,12 @@ class LearningAnalyticsCoreService:
                     'quiz_deadline_configured': session.get('quiz_deadline_configured'),
                     'quiz_submitted_at': quiz_submitted_at.isoformat() if quiz_submitted_at else None,
                     'quiz_usage_key': session.get('quiz_usage_key'),
+                    'raw_quiz_attempt_id': raw_attempt.id if raw_attempt else None,
+                    'session_type': session_type,
+                    'avg_video_quality_percent': avg_video_quality,
+                    'passive_watch_seconds': passive_watch_seconds,
+                    'long_passive_video_count': long_passive_video_count,
+                    'crammed_low_watch_candidate': low_video_quality,
                     'video_count': len(rows),
                 }
                 row.calculated_at = now
@@ -614,37 +747,61 @@ class LearningAnalyticsCoreService:
             rows = videos_by_user.get(user, [])
             events_count = events_by_user.get(user, 0)
             session_rows = sessions_by_user.get(user, [])
+            learning_session_rows = [r for r in session_rows if (getattr(r, 'session_type', 'LEARNING_SESSION') or 'LEARNING_SESSION') == 'LEARNING_SESSION']
             completed = [r for r in rows if r.is_completed]
             suspicious = [r for r in rows if r.is_suspicious]
             avg_completion = round(sum((r.completion_percent or 0) for r in rows) / len(rows), 2) if rows else None
             avg_watch = round(sum((r.estimated_watch_percent or 0) for r in rows) / len(rows), 2) if rows else None
-            deadline_known = [r for r in session_rows if r.deadline_at]
-            on_time = len([r for r in session_rows if r.completed_before_deadline is True])
-            late = len([r for r in session_rows if r.completed_late is True])
-            quiz_before = len([r for r in session_rows if 'QUIZ_BEFORE_VIDEO' in (r.reason_codes or [])])
-            late_completion_dates = [r.last_activity_at.date() for r in session_rows if r.last_activity_at and r.completed_late]
+            quality_values = [r.video_quality_percent for r in rows if r.video_quality_percent is not None]
+            avg_quality = round(sum(float(v or 0) for v in quality_values) / len(quality_values), 2) if quality_values else None
+            deadline_known = [r for r in learning_session_rows if r.deadline_at]
+            on_time = len([r for r in learning_session_rows if r.completed_before_deadline is True])
+            late = len([r for r in learning_session_rows if r.completed_late is True])
+            quiz_before = len([r for r in learning_session_rows if 'QUIZ_BEFORE_VIDEO' in (r.reason_codes or [])])
+            suspicious_quiz_speed = len([r for r in learning_session_rows if 'SUSPICIOUS_QUIZ_SPEED' in (r.reason_codes or [])])
+            fishing_pattern = len([r for r in learning_session_rows if 'FISHING_PATTERN' in (r.reason_codes or [])])
+            late_completion_dates = [r.last_activity_at.date() for r in learning_session_rows if r.last_activity_at and r.completed_late]
             crammed = max(Counter(late_completion_dates).values()) if late_completion_dates else 0
             crammed = crammed if crammed >= 3 else 0
+            crammed_low_watch = 0
+            if crammed:
+                for dt, count in Counter(late_completion_dates).items():
+                    if count >= 3:
+                        crammed_low_watch += len([r for r in learning_session_rows if r.last_activity_at and r.last_activity_at.date() == dt and (r.evidence_json or {}).get('crammed_low_watch_candidate')])
+            total_watch_seconds = sum((r.estimated_watch_seconds or 0) for r in rows)
+            passive_watch_seconds = sum((r.passive_watch_seconds or 0) for r in rows)
+            watch_without_quiz = len([r for r in learning_session_rows if (r.estimated_watch_seconds or 0) > 60 and not r.quiz_attempted])
+            watch_without_navigation = len([r for r in learning_session_rows if (r.passive_watch_seconds or 0) > 0 or (r.long_passive_video_count or 0) > 0])
             inp = BehaviorInput(
                 total_events=events_count,
-                total_sessions=len(session_rows) or len({r.session_index for r in rows if r.session_index}) or 0,
-                sessions_started=len([r for r in session_rows if r.started_at]) or len({r.session_index for r in rows if r.session_index}) or (1 if rows else 0),
+                total_sessions=len(learning_session_rows) or len({r.session_index for r in rows if r.session_index}) or 0,
+                sessions_started=len([r for r in learning_session_rows if r.started_at]) or len({r.session_index for r in rows if r.session_index}) or (1 if rows else 0),
                 sessions_completed_on_time=on_time,
                 sessions_completed_late=late,
                 crammed_session_count=crammed,
+                crammed_low_watch_session_count=crammed_low_watch,
                 quiz_before_video_count=quiz_before,
-                video_before_quiz_count=len([r for r in session_rows if r.quiz_attempted and 'QUIZ_BEFORE_VIDEO' not in (r.reason_codes or [])]),
+                video_before_quiz_count=len([r for r in learning_session_rows if r.quiz_attempted and 'QUIZ_BEFORE_VIDEO' not in (r.reason_codes or [])]),
+                total_quiz_sessions=len([r for r in learning_session_rows if r.quiz_attempted]),
+                total_quiz_attempts=len([r for r in learning_session_rows if r.quiz_attempted]),
+                suspicious_quiz_speed_count=suspicious_quiz_speed,
+                fishing_pattern_count=fishing_pattern,
                 total_videos_seen=len(rows),
                 total_videos_completed=len(completed),
                 avg_video_completion_percent=avg_completion,
-                total_estimated_watch_seconds=sum((r.estimated_watch_seconds or 0) for r in rows),
+                total_estimated_watch_seconds=total_watch_seconds,
                 avg_estimated_watch_percent=avg_watch,
+                avg_video_quality_percent=avg_quality,
                 suspicious_video_count=len(suspicious),
+                long_passive_video_count=len([r for r in rows if (r.long_passive_segment_count or 0) > 0]),
+                passive_watch_seconds=passive_watch_seconds,
+                watch_without_quiz_session_count=watch_without_quiz,
+                watch_without_navigation_session_count=watch_without_navigation,
                 missing_duration_count=len([r for r in rows if not r.duration_seconds]),
-                missing_session_mapping=any(r.session_index is None for r in rows) if rows else bool(not session_rows),
-                missing_deadline_mapping=bool(session_rows and len(deadline_known) < len(session_rows)),
-                last_activity_at=max([d for d in [r.last_activity_at for r in session_rows] + [r.last_event_at for r in rows] if d] or [None]),
-                extra_reasons=[code for r in suspicious for code in (r.suspicious_reason or '').split(',') if code] + [code for sr in session_rows for code in (sr.reason_codes or []) if code],
+                missing_session_mapping=any(r.session_index is None for r in rows) if rows else bool(not learning_session_rows),
+                missing_deadline_mapping=bool(learning_session_rows and len(deadline_known) < len(learning_session_rows)),
+                last_activity_at=max([d for d in [r.last_activity_at for r in learning_session_rows] + [r.last_event_at for r in rows] if d] or [None]),
+                extra_reasons=[code for r in suspicious for code in (r.suspicious_reason or '').split(',') if code] + [code for sr in learning_session_rows for code in (sr.reason_codes or []) if code],
             )
             result = classify_learning_behavior(inp)
             snap = self.db.query(AnalyticsLearningBehaviorSnapshot).filter(
@@ -668,7 +825,7 @@ class LearningAnalyticsCoreService:
             snap.human_readable_summary = result.human_readable_summary
             snap.recommended_action = result.recommended_action
             snap.data_quality = result.data_quality
-            snap.evidence_json = {**result.evidence, 'deadline_known_sessions': len(deadline_known), 'on_time_sessions': on_time, 'late_sessions': late, 'quiz_before_video_count': quiz_before}
+            snap.evidence_json = {**result.evidence, 'deadline_known_sessions': len(deadline_known), 'on_time_sessions': on_time, 'late_sessions': late, 'quiz_before_video_count': quiz_before, 'learning_session_count': len(learning_session_rows), 'session_types_excluded': len(session_rows) - len(learning_session_rows)}
             snap.last_activity_at = inp.last_activity_at
             snap.calculated_at = now
             counts[result.classification] += 1
@@ -683,6 +840,7 @@ class LearningAnalyticsCoreService:
         mapping = {
             'LIKELY_REAL_LEARNING': 'Có dấu hiệu học thật',
             'POSSIBLE_IDLE': 'Có khả năng treo máy',
+            'POSSIBLE_ANOMALY': 'Dấu hiệu bất thường cần kiểm tra',
             'POSSIBLE_CHEATING': 'Dấu hiệu bất thường cần kiểm tra',
             'INSUFFICIENT_DATA': 'Chưa đủ dữ liệu',
             'NORMAL': 'Chưa thấy bất thường rõ',
@@ -1376,7 +1534,7 @@ class LearningAnalyticsCoreService:
             if video_snapshots <= 0:
                 status = 'WARN' if status == 'PASS' else status
                 reasons.append('NO_VIDEO_PROGRESS_SNAPSHOT')
-            if classifications.get('POSSIBLE_CHEATING', 0):
+            if (classifications.get('POSSIBLE_ANOMALY', 0) or classifications.get('POSSIBLE_CHEATING', 0)):
                 reasons.append('HAS_ATTENTION_SIGNALS_REQUIRING_TEACHER_REVIEW')
 
             if status == 'FAIL':
@@ -1562,7 +1720,11 @@ class LearningAnalyticsCoreService:
         if course_id:
             q = q.filter(AnalyticsLearningBehaviorSnapshot.course_id == course_id)
         if classification and classification != 'all':
-            q = q.filter(AnalyticsLearningBehaviorSnapshot.classification == classification)
+            normalized_classification = str(classification).strip().upper()
+            if normalized_classification in {'POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING'}:
+                q = q.filter(AnalyticsLearningBehaviorSnapshot.classification.in_(['POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING']))
+            else:
+                q = q.filter(AnalyticsLearningBehaviorSnapshot.classification == normalized_classification)
         if start:
             q = q.filter(AnalyticsLearningBehaviorSnapshot.calculated_at >= start)
         if end:
@@ -1754,7 +1916,7 @@ class LearningAnalyticsCoreService:
                 'total_students': len(group),
                 'likely_real_learning_count': cc.get('LIKELY_REAL_LEARNING', 0),
                 'possible_idle_count': cc.get('POSSIBLE_IDLE', 0),
-                'possible_suspicious_count': cc.get('POSSIBLE_CHEATING', 0),
+                'possible_suspicious_count': cc.get('POSSIBLE_ANOMALY', 0) + cc.get('POSSIBLE_CHEATING', 0),
                 'insufficient_data_count': cc.get('INSUFFICIENT_DATA', 0),
                 'normal_count': cc.get('NORMAL', 0),
                 'avg_confidence_score': round(sum(float(r.confidence_score or 0) for r in group) / len(group), 2) if group else 0,
@@ -1793,12 +1955,12 @@ class LearningAnalyticsCoreService:
             'total_students': len(rows),
             'likely_real_learning_count': counts.get('LIKELY_REAL_LEARNING', 0),
             'possible_idle_count': counts.get('POSSIBLE_IDLE', 0),
-            'possible_suspicious_count': counts.get('POSSIBLE_CHEATING', 0),
+            'possible_suspicious_count': counts.get('POSSIBLE_ANOMALY', 0) + counts.get('POSSIBLE_CHEATING', 0),
             'insufficient_data_count': counts.get('INSUFFICIENT_DATA', 0),
             'normal_count': counts.get('NORMAL', 0),
             'data_quality_breakdown': dict(quality),
             'class_items': class_items[:limit],
-            'top_possible_suspicious': [row_item(r) for r in top_suspicious if r.classification == 'POSSIBLE_CHEATING' or (r.suspicious_score or 0) > 0],
+            'top_possible_suspicious': [row_item(r) for r in top_suspicious if r.classification in {'POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING'} or (r.suspicious_score or 0) > 0],
             'top_possible_idle': [row_item(r) for r in top_idle if r.classification == 'POSSIBLE_IDLE' or (r.idle_score or 0) > 0],
             'deadline_attention': [row_item(r) for r in sorted(overdue, key=lambda r: (r.crammed_session_count or 0, 100 - float(r.deadline_compliance_percent or 0)), reverse=True)[:limit]],
             'disclaimer': 'Dữ liệu chỉ phản ánh dấu hiệu từ log hệ thống, không phải kết luận vi phạm.',
@@ -2054,7 +2216,7 @@ class LearningAnalyticsCoreService:
             func.count(AnalyticsLearningBehaviorSnapshot.id).label('total_students'),
             func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'LIKELY_REAL_LEARNING', 1), else_=0)).label('likely_real_learning_count'),
             func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'POSSIBLE_IDLE', 1), else_=0)).label('possible_idle_count'),
-            func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'POSSIBLE_CHEATING', 1), else_=0)).label('possible_suspicious_count'),
+            func.sum(case((AnalyticsLearningBehaviorSnapshot.classification.in_(['POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING']), 1), else_=0)).label('possible_suspicious_count'),
             func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'INSUFFICIENT_DATA', 1), else_=0)).label('insufficient_data_count'),
             func.sum(case((AnalyticsLearningBehaviorSnapshot.classification == 'NORMAL', 1), else_=0)).label('normal_count'),
             func.max(AnalyticsLearningBehaviorSnapshot.last_activity_at).label('last_activity_at'),
@@ -2169,7 +2331,7 @@ class LearningAnalyticsCoreService:
             return int(behavior.get('likely_real_learning_count') or 0)
         if classification == 'POSSIBLE_IDLE':
             return int(behavior.get('possible_idle_count') or 0)
-        if classification == 'POSSIBLE_CHEATING':
+        if classification == 'POSSIBLE_ANOMALY':
             return int(behavior.get('possible_suspicious_count') or 0)
         if classification == 'INSUFFICIENT_DATA':
             return int(behavior.get('insufficient_data_count') or 0)
@@ -2180,7 +2342,7 @@ class LearningAnalyticsCoreService:
     @staticmethod
     def _dominant_classification(behavior: dict[str, Any]) -> str:
         candidates = [
-            ('POSSIBLE_CHEATING', int(behavior.get('possible_suspicious_count') or 0)),
+            ('POSSIBLE_ANOMALY', int(behavior.get('possible_suspicious_count') or 0)),
             ('POSSIBLE_IDLE', int(behavior.get('possible_idle_count') or 0)),
             ('INSUFFICIENT_DATA', int(behavior.get('insufficient_data_count') or 0)),
             ('LIKELY_REAL_LEARNING', int(behavior.get('likely_real_learning_count') or 0)),
@@ -2202,7 +2364,7 @@ class LearningAnalyticsCoreService:
             'total_students': len(rows),
             'likely_real_learning_count': counts.get('LIKELY_REAL_LEARNING', 0),
             'possible_idle_count': counts.get('POSSIBLE_IDLE', 0),
-            'possible_suspicious_count': counts.get('POSSIBLE_CHEATING', 0),
+            'possible_suspicious_count': counts.get('POSSIBLE_ANOMALY', 0) + counts.get('POSSIBLE_CHEATING', 0),
             'insufficient_data_count': counts.get('INSUFFICIENT_DATA', 0),
             'normal_count': counts.get('NORMAL', 0),
             'data_quality_breakdown': dict(quality),
@@ -2216,7 +2378,11 @@ class LearningAnalyticsCoreService:
         if course_id:
             q = q.filter(AnalyticsLearningBehaviorSnapshot.course_id == course_id)
         if classification:
-            q = q.filter(AnalyticsLearningBehaviorSnapshot.classification == classification)
+            normalized_classification = str(classification).strip().upper()
+            if normalized_classification in {'POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING'}:
+                q = q.filter(AnalyticsLearningBehaviorSnapshot.classification.in_(['POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING']))
+            else:
+                q = q.filter(AnalyticsLearningBehaviorSnapshot.classification == normalized_classification)
         total = q.count()
         rows = q.order_by(AnalyticsLearningBehaviorSnapshot.suspicious_score.desc(), AnalyticsLearningBehaviorSnapshot.calculated_at.desc()).offset(max(0, offset)).limit(min(max(1, limit), 200)).all()
         return {

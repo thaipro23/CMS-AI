@@ -116,13 +116,17 @@ def test_classifier_possible_idle():
         total_videos_completed=8,
         avg_video_completion_percent=95,
         avg_estimated_watch_percent=92,
-        long_passive_video_count=3,
+        long_passive_video_count=8,
+        passive_watch_seconds=7200,
+        total_estimated_watch_seconds=7200,
+        watch_without_quiz_session_count=2,
+        watch_without_navigation_session_count=2,
     ))
     assert result.classification == 'POSSIBLE_IDLE'
     assert result.display_label == 'Có khả năng treo máy'
 
 
-def test_classifier_possible_cheating_frontend_label_is_soft():
+def test_classifier_possible_anomaly_frontend_label_is_soft():
     result = classify_learning_behavior(BehaviorInput(
         total_events=40,
         total_sessions=6,
@@ -131,12 +135,15 @@ def test_classifier_possible_cheating_frontend_label_is_soft():
         total_videos_completed=10,
         avg_video_completion_percent=98,
         avg_estimated_watch_percent=10,
-        suspicious_video_count=3,
-        quiz_before_video_count=2,
-        crammed_session_count=2,
+        suspicious_video_count=10,
+        quiz_before_video_count=6,
+        crammed_low_watch_session_count=6,
+        total_quiz_sessions=6,
+        total_quiz_attempts=6,
+        suspicious_quiz_speed_count=6,
         extra_reasons=['LARGE_SEEK_JUMP'],
     ))
-    assert result.classification == 'POSSIBLE_CHEATING'
+    assert result.classification == 'POSSIBLE_ANOMALY'
     assert result.display_label == 'Dấu hiệu bất thường cần kiểm tra'
     assert 'cheating' not in result.display_label.lower()
 

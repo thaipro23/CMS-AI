@@ -2140,7 +2140,7 @@ export type AcademicTrainingTeacherReport = {
   status_counts: Record<string, number>
   learning_alerts: string[]
   last_synced_at?: string | null
-  classes: AcademicTrainingClassReport[]
+  classes?: AcademicTrainingClassReport[]
 }
 
 export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTrainingTeacherReport> & {
@@ -2232,6 +2232,7 @@ export type AcademicClassListResponse = PaginatedResponse<AcademicClass> & { sum
 export type AnalyticsLearningBehaviorClassification =
   | 'LIKELY_REAL_LEARNING'
   | 'POSSIBLE_IDLE'
+  | 'POSSIBLE_ANOMALY'
   | 'POSSIBLE_CHEATING'
   | 'INSUFFICIENT_DATA'
   | 'NORMAL'

@@ -3655,8 +3655,8 @@ class VersionedQuestionBankService:
         labels = {
             'quiz': 'Tạo Quiz',
             'final_test': 'Tạo Final test',
-            'assignment': 'Không tạo quiz: Assignment/nội dung',
-            'skip': 'Không tạo quiz',
+            'assignment': 'Không tạo',
+            'skip': 'Không tạo',
         }
         return labels.get(str(action or '').lower(), 'Tạo Quiz')
 
@@ -3897,7 +3897,7 @@ class VersionedQuestionBankService:
             'warnings': list(dict.fromkeys(warnings)),
             'blocking_errors': list(dict.fromkeys(blocking_errors)),
             'can_apply': can_apply,
-            'message': f'Đã tự tìm được version môn. Có thể lưu cấu hình: {ready_quiz_count}/{selected_quiz_count} bài kiểm tra sẵn sàng, {skipped_chapter_count} bài không tạo Quiz.' if can_apply else 'Chưa thể lưu cấu hình. Hãy xử lý các lỗi bên dưới hoặc đổi bài sang Không tạo quiz/Assignment.',
+            'message': f'Đã tự tìm được version môn. Có thể lưu cấu hình: {ready_quiz_count}/{selected_quiz_count} bài kiểm tra sẵn sàng, {skipped_chapter_count} bài Không tạo.' if can_apply else 'Chưa thể lưu cấu hình. Hãy xử lý các lỗi bên dưới hoặc đổi trạng thái dòng sang Không tạo.',
         }
 
     async def apply_quiz_auto_map(self, *, openedx_course_id: str, selected_subject_offering_id: str | None = None, chapter_plan: list[dict] | None = None, actor: str | None = None) -> dict:

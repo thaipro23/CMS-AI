@@ -35,7 +35,7 @@ const CLASSIFICATION_OPTIONS = [
   { value: 'all', label: 'Tất cả trạng thái' },
   { value: 'LIKELY_REAL_LEARNING', label: 'Có dấu hiệu học thật' },
   { value: 'POSSIBLE_IDLE', label: 'Có khả năng treo máy' },
-  { value: 'POSSIBLE_CHEATING', label: 'Dấu hiệu bất thường cần kiểm tra' },
+  { value: 'POSSIBLE_ANOMALY', label: 'Dấu hiệu bất thường cần kiểm tra' },
   { value: 'INSUFFICIENT_DATA', label: 'Chưa đủ dữ liệu' },
   { value: 'NORMAL', label: 'Chưa thấy bất thường rõ' },
 ]
@@ -81,7 +81,7 @@ function resultLabel(value?: string | null, fallback?: string | null) {
   const classification = String(value || '').toUpperCase()
   if (classification === 'LIKELY_REAL_LEARNING') return 'Có dấu hiệu học thật'
   if (classification === 'POSSIBLE_IDLE') return 'Có khả năng treo máy'
-  if (classification === 'POSSIBLE_CHEATING') return 'Dấu hiệu bất thường cần kiểm tra'
+  if ((classification === 'POSSIBLE_ANOMALY' || classification === 'POSSIBLE_CHEATING')) return 'Dấu hiệu bất thường cần kiểm tra'
   if (classification === 'INSUFFICIENT_DATA') return 'Chưa đủ dữ liệu'
   if (classification === 'NORMAL') return 'Chưa thấy bất thường rõ'
   return fallback || 'Chưa đủ dữ liệu'
@@ -91,7 +91,7 @@ function resultClass(value?: string | null) {
   const classification = String(value || '').toUpperCase()
   if (classification === 'LIKELY_REAL_LEARNING') return 'status-pill success'
   if (classification === 'POSSIBLE_IDLE') return 'status-pill warning'
-  if (classification === 'POSSIBLE_CHEATING') return 'status-pill danger'
+  if ((classification === 'POSSIBLE_ANOMALY' || classification === 'POSSIBLE_CHEATING')) return 'status-pill danger'
   if (classification === 'NORMAL') return 'status-pill neutral'
   return 'status-pill neutral'
 }

@@ -8,11 +8,29 @@ from datetime import datetime, timezone
 from typing import Any
 
 _TRACKING_JSON_RE = re.compile(r"\s-\s(?P<payload>\{.*\})\s*$")
-_RELEVANT_EVENTS = {
-    'play_video', 'pause_video', 'stop_video', 'seek_video', 'edx.video.position.changed',
-    'problem_check', 'problem_graded', 'problem_save', 'seq_next', 'seq_prev',
-    'edx.video.closed_captions.hidden',
+VIDEO_EVENTS = {
+    'play_video', 'pause_video', 'stop_video', 'seek_video',
+    'edx.video.played', 'edx.video.paused', 'edx.video.stopped', 'edx.video.position.changed',
 }
+QUIZ_SERVER_EVENTS = {
+    'problem_check', 'problem_graded', 'problem_save', 'edx.grades.problem.submitted',
+    'edx.completion.block_completion.changed',
+}
+QUIZ_SESSION_EVENTS = {
+    '/api/unit-reset/v1/quiz-session/start',
+    '/api/unit-reset/v1/quiz-session/status',
+    '/api/unit-reset/v1/quiz-session/reset',
+}
+ITEMBANK_EVENTS = {'edx.itembankblock.content.assigned'}
+ANSWER_REVEAL_EVENTS = {'problem_show', 'showanswer'}
+NAVIGATION_EVENTS = {'seq_next', 'seq_prev'}
+CAPTION_EVENTS = {'edx.video.closed_captions.hidden'}
+_RELEVANT_EVENTS = VIDEO_EVENTS | QUIZ_SERVER_EVENTS | QUIZ_SESSION_EVENTS | ITEMBANK_EVENTS | ANSWER_REVEAL_EVENTS | NAVIGATION_EVENTS | CAPTION_EVENTS
+_NOISE_PATTERNS = (
+    '/theming/asset/', '/api/notifications/', '/api/mfe_config/', '/csrf/api/v1/token',
+    '/api/course_home/', '/api/learning_sequences/', '/api/courseware/course/',
+    '/courseware-search/enabled/', '/api/user_tours/', '/favicon', '/static/',
+)
 
 
 @dataclass(slots=True)
@@ -157,7 +175,10 @@ def parse_tracking_log_line(line: str, *, include_caption_events: bool = True) -
     event_type = _safe_str(data.get('event_type')) or _safe_str(data.get('name')) or ''
     if not event_type:
         raise TrackingParseError('event_type_missing')
+    page_for_noise = _safe_str(data.get('page')) or ''
     if event_type not in _RELEVANT_EVENTS:
+        if any(pattern in page_for_noise for pattern in _NOISE_PATTERNS):
+            return None
         return None
     if event_type == 'edx.video.closed_captions.hidden' and not include_caption_events:
         return None
@@ -177,7 +198,7 @@ def parse_tracking_log_line(line: str, *, include_caption_events: bool = True) -
         raw_line_hash=raw_hash,
         event_time=_parse_time(data.get('time')),
         event_type=event_type,
-        event_source='openedx_tracking_log',
+        event_source=_safe_str(data.get('event_source')) or _safe_str(data.get('source')) or 'openedx_tracking_log',
         user_id=_safe_str((context or {}).get('user_id')) or _safe_str(data.get('user_id')),
         username=_safe_str(data.get('username')) or _safe_str((context or {}).get('username')),
         course_id=course_id,
