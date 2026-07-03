@@ -260,6 +260,27 @@ def stable_concept_identity(question: Question) -> str:
     return slugify(question.concept_key or question.concept_title or question.topic or question.learning_objective or 'unknown-concept', 'concept')
 
 
+
+
+def _ui_notice(status: str, message: str, title: str | None = None) -> dict:
+    normalized = (status or 'info').strip().lower()
+    if normalized == 'danger':
+        normalized = 'error'
+    if normalized not in {'success', 'error', 'warning', 'info'}:
+        normalized = 'info'
+    default_titles = {
+        'success': 'Thành công',
+        'error': 'Có lỗi',
+        'warning': 'Cần kiểm tra',
+        'info': 'Thông báo',
+    }
+    return {
+        'ui_status': normalized,
+        'ui_title': title or default_titles[normalized],
+        'ui_message': message,
+    }
+
+
 class VersionedQuestionBankService:
     """Question Bank-first service.
 
@@ -3144,6 +3165,7 @@ class VersionedQuestionBankService:
             'manual_cleanup_required': manual_required,
             'delete_result': delete_result,
             'message': 'Đã rollback Quiz trên Open edX.' if openedx_deleted else 'Đã đánh dấu cần kiểm tra/xóa Quiz thủ công trong Studio.',
+            **_ui_notice('success' if openedx_deleted else 'warning', 'Đã rollback Quiz trên Open edX.' if openedx_deleted else 'Đã đánh dấu cần kiểm tra/xóa Quiz thủ công trong Studio.'),
         }
 
     def _normalize_release_term_slug(self, raw_term: str | None) -> str | None:
@@ -3790,14 +3812,14 @@ class VersionedQuestionBankService:
         warnings: list[str] = []
         plan_by_chapter = self._normalize_quiz_chapter_plan(chapter_plan)
         if not parsed.get('ok'):
-            return {'ok': False, 'openedx_course_id': course_id, 'mode': 'preview', 'subject': None, 'offering': None, 'course_mapping': None, 'summary': {}, 'sections': [], 'mappings': [], 'warnings': [], 'blocking_errors': ['Course ID phải có dạng course-v1:ORG+COURSE+RUN.'], 'can_apply': False, 'message': 'Course ID không hợp lệ.'}
+            return {'ok': False, 'openedx_course_id': course_id, 'mode': 'preview', 'subject': None, 'offering': None, 'course_mapping': None, 'summary': {}, 'sections': [], 'mappings': [], 'warnings': [], 'blocking_errors': ['Course ID phải có dạng course-v1:ORG+COURSE+RUN.'], 'can_apply': False, 'message': 'Course ID không hợp lệ.', **_ui_notice('error', 'Course ID không hợp lệ.')}
         subject = self.db.query(Subject).filter(func.lower(Subject.code) == str(parsed.get('course_code')).lower()).first()
         if not subject:
             # Case-insensitive + punctuation-insensitive fallback.
             all_subjects = self.db.query(Subject).all()
             subject = next((item for item in all_subjects if normalize_code(item.code) == normalize_code(parsed.get('course_code'))), None)
         if not subject:
-            return {'ok': False, 'openedx_course_id': course_id, 'mode': 'preview', 'subject': None, 'offering': None, 'course_mapping': None, 'summary': {'course_code': parsed.get('course_code'), 'course_run': parsed.get('run')}, 'sections': [], 'mappings': [], 'warnings': [], 'blocking_errors': [f'Không tìm thấy môn có mã {parsed.get("course_code")}.'], 'can_apply': False, 'message': 'Không tìm thấy môn phù hợp với Course ID.'}
+            return {'ok': False, 'openedx_course_id': course_id, 'mode': 'preview', 'subject': None, 'offering': None, 'course_mapping': None, 'summary': {'course_code': parsed.get('course_code'), 'course_run': parsed.get('run')}, 'sections': [], 'mappings': [], 'warnings': [], 'blocking_errors': [f'Không tìm thấy môn có mã {parsed.get("course_code")}.'], 'can_apply': False, 'message': 'Không tìm thấy môn phù hợp với Course ID.', **_ui_notice('error', 'Không tìm thấy môn phù hợp với Course ID.')}
         department = self.db.get(Department, subject.department_id) if subject.department_id else None
         offering, candidates, candidate_warnings = self._select_offering_for_course(course_id=course_id, subject=subject, selected_subject_offering_id=selected_subject_offering_id)
         warnings.extend(candidate_warnings)
@@ -3817,6 +3839,7 @@ class VersionedQuestionBankService:
                 'blocking_errors': blocking_errors,
                 'can_apply': False,
                 'message': 'Chưa chọn được version môn để map course.',
+                **_ui_notice('warning', 'Chưa chọn được version môn để map course.'),
             }
         release_status = self._offering_published_release_status(offering)
         sections, section_warnings = await self._load_openedx_sections_for_quiz(course_id)
@@ -3872,6 +3895,8 @@ class VersionedQuestionBankService:
         ready_quiz_count = len([item for item in mappings if item.get('can_create')])
         skipped_chapter_count = len([item for item in mappings if item.get('skipped')])
         can_apply = not blocking_errors and bool(chapters)
+        ui_message = f'Đã tự tìm được version môn. Có thể lưu cấu hình: {ready_quiz_count}/{selected_quiz_count} bài kiểm tra sẵn sàng, {skipped_chapter_count} bài Không tạo.' if can_apply else 'Chưa thể lưu cấu hình. Hãy xử lý các lỗi bên dưới hoặc đổi trạng thái dòng sang Không tạo.'
+        ui_status = 'success' if can_apply else 'warning'
         return {
             'ok': can_apply,
             'openedx_course_id': course_id,
@@ -3897,7 +3922,8 @@ class VersionedQuestionBankService:
             'warnings': list(dict.fromkeys(warnings)),
             'blocking_errors': list(dict.fromkeys(blocking_errors)),
             'can_apply': can_apply,
-            'message': f'Đã tự tìm được version môn. Có thể lưu cấu hình: {ready_quiz_count}/{selected_quiz_count} bài kiểm tra sẵn sàng, {skipped_chapter_count} bài Không tạo.' if can_apply else 'Chưa thể lưu cấu hình. Hãy xử lý các lỗi bên dưới hoặc đổi trạng thái dòng sang Không tạo.',
+            'message': ui_message,
+            **_ui_notice(ui_status, ui_message),
         }
 
     async def apply_quiz_auto_map(self, *, openedx_course_id: str, selected_subject_offering_id: str | None = None, chapter_plan: list[dict] | None = None, actor: str | None = None) -> dict:
@@ -3982,6 +4008,7 @@ class VersionedQuestionBankService:
             self.db.flush()
             saved_mappings.append({**item, 'course_chapter_mapping_id': chapter_mapping.id})
         self.db.commit()
+        saved_message = f'Đã lưu cấu hình version {offering.get("code")}: {len([item for item in saved_mappings if item.get("requires_quiz")])} bài có thể tạo Quiz/Final test, {len([item for item in saved_mappings if item.get("skipped")])} bài không tạo Quiz.'
         return {
             **preview,
             'ok': True,
@@ -3989,7 +4016,8 @@ class VersionedQuestionBankService:
             'course_mapping': {'id': mapping.id, 'openedx_course_id': mapping.openedx_course_id, 'status': mapping.status},
             'mappings': saved_mappings,
             'can_apply': True,
-            'message': f'Đã lưu cấu hình version {offering.get("code")}: {len([item for item in saved_mappings if item.get("requires_quiz")])} bài có thể tạo Quiz/Final test, {len([item for item in saved_mappings if item.get("skipped")])} bài không tạo Quiz.',
+            'message': saved_message,
+            **_ui_notice('success', saved_message),
         }
 
     def _validation_result(self, checks: list[dict]) -> dict:
@@ -4340,6 +4368,7 @@ class VersionedQuestionBankService:
             'assigned_component_count': len(assigned_components),
             'hard_guard': {'valid': True, 'summary': 'Release plan hợp lệ: EASY/MEDIUM/HARD tách riêng; không trùng question_id hoặc Open edX component giữa các bank.'},
             'message': f'Tạo kế hoạch theo chuẩn /export: {len(slots)} Problem Bank EASY/MEDIUM/HARD, learner thấy {int(total_questions)} câu.',
+            **_ui_notice('success', f'Tạo kế hoạch theo chuẩn /export: {len(slots)} Problem Bank EASY/MEDIUM/HARD, learner thấy {int(total_questions)} câu.'),
         }
         return plan
 
@@ -4582,6 +4611,7 @@ class VersionedQuestionBankService:
                 'problem_bank_result': insert_result,
                 'timer_config': instance.metadata_json.get('timer_config') or timer_config,
                 'message': 'Đã tạo Final test và native Problem Bank từ Bank Release trên Open edX.' if assessment_type == 'final_test' else 'Đã tạo Quiz và native Problem Bank từ Bank Release trên Open edX.',
+                **_ui_notice('success', 'Đã tạo Final test và native Problem Bank từ Bank Release trên Open edX.' if assessment_type == 'final_test' else 'Đã tạo Quiz và native Problem Bank từ Bank Release trên Open edX.'),
             }
         except Exception as exc:
             instance.status = 'failed'

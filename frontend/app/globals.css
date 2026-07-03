@@ -7588,7 +7588,7 @@ body.ai-theme-dark .analytics-three-step-flow-page .analytics-stepper button.act
   color: #bfdbfe;
 }
 
-/* v25.9.16.7.2.29 — unified notices + equal action buttons */
+/* v25.9.16.7.2.31 — unified notices + equal action buttons */
 .notice,
 .academic-inline-notice,
 .academic-inline-error {
@@ -7686,3 +7686,464 @@ body.ai-theme-dark .analytics-three-step-flow-page .analytics-stepper button.act
 }
 .subject-table td:last-child,
 .teacher-management-page td:last-child { width: 136px; }
+
+/* v25.9.16.7.2.31 — responsive device-adaptive UX sweep
+   Goal: one operational UI that remains usable on 1366px laptop, tablet, and phone.
+   Tables keep horizontal scroll where data density is high; cards/filters/actions collapse safely. */
+:root {
+  --ux-page-gutter: clamp(8px, 1.6vw, 24px);
+  --ux-card-pad: clamp(10px, 1.3vw, 18px);
+  --ux-touch-target: 40px;
+  --ux-table-min: 920px;
+}
+
+html, body, .app-layout, .product-shell, .product-main, .main-area {
+  max-width: 100%;
+}
+body { overflow-x: hidden; }
+*, *::before, *::after { min-width: 0; }
+img, svg, video, canvas { max-width: 100%; height: auto; }
+pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
+
+.product-content.content-shell,
+.content-shell,
+.compact-content-shell {
+  width: 100%;
+  max-width: min(1440px, calc(100vw - (var(--ux-page-gutter) * 2)));
+  padding-left: var(--ux-page-gutter);
+  padding-right: var(--ux-page-gutter);
+}
+
+.card,
+.academic-unified-card,
+.ux-table-card,
+.student-list-card,
+.analytics-card,
+.bank-card {
+  padding: var(--ux-card-pad);
+}
+
+.card h1,
+.hero-card h1,
+.ops-hero h1,
+.dashboard-command-hero h1,
+.workspace-topbar h1,
+.product-command-topbar h1 {
+  font-size: clamp(18px, 2.25vw, 28px);
+  line-height: 1.14;
+  overflow-wrap: anywhere;
+}
+
+.card h2,
+.section-head h2,
+.list-card-head h2 { font-size: clamp(16px, 1.8vw, 22px); }
+.card h3 { font-size: clamp(14px, 1.35vw, 18px); }
+.helper, .card p, .notice p, .academic-inline-notice span, .academic-inline-error span { overflow-wrap: anywhere; }
+
+/* Layout grids collapse by available width instead of page-specific hard-coding. */
+.grid-2,
+.grid-3,
+.dashboard-kpi-grid,
+.dashboard-grid,
+.summary-grid,
+.academic-summary-strip,
+.ux-kpi-grid,
+.training-summary-strip,
+.analytics-class-overview-summary,
+.estimate-summary,
+.pricing-summary,
+.compact-summary {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+}
+
+.academic-filter-bar,
+.academic-list-filter,
+.teacher-filter-bar,
+.ux-filter-grid,
+.analytics-learning-flow-filters,
+.analytics-three-step-flow-page .compact-filter-row,
+.form-grid,
+.academic-modal-form,
+.bank-filter-grid,
+.quiz-filter-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  align-items: end;
+}
+
+.section-head,
+.list-card-head,
+.page-intro,
+.hero-card,
+.compact-hero,
+.teacher-compact-toolbar,
+.class-action-row,
+.button-row,
+.workspace-actions,
+.workspace-topbar,
+.product-command-topbar.workspace-topbar {
+  min-width: 0;
+}
+
+.section-head,
+.list-card-head,
+.page-intro,
+.teacher-compact-toolbar,
+.class-action-row,
+.button-row {
+  flex-wrap: wrap;
+}
+
+.button-row .btn,
+.row-actions .btn,
+.toolbar-actions .btn,
+.question-actions .btn,
+.teacher-row-actions-stack .btn,
+.subject-table .row-actions .btn {
+  min-height: var(--ux-touch-target);
+}
+
+/* Tables: keep data dense on desktop, safe horizontal scroll on smaller devices. */
+.table-wrap,
+.responsive-table-wrap,
+.academic-table-wrap,
+.training-table-wrap,
+.bank-table-wrap,
+.dynamic-grade-table-wrap,
+.analytics-dashboard-table-wrap,
+.analytics-result-table-wrap,
+.policy-edit-table-wrap,
+.quiz-map-table-wrap,
+.class-student-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable both-edges;
+}
+
+.table,
+.data-table,
+.academic-data-table,
+.ops-data-table,
+.audit-data-table,
+.student-grade-table,
+.bank-data-table,
+.quiz-map-table,
+.subject-table {
+  min-width: min(var(--ux-table-min), 1000px);
+}
+
+.table th,
+.data-table th,
+.academic-data-table th,
+.ops-data-table th,
+.student-grade-table th,
+.bank-data-table th,
+.table td,
+.data-table td,
+.academic-data-table td,
+.ops-data-table td,
+.student-grade-table td,
+.bank-data-table td {
+  overflow-wrap: anywhere;
+}
+
+/* Main action cells should be consistent and not create giant columns on narrow screens. */
+.row-actions,
+.toolbar-actions,
+.teacher-row-actions-stack,
+.subject-table .row-actions {
+  display: grid;
+  gap: 7px;
+  align-items: stretch;
+}
+.row-actions .btn,
+.toolbar-actions .btn,
+.teacher-row-actions-stack .btn,
+.subject-table .row-actions .btn {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+/* Modal and drawer safety on phones/tablets. */
+.modal-backdrop,
+.bank-popup-backdrop {
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+}
+.modal-card,
+.bank-modal,
+.drawer-panel,
+.side-panel {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+}
+.bank-modal-wide { width: min(980px, calc(100vw - 16px)); }
+
+@media (max-width: 1280px) {
+  :root { --ux-table-min: 860px; }
+  .product-shell.app-layout { grid-template-columns: 236px minmax(0, 1fr); }
+  .product-nav .nav-link { grid-template-columns: 30px 1fr; gap: 8px; padding: 8px; min-height: 50px; }
+  .product-nav .nav-icon { width: 30px; height: 30px; border-radius: 10px; }
+  .product-nav .nav-link small { font-size: 11px; }
+  .workspace-topbar,
+  .product-command-topbar.workspace-topbar { padding-left: 18px; padding-right: 18px; }
+}
+
+@media (max-width: 1024px) {
+  :root { --ux-table-min: 800px; --ux-touch-target: 42px; }
+  .product-shell.app-layout,
+  .app-layout { display: block; grid-template-columns: 1fr; }
+  .product-sidebar.sidebar,
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    height: auto;
+    max-height: none;
+    padding: 8px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--ds-border, #e5e7eb);
+    box-shadow: 0 6px 18px rgba(15, 23, 42, .06);
+  }
+  .product-brand.brand,
+  .brand { padding: 4px 4px 8px; border-bottom: 0; }
+  .product-brand-mark.brand-mark,
+  .brand-mark { width: 34px; height: 34px; border-radius: 12px; }
+  .product-brand small,
+  .brand small { display: none; }
+  .product-nav.grouped-side-nav,
+  .side-nav {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 2px 0 6px;
+    scroll-snap-type: x proximity;
+    overscroll-behavior-x: contain;
+  }
+  .product-nav .nav-group { display: contents; }
+  .product-nav .nav-group-title { display: none; }
+  .product-nav .nav-group-items { display: flex; gap: 8px; }
+  .product-nav .nav-link,
+  .nav-link {
+    min-width: 128px;
+    min-height: 44px;
+    scroll-snap-align: start;
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+  .product-nav .nav-link small,
+  .nav-link small { display: none; }
+  .product-session-card.sidebar-note,
+  .sidebar-note { display: none; }
+  .workspace-topbar,
+  .product-command-topbar.workspace-topbar,
+  .workspace-topbar.product-command-topbar {
+    position: static;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px var(--ux-page-gutter);
+  }
+  .product-topbar-meta { justify-content: flex-start; flex-wrap: wrap; }
+  .content-shell,
+  .product-content.content-shell { padding-top: 10px; }
+  .summary-grid,
+  .dashboard-kpi-grid,
+  .dashboard-grid,
+  .ux-kpi-grid,
+  .academic-summary-strip { grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+}
+
+@media (max-width: 760px) {
+  :root { --ux-page-gutter: 8px; --ux-card-pad: 10px; --ux-table-min: 720px; --ux-touch-target: 44px; }
+  body { font-size: 13px; }
+  .product-sidebar.sidebar,
+  .sidebar { padding: 7px 8px; }
+  .product-brand.brand,
+  .brand { gap: 8px; }
+  .product-brand b,
+  .brand b { font-size: 13px; }
+  .product-nav .nav-link,
+  .nav-link { min-width: 108px; padding: 7px 8px; border-radius: 12px; }
+  .product-nav .nav-icon { width: 26px; height: 26px; font-size: 12px; }
+  .product-nav .nav-text b { font-size: 12px; line-height: 1.15; }
+  .topbar-role-pill,
+  .topbar-session-pill,
+  .workspace-chip,
+  .badge,
+  .soft-tag,
+  .status,
+  .status-pill { white-space: normal; text-align: center; }
+  .card,
+  .academic-unified-card,
+  .ux-table-card,
+  .metric-card,
+  .stat-panel { border-radius: 12px; }
+  .section-head,
+  .list-card-head,
+  .page-intro,
+  .hero-card,
+  .compact-hero,
+  .teacher-compact-toolbar,
+  .class-action-row { display: grid; grid-template-columns: 1fr; align-items: stretch; }
+  .button-row,
+  .toolbar-actions,
+  .row-actions { align-items: stretch; justify-content: stretch; }
+  .button-row .btn,
+  .toolbar-actions .btn,
+  .row-actions .btn,
+  .teacher-row-actions-stack .btn,
+  .subject-table .row-actions .btn { width: 100%; }
+  .academic-inline-notice,
+  .academic-inline-error,
+  .notice { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .notice-action-btn { width: 100%; }
+  .table-wrap,
+  .responsive-table-wrap,
+  .academic-table-wrap,
+  .training-table-wrap,
+  .bank-table-wrap,
+  .analytics-dashboard-table-wrap,
+  .analytics-result-table-wrap { border-radius: 12px; }
+  .table th,
+  .data-table th,
+  .academic-data-table th,
+  .ops-data-table th,
+  .student-grade-table th,
+  .bank-data-table th { padding: 8px 9px; font-size: 10px; }
+  .table td,
+  .data-table td,
+  .academic-data-table td,
+  .ops-data-table td,
+  .student-grade-table td,
+  .bank-data-table td { padding: 9px; font-size: 12px; }
+  .two-col-sticky-table { --sticky-stt-width: 46px; --sticky-student-width: 210px; }
+  .class-student-table-scroll .student-grade-table.two-col-sticky-table { --sticky-stt-width: 46px; --sticky-student-width: 220px; }
+  .analytics-two-col-sticky-table { --sticky-stt-width: 46px; --sticky-student-width: 210px; }
+  .modal-card,
+  .bank-modal,
+  .drawer-panel,
+  .side-panel { border-radius: 14px; }
+  .modal-card .button-row,
+  .bank-modal .button-row { display: grid; grid-template-columns: 1fr; }
+  .input,
+  select.input,
+  textarea.input { min-height: 44px; font-size: 16px; }
+}
+
+@media (max-width: 480px) {
+  :root { --ux-table-min: 680px; }
+  .product-nav .nav-link,
+  .nav-link { min-width: 96px; grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .product-nav .nav-icon { display: none; }
+  .workspace-breadcrumb { overflow-x: auto; white-space: nowrap; padding-bottom: 2px; }
+  .summary-grid,
+  .dashboard-kpi-grid,
+  .dashboard-grid,
+  .ux-kpi-grid,
+  .academic-summary-strip,
+  .analytics-class-overview-summary { grid-template-columns: 1fr; }
+  .pagination-bar,
+  .pagination-actions { display: grid; grid-template-columns: 1fr; align-items: stretch; }
+  .pagination-actions .btn,
+  .pagination-actions .page-number,
+  .pagination-actions .page-size-select { width: 100%; }
+  .page-number-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .answer-grid,
+  .question-actions { grid-template-columns: 1fr; }
+  .two-col-sticky-table { --sticky-stt-width: 42px; --sticky-student-width: 190px; }
+  .class-student-table-scroll .student-grade-table.two-col-sticky-table { --sticky-stt-width: 42px; --sticky-student-width: 196px; }
+  .analytics-two-col-sticky-table { --sticky-stt-width: 42px; --sticky-student-width: 190px; }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .btn:hover:not(:disabled),
+  .nav-link:hover,
+  .dashboard-kpi-card:hover,
+  .card:hover {
+    transform: none;
+    box-shadow: var(--ds-shadow-sm, 0 6px 18px rgba(15,23,42,.06));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* v25.9.16.7.2.31 — bank quiz spacing and semantic notice colors */
+.bank-quiz-page .quiz-inline-message {
+  border: 1px solid #d1fae5;
+  background: #ecfdf5;
+  color: #047857;
+  font-weight: 800;
+  margin: 10px 0 12px;
+}
+.bank-quiz-page .quiz-inline-message.danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+.bank-quiz-page .quiz-inline-message.warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
+}
+.bank-quiz-page .quiz-inline-message.info {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.bank-quiz-page .quiz-result-card .alert {
+  clear: both;
+  margin: 12px 0 14px;
+}
+.bank-quiz-page .quiz-result-card .alert + .quiz-map-table-wrap {
+  margin-top: 12px;
+}
+.bank-quiz-page .quiz-map-table-wrap {
+  margin-top: 12px;
+}
+.bank-quiz-page .quiz-map-table th,
+.bank-quiz-page .quiz-map-table td {
+  vertical-align: top;
+}
+.bank-quiz-page .quiz-status-cell {
+  min-width: 168px;
+  width: 178px;
+}
+.bank-quiz-page .quiz-status-control {
+  display: grid;
+  grid-template-columns: minmax(136px, 1fr);
+  gap: 7px;
+  align-items: start;
+}
+.bank-quiz-page .quiz-status-control .compact-select {
+  width: 100%;
+  min-width: 136px;
+}
+.bank-quiz-page .quiz-status-control .status {
+  width: fit-content;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.2;
+}
+.bank-quiz-page .quiz-status-control small {
+  display: block;
+  margin-top: -2px;
+  color: #64748b;
+  line-height: 1.25;
+}
+@media (max-width: 760px) {
+  .bank-quiz-page .quiz-status-cell {
+    min-width: 150px;
+    width: 160px;
+  }
+}

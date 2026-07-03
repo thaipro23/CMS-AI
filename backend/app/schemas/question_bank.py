@@ -716,7 +716,13 @@ class BankReleaseQuizCreateRequest(BankReleaseQuizPreviewRequest):
     native_timed_exam: bool = False
 
 
-class BankReleaseQuizPlanOut(BaseModel):
+class BackendUiStatusMixin(BaseModel):
+    ui_status: Literal['success', 'error', 'warning', 'info'] = 'info'
+    ui_title: str | None = None
+    ui_message: str | None = None
+
+
+class BankReleaseQuizPlanOut(BackendUiStatusMixin):
     ok: bool
     planner_engine: str | None = None
     uses_llm: bool = False
@@ -736,7 +742,7 @@ class BankReleaseQuizPlanOut(BaseModel):
     message: str = ''
 
 
-class BankReleaseQuizCreateOut(BaseModel):
+class BankReleaseQuizCreateOut(BackendUiStatusMixin):
     ok: bool
     status: str
     course_quiz_instance_id: str
@@ -775,7 +781,7 @@ class CourseQuizRollbackRequest(BaseModel):
     note: str = ''
 
 
-class CourseQuizRollbackOut(BaseModel):
+class CourseQuizRollbackOut(BackendUiStatusMixin):
     ok: bool
     course_quiz_instance_id: str
     status: str
@@ -801,7 +807,7 @@ class QuizAutoMapRequest(BaseModel):
     chapter_plan: list[QuizChapterPlanItem] = Field(default_factory=list)
 
 
-class QuizAutoMapOut(BaseModel):
+class QuizAutoMapOut(BackendUiStatusMixin):
     ok: bool
     openedx_course_id: str
     mode: str = 'preview'

@@ -3043,6 +3043,258 @@ class AcademicService:
             'assignment_not_graded_count': sum(int(item.get('assignment_not_graded_count') or 0) for item in items),
         }
 
+
+    def _training_teacher_report_lite_fast(
+        self,
+        user: UserContext,
+        *,
+        term_id: str,
+        branch: str | None,
+        campus: str | None,
+        search: str | None,
+        learning_status: str | None,
+        teacher_id: str | None,
+        page: int,
+        page_size: int,
+        decision: AccessDecision,
+    ) -> dict[str, Any] | None:
+        """Fast exact-lite report for the teacher-management list.
+
+        This path is used when the UI only needs the teacher overview rows. It
+        intentionally avoids hydrating nested classes, every student policy, and
+        exam-deadline evaluation for the full term. Those deep fields are still
+        available from the teacher drill-down/export paths.
+        """
+        status_filter = self._normalize_learning_list_filter(learning_status)
+        if teacher_id or status_filter in {'deadline_late', 'exam_not_eligible', 'exam_insufficient_data'}:
+            return None
+
+        query = self.db.query(
+            AcademicTeacher,
+            AcademicClass,
+            AcademicSubject,
+        ).join(
+            AcademicTeacherAssignment,
+            AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
+        ).join(
+            AcademicClass,
+            AcademicClass.id == AcademicTeacherAssignment.class_id,
+        ).join(
+            AcademicSubject,
+            AcademicSubject.id == AcademicClass.subject_id,
+        ).filter(
+            AcademicTeacher.active.is_(True),
+            AcademicClass.active.is_(True),
+            AcademicSubject.active.is_(True),
+        )
+        query = self._apply_academic_access_filter(query, user, decision)
+        query = query.filter(AcademicClass.term_id == term_id)
+        if branch:
+            query = query.filter(AcademicClass.branch == branch.strip().lower())
+        if campus:
+            query = query.filter(func.lower(AcademicClass.campus) == campus.strip().lower())
+        if search and search.strip():
+            like = f"%{search.strip()}%"
+            query = query.filter(or_(
+                AcademicTeacher.username.ilike(like),
+                AcademicTeacher.full_name.ilike(like),
+                AcademicTeacher.email.ilike(like),
+                AcademicClass.class_code.ilike(like),
+                AcademicSubject.subject_code.ilike(like),
+                AcademicSubject.subject_name.ilike(like),
+            ))
+
+        rows = query.order_by(
+            AcademicTeacher.full_name.asc().nullslast(),
+            AcademicTeacher.username.asc(),
+            AcademicSubject.subject_code.asc(),
+            AcademicClass.class_code.asc(),
+        ).all()
+        if not rows:
+            return {
+                'items': [],
+                'summary': self._teacher_report_summary_from_items([]),
+                'summary_scope': 'lite_filtered',
+                'total': 0,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': 0,
+                'has_next': False,
+                'cache': {'status': 'lite', 'scope_key': self._teacher_report_scope_key(term_id, branch, campus), 'row_count': 0},
+            }
+
+        class_by_id: dict[str, AcademicClass] = {}
+        teacher_rows: list[tuple[AcademicTeacher, AcademicClass, AcademicSubject]] = []
+        for teacher, cls, subject in rows:
+            class_by_id[str(cls.id)] = cls
+            teacher_rows.append((teacher, cls, subject))
+        class_ids = list(class_by_id.keys())
+
+        student_count_by_class = {
+            str(class_id): int(count or 0)
+            for class_id, count in self.db.query(
+                AcademicClassStudent.class_id,
+                func.count(AcademicClassStudent.id),
+            ).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(AcademicClassStudent.class_id).all()
+        }
+        sync_by_class = self._student_sync_summary_for_classes(class_ids)
+
+        class_overrides = self.db.query(AcademicClassCourseMapping).filter(
+            AcademicClassCourseMapping.class_id.in_(class_ids),
+            AcademicClassCourseMapping.active.is_(True),
+        ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast()).all() if class_ids else []
+        override_by_class = {item.class_id: item for item in class_overrides}
+        inherited_by_class = self.inherited_course_mappings_for_classes(list(class_by_id.values()))
+        course_by_class: dict[str, str | None] = {}
+        for class_id, cls in class_by_id.items():
+            mapping = override_by_class.get(class_id) or inherited_by_class.get(class_id)
+            course_by_class[class_id] = mapping.openedx_course_id if mapping else None
+
+        learning_by_class = self._learning_summary_by_class_ids(class_ids, course_by_class)
+        status_counts_by_class, _snapshot_by_class_student, _status_by_class_student = self._training_learning_status_counts_by_class(class_ids, course_by_class)
+
+        buckets: dict[str, dict[str, Any]] = {}
+        seen_teacher_classes: set[tuple[str, str]] = set()
+        for teacher, cls, subject in teacher_rows:
+            key = str(teacher.id)
+            bucket = buckets.setdefault(key, {
+                'teacher_id': str(teacher.id),
+                'teacher_code': teacher.teacher_code,
+                'teacher_username': teacher.username,
+                'teacher_name': teacher.full_name or teacher.username,
+                'teacher_email': teacher.email,
+                'campus': teacher.campus,
+                'branch': teacher.branch,
+                'subject_ids': set(),
+                'subject_codes': set(),
+                'class_ids': set(),
+                'student_count': 0,
+                'unique_student_count': 0,
+                'cms_synced_count': 0,
+                'cms_unsynced_count': 0,
+                'learning_enrolled_count': 0,
+                'learning_active_count': 0,
+                'learning_synced_count': 0,
+                'classes_without_course_count': 0,
+                'progress_values': [],
+                'grade_values': [],
+                'status_counts': {},
+                'last_synced_at': None,
+            })
+            class_id = str(cls.id)
+            pair = (key, class_id)
+            if pair in seen_teacher_classes:
+                continue
+            seen_teacher_classes.add(pair)
+            bucket['class_ids'].add(class_id)
+            bucket['subject_ids'].add(str(subject.id))
+            if subject.subject_code:
+                bucket['subject_codes'].add(str(subject.subject_code))
+            total_students = int(student_count_by_class.get(class_id, 0) or 0)
+            bucket['student_count'] += total_students
+            bucket['unique_student_count'] += total_students
+            sync_bucket = sync_by_class.get(class_id, {})
+            matched = int(sync_bucket.get('matched', 0) or 0)
+            bucket['cms_synced_count'] += matched
+            bucket['cms_unsynced_count'] += max(0, total_students - matched)
+            learning = learning_by_class.get(class_id, {})
+            bucket['learning_enrolled_count'] += int(learning.get('learning_enrolled_count') or 0)
+            bucket['learning_active_count'] += int(learning.get('learning_active_count') or 0)
+            bucket['learning_synced_count'] += int(learning.get('learning_synced_count') or 0)
+            if learning.get('learning_avg_progress_percent') is not None:
+                bucket['progress_values'].append(float(learning.get('learning_avg_progress_percent')))
+            if learning.get('learning_avg_grade_percent') is not None:
+                bucket['grade_values'].append(float(learning.get('learning_avg_grade_percent')))
+            last_synced_at = learning.get('learning_last_synced_at')
+            if last_synced_at and (bucket['last_synced_at'] is None or last_synced_at > bucket['last_synced_at']):
+                bucket['last_synced_at'] = last_synced_at
+            if not course_by_class.get(class_id):
+                bucket['classes_without_course_count'] += 1
+            for status_name, count in (status_counts_by_class.get(class_id) or {}).items():
+                bucket['status_counts'][status_name] = int(bucket['status_counts'].get(status_name, 0) or 0) + int(count or 0)
+
+        items: list[dict[str, Any]] = []
+        for bucket in buckets.values():
+            status_counts = dict(bucket['status_counts'])
+            student_total = int(bucket['student_count'] or 0)
+            avg_progress = round(sum(bucket['progress_values']) / len(bucket['progress_values']), 2) if bucket['progress_values'] else None
+            avg_grade = round(sum(bucket['grade_values']) / len(bucket['grade_values']), 2) if bucket['grade_values'] else None
+            risk_student_count = self._bounded_risk_count_from_status_counts(status_counts, student_total)
+            learning_alerts: list[str] = []
+            if int(bucket.get('classes_without_course_count') or 0):
+                learning_alerts.append(f"{int(bucket.get('classes_without_course_count') or 0)} lớp chưa ghép Course CMS")
+            if int(status_counts.get('cms_not_synced', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('cms_not_synced', 0) or 0)} SV chưa đồng bộ CMS")
+            if int(status_counts.get('not_enrolled', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('not_enrolled', 0) or 0)} SV chưa ghi danh CMS")
+            if int(status_counts.get('no_activity', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('no_activity', 0) or 0)} SV chưa học")
+            if int(status_counts.get('low_progress', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('low_progress', 0) or 0)} SV tiến độ thấp")
+            if int(status_counts.get('low_grade', 0) or 0):
+                learning_alerts.append(f"{int(status_counts.get('low_grade', 0) or 0)} SV điểm thấp")
+            items.append({
+                'teacher_id': bucket['teacher_id'],
+                'teacher_code': bucket['teacher_code'],
+                'teacher_username': bucket['teacher_username'],
+                'teacher_name': bucket['teacher_name'],
+                'teacher_email': bucket['teacher_email'],
+                'campus': bucket['campus'],
+                'branch': bucket['branch'],
+                'subject_count': len(bucket['subject_ids']),
+                'subject_codes': sorted(bucket['subject_codes']),
+                'class_count': len(bucket['class_ids']),
+                'student_count': student_total,
+                'unique_student_count': int(bucket['unique_student_count'] or 0),
+                'relearn_student_count': 0,
+                'total_relearn_count': 0,
+                'cms_synced_count': int(bucket['cms_synced_count'] or 0),
+                'cms_unsynced_count': int(bucket['cms_unsynced_count'] or 0),
+                'learning_enrolled_count': int(bucket['learning_enrolled_count'] or 0),
+                'learning_active_count': int(bucket['learning_active_count'] or 0),
+                'learning_synced_count': int(bucket['learning_synced_count'] or 0),
+                'classes_without_course_count': int(bucket['classes_without_course_count'] or 0),
+                'deadline_late_student_count': 0,
+                'deadline_late_quiz_count': 0,
+                'deadline_due_quiz_count': 0,
+                'exam_eligible_student_count': 0,
+                'exam_not_eligible_student_count': 0,
+                'exam_insufficient_data_student_count': 0,
+                'quiz_failed_count': 0,
+                'quiz_late_count': 0,
+                'quiz_not_attempted_count': 0,
+                'quiz_missing_deadline_count': 0,
+                'assignment_not_graded_count': 0,
+                'learning_avg_progress_percent': avg_progress,
+                'learning_avg_grade_percent': avg_grade,
+                'learning_avg_grade_10': self._percent_to_grade10(avg_grade),
+                'risk_student_count': risk_student_count,
+                'status_counts': status_counts,
+                'learning_alerts': learning_alerts,
+                'last_synced_at': bucket['last_synced_at'],
+            })
+        filtered_items = [item for item in items if self._teacher_report_item_matches_filter(item, status_filter)]
+        filtered_items.sort(key=lambda item: (str(item.get('teacher_name') or ''), str(item.get('teacher_username') or '')))
+        total = len(filtered_items)
+        total_pages = math.ceil(total / page_size) if total else 0
+        page_items = filtered_items[(page - 1) * page_size: page * page_size]
+        return {
+            'items': page_items,
+            'summary': self._teacher_report_summary_from_items(filtered_items),
+            'summary_scope': 'lite_filtered',
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
+            'has_next': page < total_pages,
+            'cache': {
+                'status': 'lite',
+                'scope_key': self._teacher_report_scope_key(term_id, branch, campus),
+                'row_count': len(rows),
+                'note': 'Danh sách nhanh: không hydrate lớp/sinh viên chi tiết. Mở Xem lớp để tải chi tiết giáo viên.',
+            },
+        }
+
     def _training_teacher_report_from_cache(
         self,
         *,
@@ -3241,6 +3493,21 @@ class AcademicService:
             )
             if cached_report is not None:
                 return cached_report
+        if term_id and not include_all and not include_students and not include_classes and not teacher_id:
+            lite_report = self._training_teacher_report_lite_fast(
+                user,
+                term_id=term_id,
+                branch=branch,
+                campus=campus,
+                search=search,
+                learning_status=status_filter,
+                teacher_id=teacher_id,
+                page=page,
+                page_size=page_size,
+                decision=decision,
+            )
+            if lite_report is not None:
+                return lite_report
         query = self.db.query(
             AcademicTeacher,
             AcademicTeacherAssignment,

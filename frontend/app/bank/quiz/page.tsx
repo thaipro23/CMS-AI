@@ -1,6 +1,7 @@
 'use client'
 
 import { formatVNDateTime } from '../../../lib/time'
+import { inlineMessageFromBackend } from '../../../lib/backendNotice'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
@@ -43,9 +44,10 @@ function quizSuffixFromChapterTitle(title: string | undefined | null) {
   return withoutPrefix || text || '1'
 }
 
-function isErrorMessage(message: string) {
-  const lower = message.toLowerCase()
-  return lower.includes('lỗi') || lower.includes('thất bại') || lower.includes('không') || lower.includes('failed')
+type InlineMessage = { tone: 'success' | 'danger' | 'warning' | 'info'; text: string }
+
+function messageClass(message: InlineMessage) {
+  return message.tone === 'danger' ? 'danger' : message.tone === 'warning' ? 'warning' : message.tone === 'info' ? 'info' : 'success'
 }
 
 function defaultActionFromMapping(item: QuizMapping): QuizChapterAction {
@@ -75,7 +77,7 @@ function actionStatusClass(item: EffectiveQuizMapping) {
 }
 
 function actionStatusText(item: EffectiveQuizMapping) {
-  if (!item.effectiveRequiresQuiz) return 'Không tạo'
+  if (!item.effectiveRequiresQuiz) return 'Bỏ qua'
   if (item.effectiveReady) return item.action === 'final_test' ? 'Sẵn sàng tạo Final test' : 'Sẵn sàng tạo Quiz'
   return 'Cần Release + Section'
 }
@@ -99,7 +101,7 @@ export default function BankQuizPage() {
   const [busy, setBusy] = useState(false)
   const [historyBusy, setHistoryBusy] = useState(false)
   const [creatingKey, setCreatingKey] = useState<string>('')
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState<InlineMessage | null>(null)
   const [selectedOfferingId, setSelectedOfferingId] = useState<string>('')
   const [createModal, setCreateModal] = useState<PendingCreate | null>(null)
 
@@ -174,7 +176,7 @@ export default function BankQuizPage() {
 
   async function runPreview(offeringId = selectedOfferingId, keepPlan = false) {
     setBusy(true)
-    setMessage('')
+    setMessage(null)
     setAutoMap(null)
     try {
       const result = await previewQuizAutoMap(headers, {
@@ -193,7 +195,7 @@ export default function BankQuizPage() {
       if (picked) setSelectedOfferingId(picked)
       await loadHistory(courseId.trim())
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không tự kiểm tra được course Open edX')
+      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Không tự kiểm tra được course Open edX' })
     } finally {
       setBusy(false)
     }
@@ -201,7 +203,7 @@ export default function BankQuizPage() {
 
   async function runApply() {
     setBusy(true)
-    setMessage('')
+    setMessage(null)
     try {
       const result = await applyQuizAutoMap(headers, {
         openedx_course_id: courseId.trim(),
@@ -217,10 +219,10 @@ export default function BankQuizPage() {
       hydrateActionDefaults(result)
       const picked = result.summary?.selected_subject_offering_id || result.offering?.id || ''
       if (picked) setSelectedOfferingId(picked)
-      setMessage(result.message || 'Đã lưu cấu hình map Khóa học ID.')
+      setMessage(inlineMessageFromBackend(result, result.message || 'Đã lưu cấu hình map Khóa học ID.', result.ok ? 'success' : 'warning'))
       await loadHistory(courseId.trim())
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Lưu cấu hình tự động thất bại')
+      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Lưu cấu hình tự động thất bại' })
     } finally {
       setBusy(false)
     }
@@ -240,7 +242,7 @@ export default function BankQuizPage() {
     if (!item.release_id || !item.course_chapter_mapping_id || !item.effectiveRequiresQuiz) return
     const config = configForAction(item.action)
     setCreatingKey(item.chapter_id)
-    setMessage('')
+    setMessage(null)
     try {
       const result = await createQuizFromBankRelease(headers, item.release_id, {
         course_chapter_mapping_id: item.course_chapter_mapping_id,
@@ -260,10 +262,10 @@ export default function BankQuizPage() {
         native_timed_exam: false,
       })
       const timerText = config.timerEnabled ? ` · Timer ${config.timeLimitMinutes} phút · làm lại sau ${config.retakeCooldownMinutes} phút` : ''
-      setMessage((result.message || `Đã tạo ${actionLabel(item.action)} cho ${item.chapter_title}`) + timerText)
+      setMessage(inlineMessageFromBackend(result, (result.message || `Đã tạo ${actionLabel(item.action)} cho ${item.chapter_title}`) + timerText, result.ok ? 'success' : 'warning'))
       if (refreshHistory) await loadHistory(courseId.trim())
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : `Tạo bài kiểm tra cho ${item.chapter_title} thất bại`)
+      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : `Tạo bài kiểm tra cho ${item.chapter_title} thất bại` })
     } finally {
       setCreatingKey('')
     }
@@ -281,13 +283,13 @@ export default function BankQuizPage() {
     }
     setCreateModal(null)
     setBusy(true)
-    setMessage(`Đang tạo ${readyRows.length} bài kiểm tra. Vui lòng chờ...`)
+    setMessage({ tone: 'info', text: `Đang tạo ${readyRows.length} bài kiểm tra. Vui lòng chờ...` })
     try {
       for (const item of readyRows) {
         // eslint-disable-next-line no-await-in-loop
         await executeCreateOneQuiz(item, false)
       }
-      setMessage(`Đã gửi tạo ${readyRows.length} bài kiểm tra.`)
+      setMessage({ tone: 'success', text: `Đã gửi tạo ${readyRows.length} bài kiểm tra.` })
       await loadHistory(courseId.trim())
     } finally {
       setBusy(false)
@@ -346,7 +348,7 @@ export default function BankQuizPage() {
       setAutoMap(null)
       setSelectedOfferingId('')
       setHistory([])
-      setMessage('')
+      setMessage(null)
       setChapterActions({})
       return undefined
     }
@@ -372,7 +374,7 @@ export default function BankQuizPage() {
       </div>
     </section>
 
-    {message ? <div className={classNames('alert quiz-inline-message', isErrorMessage(message) ? 'danger' : 'success')}>{message}</div> : null}
+    {message ? <div className={classNames('alert quiz-inline-message', messageClass(message))}>{message.text}</div> : null}
 
     <div className="quiz-workbench-grid">
       <aside className="quiz-settings-panel card" aria-label="Cấu hình tạo bài kiểm tra">
@@ -449,7 +451,8 @@ export default function BankQuizPage() {
                 <td>{item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small><code>{item.openedx_section_id}</code></small></> : <span className="status danger">Chưa tìm thấy</span>}</td>
                 <td>{item.release_code ? <><b>{item.release_code}</b><small>{item.openedx_library_key}</small></> : item.effectiveRequiresQuiz ? <span className="status danger">Chưa publish</span> : <span className="muted">Không cần Release</span>}</td>
                 <td>{percent(item.match_score)}<small>{item.match_reason}</small></td>
-                <td>
+                <td className="quiz-status-cell">
+                  <div className="quiz-status-control">
                   <select className="input compact-select" value={item.action === 'assignment' ? 'skip' : item.action} disabled={busy || Boolean(creatingKey)} onChange={(event) => {
                     const next = event.target.value as QuizChapterAction
                     setChapterActions((current) => ({ ...current, [item.chapter_id]: next }))
@@ -460,6 +463,7 @@ export default function BankQuizPage() {
                   </select>
                   <span className={classNames('status', actionStatusClass(item))}>{actionStatusText(item)}</span>
                   {item.course_chapter_mapping_id ? <small>Đã lưu cấu hình</small> : applied && item.effectiveRequiresQuiz ? <small>Cần bấm Lưu cấu hình</small> : null}
+                  </div>
                 </td>
                 <td><button className="btn small" disabled={!item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final test' : 'Tạo Quiz'}</button></td>
               </tr>)}</tbody>
@@ -481,10 +485,10 @@ export default function BankQuizPage() {
             setBusy(true)
             try {
               const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử bài kiểm tra' })
-              setMessage(result.message)
+              setMessage(inlineMessageFromBackend(result, result.message || 'Đã khôi phục bài kiểm tra.', result.ok ? 'success' : 'warning'))
               await loadHistory(courseId.trim())
             } catch (error) {
-              setMessage(error instanceof Error ? error.message : 'Khôi phục thất bại')
+              setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Khôi phục thất bại' })
             } finally {
               setBusy(false)
             }

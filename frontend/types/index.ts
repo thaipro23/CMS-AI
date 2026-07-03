@@ -2,6 +2,13 @@ export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | undefined | JsonValue[] | { [key: string]: JsonValue }
 export type JsonObject = { [key: string]: JsonValue }
 
+export type UiStatus = 'success' | 'error' | 'warning' | 'info'
+export type BackendUiNotice = {
+  ui_status?: UiStatus | string | null
+  ui_title?: string | null
+  ui_message?: string | null
+}
+
 export type Role = 'admin' | 'teacher' | 'reviewer' | 'viewer'
 
 export type Permission =
@@ -1297,7 +1304,7 @@ export type BankRetireResult = {
 }
 
 
-export type BankReleaseQuizPlan = {
+export type BankReleaseQuizPlan = BackendUiNotice & {
   ok: boolean
   planner_engine?: string | null
   uses_llm: boolean
@@ -1317,7 +1324,7 @@ export type BankReleaseQuizPlan = {
   message: string
 }
 
-export type BankReleaseQuizCreateResult = {
+export type BankReleaseQuizCreateResult = BackendUiNotice & {
   ok: boolean
   status: string
   course_quiz_instance_id: string
@@ -1413,7 +1420,7 @@ export type QuizAutoMapCandidate = {
   selection_note?: string | null
 }
 
-export type QuizAutoMapResult = {
+export type QuizAutoMapResult = BackendUiNotice & {
   ok: boolean
   openedx_course_id: string
   mode: 'preview' | 'applied' | string
@@ -1449,7 +1456,7 @@ export type QuizAutoMapResult = {
   message: string
 }
 
-export type CourseQuizRollbackResult = {
+export type CourseQuizRollbackResult = BackendUiNotice & {
   ok: boolean
   course_quiz_instance_id: string
   status: string
