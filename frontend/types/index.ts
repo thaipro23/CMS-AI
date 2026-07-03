@@ -2245,6 +2245,56 @@ export type AnalyticsLearningBehaviorClassification =
   | 'NORMAL'
   | string
 
+
+export type AnalyticsClassResultDoctor = {
+  status: 'ready' | 'partial' | 'waiting' | 'blocked' | 'needs_recalculate' | string
+  data_gap: 'READY' | 'PARTIAL_SNAPSHOT' | 'HAS_ACTIVITY_NO_SNAPSHOT' | 'NO_TRACKING_EVENTS' | 'NO_COURSE_MAPPING' | 'AMBIGUOUS_COURSE_MAPPING' | 'NO_ROSTER' | 'CLASS_NOT_FOUND' | string
+  message?: string | null
+  recommended_action?: string | null
+  class?: {
+    class_id?: string | null
+    class_code?: string | null
+    class_name?: string | null
+    campus?: string | null
+    branch?: string | null
+    term_id?: string | null
+    term_name?: string | null
+    subject_id?: string | null
+    subject_code?: string | null
+  }
+  course_mapping?: {
+    status?: string | null
+    resolved_course_id?: string | null
+    mapping_source?: string | null
+    candidate_count?: number
+    mapped_course_ids?: string[]
+    candidates?: Array<Record<string, any>>
+    message?: string | null
+  }
+  resolved_course_id?: string | null
+  roster_count: number
+  snapshot_count: number
+  missing_snapshot_count: number
+  tracking_event_count: number
+  tracking_user_count?: number
+  latest_tracking_event_at?: string | null
+  video_progress_count?: number
+  video_user_count?: number
+  session_progress_count?: number
+  session_user_count?: number
+  session_structure_count?: number
+  latest_behavior_calculated_at?: string | null
+  last_recalculate_job?: Record<string, any> | null
+  active_recalculate_job?: Record<string, any> | null
+  recalculate?: {
+    can_enqueue?: boolean
+    course_id?: string | null
+    disabled_reasons?: string[]
+    guard?: Record<string, any>
+  }
+  safe_policy?: string
+}
+
 export type AnalyticsLearningBehaviorSummary = {
   total_students: number
   roster_count?: number
@@ -2260,6 +2310,7 @@ export type AnalyticsLearningBehaviorSummary = {
   current_week?: number | null
   due_sessions_this_week?: number[] | null
   overdue_sessions?: number[] | null
+  diagnostics?: AnalyticsClassResultDoctor | null
   disclaimer?: string
 }
 
@@ -2349,6 +2400,8 @@ export type AnalyticsClassBehaviorOverviewResponse = {
 export type AnalyticsLearningBehaviorListResponse = {
   total: number
   items: AnalyticsLearningBehaviorRow[]
+  roster_fallback?: boolean
+  diagnostics?: AnalyticsClassResultDoctor | null
 }
 
 

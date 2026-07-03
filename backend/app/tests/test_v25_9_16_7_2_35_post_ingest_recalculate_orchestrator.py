@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.35'
+VERSION = '25.9.16.7.2.37'
 
 
 def read(path: str) -> str:
@@ -16,7 +16,7 @@ def test_v35_version_is_synchronized_across_runtime_fallbacks_and_examples():
     assert f'APP_VERSION={VERSION}' in read('.env.example')
     assert f'APP_VERSION={VERSION}' in read('.env.production.example')
     assert f'# AI Server Open edX — v{VERSION}' in read('README.md')
-    assert f'# v{VERSION} — Analytics Post-Ingest Recalculate Orchestrator' in read('RUN_CURRENT.md')
+    assert f'# v{VERSION} — Analytics Class Result Doctor + Production Readiness Repair' in read('RUN_CURRENT.md')
 
 
 def test_post_ingest_recalculate_settings_and_env_are_exposed():
@@ -62,6 +62,6 @@ def test_orchestrator_is_class_scoped_debounced_and_capped_not_per_student():
 
 def test_changelog_documents_v35_before_v34_and_no_new_migration():
     changelog = read('CHANGELOG.md')
-    assert changelog.startswith('## v25.9.16.7.2.35 — Analytics Post-Ingest Recalculate Orchestrator')
-    assert changelog.index('## v25.9.16.7.2.35 — Analytics Post-Ingest Recalculate Orchestrator') < changelog.index('## v25.9.16.7.2.34 — Production Polish Version Sync + Analytics Roster QA')
+    assert changelog.startswith('## v25.9.16.7.2.37 — Analytics Class Result Doctor + Production Readiness Repair')
+    assert changelog.index('## v25.9.16.7.2.37 — Analytics Class Result Doctor + Production Readiness Repair') < changelog.index('## v25.9.16.7.2.34 — Production Polish Version Sync + Analytics Roster QA')
     assert '- No migration.' in changelog.split('## v25.9.16.7.2.34', 1)[0]

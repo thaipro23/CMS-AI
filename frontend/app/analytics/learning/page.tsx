@@ -9,7 +9,9 @@ import {
   getAcademicTerms,
   getAnalyticsClassLearningBehavior,
   getAnalyticsClassLearningBehaviorSummary,
+  getAnalyticsClassResultDoctor,
   getAnalyticsProductionReadiness,
+  enqueueAnalyticsClassDoctorRecalculate,
   getAnalyticsStudentLearningBehaviorDetail,
   getAnalyticsSubjectClassBehaviorOverview,
 } from '../../../lib/api'
@@ -19,6 +21,7 @@ import {
   AcademicTerm,
   AnalyticsClassBehaviorOverviewItem,
   AnalyticsClassBehaviorOverviewSummary,
+  AnalyticsClassResultDoctor,
   AnalyticsLearningBehaviorRow,
   AnalyticsLearningBehaviorSummary,
   AnalyticsProductionReadinessReport,
@@ -107,6 +110,26 @@ function compactSubjectLabel(item: AcademicSubjectManagement) {
 function classDataStatusLabel(item: AnalyticsClassBehaviorOverviewItem) {
   if (item.data_status === 'not_calculated') return 'Chưa có kết quả'
   return `${item.snapshot_count}/${item.student_count} SV có kết quả`
+}
+
+function doctorStatusClass(status?: string | null) {
+  const value = String(status || '').toLowerCase()
+  if (value === 'ready') return 'status-pill success'
+  if (value === 'partial' || value === 'waiting' || value === 'needs_recalculate') return 'status-pill warning'
+  return 'status-pill danger'
+}
+
+function doctorGapLabel(gap?: string | null) {
+  const value = String(gap || '').toUpperCase()
+  if (value === 'READY') return 'Dữ liệu sẵn sàng'
+  if (value === 'PARTIAL_SNAPSHOT') return 'Thiếu một phần snapshot'
+  if (value === 'HAS_ACTIVITY_NO_SNAPSHOT') return 'Có hoạt động, thiếu snapshot'
+  if (value === 'NO_TRACKING_EVENTS') return 'Chưa thấy event học online'
+  if (value === 'NO_COURSE_MAPPING') return 'Chưa ghép Course CMS'
+  if (value === 'AMBIGUOUS_COURSE_MAPPING') return 'Mapping Course chưa rõ'
+  if (value === 'NO_ROSTER') return 'Chưa có roster AP'
+  if (value === 'CLASS_NOT_FOUND') return 'Không tìm thấy lớp'
+  return value || 'Chưa kiểm tra'
 }
 
 function campusLabel(campus: string, campuses: AcademicCampus[]) {
@@ -274,6 +297,9 @@ export default function AnalyticsLearningPage() {
   const [detail, setDetail] = useState<AnalyticsStudentLearningBehaviorDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [productionReadiness, setProductionReadiness] = useState<AnalyticsProductionReadinessReport | null>(null)
+  const [classDoctor, setClassDoctor] = useState<AnalyticsClassResultDoctor | null>(null)
+  const [doctorLoading, setDoctorLoading] = useState(false)
+  const [recalculateLoading, setRecalculateLoading] = useState(false)
 
   const selectedTerm = useMemo(() => terms.find((item) => item.id === termId) || null, [terms, termId])
   const selectedSubject = useMemo(() => subjects.find((item) => item.id === subjectId) || null, [subjects, subjectId])
@@ -310,10 +336,12 @@ export default function AnalyticsLearningPage() {
       setClassOverview([])
       setRows([])
       setSummary(EMPTY_SUMMARY)
+      setClassDoctor(null)
     }
     if (nextStep === 'classes') {
       setRows([])
       setSummary(EMPTY_SUMMARY)
+      setClassDoctor(null)
       setClassOverviewPage(1)
     }
     updateUrl({ step: nextStep, subjectId: nextSubjectId, classId: nextClassId })
@@ -436,30 +464,35 @@ export default function AnalyticsLearningPage() {
       setSummary(EMPTY_SUMMARY)
       setRows([])
       setTotalRows(0)
+      setClassDoctor(null)
       return
     }
     let cancelled = false
     setLoadingResults(true)
     setMessage('')
+    setDoctorLoading(true)
     Promise.all([
       getAnalyticsClassLearningBehaviorSummary(headers, classId, effectiveCourseId),
       getAnalyticsClassLearningBehavior(headers, classId, { courseId: effectiveCourseId, classification, limit: PAGE_SIZE, offset: 0 }),
+      getAnalyticsClassResultDoctor(headers, classId, effectiveCourseId),
     ])
-      .then(([nextSummary, result]) => {
+      .then(([nextSummary, result, doctor]) => {
         if (cancelled) return
         setSummary(nextSummary || EMPTY_SUMMARY)
         setRows(result.items || [])
-        setTotalRows(result.total || 0)
+        setTotalRows(result.total || nextSummary?.roster_count || result.items?.length || 0)
+        setClassDoctor(doctor || nextSummary?.diagnostics || result.diagnostics || null)
       })
       .catch((error) => {
         if (!cancelled) {
           setSummary(EMPTY_SUMMARY)
           setRows([])
           setTotalRows(0)
+          setClassDoctor(null)
           setMessage(error instanceof Error ? error.message : 'Không tải được kết quả học online')
         }
       })
-      .finally(() => { if (!cancelled) setLoadingResults(false) })
+      .finally(() => { if (!cancelled) { setLoadingResults(false); setDoctorLoading(false) } })
     return () => { cancelled = true }
   }, [headers, classId, effectiveCourseId, classification, step])
 
@@ -499,6 +532,40 @@ export default function AnalyticsLearningPage() {
       setMessage(error instanceof Error ? error.message : 'Không tải được lý do chi tiết')
     } finally {
       setDetailLoading(false)
+    }
+  }
+
+  const refreshClassDoctor = async () => {
+    if (!classId) return
+    setDoctorLoading(true)
+    setMessage('')
+    try {
+      const doctor = await getAnalyticsClassResultDoctor(headers, classId, effectiveCourseId)
+      setClassDoctor(doctor)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái dữ liệu lớp')
+    } finally {
+      setDoctorLoading(false)
+    }
+  }
+
+  const enqueueClassRecalculate = async () => {
+    if (!classId) return
+    const courseForJob = classDoctor?.recalculate?.course_id || classDoctor?.resolved_course_id || effectiveCourseId
+    if (!courseForJob) {
+      setMessage('Lớp chưa có Course CMS/Open edX rõ ràng nên chưa thể tính lại.')
+      return
+    }
+    setRecalculateLoading(true)
+    setMessage('')
+    try {
+      const job = await enqueueAnalyticsClassDoctorRecalculate(headers, classId, courseForJob, { force: true, limit: 500 })
+      setMessage(`Đã đưa tác vụ tính lại lớp vào hàng đợi: #${job.id || 'job'}. Theo dõi ở /jobs.`)
+      await refreshClassDoctor()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Không đưa được tác vụ tính lại vào hàng đợi')
+    } finally {
+      setRecalculateLoading(false)
     }
   }
 
@@ -556,6 +623,7 @@ export default function AnalyticsLearningPage() {
 
       {productionReadiness && <div className={productionReadiness.ready_for_production ? 'alert success compact-alert' : 'alert warning compact-alert'}>
         <b>Production readiness</b> · {productionReadiness.ready_for_production ? 'Sẵn sàng production' : 'Chưa sẵn sàng production'} · Cần xử lý trước production: {productionReadiness.blocker_count || 0} blocker, {productionReadiness.warning_count || 0} cảnh báo.
+        {!productionReadiness.ready_for_production && Array.isArray(productionReadiness.issues) && productionReadiness.issues.length > 0 && <span className="analytics-readiness-issues"> · {productionReadiness.issues.slice(0, 3).map((item) => item.code || item.message).filter(Boolean).join(', ')}</span>}
       </div>}
       <div className="alert info compact-alert">{permissionText}</div>
       {message && <div className="academic-inline-error"><b>Cần kiểm tra</b><span>{message}</span></div>}
@@ -677,6 +745,36 @@ export default function AnalyticsLearningPage() {
           <button className="btn secondary small" type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>Quay lại môn</button>
           <span className="status-pill neutral">{totalRows ? `1-${Math.min(totalRows, PAGE_SIZE)} / ${totalRows}` : '0 sinh viên'}</span>
         </div>
+      </div>
+
+      <div className="analytics-class-doctor-panel">
+        <div className="section-head list-card-head compact-head">
+          <div>
+            <h4>Trạng thái dữ liệu lớp</h4>
+            <p>{doctorLoading ? 'Đang kiểm tra roster, mapping, event và snapshot...' : (classDoctor?.message || 'Kiểm tra nhanh để biết vì sao lớp có thể đang 0/N snapshot.')}</p>
+          </div>
+          <div className="teacher-compact-actions">
+            {classDoctor && <span className={doctorStatusClass(classDoctor.status)}>{doctorGapLabel(classDoctor.data_gap)}</span>}
+            <button className="btn secondary small" type="button" onClick={refreshClassDoctor} disabled={doctorLoading}>Kiểm tra dữ liệu lớp</button>
+            <button className="btn primary small" type="button" onClick={enqueueClassRecalculate} disabled={recalculateLoading || doctorLoading || !classDoctor?.recalculate?.can_enqueue}>{recalculateLoading ? 'Đang đưa job...' : 'Tính lại lớp này'}</button>
+          </div>
+        </div>
+        <div className="academic-summary-strip analytics-doctor-strip">
+          <div><span>Roster AP</span><b>{classDoctor?.roster_count ?? summary.roster_count ?? 0}</b></div>
+          <div><span>Snapshot</span><b>{classDoctor?.snapshot_count ?? summary.snapshot_count ?? 0}</b></div>
+          <div><span>Thiếu snapshot</span><b>{classDoctor?.missing_snapshot_count ?? summary.missing_snapshot_count ?? 0}</b></div>
+          <div><span>Course CMS</span><b>{classDoctor?.resolved_course_id || effectiveCourseId || 'Chưa ghép'}</b></div>
+          <div><span>Event đã ingest</span><b>{classDoctor?.tracking_event_count ?? 0}</b></div>
+          <div><span>User có event</span><b>{classDoctor?.tracking_user_count ?? 0}</b></div>
+          <div><span>Video progress</span><b>{classDoctor?.video_progress_count ?? 0}</b></div>
+          <div><span>Session progress</span><b>{classDoctor?.session_progress_count ?? 0}</b></div>
+        </div>
+        {classDoctor && <div className="alert info compact-alert">
+          <b>Gợi ý xử lý</b> · {classDoctor.recommended_action || 'Theo dõi ingest/recalculate.'}
+          {classDoctor.active_recalculate_job ? ` · Đang có job ${classDoctor.active_recalculate_job.status || ''}` : ''}
+          {classDoctor.latest_tracking_event_at ? ` · Event gần nhất: ${formatVNDateTime(classDoctor.latest_tracking_event_at)}` : ''}
+        </div>}
+        {classDoctor?.course_mapping?.status === 'ambiguous' && <div className="alert warning compact-alert">Có nhiều Course CMS có thể khớp lớp này. Hệ thống không tự tính bừa; hãy tạo mapping lớp rõ ràng trước.</div>}
       </div>
 
       <div className="academic-summary-strip analytics-summary-strip analytics-result-only-summary">

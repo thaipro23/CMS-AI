@@ -106,6 +106,7 @@ import {
   AcademicAssignmentDefenseScore,
   AnalyticsLearningBehaviorSummary,
   AnalyticsLearningBehaviorListResponse,
+  AnalyticsClassResultDoctor,
   AnalyticsClassBehaviorOverviewResponse,
   AnalyticsStudentLearningBehaviorDetail,
   AnalyticsLearningDashboardResponse,
@@ -3516,6 +3517,40 @@ export async function getAnalyticsSubjectClassBehaviorOverview(
     await apiFetch(
       `${API}/analytics/subjects/${encodeURIComponent(subjectId)}/classes/learning-behavior/overview?${params.toString()}`,
       { credentials: "include", headers },
+    ),
+  );
+}
+
+
+export async function getAnalyticsClassResultDoctor(
+  headers: HeadersInit,
+  classId: string,
+  courseId?: string | null,
+): Promise<AnalyticsClassResultDoctor> {
+  const params = new URLSearchParams();
+  if (courseId?.trim()) params.set("course_id", courseId.trim());
+  return parseResponse(
+    await apiFetch(
+      `${API}/analytics/classes/${encodeURIComponent(classId)}/doctor?${params.toString()}`,
+      { credentials: "include", headers },
+    ),
+  );
+}
+
+export async function enqueueAnalyticsClassDoctorRecalculate(
+  headers: HeadersInit,
+  classId: string,
+  courseId?: string | null,
+  payload: { force?: boolean; limit?: number | null } = {},
+): Promise<AcademicClassSyncJob> {
+  const params = new URLSearchParams();
+  if (courseId?.trim()) params.set("course_id", courseId.trim());
+  if (payload.force) params.set("force", "true");
+  if (payload.limit) params.set("limit", String(payload.limit));
+  return parseResponse(
+    await apiFetch(
+      `${API}/analytics/classes/${encodeURIComponent(classId)}/doctor/recalculate?${params.toString()}`,
+      { method: "POST", credentials: "include", headers },
     ),
   );
 }

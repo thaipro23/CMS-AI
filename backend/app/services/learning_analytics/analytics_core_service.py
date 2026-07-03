@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot
+from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot, AcademicSubject, AcademicTerm
 from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
@@ -2606,6 +2606,290 @@ class LearningAnalyticsCoreService:
         label, count = max(candidates, key=lambda item: item[1])
         return label if count > 0 else 'INSUFFICIENT_DATA'
 
+
+    @staticmethod
+    def _iso_or_none(value: Any) -> str | None:
+        return value.isoformat() if value else None
+
+    def _class_course_mapping_diagnostics(self, *, class_id: str, preferred_course_id: str | None = None) -> dict[str, Any]:
+        """Inspect class -> Open edX course resolution without writing data.
+
+        Production incidents around /analytics/learning usually come from a
+        missing or ambiguous course mapping, not from the classifier itself. This
+        diagnostic keeps the resolver transparent and conservative: exact class
+        override wins, inherited subject/term mappings are listed, and ambiguous
+        candidates are not auto-selected.
+        """
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls:
+            return {
+                'status': 'missing_class',
+                'resolved_course_id': preferred_course_id,
+                'mapping_source': 'request' if preferred_course_id else None,
+                'candidate_count': 0,
+                'candidates': [],
+                'message': 'Không tìm thấy lớp trong AcademicClass.',
+            }
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add_candidate(course_id: str | None, source: str, score: int, mapping: Any = None, note: str = '') -> None:
+            clean = str(course_id or '').strip()
+            if not clean:
+                return
+            key = (clean, source)
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append({
+                'course_id': clean,
+                'source': source,
+                'score': int(score),
+                'mapping_id': str(getattr(mapping, 'id', '') or '') or None,
+                'validation_status': getattr(mapping, 'validation_status', None),
+                'updated_at': self._iso_or_none(getattr(mapping, 'updated_at', None)),
+                'note': note,
+            })
+
+        if preferred_course_id:
+            add_candidate(preferred_course_id, 'request', 100, None, 'Course ID được truyền từ UI/API.')
+
+        direct_rows = self.db.query(AcademicClassCourseMapping).filter(
+            AcademicClassCourseMapping.class_id == class_id,
+            AcademicClassCourseMapping.active.is_(True),
+        ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast()).all()
+        for row in direct_rows:
+            add_candidate(row.openedx_course_id, 'class_override', 90, row, 'Mapping trực tiếp theo lớp.')
+
+        mappings = self.db.query(AcademicCourseMapping).filter(
+            AcademicCourseMapping.term_id == cls.term_id,
+            AcademicCourseMapping.subject_id == cls.subject_id,
+            AcademicCourseMapping.active.is_(True),
+        ).all()
+        for row in mappings:
+            score = 30
+            if (row.block_id or None) == (cls.block_id or None):
+                score += 20
+            elif row.block_id is None:
+                score += 5
+            if (row.campus or '').strip().lower() == (cls.campus or '').strip().lower():
+                score += 15
+            elif not row.campus:
+                score += 3
+            if (row.branch or '').strip().lower() == (cls.branch or '').strip().lower():
+                score += 15
+            elif not row.branch:
+                score += 3
+            add_candidate(row.openedx_course_id, 'subject_term_mapping', score, row, 'Mapping kế thừa theo môn/kỳ/cơ sở/hệ.')
+
+        candidates.sort(key=lambda item: (int(item.get('score') or 0), str(item.get('updated_at') or '')), reverse=True)
+        course_ids = []
+        for item in candidates:
+            cid = str(item.get('course_id') or '')
+            if cid and cid not in course_ids:
+                course_ids.append(cid)
+
+        if not course_ids:
+            status = 'missing'
+            resolved = None
+            source = None
+            message = 'Lớp chưa ghép Course CMS/Open edX.'
+        elif len(course_ids) == 1:
+            status = 'resolved'
+            resolved = course_ids[0]
+            source = next((item.get('source') for item in candidates if item.get('course_id') == resolved), None)
+            message = 'Đã xác định được Course CMS/Open edX cho lớp.'
+        else:
+            top_score = int(candidates[0].get('score') or 0)
+            top_courses = [str(item.get('course_id')) for item in candidates if int(item.get('score') or 0) == top_score]
+            if len(set(top_courses)) == 1:
+                status = 'resolved'
+                resolved = top_courses[0]
+                source = next((item.get('source') for item in candidates if item.get('course_id') == resolved), None)
+                message = 'Đã chọn course có độ khớp cao nhất.'
+            else:
+                status = 'ambiguous'
+                resolved = None
+                source = None
+                message = 'Có nhiều Course CMS có thể khớp lớp này; hệ thống không tự chọn bừa.'
+
+        return {
+            'status': status,
+            'resolved_course_id': resolved,
+            'mapping_source': source,
+            'candidate_count': len(course_ids),
+            'mapped_course_ids': course_ids,
+            'candidates': candidates[:10],
+            'message': message,
+        }
+
+    def class_result_doctor(self, *, class_id: str, course_id: str | None = None) -> dict[str, Any]:
+        """Operational doctor for the 0/N analytics result problem.
+
+        The result page needs to distinguish an empty class from a class whose AP
+        roster exists but analytics snapshots have not been produced yet. This
+        method reads DB aggregates only; it never scans tracking.log directly.
+        """
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls:
+            return {
+                'status': 'blocked',
+                'data_gap': 'CLASS_NOT_FOUND',
+                'class_id': class_id,
+                'message': 'Không tìm thấy lớp trong dữ liệu AP/CMS.',
+                'recommended_action': 'Đồng bộ lại AP/CMS trước khi kiểm tra học online.',
+                'safe_policy': 'signals_only_not_violation',
+            }
+
+        subject = self.db.get(AcademicSubject, cls.subject_id) if getattr(cls, 'subject_id', None) else None
+        term = self.db.get(AcademicTerm, cls.term_id) if getattr(cls, 'term_id', None) else None
+        roster = self._class_student_roster(class_id)
+        roster_usernames = [str(item.get('username') or '').strip() for item in roster if str(item.get('username') or '').strip()]
+        mapping = self._class_course_mapping_diagnostics(class_id=class_id, preferred_course_id=course_id)
+        resolved_course_id = mapping.get('resolved_course_id') or course_id
+
+        snapshot_q = self.db.query(AnalyticsLearningBehaviorSnapshot).filter(AnalyticsLearningBehaviorSnapshot.class_id == class_id)
+        if resolved_course_id:
+            snapshot_q = snapshot_q.filter(AnalyticsLearningBehaviorSnapshot.course_id == resolved_course_id)
+        snapshot_count = int(snapshot_q.count() or 0)
+        latest_snapshot = snapshot_q.order_by(AnalyticsLearningBehaviorSnapshot.calculated_at.desc()).first()
+
+        tracking_event_count = 0
+        tracking_user_count = 0
+        latest_tracking_event_at = None
+        video_progress_count = 0
+        session_progress_count = 0
+        video_user_count = 0
+        session_user_count = 0
+        session_structure_count = 0
+        if resolved_course_id:
+            event_q = self.db.query(AnalyticsTrackingEvent).filter(AnalyticsTrackingEvent.course_id == resolved_course_id)
+            if roster_usernames:
+                event_q = event_q.filter(AnalyticsTrackingEvent.username.in_(roster_usernames))
+            tracking_event_count = int(event_q.count() or 0)
+            tracking_user_count = int(event_q.with_entities(func.count(func.distinct(AnalyticsTrackingEvent.username))).scalar() or 0)
+            latest_tracking_event_at = event_q.with_entities(func.max(AnalyticsTrackingEvent.event_time)).scalar()
+
+            video_q = self.db.query(AnalyticsStudentVideoProgress).filter(AnalyticsStudentVideoProgress.course_id == resolved_course_id)
+            session_q = self.db.query(AnalyticsStudentSessionProgress).filter(AnalyticsStudentSessionProgress.course_id == resolved_course_id)
+            if roster_usernames:
+                video_q = video_q.filter(AnalyticsStudentVideoProgress.username.in_(roster_usernames))
+                session_q = session_q.filter(AnalyticsStudentSessionProgress.username.in_(roster_usernames))
+            video_progress_count = int(video_q.count() or 0)
+            session_progress_count = int(session_q.count() or 0)
+            video_user_count = int(video_q.with_entities(func.count(func.distinct(AnalyticsStudentVideoProgress.username))).scalar() or 0)
+            session_user_count = int(session_q.with_entities(func.count(func.distinct(AnalyticsStudentSessionProgress.username))).scalar() or 0)
+            session_structure_count = int(self.db.query(AnalyticsCourseSession.id).filter(AnalyticsCourseSession.course_id == resolved_course_id, AnalyticsCourseSession.active.is_(True)).count() or 0)
+
+        latest_job = self.db.query(AcademicClassSyncJob).filter(
+            AcademicClassSyncJob.class_id == class_id,
+            AcademicClassSyncJob.job_type == 'learning_analytics_recalculate',
+        ).order_by(AcademicClassSyncJob.created_at.desc()).first()
+        active_job = self.db.query(AcademicClassSyncJob).filter(
+            AcademicClassSyncJob.class_id == class_id,
+            AcademicClassSyncJob.job_type == 'learning_analytics_recalculate',
+            AcademicClassSyncJob.status.in_(['queued', 'running']),
+        ).order_by(AcademicClassSyncJob.created_at.desc()).first()
+        guard = self.analytics_enqueue_guard(class_id=class_id)
+        can_enqueue = bool(resolved_course_id and mapping.get('status') != 'ambiguous' and guard.get('allowed') and not active_job)
+
+        roster_count = len(roster)
+        missing_snapshot_count = max(0, roster_count - snapshot_count)
+        if roster_count <= 0:
+            data_gap = 'NO_ROSTER'
+            status = 'blocked'
+            message = 'Lớp chưa có roster sinh viên AP trong hệ thống.'
+            recommended_action = 'Đồng bộ AP/CMS roster lớp trước khi tính học online.'
+        elif mapping.get('status') == 'missing':
+            data_gap = 'NO_COURSE_MAPPING'
+            status = 'blocked'
+            message = 'Lớp có roster AP nhưng chưa map Course CMS/Open edX.'
+            recommended_action = 'Ghép Course CMS cho lớp/môn, sau đó để hệ thống tự tính lại.'
+        elif mapping.get('status') == 'ambiguous':
+            data_gap = 'AMBIGUOUS_COURSE_MAPPING'
+            status = 'blocked'
+            message = 'Lớp có nhiều Course CMS có thể khớp; cần chọn mapping rõ ràng.'
+            recommended_action = 'Tạo class override mapping để tránh tính sai lớp.'
+        elif tracking_event_count <= 0 and video_progress_count <= 0 and session_progress_count <= 0:
+            data_gap = 'NO_TRACKING_EVENTS'
+            status = 'waiting'
+            message = 'Lớp đã có roster và Course CMS nhưng chưa thấy event học online đã ingest cho roster này.'
+            recommended_action = 'Kiểm tra ingest tracking.log, enrollment/Course ID hoặc chờ event mới.'
+        elif snapshot_count <= 0:
+            data_gap = 'HAS_ACTIVITY_NO_SNAPSHOT'
+            status = 'needs_recalculate'
+            message = 'Đã có tín hiệu học nhưng chưa có snapshot nhận định.'
+            recommended_action = 'Đưa tác vụ tính lại lớp vào worker; không cần tính toàn kỳ.'
+        elif missing_snapshot_count > 0:
+            data_gap = 'PARTIAL_SNAPSHOT'
+            status = 'partial'
+            message = 'Một phần sinh viên chưa có snapshot nhận định.'
+            recommended_action = 'Tính lại lớp hoặc chờ post-ingest orchestrator xử lý dần.'
+        else:
+            data_gap = 'READY'
+            status = 'ready'
+            message = 'Dữ liệu lớp đã đủ để xem dashboard học online.'
+            recommended_action = 'Có thể dùng kết quả như tín hiệu mềm và tiếp tục theo dõi job ingest.'
+
+        return {
+            'status': status,
+            'data_gap': data_gap,
+            'message': message,
+            'recommended_action': recommended_action,
+            'class': {
+                'class_id': class_id,
+                'class_code': cls.class_code,
+                'class_name': cls.class_name,
+                'campus': cls.campus,
+                'branch': cls.branch,
+                'term_id': cls.term_id,
+                'term_name': term.term_name if term else None,
+                'subject_id': cls.subject_id,
+                'subject_code': subject.subject_code if subject else None,
+            },
+            'course_mapping': mapping,
+            'resolved_course_id': resolved_course_id,
+            'roster_count': roster_count,
+            'snapshot_count': snapshot_count,
+            'missing_snapshot_count': missing_snapshot_count,
+            'tracking_event_count': tracking_event_count,
+            'tracking_user_count': tracking_user_count,
+            'latest_tracking_event_at': self._iso_or_none(latest_tracking_event_at),
+            'video_progress_count': video_progress_count,
+            'video_user_count': video_user_count,
+            'session_progress_count': session_progress_count,
+            'session_user_count': session_user_count,
+            'session_structure_count': session_structure_count,
+            'latest_behavior_calculated_at': self._iso_or_none(latest_snapshot.calculated_at if latest_snapshot else None),
+            'last_recalculate_job': ({
+                'id': latest_job.id,
+                'status': latest_job.status,
+                'created_at': self._iso_or_none(latest_job.created_at),
+                'updated_at': self._iso_or_none(latest_job.updated_at),
+                'progress_label': latest_job.progress_label,
+            } if latest_job else None),
+            'active_recalculate_job': ({
+                'id': active_job.id,
+                'status': active_job.status,
+                'created_at': self._iso_or_none(active_job.created_at),
+                'progress_label': active_job.progress_label,
+            } if active_job else None),
+            'recalculate': {
+                'can_enqueue': can_enqueue,
+                'course_id': resolved_course_id,
+                'guard': guard,
+                'disabled_reasons': ([] if can_enqueue else [
+                    reason for reason in [
+                        'NO_RESOLVED_COURSE' if not resolved_course_id else '',
+                        'AMBIGUOUS_COURSE_MAPPING' if mapping.get('status') == 'ambiguous' else '',
+                        'CLASS_JOB_ALREADY_ACTIVE' if active_job else '',
+                    ] + list(guard.get('reasons') or []) if reason
+                ]),
+            },
+            'safe_policy': 'signals_only_not_violation',
+        }
+
     def behavior_summary(self, *, class_id: str | None, course_id: str | None = None) -> dict[str, Any]:
         q = self.db.query(AnalyticsLearningBehaviorSnapshot)
         if class_id:
@@ -2628,6 +2912,7 @@ class LearningAnalyticsCoreService:
             data_status = 'ready' if len(rows) >= len(roster) else ('partial' if rows else 'not_calculated')
         else:
             data_status = 'ready' if rows else 'not_calculated'
+        diagnostics = self.class_result_doctor(class_id=class_id, course_id=course_id) if class_id else None
         return {
             'total_students': total_students,
             'roster_count': len(roster),
@@ -2640,6 +2925,7 @@ class LearningAnalyticsCoreService:
             'insufficient_data_count': counts.get('INSUFFICIENT_DATA', 0),
             'normal_count': counts.get('NORMAL', 0),
             'data_quality_breakdown': dict(quality),
+            'diagnostics': diagnostics,
             'disclaimer': 'Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.',
         }
 
@@ -2663,9 +2949,14 @@ class LearningAnalyticsCoreService:
             AnalyticsLearningBehaviorSnapshot.calculated_at.desc(),
         ).all()
 
+        roster_identity = {self._normal_username(item.get('username')): item for item in (self._class_student_roster(class_id) if class_id else [])}
+
         def snapshot_item(r: AnalyticsLearningBehaviorSnapshot) -> dict[str, Any]:
+            student_identity = roster_identity.get(self._normal_username(r.username)) or {}
             return {
                 'username': r.username,
+                'student_code': student_identity.get('student_code'),
+                'full_name': student_identity.get('full_name'),
                 'user_id': r.user_id,
                 'course_id': r.course_id,
                 'class_id': r.class_id,
@@ -2764,8 +3055,10 @@ class LearningAnalyticsCoreService:
         total = len(items)
         safe_offset = max(0, int(offset or 0))
         safe_limit = min(max(1, int(limit or 100)), 200)
+        diagnostics = self.class_result_doctor(class_id=class_id, course_id=course_id) if class_id else None
         return {
             'total': total,
             'items': items[safe_offset:safe_offset + safe_limit],
             'roster_fallback': class_id is not None,
+            'diagnostics': diagnostics,
         }

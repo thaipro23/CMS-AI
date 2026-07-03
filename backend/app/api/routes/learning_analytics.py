@@ -146,6 +146,14 @@ class RebuildSessionStructureRequest(BaseModel):
     course_start_at: str | None = None
 
 
+
+
+class AnalyticsClassRecalculateRequest(BaseModel):
+    course_id: str | None = None
+    force: bool = False
+    limit: int | None = Field(default=None, ge=1, le=500)
+
+
 class AnalyticsIngestRequest(BaseModel):
     file_path: str | None = None
     max_lines: int | None = Field(default=None, ge=1, le=200000)
@@ -486,6 +494,56 @@ def subject_class_behavior_overview(
     )
     result['permission_scope'] = _analytics_permission_scope(db, user)
     return result
+
+
+@router.get('/classes/{class_id}/doctor')
+def class_result_doctor(
+    class_id: str,
+    course_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_dashboard')),
+):
+    _assert_analytics_class_access(db, user, class_id)
+    result = LearningAnalyticsCoreService(db).class_result_doctor(class_id=class_id, course_id=course_id)
+    log_audit(
+        db,
+        action='analytics.learning_behavior.class_doctor.view',
+        status='success',
+        message='Kiểm tra trạng thái dữ liệu học online của lớp',
+        user=user,
+        course_id=result.get('resolved_course_id') or course_id,
+        target_type='academic_class',
+        target_id=class_id,
+        metadata={'data_gap': result.get('data_gap'), 'status': result.get('status'), 'signals_only_not_violation': True},
+    )
+    return result
+
+
+@router.post('/classes/{class_id}/doctor/recalculate', response_model=AcademicClassSyncJobOut)
+def class_result_doctor_enqueue_recalculate(
+    class_id: str,
+    payload: AnalyticsClassRecalculateRequest | None = None,
+    course_id: str | None = None,
+    force: bool = False,
+    limit: int | None = Query(default=None, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_dashboard')),
+):
+    _assert_analytics_class_access(db, user, class_id)
+    payload = payload or AnalyticsClassRecalculateRequest()
+    requested_course_id = payload.course_id or course_id
+    requested_force = bool(payload.force or force)
+    requested_limit = payload.limit or limit
+    doctor = LearningAnalyticsCoreService(db).class_result_doctor(class_id=class_id, course_id=requested_course_id)
+    resolved_course_id = str(doctor.get('resolved_course_id') or '').strip()
+    if not resolved_course_id:
+        raise HTTPException(status_code=409, detail={'code': 'NO_RESOLVED_COURSE', 'message': 'Lớp chưa có Course CMS/Open edX rõ ràng nên chưa thể tính lại.', 'doctor': doctor})
+    if doctor.get('data_gap') == 'AMBIGUOUS_COURSE_MAPPING':
+        raise HTTPException(status_code=409, detail={'code': 'AMBIGUOUS_COURSE_MAPPING', 'message': 'Mapping Course CMS chưa rõ, hệ thống không tự tính bừa.', 'doctor': doctor})
+    job = _enqueue_analytics_recalculate_job(db=db, user=user, class_id=class_id, course_id=resolved_course_id, force=requested_force, limit=requested_limit)
+    log_audit(db, action='analytics.learning_behavior.class_doctor.recalculate_enqueue', status='success', message='Đưa tính lại học online từ doctor lớp vào hàng đợi', user=user, course_id=resolved_course_id, target_type='academic_class_sync_job', target_id=job.id, metadata={'class_id': class_id, 'data_gap': doctor.get('data_gap'), 'signals_only_not_violation': True})
+    return job
+
 
 @router.get('/classes/{class_id}/learning-behavior/summary')
 def class_behavior_summary(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
