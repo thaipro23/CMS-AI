@@ -9,6 +9,7 @@ import {
   getAcademicTerms,
   getAnalyticsClassLearningBehavior,
   getAnalyticsClassLearningBehaviorSummary,
+  getAnalyticsProductionReadiness,
   getAnalyticsStudentLearningBehaviorDetail,
   getAnalyticsSubjectClassBehaviorOverview,
 } from '../../../lib/api'
@@ -20,6 +21,7 @@ import {
   AnalyticsClassBehaviorOverviewSummary,
   AnalyticsLearningBehaviorRow,
   AnalyticsLearningBehaviorSummary,
+  AnalyticsProductionReadinessReport,
   AnalyticsStudentLearningBehaviorDetail,
 } from '../../../types'
 import { formatVNDateTime } from '../../../lib/time'
@@ -271,6 +273,7 @@ export default function AnalyticsLearningPage() {
   const [selectedRow, setSelectedRow] = useState<AnalyticsLearningBehaviorRow | null>(null)
   const [detail, setDetail] = useState<AnalyticsStudentLearningBehaviorDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [productionReadiness, setProductionReadiness] = useState<AnalyticsProductionReadinessReport | null>(null)
 
   const selectedTerm = useMemo(() => terms.find((item) => item.id === termId) || null, [terms, termId])
   const selectedSubject = useMemo(() => subjects.find((item) => item.id === subjectId) || null, [subjects, subjectId])
@@ -315,6 +318,14 @@ export default function AnalyticsLearningPage() {
     }
     updateUrl({ step: nextStep, subjectId: nextSubjectId, classId: nextClassId })
   }
+
+  useEffect(() => {
+    let cancelled = false
+    getAnalyticsProductionReadiness(headers)
+      .then((report) => { if (!cancelled) setProductionReadiness(report) })
+      .catch(() => { if (!cancelled) setProductionReadiness(null) })
+    return () => { cancelled = true }
+  }, [headers])
 
   useEffect(() => {
     let cancelled = false
@@ -543,6 +554,9 @@ export default function AnalyticsLearningPage() {
         <span>{selectedClassOverview?.class_code || 'Chưa chọn lớp'}</span>
       </div>
 
+      {productionReadiness && <div className={productionReadiness.ready_for_production ? 'alert success compact-alert' : 'alert warning compact-alert'}>
+        <b>Production readiness</b> · {productionReadiness.ready_for_production ? 'Sẵn sàng production' : 'Chưa sẵn sàng production'} · Cần xử lý trước production: {productionReadiness.blocker_count || 0} blocker, {productionReadiness.warning_count || 0} cảnh báo.
+      </div>}
       <div className="alert info compact-alert">{permissionText}</div>
       {message && <div className="academic-inline-error"><b>Cần kiểm tra</b><span>{message}</span></div>}
       {!effectiveCourseId && step === 'results' && classId && <div className="alert warning compact-alert">Lớp này chưa ghép Course CMS nên kết quả học online có thể chưa đủ. Giáo viên vẫn xem được trạng thái Chưa đủ dữ liệu.</div>}
@@ -667,6 +681,8 @@ export default function AnalyticsLearningPage() {
 
       <div className="academic-summary-strip analytics-summary-strip analytics-result-only-summary">
         <div><span>Tổng sinh viên</span><b>{summary.total_students || 0}</b></div>
+        <div><span>Snapshot nhận định</span><b>{summary.snapshot_count ?? rows.length}/{summary.roster_count ?? summary.total_students ?? 0}</b></div>
+        <div><span>Thiếu snapshot</span><b>{summary.missing_snapshot_count ?? Math.max(0, (summary.roster_count ?? summary.total_students ?? 0) - (summary.snapshot_count ?? rows.length))}</b></div>
         <div><span>Có dấu hiệu học thật</span><b>{summary.likely_real_learning_count || 0}</b></div>
         <div><span>Có khả năng treo máy</span><b>{summary.possible_idle_count || 0}</b></div>
         <div><span>Dấu hiệu bất thường cần kiểm tra</span><b>{summary.possible_suspicious_count || 0}</b></div>
@@ -688,7 +704,7 @@ export default function AnalyticsLearningPage() {
           <tbody>
             {rows.map((row, index) => <tr key={`${row.class_id}-${row.course_id}-${row.username}`}>
               <td className="stt-cell sticky-index-col">{index + 1}</td>
-              <td className="student-sticky-col analytics-student-identity-cell"><b>{row.username}</b><small>{row.course_id || effectiveCourseId || 'Course CMS N/A'}</small></td>
+              <td className="student-sticky-col analytics-student-identity-cell"><b>{row.student_code || row.username}</b><small>{row.full_name || row.username}</small><small>{row.course_id || effectiveCourseId || 'Course CMS N/A'}</small></td>
               <td>
                 <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}>
                   <span className={resultClass(row.classification)}>{resultLabel(row.classification, row.display_label)}</span>

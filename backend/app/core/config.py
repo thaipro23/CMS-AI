@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.7.2.32'
+    app_version: str = '25.9.16.7.2.35'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -199,6 +199,13 @@ class Settings(BaseSettings):
     analytics_backfill_max_jobs_per_request: int = 25
     analytics_backfill_max_active_jobs: int = 20
     analytics_recalculate_enqueue_cooldown_seconds: int = 300
+    # v25.9.16.7.2.35 post-ingest orchestrator. Ingest may run every
+    # minute, but recalculation must stay debounced and class-scoped so a
+    # production term with thousands of enrollments does not rebuild all
+    # analytics snapshots on every scheduler tick.
+    analytics_post_ingest_recalculate_enabled: bool = True
+    analytics_post_ingest_recalculate_cooldown_seconds: int = 900
+    analytics_post_ingest_recalculate_max_jobs_per_run: int = 10
     analytics_ingest_enqueue_cooldown_seconds: int = 120
     analytics_export_max_rows: int = 50000
     analytics_production_min_events: int = 1

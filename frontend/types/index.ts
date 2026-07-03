@@ -2247,6 +2247,10 @@ export type AnalyticsLearningBehaviorClassification =
 
 export type AnalyticsLearningBehaviorSummary = {
   total_students: number
+  roster_count?: number
+  snapshot_count?: number
+  missing_snapshot_count?: number
+  data_status?: 'ready' | 'partial' | 'not_calculated' | string
   likely_real_learning_count: number
   possible_idle_count: number
   possible_suspicious_count: number
@@ -2261,6 +2265,8 @@ export type AnalyticsLearningBehaviorSummary = {
 
 export type AnalyticsLearningBehaviorRow = {
   username: string
+  student_code?: string | null
+  full_name?: string | null
   user_id?: string | null
   course_id: string
   class_id?: string | null
@@ -2291,7 +2297,9 @@ export type AnalyticsClassBehaviorOverviewItem = {
   openedx_course_id?: string | null
   openedx_mapping_source?: string | null
   student_count: number
+  roster_count?: number
   snapshot_count: number
+  missing_snapshot_count?: number
   likely_real_learning_count: number
   possible_idle_count: number
   possible_suspicious_count: number
@@ -2308,7 +2316,9 @@ export type AnalyticsClassBehaviorOverviewItem = {
 export type AnalyticsClassBehaviorOverviewSummary = {
   total_classes: number
   total_students: number
+  roster_count?: number
   snapshot_count: number
+  missing_snapshot_count?: number
   likely_real_learning_count: number
   possible_idle_count: number
   possible_suspicious_count: number

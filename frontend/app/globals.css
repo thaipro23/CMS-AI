@@ -8147,3 +8147,58 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
     width: 160px;
   }
 }
+
+
+/* v25.9.16.7.2.33 — class-detail actions are equal-size but not forced into one vertical column */
+.class-detail-flow .class-action-row.compact-sync-action-strip,
+.class-detail-flow .clean-sync-action-strip {
+  display: block;
+  width: 100%;
+}
+.class-detail-flow .class-action-row.compact-sync-action-strip .toolbar-actions,
+.class-detail-flow .clean-sync-action-strip .toolbar-actions {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+.class-detail-flow .class-action-row.compact-sync-action-strip .toolbar-actions .btn,
+.class-detail-flow .clean-sync-action-strip .toolbar-actions .btn {
+  flex: 0 0 174px;
+  width: 174px !important;
+  min-width: 174px;
+  max-width: 174px;
+  min-height: 40px;
+  justify-content: center;
+  text-align: center;
+  white-space: normal;
+  line-height: 1.15;
+}
+@media (max-width: 760px) {
+  .class-detail-flow .class-action-row.compact-sync-action-strip .toolbar-actions,
+  .class-detail-flow .clean-sync-action-strip .toolbar-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .class-detail-flow .class-action-row.compact-sync-action-strip .toolbar-actions .btn,
+  .class-detail-flow .clean-sync-action-strip .toolbar-actions .btn {
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+    flex-basis: auto;
+  }
+}
+@media (max-width: 480px) {
+  .class-detail-flow .class-action-row.compact-sync-action-strip .toolbar-actions,
+  .class-detail-flow .clean-sync-action-strip .toolbar-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analytics-learning-table .analytics-student-identity-cell small + small {
+  margin-top: 2px;
+  color: #64748b;
+}

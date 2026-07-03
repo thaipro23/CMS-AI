@@ -27,8 +27,8 @@ def test_root_layout_has_mobile_viewport_metadata():
     assert "viewportFit: 'cover'" in layout
 
 
-def test_version_is_synchronized_for_v30():
-    assert "app_version: str = '25.9.16.7.2.32'" in (ROOT / 'backend/app/core/config.py').read_text()
-    assert '"version": "25.9.16.7.2.32"' in (ROOT / 'frontend/package.json').read_text()
-    assert '25.9.16.7.2.32' in (ROOT / 'docker-compose.prod.yml').read_text()
-    assert "'25.9.16.7.2.32'" in (ROOT / 'frontend/components/layout/AppShell.tsx').read_text()
+def test_version_is_synchronized_for_current_release():
+    assert "app_version: str = '25.9.16.7.2.35'" in (ROOT / 'backend/app/core/config.py').read_text()
+    assert '"version": "25.9.16.7.2.35"' in (ROOT / 'frontend/package.json').read_text()
+    assert '25.9.16.7.2.35' in (ROOT / 'docker-compose.prod.yml').read_text()
+    assert "'25.9.16.7.2.35'" in (ROOT / 'frontend/components/layout/AppShell.tsx').read_text()

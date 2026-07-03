@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import case, func, text
+from sqlalchemy import and_, case, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -138,6 +138,185 @@ class LearningAnalyticsCoreService:
             'stats': cp.stats_json if cp else {},
         }
 
+    def _class_scope_filter(self, q: Any, column: Any, value: Any) -> Any:
+        """Apply AcademicCourseMapping scope fields to AcademicClass safely.
+
+        AP/CMS data can store campus/branch/block as NULL or empty strings for
+        broad mappings. Keep this helper conservative: a scoped mapping must
+        match exactly, while a blank mapping only matches blank class scope.
+        """
+        if value is None or str(value).strip() == '':
+            return q.filter(or_(column.is_(None), column == ''))
+        return q.filter(column == value)
+
+    def _resolve_recalculate_class_ids_for_courses(self, *, course_ids: set[str]) -> dict[str, set[str]]:
+        """Resolve Open edX course IDs to AP class IDs using existing mappings.
+
+        Direct class mappings win. Subject/term course mappings are used as a
+        fallback so post-ingest orchestration can still enqueue class jobs even
+        when the course is mapped at the subject scope rather than the class
+        override scope.
+        """
+        clean_course_ids = {str(course_id or '').strip() for course_id in course_ids if str(course_id or '').strip()}
+        if not clean_course_ids:
+            return {}
+        resolved: dict[str, set[str]] = defaultdict(set)
+        direct_rows = (
+            self.db.query(AcademicClassCourseMapping.openedx_course_id, AcademicClassCourseMapping.class_id)
+            .join(AcademicClass, AcademicClass.id == AcademicClassCourseMapping.class_id)
+            .filter(
+                AcademicClassCourseMapping.active.is_(True),
+                AcademicClass.active.is_(True),
+                AcademicClassCourseMapping.openedx_course_id.in_(list(clean_course_ids)),
+            )
+            .all()
+        )
+        for course_id, class_id in direct_rows:
+            if course_id and class_id:
+                resolved[str(course_id)].add(str(class_id))
+
+        subject_mappings = (
+            self.db.query(AcademicCourseMapping)
+            .filter(
+                AcademicCourseMapping.active.is_(True),
+                AcademicCourseMapping.openedx_course_id.in_(list(clean_course_ids)),
+            )
+            .all()
+        )
+        for mapping in subject_mappings:
+            q = self.db.query(AcademicClass.id).filter(
+                AcademicClass.active.is_(True),
+                AcademicClass.term_id == mapping.term_id,
+                AcademicClass.subject_id == mapping.subject_id,
+            )
+            q = self._class_scope_filter(q, AcademicClass.block_id, mapping.block_id)
+            q = self._class_scope_filter(q, AcademicClass.campus, mapping.campus)
+            q = self._class_scope_filter(q, AcademicClass.branch, mapping.branch)
+            for (class_id,) in q.all():
+                if class_id:
+                    resolved[str(mapping.openedx_course_id)].add(str(class_id))
+        return resolved
+
+    def enqueue_post_ingest_recalculate_jobs(
+        self,
+        *,
+        course_usernames: dict[str, set[str]],
+        source: str = 'analytics_ingest_task',
+    ) -> dict[str, Any]:
+        """Queue production-safe recalculation after ingest.
+
+        This deliberately does not recalculate every student or every course on
+        every scheduler tick. It only considers courses that received newly
+        inserted tracking events, resolves them to AP classes, then enqueues at
+        most a bounded number of class-level jobs. Existing queued/running jobs
+        and recent completed jobs debounce noisy tracking.log bursts.
+        """
+        if not bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)):
+            return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_POST_INGEST_RECALCULATE_ENABLED=false'}
+        course_ids = {str(course_id or '').strip() for course_id in (course_usernames or {}).keys() if str(course_id or '').strip()}
+        if not course_ids:
+            return {'enabled': True, 'status': 'no_impacted_courses', 'courses': 0, 'queued_jobs': 0}
+
+        class_ids_by_course = self._resolve_recalculate_class_ids_for_courses(course_ids=course_ids)
+        cooldown_seconds = int(getattr(settings, 'analytics_post_ingest_recalculate_cooldown_seconds', 900) or 900)
+        max_jobs_per_run = max(1, int(getattr(settings, 'analytics_post_ingest_recalculate_max_jobs_per_run', 10) or 10))
+        max_active = max(1, int(getattr(settings, 'analytics_backfill_max_active_jobs', 20) or 20))
+        safe_limit = max(1, min(int(getattr(settings, 'analytics_recalculate_max_students_per_job', 500) or 500), 5000))
+        now = datetime.utcnow()
+        queued: list[dict[str, Any]] = []
+        skipped: Counter[str] = Counter()
+        considered = 0
+
+        # Highest-impact courses first. The event count is not used as a score
+        # for students; it only prioritizes which class jobs enter the queue
+        # when the run cap is reached.
+        sorted_courses = sorted(course_ids, key=lambda cid: len(course_usernames.get(cid) or set()), reverse=True)
+        from app.worker import analytics_class_recalculate_task
+
+        for course_id in sorted_courses:
+            class_ids = sorted(class_ids_by_course.get(course_id) or set())
+            if not class_ids:
+                skipped['NO_CLASS_MAPPING'] += 1
+                continue
+            impacted_users = sorted(str(u) for u in (course_usernames.get(course_id) or set()) if str(u or '').strip())
+            for class_id in class_ids:
+                considered += 1
+                if len(queued) >= max_jobs_per_run:
+                    skipped['RUN_JOB_CAP_REACHED'] += 1
+                    break
+                active_global = self.db.query(AcademicClassSyncJob).filter(
+                    AcademicClassSyncJob.job_type == 'learning_analytics_recalculate',
+                    AcademicClassSyncJob.status.in_(['queued', 'running']),
+                ).count()
+                if active_global >= max_active:
+                    skipped['TOO_MANY_ACTIVE_ANALYTICS_JOBS'] += 1
+                    break
+                active_for_class = self.db.query(AcademicClassSyncJob).filter(
+                    AcademicClassSyncJob.class_id == class_id,
+                    AcademicClassSyncJob.job_type == 'learning_analytics_recalculate',
+                    AcademicClassSyncJob.status.in_(['queued', 'running']),
+                ).order_by(AcademicClassSyncJob.created_at.desc()).first()
+                if active_for_class:
+                    skipped['CLASS_JOB_ALREADY_ACTIVE'] += 1
+                    continue
+                recent_for_class = self.db.query(AcademicClassSyncJob).filter(
+                    AcademicClassSyncJob.class_id == class_id,
+                    AcademicClassSyncJob.job_type == 'learning_analytics_recalculate',
+                    AcademicClassSyncJob.created_at >= now - timedelta(seconds=cooldown_seconds),
+                ).order_by(AcademicClassSyncJob.created_at.desc()).first()
+                if recent_for_class:
+                    skipped['CLASS_COOLDOWN_ACTIVE'] += 1
+                    continue
+                job = AcademicClassSyncJob(
+                    job_type='learning_analytics_recalculate',
+                    status='queued',
+                    class_id=class_id,
+                    requested_by='system:analytics-ingest',
+                    force=False,
+                    limit=safe_limit,
+                    progress_current=0,
+                    progress_total=100,
+                    progress_label='Đang chờ tính lại sau ingest tracking.log',
+                    request_json=json_safe_value({
+                        'course_id': course_id,
+                        'username': None,
+                        'force': False,
+                        'limit': safe_limit,
+                        'source': source,
+                        'cooldown_seconds': cooldown_seconds,
+                        'impacted_user_count': len(impacted_users),
+                        'impacted_usernames_sample': impacted_users[:20],
+                        'signals_only_not_violation': True,
+                    }),
+                    result_json={},
+                )
+                self.db.add(job)
+                self.db.commit()
+                async_result = analytics_class_recalculate_task.delay(job.id)
+                data = job.request_json if isinstance(job.request_json, dict) else {}
+                data['enqueue'] = {'task_name': 'analytics_class_recalculate_task', 'celery_task_id': getattr(async_result, 'id', None)}
+                job.request_json = json_safe_value(data)
+                self.db.add(job)
+                self.db.commit()
+                queued.append({'job_id': job.id, 'class_id': class_id, 'course_id': course_id, 'impacted_user_count': len(impacted_users)})
+            if len(queued) >= max_jobs_per_run:
+                break
+
+        return {
+            'enabled': True,
+            'status': 'completed',
+            'courses': len(course_ids),
+            'mapped_courses': len([cid for cid in course_ids if class_ids_by_course.get(cid)]),
+            'considered_class_jobs': considered,
+            'queued_jobs': len(queued),
+            'queued': queued,
+            'skipped': dict(skipped),
+            'cooldown_seconds': cooldown_seconds,
+            'max_jobs_per_run': max_jobs_per_run,
+            'max_active_jobs': max_active,
+            'safe_policy': 'signals_only_not_violation',
+        }
+
     def run_ingest(self, *, file_path: str | None = None, max_lines: int | None = None) -> dict[str, Any]:
         if not bool(getattr(settings, 'analytics_ingest_enabled', True)):
             return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_INGEST_ENABLED=false'}
@@ -163,6 +342,7 @@ class LearningAnalyticsCoreService:
                 self.db.commit()
                 return {'status': 'missing_file', 'file_path': path, 'file_exists': False, **dict(stats)}
             event_type_counts: Counter[str] = Counter()
+            impacted_course_usernames: dict[str, set[str]] = defaultdict(set)
             for line in result.lines:
                 try:
                     parsed = parse_tracking_log_line(line)
@@ -179,6 +359,8 @@ class LearningAnalyticsCoreService:
                     continue
                 self.db.add(AnalyticsTrackingEvent(**parsed.as_model_kwargs()))
                 stats['events_inserted'] += 1
+                if parsed.course_id:
+                    impacted_course_usernames[str(parsed.course_id or '').strip()].add(str(parsed.username or '').strip())
                 if parsed.event_type in VIDEO_EVENT_TYPES:
                     stats['video_events'] += 1
                 if parsed.event_type in PROBLEM_EVENT_TYPES:
@@ -203,7 +385,32 @@ class LearningAnalyticsCoreService:
             cp.total_events_inserted = int(cp.total_events_inserted or 0) + int(stats['events_inserted'])
             cp.total_duplicate_events = int(cp.total_duplicate_events or 0) + int(stats['duplicate_events'])
             cp.total_parse_errors = int(cp.total_parse_errors or 0) + int(stats['parse_errors'])
-            cp.stats_json = {**dict(stats), 'event_type_counts': dict(event_type_counts), 'start_offset': result.start_offset, 'end_offset': result.end_offset, 'rotated': result.rotated}
+            impacted_course_usernames = {
+                course_id: {username for username in usernames if username}
+                for course_id, usernames in impacted_course_usernames.items()
+                if course_id
+            }
+            cp.stats_json = {
+                **dict(stats),
+                'event_type_counts': dict(event_type_counts),
+                'start_offset': result.start_offset,
+                'end_offset': result.end_offset,
+                'rotated': result.rotated,
+                'impacted_course_count': len(impacted_course_usernames),
+                'impacted_user_count': sum(len(users) for users in impacted_course_usernames.values()),
+            }
+            self.db.commit()
+            post_ingest_recalculate = {'enabled': bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)), 'status': 'not_run'}
+            if int(stats['events_inserted'] or 0) > 0:
+                try:
+                    post_ingest_recalculate = self.enqueue_post_ingest_recalculate_jobs(
+                        course_usernames=impacted_course_usernames,
+                        source='analytics_ingest_task',
+                    )
+                except Exception as exc:
+                    post_ingest_recalculate = {'enabled': True, 'status': 'failed', 'message': str(exc)[:1000]}
+            cp.stats_json = {**(cp.stats_json or {}), 'post_ingest_recalculate': post_ingest_recalculate}
+            self.db.add(cp)
             self.db.commit()
             return {'enabled': True, 'status': 'completed', 'file_path': path, 'file_exists': True, 'last_offset': result.end_offset, **cp.stats_json}
         finally:
@@ -1801,6 +2008,40 @@ class LearningAnalyticsCoreService:
         ).filter(AcademicClassStudent.class_id == class_id).all()
         return {str(row[0]) for row in rows if row and row[0]}
 
+    def _class_student_roster(self, class_id: str | None) -> list[dict[str, Any]]:
+        """Return the AP roster for a class as the canonical analytics fallback.
+
+        Learning-behavior screens must never show "0 sinh viên" just because the
+        behavior snapshot job has not materialized rows yet. The roster is the
+        ground truth for who belongs to the class; missing behavior snapshots are
+        represented as INSUFFICIENT_DATA rows so teachers can see that the class
+        exists and then decide whether to run/retry recalculation.
+        """
+        if not class_id:
+            return []
+        rows = self.db.query(AcademicStudent).join(
+            AcademicClassStudent,
+            AcademicClassStudent.student_id == AcademicStudent.id,
+        ).filter(
+            AcademicClassStudent.class_id == class_id,
+            AcademicStudent.active.is_(True),
+        ).order_by(AcademicStudent.username.asc()).all()
+        return [
+            {
+                'student_id': str(item.id),
+                'username': item.username,
+                'student_code': item.student_code,
+                'full_name': item.full_name,
+                'email': item.email,
+            }
+            for item in rows
+            if item and item.username
+        ]
+
+    @staticmethod
+    def _normal_username(value: str | None) -> str:
+        return str(value or '').strip().lower()
+
     def class_video_summary(self, *, class_id: str | None, course_id: str | None = None) -> dict[str, Any]:
         resolved_course = self._course_for_class(class_id, course_id)
         if not resolved_course:
@@ -2247,13 +2488,19 @@ class LearningAnalyticsCoreService:
         totals = Counter()
         for klass in classes:
             class_id = str(klass.id)
-            behavior = behavior_by_class.get(class_id) or self._empty_class_behavior_overview_summary()
+            raw_behavior = behavior_by_class.get(class_id) or self._empty_class_behavior_overview_summary()
+            student_count = int(student_counts.get(class_id, 0))
+            snapshot_count = int(raw_behavior.get('total_students') or 0)
+            missing_snapshot_count = max(0, student_count - snapshot_count)
+            behavior = dict(raw_behavior)
+            if missing_snapshot_count:
+                behavior['total_students'] = max(student_count, snapshot_count)
+                behavior['insufficient_data_count'] = int(behavior.get('insufficient_data_count') or 0) + missing_snapshot_count
             focus_count = self._class_behavior_focus_count(behavior, normalized_filter)
             if normalized_filter != 'all' and focus_count <= 0:
                 continue
-            student_count = int(student_counts.get(class_id, 0))
             dominant = self._dominant_classification(behavior)
-            data_status = 'ready' if int(behavior.get('total_students') or 0) > 0 else 'not_calculated'
+            data_status = 'ready' if snapshot_count >= student_count and student_count > 0 else ('partial' if snapshot_count > 0 else 'not_calculated')
             mapping = override_by_class.get(class_id) or inherited_by_class.get(class_id)
             item = {
                 'class_id': class_id,
@@ -2264,7 +2511,9 @@ class LearningAnalyticsCoreService:
                 'openedx_course_id': mapping.openedx_course_id if mapping else None,
                 'openedx_mapping_source': 'class_override' if class_id in override_by_class else ('subject_term_mapping' if mapping else None),
                 'student_count': student_count,
-                'snapshot_count': int(behavior.get('total_students') or 0),
+                'roster_count': student_count,
+                'snapshot_count': snapshot_count,
+                'missing_snapshot_count': missing_snapshot_count,
                 'likely_real_learning_count': int(behavior.get('likely_real_learning_count') or 0),
                 'possible_idle_count': int(behavior.get('possible_idle_count') or 0),
                 'possible_suspicious_count': int(behavior.get('possible_suspicious_count') or 0),
@@ -2280,7 +2529,9 @@ class LearningAnalyticsCoreService:
             items.append(item)
             totals['total_classes'] += 1
             totals['total_students'] += student_count
+            totals['roster_count'] += item['roster_count']
             totals['snapshot_count'] += item['snapshot_count']
+            totals['missing_snapshot_count'] += item['missing_snapshot_count']
             totals['likely_real_learning_count'] += item['likely_real_learning_count']
             totals['possible_idle_count'] += item['possible_idle_count']
             totals['possible_suspicious_count'] += item['possible_suspicious_count']
@@ -2297,7 +2548,9 @@ class LearningAnalyticsCoreService:
             'summary': {
                 'total_classes': int(totals.get('total_classes', 0)),
                 'total_students': int(totals.get('total_students', 0)),
+                'roster_count': int(totals.get('roster_count', 0)),
                 'snapshot_count': int(totals.get('snapshot_count', 0)),
+                'missing_snapshot_count': int(totals.get('missing_snapshot_count', 0)),
                 'likely_real_learning_count': int(totals.get('likely_real_learning_count', 0)),
                 'possible_idle_count': int(totals.get('possible_idle_count', 0)),
                 'possible_suspicious_count': int(totals.get('possible_suspicious_count', 0)),
@@ -2314,7 +2567,9 @@ class LearningAnalyticsCoreService:
         return {
             'total_classes': 0,
             'total_students': 0,
+            'roster_count': 0,
             'snapshot_count': 0,
+            'missing_snapshot_count': 0,
             'likely_real_learning_count': 0,
             'possible_idle_count': 0,
             'possible_suspicious_count': 0,
@@ -2360,8 +2615,25 @@ class LearningAnalyticsCoreService:
         rows = q.all()
         counts = Counter(r.classification for r in rows)
         quality = Counter(r.data_quality for r in rows)
+
+        roster = self._class_student_roster(class_id) if class_id else []
+        snapshot_usernames = {self._normal_username(r.username) for r in rows if r.username}
+        missing_roster_count = len([item for item in roster if self._normal_username(item.get('username')) not in snapshot_usernames])
+        if missing_roster_count:
+            counts['INSUFFICIENT_DATA'] += missing_roster_count
+            quality['MISSING'] += missing_roster_count
+
+        total_students = max(len(rows), len(roster)) if class_id else len(rows)
+        if class_id and roster:
+            data_status = 'ready' if len(rows) >= len(roster) else ('partial' if rows else 'not_calculated')
+        else:
+            data_status = 'ready' if rows else 'not_calculated'
         return {
-            'total_students': len(rows),
+            'total_students': total_students,
+            'roster_count': len(roster),
+            'snapshot_count': len(rows),
+            'missing_snapshot_count': missing_roster_count,
+            'data_status': data_status,
             'likely_real_learning_count': counts.get('LIKELY_REAL_LEARNING', 0),
             'possible_idle_count': counts.get('POSSIBLE_IDLE', 0),
             'possible_suspicious_count': counts.get('POSSIBLE_ANOMALY', 0) + counts.get('POSSIBLE_CHEATING', 0),
@@ -2377,38 +2649,123 @@ class LearningAnalyticsCoreService:
             q = q.filter(AnalyticsLearningBehaviorSnapshot.class_id == class_id)
         if course_id:
             q = q.filter(AnalyticsLearningBehaviorSnapshot.course_id == course_id)
-        if classification:
-            normalized_classification = str(classification).strip().upper()
+
+        normalized_classification = str(classification or 'all').strip().upper()
+        apply_snapshot_classification_filter = normalized_classification and normalized_classification != 'ALL'
+        if apply_snapshot_classification_filter:
             if normalized_classification in {'POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING'}:
                 q = q.filter(AnalyticsLearningBehaviorSnapshot.classification.in_(['POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING']))
             else:
                 q = q.filter(AnalyticsLearningBehaviorSnapshot.classification == normalized_classification)
-        total = q.count()
-        rows = q.order_by(AnalyticsLearningBehaviorSnapshot.suspicious_score.desc(), AnalyticsLearningBehaviorSnapshot.calculated_at.desc()).offset(max(0, offset)).limit(min(max(1, limit), 200)).all()
+
+        snapshot_rows = q.order_by(
+            AnalyticsLearningBehaviorSnapshot.suspicious_score.desc(),
+            AnalyticsLearningBehaviorSnapshot.calculated_at.desc(),
+        ).all()
+
+        def snapshot_item(r: AnalyticsLearningBehaviorSnapshot) -> dict[str, Any]:
+            return {
+                'username': r.username,
+                'user_id': r.user_id,
+                'course_id': r.course_id,
+                'class_id': r.class_id,
+                'classification': r.classification,
+                'display_label': r.display_label,
+                'confidence_score': r.confidence_score,
+                'real_learning_score': r.real_learning_score,
+                'idle_score': r.idle_score,
+                'suspicious_score': r.suspicious_score,
+                'deadline_compliance_percent': r.deadline_compliance_percent,
+                'crammed_session_count': r.crammed_session_count,
+                'quiz_before_video_count': r.quiz_before_video_count,
+                'reason_codes': r.reason_codes or [],
+                'human_readable_summary': r.human_readable_summary,
+                'recommended_action': r.recommended_action,
+                'data_quality': r.data_quality,
+                'calculated_at': r.calculated_at.isoformat() if r.calculated_at else None,
+                'last_activity_at': r.last_activity_at.isoformat() if r.last_activity_at else None,
+            }
+
+        items = [snapshot_item(r) for r in snapshot_rows]
+
+        # Roster fallback: if behavior snapshots have not been materialized for
+        # every AP student in the class, still show those students as
+        # INSUFFICIENT_DATA instead of returning an empty/partial table. This is
+        # intentionally conservative: the UI must distinguish "no snapshot yet"
+        # from "class has no students".
+        if class_id and normalized_classification in {'ALL', 'INSUFFICIENT_DATA'}:
+            roster = self._class_student_roster(class_id)
+            present_usernames = {self._normal_username(item.get('username')) for item in items}
+            resolved_course = self._course_for_class(class_id, course_id) or course_id or ''
+            activity_by_username: dict[str, dict[str, Any]] = {}
+            if resolved_course and roster:
+                roster_names = [item['username'] for item in roster if item.get('username')]
+                if roster_names:
+                    video_rows = self.db.query(
+                        AnalyticsStudentVideoProgress.username,
+                        func.max(AnalyticsStudentVideoProgress.last_event_at),
+                        func.count(AnalyticsStudentVideoProgress.id),
+                    ).filter(
+                        AnalyticsStudentVideoProgress.course_id == resolved_course,
+                        AnalyticsStudentVideoProgress.username.in_(roster_names),
+                    ).group_by(AnalyticsStudentVideoProgress.username).all()
+                    for username, last_at, count in video_rows:
+                        key = self._normal_username(username)
+                        activity_by_username.setdefault(key, {'has_activity': False, 'last_activity_at': None, 'activity_count': 0})
+                        activity_by_username[key]['has_activity'] = True
+                        activity_by_username[key]['last_activity_at'] = last_at
+                        activity_by_username[key]['activity_count'] += int(count or 0)
+                    session_rows = self.db.query(
+                        AnalyticsStudentSessionProgress.username,
+                        func.max(AnalyticsStudentSessionProgress.last_activity_at),
+                        func.count(AnalyticsStudentSessionProgress.id),
+                    ).filter(
+                        AnalyticsStudentSessionProgress.course_id == resolved_course,
+                        AnalyticsStudentSessionProgress.username.in_(roster_names),
+                    ).group_by(AnalyticsStudentSessionProgress.username).all()
+                    for username, last_at, count in session_rows:
+                        key = self._normal_username(username)
+                        current = activity_by_username.setdefault(key, {'has_activity': False, 'last_activity_at': None, 'activity_count': 0})
+                        current['has_activity'] = True
+                        if last_at and (not current.get('last_activity_at') or last_at > current.get('last_activity_at')):
+                            current['last_activity_at'] = last_at
+                        current['activity_count'] += int(count or 0)
+
+            for student in roster:
+                username = student.get('username')
+                if not username or self._normal_username(username) in present_usernames:
+                    continue
+                activity = activity_by_username.get(self._normal_username(username)) or {}
+                has_activity = bool(activity.get('has_activity'))
+                items.append({
+                    'username': username,
+                    'user_id': None,
+                    'course_id': resolved_course,
+                    'class_id': class_id,
+                    'classification': 'INSUFFICIENT_DATA',
+                    'display_label': 'Chưa đủ dữ liệu',
+                    'confidence_score': 25 if has_activity else 0,
+                    'real_learning_score': 0,
+                    'idle_score': 0,
+                    'suspicious_score': 0,
+                    'deadline_compliance_percent': None,
+                    'crammed_session_count': 0,
+                    'quiz_before_video_count': 0,
+                    'reason_codes': ['NO_BEHAVIOR_SNAPSHOT'] + (['HAS_LEARNING_ACTIVITY'] if has_activity else []),
+                    'human_readable_summary': 'Đã có tín hiệu học nhưng chưa có snapshot nhận định. Hãy chạy lại tính toán học online.' if has_activity else 'Sinh viên thuộc lớp AP nhưng chưa có snapshot nhận định học online.',
+                    'recommended_action': 'Tính lại học online cho lớp' if has_activity else 'Chờ dữ liệu học hoặc chạy đồng bộ full CMS',
+                    'data_quality': 'PARTIAL' if has_activity else 'MISSING',
+                    'student_code': student.get('student_code'),
+                    'full_name': student.get('full_name'),
+                    'calculated_at': None,
+                    'last_activity_at': activity.get('last_activity_at').isoformat() if activity.get('last_activity_at') else None,
+                })
+
+        total = len(items)
+        safe_offset = max(0, int(offset or 0))
+        safe_limit = min(max(1, int(limit or 100)), 200)
         return {
             'total': total,
-            'items': [
-                {
-                    'username': r.username,
-                    'user_id': r.user_id,
-                    'course_id': r.course_id,
-                    'class_id': r.class_id,
-                    'classification': r.classification,
-                    'display_label': r.display_label,
-                    'confidence_score': r.confidence_score,
-                    'real_learning_score': r.real_learning_score,
-                    'idle_score': r.idle_score,
-                    'suspicious_score': r.suspicious_score,
-                    'deadline_compliance_percent': r.deadline_compliance_percent,
-                    'crammed_session_count': r.crammed_session_count,
-                    'quiz_before_video_count': r.quiz_before_video_count,
-                    'reason_codes': r.reason_codes or [],
-                    'human_readable_summary': r.human_readable_summary,
-                    'recommended_action': r.recommended_action,
-                    'data_quality': r.data_quality,
-                    'calculated_at': r.calculated_at.isoformat() if r.calculated_at else None,
-                    'last_activity_at': r.last_activity_at.isoformat() if r.last_activity_at else None,
-                }
-                for r in rows
-            ],
+            'items': items[safe_offset:safe_offset + safe_limit],
+            'roster_fallback': class_id is not None,
         }
