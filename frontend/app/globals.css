@@ -8327,7 +8327,7 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
   .nav-icon { display: none; }
 }
 
-/* v25.9.16.7.2.37 — analytics class result doctor.
+/* v25.9.16.7.2.38 — analytics class result doctor.
    Make the 0/N analytics state explainable: roster, mapping, events, snapshots,
    and recalculate readiness are visible before the student table. */
 .analytics-class-doctor-panel {
@@ -8368,4 +8368,165 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
     flex: 1 1 100%;
     justify-content: center;
   }
+}
+
+/* v25.9.16.7.2.38 — compact bank table ux + sidebar group taxonomy.
+   Bank hierarchy pages can contain hundreds of subjects/versions, so dense tables
+   replace large entity cards. Tables keep STT, compact status, and action menus while
+   preserving horizontal scrolling inside the table wrapper only. */
+.bank-multipage .bank-compact-table-wrap {
+  margin-top: 12px;
+  border-radius: 16px;
+  max-width: 100%;
+}
+.bank-multipage .bank-compact-data-table {
+  min-width: 980px;
+  font-size: 12.5px;
+}
+.bank-multipage .bank-compact-data-table th {
+  padding: 9px 11px;
+  font-size: 10px;
+  letter-spacing: .055em;
+}
+.bank-multipage .bank-compact-data-table td {
+  padding: 9px 11px;
+  vertical-align: middle;
+}
+.bank-multipage .bank-compact-data-table .stt-cell {
+  width: 52px;
+  text-align: center;
+  color: #64748b;
+  font-weight: 800;
+}
+.bank-table-link {
+  display: inline-grid;
+  gap: 1px;
+  max-width: 360px;
+  color: inherit;
+  text-decoration: none;
+}
+.bank-table-link:hover b,
+.bank-table-link:focus-visible b {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.bank-table-link b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bank-table-link small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bank-row-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #dbe4f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.bank-row-status.status-published,
+.bank-row-status.status-ready {
+  border-color: rgba(22, 163, 74, .22);
+  background: #ecfdf5;
+  color: #166534;
+}
+.bank-row-status.status-needs_fix,
+.bank-row-status.status-danger,
+.bank-row-status.status-rejected {
+  border-color: rgba(220, 38, 38, .2);
+  background: #fef2f2;
+  color: #991b1b;
+}
+.bank-row-status.status-needs_review,
+.bank-row-status.status-not_ready,
+.bank-row-status.status-incomplete,
+.bank-row-status.status-pending_review {
+  border-color: rgba(245, 158, 11, .25);
+  background: #fffbeb;
+  color: #92400e;
+}
+.bank-row-status.status-empty {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+}
+.bank-status-legend-compact {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.bank-multipage .bank-compact-data-table .entity-actions {
+  justify-content: center;
+}
+.bank-multipage .bank-compact-data-table td:last-child {
+  width: 72px;
+  text-align: center;
+}
+.bank-multipage .chapter-command-bar {
+  align-items: start;
+}
+.chapter-inline-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  max-width: 920px;
+}
+.chapter-inline-stats > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.chapter-inline-stats b {
+  color: #0f172a;
+  font-weight: 900;
+}
+.chapter-inline-stats small {
+  color: #64748b;
+  font-weight: 750;
+}
+.chapter-inline-stats em {
+  font-style: normal;
+}
+.chapter-inline-stats > span.is-busy {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+@media (max-width: 760px) {
+  .bank-multipage .bank-compact-data-table { min-width: 860px; }
+  .chapter-inline-stats { gap: 5px; }
+  .chapter-inline-stats > span { min-height: 26px; padding: 4px 8px; font-size: 11px; }
+}
+html[data-ai-theme='dark'] .bank-row-status,
+html[data-theme='dark'] .bank-row-status {
+  border-color: rgba(148, 163, 184, .2);
+  background: rgba(15, 23, 42, .72);
+  color: #cbd5e1;
+}
+html[data-ai-theme='dark'] .chapter-inline-stats > span,
+html[data-theme='dark'] .chapter-inline-stats > span {
+  border-color: rgba(148, 163, 184, .18);
+  background: rgba(15, 23, 42, .74);
+  color: #cbd5e1;
 }

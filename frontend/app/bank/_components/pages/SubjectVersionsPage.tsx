@@ -172,24 +172,27 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     <section className="card">
       <div className="section-head"><div><h2>{subject ? `Danh sách phiên bản của ${subject.code}` : 'Danh sách phiên bản môn'}</h2><p className="helper">Tạo mới hoàn toàn hoặc tạo từ phiên bản cũ của môn.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm phiên bản môn" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined} />
-      <div className="entity-list horizontal multipage-list">
-        {visible.map(({ subject_version, stats: rawStats }) => {
-          const stats = rawStats || emptyReviewStats()
-          const hasPublished = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published')
-          return <Link key={subject_version.id} href={`/bank/subject-versions/${subject_version.id}/chapters`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
-            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditSubjectVersion(subject_version)} onDelete={() => setDeleteTarget(subject_version)} />
-            <div className="entity-card-head"><b>{subject_version.code}</b><span className="status-pill">{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></div>
-            <small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small>
-            <StatLine label="Bài" value={stats.chapter_count || 0} />
-            <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))}`} />
-            <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
-            <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
-            <StatLine label="Bộ đề đã đưa lên CMS" value={`${stats.published_release_count || 0}/${stats.chapter_count || 0} bài`} />
-            {hasPublished ? <span className="status success">Đã khóa chỉnh sửa</span> : null}
-          </Link>
-        })}
+      <div className="responsive-table-wrap bank-compact-table-wrap">
+        <table className="ops-data-table bank-compact-data-table bank-version-table">
+          <thead><tr><th>STT</th><th>Phiên bản môn</th><th>Trạng thái</th><th>Bài</th><th>Tổng câu</th><th>Đã duyệt</th><th>Chưa duyệt/lỗi</th><th>Đã đưa CMS</th><th>Thao tác</th></tr></thead>
+          <tbody>{visible.map(({ subject_version, stats: rawStats }, index) => {
+            const stats = rawStats || emptyReviewStats()
+            const hasPublished = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published')
+            const capacity = stats.question_capacity || ((stats.chapter_count || 0) * (stats.chapter_question_limit || 100))
+            return <tr key={subject_version.id}>
+              <td className="stt-cell">{index + 1}</td>
+              <td><Link className="bank-table-link" href={`/bank/subject-versions/${subject_version.id}/chapters`}><b>{subject_version.code}</b><small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small></Link></td>
+              <td><span className={`bank-row-status status-${hasPublished ? 'published' : (stats.status || 'empty')}`}>{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></td>
+              <td>{stats.chapter_count || 0}</td>
+              <td>{stats.total_questions || 0}/{capacity}</td>
+              <td>{stats.approved_count || 0}</td>
+              <td>{stats.unresolved_count || 0}</td>
+              <td>{stats.published_release_count || 0}/{stats.chapter_count || 0}</td>
+              <td><EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditSubjectVersion(subject_version)} onDelete={() => setDeleteTarget(subject_version)} /></td>
+            </tr>
+          })}{!visible.length ? <tr><td colSpan={9}><div className="empty-state">Chưa có version phù hợp.</div></td></tr> : null}</tbody>
+        </table>
       </div>
-      {!visible.length ? <div className="empty-state">Chưa có version phù hợp.</div> : null}
     </section>
 
     <Modal open={Boolean(editing)} title="Sửa phiên bản môn" onClose={() => setEditing(null)}>

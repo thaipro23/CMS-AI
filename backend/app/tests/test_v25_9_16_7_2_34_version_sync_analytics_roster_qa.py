@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.37'
+VERSION = '25.9.16.7.2.38'
 
 
 def read(path: str) -> str:
@@ -16,12 +16,12 @@ def test_v35_runtime_version_still_keeps_v34_roster_qa_baseline():
     assert f'APP_VERSION={VERSION}' in read('.env.example')
     assert f'APP_VERSION={VERSION}' in read('.env.production.example')
     assert f'# AI Server Open edX — v{VERSION}' in read('README.md')
-    assert f'# v{VERSION} — Analytics Class Result Doctor + Production Readiness Repair' in read('RUN_CURRENT.md')
+    assert f'# v{VERSION} — Bank Compact Table UX + Sidebar Taxonomy' in read('RUN_CURRENT.md')
 
 
 def test_changelog_order_and_known_heading_cleanup():
     changelog = read('CHANGELOG.md')
-    assert changelog.startswith('## v25.9.16.7.2.37 — Analytics Class Result Doctor + Production Readiness Repair')
+    assert changelog.startswith('## v25.9.16.7.2.38 — Bank Compact Table UX + Sidebar Taxonomy')
     assert changelog.index('## v25.9.16.7.2.34 — Production Polish Version Sync + Analytics Roster QA') < changelog.index('## v25.9.16.7.2.33 — Class Actions Toolbar + Learning Roster Fallback')
     assert '## v25.9.16.7.2.30 — Responsive Device-Adaptive UX' in changelog
     assert '## v25.9.16.7.2.32 — Responsive Device-Adaptive UX' not in changelog

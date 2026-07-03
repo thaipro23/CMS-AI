@@ -182,23 +182,26 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     <section className="card">
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
-      <div className="entity-list horizontal multipage-list">
-        {visible.map(({ chapter, stats: rawStats }) => {
-          const stats = rawStats || emptyReviewStats()
-          const hasPublished = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0)
-          return <Link key={chapter.id} href={`/bank/chapters/${chapter.id}`} className={`entity-card link-card ${reviewStatusClass(hasPublished ? 'published' : stats.status)}`}>
-            <EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} />
-            <div className="entity-card-head"><b>{chapterDisplayName(chapter)}</b><span className="status-pill">{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></div>
-            <StatLine label="Tài liệu" value={stats.material_count || 0} />
-            <StatLine label="Tổng câu" value={`${stats.total_questions || 0}/${stats.question_limit || 100}`} />
-            <StatLine label="Đã duyệt" value={stats.approved_count || 0} />
-            <StatLine label="Chưa duyệt/lỗi" value={stats.unresolved_count || 0} />
-            <StatLine label="Bộ đề" value={hasPublished ? 'Đã đưa lên CMS' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'} />
-            {hasPublished ? <span className="status success">Đã khóa chỉnh sửa</span> : stats.ready_to_release ? <span className="status success">Sẵn sàng chốt bộ đề</span> : null}
-          </Link>
-        })}
+      <div className="responsive-table-wrap bank-compact-table-wrap">
+        <table className="ops-data-table bank-compact-data-table bank-chapter-table">
+          <thead><tr><th>STT</th><th>Bài</th><th>Trạng thái</th><th>Tài liệu</th><th>Tổng câu</th><th>Đã duyệt</th><th>Chưa duyệt/lỗi</th><th>Bộ đề</th><th>Thao tác</th></tr></thead>
+          <tbody>{visible.map(({ chapter, stats: rawStats }, index) => {
+            const stats = rawStats || emptyReviewStats()
+            const hasPublished = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0)
+            return <tr key={chapter.id}>
+              <td className="stt-cell">{index + 1}</td>
+              <td><Link className="bank-table-link" href={`/bank/chapters/${chapter.id}`}><b>{chapterDisplayName(chapter)}</b><small>{chapter.title || chapterDisplayName(chapter)}</small></Link></td>
+              <td><span className={`bank-row-status status-${hasPublished ? 'published' : (stats.status || 'empty')}`}>{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></td>
+              <td>{stats.material_count || 0}</td>
+              <td>{stats.total_questions || 0}/{stats.question_limit || 100}</td>
+              <td>{stats.approved_count || 0}</td>
+              <td>{stats.unresolved_count || 0}</td>
+              <td>{hasPublished ? 'Đã đưa lên CMS' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'}</td>
+              <td><EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} /></td>
+            </tr>
+          })}{!visible.length ? <tr><td colSpan={9}><div className="empty-state">Chưa có bài phù hợp.</div></td></tr> : null}</tbody>
+        </table>
       </div>
-      {!visible.length ? <div className="empty-state">Chưa có bài phù hợp.</div> : null}
     </section>
 
     <Modal open={Boolean(editing)} title="Sửa bài" onClose={() => setEditing(null)}>

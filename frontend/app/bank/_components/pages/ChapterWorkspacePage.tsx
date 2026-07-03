@@ -708,22 +708,20 @@ ${chunk.content}`).join('\n\n')
     {!chapterPublished && diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
     {!chapterPublished && unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
 
-
-    <section className="summary-grid compact-summary">
-      <div className={materialOperationBusy ? 'summary-local-busy' : ''}><span>Tài liệu</span><b>{materials.length}</b>{materialOperationBusy ? <small><BusyLabel text="Đang up tài liệu" /></small> : null}</div>
-      <div><span>Tổng câu hiện có</span><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Còn {remainingQuota} câu</small></div>
-      <div><span>Câu đã duyệt</span><b>{stats.approved}</b></div>
-      <div><span>Câu chờ duyệt</span><b>{stats.pending}</b></div>
-      <div><span>Câu bị loại</span><b>{stats.rejected}</b></div>
-      <div><span>Nhóm kiến thức</span><b>{stats.families}</b></div>
-      <div><span>Bộ đề</span><b>{publishedRelease ? 'Đã đưa lên CMS' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b><small>{nextReleaseText(publishedRelease || latestRelease)}</small></div>
-    </section>
-
     <section className="card chapter-command-bar">
       <div>
         <div className="eyebrow">Bài học</div>
         <h2>{chapterDisplayName(chapter)}</h2>
         <p className="helper">Quản lý tài liệu, tạo câu hỏi, duyệt câu và chốt bộ đề cho bài này.</p>
+        <div className="chapter-inline-stats" aria-label="Tóm tắt bài học">
+          <span className={materialOperationBusy ? 'is-busy' : ''}>Tài liệu <b>{materials.length}</b>{materialOperationBusy ? <em><BusyLabel text="Đang up" /></em> : null}</span>
+          <span>Tổng câu <b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Còn {remainingQuota}</small></span>
+          <span>Đã duyệt <b>{stats.approved}</b></span>
+          <span>Chờ duyệt <b>{stats.pending}</b></span>
+          <span>Bị loại <b>{stats.rejected}</b></span>
+          <span>Nhóm KT <b>{stats.families}</b></span>
+          <span>Bộ đề <b>{publishedRelease ? 'Đã đưa lên CMS' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b></span>
+        </div>
       </div>
       <div className="button-row no-margin">
         <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>

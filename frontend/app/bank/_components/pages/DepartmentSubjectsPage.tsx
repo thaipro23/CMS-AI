@@ -166,22 +166,26 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     <section className="card">
       <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={can('subject.create') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
-      <div className="entity-list horizontal multipage-list">
-        {visible.map(({ subject, stats: rawStats }) => {
-          const stats = rawStats || emptyReviewStats()
-          return <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('subject.update')} onEdit={() => openEditSubject(subject)} onDelete={() => setDeleteTarget(subject)} />
-          <div className="entity-card-head"><b>{subject.code} - {subject.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
-          <StatLine label="Phiên bản môn" value={stats.subject_version_count || 0} />
-          <StatLine label="Đã duyệt xong" value={`${stats.review_done_version_count || 0} version`} />
-          <StatLine label="Chưa duyệt xong" value={`${stats.review_not_done_version_count || 0} version`} />
-          <StatLine label="Tổng câu" value={stats.total_questions || 0} />
-          <StatLine label="Câu chờ xử lý" value={stats.unresolved_count || 0} />
-          <StatLine label="Bài sẵn sàng chốt" value={stats.ready_to_release_chapter_count || 0} />
-        </Link>
-        })}
+      <div className="responsive-table-wrap bank-compact-table-wrap">
+        <table className="ops-data-table bank-compact-data-table bank-subject-table">
+          <thead><tr><th>STT</th><th>Môn</th><th>Trạng thái</th><th>Phiên bản</th><th>Đã duyệt</th><th>Chưa duyệt</th><th>Tổng câu</th><th>Cần xử lý</th><th>Sẵn sàng chốt</th><th>Thao tác</th></tr></thead>
+          <tbody>{visible.map(({ subject, stats: rawStats }, index) => {
+            const stats = rawStats || emptyReviewStats()
+            return <tr key={subject.id}>
+              <td className="stt-cell">{index + 1}</td>
+              <td><Link className="bank-table-link" href={`/bank/subjects/${subject.id}/versions`}><b>{subject.code}</b><small>{subject.name}</small></Link></td>
+              <td><span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span></td>
+              <td>{stats.subject_version_count || 0}</td>
+              <td>{stats.review_done_version_count || 0}</td>
+              <td>{stats.review_not_done_version_count || 0}</td>
+              <td>{stats.total_questions || 0}</td>
+              <td>{stats.unresolved_count || 0}</td>
+              <td>{stats.ready_to_release_chapter_count || 0}</td>
+              <td><EntityActions canManage={can('subject.update')} onEdit={() => openEditSubject(subject)} onDelete={() => setDeleteTarget(subject)} /></td>
+            </tr>
+          })}{!visible.length ? <tr><td colSpan={10}><div className="empty-state">Chưa có môn phù hợp.</div></td></tr> : null}</tbody>
+        </table>
       </div>
-      {!visible.length ? <div className="empty-state">Chưa có môn phù hợp.</div> : null}
     </section>
 
     <Modal open={Boolean(editing)} title="Sửa môn" onClose={() => setEditing(null)}>

@@ -155,25 +155,28 @@ export function DepartmentsPage() {
     <section className="card">
       <div className="section-head"><div><h2>Danh sách bộ môn</h2><p className="helper">Click vào bộ môn để xem các môn bên trong.</p></div></div>
       <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bộ môn" action={can('manage_settings') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined} />
-      <div className="bank-status-legend" aria-label="Chú giải trạng thái">
+      <div className="bank-status-legend bank-status-legend-compact" aria-label="Chú giải trạng thái">
         <span><i className="dot-empty" />Chưa có dữ liệu</span><span><i className="dot-incomplete" />Cần hoàn thiện</span><span><i className="dot-published" />Đã đưa lên CMS</span>
       </div>
-      <div className="entity-list horizontal multipage-list">
-        {visible.map(({ department, stats: rawStats }) => {
-          const stats = rawStats || emptyReviewStats()
-          return <Link key={department.id} href={`/bank/departments/${department.id}/subjects`} className={`entity-card link-card ${reviewStatusClass(stats.status)}`}>
-          <EntityActions canManage={can('manage_settings')} onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} />
-          <div className="entity-card-head"><b>{department.name}</b><span className="status-pill">{reviewStatusText(stats.status)}</span></div>
-          <small>{department.code}</small>
-          <StatLine label="Môn" value={stats.subject_count || 0} />
-          <StatLine label="Đã duyệt xong" value={`${stats.review_done_subject_count || 0} môn`} />
-          <StatLine label="Chưa duyệt xong" value={`${stats.review_not_done_subject_count || 0} môn`} />
-          <StatLine label="Câu chờ xử lý" value={stats.unresolved_count || 0} />
-          <StatLine label="Bài sẵn sàng chốt" value={stats.ready_to_release_chapter_count || 0} />
-        </Link>
-        })}
+      <div className="responsive-table-wrap bank-compact-table-wrap">
+        <table className="ops-data-table bank-compact-data-table bank-department-table">
+          <thead><tr><th>STT</th><th>Bộ môn</th><th>Trạng thái</th><th>Môn</th><th>Đã duyệt</th><th>Chưa duyệt</th><th>Cần xử lý</th><th>Sẵn sàng chốt</th><th>Thao tác</th></tr></thead>
+          <tbody>{visible.map(({ department, stats: rawStats }, index) => {
+            const stats = rawStats || emptyReviewStats()
+            return <tr key={department.id}>
+              <td className="stt-cell">{index + 1}</td>
+              <td><Link className="bank-table-link" href={`/bank/departments/${department.id}/subjects`}><b>{department.name}</b><small>{department.code}</small></Link></td>
+              <td><span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span></td>
+              <td>{stats.subject_count || 0}</td>
+              <td>{stats.review_done_subject_count || 0}</td>
+              <td>{stats.review_not_done_subject_count || 0}</td>
+              <td>{stats.unresolved_count || 0}</td>
+              <td>{stats.ready_to_release_chapter_count || 0}</td>
+              <td><EntityActions canManage={can('manage_settings')} onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /></td>
+            </tr>
+          })}{!visible.length ? <tr><td colSpan={9}><div className="empty-state">Chưa có bộ môn phù hợp.</div></td></tr> : null}</tbody>
+        </table>
       </div>
-      {!visible.length ? <div className="empty-state">Chưa có bộ môn phù hợp.</div> : null}
     </section>
 
     <Modal open={Boolean(editing)} title="Sửa bộ môn" onClose={() => setEditing(null)}>

@@ -1,8 +1,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.37'
-TITLE = 'Analytics Class Result Doctor + Production Readiness Repair'
+VERSION = '25.9.16.7.2.38'
+TITLE = 'Bank Compact Table UX + Sidebar Taxonomy'
 
 
 def read(path: str) -> str:
@@ -18,7 +18,7 @@ def test_v36_version_and_current_docs_are_synchronized():
     assert f'APP_VERSION={VERSION}' in read('.env.production.example')
     assert f'# AI Server Open edX — v{VERSION}' in read('README.md')
     assert f'# v{VERSION} — {TITLE}' in read('RUN_CURRENT.md')
-    assert f'# v{VERSION} — {TITLE}' in read('RUN_V25_9_16_7_2_37.md')
+    assert f'# v{VERSION} — {TITLE}' in read('RUN_V25_9_16_7_2_38.md')
 
 
 def test_v36_sidebar_css_overrides_old_two_column_rail_on_desktop():
