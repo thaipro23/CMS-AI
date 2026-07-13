@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions, syncAcademicCampusesFromAp } from '../../lib/api'
+import { PageHeader } from '../../components/layout/PageHeader'
 import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult, AcademicSyncRun } from '../../types'
 
 type BranchCode = 'poly' | 'ptcd'
@@ -256,17 +257,13 @@ export default function ApSyncPage() {
   }
 
   return <div className="page-stack ap-sync-page">
-    <section className="hero-card compact-hero">
-      <div>
-        <div className="eyebrow">AP → AI Server</div>
-        <h1>Đồng bộ AP</h1>
-        <p>Trang này dùng để đồng bộ dữ liệu phân công từ AP theo kỳ. Không chia nhỏ theo cơ sở hoặc theo môn trên giao diện nữa.</p>
-      </div>
-      <div className="hero-actions">
-        <button className="btn secondary" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới'}</button>
-        {canManageAcademicOps && <button className="btn secondary" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang đồng bộ cơ sở...' : 'Đồng bộ danh sách cơ sở'}</button>}
-      </div>
-    </section>
+    <PageHeader
+      eyebrow="Vận hành hệ thống"
+      title="Đồng bộ AP"
+      description="Đồng bộ dữ liệu phân công đào tạo theo kỳ. Tác vụ chạy nền và tiếp tục hoạt động khi người dùng tải lại trang."
+      secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới'}</button>}
+      primaryAction={canManageAcademicOps ? <button className="btn" type="button" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang đồng bộ...' : 'Đồng bộ cơ sở'}</button> : undefined}
+    />
 
     {message ? <div className="alert">{message}</div> : null}
 

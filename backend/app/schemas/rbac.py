@@ -68,6 +68,7 @@ class RoleAssignmentOut(BaseModel):
     email: str | None = None
     role_code: str
     role_name: str | None = None
+    permission_codes: list[str] = Field(default_factory=list)
     scope_type: str
     scope_id: str
     scope_label: str | None = None
@@ -93,7 +94,9 @@ class EffectiveRBACOut(BaseModel):
     user_id: str
     legacy_role: str
     effective_legacy_role: str
+    is_system_admin: bool = False
     permissions: list[str]
+    business_permissions: list[str] = Field(default_factory=list)
     assignments: list[RoleAssignmentOut]
 
 

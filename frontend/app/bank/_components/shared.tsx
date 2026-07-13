@@ -128,9 +128,9 @@ export function statusClass(status?: string | null) {
 }
 
 export function useBankData() {
-  const { authHeaders, can, authReady } = useAppContext()
+  const { authHeaders, can, canScope, authReady } = useAppContext()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
-  return { headers, can, authReady }
+  return { headers, can, canScope, authReady }
 }
 
 export function useAsyncMessage() {

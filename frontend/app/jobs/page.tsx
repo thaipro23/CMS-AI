@@ -15,6 +15,7 @@ import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { AcademicBulkOperationJob, AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { PageHeader } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { formatVNDateTime } from '../../lib/time'
@@ -302,10 +303,13 @@ function JobsContent() {
 
   if (!can('view_jobs')) return <div className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</div>
   return <div className="page-stack ops-console jobs-console ux-enterprise-page">
-    <section className="ops-hero card">
-      <div><span className="eyebrow">Tiến trình</span><h1>Jobs / Việc xử lý</h1><p>Theo dõi job chạy nền: đồng bộ lớp, đồng bộ AP, báo cáo giáo viên, học online, tạo câu hỏi và Quiz. Nhật ký thao tác xem riêng ở Audit.</p></div>
-      <div className="button-row no-margin"><button className="btn secondary" onClick={() => setQuizOpen(true)}>Quiz gần đây</button><button className="btn" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại danh sách việc'}</button></div>
-    </section>
+    <PageHeader
+      eyebrow="Vận hành hệ thống"
+      title="Tác vụ nền"
+      description="Theo dõi tiến trình đồng bộ, báo cáo, analytics, tạo câu hỏi và Quiz. Nhật ký thao tác được quản lý riêng tại Nhật ký hoạt động."
+      secondaryActions={<button className="btn secondary" type="button" onClick={() => setQuizOpen(true)}>Quiz gần đây</button>}
+      primaryAction={<button className="btn" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>}
+    />
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>AP sync gần đây</span><b>{academicRuns.length}</b></div></section>
     <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => update({ q: e.target.value })} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => update({ status: e.target.value })}><option value="all">Tất cả</option><option value="active">Đang chạy</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => update({ group: e.target.value })}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="analytics">Học online</option><option value="bulk_sync">Ghép Course CMS / đồng bộ hàng loạt</option><option value="bank">Bank / Quiz</option></select></label></div></section>

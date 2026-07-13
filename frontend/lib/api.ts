@@ -111,6 +111,7 @@ import {
   AcademicAssignmentDefenseScore,
   AnalyticsLearningBehaviorSummary,
   AnalyticsLearningBehaviorListResponse,
+  AnalyticsClassWorkspaceResponse,
   AnalyticsClassResultDoctor,
   AnalyticsClassBehaviorOverviewResponse,
   AnalyticsStudentLearningBehaviorDetail,
@@ -3856,6 +3857,30 @@ export async function enqueueAnalyticsClassDoctorRecalculate(
     await apiFetch(
       `${API}/analytics/classes/${encodeURIComponent(classId)}/doctor/recalculate?${params.toString()}`,
       { method: "POST", credentials: "include", headers },
+    ),
+  );
+}
+
+export async function getAnalyticsClassWorkspace(
+  headers: HeadersInit,
+  classId: string,
+  filters: {
+    courseId?: string | null;
+    classification?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<AnalyticsClassWorkspaceResponse> {
+  const params = new URLSearchParams();
+  if (filters.courseId?.trim()) params.set("course_id", filters.courseId.trim());
+  if (filters.classification?.trim() && filters.classification !== "all")
+    params.set("classification", filters.classification.trim());
+  params.set("limit", String(Math.max(1, Math.min(200, filters.limit || 100))));
+  params.set("offset", String(Math.max(0, filters.offset || 0)));
+  return parseResponse(
+    await apiFetch(
+      `${API}/analytics/classes/${encodeURIComponent(classId)}/workspace?${params.toString()}`,
+      { credentials: "include", headers },
     ),
   );
 }

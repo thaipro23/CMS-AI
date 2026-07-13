@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { deleteAcademicTerm, getAcademicTermWithBlocks, getAcademicTerms, saveAcademicTerm } from '../../lib/api'
 import { AcademicBlock, AcademicTerm } from '../../types'
+import { PageHeader } from '../../components/layout/PageHeader'
 import { addDaysToVNDateInput, formatVNDate, normalizeVNDateInput, vnDateInputToISODate, vnDateInputToISODateTime } from '../../lib/time'
 
 type Branch = 'poly' | 'ptcd'
@@ -160,10 +161,10 @@ export default function SemestersPage() {
     finally { setSaving(false) }
   }
 
-  if (!can('manage_settings')) return <div className="page-stack"><section className="hero-card compact-hero"><div><div className="eyebrow">Semesters</div><h1>Học kỳ</h1><p>Bạn không có quyền quản trị học kỳ.</p></div></section></div>
+  if (!can('manage_settings')) return <div className="page-stack"><PageHeader eyebrow="Danh mục" title="Học kỳ" description="Bạn không có quyền quản trị học kỳ." /></div>
 
   return <div className="page-stack semesters-page">
-    <section className="hero-card compact-hero"><div><div className="eyebrow">AP master data</div><h1>Học kỳ & Cấu hình tuần học</h1><p>Quản lý kỳ, block và lịch tuần học. Deadline Quiz của lớp sẽ lấy lịch tuần học tại đây để chia deadline.</p></div><div className="hero-actions"><button className="btn secondary" disabled={loading} onClick={load}>Làm mới</button><button className="btn" onClick={openCreate}>Thêm học kỳ</button></div></section>
+    <PageHeader eyebrow="Danh mục" title="Học kỳ & Cấu hình tuần học" description="Quản lý kỳ, block và lịch tuần học dùng để xác định deadline Quiz." secondaryActions={<button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button>} primaryAction={<button className="btn" type="button" onClick={openCreate}>Thêm học kỳ</button>} />
     {message ? <div className="alert">{message}</div> : null}
     <section className="card"><div className="section-head"><div><h2>Danh sách học kỳ</h2><p>{loading ? 'Đang tải...' : `${items.length} học kỳ`}</p></div></div>
       <div className="table-wrap" style={{ marginTop: 16 }}><table className="data-table compact-table"><thead><tr><th>STT</th><th>Hệ</th><th>Mã học kỳ</th><th>Tên học kỳ</th><th>Block 1</th><th>Block 2</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>{items.map((item, index) => {

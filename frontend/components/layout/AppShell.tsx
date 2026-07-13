@@ -1,267 +1,339 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
-import { ROLE_LABELS } from '../../types'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
-import { Breadcrumbs } from '../navigation/Breadcrumbs'
+import { SHOW_DIAGNOSTICS_UI } from '../../lib/runtime'
+import { ROLE_LABELS } from '../../types'
+import { AppIcon, type AppIconName } from '../icons/AppIcon'
+import { Breadcrumbs, type BreadcrumbItem } from '../navigation/Breadcrumbs'
+
+type NavGroupKey = 'overview' | 'bank' | 'training' | 'operations' | 'catalog' | 'admin'
 
 type NavItem = {
   href: string
   label: string
-  desc: string
-  icon: string
-  group: 'overview' | 'bank' | 'training' | 'operations'
+  description: string
+  icon: AppIconName
+  group: NavGroupKey
   permission?: string
+  diagnostic?: boolean
 }
 
-const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan ngân hàng', desc: 'Số liệu và việc cần xử lý', icon: '⌁', group: 'overview', permission: 'view_questions' },
-  { href: '/bank/departments', label: 'Ngân hàng câu hỏi', desc: 'Bộ môn → Môn → Phiên bản → Bài → Câu hỏi', icon: '▦', group: 'bank', permission: 'view_questions' },
-  { href: '/bank/quiz', label: 'Tạo Quiz từ bộ đề', desc: 'Luồng xuất bản sau ngân hàng', icon: '◈', group: 'bank', permission: 'publish_questions' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Quiz đã tạo và khôi phục', icon: '◷', group: 'bank', permission: 'publish_questions' },
-  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'training', permission: 'view_training_reports' },
-  { href: '/teacher-management', label: 'Quản lý giảng viên', desc: 'Giảng viên, lớp, tiến độ', icon: '▤', group: 'training', permission: 'view_training_reports' },
-  { href: '/analytics/learning', label: 'Học online', desc: 'Tín hiệu học theo dữ liệu', icon: '◌', group: 'training', permission: 'view_dashboard' },
-  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_training_deadlines' },
-  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'operations', permission: 'manage_settings' },
-  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_training_deadlines' },
-  { href: '/ops/readiness', label: 'Readiness', desc: 'Gate vận hành và pilot', icon: '◬', group: 'operations', permission: 'view_jobs' },
-  { href: '/jobs', label: 'Tác vụ nền', desc: 'Việc đang xử lý', icon: '⚙', group: 'operations', permission: 'view_jobs' },
-  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'operations', permission: 'view_jobs' },
-  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'operations', permission: 'manage_settings' },
-  { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'operations', permission: 'manage_settings' },
-]
+const SIDEBAR_STORAGE_KEY = 'ai-shell-sidebar'
+const GROUP_STORAGE_KEY = 'ai-shell-nav-groups'
+const THEME_STORAGE_KEY = 'ai-shell-theme'
 
-const navGroups: Array<{ key: NavItem['group']; label: string }> = [
+const navGroups: Array<{ key: NavGroupKey; label: string }> = [
   { key: 'overview', label: 'Tổng quan' },
-  { key: 'bank', label: 'Ngân hàng câu hỏi' },
-  { key: 'training', label: 'Đào tạo' },
-  { key: 'operations', label: 'Vận hành & quản trị' },
+  { key: 'bank', label: 'Ngân hàng đề' },
+  { key: 'training', label: 'Vận hành đào tạo' },
+  { key: 'operations', label: 'Vận hành hệ thống' },
+  { key: 'catalog', label: 'Danh mục' },
+  { key: 'admin', label: 'Quản trị' },
 ]
 
+const navItems: NavItem[] = [
+  { href: '/bank', label: 'Tổng quan', description: 'Số liệu và việc cần xử lý', icon: 'dashboard', group: 'overview', permission: 'view_questions' },
+  { href: '/bank/departments', label: 'Ngân hàng đề', description: 'Bộ môn, môn, phiên bản và câu hỏi', icon: 'bank', group: 'bank', permission: 'view_questions' },
+  { href: '/bank/search', label: 'Tìm kiếm câu hỏi', description: 'Tra cứu trên toàn bộ phạm vi được giao', icon: 'search', group: 'bank', permission: 'view_questions' },
+  { href: '/bank/quiz', label: 'Tạo Quiz', description: 'Tạo Quiz và Final test trên Open edX', icon: 'quiz', group: 'bank', permission: 'publish_questions' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', description: 'Theo dõi publish và rollback', icon: 'release', group: 'bank', permission: 'publish_questions' },
+  { href: '/student-management', label: 'Quản lý sinh viên', description: 'Lớp, sinh viên và trạng thái CMS', icon: 'students', group: 'training', permission: 'view_training_reports' },
+  { href: '/teacher-management', label: 'Quản lý giảng viên', description: 'Giảng viên và lớp được phân công', icon: 'teachers', group: 'training', permission: 'view_training_reports' },
+  { href: '/analytics/learning', label: 'Phân tích học tập', description: 'Tiến độ và tín hiệu học online', icon: 'analytics', group: 'training', permission: 'view_training_reports' },
+  { href: '/jobs', label: 'Tác vụ nền', description: 'Theo dõi tiến trình Celery', icon: 'jobs', group: 'operations', permission: 'view_jobs' },
+  { href: '/audit', label: 'Nhật ký hoạt động', description: 'Lịch sử thao tác và thay đổi', icon: 'audit', group: 'operations', permission: 'view_jobs' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', description: 'Đồng bộ dữ liệu đào tạo', icon: 'sync', group: 'operations', permission: 'manage_training_deadlines' },
+  { href: '/ops/readiness', label: 'Kiểm tra vận hành', description: 'Gate kỹ thuật dành cho môi trường kiểm thử', icon: 'readiness', group: 'operations', permission: 'view_ops_readiness', diagnostic: true },
+  { href: '/premises', label: 'Cơ sở', description: 'Danh mục cơ sở đào tạo', icon: 'campus', group: 'catalog', permission: 'manage_training_deadlines' },
+  { href: '/semesters', label: 'Học kỳ', description: 'Kỳ, block và cấu hình tuần học', icon: 'semester', group: 'catalog', permission: 'manage_settings' },
+  { href: '/users', label: 'Người dùng & phân quyền', description: 'Gán vai trò theo phạm vi', icon: 'users', group: 'admin', permission: 'view_rbac' },
+  { href: '/settings', label: 'Cài đặt', description: 'Cấu hình vận hành hệ thống', icon: 'settings', group: 'admin', permission: 'manage_settings' },
+]
+
+function isPathActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`)
+}
 
 function requiredPermissionForPath(pathname: string): string | null {
   const rules: Array<[RegExp, string]> = [
-    [/^\/bank\/quiz(?:\/|$)/, 'publish_questions'],
-    [/^\/bank\/history(?:\/|$)/, 'publish_questions'],
+    [/^\/bank\/(?:quiz|history)(?:\/|$)/, 'publish_questions'],
     [/^\/bank(?:\/|$)/, 'view_questions'],
-    [/^\/question-bank(?:\/|$)/, 'view_questions'],
-    [/^\/review(?:\/|$)/, 'review_questions'],
-    [/^\/generate(?:\/|$)/, 'generate_questions'],
-    [/^\/export(?:\/|$)/, 'export_questions'],
-    [/^\/workflow(?:\/|$)/, 'view_questions'],
-    [/^\/sync(?:\/|$)/, 'sync_course'],
-    [/^\/dashboard(?:\/|$)/, 'view_dashboard'],
+    [/^\/(?:question-bank|review|generate|workflow)(?:\/|$)/, 'view_questions'],
+    [/^\/export(?:\/|$)/, 'publish_questions'],
+    [/^\/(?:student-management|teacher-management|training-management|analytics)(?:\/|$)/, 'view_training_reports'],
     [/^\/premises(?:\/|$)/, 'manage_training_deadlines'],
     [/^\/semesters(?:\/|$)/, 'manage_settings'],
     [/^\/ap-sync(?:\/|$)/, 'manage_training_deadlines'],
-    [/^\/student-management(?:\/|$)/, 'view_training_reports'],
-    [/^\/analytics(?:\/|$)/, 'view_dashboard'],
-    [/^\/teacher-management(?:\/|$)/, 'view_training_reports'],
-    [/^\/training-management(?:\/|$)/, 'view_training_reports'],
-    [/^\/ops\/readiness(?:\/|$)/, 'view_jobs'],
-    [/^\/jobs(?:\/|$)/, 'view_jobs'],
-    [/^\/audit(?:\/|$)/, 'view_jobs'],
-    [/^\/users(?:\/|$)/, 'manage_settings'],
+    [/^\/ops\/readiness(?:\/|$)/, 'view_ops_readiness'],
+    [/^\/(?:jobs|audit)(?:\/|$)/, 'view_jobs'],
+    [/^\/users(?:\/|$)/, 'view_rbac'],
     [/^\/settings(?:\/|$)/, 'manage_settings'],
   ]
   return rules.find(([pattern]) => pattern.test(pathname))?.[1] || null
 }
 
-function pageTitle(pathname: string) {
+function pageLabel(pathname: string) {
   const exact = navItems.find((item) => pathname === item.href)
   if (exact) return exact.label
-  const nested = navItems
-    .filter((item) => pathname.startsWith(`${item.href}/`))
-    .sort((a, b) => b.href.length - a.href.length)[0]
-  return nested ? nested.label : 'AI Server'
+  return navItems
+    .filter((item) => isPathActive(pathname, item.href))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.label || 'AI Server'
 }
 
-
-function buildStudentManagementTopbar(pathname: string, searchParams: { get(name: string): string | null }) {
-  if (!pathname.startsWith('/student-management')) return null
-
-  const subjectIdMatch = pathname.match(/^\/student-management\/subjects\/([^/]+)\/classes/)
-  const classIdMatch = pathname.match(/^\/student-management\/classes\/([^/]+)/)
-  const subjectId = subjectIdMatch?.[1] || searchParams.get('subject_id') || ''
-  const subjectCode = searchParams.get('subject_code') || ''
-  const subjectName = searchParams.get('subject_name') || ''
-  const termId = searchParams.get('term_id') || ''
-  const termName = searchParams.get('term_name') || ''
-  const branch = searchParams.get('branch') || 'poly'
-  const campus = searchParams.get('campus') || ''
-
-  const subjectParams = new URLSearchParams()
-  if (termId) subjectParams.set('term_id', termId)
-  if (branch) subjectParams.set('branch', branch)
-  if (campus) subjectParams.set('campus', campus)
-  if (termName) subjectParams.set('term_name', termName)
-  if (subjectCode) subjectParams.set('subject_code', subjectCode)
-  if (subjectName) subjectParams.set('subject_name', subjectName)
-  const subjectHref = subjectId
-    ? `/student-management/subjects/${encodeURIComponent(subjectId)}/classes${subjectParams.toString() ? `?${subjectParams.toString()}` : ''}`
-    : '/student-management'
-
-  const items: Array<{ label: string; href?: string }> = [
-    { label: 'Quản lý sinh viên', href: '/student-management' },
-    { label: 'Môn', href: pathname === '/student-management' ? undefined : '/student-management' },
-  ]
-
-  if (subjectIdMatch || classIdMatch) {
-    items.push({
-      label: subjectCode || 'Môn đã chọn',
-      href: classIdMatch ? subjectHref : undefined,
-    })
+function breadcrumbsForPath(pathname: string): BreadcrumbItem[] {
+  if (pathname.startsWith('/bank/departments/')) {
+    const items: BreadcrumbItem[] = [
+      { label: 'Ngân hàng đề', href: '/bank/departments' },
+      { label: 'Bộ môn' },
+    ]
+    if (pathname.includes('/subjects/')) items.push({ label: 'Môn học' })
+    return items
   }
-
-  if (classIdMatch) {
-    items.push({ label: 'Lớp' })
-  }
-
-  return items
+  if (pathname.startsWith('/bank/subjects/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Môn học' }, { label: 'Phiên bản môn' }]
+  if (pathname.startsWith('/bank/subject-versions/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn' }, { label: 'Bài học' }]
+  if (pathname.startsWith('/bank/chapters/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bài học' }, { label: 'Câu hỏi' }]
+  if (pathname.startsWith('/student-management/classes/')) return [{ label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Chi tiết lớp' }]
+  if (pathname.startsWith('/student-management/subjects/')) return [{ label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Danh sách lớp' }]
+  if (pathname.startsWith('/teacher-management/teachers/')) return [{ label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Lớp giảng viên' }]
+  if (pathname.startsWith('/teacher-management/classes/')) return [{ label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Chi tiết lớp' }]
+  const item = navItems.find((candidate) => isPathActive(pathname, candidate.href))
+  return item ? [{ label: item.label }] : [{ label: pageLabel(pathname) }]
 }
 
-function AppFooter() {
-  const version = process.env.NEXT_PUBLIC_APP_VERSION || '25.9.16.7.2.64.14'
-  return <footer className="app-footer app-footer-compact product-footer">
-    <div><b>Open edX AI Server</b><span>Ngân hàng câu hỏi · Vận hành đào tạo · Open edX CMS</span></div>
-    <div className="footer-links"><span>v{version}</span></div>
-  </footer>
+function loadGroupPreference(): Record<NavGroupKey, boolean> {
+  const defaults = Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(GROUP_STORAGE_KEY) || '{}') as Partial<Record<NavGroupKey, boolean>>
+    return { ...defaults, ...parsed }
+  } catch {
+    return defaults
+  }
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  const [topbarSearch, setTopbarSearch] = useState('')
-  const {
-    courseId,
-    role,
-    userId,
-    can,
-    isAuthenticated,
-    authReady,
-  } = useAppContext()
+  const drawerRef = useRef<HTMLElement>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const [collapsed, setCollapsed] = useState(true)
+  const [mobile, setMobile] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
+  const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
+  const { courseId, role, userId, can, isAuthenticated, authReady } = useAppContext()
 
-  const visibleItems = useMemo(() => authReady ? navItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, can])
-  const currentTitle = pageTitle(pathname)
-  const currentNavItem = useMemo(() => {
-    const exact = navItems.find((item) => pathname === item.href)
-    if (exact) return exact
-    return navItems
-      .filter((item) => pathname.startsWith(`${item.href}/`))
-      .sort((a, b) => b.href.length - a.href.length)[0]
-  }, [pathname])
+  const availableItems = useMemo(() => navItems.filter((item) => !item.diagnostic || SHOW_DIAGNOSTICS_UI), [])
+  const visibleItems = useMemo(() => authReady ? availableItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, availableItems, can])
+  const currentGroup = useMemo(() => availableItems.find((item) => isPathActive(pathname, item.href))?.group, [availableItems, pathname])
   const routePermission = requiredPermissionForPath(pathname)
-  const routeAllowed = !routePermission || (authReady && can(routePermission))
+  const diagnosticsRouteBlocked = pathname.startsWith('/ops/readiness') && !SHOW_DIAGNOSTICS_UI
+  const routeAllowed = !diagnosticsRouteBlocked && (!routePermission || (authReady && can(routePermission)))
   const fallbackHref = visibleItems[0]?.href || '/bank'
-  const studentTopbar = buildStudentManagementTopbar(pathname, new URLSearchParams(topbarSearch))
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    setTopbarSearch(window.location.search || '')
+    const media = window.matchMedia('(max-width: 767px)')
+    const updateMobile = () => setMobile(media.matches)
+    updateMobile()
+    media.addEventListener('change', updateMobile)
+    const sidebarPreference = window.localStorage.getItem(SIDEBAR_STORAGE_KEY)
+    const nextCollapsed = sidebarPreference ? sidebarPreference !== 'expanded' : true
+    setCollapsed(nextCollapsed)
+    document.documentElement.dataset.sidebar = nextCollapsed ? 'collapsed' : 'expanded'
+    setOpenGroups(loadGroupPreference())
+    const htmlTheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+    setTheme(htmlTheme)
+    return () => media.removeEventListener('change', updateMobile)
+  }, [])
+
+  useEffect(() => {
+    if (!currentGroup) return
+    setOpenGroups((current) => current[currentGroup] ? current : { ...current, [currentGroup]: true })
+  }, [currentGroup])
+
+  useEffect(() => {
+    setDrawerOpen(false)
   }, [pathname])
 
-  const loginWithCms = () => {
-    try {
-      window.location.href = buildCmsSessionBridgeUrl(courseId)
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Không tạo được CMS login URL')
+  useEffect(() => {
+    document.documentElement.dataset.mobileNav = drawerOpen ? 'open' : 'closed'
+    const drawer = drawerRef.current
+    if (drawer) drawer.inert = mobile && !drawerOpen
+    document.body.style.overflow = drawerOpen && mobile ? 'hidden' : ''
+    if (!drawerOpen || !mobile) return () => { document.body.style.overflow = '' }
+    const focusable = drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), summary, input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    const first = focusable?.[0]
+    const last = focusable?.[focusable.length - 1]
+    first?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setDrawerOpen(false)
+        menuButtonRef.current?.focus()
+        return
+      }
+      if (event.key !== 'Tab' || !first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
-  }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = ''
+    }
+  }, [drawerOpen, mobile])
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (!authReady) return
-    if (isAuthenticated) {
-      window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
-      return
-    }
-    if (pathname.startsWith('/auth/cms-callback')) return
-    const autoLoginEnabled = (process.env.NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN || 'true').toLowerCase() !== 'false'
-    if (!autoLoginEnabled) return
-    const startedAtRaw = window.sessionStorage.getItem('ai_openedx_cms_bridge_started_at')
-    const startedAt = startedAtRaw ? Number(startedAtRaw) : 0
+    if (!authReady || routeAllowed || pathname.startsWith('/auth/')) return
+    if (fallbackHref !== pathname) router.replace(fallbackHref)
+  }, [authReady, fallbackHref, pathname, routeAllowed, router])
+
+  useEffect(() => {
+    if (!authReady || isAuthenticated || pathname.startsWith('/auth/cms-callback')) return
+    const enabled = (process.env.NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN || 'true').toLowerCase() !== 'false'
+    if (!enabled) return
+    const startedAt = Number(window.sessionStorage.getItem('ai_openedx_cms_bridge_started_at') || 0)
     const now = Date.now()
     if (startedAt && now - startedAt < 30000) {
-      setAutoLoginMessage('Đang chờ CMS trả phiên đăng nhập...')
+      setAutoLoginMessage('Đang chờ CMS xác thực...')
       return
     }
     try {
-      setAutoLoginMessage('Đang chuyển sang CMS để lấy phiên đăng nhập...')
+      setAutoLoginMessage('Đang chuyển sang CMS...')
       window.sessionStorage.setItem('ai_openedx_cms_bridge_started_at', String(now))
       window.location.href = buildCmsSessionBridgeUrl(courseId)
     } catch (error) {
-      setAutoLoginMessage(error instanceof Error ? error.message : 'Không tạo được CMS session bridge URL')
+      setAutoLoginMessage(error instanceof Error ? error.message : 'Không tạo được liên kết CMS')
     }
   }, [authReady, courseId, isAuthenticated, pathname])
 
-  useEffect(() => {
-    if (!authReady) return
-    if (routeAllowed) return
-    if (pathname.startsWith('/auth/')) return
-    if (fallbackHref && fallbackHref !== pathname) router.replace(fallbackHref)
-  }, [authReady, fallbackHref, pathname, routeAllowed, router])
+  const toggleSidebar = () => {
+    if (mobile) {
+      setDrawerOpen((value) => !value)
+      return
+    }
+    const next = !collapsed
+    setCollapsed(next)
+    document.documentElement.dataset.sidebar = next ? 'collapsed' : 'expanded'
+    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? 'collapsed' : 'expanded')
+  }
+
+  const toggleGroup = (key: NavGroupKey) => {
+    if (currentGroup === key) return
+    setOpenGroups((current) => {
+      const next = { ...current, [key]: !current[key] }
+      window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    document.documentElement.dataset.theme = next
+    document.documentElement.dataset.aiTheme = next
+    window.localStorage.setItem(THEME_STORAGE_KEY, next)
+  }
+
+  const reconnectCms = () => {
+    try {
+      window.location.href = buildCmsSessionBridgeUrl(courseId)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Không tạo được liên kết CMS')
+    }
+  }
 
   const guardedChildren = routeAllowed ? children : <section className="card empty-state permission-hidden-state">
-    <h2>{authReady ? 'Không có chức năng phù hợp với quyền hiện tại' : 'Đang kiểm tra quyền truy cập'}</h2>
-    <p>{authReady ? 'Hệ thống đã ẩn chức năng này và đang chuyển về màn bạn được phép sử dụng.' : 'Các chức năng sẽ chỉ hiện sau khi hệ thống xác định đúng quyền ACMS/AI Server của tài khoản.'}</p>
+    <h2>{authReady ? 'Bạn không có quyền truy cập chức năng này' : 'Đang kiểm tra quyền truy cập'}</h2>
+    <p>{authReady ? 'Hệ thống đang chuyển về màn hình phù hợp với phạm vi được phân công.' : 'Vui lòng chờ trong khi hệ thống xác định quyền từ phiên CMS.'}</p>
   </section>
 
-  return <div className="app-layout product-shell">
-    <a className="skip-link" href="#main-content">Bỏ qua menu, tới nội dung chính</a>
-    <aside className="sidebar product-sidebar" aria-label="Điều hướng chính">
-      <Link href="/bank" className="brand product-brand" aria-label="Open edX AI Server">
-        <div className="brand-mark product-brand-mark">AI</div>
-        <div><b>AI Server ACMS</b><small>Question Bank · Training Ops</small></div>
-      </Link>
+  return <div className="enterprise-app-shell">
+    <a className="skip-link" href="#main-content">Bỏ qua điều hướng</a>
+    {drawerOpen && mobile && <button className="enterprise-sidebar-overlay" aria-label="Đóng menu" type="button" onClick={() => setDrawerOpen(false)} />}
 
-      <nav className="side-nav grouped-side-nav product-nav">
-        {!authReady && <div className="nav-loading-stack" aria-label="Đang tải quyền">
-          <span /><span /><span /><span />
-        </div>}
+    <aside ref={drawerRef} className={`enterprise-sidebar${drawerOpen ? ' mobile-open' : ''}`} aria-label="Điều hướng chính" aria-hidden={mobile && !drawerOpen ? true : undefined}>
+      <div className="enterprise-sidebar-header">
+        <Link href="/bank" className="enterprise-brand" aria-label="AI Server ACMS">
+          <span className="enterprise-brand-mark">AI</span>
+          <span className="enterprise-brand-copy"><b>AI Server ACMS</b><small>FPT Polytechnic</small></span>
+        </Link>
+        {mobile && <button className="enterprise-icon-button sidebar-mobile-close" type="button" aria-label="Đóng menu" onClick={() => setDrawerOpen(false)}><AppIcon name="close" /></button>}
+      </div>
+
+      <nav className="enterprise-navigation" aria-label="Chức năng hệ thống">
+        {!authReady && <div className="enterprise-nav-skeleton" aria-label="Đang tải quyền"><span/><span/><span/><span/></div>}
         {navGroups.map((group) => {
           const items = visibleItems.filter((item) => item.group === group.key)
           if (!items.length) return null
-          return <div className="nav-group" key={group.key}>
-            <div className="nav-group-title">{group.label}</div>
-            <div className="nav-group-items">
+          const activeGroup = group.key === currentGroup
+          const expanded = activeGroup || openGroups[group.key] || collapsed
+          return <section className={`enterprise-nav-group${activeGroup ? ' active-group' : ''}`} key={group.key}>
+            <button className="enterprise-nav-group-toggle" type="button" aria-expanded={expanded} onClick={() => toggleGroup(group.key)} disabled={collapsed || activeGroup}>
+              <span>{group.label}</span><AppIcon name="chevron-down" size={14}/>
+            </button>
+            {expanded && <div className="enterprise-nav-items">
               {items.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(`${item.href}/`)
-                return <Link key={item.href} href={item.href} className={active ? 'nav-link active' : 'nav-link'} aria-current={active ? 'page' : undefined}>
-                  <span className="nav-icon" aria-hidden="true">{item.icon}</span>
-                  <span className="nav-text"><b>{item.label}</b><small>{item.desc}</small></span>
+                const active = isPathActive(pathname, item.href)
+                return <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`enterprise-nav-link${active ? ' active' : ''}`}
+                  aria-current={active ? 'page' : undefined}
+                  data-tooltip={item.label}
+                >
+                  <span className="enterprise-nav-icon"><AppIcon name={item.icon}/></span>
+                  <span className="enterprise-nav-copy"><b>{item.label}</b><small>{item.description}</small></span>
                 </Link>
               })}
-            </div>
-          </div>
+            </div>}
+          </section>
         })}
       </nav>
 
-      <div className="sidebar-note product-session-card product-session-card-compact">
-        <span className={isAuthenticated ? 'session-dot ok' : 'session-dot wait'} />
-        <div><b>{isAuthenticated ? 'CMS OK' : 'Chờ CMS'}</b><span>{isAuthenticated ? (userId || 'user') : (autoLoginMessage || 'Đang lấy phiên')}</span></div>
-        <button className="btn small secondary" type="button" onClick={loginWithCms}>{isAuthenticated ? 'Kết nối lại CMS' : 'Đăng nhập CMS'}</button>
+      <div className="enterprise-sidebar-session" title={isAuthenticated ? `Đã đăng nhập: ${userId}` : autoLoginMessage || 'Chưa có phiên CMS'}>
+        <span className={`enterprise-session-indicator ${isAuthenticated ? 'ok' : 'wait'}`} aria-hidden="true" />
+        <span className="enterprise-sidebar-session-copy"><b>{isAuthenticated ? 'CMS đã kết nối' : 'Đang kết nối CMS'}</b><small>{isAuthenticated ? userId || 'Tài khoản hiện tại' : autoLoginMessage || 'Vui lòng chờ'}</small></span>
       </div>
     </aside>
 
-    <div className="main-area product-main">
-      <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar product-command-topbar' : 'workspace-topbar workspace-topbar-minimal product-command-topbar'}>
-        <div className="workspace-topbar-main product-topbar-copy">
-          <h1>{currentTitle}</h1>
-          {studentTopbar && <Breadcrumbs items={studentTopbar} ariaLabel="Điều hướng Quản lý sinh viên" compact />}
+    <div className="enterprise-workspace">
+      <header className="enterprise-topbar">
+        <div className="enterprise-topbar-start">
+          <button ref={menuButtonRef} className="enterprise-icon-button" type="button" aria-label={mobile ? 'Mở menu' : collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'} aria-expanded={mobile ? drawerOpen : !collapsed} onClick={toggleSidebar}>
+            <AppIcon name={mobile ? 'menu' : collapsed ? 'panel-left-open' : 'panel-left-close'} />
+          </button>
+          <Breadcrumbs items={breadcrumbsForPath(pathname)} compact />
         </div>
-        <div className="product-topbar-meta" aria-label="Thông tin phiên làm việc">
-          <span className={isAuthenticated ? 'topbar-session-pill ok' : 'topbar-session-pill wait'}>{isAuthenticated ? 'CMS OK' : 'Chờ CMS'}</span>
-          <span className="topbar-role-pill">{ROLE_LABELS[role]}</span>
+        <div className="enterprise-topbar-end">
+          <span className={`enterprise-cms-pill ${isAuthenticated ? 'ok' : 'wait'}`}><span aria-hidden="true" />{isAuthenticated ? 'CMS OK' : 'Đang kết nối'}</span>
+          <button className="enterprise-icon-button" type="button" aria-label={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'} onClick={toggleTheme}>
+            <AppIcon name={theme === 'dark' ? 'sun' : 'moon'} />
+          </button>
+          <details className="enterprise-user-menu">
+            <summary aria-label="Mở menu tài khoản">
+              <span className="enterprise-avatar">{String(userId || 'U').slice(0, 2).toUpperCase()}</span>
+              <span className="enterprise-user-summary"><b>{userId || 'Người dùng'}</b><small>{ROLE_LABELS[role]}</small></span>
+              <AppIcon name="chevron-down" size={14}/>
+            </summary>
+            <div className="enterprise-user-popover">
+              <div className="enterprise-user-popover-head"><AppIcon name="user"/><span><b>{userId || 'Người dùng'}</b><small>{ROLE_LABELS[role]}</small></span></div>
+              <button type="button" onClick={reconnectCms}><AppIcon name="sync"/> Kết nối lại CMS</button>
+            </div>
+          </details>
         </div>
       </header>
 
-      <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{guardedChildren}</main>
-      <AppFooter />
+      <main id="main-content" className="enterprise-content" tabIndex={-1}>{guardedChildren}</main>
     </div>
   </div>
 }

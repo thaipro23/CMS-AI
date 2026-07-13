@@ -151,6 +151,7 @@ def effective_me(user: UserContext = Depends(get_user_context), db: Session = De
     service = BusinessRBACService(db)
     assignments = service.active_assignments_for_actor(user)
     raw_claims = user.raw_claims or {}
+    permissions = sorted(service.effective_permissions_for_user(user))
     return {
         'user_id': user.user_id,
         'legacy_role': user.role,
@@ -160,7 +161,9 @@ def effective_me(user: UserContext = Depends(get_user_context), db: Session = De
             email=user.email or raw_claims.get('email'),
             username=user.username or raw_claims.get('username'),
         ),
-        'permissions': sorted(service.effective_permissions_for_user(user)),
+        'is_system_admin': service.is_system_admin(user),
+        'permissions': permissions,
+        'business_permissions': permissions,
         'assignments': [service.serialize_assignment(item) for item in assignments],
     }
 
@@ -214,14 +217,14 @@ def scope_audit(user: UserContext = Depends(get_user_context), db: Session = Dep
 
 
 @router.get('/roles', response_model=list[RBACRoleOut])
-def list_roles(user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
+def list_roles(user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     service.ensure_default_catalog()
     return service.list_roles()
 
 
 @router.get('/permissions', response_model=list[RBACPermissionOut])
-def list_permissions(user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
+def list_permissions(user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     service.ensure_default_catalog()
     return service.list_permissions()
@@ -234,7 +237,7 @@ def list_assignments(
     scope_type: str | None = None,
     scope_id: str | None = None,
     include_revoked: bool = False,
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(require_permission('view_rbac')),
     db: Session = Depends(get_db),
 ):
     service = BusinessRBACService(db)
@@ -250,7 +253,7 @@ def list_assignments(
 
 
 @router.post('/assignments', response_model=RoleAssignmentOut)
-def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
+def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     try:
         service.ensure_default_catalog()
@@ -274,7 +277,7 @@ def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends
 
 
 @router.delete('/assignments/{assignment_id}', response_model=RoleAssignmentOut)
-def revoke_assignment(assignment_id: str, payload: RoleAssignmentRevoke | None = None, user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
+def revoke_assignment(assignment_id: str, payload: RoleAssignmentRevoke | None = None, user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     try:
         item = service.revoke_assignment(assignment_id, actor=user, revoke_reason=(payload.revoke_reason if payload else ''))
@@ -297,7 +300,7 @@ def revoke_assignment(assignment_id: str, payload: RoleAssignmentRevoke | None =
 
 
 @router.get('/assignments/import-template')
-def download_import_template(user: UserContext = Depends(require_permission('view_questions')), db: Session = Depends(get_db)):
+def download_import_template(user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     if not service.has_any_business_permission(user, 'reviewer.assign') and not service.has_any_business_permission(user, 'user.manage_all'):
         raise HTTPException(status_code=403, detail='Bạn không có quyền tải mẫu import phân quyền')
@@ -313,7 +316,7 @@ def download_import_template(user: UserContext = Depends(require_permission('vie
 async def import_assignments(
     file: UploadFile = File(...),
     dry_run: bool = Query(default=False),
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(require_permission('view_rbac')),
     db: Session = Depends(get_db),
 ):
     service = BusinessRBACService(db)

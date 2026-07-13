@@ -196,6 +196,9 @@ class AcademicClass(Base):
             postgresql_where=text('active IS TRUE'),
         ),
         Index('ix_academic_classes_teacher_lookup', 'term_id', 'block_id', 'subject_id', 'active'),
+        # Mirrors migration 0050 and the production index contract. No new migration
+        # is required when the index already exists in PostgreSQL.
+        Index('ix_academic_classes_scope_lookup', 'branch', 'campus', 'term_id', 'block_id', 'subject_id', 'class_code', 'active'),
         Index('ix_academic_classes_campus_branch', 'campus', 'branch'),
     )
 

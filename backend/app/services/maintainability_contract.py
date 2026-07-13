@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import os
 from typing import Any
 
 from app.core.config import settings
@@ -80,7 +81,7 @@ class MaintainabilityContractService:
     ]
 
     def __init__(self, root: Path | None = None):
-        self.root = root or Path(__file__).resolve().parents[3]
+        self.root = root or Path(os.getenv('SOURCE_CONTRACT_ROOT') or Path(__file__).resolve().parents[3])
 
     def report(self) -> dict[str, Any]:
         file_metrics = self._file_metrics()

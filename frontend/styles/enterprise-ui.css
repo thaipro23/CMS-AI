@@ -102,3 +102,94 @@ html[data-ai-theme='dark'] .bank-question-link-button small, html[data-ai-theme=
 .ops-compact-summary span, .ops-compact-summary small { display: block; }
 .ops-compact-summary b { display: block; margin-top: .25rem; font-size: 1.25rem; }
 @media (max-width: 720px) { .enterprise-table-controls { align-items: stretch; } .enterprise-table-view-actions { width: 100%; justify-content: space-between; } }
+
+/* v25.9.16.7.2.64.16 — one geometry contract for all enterprise tables. */
+.enterprise-table-scroll,
+.table-wrap,
+.academic-table-wrap,
+.ops-table-wrap,
+.student-grade-table-wrap,
+.quiz-map-table-wrap {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.enterprise-data-table,
+.data-table,
+.academic-data-table,
+.ops-data-table,
+.student-grade-table,
+.quiz-map-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+
+.enterprise-data-table th,
+.enterprise-data-table td,
+.data-table th,
+.data-table td,
+.academic-data-table th,
+.academic-data-table td,
+.ops-data-table th,
+.ops-data-table td,
+.student-grade-table th,
+.student-grade-table td,
+.quiz-map-table th,
+.quiz-map-table td {
+  box-sizing: border-box;
+  vertical-align: top;
+}
+
+.enterprise-data-table .enterprise-index-column,
+.enterprise-data-table .stt-cell,
+.data-table th:first-child,
+.data-table td.stt-cell,
+.academic-data-table th:first-child,
+.academic-data-table td.stt-cell,
+.ops-data-table th:first-child,
+.ops-data-table td.stt-cell {
+  width: 64px;
+  min-width: 64px;
+  max-width: 64px;
+  padding-left: 8px;
+  padding-right: 8px;
+  text-align: center !important;
+  white-space: nowrap;
+}
+
+.enterprise-data-table .enterprise-select-column {
+  width: 52px;
+  min-width: 52px;
+  max-width: 52px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.enterprise-data-table .sticky-left,
+.enterprise-data-table .sticky-right {
+  background-clip: padding-box;
+}
+
+.enterprise-data-table tbody tr:hover .sticky-left,
+.enterprise-data-table tbody tr:hover .sticky-right {
+  background: #f8fbff;
+}
+
+@media (max-width: 760px) {
+  .enterprise-data-table,
+  .data-table,
+  .academic-data-table,
+  .ops-data-table,
+  .student-grade-table,
+  .quiz-map-table {
+    min-width: 760px;
+  }
+}
+
+html[data-ai-theme='dark'] .enterprise-data-table tbody tr:hover .sticky-left,
+html[data-ai-theme='dark'] .enterprise-data-table tbody tr:hover .sticky-right {
+  background: #172033;
+}

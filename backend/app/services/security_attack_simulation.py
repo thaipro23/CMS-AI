@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import os
 from typing import Any
 
 from app.core.config import settings
@@ -39,7 +40,7 @@ class SecurityAttackSimulationService:
     ]
 
     def __init__(self, root: Path | None = None) -> None:
-        self.root = root or Path(__file__).resolve().parents[3]
+        self.root = root or Path(os.getenv('SOURCE_CONTRACT_ROOT') or Path(__file__).resolve().parents[3])
         self.cache: dict[str, str] = {}
 
     def report(self) -> dict[str, Any]:

@@ -23,7 +23,7 @@ import {
 } from '../shared'
 
 export function DepartmentSubjectsPage({ departmentId }: { departmentId: string }) {
-  const { headers, can } = useBankData()
+  const { headers, canScope } = useBankData()
   const { message, busy, run } = useAsyncMessage()
   const { state: tableState, update: updateTableState } = useUrlTableState({ status: 'all', pageSize: 20, density: 'compact' })
   const [department, setDepartment] = useState<Department | null>(null)
@@ -35,6 +35,9 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   const [editCode, setEditCode] = useState('')
   const [editName, setEditName] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Subject | null>(null)
+  const departmentScope = { scopeType: 'DEPARTMENT' as const, scopeId: departmentId, departmentId }
+  const canCreateSubject = canScope('subject.create', departmentScope)
+  const canUpdateSubject = canScope('subject.update', departmentScope)
 
   const load = async () => {
     const [nextDepartment, nextSummaries] = await Promise.all([
@@ -68,8 +71,8 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     { key: 'questions', header: 'Tổng câu', align: 'right', hideable: true, render: ({ stats }) => stats?.total_questions || 0 },
     { key: 'unresolved', header: 'Cần xử lý', align: 'right', hideable: true, render: ({ stats }) => stats?.unresolved_count || 0 },
     { key: 'ready', header: 'Sẵn sàng chốt', align: 'right', hideable: true, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
-    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ subject }) => <EntityActions variant="inline" canManage={can('subject.update')} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
-  ], [can, safePage, tableState.pageSize])
+    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ subject }) => <EntityActions variant="inline" canManage={canUpdateSubject} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
+  ], [canUpdateSubject, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn học' }]} />
@@ -77,7 +80,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Mỗi môn có tối đa một phiên bản môn cuối cho mỗi học kỳ.</p></div></div>
-      <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm mã môn hoặc tên môn" action={can('subject.create') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
+      <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm mã môn hoặc tên môn" action={canCreateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
       <EnterpriseDataTable
         tableId={`bank-subjects-${departmentId}`}
         caption="Danh sách môn học"

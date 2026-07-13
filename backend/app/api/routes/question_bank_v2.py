@@ -847,8 +847,8 @@ def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), 
 
 
 @router.patch('/departments/{department_id}', response_model=DepartmentOut)
-def update_department(department_id: str, payload: DepartmentUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
-    _require_business(db, user, 'department.manage_all')
+def update_department(department_id: str, payload: DepartmentUpdate, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_department'))):
+    _require_business(db, user, 'department.update', 'DEPARTMENT', department_id)
     try:
         item = VersionedQuestionBankService(db).update_department(department_id, **payload.model_dump(exclude_unset=True))
         log_audit(db, action='question_bank.department.update', status='success', message='Sửa bộ môn thành công', user=user, target_type='department', target_id=item.id)
@@ -859,8 +859,8 @@ def update_department(department_id: str, payload: DepartmentUpdate, db: Session
 
 
 @router.delete('/departments/{department_id}', response_model=EntityDeleteOut)
-def delete_department(department_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_settings'))):
-    _require_business(db, user, 'department.manage_all')
+def delete_department(department_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_department'))):
+    _require_business(db, user, 'department.update', 'DEPARTMENT', department_id)
     try:
         result = VersionedQuestionBankService(db).delete_department(department_id)
         log_audit(db, action='question_bank.department.delete', status='success', message=result.get('message', 'Đã xóa bộ môn'), user=user, target_type='department', target_id=department_id)

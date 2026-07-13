@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/uat-build-gate-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.14}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16}"
 STRICT="${STRICT:-0}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-0}"
 RUN_FRONTEND_INSTALL="${RUN_FRONTEND_INSTALL:-0}"
@@ -135,7 +135,7 @@ else
   warn_or_fail_when_strict BACKEND_TEST_DEPS_MISSING "pytest/psycopg not available; install backend requirements before UAT sign-off" "python-dependency-check.json"
 fi
 
-# Frontend typecheck/build. v25.9.16.7.2.64.14 delegates the deep
+# Frontend typecheck/build. v25.9.16.7.2.64.16 delegates the deep
 # frontend verification to scripts/frontend-build-verify.sh so package-lock,
 # Dockerfile build args, tsc, next build and standalone output are validated
 # consistently in one report.
@@ -152,7 +152,7 @@ Run on UAT before sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.14 \
+EXPECTED_VERSION=25.9.16.7.2.64.16 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh

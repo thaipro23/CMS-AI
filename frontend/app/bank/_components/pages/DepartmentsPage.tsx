@@ -115,7 +115,7 @@ import {
 } from '../shared'
 
 export function DepartmentsPage() {
-  const { headers, can } = useBankData()
+  const { headers, can, canScope } = useBankData()
   const { message, busy, busyLabel, run } = useAsyncMessage()
   const [summaries, setSummaries] = useState<DepartmentSummary[]>([])
   const { state: tableState, update: updateTableState } = useUrlTableState({ status: 'all', pageSize: 20, density: 'compact' })
@@ -166,8 +166,8 @@ export function DepartmentsPage() {
     { key: 'pending', header: 'Chưa duyệt', align: 'right', hideable: true, render: ({ stats }) => stats?.review_not_done_subject_count || 0 },
     { key: 'unresolved', header: 'Cần xử lý', align: 'right', hideable: true, render: ({ stats }) => stats?.unresolved_count || 0 },
     { key: 'ready', header: 'Sẵn sàng chốt', align: 'right', hideable: true, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
-    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ department }) => <EntityActions variant="inline" canManage={can('manage_settings')} lockedLabel="Không có quyền" onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /> },
-  ], [can, safePage, tableState.pageSize])
+    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ department }) => <EntityActions variant="inline" canManage={canScope('manage_department', { scopeType: 'DEPARTMENT', scopeId: department.id, departmentId: department.id })} lockedLabel="Không có quyền" onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /> },
+  ], [canScope, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn' }]} />

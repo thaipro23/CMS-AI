@@ -20,6 +20,7 @@ import {
   AcademicTrainingTeacherReport,
 } from "../../types";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
+import { PageHeader } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
 import {
@@ -460,54 +461,14 @@ function TeacherManagementContent() {
 
   return (
     <div className="page-stack student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
+      <PageHeader
+        eyebrow="Vận hành đào tạo"
+        title="Quản lý giảng viên"
+        description={`${selectedTerm?.term_name || "Chưa chọn kỳ"} · ${branch.toUpperCase()} · ${campus ? campus.toUpperCase() : "Tất cả cơ sở"} · ${counterText(total, page, pageSize)} giảng viên`}
+        secondaryActions={<><button className="btn secondary" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === "queued" || exportJob?.status === "running"}>{exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel nền"}</button>{exportJob?.status === "completed" && <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button>}</>}
+        primaryAction={<button className="btn" type="button" onClick={exportExcel} disabled={exporting || loading}>{exporting ? "Đang xuất..." : "Xuất trực tiếp"}</button>}
+      />
       <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
-        <div className="teacher-compact-toolbar">
-          <div>
-            <b>
-              Quản lý giảng viên · {selectedTerm?.term_name || "Chưa chọn kỳ"} ·{" "}
-              {branch.toUpperCase()} ·{" "}
-              {campus ? campus.toUpperCase() : "Tất cả cơ sở"}
-            </b>
-            <small>
-              Đang hiển thị {counterText(total, page, pageSize)} giảng viên.
-              Các số tổng tính theo bộ lọc hiện tại.
-            </small>
-          </div>
-          <div className="teacher-compact-actions">
-            <button
-              className="btn secondary small"
-              type="button"
-              onClick={exportExcelBackground}
-              disabled={
-                !termId ||
-                exportJob?.status === "queued" ||
-                exportJob?.status === "running"
-              }
-            >
-              {exportJob && ["queued", "running"].includes(exportJob.status)
-                ? `Đang xuất ${jobPercent(exportJob)}%`
-                : "Xuất Excel nền"}
-            </button>
-            {exportJob?.status === "completed" && (
-              <button
-                className="btn primary small"
-                type="button"
-                onClick={downloadBackgroundExcel}
-              >
-                Tải Excel
-              </button>
-            )}
-            <button
-              className="btn ghost small"
-              type="button"
-              onClick={exportExcel}
-              disabled={exporting || loading}
-            >
-              {exporting ? "Đang xuất..." : "Xuất trực tiếp"}
-            </button>
-          </div>
-        </div>
-
         <div className="academic-filter-bar ux-filter-grid teacher-filter-bar">
           <label>
             Hệ

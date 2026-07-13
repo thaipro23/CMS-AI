@@ -111,7 +111,7 @@ function Popup({ open, title, children, onClose }: { open: boolean; title: strin
 }
 
 export default function UsersPage() {
-  const { authHeaders } = useAppContext()
+  const { authHeaders, isSystemAdmin, businessPermissions, canScope } = useAppContext()
   const [message, setMessage] = useState<ActionMessageData | null>(null)
   const [loading, setLoading] = useState(false)
   const [effective, setEffective] = useState<EffectiveRBAC | null>(null)
@@ -150,19 +150,31 @@ export default function UsersPage() {
     { code: 'CAMPUS_MANAGER', name: 'Chủ cơ sở (legacy)', description: roleSubtitles.CAMPUS_MANAGER, rank: 60, status: 'active' },
     { code: 'TEACHER_ASSIGNED', name: 'Giáo viên được phân công AP', description: roleSubtitles.TEACHER_ASSIGNED, rank: 10, status: 'active' },
   ] as RBACRole[], [])
-  const visibleRoles = roles.length ? roles : fallbackRoles
+  const allRoles = roles.length ? roles : fallbackRoles
+  const grantableRoleCodes = useMemo(() => {
+    if (isSystemAdmin) return new Set(allRoles.map((role) => role.code))
+    const result = new Set<string>()
+    if (businessPermissions.includes('subject.assign_owner')) result.add('SUBJECT_OWNER')
+    if (businessPermissions.includes('reviewer.assign')) result.add('QUESTION_REVIEWER')
+    return result
+  }, [allRoles, businessPermissions, isSystemAdmin])
+  const visibleRoles = allRoles.filter((role) => grantableRoleCodes.has(role.code))
   const availableScopes = allowedScopesByRole[form.role_code] || ['SYSTEM']
   const scopeOptions = useMemo(() => {
     const needle = scopeSearch.trim().toLowerCase()
-    const filter = <T extends { id: string; label: string; path: string }>(rows: T[]) => needle ? rows.filter((row) => [row.id, row.label, row.path].some((value) => String(value || '').toLowerCase().includes(needle))) : rows
-    if (form.scope_type === 'SYSTEM') return [{ id: '*', label: 'Toàn hệ thống', path: 'SYSTEM' }]
-    if (form.scope_type === 'DEPARTMENT') return filter(departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}` })))
-    if (form.scope_type === 'SUBJECT') return filter(subjects.map((s) => ({ id: s.id, label: `${s.code} · ${s.name}`, path: `Môn / ${s.code}` })))
-    if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((o) => ({ id: o.id, label: `${o.code} · ${o.name || o.version_code}`, path: `Version / ${o.code}` })))
-    if (form.scope_type === 'CHAPTER') return filter(chapters.map((c) => ({ id: c.id, label: c.title, path: `Bài / ${c.title}` })))
-    if (form.scope_type === 'CAMPUS') return filter([{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }, ...campuses.map((c) => ({ id: c.campus_code, label: `${c.campus_code.toUpperCase()} · ${c.campus_name}`, path: `Cơ sở / ${c.campus_code.toUpperCase()}` }))])
+    const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : 'user.manage_all'
+    const filter = <T extends { id: string; label: string; path: string; target: Parameters<typeof canScope>[1] }>(rows: T[]) => rows
+      .filter((row) => canScope(requiredPermission, row.target))
+      .filter((row) => needle ? [row.id, row.label, row.path].some((value) => String(value || '').toLowerCase().includes(needle)) : true)
+      .map(({ target: _target, ...row }) => row)
+    if (form.scope_type === 'SYSTEM') return isSystemAdmin ? [{ id: '*', label: 'Toàn hệ thống', path: 'SYSTEM' }] : []
+    if (form.scope_type === 'DEPARTMENT') return filter(departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}`, target: { scopeType: 'DEPARTMENT' as const, scopeId: d.id, departmentId: d.id } })))
+    if (form.scope_type === 'SUBJECT') return filter(subjects.map((subject) => ({ id: subject.id, label: `${subject.code} · ${subject.name}`, path: `Môn / ${subject.code}`, target: { scopeType: 'SUBJECT' as const, scopeId: subject.id, subjectId: subject.id, departmentId: subject.department_id } })))
+    if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((offering) => ({ id: offering.id, label: `${offering.code} · ${offering.name || offering.version_code}`, path: `Version / ${offering.code}`, target: { scopeType: 'SUBJECT_VERSION' as const, scopeId: offering.id, subjectOfferingId: offering.id, subjectId: offering.subject_id, departmentId: offering.department_id || undefined } })))
+    if (form.scope_type === 'CHAPTER') return filter(chapters.map((chapter) => ({ id: chapter.id, label: chapter.title, path: `Bài / ${chapter.title}`, target: { scopeType: 'CHAPTER' as const, scopeId: chapter.id, chapterId: chapter.id, subjectOfferingId: chapter.subject_offering_id || undefined, subjectId: chapter.subject_id } })))
+    if (form.scope_type === 'CAMPUS') return isSystemAdmin ? [{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }, ...campuses.map((campus) => ({ id: campus.campus_code, label: `${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${campus.campus_code.toUpperCase()}` }))] : []
     return []
-  }, [campuses, chapters, departments, form.scope_type, offerings, scopeSearch, subjects])
+  }, [campuses, canScope, chapters, departments, form.role_code, form.scope_type, isSystemAdmin, offerings, scopeSearch, subjects])
 
   const selectedScopeOption = useMemo(() => scopeOptions.find((item) => item.id === form.scope_id), [form.scope_id, scopeOptions])
 
@@ -189,6 +201,12 @@ export default function UsersPage() {
       campusManagers: active.filter((a) => a.role_code === 'CAMPUS_MANAGER' || a.role_code === 'CAMPUS_OWNER').length,
     }
   }, [assignments])
+
+  useEffect(() => {
+    if (!visibleRoles.length) return
+    if (!visibleRoles.some((role) => role.code === form.role_code)) syncScopeForRole(visibleRoles[0].code as BusinessRoleCode)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleRoles.map((role) => role.code).join('|')])
 
   function syncScopeForRole(nextRole: BusinessRoleCode) {
     const scopes = allowedScopesByRole[nextRole] || ['SYSTEM']
@@ -367,25 +385,25 @@ export default function UsersPage() {
         </div>
         {form.scope_id && <div className="scope-preview"><span>Quyền sẽ được cấp</span><b>{roleLabels[form.role_code]} · {scopeLabel[form.scope_type]}</b><small>{scopeOptions.find((s) => s.id === form.scope_id)?.path || form.scope_id}</small></div>}
         <label className="check-row"><input type="checkbox" checked={form.sync_openedx} onChange={(e) => setForm({ ...form, sync_openedx: e.target.checked })} /> Ghi nhận yêu cầu đồng bộ Open edX</label>
-        <div className="button-row"><button className="btn" onClick={submitAssignment}>Gán quyền</button><button className="btn secondary" onClick={() => setForm({ user_id: '', email: '', role_code: 'DEPARTMENT_HEAD', scope_type: 'DEPARTMENT', scope_id: '', grant_reason: '', sync_openedx: false })}>Xóa thông tin đã nhập</button></div>
+        <div className="button-row"><button className="btn" onClick={submitAssignment} disabled={!visibleRoles.length || !form.scope_id}>Gán quyền</button><button className="btn secondary" onClick={() => { const role = (visibleRoles[0]?.code || 'QUESTION_REVIEWER') as BusinessRoleCode; const scopes = allowedScopesByRole[role] || ['SUBJECT']; setForm({ user_id: '', email: '', role_code: role, scope_type: scopes[0], scope_id: scopes[0] === 'SYSTEM' ? '*' : '', grant_reason: '', sync_openedx: false }) }}>Xóa thông tin đã nhập</button></div>
       </div>
 
       <div className="card access-side-actions">
         <div className="section-head"><div><h2>Công cụ</h2><p className="helper">Mở khi cần, tránh trang chính quá nhiều thông tin.</p></div></div>
-        <button className="btn secondary full-width" type="button" onClick={() => setImportOpen(true)}>Import bằng Excel</button>
+        {isSystemAdmin && <button className="btn secondary full-width" type="button" onClick={() => setImportOpen(true)}>Import bằng Excel</button>}
         <button className="btn secondary full-width" type="button" onClick={() => setAssignmentsOpen(true)}>Danh sách quyền đang có ({assignmentStats.total})</button>
-        <button className="btn secondary full-width" type="button" onClick={downloadTemplate}>Tải Excel mẫu</button>
+        {isSystemAdmin && <button className="btn secondary full-width" type="button" onClick={downloadTemplate}>Tải Excel mẫu</button>}
       </div>
     </section>
 
-    <Popup open={importOpen} title="Import phân quyền bằng Excel" onClose={() => setImportOpen(false)}>
+    {isSystemAdmin && <Popup open={importOpen} title="Import phân quyền bằng Excel" onClose={() => setImportOpen(false)}>
       <div className="import-steps"><div><b>1</b><span>Tải file mẫu</span></div><div><b>2</b><span>Điền user, vai trò, phạm vi</span></div><div><b>3</b><span>Kiểm tra thử</span></div><div><b>4</b><span>Import chính thức</span></div></div>
       <div className="button-row"><button className="btn secondary" onClick={downloadTemplate}>Tải Excel mẫu</button></div>
       <label>Chọn file Excel</label><input className="input" type="file" accept=".xlsx,.xlsm" onChange={onFileChange} />
       <label className="check-row"><input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} /> Kiểm tra trước, chưa ghi dữ liệu</label>
       <div className="button-row"><button className="btn" onClick={submitImport}>{dryRun ? 'Kiểm tra file' : 'Import phân quyền'}</button></div>
       {importResult && <div className="import-result"><div className="summary-grid"><div><span>Tổng dòng</span><b>{importResult.total_rows}</b></div><div><span>Hợp lệ</span><b>{importResult.valid_rows}</b></div><div><span>Đã tạo</span><b>{importResult.created_count}</b></div><div><span>Lỗi</span><b>{importResult.failed_count}</b></div></div><div className="import-row-list">{importResult.rows.slice(0, 30).map((row) => <div key={row.row_index} className="stat-row"><span>Dòng {row.row_index} · {row.user_id} · {row.role_code}</span><b className={`status ${resultClass(row.status)}`}>{row.status}</b><small>{row.message}</small></div>)}</div></div>}
-    </Popup>
+    </Popup>}
 
     <Popup open={assignmentsOpen} title="Danh sách quyền đang có" onClose={() => setAssignmentsOpen(false)}>
       <div className="section-head compact-section-head"><div><p className="helper">Chỉ hiển thị các quyền bạn được phép nhìn thấy hoặc quản lý.</p></div><label className="check-row"><input type="checkbox" checked={includeRevoked} onChange={(e) => setIncludeRevoked(e.target.checked)} /> Cả quyền đã thu hồi</label></div>

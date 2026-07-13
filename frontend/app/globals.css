@@ -1,7 +1,4 @@
 @import '../styles/enterprise-ui.css';
-@import '../styles/ops-readiness.css';
-/* v25.9.16.7.2.64.13 compatibility markers: ops/readiness panel styles live in frontend/styles/ops-readiness.css.
-   .analytics-performance-readiness-panel .analytics-security-readiness-panel .analytics-release-candidate-panel .analytics-pilot-operations-panel .ops-gate-panel */
 * { box-sizing: border-box; }
 :root {
   --bg: #f4f6fb;

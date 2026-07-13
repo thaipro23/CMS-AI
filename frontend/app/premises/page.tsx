@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { deleteAcademicCampus, getAcademicCampuses, saveAcademicCampus } from '../../lib/api'
 import { AcademicCampus } from '../../types'
+import { PageHeader } from '../../components/layout/PageHeader'
 
 const EMPTY_FORM = { campus_code: '', campus_name: '', branch: 'poly', active: true }
 type CampusForm = typeof EMPTY_FORM
@@ -76,7 +77,7 @@ export default function PremisesPage() {
   if (!(can('manage_training_deadlines') || can('manage_settings'))) return null
 
   return <div className="page-stack premises-page">
-    <section className="hero-card compact-hero"><div><div className="eyebrow">AP master data</div><h1>Cơ sở</h1><p>Quản lý danh mục cơ sở dùng cho đồng bộ AP. Dữ liệu đồng bộ từ AP CMS get-campus sẽ được lưu tại đây; vẫn có thể thêm mới và chỉnh sửa bằng popup.</p></div><div className="hero-actions"><button className="btn secondary" disabled={loading} onClick={load}>Làm mới</button><button className="btn" onClick={openCreate}>Thêm cơ sở</button></div></section>
+    <PageHeader eyebrow="Danh mục" title="Cơ sở" description="Quản lý danh mục cơ sở dùng cho đồng bộ AP và phạm vi phân quyền đào tạo." secondaryActions={<button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button>} primaryAction={<button className="btn" type="button" onClick={openCreate}>Thêm cơ sở</button>} />
     {message ? <div className="alert">{message}</div> : null}
     <section className="card"><div className="section-head"><div><h2>Danh sách cơ sở</h2><p>{loading ? 'Đang tải...' : `${filtered.length} / ${items.length} cơ sở`}</p></div></div>
       <div className="filter-grid academic-filter-grid"><label>Hệ<select className="input" value={branch} onChange={(event) => setBranch(event.target.value)}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label><label>Trạng thái<select className="input" value={activeFilter} onChange={(event) => setActiveFilter(event.target.value as ActiveFilter)}><option value="active">Đang dùng</option><option value="inactive">Đã xóa</option><option value="all">Tất cả</option></select></label><label>Tìm kiếm<input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="PT, Thái Nguyên, TP. HCM..." /></label></div>

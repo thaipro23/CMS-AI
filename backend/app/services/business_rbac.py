@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.rbac import RBACPermission, RBACRole, RBACRolePermission, UserRoleAssignment
@@ -43,36 +43,37 @@ ROLE_LABELS = {
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     SYSTEM_ADMIN: {
-        'user.manage_all', 'department.manage_all', 'department.assign_head', 'subject.create', 'subject.update',
+        'user.manage_all', 'department.manage_all', 'department.update', 'department.assign_head', 'subject.create', 'subject.update',
         'subject.assign_owner', 'reviewer.assign', 'course.sync', 'document.manage', 'question.generate',
         'question.edit', 'question.approve', 'question.reject', 'bank.release.create', 'bank.release.publish',
         'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view', 'bank.view',
         'academic.view', 'academic.manage_campus', 'view_training_reports',
+        'jobs.view', 'ops.readiness.view', 'rbac.view',
     },
     # QUIZ_BANK domain: question bank / quiz roles only. They do not grant
     # Student Ops visibility unless the user is separately assigned there.
     DEPARTMENT_HEAD: {
-        'bank.view', 'subject.create', 'subject.update', 'subject.assign_owner', 'reviewer.assign', 'course.sync',
+        'bank.view', 'department.update', 'subject.create', 'subject.update', 'subject.assign_owner', 'reviewer.assign', 'course.sync',
         'document.manage', 'question.generate', 'question.edit', 'question.approve', 'question.reject',
         'bank.release.create', 'bank.release.publish', 'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view',
+        'jobs.view', 'rbac.view',
     },
     SUBJECT_OWNER: {
         'bank.view', 'subject.update', 'reviewer.assign', 'course.sync', 'document.manage', 'question.generate',
         'question.edit', 'question.approve', 'question.reject', 'bank.release.create', 'bank.release.publish',
-        'quiz.preview', 'quiz.create_openedx', 'audit.view',
+        'quiz.preview', 'quiz.create_openedx', 'audit.view', 'jobs.view', 'rbac.view',
     },
-    QUESTION_REVIEWER: {'bank.view', 'question.edit', 'question.approve', 'question.reject', 'audit.view'},
+    QUESTION_REVIEWER: {'bank.view', 'question.edit', 'question.approve', 'question.reject', 'audit.view', 'jobs.view'},
     # STUDENT_OPS domain: campus/class/student operations only. These roles do
     # not grant Question Bank/Quiz permissions.
-    CAMPUS_OWNER: {'academic.view', 'academic.manage_campus', 'view_training_reports'},
-    CAMPUS_MANAGER: {'academic.view', 'academic.manage_campus', 'view_training_reports'},
+    CAMPUS_OWNER: {'academic.view', 'academic.manage_campus', 'view_training_reports', 'jobs.view'},
+    CAMPUS_MANAGER: {'academic.view', 'academic.manage_campus', 'view_training_reports', 'jobs.view'},
     TEACHER_ASSIGNED: {'academic.view', 'view_training_reports'},
 }
 
 LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
     'view_dashboard': {'bank.view', 'audit.view', 'academic.view', 'view_training_reports'},
     'view_questions': {'bank.view', 'question.edit', 'question.approve', 'question.reject'},
-    'view_jobs': {'bank.view', 'audit.view'},
     'sync_course': {'course.sync'},
     'estimate_cost': {'question.generate', 'document.manage', 'bank.view'},
     'generate_questions': {'question.generate'},
@@ -84,9 +85,13 @@ LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
     'publish_to_openedx': {'bank.release.publish', 'quiz.create_openedx'},
     'manage_budget': {'quota.manage'},
     'manage_settings': {'user.manage_all', 'department.manage_all', 'department.assign_head'},
+    'manage_department': {'department.manage_all', 'department.update'},
     'view_user_analytics': {'user.manage_all'},
     'view_training_reports': {'academic.view', 'view_training_reports'},
     'manage_training_deadlines': {'academic.manage_campus'},
+    'view_jobs': {'jobs.view'},
+    'view_ops_readiness': {'ops.readiness.view'},
+    'view_rbac': {'rbac.view', 'user.manage_all', 'subject.assign_owner', 'reviewer.assign'},
 }
 
 
@@ -148,6 +153,7 @@ class BusinessRBACService:
         permission_names = {
             'user.manage_all': 'Quản lý toàn bộ người dùng',
             'department.manage_all': 'Quản lý toàn bộ bộ môn',
+            'department.update': 'Cập nhật bộ môn trong phạm vi được giao',
             'department.assign_head': 'Gán Trưởng bộ môn',
             'subject.create': 'Tạo môn',
             'subject.update': 'Cập nhật môn',
@@ -169,6 +175,9 @@ class BusinessRBACService:
             'academic.view': 'Xem báo cáo giáo viên/lớp trong cơ sở',
             'academic.manage_campus': 'Quản lý vận hành đào tạo theo cơ sở',
             'view_training_reports': 'Xem báo cáo quản lý giáo viên',
+            'jobs.view': 'Xem tác vụ trong phạm vi được phân quyền',
+            'ops.readiness.view': 'Xem readiness toàn hệ thống',
+            'rbac.view': 'Xem và gán quyền trong phạm vi được phép',
         }
         for code, name in permission_names.items():
             perm = self.db.get(RBACPermission, code)
@@ -248,6 +257,38 @@ class BusinessRBACService:
                 best_rank = rank
         return best
 
+    def _has_ap_teacher_assignment(self, user: Any) -> bool:
+        """Return whether the authenticated identity is an active AP-assigned teacher.
+
+        AP is the source of truth for teacher-to-class assignment. A teacher must not
+        need a duplicated TEACHER_ASSIGNED row merely to make the training pages visible.
+        """
+        raw_claims = getattr(user, 'raw_claims', None) or {}
+        values = {
+            getattr(user, 'user_id', None),
+            getattr(user, 'username', None),
+            getattr(user, 'email', None),
+            raw_claims.get('username'),
+            raw_claims.get('preferred_username'),
+            raw_claims.get('email'),
+        }
+        names = {str(value).strip().lower() for value in values if str(value or '').strip()}
+        if not names:
+            return False
+        try:
+            from app.models.academic import AcademicTeacher, AcademicTeacherAssignment
+            return self.db.query(AcademicTeacherAssignment.id).join(
+                AcademicTeacher, AcademicTeacher.id == AcademicTeacherAssignment.teacher_id,
+            ).filter(
+                AcademicTeacher.active.is_(True),
+                or_(
+                    func.lower(AcademicTeacher.username).in_(sorted(names)),
+                    func.lower(AcademicTeacher.email).in_(sorted(names)),
+                ),
+            ).first() is not None
+        except Exception:
+            return False
+
     def effective_permissions_for_user(self, user: Any) -> set[str]:
         permissions: set[str] = set()
         if self.is_system_admin(user):
@@ -256,6 +297,8 @@ class BusinessRBACService:
             if assignment.role_code == SYSTEM_ADMIN and not self.is_system_admin(user):
                 continue
             permissions.update(ROLE_PERMISSIONS.get(assignment.role_code, set()))
+        if self._has_ap_teacher_assignment(user):
+            permissions.update(ROLE_PERMISSIONS[TEACHER_ASSIGNED])
         return permissions
 
     def has_any_business_permission(self, user: Any, permission: str) -> bool:
@@ -546,6 +589,7 @@ class BusinessRBACService:
             'email': item.email,
             'role_code': item.role_code,
             'role_name': ROLE_LABELS.get(item.role_code, item.role_code),
+            'permission_codes': sorted(ROLE_PERMISSIONS.get(item.role_code, set())),
             'scope_type': item.scope_type,
             'scope_id': item.scope_id,
             'scope_label': self.scope_label(item.scope_type, item.scope_id),

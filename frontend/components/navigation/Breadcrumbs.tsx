@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { AppIcon } from '../icons/AppIcon'
 
 export type BreadcrumbItem = {
   label: string
@@ -15,7 +16,7 @@ export function Breadcrumbs({ items, ariaLabel = 'Điều hướng phân cấp',
       {safeItems.map((item, index) => {
         const current = index === safeItems.length - 1
         return <li key={`${item.label}-${index}`} aria-current={current ? 'page' : undefined}>
-          {index > 0 && <span className="enterprise-breadcrumb-separator" aria-hidden="true">›</span>}
+          {index > 0 && <span className="enterprise-breadcrumb-separator" aria-hidden="true"><AppIcon name="chevron-right" size={12} /></span>}
           {!current && item.href ? <Link href={item.href}>{item.label}</Link> : <span className={current ? 'current' : undefined}>{item.label}</span>}
         </li>
       })}

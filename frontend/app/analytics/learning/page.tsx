@@ -7,8 +7,7 @@ import {
   getAcademicCampuses,
   getAcademicTeacherSubjects,
   getAcademicTerms,
-  getAnalyticsClassLearningBehavior,
-  getAnalyticsClassLearningBehaviorSummary,
+  getAnalyticsClassWorkspace,
   getAnalyticsClassResultDoctor,
   getAnalyticsProductionReadiness,
   getAnalyticsSlaReport,
@@ -46,6 +45,8 @@ import {
 } from '../../../types'
 import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
+import { SHOW_DIAGNOSTICS_UI } from '../../../lib/runtime'
+import { PageHeader } from '../../../components/layout/PageHeader'
 
 const PAGE_SIZE = 200
 const SUBJECT_PAGE_SIZE = 50
@@ -492,7 +493,7 @@ export default function AnalyticsLearningPage() {
   const queryClassification = searchParams.get('classification') || 'all'
   const initialStep = queryClassId ? 'results' : (querySubjectId ? normalizeStep(searchParams.get('step') || 'classes') : 'subjects')
 
-  const { authHeaders } = useAppContext()
+  const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [campuses, setCampuses] = useState<AcademicCampus[]>([])
@@ -536,6 +537,7 @@ export default function AnalyticsLearningPage() {
   const [releaseCandidate, setReleaseCandidate] = useState<ReleaseCandidateReport | null>(null)
   const [pilotOperations, setPilotOperations] = useState<PilotOperationsReport | null>(null)
   const [pilotLoading, setPilotLoading] = useState(false)
+  const [showOperations, setShowOperations] = useState(false)
   const [classDoctor, setClassDoctor] = useState<AnalyticsClassResultDoctor | null>(null)
   const [doctorLoading, setDoctorLoading] = useState(false)
   const [recalculateLoading, setRecalculateLoading] = useState(false)
@@ -587,6 +589,13 @@ export default function AnalyticsLearningPage() {
   }
 
   useEffect(() => {
+    if (!showOperations || !can('view_ops_readiness')) {
+      setProductionReadiness(null)
+      setSlaReport(null)
+      setPerformanceReadiness(null)
+      setSecurityReadiness(null)
+      return
+    }
     let cancelled = false
     getAnalyticsProductionReadiness(headers)
       .then((report) => { if (!cancelled) setProductionReadiness(report) })
@@ -601,9 +610,18 @@ export default function AnalyticsLearningPage() {
       .then((report) => { if (!cancelled) setSecurityReadiness(report) })
       .catch(() => { if (!cancelled) setSecurityReadiness(null) })
     return () => { cancelled = true }
-  }, [headers])
+  }, [headers, showOperations, can])
 
   useEffect(() => {
+    if (!showOperations || !can('view_ops_readiness')) {
+      setPilotAcceptance(null)
+      setEvidencePack(null)
+      setReleaseCandidate(null)
+      setPilotOperations(null)
+      setMappingReliability(null)
+      setPilotLoading(false)
+      return
+    }
     let cancelled = false
     setPilotLoading(true)
     getAnalyticsPilotAcceptance(headers, {
@@ -655,7 +673,7 @@ export default function AnalyticsLearningPage() {
       .then((report) => { if (!cancelled) setMappingReliability(report) })
       .catch(() => { if (!cancelled) setMappingReliability(null) })
     return () => { cancelled = true }
-  }, [headers, branch, campus, termId, subjectId, classId, effectiveCourseId])
+  }, [headers, branch, campus, termId, subjectId, classId, effectiveCourseId, showOperations, can])
 
   useEffect(() => {
     let cancelled = false
@@ -773,17 +791,21 @@ export default function AnalyticsLearningPage() {
     setLoadingResults(true)
     setMessage('')
     setDoctorLoading(true)
-    Promise.all([
-      getAnalyticsClassLearningBehaviorSummary(headers, classId, effectiveCourseId),
-      getAnalyticsClassLearningBehavior(headers, classId, { courseId: effectiveCourseId, classification, limit: PAGE_SIZE, offset: 0 }),
-      getAnalyticsClassResultDoctor(headers, classId, effectiveCourseId),
-    ])
-      .then(([nextSummary, result, doctor]) => {
+    getAnalyticsClassWorkspace(headers, classId, {
+      courseId: effectiveCourseId,
+      classification,
+      limit: PAGE_SIZE,
+      offset: 0,
+    })
+      .then((workspace) => {
         if (cancelled) return
-        setSummary(nextSummary || EMPTY_SUMMARY)
+        const nextSummary = workspace.summary || EMPTY_SUMMARY
+        const result = workspace.rows || { items: [], total: 0 }
+        setSummary(nextSummary)
         setRows(result.items || [])
-        setTotalRows(result.total || nextSummary?.roster_count || result.items?.length || 0)
-        setClassDoctor(doctor || nextSummary?.diagnostics || result.diagnostics || null)
+        setTotalRows(result.total || nextSummary.roster_count || result.items?.length || 0)
+        setClassDoctor(workspace.doctor || nextSummary.diagnostics || result.diagnostics || null)
+        if (workspace.permission_scope) setPermissionScope(workspace.permission_scope as Record<string, unknown>)
       })
       .catch((error) => {
         if (!cancelled) {
@@ -877,14 +899,13 @@ export default function AnalyticsLearningPage() {
     : 'Quyền xem: hệ thống đã lọc theo phân quyền cơ sở, môn hoặc lớp AP được phân công.'
 
   return <div className="page-stack analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
+    <PageHeader
+      eyebrow="Vận hành đào tạo"
+      title="Phân tích học tập"
+      description="Chọn môn, chọn lớp và xem kết quả. Dữ liệu luôn được backend lọc theo phạm vi được phân công."
+      secondaryActions={SHOW_DIAGNOSTICS_UI && can('view_ops_readiness') ? <button className="btn secondary" type="button" aria-expanded={showOperations} onClick={() => setShowOperations((value) => !value)}>{showOperations ? 'Ẩn kiểm tra vận hành' : 'Mở kiểm tra vận hành'}</button> : undefined}
+    />
     <section className="card academic-unified-card">
-      <div className="section-head list-card-head">
-        <div>
-          <h2>Phân tích hành vi học</h2>
-          <p>Luồng quản lý tách 3 màn: chọn môn → chọn lớp → xem kết quả. Backend luôn lọc theo phân quyền thật, không chỉ ẩn trên giao diện.</p>
-        </div>
-      </div>
-
       <div className="academic-filter-bar analytics-learning-flow-filters">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => resetScope({ branch: event.target.value })}>
@@ -923,6 +944,7 @@ export default function AnalyticsLearningPage() {
         <span>{selectedClassOverview?.class_code || 'Chưa chọn lớp'}</span>
       </div>
 
+      {SHOW_DIAGNOSTICS_UI && showOperations && can('view_ops_readiness') && <>
       {productionReadiness && <div className={`analytics-production-readiness-panel ${readinessTone(productionReadiness)}`}>
         <div className="analytics-readiness-head">
           <div>
@@ -1241,6 +1263,7 @@ export default function AnalyticsLearningPage() {
         </div>}
         {Array.isArray(mappingReliability.read_only_guarantees) && mappingReliability.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {mappingReliability.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
       </div>}
+      </>}
       <div className="alert info compact-alert">{permissionText}</div>
       {message && <div className="academic-inline-error"><b>Cần kiểm tra</b><span>{message}</span></div>}
       {!effectiveCourseId && step === 'results' && classId && <div className="alert warning compact-alert">Lớp này chưa ghép Course CMS nên kết quả học online có thể chưa đủ. Giáo viên vẫn xem được trạng thái Chưa đủ dữ liệu.</div>}
@@ -1363,7 +1386,7 @@ export default function AnalyticsLearningPage() {
         </div>
       </div>
 
-      <div className="analytics-class-doctor-panel">
+      {SHOW_DIAGNOSTICS_UI && <div className="analytics-class-doctor-panel">
         <div className="section-head list-card-head compact-head">
           <div>
             <h4>Trạng thái dữ liệu lớp</h4>
@@ -1391,7 +1414,7 @@ export default function AnalyticsLearningPage() {
           {classDoctor.latest_tracking_event_at ? ` · Event gần nhất: ${formatVNDateTime(classDoctor.latest_tracking_event_at)}` : ''}
         </div>}
         {classDoctor?.course_mapping?.status === 'ambiguous' && <div className="alert warning compact-alert">Có nhiều Course CMS có thể khớp lớp này. Hệ thống không tự tính bừa; hãy tạo mapping lớp rõ ràng trước.</div>}
-      </div>
+      </div>}
 
       <div className="academic-summary-strip analytics-summary-strip analytics-result-only-summary">
         <div><span>Tổng sinh viên</span><b>{summary.total_students || 0}</b></div>

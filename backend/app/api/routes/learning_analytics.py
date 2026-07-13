@@ -171,7 +171,7 @@ class AnalyticsIngestRequest(BaseModel):
 
 
 @router.get('/learning/schema-inspect')
-def learning_schema_inspect(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def learning_schema_inspect(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_ops_readiness'))):
     return LearningAnalyticsCoreService(db).schema_inspect()
 
 
@@ -188,7 +188,7 @@ def run_ingest(
 
 
 @router.get('/ingest/status')
-def ingest_status(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def ingest_status(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_ops_readiness'))):
     return LearningAnalyticsCoreService(db).ingest_status()
 
 
@@ -211,12 +211,12 @@ def enqueue_ingest_job(
 
 
 @router.get('/ops/status')
-def analytics_ops_status(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def analytics_ops_status(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_ops_readiness'))):
     return LearningAnalyticsCoreService(db).ops_status()
 
 
 @router.get('/ops/production-readiness')
-def analytics_production_readiness(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def analytics_production_readiness(db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_ops_readiness'))):
     allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
     return LearningAnalyticsCoreService(db).production_readiness_report(allowed_class_ids=allowed_class_ids)
 
@@ -225,7 +225,7 @@ def analytics_production_readiness(db: Session = Depends(get_db), user: UserCont
 def analytics_sla_dashboard(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     """Read-only SLA dashboard for tracking.log ingest -> recalculate -> snapshot.
 
@@ -246,7 +246,7 @@ def analytics_rollout_control(
     course_id: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     if class_id:
         _assert_analytics_class_access(db, user, class_id)
@@ -259,7 +259,7 @@ def analytics_monitoring(
     class_id: str | None = None,
     course_id: str | None = None,
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     if class_id:
         _assert_analytics_class_access(db, user, class_id)
@@ -272,7 +272,7 @@ def analytics_data_quality(
     class_id: str | None = None,
     course_id: str | None = None,
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     if class_id:
         _assert_analytics_class_access(db, user, class_id)
@@ -288,7 +288,7 @@ def analytics_backfill_plan(
     course_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     if class_id:
         _assert_analytics_class_access(db, user, class_id)
@@ -304,7 +304,7 @@ def enqueue_analytics_backfill_jobs(
     course_id: str | None = None,
     limit: int = Query(default=20, ge=1, le=50),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     if class_id:
         _assert_analytics_class_access(db, user, class_id)
@@ -360,7 +360,7 @@ def analytics_pilot_acceptance(
     branch: str | None = None,
     sample_limit: int = Query(default=5, ge=1, le=20),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     if class_id:
         _assert_analytics_class_access(db, user, class_id)
@@ -380,7 +380,7 @@ def analytics_course_class_mapping_reliability(
     course_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=500),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     """Read-only reliability report for Open edX course -> AP class mapping.
 
@@ -423,7 +423,7 @@ def analytics_uat_evidence_pack(
     branch: str | None = None,
     sample_limit: int = Query(default=5, ge=1, le=20),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_ops_readiness')),
 ):
     """Read-only UAT evidence bundle for acceptance sign-off.
 
@@ -457,7 +457,7 @@ def analytics_uat_evidence_pack(
 
 
 @router.get('/courses/{course_id}/session-structure')
-def get_session_structure(course_id: str, class_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def get_session_structure(course_id: str, class_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     return {'course_id': course_id, 'class_id': class_id, 'sessions': LearningAnalyticsCoreService(db).get_session_structure(course_id=course_id, class_id=class_id)}
 
 
@@ -476,7 +476,7 @@ def recalculate_video_progress(course_id: str, username: str | None = None, db: 
 
 
 @router.post('/classes/{class_id}/learning-behavior/recalculate')
-def recalculate_class_behavior(class_id: str, course_id: str, username: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def recalculate_class_behavior(class_id: str, course_id: str, username: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_training_deadlines'))):
     _assert_analytics_class_access(db, user, class_id)
     service = LearningAnalyticsCoreService(db)
     service.recalculate_course_video_progress(course_id=course_id, username=username)
@@ -494,7 +494,7 @@ def enqueue_class_behavior_recalculate_job(
     force: bool = False,
     limit: int | None = Query(default=None, ge=1, le=500),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('manage_training_deadlines')),
 ):
     job = _enqueue_analytics_recalculate_job(db=db, user=user, class_id=class_id, course_id=course_id, username=username, force=force, limit=limit)
     log_audit(db, action='analytics.learning_behavior.recalculate.enqueue', status='success', message='Đưa tính lại học online vào hàng đợi', user=user, course_id=course_id, target_type='academic_class_sync_job', target_id=job.id, metadata={'class_id': class_id, 'username': username, 'signals_only_not_violation': True})
@@ -513,7 +513,7 @@ def learning_dashboard(
     date_to: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_training_reports')),
 ):
     _assert_analytics_class_access(db, user, class_id)
     allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
@@ -533,7 +533,7 @@ def export_learning_behavior_csv(
     date_from: str | None = None,
     date_to: str | None = None,
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_training_reports')),
 ):
     _assert_analytics_class_access(db, user, class_id)
     allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
@@ -547,19 +547,19 @@ def export_learning_behavior_csv(
 
 
 @router.get('/classes/{class_id}/video-summary')
-def class_video_summary(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def class_video_summary(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     _assert_analytics_class_access(db, user, class_id)
     return LearningAnalyticsCoreService(db).class_video_summary(class_id=class_id, course_id=course_id)
 
 
 @router.get('/classes/{class_id}/sessions/progress')
-def class_sessions_progress(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def class_sessions_progress(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     _assert_analytics_class_access(db, user, class_id)
     return LearningAnalyticsCoreService(db).class_sessions_progress(class_id=class_id, course_id=course_id)
 
 
 @router.get('/videos/{video_id}/students')
-def video_students(video_id: str, course_id: str | None = None, class_id: str | None = None, limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def video_students(video_id: str, course_id: str | None = None, class_id: str | None = None, limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     if class_id:
         _assert_analytics_class_access(db, user, class_id)
     else:
@@ -581,7 +581,7 @@ def subject_class_behavior_overview(
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_training_reports')),
 ):
     allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
     result = LearningAnalyticsCoreService(db).class_behavior_overview(
@@ -604,7 +604,7 @@ def class_result_doctor(
     class_id: str,
     course_id: str | None = None,
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_training_reports')),
 ):
     _assert_analytics_class_access(db, user, class_id)
     result = LearningAnalyticsCoreService(db).class_result_doctor(class_id=class_id, course_id=course_id)
@@ -630,7 +630,7 @@ def class_result_doctor_enqueue_recalculate(
     force: bool = False,
     limit: int | None = Query(default=None, ge=1, le=500),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('manage_training_deadlines')),
 ):
     _assert_analytics_class_access(db, user, class_id)
     payload = payload or AnalyticsClassRecalculateRequest()
@@ -648,8 +648,44 @@ def class_result_doctor_enqueue_recalculate(
     return job
 
 
+@router.get('/classes/{class_id}/workspace')
+def class_behavior_workspace(
+    class_id: str,
+    course_id: str | None = None,
+    classification: str | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_training_reports')),
+):
+    """Return the class analytics workspace in one scoped request.
+
+    The results screen previously issued summary, rows and doctor requests in
+    parallel, amplifying permission errors and database pressure. This endpoint
+    applies the class scope once and composes only normalized database results;
+    it never scans tracking.log or enqueues work.
+    """
+    _assert_analytics_class_access(db, user, class_id)
+    service = LearningAnalyticsCoreService(db)
+    return {
+        'class_id': class_id,
+        'course_id': course_id,
+        'summary': service.behavior_summary(class_id=class_id, course_id=course_id),
+        'rows': service.behavior_rows(
+            class_id=class_id,
+            course_id=course_id,
+            classification=classification,
+            limit=limit,
+            offset=offset,
+        ),
+        'doctor': service.class_result_doctor(class_id=class_id, course_id=course_id),
+        'permission_scope': _analytics_permission_scope(db, user),
+        'read_only': True,
+    }
+
+
 @router.get('/classes/{class_id}/learning-behavior/summary')
-def class_behavior_summary(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def class_behavior_summary(class_id: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     _assert_analytics_class_access(db, user, class_id)
     return LearningAnalyticsCoreService(db).behavior_summary(class_id=class_id, course_id=course_id)
 
@@ -662,21 +698,21 @@ def class_behavior_rows(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_dashboard')),
+    user: UserContext = Depends(require_permission('view_training_reports')),
 ):
     _assert_analytics_class_access(db, user, class_id)
     return LearningAnalyticsCoreService(db).behavior_rows(class_id=class_id, course_id=course_id, classification=classification, limit=limit, offset=offset)
 
 
 @router.get('/classes/{class_id}/students/{username}/learning-behavior')
-def student_behavior_detail(class_id: str, username: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def student_behavior_detail(class_id: str, username: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     _assert_analytics_class_access(db, user, class_id)
     log_audit(db, action='analytics.learning_behavior.view_student', status='success', message='Xem chi tiết học online của sinh viên', user=user, course_id=course_id, target_type='academic_class_student', target_id=f'{class_id}:{username}', metadata={'classification_note': 'signals_only_not_violation'})
     return LearningAnalyticsCoreService(db).student_behavior_detail(class_id=class_id, course_id=course_id, username=username)
 
 
 @router.get('/classes/{class_id}/students/{username}/session-progress')
-def student_session_progress(class_id: str, username: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_dashboard'))):
+def student_session_progress(class_id: str, username: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     _assert_analytics_class_access(db, user, class_id)
     detail = LearningAnalyticsCoreService(db).student_behavior_detail(class_id=class_id, course_id=course_id, username=username)
     return {'class_id': class_id, 'username': username, 'course_id': course_id, 'sessions': detail.get('sessions', []), 'timeline_weeks': detail.get('timeline_weeks', []), 'disclaimer': detail.get('disclaimer')}

@@ -19,6 +19,7 @@ import {
   AcademicSubjectManagementSummary,
   AcademicTerm,
 } from "../../types";
+import { PageHeader } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -361,30 +362,13 @@ function StudentManagementSubjectsContent() {
 
   return (
     <div className="page-stack student-management-page academic-flow-page ux-enterprise-page">
+      <PageHeader
+        eyebrow="Vận hành đào tạo"
+        title="Quản lý sinh viên"
+        description={`Tổng hợp môn, lớp và sinh viên theo hệ, học kỳ và cơ sở đang chọn · ${counterText(total, page, pageSize)}`}
+        primaryAction={<button className="btn" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}</button>}
+      />
       <section className="card academic-unified-card">
-        <div className="section-head list-card-head">
-          <div>
-            <h2>Sinh viên & lớp theo môn</h2>
-            <p>
-              Tổng hợp môn, lớp và sinh viên theo đúng hệ · học kỳ · cơ sở đang
-              chọn.
-            </p>
-          </div>
-          <div className="toolbar-actions">
-            <span className="status-pill neutral">
-              {counterText(total, page, pageSize)}
-            </span>
-            <button
-              className="btn primary small"
-              type="button"
-              disabled={!termId || bulkMapping}
-              onClick={runAutoMapAllAndSync}
-            >
-              {bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}
-            </button>
-          </div>
-        </div>
-
         <div className="academic-filter-bar">
           <label>
             Hệ

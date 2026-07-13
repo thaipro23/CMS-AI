@@ -2535,6 +2535,16 @@ export type AnalyticsLearningBehaviorListResponse = {
   diagnostics?: AnalyticsClassResultDoctor | null
 }
 
+export type AnalyticsClassWorkspaceResponse = {
+  class_id: string
+  course_id?: string | null
+  summary: AnalyticsLearningBehaviorSummary
+  rows: AnalyticsLearningBehaviorListResponse
+  doctor: AnalyticsClassResultDoctor
+  permission_scope?: AnalyticsLearningPermissionScope
+  read_only?: boolean
+}
+
 
 export type AnalyticsStudentSessionProgress = {
   session_index: number

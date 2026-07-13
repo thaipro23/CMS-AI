@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext
@@ -29,7 +29,10 @@ class AcademicAccessWorkflowService:
         names = _actor_names(user)
         teachers = []
         if names:
-            teachers = self.db.query(AcademicTeacher).filter(func.lower(AcademicTeacher.username).in_(names)).all()
+            teachers = self.db.query(AcademicTeacher).filter(or_(
+                func.lower(AcademicTeacher.username).in_(names),
+                func.lower(AcademicTeacher.email).in_(names),
+            )).all()
 
         # Student Ops visibility comes only from campus-scoped roles and AP
         # teacher assignments. Quiz Bank roles do not grant class/student access.

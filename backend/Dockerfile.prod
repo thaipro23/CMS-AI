@@ -1,0 +1,25 @@
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    SOURCE_CONTRACT_ROOT=/source-contract
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl tesseract-ocr tesseract-ocr-vie poppler-utils && rm -rf /var/lib/apt/lists/*
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/ .
+
+# Runtime readiness endpoints perform read-only static source checks. Package a
+# bounded, secret-free source snapshot so the checks do not incorrectly report
+# every frontend/plugin module as missing inside the backend container.
+COPY backend/ /source-contract/backend/
+COPY frontend/app/ /source-contract/frontend/app/
+COPY frontend/components/ /source-contract/frontend/components/
+COPY frontend/context/ /source-contract/frontend/context/
+COPY frontend/hooks/ /source-contract/frontend/hooks/
+COPY frontend/lib/ /source-contract/frontend/lib/
+COPY frontend/styles/ /source-contract/frontend/styles/
+COPY frontend/types/ /source-contract/frontend/types/
+COPY scripts/ /source-contract/scripts/
+COPY openedx-connector-plugin/ /source-contract/openedx-connector-plugin/
+COPY openedx-unit-reset-plugin/ /source-contract/openedx-unit-reset-plugin/
+EXPOSE 8000

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import os
 from typing import Any
 
 from app.core.config import settings
@@ -45,7 +46,7 @@ class UxAcceptanceService:
     )
 
     def __init__(self, root: Path | None = None):
-        self.root = root or Path(__file__).resolve().parents[3]
+        self.root = root or Path(os.getenv('SOURCE_CONTRACT_ROOT') or Path(__file__).resolve().parents[3])
 
     def report(self) -> dict[str, Any]:
         checks = self._checks()
@@ -110,7 +111,7 @@ class UxAcceptanceService:
             UxAcceptanceCheck('accessibility', 'TABLE_HORIZONTAL_SCROLL_ACCESSIBLE', 'BLOCKER', 'tabIndex={0}' in enterprise and 'có thể cuộn ngang' in enterprise, 'Horizontal table container is keyboard-focusable and labeled.', 'Giữ horizontal scroll trong container có nhãn truy cập.', 'frontend/components/table/EnterpriseDataTable.tsx'),
             UxAcceptanceCheck('accessibility', 'STATUS_ICON_TEXT_CONTRACT', 'BLOCKER', 'status-icon' in status_badge and 'aria-hidden="true"' in status_badge, 'Semantic status uses icon + text + color.', 'Không dùng màu là tín hiệu duy nhất.', 'frontend/components/ui/StatusBadge.tsx'),
             UxAcceptanceCheck('audit', 'AUDIT_SERVER_SEARCH_EXPORT', 'BLOCKER', "@router.get('/export.csv')" in audit_route and 'search: str | None' in audit_route and '_visible_audit_row' in audit_route, 'Audit search/export is server-filtered and RBAC-filtered.', 'Export phải dùng cùng filter và visibility contract với list.', 'backend/app/api/routes/audit.py'),
-            UxAcceptanceCheck('ops', 'OPS_UX_GATE_VISIBLE', 'BLOCKER', 'UAT UX acceptance' in ops_page and 'getUxAcceptance' in ops_page, 'Ops readiness surfaces the UX acceptance gate.', 'Hiển thị gate trong /ops/readiness.', 'frontend/app/ops/readiness/page.tsx'),
+            UxAcceptanceCheck('ops', 'OPS_DIAGNOSTICS_NOT_SHIPPED', 'BLOCKER', 'notFound()' in ops_page and 'ReadinessClient' not in ops_page and 'getUxAcceptance' not in ops_page, 'Production does not ship the UAT/readiness interface.', 'Loại giao diện diagnostics khỏi production bundle; giữ kiểm tra qua script/API có kiểm soát.', 'frontend/app/ops/readiness/page.tsx'),
             UxAcceptanceCheck('scope', 'ASSIGNMENT_WRITE_NOT_REINTRODUCED', 'WARNING', 'Workflow Assignment' not in self._read('frontend/app/student-management/page.tsx'), 'Training index does not reintroduce Assignment score write.', 'Không khôi phục Assignment write trong AI Server.', 'frontend/app/student-management/page.tsx'),
         ])
         return checks
@@ -133,7 +134,7 @@ class UxAcceptanceService:
         for category, title in (
             ('enterprise_table', 'Enterprise tables'), ('url_state', 'URL-preserved state'),
             ('table_states', 'Loading/error/empty/pagination'), ('accessibility', 'Accessibility semantics'),
-            ('audit', 'Audit filtering/export'), ('ops', 'Ops readiness integration'), ('scope', 'Workflow boundaries'),
+            ('audit', 'Audit filtering/export'), ('ops', 'Production diagnostics boundary'), ('scope', 'Workflow boundaries'),
         ):
             items = [item for item in checks if item.category == category]
             if not items:
@@ -155,8 +156,8 @@ class UxAcceptanceService:
         actions = [item.action for item in [*blockers, *warnings] if item.action]
         if not actions:
             actions = [
-                'Chạy scripts/uat-ux-acceptance-report.sh sau khi deploy .64.14.',
+                'Chạy scripts/uat-ux-acceptance-report.sh sau khi deploy .64.16.',
                 'Thực hiện browser UAT theo checklist và lưu ảnh/video hoặc ticket evidence.',
-                'Chỉ sửa tiếp dựa trên lỗi UAT thật; không mở rộng Bank workflow trong bản này.',
+                'Chỉ sửa tiếp dựa trên lỗi UAT thật; không mở rộng Bank workflow ngoài phạm vi đã chốt.',
             ]
         return actions[:8]

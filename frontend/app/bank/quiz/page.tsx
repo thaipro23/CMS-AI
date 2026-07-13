@@ -5,6 +5,7 @@ import { inlineMessageFromBackend } from '../../../lib/backendNotice'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
+import { PageHeader } from '../../../components/layout/PageHeader'
 import { CourseQuizInstance, QuizAutoMapResult, QuizChapterAction, QuizChapterPlanItem } from '../../../types'
 import {
   applyQuizAutoMap,
@@ -388,17 +389,12 @@ export default function BankQuizPage() {
   if (!can('publish_questions')) return <div className="card empty-state">Bạn không có quyền map khóa học hoặc tạo quiz.</div>
 
   return <div className="page-stack bank-quiz-page quiz-workbench">
-    <section className="card page-intro quiz-hero">
-      <div>
-        <div className="eyebrow">Open edX assessment</div>
-        <h1>Map khóa học và chọn bài cần tạo Quiz</h1>
-        <p>Không bắt buộc mọi bài đều tạo bài kiểm tra. Ở cột Trạng thái, chọn Tạo Quiz, Tạo Final test hoặc Không tạo.</p>
-      </div>
-      <div className="button-row">
-        <Link className="btn secondary" href="/bank">Tổng quan</Link>
-        <Link className="btn secondary" href="/bank/departments">Quản lý bộ môn</Link>
-      </div>
-    </section>
+    <PageHeader
+      eyebrow="Ngân hàng đề"
+      title="Tạo Quiz trên Open edX"
+      description="Map khóa học và chọn bài cần tạo Quiz, Final test hoặc bỏ qua theo đúng Release đã chốt."
+      secondaryActions={<><Link className="btn secondary" href="/bank">Tổng quan</Link><Link className="btn secondary" href="/bank/departments">Ngân hàng đề</Link></>}
+    />
 
     {message ? <div className={classNames('alert quiz-inline-message', messageClass(message))}>{message.text}</div> : null}
 
