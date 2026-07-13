@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Auth/RBAC Security Boundary Hardening'
 
 
@@ -29,7 +29,7 @@ def test_v48_business_rbac_has_campus_scope_guards():
     assert 'def can_access_academic_scope(' in service
     assert 'def require_academic_scope(' in service
     assert 'Scope cơ sở giới hạn phải chọn một cơ sở cụ thể' in service
-    assert 'Jobs created after v25.9.16.7.2.64.12' in service
+    assert 'Jobs created after v25.9.16.7.2.64.13' in service
 
 
 def test_v48_academic_jobs_are_scope_guarded_and_auditable():

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -12,11 +12,11 @@ def test_v64_3_version_and_docs():
     assert f"app_version: str = '{VERSION}'" in text('backend/app/core/config.py')
     assert f'"version": "{VERSION}"' in text('frontend/package.json')
     assert f'NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{VERSION}}}' in text('docker-compose.prod.yml')
-    assert 'Question Bank Quiz Creation/Auto-map Workflow Split' in text('README.md')
-    assert 'RUN_V25_9_16_7_2_64_12.md' in text('README.md')
-    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.12 — Academic AP Sync + External Assignment Workflow Split')
-    assert (ROOT / 'docs/RELEASE_v25.9.16.7.2.64.12_QUESTION_BANK_QUIZ_CREATION_AUTOMAP_WORKFLOW_SPLIT.md').exists()
-    assert (ROOT / 'docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_64_12.md').exists()
+    assert 'Bank Workflow UX Completion' in text('README.md')
+    assert 'RUN_V25_9_16_7_2_64_13.md' in text('README.md')
+    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.13 — Bank Workflow UX Completion')
+    assert (ROOT / 'docs/RELEASE_v25.9.16.7.2.64.13_BANK_WORKFLOW_UX_COMPLETION.md').exists()
+    assert (ROOT / 'docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_64_13.md').exists()
 
 
 def test_question_bank_release_publish_workflow_is_extracted_and_delegated():

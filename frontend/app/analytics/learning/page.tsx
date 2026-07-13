@@ -1084,7 +1084,7 @@ export default function AnalyticsLearningPage() {
         <div className="analytics-pilot-grid">
           <div><span>Ready pilot</span><b>{releaseCandidate.ready_for_pilot ? 'Có' : 'Chưa'}</b><small>Go/no-go UAT</small></div>
           <div><span>Ready mở rộng</span><b>{releaseCandidate.ready_for_broad_production ? 'Có' : 'Chưa'}</b><small>Broad rollout</small></div>
-          <div><span>RC</span><b>{releaseCandidate.release_candidate || 'v25.9.16.7.2.64.12'}</b><small>Ứng viên pilot</small></div>
+          <div><span>RC</span><b>{releaseCandidate.release_candidate || 'v25.9.16.7.2.64.13'}</b><small>Ứng viên pilot</small></div>
           <div><span>Gate</span><b>{releaseCandidate.gates?.length || 0}</b><small>Readiness/security/performance/evidence</small></div>
           <div><span>Policy</span><b>Read-only</b><small>Không mutate dữ liệu</small></div>
         </div>

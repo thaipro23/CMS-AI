@@ -662,7 +662,7 @@ class QuestionBankGenerationReviewWorkflowService:
             'message': 'Đã duyệt câu hỏi.' if target_status == 'approved' else ('Đã từ chối câu hỏi.' if target_status == 'rejected' else 'Đã đưa câu hỏi về trạng thái chờ duyệt.'),
         }
 
-    def bulk_review_bank_questions(self, *, bank_version_id: str, action: str = 'approve', question_ids: list[str] | None = None, approve_all_pending: bool = False, note: str = '', actor: str | None = None) -> dict:
+    def bulk_review_bank_questions(self, *, bank_version_id: str, action: str = 'approve', question_ids: list[str] | None = None, approve_all_pending: bool = False, apply_to_filtered: bool = False, status_filter: str | None = None, difficulty: str | None = None, search: str | None = None, note: str = '', actor: str | None = None) -> dict:
         version = self._require_bank_version(bank_version_id)
         self._raise_if_published_locked(version, action='không thể duyệt/bỏ hàng loạt câu hỏi')
         action = (action or '').strip().lower()
@@ -671,6 +671,19 @@ class QuestionBankGenerationReviewWorkflowService:
         query = self.db.query(Question).filter(Question.bank_version_id == version.id)
         if approve_all_pending:
             query = query.filter(Question.status.in_(['pending_review', 'needs_review']))
+        elif apply_to_filtered:
+            if status_filter and status_filter not in {'all', 'needs_action'}:
+                query = query.filter(Question.status == status_filter)
+            elif status_filter == 'needs_action':
+                query = query.filter(Question.status.in_(['pending_review', 'needs_review', 'draft_error']))
+            if difficulty and difficulty != 'all':
+                query = query.filter(Question.difficulty == difficulty)
+            if search and search.strip():
+                pattern = f"%{search.strip()}%"
+                query = query.filter(or_(Question.question_text.ilike(pattern), Question.concept_title.ilike(pattern), Question.question_family_id.ilike(pattern)))
+            total_filtered = int(query.order_by(None).count())
+            if total_filtered > 2000:
+                raise ValueError('Bộ lọc có hơn 2.000 câu. Hãy thu hẹp bộ lọc hoặc xử lý theo từng trang để tránh job HTTP quá nặng.')
         else:
             ids = [item for item in (question_ids or []) if item]
             if not ids:

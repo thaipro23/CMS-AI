@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -55,4 +55,4 @@ def test_frontend_surfaces_sla_panel_on_analytics_learning():
     assert 'SLA vận hành analytics' in page
     assert 'classes_needing_snapshot' in page
     assert '.analytics-sla-panel' in css
-    assert 'v25.9.16.7.2.64.12 — Bank Release Publish Reliability + Rollback QA' in css
+    assert 'v25.9.16.7.2.64.13 — Bank Release Publish Reliability + Rollback QA' in css

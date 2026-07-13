@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def read(path: str) -> str:
@@ -21,7 +21,7 @@ def test_v35_runtime_version_still_keeps_v34_roster_qa_baseline():
 
 def test_changelog_order_and_known_heading_cleanup():
     changelog = read('CHANGELOG.md')
-    assert changelog.startswith('## v25.9.16.7.2.64.12 — Performance Load Hardening')
+    assert changelog.startswith('## v25.9.16.7.2.64.13 — Performance Load Hardening')
     assert changelog.index('## v25.9.16.7.2.34 — Production Polish Version Sync + Analytics Roster QA') < changelog.index('## v25.9.16.7.2.33 — Class Actions Toolbar + Learning Roster Fallback')
     assert '## v25.9.16.7.2.30 — Responsive Device-Adaptive UX' in changelog
     assert '## v25.9.16.7.2.32 — Responsive Device-Adaptive UX' not in changelog

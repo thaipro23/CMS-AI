@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def read(path: str) -> str:
@@ -62,6 +62,6 @@ def test_orchestrator_is_class_scoped_debounced_and_capped_not_per_student():
 
 def test_changelog_documents_v35_before_v34_and_no_new_migration():
     changelog = read('CHANGELOG.md')
-    assert changelog.startswith('## v25.9.16.7.2.64.12 — Performance Load Hardening')
-    assert changelog.index('## v25.9.16.7.2.64.12 — Performance Load Hardening') < changelog.index('## v25.9.16.7.2.34 — Production Polish Version Sync + Analytics Roster QA')
+    assert changelog.startswith('## v25.9.16.7.2.64.13 — Performance Load Hardening')
+    assert changelog.index('## v25.9.16.7.2.64.13 — Performance Load Hardening') < changelog.index('## v25.9.16.7.2.34 — Production Polish Version Sync + Analytics Roster QA')
     assert '- No migration.' in changelog.split('## v25.9.16.7.2.34', 1)[0]

@@ -2,7 +2,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -14,8 +14,8 @@ def test_v64_10_version_and_docs():
     assert f'"version": "{VERSION}"' in text('frontend/package.json')
     assert f'NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{VERSION}}}' in text('docker-compose.prod.yml')
     assert 'Academic AP Sync + External Assignment Workflow Split' in text('README.md')
-    assert 'RUN_V25_9_16_7_2_64_12.md' in text('README.md')
-    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.12 — Academic AP Sync + External Assignment Workflow Split')
+    assert 'RUN_V25_9_16_7_2_64_13.md' in text('README.md')
+    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.13 — Academic AP Sync + External Assignment Workflow Split')
 
 
 def test_ap_sync_workflow_is_split_from_route():

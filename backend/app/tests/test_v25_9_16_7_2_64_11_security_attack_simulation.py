@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -12,7 +12,7 @@ def test_v64_11_version_sync_and_no_migration():
     assert f"app_version: str = '{VERSION}'" in text('backend/app/core/config.py')
     assert f'"version": "{VERSION}"' in text('frontend/package.json')
     assert f'NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{VERSION}}}' in text('docker-compose.prod.yml')
-    assert 'Security Attack Simulation + 20 Common Attack Hardening' in text('README.md')
+    assert 'Bank Workflow UX Completion' in text('README.md')
     assert not list((ROOT / 'backend/alembic/versions').glob('0053*.py'))
     assert (ROOT / 'backend/alembic/versions/0052_v25_9_16_7_2_27_learning_behavior_logic_calibration.py').exists()
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -63,7 +63,7 @@ def test_v38_chapter_workspace_embeds_stats_in_lesson_header_and_removes_large_r
 
 def test_v38_css_locks_compact_bank_table_and_inline_chapter_stats():
     css = read('frontend/app/globals.css')
-    assert 'v25.9.16.7.2.64.12 — bank table production ux' in css
+    assert 'v25.9.16.7.2.64.13 — bank table production ux' in css
     assert '.bank-multipage .bank-compact-data-table' in css
     assert '.bank-table-link' in css
     assert '.bank-row-status' in css

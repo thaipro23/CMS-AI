@@ -2,12 +2,13 @@
 
 import { formatVNDateTime } from '../../../../lib/time'
 import Link from 'next/link'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import {
   BankRelease,
   BankReleasePublishAudit,
+  BankReleasePreview,
   BankDashboardOverview,
   BankSearchResult,
   DepartmentSummary,
@@ -59,8 +60,11 @@ import {
   getBankReleaseReadiness,
   getBankReleases,
   getBankReleasePublishAudit,
+  getBankReleasePreview,
   getBankVersionQuestion,
   getBankVersionQuestionPage,
+  getBankVersionQuestionOffsetPage,
+  exportBankVersionQuestions,
   getBankVersions,
   getCourseQuizInstances,
   getDepartments,
@@ -99,6 +103,7 @@ import {
   Toolbar,
   SearchActionBar,
   Modal,
+  ConfirmDialog,
   EntityActions,
   matchesSearch,
   reviewStatusText,
@@ -118,13 +123,16 @@ import {
   countRows,
   auditActionText,
 } from '../shared'
+import { BankQuestionEnterpriseTable } from '../BankQuestionEnterpriseTable'
+import { BankQuestionImportModal } from '../BankQuestionImportModal'
+import { useBankQuestionTableState } from '../../../../hooks/useBankQuestionTableState'
 
 type ChapterLongOperation = {
   id: string
   jobId: string
   bankVersionId: string
   chapterId: string
-  type: 'generate' | 'material_upload'
+  type: 'generate' | 'material_upload' | 'question_import'
   label: string
   successMessage: string
   questionCount?: number
@@ -144,7 +152,10 @@ type ChapterActionKey =
   | 'release_create'
   | 'release_publish'
   | 'release_audit'
+  | 'release_preview'
   | 'bulk_approve'
+  | 'bulk_review'
+  | 'question_export'
   | 'question_review'
   | 'question_edit'
   | 'question_reject'
@@ -152,6 +163,7 @@ type ChapterActionKey =
 const OPERATION_STEPS: Record<ChapterLongOperation['type'], string[]> = {
   material_upload: ['Tiếp nhận', 'Bóc tách học liệu', 'Chuẩn hóa văn bản', 'Đồng bộ'],
   generate: ['Dựng ngữ cảnh', 'Sinh câu hỏi', 'Đối chiếu trùng lặp', 'Ghi bộ câu hỏi'],
+  question_import: ['Đọc file', 'Kiểm tra trùng lặp', 'Ghi câu hỏi', 'Cập nhật thống kê'],
 }
 
 function BusyLabel({ text }: { text: string }) {
@@ -160,6 +172,7 @@ function BusyLabel({ text }: { text: string }) {
 
 function operationDetailText(operation: ChapterLongOperation) {
   if (operation.type === 'material_upload') return 'Đang bóc tách nội dung, chuẩn hóa văn bản và cập nhật danh sách tài liệu.'
+  if (operation.type === 'question_import') return 'Đang đọc file Excel, kiểm tra trùng lặp và tạo câu hỏi ở trạng thái Chờ duyệt.'
   return 'Đang dựng ngữ cảnh, sinh ứng viên câu hỏi và đối chiếu trùng lặp trước khi ghi vào ngân hàng.'
 }
 
@@ -173,7 +186,7 @@ function ChapterOperationStatus({ operation }: { operation: ChapterLongOperation
 }
 
 const ACTIVE_OPERATION_STATUSES = ['queued', 'running']
-const CHAPTER_OPERATION_TYPES = ['material_extract', 'bank_generate']
+const CHAPTER_OPERATION_TYPES = ['material_extract', 'bank_generate', 'question_import']
 
 function jobCreatedAt(job: BankOperationJob) {
   const raw = job.created_at || job.enqueued_at || job.updated_at
@@ -197,6 +210,23 @@ function buildChapterLongOperationFromJob(job: BankOperationJob, chapterId: stri
       label: `Hệ thống đang tiếp nhận học liệu${fileName ? ` ${fileName}` : ''} và kiểm tra định dạng tệp. Trạng thái sẽ tự cập nhật tại đây.`,
       successMessage: 'Hệ thống đã ghi nhận tài liệu. Bạn có thể tiếp tục bước tạo câu hỏi.',
       fileName,
+      createdAt: jobCreatedAt(job),
+    }
+  }
+
+
+  if (job.operation_type === 'question_import') {
+    const rawCount = request.valid_count
+    const questionCount = typeof rawCount === 'number' ? rawCount : Number(rawCount || 0)
+    return {
+      id: `${job.id}:question_import`,
+      jobId: job.id,
+      bankVersionId,
+      chapterId,
+      type: 'question_import',
+      label: `Hệ thống đang import ${questionCount || ''} câu hỏi từ Excel. Các câu mới sẽ ở trạng thái Chờ duyệt.`,
+      successMessage: `Đã import câu hỏi và đồng bộ danh sách bên dưới.`,
+      questionCount: Number.isFinite(questionCount) && questionCount > 0 ? questionCount : undefined,
       createdAt: jobCreatedAt(job),
     }
   }
@@ -265,7 +295,7 @@ function diffActionHint(diff: BankVersionDiffPreview | null) {
 
 export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const { headers, can } = useBankData()
-  const searchParams = useSearchParams()
+  const { state: questionTableState, update: updateQuestionTableState } = useBankQuestionTableState()
   const { message, setMessage, busy, busyLabel, run } = useAsyncMessage()
   const [departments, setDepartments] = useState<Department[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
@@ -275,11 +305,18 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [releases, setReleases] = useState<BankRelease[]>([])
   const [materials, setMaterials] = useState<MaterialVersion[]>([])
   const [questions, setQuestions] = useState<BankVersionQuestion[]>([])
-  const [questionCursor, setQuestionCursor] = useState<{ created_at: string; id: string } | null>(null)
-  const [questionHasNext, setQuestionHasNext] = useState(false)
-  const [questionLoadingMore, setQuestionLoadingMore] = useState(false)
+  const [questionTotal, setQuestionTotal] = useState(0)
+  const [questionTotalPages, setQuestionTotalPages] = useState(1)
+  const [questionLoading, setQuestionLoading] = useState(false)
+  const [questionError, setQuestionError] = useState('')
+  const [questionSearchDraft, setQuestionSearchDraft] = useState(questionTableState.q)
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set())
+  const [selectAllFiltered, setSelectAllFiltered] = useState(false)
+  const [previewQuestion, setPreviewQuestion] = useState<BankVersionQuestion | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   const [readiness, setReadiness] = useState<BankReleaseReadiness | null>(null)
   const [releaseAudit, setReleaseAudit] = useState<BankReleasePublishAudit | null>(null)
+  const [releasePreview, setReleasePreview] = useState<BankReleasePreview | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [generateCount, setGenerateCount] = useState('10')
   const [difficultyEasy, setDifficultyEasy] = useState('50')
@@ -297,12 +334,19 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [materialManagerOpen, setMaterialManagerOpen] = useState(false)
   const [generateManagerOpen, setGenerateManagerOpen] = useState(false)
   const [popupMessage, setPopupMessage] = useState<PopupMessage | null>(null)
+  const [confirmation, setConfirmation] = useState<'release_create' | 'release_publish' | 'bulk_reject' | null>(null)
+  useEffect(() => { setQuestionSearchDraft(questionTableState.q) }, [questionTableState.q])
+  useEffect(() => {
+    if (questionSearchDraft === questionTableState.q) return
+    const timer = window.setTimeout(() => updateQuestionTableState({ q: questionSearchDraft }), 350)
+    return () => window.clearTimeout(timer)
+  }, [questionSearchDraft, questionTableState.q, updateQuestionTableState])
   const [submittingLabel, setSubmittingLabel] = useState('')
   const [actionBusy, setActionBusy] = useState<ChapterActionKey | null>(null)
   const [activeOperation, setActiveOperation] = useState<ChapterLongOperation | null>(null)
-  const [questionStatusFilter, setQuestionStatusFilter] = useState(() => searchParams.get('status') || 'all')
-  const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState(() => searchParams.get('difficulty') || 'all')
-  const [questionSort, setQuestionSort] = useState('needs_review')
+  const questionStatusFilter = questionTableState.status === 'overdue' ? 'pending_review' : questionTableState.status
+  const questionDifficultyFilter = questionTableState.difficulty
+  const questionSort = questionTableState.sort
 
   const load = async () => {
     const chapter = await getSubjectChapter(headers, chapterId)
@@ -321,53 +365,46 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     if (!bankVersionId) {
       setMaterials([])
       setQuestions([])
-      setQuestionCursor(null)
-      setQuestionHasNext(false)
+      setQuestionTotal(0)
+      setQuestionTotalPages(1)
       setReadiness(null)
       setReleaseAudit(null)
       return
     }
-    const [nextMaterials, questionPage, nextReadiness] = await Promise.all([
-      getMaterialVersions(headers, bankVersionId).catch(() => []),
-      getBankVersionQuestionPage(headers, bankVersionId, { limit: 100 }).catch(() => ({ items: [], has_next: false, next_cursor: null } as any)),
-      getBankReleaseReadiness(headers, bankVersionId).catch(() => null),
-    ])
-    setMaterials(nextMaterials.filter((item) => item.status !== 'deleted'))
-    setQuestions(questionPage.items || [])
-    setQuestionCursor(questionPage.next_cursor?.created_at && questionPage.next_cursor?.id ? { created_at: questionPage.next_cursor.created_at, id: questionPage.next_cursor.id } : null)
-    setQuestionHasNext(Boolean(questionPage.has_next))
-    setReadiness(nextReadiness)
-  }
-
-  const loadMoreQuestions = async () => {
-    if (!selectedBankVersion || !questionCursor || questionLoadingMore) return
-    setQuestionLoadingMore(true)
+    setQuestionLoading(true)
+    setQuestionError('')
     try {
-      const page = await getBankVersionQuestionPage(headers, selectedBankVersion.id, {
-        limit: 100,
-        cursorCreatedAt: questionCursor.created_at,
-        cursorId: questionCursor.id,
-      })
-      setQuestions((current) => {
-        const seen = new Set(current.map((item) => item.id))
-        const extra = (page.items || []).filter((item) => !seen.has(item.id))
-        return [...current, ...extra]
-      })
-      setQuestionCursor(page.next_cursor?.created_at && page.next_cursor?.id ? { created_at: page.next_cursor.created_at, id: page.next_cursor.id } : null)
-      setQuestionHasNext(Boolean(page.has_next))
+      const [nextMaterials, questionPage, nextReadiness] = await Promise.all([
+        getMaterialVersions(headers, bankVersionId).catch(() => []),
+        getBankVersionQuestionOffsetPage(headers, bankVersionId, {
+          statusFilter: questionStatusFilter,
+          difficulty: questionDifficultyFilter,
+          search: questionTableState.q,
+          sort: questionSort,
+          page: questionTableState.page,
+          pageSize: questionTableState.pageSize,
+        }),
+        getBankReleaseReadiness(headers, bankVersionId).catch(() => null),
+      ])
+      setMaterials(nextMaterials.filter((item) => item.status !== 'deleted'))
+      setQuestions(questionPage.items || [])
+      setQuestionTotal(Number(questionPage.total || 0))
+      setQuestionTotalPages(Math.max(1, Number(questionPage.total_pages || 1)))
+      setReadiness(nextReadiness)
+      setSelectedQuestionIds(new Set())
+      setSelectAllFiltered(false)
+    } catch (error) {
+      setQuestions([])
+      setQuestionTotal(0)
+      setQuestionTotalPages(1)
+      setQuestionError(error instanceof Error ? error.message : 'Không tải được danh sách câu hỏi.')
     } finally {
-      setQuestionLoadingMore(false)
+      setQuestionLoading(false)
     }
   }
 
   useEffect(() => { load().catch(() => null) }, [chapterId]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { loadDetail(selectedBankVersion?.id).catch(() => null) }, [selectedBankVersion?.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const nextStatus = searchParams.get('status') || 'all'
-    const nextDifficulty = searchParams.get('difficulty') || 'all'
-    setQuestionStatusFilter(nextStatus === 'overdue' ? 'pending_review' : nextStatus)
-    setQuestionDifficultyFilter(nextDifficulty)
-  }, [searchParams])
+  useEffect(() => { loadDetail(selectedBankVersion?.id).catch(() => null) }, [selectedBankVersion?.id, questionStatusFilter, questionDifficultyFilter, questionSort, questionTableState.q, questionTableState.page, questionTableState.pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedBankVersion?.id) return
@@ -521,30 +558,8 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const generateOperationBusy = activeOperation?.type === 'generate'
   const longOperationBusy = Boolean(activeOperation)
   const activeOperationMessage = activeOperation?.label || ''
-  const filteredQuestions = useMemo(() => {
-    const reviewRank = (q: BankVersionQuestion) => {
-      if (q.status === 'draft_error') return 0
-      if (q.status === 'pending_review' || q.status === 'needs_review') return 1
-      if (q.status === 'approved') return 2
-      if (q.status === 'rejected') return 3
-      if (q.status === 'published') return 4
-      return 5
-    }
-    const difficultyRank = (difficulty?: string | null) => ({ easy: 1, medium: 2, hard: 3 } as Record<string, number>)[String(difficulty || '').toLowerCase()] || 9
-    const result = questions.filter((question) => {
-      const statusOk = questionStatusFilter === 'all'
-        || (questionStatusFilter === 'needs_action' && isQuestionWaitingForReview(question))
-        || question.status === questionStatusFilter
-      const difficultyOk = questionDifficultyFilter === 'all' || String(question.difficulty || '').toLowerCase() === questionDifficultyFilter
-      return statusOk && difficultyOk
-    })
-    return result.sort((a, b) => {
-      if (questionSort === 'difficulty') return difficultyRank(a.difficulty) - difficultyRank(b.difficulty)
-      if (questionSort === 'quality_low') return Number(a.quality_score || 0) - Number(b.quality_score || 0)
-      if (questionSort === 'quality_high') return Number(b.quality_score || 0) - Number(a.quality_score || 0)
-      return reviewRank(a) - reviewRank(b)
-    })
-  }, [questions, questionStatusFilter, questionDifficultyFilter, questionSort])
+  const filteredQuestions = questions
+
 
   const ensureBankVersion = async () => {
     if (!chapter) throw new Error('Không tìm thấy bài')
@@ -645,6 +660,95 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setRejectReason('')
     }, 'Đã bỏ câu hỏi', refreshCurrent)
   }
+
+  const openQuestionPreview = async (question: BankVersionQuestion) => {
+    if (!selectedBankVersion) return
+    const detail = await getBankVersionQuestion(headers, selectedBankVersion.id, question.id).catch(() => question)
+    setPreviewQuestion(detail)
+  }
+
+  const toggleQuestion = (question: BankVersionQuestion) => {
+    setSelectAllFiltered(false)
+    setSelectedQuestionIds((current) => {
+      const next = new Set(current)
+      if (next.has(question.id)) next.delete(question.id)
+      else next.add(question.id)
+      return next
+    })
+  }
+
+  const toggleQuestionPage = (rows: BankVersionQuestion[], selected: boolean) => {
+    setSelectAllFiltered(false)
+    setSelectedQuestionIds((current) => {
+      const next = new Set(current)
+      rows.forEach((row) => { if (row.status !== 'published') selected ? next.add(row.id) : next.delete(row.id) })
+      return next
+    })
+  }
+
+  const runBulkReview = async (action: 'approve' | 'reject' | 'back_to_review', note: string) => {
+    if (!selectedBankVersion || chapterPublished) return
+    const selectedIds = Array.from(selectedQuestionIds)
+    if (!selectAllFiltered && !selectedIds.length) {
+      setPopupMessage({ type: 'warning', text: 'Chưa chọn câu hỏi.' })
+      return
+    }
+    await runAction('bulk_review', async () => {
+      await bulkReviewBankQuestions(headers, selectedBankVersion.id, {
+        action,
+        question_ids: selectAllFiltered ? [] : selectedIds,
+        apply_to_filtered: selectAllFiltered,
+        status_filter: questionStatusFilter,
+        difficulty: questionDifficultyFilter,
+        search: questionTableState.q,
+        note,
+      })
+      setSelectedQuestionIds(new Set())
+      setSelectAllFiltered(false)
+    }, 'Đã xử lý các câu hỏi đã chọn.', refreshCurrent, 'Không xử lý được danh sách câu hỏi đã chọn.')
+  }
+
+  const saveQuestionExport = async () => {
+    if (!selectedBankVersion) return
+    await runAction('question_export', async () => {
+      const blob = await exportBankVersionQuestions(headers, selectedBankVersion.id, {
+        statusFilter: questionStatusFilter,
+        difficulty: questionDifficultyFilter,
+        search: questionTableState.q,
+        questionIds: selectedQuestionIds.size && !selectAllFiltered ? Array.from(selectedQuestionIds) : undefined,
+      })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `bank-questions-${chapterDisplayName(chapter).replace(/\s+/g, '-')}.csv`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    }, 'Đã xuất danh sách câu hỏi.', undefined, 'Không xuất được danh sách câu hỏi.')
+  }
+
+  const confirmDangerousAction = async () => {
+    const pending = confirmation
+    setConfirmation(null)
+    if (pending === 'bulk_reject') {
+      await runBulkReview('reject', 'Bỏ hàng loạt từ bảng câu hỏi')
+      return
+    }
+    if (pending === 'release_create') {
+      await runAction('release_create', async () => {
+        if (!selectedBankVersion) return
+        await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
+      }, 'Hệ thống đã chốt bộ đề. Bạn có thể đưa lên CMS khi sẵn sàng.', refreshCurrent, 'Không chốt được bộ đề. Vui lòng kiểm tra câu hỏi còn chờ xử lý.')
+      return
+    }
+    if (pending === 'release_publish' && latestRelease) {
+      await runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Hệ thống đã đưa bộ đề lên CMS.', refreshCurrent, 'Không đưa được thư viện lên CMS. Vui lòng thử lại.')
+    }
+  }
+
+  const selectedQuestionCount = selectAllFiltered ? questionTotal : selectedQuestionIds.size
+
   const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: difficultyEasy === '' ? 50 : Number(difficultyEasy), difficulty_medium: difficultyMedium === '' ? 30 : Number(difficultyMedium), difficulty_hard: difficultyHard === '' ? 20 : Number(difficultyHard) }
 
   const openGenerateConfirm = async () => {
@@ -754,10 +858,8 @@ ${chunk.content}`).join('\n\n')
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
         }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra thay đổi'}</button> : null}
         {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_audit')} onClick={() => runAction('release_audit', async () => { await refreshReleaseAudit(latestRelease.id) }, 'Đã kiểm tra trạng thái bộ đề.', undefined, 'Không kiểm tra được trạng thái bộ đề.')}>{isActionBusy('release_audit') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra bộ đề'}</button> : null}
-        {can('publish_questions') ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => runAction('release_create', async () => {
-          if (!selectedBankVersion) return
-          await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
-        }, 'Hệ thống đã chốt bộ đề. Bạn có thể đưa lên CMS khi sẵn sàng.', refreshCurrent, 'Không chốt được bộ đề. Vui lòng kiểm tra câu hỏi còn chờ xử lý.')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Hệ thống đã đưa lên CMS lên CMS.', refreshCurrent, 'Không public được thư viện. Vui lòng thử lại.')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
+        {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_preview')} onClick={() => runAction('release_preview', async () => { setReleasePreview(await getBankReleasePreview(headers, latestRelease.id)) }, 'Đã tải snapshot Release.', undefined, 'Không tải được snapshot Release.')}>{isActionBusy('release_preview') ? <BusyLabel text="Đang tải" /> : 'Xem trước Release'}</button> : null}
+        {can('publish_questions') ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => setConfirmation('release_create')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => setConfirmation('release_publish')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
       </div>
       {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
@@ -781,68 +883,56 @@ ${chunk.content}`).join('\n\n')
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">
-        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div>{!chapterPublished && can('review_questions') ? <button className="btn secondary chapter-action-button review" disabled={isActionBusy('bulk_approve') || stats.pending === 0} onClick={() => runAction('bulk_approve', async () => {
-          if (!selectedBankVersion) return
-          await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
-        }, 'Hệ thống đã duyệt hết câu chờ.', refreshCurrent, 'Không duyệt được câu hỏi. Vui lòng thử lại.')}>{isActionBusy('bulk_approve') ? <BusyLabel text="Đang duyệt" /> : 'Duyệt hết câu chờ'}</button> : null}</div>
-        <div className="question-filter-bar">
-          <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => setQuestionStatusFilter(event.target.value)}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã đưa lên CMS</option></select></label>
-          <label>Độ khó<select className="input" value={questionDifficultyFilter} onChange={(event) => setQuestionDifficultyFilter(event.target.value)}><option value="all">Tất cả</option><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
-          <label>Sắp xếp<select className="input" value={questionSort} onChange={(event) => setQuestionSort(event.target.value)}><option value="needs_review">Cần xử lý trước</option><option value="difficulty">Theo độ khó</option><option value="quality_low">Điểm chất lượng thấp trước</option><option value="quality_high">Điểm chất lượng cao trước</option></select></label>
-          <button className="btn secondary" type="button" onClick={() => { setQuestionStatusFilter('all'); setQuestionDifficultyFilter('all'); setQuestionSort('needs_review') }}>Xóa lọc</button>
-          <span className="filter-result-count">Hiện {filteredQuestions.length}/{questions.length} câu</span>
+        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Bảng phân trang phía server, lưu bộ lọc trong URL và hỗ trợ chọn theo trang hoặc toàn bộ kết quả lọc.</p></div><div className="button-row no-margin">
+          {!chapterPublished && can('edit_questions') ? <button className="btn secondary" onClick={() => setImportOpen(true)}>Import Excel</button> : null}
+          <button className="btn secondary" disabled={isActionBusy('question_export')} onClick={saveQuestionExport}>{isActionBusy('question_export') ? <BusyLabel text="Đang xuất" /> : 'Xuất CSV'}</button>
+          {!chapterPublished && can('review_questions') ? <button className="btn secondary chapter-action-button review" disabled={isActionBusy('bulk_approve') || stats.pending === 0} onClick={() => runAction('bulk_approve', async () => {
+            if (!selectedBankVersion) return
+            await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
+          }, 'Hệ thống đã duyệt hết câu chờ.', refreshCurrent, 'Không duyệt được câu hỏi. Vui lòng thử lại.')}>{isActionBusy('bulk_approve') ? <BusyLabel text="Đang duyệt" /> : 'Duyệt hết câu chờ'}</button> : null}
+        </div></div>
+        <div className="question-filter-bar enterprise-filter-bar">
+          <label>Tìm câu hỏi<input className="input" value={questionSearchDraft} onChange={(event) => setQuestionSearchDraft(event.target.value)} placeholder="Nội dung, concept hoặc family" /></label>
+          <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => updateQuestionTableState({ status: event.target.value })}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã đưa lên CMS</option></select></label>
+          <label>Độ khó<select className="input" value={questionDifficultyFilter} onChange={(event) => updateQuestionTableState({ difficulty: event.target.value })}><option value="all">Tất cả</option><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
+          <label>Sắp xếp<select className="input" value={questionSort} onChange={(event) => updateQuestionTableState({ sort: event.target.value })}><option value="needs_review">Cần xử lý trước</option><option value="newest">Mới nhất</option><option value="oldest">Cũ nhất</option><option value="difficulty">Theo độ khó</option><option value="quality_low">Chất lượng thấp trước</option><option value="quality_high">Chất lượng cao trước</option></select></label>
+          <button className="btn secondary" type="button" onClick={() => { setQuestionSearchDraft(''); updateQuestionTableState({ q: '', status: 'all', difficulty: 'all', sort: 'needs_review', page: 1 }, { resetPage: false }) }}>Xóa lọc</button>
+          <span className="filter-result-count">{questionTotal.toLocaleString('vi-VN')} kết quả</span>
         </div>
-        <div className="question-card-list bank-review-list">
-          {filteredQuestions.map((item, index) => {
-            const draftReason = item.status === 'draft_error' ? bankQuestionErrorMessage(item) : null
-            const waitingForReview = isQuestionWaitingForReview(item)
-            return <article className="question-review-card" key={item.id}>
-              <div className="question-main-box">
-                <div className="question-main-head"><span className="question-index">Câu {index + 1}</span><span className={statusClass(item.status)}>{statusLabel(item.status)}</span></div>
-                <div className="question-prompt">{item.question_text}</div>
-                <div className="answer-grid">
-                  {bankAnswerRows.map(([letter, field]) => {
-                    const isCorrect = item.correct_answer === letter
-                    return <div key={letter} className={isCorrect ? 'answer-option correct' : 'answer-option'}>
-                      <span className="answer-letter">{letter}</span>
-                      <span>{item[field] || '—'}</span>
-                    </div>
-                  })}
-                </div>
-                <div className="question-meta-row">
-                  <span>Độ khó: <b>{item.difficulty}</b></span>
-                  {item.concept_title ? <span>Concept: <b>{item.concept_title}</b></span> : null}
-                  {item.question_family_id ? <span>Family: <code>{item.question_family_id}</code></span> : null}
-                  {item.variant_no ? <span>Variant: <b>{item.variant_no}</b></span> : null}
-                  {item.is_carry_over ? <span>Clone từ kỳ trước</span> : null}
-                  <span>Điểm chất lượng: {Math.round(Number(item.quality_score || 0) * 100)}%</span>
-                </div>
-                {item.explanation ? <div className="question-explanation"><b>Giải thích:</b> {item.explanation}</div> : null}
-                {draftReason ? <div className="draft-error-reason"><strong>Lý do lỗi:</strong> {draftReason}{item.draft_error_detail?.message ? <span> · {String(item.draft_error_detail.message)}</span> : null}</div> : null}
-              </div>
-              <div className="question-control-box">
-                <div className="question-control-status"><div className="box-label">Trạng thái</div><span className={statusClass(item.status)}>{statusLabel(item.status)}</span><small className="control-note">{waitingForReview ? 'Cần xử lý trước khi chốt bộ đề' : 'Đã xử lý'}</small></div>
-                <div className="question-control-actions">
-                  <div className="box-label">Thao tác</div>
-                  <div className="question-actions">
-                    {!chapterPublished && can('review_questions') && item.status !== 'published' ? <button className="btn small secondary" disabled={isActionBusy('question_review')} onClick={() => startEditQuestion(item)}>Sửa</button> : null}
-                    {!chapterPublished && can('review_questions') && (item.status === 'pending_review' || item.status === 'needs_review' || item.status === 'rejected') ? <button className="btn small success" disabled={isActionBusy('question_review')} onClick={() => run(async () => {
-                      if (!selectedBankVersion) return
-                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' })
-                    }, 'Đã duyệt câu hỏi', refreshCurrent)}>{item.status === 'rejected' ? 'Duyệt lại' : 'Duyệt'}</button> : null}
-                    {!chapterPublished && can('review_questions') && item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={isActionBusy('question_review')} onClick={() => openRejectQuestion(item)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
-                    {!chapterPublished && can('review_questions') && item.status === 'approved' ? <button className="btn small secondary" disabled={isActionBusy('question_review')} onClick={() => run(async () => {
-                      if (!selectedBankVersion) return
-                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' })
-                    }, 'Đã đưa câu hỏi về chờ duyệt', refreshCurrent)}>Hoàn tác</button> : null}
-                  </div>
-                </div>
-              </div>
-            </article>
-          })}
-        </div>
-        {questionHasNext ? <div className="load-more-row"><button className="btn secondary" type="button" disabled={questionLoadingMore} onClick={loadMoreQuestions}>{questionLoadingMore ? 'Đang tải thêm...' : 'Tải thêm 100 câu'}</button><span className="helper">Đang hiển thị {questions.length} câu đầu. Danh sách dùng cursor/keyset nên không kéo toàn bộ bank vào trình duyệt.</span></div> : null}
-        {!filteredQuestions.length ? <div className="empty-state">Không có câu hỏi phù hợp bộ lọc.</div> : null}
+        {!chapterPublished && can('review_questions') && (selectedQuestionCount > 0 || questions.length > 0) ? <div className="bank-batch-action-bar" role="region" aria-label="Thao tác hàng loạt câu hỏi">
+          <div><b>{selectAllFiltered ? `Đã chọn toàn bộ ${questionTotal.toLocaleString('vi-VN')} kết quả lọc` : `Đã chọn ${selectedQuestionIds.size} câu trên trang`}</b><small>{selectAllFiltered ? 'Hành động áp dụng theo bộ lọc hiện tại.' : 'Checkbox chọn tất cả chỉ chọn các dòng trên trang hiện tại.'}</small></div>
+          <div className="button-row no-margin">
+            {questionTotal > questions.length && <button className={selectAllFiltered ? 'btn small' : 'btn small secondary'} onClick={() => { setSelectAllFiltered((value) => !value); setSelectedQuestionIds(new Set()) }}>{selectAllFiltered ? 'Bỏ chọn toàn bộ kết quả lọc' : `Chọn toàn bộ ${questionTotal.toLocaleString('vi-VN')} kết quả lọc`}</button>}
+            <button className="btn small success" disabled={isActionBusy('bulk_review') || selectedQuestionCount === 0} onClick={() => runBulkReview('approve', 'Duyệt hàng loạt từ bảng câu hỏi')}>Duyệt</button>
+            <button className="btn small secondary" disabled={isActionBusy('bulk_review') || selectedQuestionCount === 0} onClick={() => runBulkReview('back_to_review', 'Đưa hàng loạt về Chờ duyệt')}>Về chờ duyệt</button>
+            <button className="btn small danger" disabled={isActionBusy('bulk_review') || selectedQuestionCount === 0} onClick={() => setConfirmation('bulk_reject')}>Bỏ</button>
+            <button className="btn small secondary" disabled={!selectedQuestionIds.size && !selectAllFiltered} onClick={() => { setSelectedQuestionIds(new Set()); setSelectAllFiltered(false) }}>Bỏ chọn</button>
+          </div>
+        </div> : null}
+        <BankQuestionEnterpriseTable
+          rows={questions}
+          density={questionTableState.density}
+          page={Math.min(questionTableState.page, questionTotalPages)}
+          pageSize={questionTableState.pageSize}
+          total={questionTotal}
+          totalPages={questionTotalPages}
+          selectedKeys={selectedQuestionIds}
+          loading={questionLoading}
+          error={questionError}
+          locked={chapterPublished}
+          canReview={can('review_questions')}
+          onDensityChange={(density) => updateQuestionTableState({ density }, { resetPage: false })}
+          onPageChange={(page) => updateQuestionTableState({ page }, { resetPage: false })}
+          onPageSizeChange={(pageSize) => updateQuestionTableState({ pageSize, page: 1 }, { resetPage: false })}
+          onToggle={toggleQuestion}
+          onTogglePage={toggleQuestionPage}
+          onPreview={openQuestionPreview}
+          onEdit={startEditQuestion}
+          onApprove={(item) => run(async () => { if (!selectedBankVersion) return; await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' }) }, 'Đã duyệt câu hỏi', refreshCurrent)}
+          onReject={openRejectQuestion}
+          onBackToReview={(item) => run(async () => { if (!selectedBankVersion) return; await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' }) }, 'Đã đưa câu hỏi về chờ duyệt', refreshCurrent)}
+          onRetry={() => loadDetail(selectedBankVersion?.id)}
+        />
       </div>
     </section>}
 
@@ -928,6 +1018,57 @@ ${chunk.content}`).join('\n\n')
       </div> : null}
     </Modal>
 
+
+
+    <ConfirmDialog
+      open={Boolean(confirmation)}
+      title={confirmation === 'bulk_reject' ? `Bỏ ${selectedQuestionCount.toLocaleString('vi-VN')} câu hỏi?` : confirmation === 'release_publish' ? `Đưa Release ${latestRelease?.release_code || ''} lên CMS?` : 'Chốt bộ đề thành Release?'}
+      description={confirmation === 'bulk_reject' ? <p>Các câu được chọn sẽ chuyển sang trạng thái Đã bỏ và được ghi Audit. Câu đã publish sẽ không bị thay đổi.</p> : confirmation === 'release_publish' ? <p>Hệ thống sẽ tạo/cập nhật thư viện Open edX từ snapshot Release. Hãy kiểm tra preview và QA bộ đề trước khi tiếp tục.</p> : <p>Release sẽ đóng băng toàn bộ câu đã duyệt hiện tại của bài. Sau khi publish, nội dung không chỉnh trực tiếp trên version này.</p>}
+      confirmLabel={confirmation === 'bulk_reject' ? 'Xác nhận bỏ câu' : confirmation === 'release_publish' ? 'Đưa lên CMS' : 'Chốt bộ đề'}
+      danger={confirmation === 'bulk_reject'}
+      busy={Boolean(actionBusy)}
+      onClose={() => setConfirmation(null)}
+      onConfirm={confirmDangerousAction}
+    />
+
+    <Modal open={Boolean(releasePreview)} title="Xem trước Release đã chốt" onClose={() => setReleasePreview(null)} wide>
+      {releasePreview ? <div className="bank-release-preview">
+        <div className="summary-grid compact-summary">
+          <div><span>Mã Release</span><b>{releasePreview.release.release_code}</b></div>
+          <div><span>Trạng thái</span><b>{releasePreview.release.status}</b></div>
+          <div><span>Tổng câu snapshot</span><b>{releasePreview.total_questions}</b></div>
+          <div><span>Dễ / TB / Khó</span><b>{releasePreview.counts.easy || 0} / {releasePreview.counts.medium || 0} / {releasePreview.counts.hard || 0}</b></div>
+        </div>
+        <div className="alert info"><b>Snapshot đã chốt.</b> Danh sách dưới đây lấy từ `ai_bank_release_questions`, không lấy theo bộ lọc câu hỏi đang xem.</div>
+        <div className="bank-release-preview-list">{releasePreview.questions.map((item, index) => <article key={item.release_question_id} className="bank-release-preview-question">
+          <div className="question-main-head"><span className="soft-tag">Câu {index + 1}</span><span className="soft-tag">{item.difficulty}</span>{item.concept_title ? <span className="soft-tag">{item.concept_title}</span> : null}</div>
+          <b>{item.question_text}</b>
+          <div className="answer-grid compact">{(['A','B','C','D'] as const).map((letter) => { const value = item[`option_${letter.toLowerCase()}` as 'option_a']; return <div key={letter} className={item.correct_answer === letter ? 'answer-option correct' : 'answer-option'}><span className="answer-letter">{letter}</span><span>{value || '—'}</span></div> })}</div>
+        </article>)}</div>
+        <div className="modal-actions"><button className="btn secondary" onClick={() => setReleasePreview(null)}>Đóng</button></div>
+      </div> : null}
+    </Modal>
+
+    {selectedBankVersion ? <BankQuestionImportModal
+      open={importOpen}
+      headers={headers}
+      bankVersionId={selectedBankVersion.id}
+      onClose={() => setImportOpen(false)}
+      onQueued={(text) => { setMessage(text); setPopupMessage({ type: 'success', text }); loadDetail(selectedBankVersion.id).catch(() => null) }}
+    /> : null}
+
+    <Modal open={Boolean(previewQuestion)} title="Xem trước câu hỏi" onClose={() => setPreviewQuestion(null)} wide>
+      {previewQuestion ? <div className="bank-question-preview">
+        <div className="question-main-head"><span className={statusClass(previewQuestion.status)}>{statusLabel(previewQuestion.status)}</span><span className="soft-tag">{previewQuestion.difficulty || '—'}</span><span className="soft-tag">Chất lượng {Math.round(Number(previewQuestion.quality_score || 0) * 100)}%</span></div>
+        <div className="question-prompt">{previewQuestion.question_text}</div>
+        <div className="answer-grid">{bankAnswerRows.map(([letter, field]) => <div key={letter} className={previewQuestion.correct_answer === letter ? 'answer-option correct' : 'answer-option'}><span className="answer-letter">{letter}</span><span>{previewQuestion[field] || '—'}</span></div>)}</div>
+        <div className="question-meta-row"><span>Concept: <b>{previewQuestion.concept_title || 'Chưa gắn'}</b></span>{previewQuestion.question_family_id ? <span>Family: <code>{previewQuestion.question_family_id}</code></span> : null}{previewQuestion.source_type ? <span>Nguồn: <b>{previewQuestion.source_type}</b></span> : null}</div>
+        {previewQuestion.explanation ? <div className="question-explanation"><b>Giải thích:</b> {previewQuestion.explanation}</div> : null}
+        {previewQuestion.source_evidence ? <div className="question-explanation"><b>Bằng chứng nguồn:</b> {previewQuestion.source_evidence}</div> : null}
+        {previewQuestion.status === 'draft_error' ? <div className="draft-error-reason"><b>Lý do lỗi:</b> {bankQuestionErrorMessage(previewQuestion) || 'Không rõ'}</div> : null}
+        <div className="modal-actions"><button className="btn secondary" onClick={() => setPreviewQuestion(null)}>Đóng</button>{!chapterPublished && can('review_questions') && previewQuestion.status !== 'published' ? <button className="btn" onClick={() => { setPreviewQuestion(null); startEditQuestion(previewQuestion) }}>Sửa câu hỏi</button> : null}</div>
+      </div> : null}
+    </Modal>
 
     <Modal open={Boolean(rejectingQuestion)} title={rejectingQuestion?.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ câu hỏi'} onClose={() => { setRejectingQuestion(null); setRejectReason('') }}>
       <div className="mini-form">

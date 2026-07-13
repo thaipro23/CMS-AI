@@ -279,6 +279,29 @@ class BankReleaseOut(BaseModel):
         from_attributes = True
 
 
+class BankReleasePreviewQuestionOut(BaseModel):
+    release_question_id: str
+    question_id: str
+    question_text: str
+    option_a: str | None = None
+    option_b: str | None = None
+    option_c: str | None = None
+    option_d: str | None = None
+    correct_answer: str
+    difficulty: str
+    concept_title: str | None = None
+    question_family_id: str | None = None
+    included_at: datetime | None = None
+
+
+class BankReleasePreviewOut(BaseModel):
+    release: BankReleaseOut
+    frozen_snapshot: bool = True
+    total_questions: int
+    counts: dict = Field(default_factory=dict)
+    questions: list[BankReleasePreviewQuestionOut] = Field(default_factory=list)
+
+
 class CourseMappingCreate(BaseModel):
     openedx_course_id: str = Field(min_length=1, max_length=255)
     subject_id: str
@@ -660,6 +683,10 @@ class BankQuestionBulkReviewRequest(BaseModel):
     action: str = Field(default='approve', pattern='^(approve|reject|back_to_review)$')
     question_ids: list[str] = Field(default_factory=list)
     approve_all_pending: bool = False
+    apply_to_filtered: bool = False
+    status_filter: str | None = None
+    difficulty: str | None = None
+    search: str | None = None
     note: str = ''
 
 
@@ -669,6 +696,24 @@ class BankQuestionBulkReviewOut(BaseModel):
     skipped_count: int
     changed_question_ids: list[str] = Field(default_factory=list)
     skipped: list[dict] = Field(default_factory=list)
+    message: str
+
+
+
+
+class BankQuestionImportConfirmRequest(BaseModel):
+    preview_token: str = Field(min_length=16, max_length=128)
+
+
+class BankQuestionImportPreviewOut(BaseModel):
+    ok: bool
+    preview_token: str
+    total_rows: int
+    valid_count: int
+    error_count: int
+    preview_rows: list[dict] = Field(default_factory=list)
+    errors: list[dict] = Field(default_factory=list)
+    can_commit: bool
     message: str
 
 

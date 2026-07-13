@@ -1,4 +1,4 @@
-// v25.9.16.7.2.64.12 — split readiness contract types.
+// v25.9.16.7.2.64.13 — split readiness contract types.
 // Keep these re-exports backward compatible while new code imports from this file
 // instead of adding more operational report types to frontend/types/index.ts.
 export type {

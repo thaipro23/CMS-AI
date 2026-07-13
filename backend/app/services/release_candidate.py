@@ -153,7 +153,7 @@ class ReleaseCandidateService:
         return {
             'version': settings.app_version,
             'report_type': 'pilot_release_candidate_gate',
-            'release_candidate': 'v25.9.16.7.2.64.12',
+            'release_candidate': 'v25.9.16.7.2.64.13',
             'generated_at': generated_at,
             'status': rc_status,
             'go_no_go': go_no_go,

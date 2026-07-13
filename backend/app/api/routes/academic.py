@@ -431,7 +431,7 @@ def _require_academic_sync_permission(
 ) -> UserContext:
     """Allow Student Ops CMS/Open edX mutations only for campus/system admins.
 
-    v25.9.16.7.2.64.12 splits Quiz Bank roles from Student Ops. Bank permissions
+    v25.9.16.7.2.64.13 splits Quiz Bank roles from Student Ops. Bank permissions
     such as course.sync no longer authorize AP/CMS class/enrollment mutations.
     """
     if 'manage_settings' in user.permissions:

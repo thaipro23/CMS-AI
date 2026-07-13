@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -51,4 +51,4 @@ def test_v44_class_detail_ui_surfaces_identity_panel_and_api_client():
     assert 'LEGACY_AP_USERNAME' in page
     assert 'MISSING_ROLLNUMBER' in page
     assert 'identity-reconciliation-panel' in css
-    assert 'v25.9.16.7.2.64.12 — RollNumber identity reconciliation QA' in css
+    assert 'v25.9.16.7.2.64.13 — RollNumber identity reconciliation QA' in css

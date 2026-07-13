@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def _read(path: str) -> str:
@@ -14,8 +14,8 @@ def test_v55_version_sync_and_docs() -> None:
     assert f'ARG NEXT_PUBLIC_APP_VERSION={VERSION}' in _read('frontend/Dockerfile')
     assert _read('CHANGELOG.md').startswith(f'## v{VERSION} — Bank Release Publish Reliability + Rollback QA')
     assert 'Bank Release Publish Reliability + Rollback QA' in _read('README.md')
-    assert 'RUN v25.9.16.7.2.64.12' in _read('RUN_V25_9_16_7_2_56.md')
-    assert 'Bank Release Publish Reliability + Rollback QA' in _read('docs/RELEASE_v25.9.16.7.2.64.12_BANK_RELEASE_PUBLISH_RELIABILITY_ROLLBACK_QA.md')
+    assert 'RUN v25.9.16.7.2.64.13' in _read('RUN_V25_9_16_7_2_56.md')
+    assert 'Bank Release Publish Reliability + Rollback QA' in _read('docs/RELEASE_v25.9.16.7.2.64.13_BANK_RELEASE_PUBLISH_RELIABILITY_ROLLBACK_QA.md')
 
 
 def test_v55_mapping_reliability_endpoint_is_read_only() -> None:

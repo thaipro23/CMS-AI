@@ -1661,7 +1661,7 @@ class LearningAnalyticsCoreService:
     def production_readiness_report(self, *, allowed_class_ids: set[str] | None = None) -> dict[str, Any]:
         """Final production gate for analytics.
 
-        v25.9.16.7.2.64.12 changes the gate from a vague counter into an
+        v25.9.16.7.2.64.13 changes the gate from a vague counter into an
         actionable operations checklist. Blockers are reserved for platform
         configuration/runtime problems. Data warm-up gaps such as no snapshots
         yet are warnings, because roster fallback and post-ingest recalculation
@@ -1870,7 +1870,7 @@ class LearningAnalyticsCoreService:
                 next_actions.append(action)
 
         return {
-            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.12'),
+            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.13'),
             'ready_for_production': ready,
             'readiness': readiness,
             'stage_status': stage_status,

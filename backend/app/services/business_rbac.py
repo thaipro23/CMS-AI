@@ -91,7 +91,7 @@ LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
 
 
 ROLE_TO_LEGACY = {
-    # v25.9.16.7.2.64.12: do not elevate business roles into legacy teacher/admin.
+    # v25.9.16.7.2.64.13: do not elevate business roles into legacy teacher/admin.
     # Frontend and backend must use business_permissions for access. Legacy role
     # only remains for SYSTEM_ADMIN so old admin-only UI keeps working for real
     # Open edX superusers / explicit system admins.
@@ -631,7 +631,7 @@ class BusinessRBACService:
         return codes
 
     def can_manage_assignment_scores_for_campus(self, user: Any, campus_code: str | None) -> bool:
-        """Deprecated in v25.9.16.7.2.64.12.
+        """Deprecated in v25.9.16.7.2.64.13.
 
         Assignment/defense score entry is owned by an external system. AI Server
         may display read-only assignment status from snapshots/imports, but must
@@ -732,7 +732,7 @@ class BusinessRBACService:
             return True
         if not campus and requested_by and str(requested_by).strip() in actor_ids:
             return True
-        # Jobs created after v25.9.16.7.2.64.12 can persist approved campus scope in
+        # Jobs created after v25.9.16.7.2.64.13 can persist approved campus scope in
         # request_json. Treat it as additional defense but never as an allow-all.
         data = request_json or {}
         approved_campuses = data.get('approved_campus_codes') if isinstance(data, dict) else None

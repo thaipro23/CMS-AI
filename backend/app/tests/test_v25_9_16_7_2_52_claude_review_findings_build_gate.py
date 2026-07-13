@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -31,7 +31,7 @@ def test_v52_version_sync_for_claude_review_build_gate() -> None:
 def test_v52_uat_build_gate_script_is_guarded_and_actionable() -> None:
     script = _read('scripts/uat-build-gate.sh')
     assert 'set -Eeuo pipefail' in script
-    assert 'EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.12}"' in script
+    assert 'EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.13}"' in script
     assert 'STRICT="${STRICT:-0}"' in script
     assert 'RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-0}"' in script
     assert 'build-gate-summary.json' in script
@@ -57,7 +57,7 @@ def test_v52_claude_review_pack_includes_build_gate_evidence() -> None:
 
 def test_v52_handoff_docs_are_explicit_for_reviewers() -> None:
     handoff = _read('docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_53.md')
-    release = _read('docs/RELEASE_v25.9.16.7.2.64.12_UAT_RUNTIME_VERIFICATION_FRONTEND_BUILD_FIX.md')
+    release = _read('docs/RELEASE_v25.9.16.7.2.64.13_UAT_RUNTIME_VERIFICATION_FRONTEND_BUILD_FIX.md')
     combined = handoff + release
     assert 'frontend-build-verify.sh' in combined
     assert 'uat-runtime-verify.sh' in combined

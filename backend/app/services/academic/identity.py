@@ -419,7 +419,7 @@ class AcademicIdentityReconciliationWorkflowService:
         ) -> dict[str, Any]:
             """Read-only RollNumber identity migration assistant.
 
-            v25.9.16.7.2.64.12 intentionally does not mutate mappings or Open edX
+            v25.9.16.7.2.64.13 intentionally does not mutate mappings or Open edX
             users.  It is a scoped, paginated dry-run report for UAT/pilot planning
             after the CMS username policy switched from AP username/email to
             RollNumber/student_code.

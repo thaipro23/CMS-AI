@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -17,7 +17,7 @@ def test_version_synced_to_56():
 
 
 def test_bank_release_publish_audit_backend_contract_is_read_only():
-    service = text('backend/app/services/question_bank_service.py')
+    service = text('backend/app/services/question_bank_service.py') + text('backend/app/services/question_bank/release_publish.py')
     route = text('backend/app/api/routes/question_bank_v2.py')
     assert 'def release_publish_audit(self, *, release_id: str) -> dict:' in service
     assert "'read_only': True" in service
@@ -28,7 +28,7 @@ def test_bank_release_publish_audit_backend_contract_is_read_only():
 
 
 def test_bank_release_publish_audit_covers_publish_and_rollback_risks():
-    service = text('backend/app/services/question_bank_service.py')
+    service = text('backend/app/services/question_bank_service.py') + text('backend/app/services/question_bank/release_publish.py')
     required_codes = [
         'release_components_complete',
         'duplicate_library_problem_ids',

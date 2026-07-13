@@ -1,4 +1,4 @@
-/* v25.9.16.7.2.64.12 — analytics production readiness gate repair.
+/* v25.9.16.7.2.64.13 — analytics production readiness gate repair.
    The old one-line banner hid the actual blocker. This panel keeps the summary
    compact but exposes blocker/category/action without forcing admins into logs. */
 .analytics-production-readiness-panel {
@@ -87,7 +87,7 @@
   }
 }
 
-/* v25.9.16.7.2.64.12 — RollNumber identity reconciliation QA.
+/* v25.9.16.7.2.64.13 — RollNumber identity reconciliation QA.
    Keep the class detail page production-safe: admins can see whether CMS/Open edX
    identity is already canonical RollNumber or still legacy AP username before
    running broad enrollment/sync. */
@@ -181,7 +181,7 @@
   .identity-sample-row { grid-template-columns: 1fr; }
 }
 
-/* v25.9.16.7.2.64.12 — UAT RollNumber identity cleanup result */
+/* v25.9.16.7.2.64.13 — UAT RollNumber identity cleanup result */
 .identity-cleanup-result {
   display: grid;
   gap: 4px;
@@ -196,7 +196,7 @@
 .identity-cleanup-result span,
 .identity-cleanup-result small { font-size: .78rem; }
 
-/* v25.9.16.7.2.64.12 — Bank Quiz Final Test Production QA.
+/* v25.9.16.7.2.64.13 — Bank Quiz Final Test Production QA.
    Keep the operational health of ingest -> recalculate -> snapshot visible in
    /analytics/learning without asking admins to read Docker logs. */
 .analytics-sla-panel {
@@ -305,7 +305,7 @@
   }
 }
 
-/* v25.9.16.7.2.64.12 — Bank Quiz / Final Test Production Flow QA.
+/* v25.9.16.7.2.64.13 — Bank Quiz / Final Test Production Flow QA.
    Make /bank/quiz explain exactly what is being created and what blocks creation. */
 .bank-quiz-page .quiz-production-gate-strip {
   display: grid;
@@ -391,7 +391,7 @@
   .bank-quiz-page .quiz-production-gate-strip { grid-template-columns: 1fr; }
 }
 
-/* v25.9.16.7.2.64.12 — UAT Evidence Pack + Acceptance Report Export.
+/* v25.9.16.7.2.64.13 — UAT Evidence Pack + Acceptance Report Export.
    Surface the existing /analytics/ops/pilot-acceptance gate directly in the
    learning analytics workspace so UAT operators can validate readiness without
    copying curl output or reading worker logs. */
@@ -512,7 +512,7 @@
   .analytics-pilot-head { align-items: flex-start; }
 }
 
-/* v25.9.16.7.2.64.12 — UAT evidence pack + acceptance report export.
+/* v25.9.16.7.2.64.13 — UAT evidence pack + acceptance report export.
    Evidence pack panel reuses the pilot gate visual contract but has its own
    class so future screenshots/tests can target it directly. */
 .analytics-evidence-pack-panel {
@@ -527,13 +527,13 @@
 .analytics-evidence-pack-panel.warning { border-color: rgba(245, 158, 11, 0.38); background: rgba(245, 158, 11, 0.07); }
 .analytics-evidence-pack-panel.danger { border-color: rgba(239, 68, 68, 0.38); background: rgba(239, 68, 68, 0.07); }
 
-/* v25.9.16.7.2.64.12 — UAT Runtime Verification + Frontend Build Fix. Static reviewer and UAT build gate marker. */
+/* v25.9.16.7.2.64.13 — UAT Runtime Verification + Frontend Build Fix. Static reviewer and UAT build gate marker. */
 
-/* v25.9.16.7.2.64.12 — UAT Runtime Verification + Frontend Build Fix.
+/* v25.9.16.7.2.64.13 — UAT Runtime Verification + Frontend Build Fix.
    Runtime UI is unchanged; this marker lets static review tests confirm the release baseline. */
-/* v25.9.16.7.2.64.12 — Bank Release Publish Reliability + Rollback QA. Static reviewer marker. */
+/* v25.9.16.7.2.64.13 — Bank Release Publish Reliability + Rollback QA. Static reviewer marker. */
 
-/* v25.9.16.7.2.64.12 — analytics course/class mapping reliability panel. */
+/* v25.9.16.7.2.64.13 — analytics course/class mapping reliability panel. */
 .analytics-mapping-reliability-panel {
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -546,7 +546,7 @@
 .analytics-mapping-reliability-panel.warning { border-color: rgba(245, 158, 11, .4); }
 .analytics-mapping-reliability-panel.danger { border-color: rgba(239, 68, 68, .45); }
 
-/* v25.9.16.7.2.64.12 — Bank Release Publish Reliability + Rollback QA */
+/* v25.9.16.7.2.64.13 — Bank Release Publish Reliability + Rollback QA */
 .bank-release-audit-panel {
   display: grid;
   gap: 12px;
@@ -608,7 +608,7 @@ html[data-theme='dark'] .bank-release-audit-item.warning {
   background: rgba(120,53,15,.22);
 }
 
-/* v25.9.16.7.2.64.12 — Performance Load Hardening.
+/* v25.9.16.7.2.64.13 — Performance Load Hardening.
    Keep performance readiness visible from analytics operations without running
    heavy DB plans or raw log scans in the browser/API request path. */
 .analytics-performance-readiness-panel {
@@ -623,7 +623,7 @@ html[data-theme='dark'] .bank-release-audit-item.warning {
 .analytics-performance-readiness-panel.warning { border-color: rgba(245, 158, 11, .42); }
 .analytics-performance-readiness-panel.danger { border-color: rgba(239, 68, 68, .45); }
 
-/* v25.9.16.7.2.64.12 — Security Production Hardening.
+/* v25.9.16.7.2.64.13 — Security Production Hardening.
    Surface the security gate without exposing secret values or running any
    mutation/external checks from the browser request path. */
 .analytics-security-readiness-panel {
@@ -638,7 +638,7 @@ html[data-theme='dark'] .bank-release-audit-item.warning {
 .analytics-security-readiness-panel.warning { border-color: rgba(245, 158, 11, .42); }
 .analytics-security-readiness-panel.danger { border-color: rgba(239, 68, 68, .45); }
 
-/* v25.9.16.7.2.64.12 — Pilot Release Candidate gate.
+/* v25.9.16.7.2.64.13 — Pilot Release Candidate gate.
    Compact read-only go/no-go panel that composes readiness, security,
    performance and evidence gates without mutating data. */
 .analytics-release-candidate-panel {
@@ -653,7 +653,7 @@ html[data-theme='dark'] .bank-release-audit-item.warning {
 .analytics-release-candidate-panel.warning { border-color: rgba(217, 119, 6, .4); }
 .analytics-release-candidate-panel.danger { border-color: rgba(220, 38, 38, .45); }
 
-/* v25.9.16.7.2.64.12 — Pilot Operations Runbook.
+/* v25.9.16.7.2.64.13 — Pilot Operations Runbook.
    Read-only go-live/rollback checklist for UAT pilot operators. */
 .analytics-pilot-operations-panel {
   border: 1px solid var(--border-subtle);
@@ -667,7 +667,7 @@ html[data-theme='dark'] .bank-release-audit-item.warning {
 .analytics-pilot-operations-panel.warning { border-color: rgba(217, 119, 6, .4); }
 .analytics-pilot-operations-panel.danger { border-color: rgba(220, 38, 38, .45); }
 
-/* v25.9.16.7.2.64.12 — shared operational gate component contract. */
+/* v25.9.16.7.2.64.13 — shared operational gate component contract. */
 .ops-gate-panel {
   border: 1px solid var(--border-subtle);
   border-radius: 18px;
@@ -681,7 +681,7 @@ html[data-theme='dark'] .bank-release-audit-item.warning {
 .ops-gate-panel.danger { border-color: rgba(220, 38, 38, .45); }
 .ops-gate-panel.neutral { border-color: var(--border-subtle); }
 
-/* v25.9.16.7.2.64.12 — Ops Readiness page split.
+/* v25.9.16.7.2.64.13 — Ops Readiness page split.
    Keeps operational gates out of business-heavy analytics screens. */
 .ops-readiness-page {
   display: grid;

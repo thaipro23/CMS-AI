@@ -60,6 +60,7 @@ class MaintainabilityContractService:
         'backend/app/services/question_bank/release_publish.py',
         'backend/app/services/question_bank/quiz_creation.py',
         'backend/app/services/question_bank/generation_review.py',
+        'backend/app/services/question_bank/import_export.py',
         'backend/app/services/learning_analytics/presentation.py',
         'backend/app/services/learning_analytics/operations.py',
         'backend/app/services/learning_analytics/results.py',
@@ -68,6 +69,9 @@ class MaintainabilityContractService:
         'frontend/components/table/EnterpriseDataTable.tsx',
         'frontend/components/table/TableStates.tsx',
         'frontend/hooks/useUrlTableState.ts',
+        'frontend/hooks/useBankQuestionTableState.ts',
+        'frontend/app/bank/_components/BankQuestionEnterpriseTable.tsx',
+        'frontend/app/bank/_components/BankQuestionImportModal.tsx',
         'frontend/styles/enterprise-ui.css',
     ]
 

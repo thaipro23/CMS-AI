@@ -28,7 +28,7 @@ def test_root_layout_has_mobile_viewport_metadata():
 
 
 def test_version_is_synchronized_for_current_release():
-    assert "app_version: str = '25.9.16.7.2.64.12'" in (ROOT / 'backend/app/core/config.py').read_text()
-    assert '"version": "25.9.16.7.2.64.12"' in (ROOT / 'frontend/package.json').read_text()
-    assert '25.9.16.7.2.64.12' in (ROOT / 'docker-compose.prod.yml').read_text()
-    assert "'25.9.16.7.2.64.12'" in (ROOT / 'frontend/components/layout/AppShell.tsx').read_text()
+    assert "app_version: str = '25.9.16.7.2.64.13'" in (ROOT / 'backend/app/core/config.py').read_text()
+    assert '"version": "25.9.16.7.2.64.13"' in (ROOT / 'frontend/package.json').read_text()
+    assert '25.9.16.7.2.64.13' in (ROOT / 'docker-compose.prod.yml').read_text()
+    assert "'25.9.16.7.2.64.13'" in (ROOT / 'frontend/components/layout/AppShell.tsx').read_text()

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -34,7 +34,7 @@ def test_v50_backend_exposes_read_only_evidence_pack():
     assert 'Không recalculate trong request.' in body
     assert 'Không mutate dữ liệu.' in body
     assert 'signals_only_not_violation' in body
-    assert "getattr(settings, 'app_version', '25.9.16.7.2.64.12')" in body
+    assert "getattr(settings, 'app_version', '25.9.16.7.2.64.13')" in body
 
 
 def test_v50_script_exports_json_and_markdown_evidence():
@@ -63,4 +63,4 @@ def test_v50_frontend_surfaces_evidence_pack_panel():
     assert 'Gói bằng chứng UAT' in page
     assert 'analytics-evidence-pack-panel' in page
     assert 'Read-only:' in page
-    assert 'v25.9.16.7.2.64.12 — UAT evidence pack' in css
+    assert 'v25.9.16.7.2.64.13 — UAT evidence pack' in css

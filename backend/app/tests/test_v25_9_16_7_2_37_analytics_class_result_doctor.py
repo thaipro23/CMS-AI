@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -67,7 +67,7 @@ def test_v37_frontend_has_data_status_panel_and_manual_safe_actions():
     assert 'classDoctor?.tracking_event_count' in page
     assert 'classDoctor?.video_progress_count' in page
     assert 'classDoctor?.session_progress_count' in page
-    assert 'v25.9.16.7.2.64.12 — bank table production ux' in css
+    assert 'v25.9.16.7.2.64.13 — bank table production ux' in css
 
 
 def test_v37_changelog_order_and_no_migration():

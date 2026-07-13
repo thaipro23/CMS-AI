@@ -1052,6 +1052,29 @@ export type BankRelease = {
   updated_at: string
 }
 
+export type BankReleasePreviewQuestion = {
+  release_question_id: string
+  question_id: string
+  question_text: string
+  option_a?: string | null
+  option_b?: string | null
+  option_c?: string | null
+  option_d?: string | null
+  correct_answer: string
+  difficulty: string
+  concept_title?: string | null
+  question_family_id?: string | null
+  included_at?: string | null
+}
+
+export type BankReleasePreview = {
+  release: BankRelease
+  frozen_snapshot: boolean
+  total_questions: number
+  counts: Record<string, number>
+  questions: BankReleasePreviewQuestion[]
+}
+
 export type EdxCourseMapping = {
   id: string
   openedx_course_id: string
@@ -1211,6 +1234,20 @@ export type BankQuestionListItem = {
   question_revision_no?: number | null
   is_carry_over?: boolean | null
   created_at: string
+}
+
+
+
+export type BankQuestionImportPreview = {
+  ok: boolean
+  preview_token: string
+  total_rows: number
+  valid_count: number
+  error_count: number
+  preview_rows: Array<Record<string, any>>
+  errors: Array<{ row?: number; field?: string; code?: string; message?: string }>
+  can_commit: boolean
+  message: string
 }
 
 export type BankVersionQuestion = {

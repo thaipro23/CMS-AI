@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -49,7 +49,7 @@ def test_v41_bank_compact_tables_use_inline_actions_not_hidden_absolute_menu():
 
 def test_v41_css_makes_compact_table_actions_visible_inside_action_column():
     css = read('frontend/app/globals.css')
-    assert 'v25.9.16.7.2.64.12 — bank compact row actions visible fix' in css
+    assert 'v25.9.16.7.2.64.13 — bank compact row actions visible fix' in css
     assert '.bank-multipage .bank-compact-data-table .entity-actions-inline' in css
     assert '.bank-multipage .bank-compact-data-table .entity-actions-placeholder' in css
     assert '.btn.danger-soft' in css

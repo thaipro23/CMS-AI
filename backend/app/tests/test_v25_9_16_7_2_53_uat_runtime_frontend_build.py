@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def _read(path: str) -> str:
@@ -73,6 +73,6 @@ def test_v53_claude_review_pack_includes_runtime_build_evidence() -> None:
 def test_v53_docs_and_changelog_are_current() -> None:
     assert _read('CHANGELOG.md').startswith(f'## v{VERSION} — Performance Load Hardening')
     assert f'v{VERSION} — Performance Load Hardening' in _read('README.md')
-    assert 'ai_server_openedx_v25_9_16_7_2_64_12' in _read('RUN_CURRENT.md')
-    assert 'Performance Load Hardening' in _read('docs/RELEASE_v25.9.16.7.2.64.12_PERFORMANCE_LOAD_HARDENING.md')
-    assert 'Claude Code Review Handoff — v25.9.16.7.2.64.12' in _read('docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_57.md')
+    assert 'ai_server_openedx_v25_9_16_7_2_64_13' in _read('RUN_CURRENT.md')
+    assert 'Performance Load Hardening' in _read('docs/RELEASE_v25.9.16.7.2.64.13_PERFORMANCE_LOAD_HARDENING.md')
+    assert 'Claude Code Review Handoff — v25.9.16.7.2.64.13' in _read('docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_57.md')

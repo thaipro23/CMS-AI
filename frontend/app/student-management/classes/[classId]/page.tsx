@@ -333,7 +333,7 @@ function ClassDetailContent() {
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const canRunFullCmsSync = can('manage_training_deadlines') || can('manage_settings')
-  const canManageAssignmentScores = false // v25.9.16.7.2.64.12: Assignment score entry is handled by an external system.
+  const canManageAssignmentScores = false // v25.9.16.7.2.64.13: Assignment score entry is handled by an external system.
   const [classInfo, setClassInfo] = useState<AcademicClass | null>(null)
   const [students, setStudents] = useState<AcademicStudent[]>([])
   const [summary, setSummary] = useState<AcademicMappingSummary | null>(null)

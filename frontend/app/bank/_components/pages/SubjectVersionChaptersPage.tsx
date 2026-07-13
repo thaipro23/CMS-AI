@@ -1,268 +1,74 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAppContext } from '../../../../context/AppContext'
-import {
-  BankRelease,
-  BankDashboardOverview,
-  BankSearchResult,
-  DepartmentSummary,
-  SubjectSummary,
-  SubjectVersionSummary,
-  ChapterSummary,
-  BankGeneratePreview,
-  BankReleaseReadiness,
-  BankVersion,
-  BankVersionDiffPreview,
-  BankVersionQuestion,
-  CourseQuizInstance,
-  AuditLogRow,
-  Job,
-  Department,
-  MaterialChunk,
-  MaterialVersion,
-  Subject,
-  SubjectChapter,
-  SubjectOffering,
-} from '../../../../types'
-import {
-  bulkReviewBankQuestions,
-  createBankRelease,
-  createBankVersion,
-  createDepartment,
-  createSubject,
-  createSubjectChapter,
-  createSubjectOffering,
-  deleteDepartment,
-  deleteSubject,
-  deleteSubjectChapter,
-  deleteSubjectOffering,
-  deleteMaterialVersion,
-  generateFromBankVersion,
-  getBankDashboardOverview,
-  getAuditLogs,
-  getJobs,
-  searchBankDashboard,
-  getDepartmentSummaries,
-  getSubjectSummaries,
-  getSubjectVersionSummaries,
-  getChapterSummaries,
-  getBankMaterialChunks,
-  getBankReleaseReadiness,
-  getBankReleases,
-  getBankVersionQuestion,
-  getBankVersionQuestionPage,
-  getBankVersions,
-  getCourseQuizInstances,
-  getDepartments,
-  getDepartment,
-  getMaterialVersions,
-  getSubjectChapter,
-  getSubjectChapters,
-  getSubjectOffering,
-  getSubjectOfferings,
-  getSubject,
-  getSubjects,
-  markBankDiffResolved,
-  previewBankVersionDiff,
-  previewGenerateFromBankVersion,
-  publishBankRelease,
-  reviewBankQuestion,
-  rollbackCourseQuizInstance,
-  uploadBankMaterial,
-  updateBankQuestion,
-  updateDepartment,
-  updateSubject,
-  updateSubjectChapter,
-  updateSubjectOffering,
-} from '../../../../lib/api'
-import {
-  TERMS,
-  chapterDisplayName,
-  normalizeLessonInput,
-  buildChapterTitle,
-  statusLabel,
-  statusClass,
-  useBankData,
-  useAsyncMessage,
-  Breadcrumb,
-  Toolbar,
-  SearchActionBar,
-  BankTableToolbar,
-  BankTableStatusFilter,
-  bankStatusMatches,
-  Modal,
-  ConfirmDialog,
-  EntityActions,
-  matchesSearch,
-  reviewStatusText,
-  reviewStatusClass,
-  emptyReviewStats,
-  StatLine,
-  QuickSearchBox,
-  questionStats,
-  nextReleaseText,
-  bankAnswerRows,
-  bankQuestionErrorMessage,
-  isQuestionWaitingForReview,
-  BankQuestionEditForm,
-  BankChartRow,
-  toBankQuestionEditForm,
-  BankBarChart,
-  BankStackedChart,
-  countRows,
-  auditActionText,
-} from '../shared'
+import { useEffect, useMemo, useState } from 'react'
+import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { useUrlTableState } from '../../../../hooks/useUrlTableState'
+import type { ChapterSummary, Department, Subject, SubjectChapter, SubjectOffering } from '../../../../types'
+import { createSubjectChapter, deleteSubjectChapter, getChapterSummaries, getDepartment, getSubject, getSubjectOffering, updateSubjectChapter } from '../../../../lib/api'
+import { BankTableStatusFilter, BankTableToolbar, Breadcrumb, ConfirmDialog, EntityActions, Modal, QuickSearchBox, bankStatusMatches, buildChapterTitle, chapterDisplayName, emptyReviewStats, matchesSearch, normalizeLessonInput, reviewStatusText, useAsyncMessage, useBankData } from '../shared'
 
 export function SubjectVersionChaptersPage({ versionId }: { versionId: string }) {
   const { headers, can } = useBankData()
   const { message, busy, run } = useAsyncMessage()
-  const [departments, setDepartments] = useState<Department[]>([])
-  const [subjects, setSubjects] = useState<Subject[]>([])
-  const [offerings, setOfferings] = useState<SubjectOffering[]>([])
+  const { state: tableState, update: updateTableState } = useUrlTableState({ status: 'all', pageSize: 20, density: 'compact' })
+  const [department, setDepartment] = useState<Department | null>(null)
+  const [subject, setSubject] = useState<Subject | null>(null)
+  const [offering, setOffering] = useState<SubjectOffering | null>(null)
   const [summaries, setSummaries] = useState<ChapterSummary[]>([])
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<BankTableStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
   const [chapterInput, setChapterInput] = useState('')
   const [editing, setEditing] = useState<SubjectChapter | null>(null)
   const [editLesson, setEditLesson] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<SubjectChapter | null>(null)
-  const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState('')
 
   const load = async () => {
-    const offering = await getSubjectOffering(headers, versionId)
-    const [subject, nextSummaries] = await Promise.all([
-      getSubject(headers, offering.subject_id),
-      getChapterSummaries(headers, versionId),
-    ])
-    const department = await getDepartment(headers, subject.department_id)
-    setDepartments([department]); setSubjects([subject]); setOfferings([offering]); setSummaries(nextSummaries)
+    const nextOffering = await getSubjectOffering(headers, versionId)
+    const [nextSubject, nextSummaries] = await Promise.all([getSubject(headers, nextOffering.subject_id), getChapterSummaries(headers, versionId)])
+    const nextDepartment = await getDepartment(headers, nextSubject.department_id)
+    setOffering(nextOffering); setSubject(nextSubject); setDepartment(nextDepartment); setSummaries(nextSummaries)
   }
   useEffect(() => { load().catch(() => null) }, [versionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const offering = offerings.find((item) => item.id === versionId)
-  const subject = subjects.find((item) => item.id === offering?.subject_id)
-  const department = departments.find((item) => item.id === subject?.department_id)
-  const visible = summaries.filter(({ chapter, stats }) => matchesSearch(chapterDisplayName(chapter), search) && bankStatusMatches(stats, statusFilter))
+  const statusFilter = tableState.status as BankTableStatusFilter
+  const filtered = summaries.filter(({ chapter, stats }) => matchesSearch(chapterDisplayName(chapter), tableState.q) && bankStatusMatches(stats, statusFilter))
+  const totalPages = Math.max(1, Math.ceil(filtered.length / tableState.pageSize))
+  const safePage = Math.min(tableState.page, totalPages)
+  const pageRows = filtered.slice((safePage - 1) * tableState.pageSize, safePage * tableState.pageSize)
 
-  const openEditChapter = (chapter: SubjectChapter) => {
-    setEditing(chapter)
-    setEditLesson(normalizeLessonInput(chapterDisplayName(chapter)))
-  }
-  const saveEditChapter = () => {
-    if (!editing) return
-    const nextTitle = buildChapterTitle(editLesson) || editLesson.trim()
-    run(async () => {
-      await updateSubjectChapter(headers, editing.id, { title: nextTitle })
-      setEditing(null)
-    }, 'Đã sửa bài', load)
-  }
-  const confirmDeleteChapter = async () => {
-    if (!deleteTarget) return
-    setDeleteBusy(true)
-    setDeleteError('')
-    try {
-      await deleteSubjectChapter(headers, deleteTarget.id)
-      setDeleteTarget(null)
-      await load()
-      // One extra refresh avoids a stale summary/cache row right after delete.
-      window.setTimeout(() => { load().catch(() => null) }, 250)
-    } catch (error) {
-      setDeleteTarget(null)
-      setDeleteError(error instanceof Error ? error.message : 'Không thể xóa bài/chapter')
-    } finally {
-      setDeleteBusy(false)
-    }
-  }
+  const columns = useMemo<EnterpriseTableColumn<ChapterSummary>[]>(() => [
+    { key: 'stt', header: 'STT', width: 64, minWidth: 64, sticky: 'left', stickyOffset: 0, hideable: false, className: 'stt-cell', render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
+    { key: 'chapter', header: 'Bài/Chapter', minWidth: 280, sticky: 'left', stickyOffset: 64, hideable: false, render: ({ chapter }) => <Link className="bank-table-link" href={`/bank/chapters/${chapter.id}`}><b>{chapterDisplayName(chapter)}</b><small>{chapter.title || chapterDisplayName(chapter)}</small></Link> },
+    { key: 'status', header: 'Trạng thái', minWidth: 165, hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); const published = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0); return <span className={`bank-row-status status-${published ? 'published' : (stats.status || 'empty')}`}>{published ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span> } },
+    { key: 'materials', header: 'Tài liệu', align: 'right', hideable: true, render: ({ stats }) => stats?.material_count || 0 },
+    { key: 'questions', header: 'Tổng câu', align: 'right', hideable: true, render: ({ stats }) => `${stats?.total_questions || 0}/${stats?.question_limit || 100}` },
+    { key: 'approved', header: 'Đã duyệt', align: 'right', hideable: true, render: ({ stats }) => stats?.approved_count || 0 },
+    { key: 'unresolved', header: 'Chưa duyệt/lỗi', align: 'right', hideable: true, render: ({ stats }) => stats?.unresolved_count || 0 },
+    { key: 'release', header: 'Bộ đề', minWidth: 150, hideable: true, render: ({ stats }) => { const published = Boolean(stats?.is_published || stats?.release_status === 'published' || (stats?.published_release_count || 0) > 0); return published ? 'Đã đưa lên CMS' : stats?.ready_to_release ? 'Sẵn sàng chốt' : stats?.release_count ? 'Đã chốt' : 'Chưa chốt' } },
+    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ chapter, stats }) => { const published = Boolean(stats?.is_published || stats?.release_status === 'published' || (stats?.published_release_count || 0) > 0); return <EntityActions variant="inline" canManage={can('subject.update') && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(chapter); setEditLesson(normalizeLessonInput(chapterDisplayName(chapter))) }} onDelete={() => setDeleteTarget(chapter)} /> } },
+  ], [can, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
+    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Phiên bản môn' }, { label: 'Bài/Chapter' }]} />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
-      <BankTableToolbar search={search} setSearch={setSearch} statusFilter={statusFilter} setStatusFilter={setStatusFilter} resultCount={visible.length} totalCount={summaries.length} placeholder="Tìm bài, Final test hoặc Assignment" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
-      <div className="responsive-table-wrap bank-compact-table-wrap">
-        <table className="ops-data-table bank-compact-data-table bank-production-table bank-chapter-table">
-          <thead><tr><th>STT</th><th>Bài</th><th>Trạng thái</th><th>Tài liệu</th><th>Tổng câu</th><th>Đã duyệt</th><th>Chưa duyệt/lỗi</th><th>Bộ đề</th><th>Thao tác</th></tr></thead>
-          <tbody>{visible.map(({ chapter, stats: rawStats }, index) => {
-            const stats = rawStats || emptyReviewStats()
-            const hasPublished = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0)
-            return <tr key={chapter.id}>
-              <td className="stt-cell">{index + 1}</td>
-              <td><Link className="bank-table-link" href={`/bank/chapters/${chapter.id}`}><b>{chapterDisplayName(chapter)}</b><small>{chapter.title || chapterDisplayName(chapter)}</small></Link></td>
-              <td><span className={`bank-row-status status-${hasPublished ? 'published' : (stats.status || 'empty')}`}>{hasPublished ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span></td>
-              <td>{stats.material_count || 0}</td>
-              <td>{stats.total_questions || 0}/{stats.question_limit || 100}</td>
-              <td>{stats.approved_count || 0}</td>
-              <td>{stats.unresolved_count || 0}</td>
-              <td>{hasPublished ? 'Đã đưa lên CMS' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'}</td>
-              <td><EntityActions variant="inline" canManage={can('subject.update') && !hasPublished} lockedLabel={hasPublished ? 'Đã khóa' : 'Không có quyền'} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} /></td>
-            </tr>
-          })}{!visible.length ? <tr><td colSpan={9}><div className="empty-state">Chưa có bài phù hợp.</div></td></tr> : null}</tbody>
-        </table>
-      </div>
+      <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong phiên bản môn'}</h2><p className="helper">Bài/Chapter là cấp cuối trước danh sách câu hỏi. Release và Quiz được thao tác từ workspace của từng bài.</p></div></div>
+      <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm bài, Final test hoặc Assignment" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
+      <EnterpriseDataTable tableId={`bank-chapters-${versionId}`} caption="Danh sách bài/Chapter" rows={pageRows} columns={columns} rowKey={({ chapter }) => chapter.id} density={tableState.density} onDensityChange={(density) => updateTableState({ density }, { resetPage: false })} page={safePage} pageSize={tableState.pageSize} total={filtered.length} totalPages={totalPages} onPageChange={(page) => updateTableState({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => updateTableState({ pageSize, page: 1 }, { resetPage: false })} label="bài" emptyTitle={tableState.q || statusFilter !== 'all' ? 'Không có bài phù hợp' : 'Chưa có bài/Chapter'} emptyDescription="Thêm bài đầu tiên cho phiên bản môn này." />
     </section>
 
-    <Modal open={Boolean(editing)} title="Sửa bài" onClose={() => setEditing(null)}>
-      <div className="mini-form">
-        <label className="field-label" htmlFor="chapter-edit-lesson-input">Tên bài / Final test / Assignment:</label>
-        <input id="chapter-edit-lesson-input" className="input" value={editLesson} onChange={(event) => setEditLesson(event.target.value)} placeholder="1, 2, 1.1, Final test, Assignment..." />
-        <p className="helper">Nhập số sẽ tự lưu thành “Bài 1.2”. Nhập “Final test” hoặc “Assignment” sẽ giữ nguyên tên đặc biệt.</p>
-        <div className="modal-actions">
-          <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !normalizeLessonInput(editLesson)} onClick={saveEditChapter}>Lưu thay đổi</button>
-        </div>
-      </div>
-    </Modal>
-    <ConfirmDialog
-      open={Boolean(deleteTarget)}
-      title={`Xóa ${deleteTarget ? chapterDisplayName(deleteTarget) : 'bài'}?`}
-      description={<p>Chỉ xóa được khi bài chưa có tài liệu thật, câu hỏi, release, mapping hoặc quiz. Bank version rỗng do hệ thống tự tạo sẽ được dọn tự động.</p>}
-      confirmLabel="Xác nhận xóa"
-      danger
-      busy={busy || deleteBusy}
-      onClose={() => setDeleteTarget(null)}
-      onConfirm={confirmDeleteChapter}
-    />
-
-    <Modal open={Boolean(deleteError)} title="Không thể xóa bài/chapter" onClose={() => setDeleteError('')}>
-      <div className="mini-form">
-        <div className="alert danger">{deleteError}</div>
-        <p className="helper">Kiểm tra lại tài liệu, câu hỏi, release, mapping hoặc quiz đang liên kết với bài này.</p>
-        <div className="modal-actions">
-          <button className="btn" type="button" onClick={() => setDeleteError('')}>Đã hiểu</button>
-        </div>
-      </div>
-    </Modal>
-
-    <Modal open={createOpen} title="Thêm bài" onClose={() => setCreateOpen(false)}>
-      <div className="mini-form">
-        <label className="field-label" htmlFor="chapter-lesson-input">Tên bài / Final test / Assignment:</label>
-        <input id="chapter-lesson-input" className="input" value={chapterInput} onChange={(event) => setChapterInput(event.target.value)} placeholder="1, 2, 1.1, Final test, Assignment..." />
-        <p className="helper">Nhập số để tạo “Bài 1.2”. Nhập “Final test” hoặc “Assignment” để tạo đúng tên đặc biệt.</p>
-        <div className="modal-actions">
-          <button className="btn secondary" type="button" onClick={() => { setChapterInput(''); setCreateOpen(false) }}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !offering || !normalizeLessonInput(chapterInput)} onClick={() => run(async () => {
-            if (!offering) return
-            const nextNo = (summaries.reduce((max, item) => Math.max(max, Number(item.chapter.sort_order || item.chapter.chapter_no || 0)), 0) || 0) + 1
-            const title = buildChapterTitle(chapterInput)
-            const created = await createSubjectChapter(headers, { subject_id: offering.subject_id, subject_offering_id: offering.id, title, sort_order: nextNo })
-            setSummaries((current) => {
-              const withoutDuplicate = current.filter((item) => item.chapter.id !== created.id)
-              return [...withoutDuplicate, { chapter: created, stats: emptyReviewStats({ material_count: 0, bank_version_count: 0, release_count: 0, question_limit: 100 }) }].sort((a, b) => Number(a.chapter.sort_order || a.chapter.chapter_no || 0) - Number(b.chapter.sort_order || b.chapter.chapter_no || 0))
-            })
-            setChapterInput(''); setCreateOpen(false)
-            await load()
-            window.setTimeout(() => { load().catch(() => null) }, 500)
-          }, 'Đã thêm bài')}>Tạo bài</button>
-        </div>
-      </div>
-    </Modal>
+    <Modal open={Boolean(editing)} title="Sửa bài" onClose={() => setEditing(null)}><div className="mini-form"><label>Tên bài / Final test / Assignment<input className="input" value={editLesson} onChange={(e) => setEditLesson(e.target.value)} /></label><p className="helper">Nhập số sẽ tự lưu thành “Bài 1.2”. Tên đặc biệt được giữ nguyên.</p><div className="modal-actions"><button className="btn secondary" onClick={() => setEditing(null)}>Hủy</button><button className="btn" disabled={busy || !normalizeLessonInput(editLesson)} onClick={() => { if (!editing) return; const title = buildChapterTitle(editLesson) || editLesson.trim(); run(async () => { await updateSubjectChapter(headers, editing.id, { title }); setEditing(null) }, 'Đã sửa bài', load) }}>Lưu thay đổi</button></div></div></Modal>
+    <ConfirmDialog open={Boolean(deleteTarget)} title={`Xóa ${deleteTarget ? chapterDisplayName(deleteTarget) : 'bài'}?`} description={<p>Chỉ xóa được khi bài chưa có tài liệu thật, câu hỏi, Release, mapping hoặc Quiz.</p>} confirmLabel="Xác nhận xóa" danger busy={busy} onClose={() => setDeleteTarget(null)} onConfirm={async () => {
+      if (!deleteTarget) return
+      try { await deleteSubjectChapter(headers, deleteTarget.id); setDeleteTarget(null); await load() } catch (error) { setDeleteTarget(null); setDeleteError(error instanceof Error ? error.message : 'Không thể xóa bài/chapter') }
+    }} />
+    <Modal open={Boolean(deleteError)} title="Không thể xóa bài/chapter" onClose={() => setDeleteError('')}><div className="mini-form"><div className="alert danger">{deleteError}</div><p className="helper">Kiểm tra tài liệu, câu hỏi, Release, mapping hoặc Quiz đang liên kết.</p><button className="btn" onClick={() => setDeleteError('')}>Đã hiểu</button></div></Modal>
+    <Modal open={createOpen} title="Thêm bài" onClose={() => setCreateOpen(false)}><div className="mini-form"><label>Tên bài / Final test / Assignment<input className="input" value={chapterInput} onChange={(e) => setChapterInput(e.target.value)} /></label><p className="helper">Nhập số để tạo “Bài 1.2”; tên đặc biệt được giữ nguyên.</p><div className="modal-actions"><button className="btn secondary" onClick={() => setCreateOpen(false)}>Hủy</button><button className="btn" disabled={busy || !offering || !normalizeLessonInput(chapterInput)} onClick={() => run(async () => {
+      if (!offering) return
+      const nextNo = (summaries.reduce((max, item) => Math.max(max, Number(item.chapter.sort_order || item.chapter.chapter_no || 0)), 0) || 0) + 1
+      await createSubjectChapter(headers, { subject_id: offering.subject_id, subject_offering_id: offering.id, title: buildChapterTitle(chapterInput), sort_order: nextNo }); setChapterInput(''); setCreateOpen(false)
+    }, 'Đã thêm bài', load)}>Tạo bài</button></div></div></Modal>
   </div>
 }
-

@@ -1,4 +1,4 @@
-// v25.9.16.7.2.64.12 — split readiness API facade.
+// v25.9.16.7.2.64.13 — split readiness API facade.
 // The legacy frontend/lib/api.ts exports remain intact. New readiness/ops code
 // should import from this facade so the monolithic API client stops growing.
 export {

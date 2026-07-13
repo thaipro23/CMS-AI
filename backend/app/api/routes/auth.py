@@ -117,7 +117,7 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
     """
     data = _decode_bridge_ticket(payload.ticket)
     is_super_admin = bool(data.get('is_superuser') or data.get('is_super_admin'))
-    # v25.9.16.7.2.64.12: Open edX staff/course author is not an AI legacy role.
+    # v25.9.16.7.2.64.13: Open edX staff/course author is not an AI legacy role.
     # Only Open edX superuser/super_admin may receive legacy role=admin. All
     # other users receive viewer and are authorized through business RBAC/AP
     # assignments only.

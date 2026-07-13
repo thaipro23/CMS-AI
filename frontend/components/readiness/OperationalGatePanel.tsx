@@ -20,7 +20,7 @@ function toneClass(tone: OperationalGateTone = 'neutral') {
 
 /**
  * Shared enterprise-style panel for security/performance/RC/pilot gates.
- * v25.9.16.7.2.64.12 introduces this component so future readiness UI does not
+ * v25.9.16.7.2.64.13 introduces this component so future readiness UI does not
  * keep expanding analytics/learning/page.tsx.
  */
 export function OperationalGatePanel({ title, subtitle, tone = 'neutral', status, counters = [], children }: OperationalGatePanelProps) {

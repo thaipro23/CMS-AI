@@ -33,6 +33,7 @@ import {
   BankRelease,
   BankReleasePublishResult,
   BankReleasePublishAudit,
+  BankReleasePreview,
   EdxCourseMapping,
   MappingValidation,
   EdxCourseChapterMapping,
@@ -44,6 +45,7 @@ import {
   BankGenerateResult,
   BankVersionQuestion,
   BankQuestionListItem,
+  BankQuestionImportPreview,
   BankVersionDiffPreview,
   BankMaterialRecheckResult,
   BankCarryOverResult,
@@ -1767,6 +1769,12 @@ export async function createBankRelease(
 }
 
 
+export async function getBankReleasePreview(headers: HeadersInit, releaseId: string): Promise<BankReleasePreview> {
+  return parseResponse<BankReleasePreview>(
+    await apiFetch(`${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/preview`, { credentials: "include", headers }),
+  );
+}
+
 export async function getBankReleasePublishAudit(
   headers: HeadersInit,
   releaseId: string,
@@ -2174,6 +2182,84 @@ function bankQuestionListItemToQuestion(
   };
 }
 
+
+export async function getBankVersionQuestionOffsetPage(
+  headers: HeadersInit,
+  bankVersionId: string,
+  options: {
+    statusFilter?: string;
+    difficulty?: string;
+    search?: string;
+    sort?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+): Promise<PaginatedResponse<BankVersionQuestion>> {
+  const params = new URLSearchParams();
+  if (options.statusFilter && options.statusFilter !== "all") params.set("status_filter", options.statusFilter);
+  if (options.difficulty && options.difficulty !== "all") params.set("difficulty", options.difficulty);
+  if (options.search?.trim()) params.set("search", options.search.trim());
+  if (options.sort?.trim()) params.set("sort", options.sort.trim());
+  params.set("page", String(Math.max(1, Number(options.page || 1))));
+  params.set("page_size", String(Math.max(1, Math.min(Number(options.pageSize || 20), 100))));
+  const page = await parseResponse<PaginatedResponse<BankQuestionListItem>>(
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/page?${params.toString()}`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+  return { ...page, items: (page.items || []).map(bankQuestionListItemToQuestion) };
+}
+
+export async function exportBankVersionQuestions(
+  headers: HeadersInit,
+  bankVersionId: string,
+  options: { statusFilter?: string; difficulty?: string; search?: string; questionIds?: string[] } = {},
+): Promise<Blob> {
+  const params = new URLSearchParams();
+  if (options.statusFilter && options.statusFilter !== "all") params.set("status_filter", options.statusFilter);
+  if (options.difficulty && options.difficulty !== "all") params.set("difficulty", options.difficulty);
+  if (options.search?.trim()) params.set("search", options.search.trim());
+  if (options.questionIds?.length) params.set("question_ids", options.questionIds.join(","));
+  const response = await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/export.csv?${params.toString()}`, { credentials: "include", headers });
+  if (!response.ok) throw new Error((await response.text()) || response.statusText);
+  return response.blob();
+}
+
+export async function downloadBankQuestionImportTemplate(headers: HeadersInit, bankVersionId: string): Promise<Blob> {
+  const response = await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/import-template.xlsx`, { credentials: "include", headers });
+  if (!response.ok) throw new Error((await response.text()) || response.statusText);
+  return response.blob();
+}
+
+export async function previewBankQuestionImport(headers: HeadersInit, bankVersionId: string, file: File): Promise<BankQuestionImportPreview> {
+  const form = new FormData();
+  form.append("file", file);
+  return parseResponse<BankQuestionImportPreview>(
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/import-preview`, {
+      method: "POST",
+      headers: withoutContentType(headers),
+      body: form,
+    }),
+  );
+}
+
+export async function downloadBankQuestionImportErrors(headers: HeadersInit, bankVersionId: string, previewToken: string): Promise<Blob> {
+  const response = await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/import-errors/${encodeURIComponent(previewToken)}.xlsx`, { credentials: "include", headers });
+  if (!response.ok) throw new Error((await response.text()) || response.statusText);
+  return response.blob();
+}
+
+export async function enqueueBankQuestionImport(headers: HeadersInit, bankVersionId: string, previewToken: string): Promise<BankOperationJobQueued> {
+  return parseResponse<BankOperationJobQueued>(
+    await apiFetch(`${API}/question-bank-v2/bank-versions/${encodeURIComponent(bankVersionId)}/questions/import-job`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ preview_token: previewToken }),
+    }),
+  );
+}
+
 export async function getBankVersionQuestionPage(
   headers: HeadersInit,
   bankVersionId: string,
@@ -2501,6 +2587,10 @@ export async function bulkReviewBankQuestions(
     action: "approve" | "reject" | "back_to_review";
     question_ids?: string[];
     approve_all_pending?: boolean;
+    apply_to_filtered?: boolean;
+    status_filter?: string;
+    difficulty?: string;
+    search?: string;
     note?: string;
   },
 ) {

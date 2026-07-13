@@ -244,7 +244,7 @@ class LearningAnalyticsOperationsWorkflowService:
                 seen_actions.add(action)
                 next_actions.append(action)
         return {
-            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.12'),
+            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.13'),
             'sla_status': status_value,
             'summary_label': 'SLA ổn định' if status_value == 'OK' else ('SLA bị chặn' if status_value == 'BLOCKED' else 'SLA cần theo dõi'),
             'generated_at': now.isoformat(),
@@ -445,7 +445,7 @@ class LearningAnalyticsOperationsWorkflowService:
         ]
 
         return {
-            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.12'),
+            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.13'),
             'pilot_status': pilot_status,
             'ready_for_pilot': pilot_status in {'PASS', 'PASS_WITH_WARNINGS'},
             'ready_for_broad_production': bool(production.get('ready_for_production')) and pilot_status == 'PASS',
@@ -561,7 +561,7 @@ class LearningAnalyticsOperationsWorkflowService:
                 next_actions.append(action_text)
 
         return {
-            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.12'),
+            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.13'),
             'artifact_type': 'uat_evidence_pack',
             'evidence_status': evidence_status,
             'generated_at': generated_at.isoformat(),

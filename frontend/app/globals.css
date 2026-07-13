@@ -1,6 +1,6 @@
 @import '../styles/enterprise-ui.css';
 @import '../styles/ops-readiness.css';
-/* v25.9.16.7.2.64.12 compatibility markers: ops/readiness panel styles live in frontend/styles/ops-readiness.css.
+/* v25.9.16.7.2.64.13 compatibility markers: ops/readiness panel styles live in frontend/styles/ops-readiness.css.
    .analytics-performance-readiness-panel .analytics-security-readiness-panel .analytics-release-candidate-panel .analytics-pilot-operations-panel .ops-gate-panel */
 * { box-sizing: border-box; }
 :root {
@@ -568,10 +568,10 @@ code { padding: 1px 5px; border-radius: 6px; }
 
 /* v25.9.13.13 sync page: compact course picker, no topbar on /sync */
 .compact-content-shell { max-width: 1500px; padding-top: 12px; }
-.sync-course-control-card { display: grid; grid-template-columns: minmax(280px, 0.55fr) minmax(0, 1.45fr); gap: 12px; align-items: end; }
+.sync-course-control-card { display: grid; grid-template-columns: minmax(280px, 0.55fr) minmax(0, 1.45fr); gap: 12px; align-items: flex-end; }
 .sync-course-current { display: grid; gap: 6px; min-width: 0; }
 .sync-course-current b { font-size: 14px; line-height: 1.3; word-break: break-all; }
-.sync-course-controls { display: grid; grid-template-columns: minmax(260px, 1.2fr) minmax(210px, 0.85fr) minmax(260px, 1.15fr) auto; gap: 10px; align-items: end; }
+.sync-course-controls { display: grid; grid-template-columns: minmax(260px, 1.2fr) minmax(210px, 0.85fr) minmax(260px, 1.15fr) auto; gap: 10px; align-items: flex-end; }
 .sync-course-actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; justify-content: flex-end; }
 .sync-course-actions .btn { white-space: nowrap; }
 @media(max-width: 1280px){
@@ -955,7 +955,7 @@ label { margin: 5px 0 4px; font-size: 12px; }
 .bank-column { min-height: 360px; }
 .bank-column.wide { min-width: 0; }
 .mini-form { display: grid; gap: 8px; margin: 10px 0 14px; }
-.mini-form.version-form { grid-template-columns: minmax(130px, 0.7fr) minmax(180px, 1fr) auto; align-items: end; }
+.mini-form.version-form { grid-template-columns: minmax(130px, 0.7fr) minmax(180px, 1fr) auto; align-items: flex-end; }
 .entity-list { display: grid; gap: 8px; max-height: 430px; overflow: auto; padding-right: 4px; }
 .entity-list.horizontal { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); max-height: none; }
 .entity-list.compact-list { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
@@ -971,7 +971,7 @@ label { margin: 5px 0 4px; font-size: 12px; }
 .no-margin { margin: 0; }
 .mini-input { max-width: 120px; }
 .small-chunk-list { grid-template-columns: 1fr; max-height: 330px; }
-.bank-quiz-page .inline-form.compact-form { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: end; }
+.bank-quiz-page .inline-form.compact-form { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: flex-end; }
 @media(max-width: 1180px){
   .bank-browser-grid { grid-template-columns: 1fr; }
   .workspace-grid { grid-template-columns: 1fr; }
@@ -985,7 +985,7 @@ label { margin: 5px 0 4px; font-size: 12px; }
 .bank-multipage .breadcrumb-row em { font-style: normal; color: #94a3b8; margin-left: 6px; }
 .compact-page-header { align-items: flex-start; }
 .multipage-list .link-card { text-decoration: none; color: inherit; min-height: 112px; }
-.version-create-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: end; }
+.version-create-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: flex-end; }
 .version-create-grid label, .three-col-form { display: grid; gap: 6px; }
 .version-create-grid label span { font-size: 12px; font-weight: 700; color: #64748b; }
 .three-col-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2133,7 +2133,7 @@ code {
   display: grid;
   grid-template-columns: repeat(3, minmax(170px, 1fr)) auto auto;
   gap: 10px;
-  align-items: end;
+  align-items: flex-end;
   border: 1px solid var(--bank-line);
   background: #fff;
   border-radius: 16px;
@@ -3967,7 +3967,7 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
 .small-empty { padding: 12px; font-size: 13px; }
 .history-action-panel { padding: 18px; }
 .history-action-buttons { justify-content: flex-end; flex-wrap: wrap; }
-.modal-filter-bar { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(180px, 240px) auto; gap: 12px; align-items: end; margin-bottom: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 16px; background: var(--neutral-50); }
+.modal-filter-bar { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(180px, 240px) auto; gap: 12px; align-items: flex-end; margin-bottom: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 16px; background: var(--neutral-50); }
 .modal-filter-bar label { display: grid; gap: 6px; font-weight: 700; font-size: 13px; color: var(--text); }
 @media (max-width: 760px) { .modal-filter-bar { grid-template-columns: 1fr; } .history-action-buttons { justify-content: stretch; } .history-action-buttons .btn { width: 100%; justify-content: center; } }
 
@@ -4247,7 +4247,7 @@ label { color: var(--ds-text-2); font-size: 13px; font-weight: 800; }
   display: grid;
   grid-template-columns: minmax(130px, .5fr) minmax(200px, .8fr) minmax(200px, .9fr) minmax(210px, .9fr) minmax(250px, 1.15fr);
   gap: 10px;
-  align-items: end;
+  align-items: flex-end;
   margin: 10px 0 12px;
   padding: 12px;
   border: 1px solid rgba(148, 163, 184, .22);
@@ -5398,7 +5398,7 @@ label { color: #334155; font-size: 12px; letter-spacing: .01em; }
   display: grid;
   grid-template-columns: minmax(120px, .75fr) minmax(160px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1.1fr) minmax(260px, 1.8fr);
   gap: 10px;
-  align-items: end;
+  align-items: flex-end;
   padding: 12px;
   border: 1px solid var(--ux-line);
   border-radius: 16px;
@@ -5865,7 +5865,7 @@ label { margin: 0; color: #334155; font-size: 12px; font-weight: 850; }
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr)) minmax(260px, 1.6fr);
   gap: 10px;
-  align-items: end;
+  align-items: flex-end;
 }
 .academic-filter-search { min-width: 260px; }
 
@@ -6559,7 +6559,7 @@ pre, .message-card pre {
 .assignment-workflow-summary > div { border:1px solid var(--border); border-radius:14px; padding:10px 12px; background:var(--surface-muted); display:grid; gap:4px; }
 .assignment-workflow-summary span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
 .assignment-workflow-summary b { font-size:22px; color:var(--text); }
-.assignment-workflow-toolbar { align-items:end; }
+.assignment-workflow-toolbar { align-items: flex-end; }
 .assignment-workflow-table-wrap { max-height:min(62vh, 680px); overflow:auto; }
 .assignment-workflow-table-wrap .data-table th { position:sticky; top:0; z-index:2; background:var(--surface); }
 .assignment-workflow-table-wrap .score-input { width:92px; }
@@ -7771,7 +7771,7 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
 .bank-filter-grid,
 .quiz-filter-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  align-items: end;
+  align-items: flex-end;
 }
 
 .section-head,
@@ -8374,7 +8374,7 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
   }
 }
 
-/* v25.9.16.7.2.64.12 — compact bank table ux + sidebar group taxonomy.
+/* v25.9.16.7.2.64.13 — compact bank table ux + sidebar group taxonomy.
    Bank hierarchy pages can contain hundreds of subjects/versions, so dense tables
    replace large entity cards. Tables keep STT, compact status, and action menus while
    preserving horizontal scrolling inside the table wrapper only. */
@@ -8535,7 +8535,7 @@ html[data-theme='dark'] .chapter-inline-stats > span {
   color: #cbd5e1;
 }
 
-/* v25.9.16.7.2.64.12 — bank compact row actions visible fix.
+/* v25.9.16.7.2.64.13 — bank compact row actions visible fix.
    The v40 compact table moved card actions into table cells, but the old
    absolute-positioned kebab menu could render outside the cell or be clipped by
    the horizontal scroll wrapper. Compact hierarchy tables now use inline row
@@ -8598,7 +8598,7 @@ html[data-theme='dark'] .chapter-inline-stats > span {
   }
 }
 
-/* v25.9.16.7.2.64.12 — bank table production ux.
+/* v25.9.16.7.2.64.13 — bank table production ux.
    Bank hierarchy screens must scale to hundreds of subjects/versions. A compact
    filter toolbar, result count, and sticky action column keep operators oriented
    without returning to large cards. Horizontal overflow stays inside the table
@@ -8616,7 +8616,7 @@ html[data-theme='dark'] .chapter-inline-stats > span {
 }
 .bank-table-toolbar-fields {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   gap: 10px;
   min-width: 0;
   flex: 1 1 auto;

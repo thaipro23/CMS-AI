@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -63,7 +63,7 @@ def test_v43_frontend_replaces_opaque_readiness_banner():
     assert 'primary_blocker?' in types
     assert 'sections?' in types
     assert 'command?: string | null' in types
-    assert 'v25.9.16.7.2.64.12 — analytics production readiness gate repair' in css
+    assert 'v25.9.16.7.2.64.13 — analytics production readiness gate repair' in css
 
 
 def test_v43_no_migration_added():

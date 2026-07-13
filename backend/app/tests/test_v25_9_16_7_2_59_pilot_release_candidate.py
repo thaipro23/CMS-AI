@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -15,8 +15,8 @@ def test_v59_version_sync_and_docs():
     assert f"'{VERSION}'" in text('frontend/components/layout/AppShell.tsx')
     assert text('CHANGELOG.md').startswith(f'## v{VERSION} — Question Bank Quiz Creation/Auto-map Workflow Split')
     assert f'v{VERSION} — Question Bank Quiz Creation/Auto-map Workflow Split' in text('RUN_CURRENT.md')
-    assert 'ai_server_openedx_v25_9_16_7_2_64_12' in text('RUN_CURRENT.md')
-    assert 'RELEASE_v25.9.16.7.2.64.12_QUESTION_BANK_QUIZ_CREATION_AUTOMAP_WORKFLOW_SPLIT.md' in '\n'.join(p.name for p in (ROOT / 'docs').glob('*64*'))
+    assert 'ai_server_openedx_v25_9_16_7_2_64_13' in text('RUN_CURRENT.md')
+    assert 'RELEASE_v25.9.16.7.2.64.13_QUESTION_BANK_QUIZ_CREATION_AUTOMAP_WORKFLOW_SPLIT.md' in '\n'.join(p.name for p in (ROOT / 'docs').glob('*64*'))
 
 
 def test_v59_release_candidate_backend_gate():
@@ -57,7 +57,7 @@ def test_v59_scripts_and_review_pack_gate():
     assert 'RELEASE_CANDIDATE /health/release-candidate' in runtime
     assert 'scripts/pilot-release-candidate-report.sh' in build_gate
     assert 'scripts/pilot-release-candidate-report.sh' in review
-    assert 'GET /api/health/release-candidate' in text('docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_64_12.md')
+    assert 'GET /api/health/release-candidate' in text('docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_64_13.md')
 
 
 def test_v59_no_schema_migration_added():

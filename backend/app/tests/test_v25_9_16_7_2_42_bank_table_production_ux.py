@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
@@ -55,7 +55,7 @@ def test_v42_bank_hierarchy_pages_use_production_toolbar_and_filtered_tables():
 
 def test_v42_css_sticky_stt_and_action_columns_without_page_overflow():
     css = read('frontend/app/globals.css')
-    assert 'v25.9.16.7.2.64.12 — bank table production ux' in css
+    assert 'v25.9.16.7.2.64.13 — bank table production ux' in css
     assert '.bank-table-toolbar' in css
     assert '.bank-table-toolbar-fields' in css
     assert '.bank-table-result-count' in css

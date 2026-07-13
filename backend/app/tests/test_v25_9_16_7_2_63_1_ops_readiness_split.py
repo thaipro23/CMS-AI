@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -13,9 +13,9 @@ def test_v63_1_version_and_release_docs():
     assert f'"version": "{VERSION}"' in text('frontend/package.json')
     assert f'NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{VERSION}}}' in text('docker-compose.prod.yml')
     assert 'Question Bank Quiz Creation/Auto-map Workflow Split' in text('README.md')
-    assert 'RUN_V25_9_16_7_2_64_12.md' in text('README.md')
-    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.12 — Question Bank Quiz Creation/Auto-map Workflow Split')
-    assert (ROOT / 'docs/RELEASE_v25.9.16.7.2.64.12_QUESTION_BANK_QUIZ_CREATION_AUTOMAP_WORKFLOW_SPLIT.md').exists()
+    assert 'RUN_V25_9_16_7_2_64_13.md' in text('README.md')
+    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.13 — Question Bank Quiz Creation/Auto-map Workflow Split')
+    assert (ROOT / 'docs/RELEASE_v25.9.16.7.2.64.13_QUESTION_BANK_QUIZ_CREATION_AUTOMAP_WORKFLOW_SPLIT.md').exists()
 
 
 def test_ops_readiness_page_uses_split_facade_and_shared_panel():

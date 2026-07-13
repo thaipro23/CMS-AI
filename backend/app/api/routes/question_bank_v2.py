@@ -1,11 +1,13 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from math import ceil
 from pathlib import Path
+import json
 import uuid
 
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import and_, func, or_
+from fastapi.responses import Response
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext, get_user_context, require_permission
@@ -19,6 +21,7 @@ from app.models.question_bank import (
     LearningMaterialVersion,
     MaterialChunk,
     QuestionBankRelease,
+    BankReleaseQuestion,
     QuestionBankVersion,
     QuizBlueprint,
     CourseQuizInstance,
@@ -31,6 +34,7 @@ from app.models.question_bank import (
 from app.schemas.question_bank import (
     BankReleaseCreate,
     BankReleaseOut,
+    BankReleasePreviewOut,
     BankReleasePublishOut,
     BankReleasePublishRequest,
     BankReleaseQuizCreateOut,
@@ -76,6 +80,8 @@ from app.schemas.question_bank import (
     BankQuestionReviewOut,
     BankQuestionBulkReviewRequest,
     BankQuestionBulkReviewOut,
+    BankQuestionImportConfirmRequest,
+    BankQuestionImportPreviewOut,
     BankDocumentDiffResolveRequest,
     BankDocumentDiffResolveOut,
     BankReleaseReadinessOut,
@@ -100,13 +106,14 @@ from app.schemas.question_bank import (
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.question_bank_service import VersionedQuestionBankService
 from app.services.question_bank.helpers import safe_upload_filename
+from app.services.question_bank.import_export import build_import_error_workbook, build_import_template, export_questions_csv, parse_import_workbook, persist_preview
 from app.services.business_rbac import BusinessRBACService
 from app.services.bank_dashboard_stats import BankDashboardStatsService
 from app.services.dashboard_analytics import DashboardAnalyticsService
 from app.services.bank_search import BankSearchService
 from app.services.bank_operation_jobs import BankOperationJobService, operation_pending_dir, serialize_job
 from app.services.content_extractor import ContentExtractor
-from app.worker import bank_material_extract_task, bank_generate_questions_task, bank_release_publish_task, bank_quiz_create_task
+from app.worker import bank_material_extract_task, bank_generate_questions_task, bank_release_publish_task, bank_quiz_create_task, bank_question_import_task
 
 router = APIRouter()
 
@@ -548,6 +555,7 @@ def _task_for_bank_operation(operation_type: str):
         'bank_generate': bank_generate_questions_task,
         'release_publish': bank_release_publish_task,
         'quiz_create': bank_quiz_create_task,
+        'question_import': bank_question_import_task,
     }
     return mapping.get(operation_type)
 
@@ -1342,6 +1350,236 @@ def _question_list_item(row) -> dict:
     }
 
 
+
+
+def _bank_question_filters(
+    bank_version_id: str,
+    *,
+    status_filter: str | None = None,
+    difficulty: str | None = None,
+    search: str | None = None,
+):
+    filters = [Question.bank_version_id == bank_version_id]
+    if status_filter and status_filter not in {'all', 'needs_action'}:
+        filters.append(Question.status == status_filter)
+    elif status_filter == 'needs_action':
+        filters.append(Question.status.in_(['pending_review', 'needs_review', 'draft_error']))
+    if difficulty and difficulty != 'all':
+        filters.append(Question.difficulty == difficulty)
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        filters.append(or_(Question.question_text.ilike(pattern), Question.concept_title.ilike(pattern), Question.question_family_id.ilike(pattern)))
+    return filters
+
+
+def _bank_question_order(sort: str | None):
+    key = (sort or 'needs_review').strip().lower()
+    if key == 'difficulty':
+        return (Question.difficulty.asc(), Question.created_at.desc(), Question.id.desc())
+    if key == 'quality_low':
+        return (Question.quality_score.asc(), Question.created_at.desc(), Question.id.desc())
+    if key == 'quality_high':
+        return (Question.quality_score.desc(), Question.created_at.desc(), Question.id.desc())
+    if key == 'oldest':
+        return (Question.created_at.asc(), Question.id.asc())
+    if key == 'newest':
+        return (Question.created_at.desc(), Question.id.desc())
+    status_rank = case(
+        (Question.status == 'draft_error', 0),
+        (Question.status.in_(['pending_review', 'needs_review']), 1),
+        (Question.status == 'rejected', 2),
+        (Question.status == 'approved', 3),
+        (Question.status == 'published', 4),
+        else_=5,
+    )
+    return (status_rank.asc(), Question.quality_score.asc(), Question.created_at.desc(), Question.id.desc())
+
+
+@router.get('/bank-versions/{bank_version_id}/questions/page', response_model=PaginatedOut[BankQuestionListItemOut])
+def page_bank_version_questions(
+    bank_version_id: str,
+    status_filter: str | None = None,
+    difficulty: str | None = None,
+    search: str | None = None,
+    sort: str = Query('needs_review'),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
+    filters = _bank_question_filters(bank_version_id, status_filter=status_filter, difficulty=difficulty, search=search)
+    query = db.query(
+        Question.id,
+        Question.bank_version_id,
+        Question.subject_id,
+        Question.subject_chapter_id,
+        Question.difficulty,
+        Question.status,
+        func.substr(Question.question_text, 1, 520).label('question_text_preview'),
+        func.substr(Question.option_a, 1, 260).label('option_a_preview'),
+        func.substr(Question.option_b, 1, 260).label('option_b_preview'),
+        func.substr(Question.option_c, 1, 260).label('option_c_preview'),
+        func.substr(Question.option_d, 1, 260).label('option_d_preview'),
+        Question.correct_answer,
+        Question.concept_title,
+        Question.question_family_id,
+        Question.variant_no,
+        Question.quality_score,
+        Question.draft_error_reason,
+        Question.is_duplicate,
+        Question.is_retired,
+        Question.previous_question_id,
+        Question.lineage_root_question_id,
+        Question.question_revision_no,
+        Question.is_carry_over,
+        Question.created_at,
+    ).filter(*filters).order_by(*_bank_question_order(sort))
+    page_data = _paginate(query, page=page, page_size=page_size, max_page_size=100)
+    page_data['items'] = [_question_list_item(row) for row in page_data['items']]
+    return page_data
+
+
+@router.get('/bank-versions/{bank_version_id}/questions/export.csv')
+def export_bank_version_questions(
+    bank_version_id: str,
+    status_filter: str | None = None,
+    difficulty: str | None = None,
+    search: str | None = None,
+    question_ids: str | None = None,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
+    filters = _bank_question_filters(bank_version_id, status_filter=status_filter, difficulty=difficulty, search=search)
+    ids = [item.strip() for item in (question_ids or '').split(',') if item.strip()]
+    if ids:
+        filters.append(Question.id.in_(ids[:5000]))
+    rows = db.query(Question).filter(*filters).order_by(Question.created_at.desc(), Question.id.desc()).limit(50000).all()
+    raw = export_questions_csv(rows)
+    return Response(
+        content=raw,
+        media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="bank-questions-{bank_version_id}.csv"'},
+    )
+
+
+def _load_owned_question_import_preview(*, bank_version_id: str, preview_token: str, user: UserContext) -> tuple[Path, dict]:
+    if not preview_token or len(preview_token) != 32 or any(char not in '0123456789abcdef' for char in preview_token.lower()):
+        raise HTTPException(status_code=400, detail='Mã preview import không hợp lệ.')
+    preview_path = operation_pending_dir() / f'question-import-{preview_token}.json'
+    if not preview_path.exists() or not preview_path.is_file():
+        raise HTTPException(status_code=404, detail='Preview import đã hết hạn hoặc không tồn tại. Hãy upload lại file.')
+    modified_at = datetime.fromtimestamp(preview_path.stat().st_mtime, tz=timezone.utc)
+    if datetime.now(timezone.utc) - modified_at > timedelta(hours=2):
+        try:
+            preview_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=410, detail='Preview import đã hết hạn sau 2 giờ. Hãy upload lại file.')
+    try:
+        preview = json.loads(preview_path.read_text(encoding='utf-8'))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail='Preview import không hợp lệ. Hãy upload lại file.') from exc
+    if str(preview.get('bank_version_id')) != bank_version_id or str(preview.get('requested_by')) != str(user.user_id):
+        raise HTTPException(status_code=403, detail='Preview import không thuộc người dùng hiện tại.')
+    return preview_path, preview
+
+
+@router.get('/bank-versions/{bank_version_id}/questions/import-template.xlsx')
+def download_bank_question_import_template(
+    bank_version_id: str,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    _require_bank_version(db, user, 'bank.view', bank_version_id)
+    return Response(
+        content=build_import_template(),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="bank-question-import-template.xlsx"'},
+    )
+
+
+@router.post('/bank-versions/{bank_version_id}/questions/import-preview', response_model=BankQuestionImportPreviewOut)
+async def preview_bank_question_import(
+    bank_version_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('edit_questions')),
+):
+    _require_bank_version(db, user, 'question.edit', bank_version_id)
+    filename = safe_upload_filename(file.filename or 'questions.xlsx')
+    if not filename.lower().endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail='Chỉ hỗ trợ file .xlsx theo mẫu import câu hỏi.')
+    raw = await file.read()
+    if len(raw) > min(_BANK_UPLOAD_MAX_BYTES, 10 * 1024 * 1024):
+        raise HTTPException(status_code=413, detail='File import vượt giới hạn 10 MB.')
+    try:
+        parsed = parse_import_workbook(raw, max_rows=2000)
+        token, path = persist_preview({**parsed, 'bank_version_id': bank_version_id, 'requested_by': user.user_id, 'filename': filename}, operation_pending_dir())
+        log_audit(db, action='question_bank.question.import.preview', status='success', message='Đã kiểm tra file import câu hỏi', user=user, target_type='bank_version', target_id=bank_version_id, metadata={'valid_count': parsed['valid_count'], 'error_count': parsed['error_count'], 'filename': filename})
+        return {
+            'ok': True,
+            'preview_token': token,
+            'total_rows': parsed['total_rows'],
+            'valid_count': parsed['valid_count'],
+            'error_count': parsed['error_count'],
+            'preview_rows': parsed['rows'][:20],
+            'errors': parsed['errors'][:100],
+            'can_commit': parsed['valid_count'] > 0 and parsed['error_count'] == 0,
+            'message': 'File hợp lệ, có thể xác nhận import.' if parsed['error_count'] == 0 else 'File còn lỗi. Hãy sửa các dòng lỗi rồi upload lại.',
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get('/bank-versions/{bank_version_id}/questions/import-errors/{preview_token}.xlsx')
+def download_bank_question_import_errors(
+    bank_version_id: str,
+    preview_token: str,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('edit_questions')),
+):
+    _require_bank_version(db, user, 'question.edit', bank_version_id)
+    _preview_path, preview = _load_owned_question_import_preview(bank_version_id=bank_version_id, preview_token=preview_token, user=user)
+    raw = build_import_error_workbook(preview)
+    return Response(
+        content=raw,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="bank-question-import-errors.xlsx"'},
+    )
+
+
+@router.post('/bank-versions/{bank_version_id}/questions/import-job', response_model=BankOperationJobQueuedOut)
+def enqueue_bank_question_import(
+    bank_version_id: str,
+    payload: BankQuestionImportConfirmRequest,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('edit_questions')),
+):
+    _require_bank_version(db, user, 'question.edit', bank_version_id)
+    preview_path, preview = _load_owned_question_import_preview(
+        bank_version_id=bank_version_id,
+        preview_token=payload.preview_token,
+        user=user,
+    )
+    if int(preview.get('error_count') or 0) > 0 or int(preview.get('valid_count') or 0) <= 0:
+        raise HTTPException(status_code=400, detail='Chỉ có thể import khi file không còn dòng lỗi.')
+    job = BankOperationJobService(db).create_job(
+        operation_type='question_import',
+        target_type='bank_version',
+        target_id=bank_version_id,
+        requested_by=user.user_id,
+        bank_version_id=bank_version_id,
+        request_json={'preview_path': str(preview_path), 'preview_token': payload.preview_token, 'valid_count': preview.get('valid_count'), 'filename': preview.get('filename')},
+        progress_total=max(2, int(preview.get('valid_count') or 1) + 1),
+        progress_label='Đang chờ import câu hỏi',
+    )
+    job = _enqueue_bank_job_or_fail(db, job, bank_question_import_task, label='Đã đưa import câu hỏi vào hàng đợi')
+    log_audit(db, action='question_bank.question.import.enqueue', status='success', message='Đã tạo job import câu hỏi', user=user, target_type='bank_operation_job', target_id=job.id, metadata={'bank_version_id': bank_version_id, 'valid_count': preview.get('valid_count')})
+    return _queued_response(job, 'Đã tạo tác vụ nền import câu hỏi. Các câu mới sẽ ở trạng thái Chờ duyệt.')
+
+
 @router.get('/bank-versions/{bank_version_id}/questions', response_model=CursorPaginatedOut[BankQuestionListItemOut])
 def list_bank_version_questions(
     bank_version_id: str,
@@ -1543,6 +1781,10 @@ def bulk_review_bank_questions(bank_version_id: str, payload: BankQuestionBulkRe
             action=payload.action,
             question_ids=payload.question_ids,
             approve_all_pending=payload.approve_all_pending,
+            apply_to_filtered=payload.apply_to_filtered,
+            status_filter=payload.status_filter,
+            difficulty=payload.difficulty,
+            search=payload.search,
             note=payload.note,
             actor=user.user_id,
         )
@@ -1607,6 +1849,46 @@ def cancel_failed_release(release_id: str, db: Session = Depends(get_db), user: 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+
+
+@router.get('/releases/{release_id}/preview', response_model=BankReleasePreviewOut)
+def preview_bank_release_snapshot(
+    release_id: str,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    release = db.get(QuestionBankRelease, release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail='Không tìm thấy Release')
+    _require_bank_version(db, user, 'bank.view', release.bank_version_id)
+    rows = db.query(BankReleaseQuestion, Question).join(Question, Question.id == BankReleaseQuestion.question_id).filter(
+        BankReleaseQuestion.bank_release_id == release.id,
+    ).order_by(BankReleaseQuestion.included_at.asc(), BankReleaseQuestion.id.asc()).all()
+    questions = [{
+        'release_question_id': snapshot.id,
+        'question_id': question.id,
+        'question_text': question.question_text,
+        'option_a': question.option_a,
+        'option_b': question.option_b,
+        'option_c': question.option_c,
+        'option_d': question.option_d,
+        'correct_answer': question.correct_answer,
+        'difficulty': snapshot.difficulty or question.difficulty,
+        'concept_title': question.concept_title,
+        'question_family_id': snapshot.question_family_id or question.question_family_id,
+        'included_at': snapshot.included_at,
+    } for snapshot, question in rows]
+    return {
+        'release': release,
+        'frozen_snapshot': True,
+        'total_questions': len(questions),
+        'counts': {
+            'easy': sum(1 for item in questions if item['difficulty'] == 'easy'),
+            'medium': sum(1 for item in questions if item['difficulty'] == 'medium'),
+            'hard': sum(1 for item in questions if item['difficulty'] == 'hard'),
+        },
+        'questions': questions,
+    }
 
 
 @router.get('/releases/{release_id}/publish-audit')

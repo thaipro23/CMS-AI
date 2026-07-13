@@ -978,6 +978,47 @@ def bank_quiz_create_task(job_id: str):
     return asyncio.run(_run())
 
 
+
+@celery_app.task(name='bank_question_import_task')
+def bank_question_import_task(job_id: str):
+    from app.services.bank_operation_jobs import BankOperationJobService
+    from app.services.question_bank.import_export import import_questions
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    ops = BankOperationJobService(db)
+    job = ops.get_job(job_id)
+    if not job:
+        db.close()
+        return {'ok': False, 'error': 'job_not_found'}
+    try:
+        payload = job.request_json or {}
+        total = max(2, int(payload.get('valid_count') or 1) + 1)
+        ops.start(job, label='Đang import câu hỏi', total=total)
+        result = import_questions(
+            db,
+            bank_version_id=str(job.bank_version_id or payload.get('bank_version_id') or job.target_id),
+            preview_path=str(payload.get('preview_path') or ''),
+            actor=job.requested_by,
+        )
+        ops.progress(job, current=total - 1, total=total, label='Đang cập nhật thống kê Bank')
+        try:
+            from app.services.bank_dashboard_stats import BankDashboardStatsService
+            BankDashboardStatsService(db).refresh_for_bank_version(str(job.bank_version_id or job.target_id))
+        except Exception:
+            db.rollback()
+        log_audit(db, action='question_bank.question.import.async', status='success', message=result.get('message') or 'Import câu hỏi hoàn tất', user=None, target_type='bank_operation_job', target_id=job.id, metadata=result)
+        return ops.complete(job, result=result, label='Đã import câu hỏi').result_json
+    except Exception as exc:
+        try:
+            log_audit(db, action='question_bank.question.import.async', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=None, target_type='bank_operation_job', target_id=job.id)
+        except Exception:
+            pass
+        return ops.fail(job, error=exc, result={'user_message': str(exc)}).result_json
+    finally:
+        db.close()
+
+
 @celery_app.task(name='bank_material_cleanup_task')
 def bank_material_cleanup_task(retention_days: int | None = None, limit: int | None = None, dry_run: bool = False):
     """Admin/ops task for v25.9.16.3.6 material cleanup policy."""

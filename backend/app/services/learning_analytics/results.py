@@ -681,7 +681,7 @@ class LearningAnalyticsResultsWorkflowService:
             next_actions.append('Có thể tiếp tục pilot analytics theo scope này; vẫn theo dõi SLA và readiness.')
 
         return {
-            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.12'),
+            'version': getattr(settings, 'app_version', '25.9.16.7.2.64.13'),
             'report_type': 'analytics_course_class_mapping_reliability',
             'status': status,
             'summary_label': summary_label,

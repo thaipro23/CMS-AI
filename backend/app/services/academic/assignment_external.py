@@ -18,7 +18,7 @@ ASSIGNMENT_SCORE_EXTERNAL_MESSAGE = (
 class AcademicAssignmentExternalWorkflowService:
     """Read-only assignment/defense score facade.
 
-    v25.9.16.7.2.64.12 removes manual assignment score entry from AI Server.
+    v25.9.16.7.2.64.13 removes manual assignment score entry from AI Server.
     The external assignment/defense system is the source of truth.  This service
     keeps a read-only list endpoint for backward compatibility and blocks all
     write attempts with HTTP 410 so old clients fail safely.

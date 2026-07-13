@@ -21,7 +21,7 @@ def test_bank_quiz_table_uses_status_column_for_creation_choice():
 
 def test_bank_quiz_default_final_test_and_assignment_statuses_are_clear():
     page = (_root() / 'frontend' / 'app' / 'bank' / 'quiz' / 'page.tsx').read_text(encoding='utf-8')
-    service = (_root() / 'backend' / 'app' / 'services' / 'question_bank_service.py').read_text(encoding='utf-8')
+    service = ((_root() / 'backend' / 'app' / 'services' / 'question_bank_service.py').read_text(encoding='utf-8') + (_root() / 'backend' / 'app' / 'services' / 'question_bank' / 'quiz_creation.py').read_text(encoding='utf-8'))
 
     assert "if (title.includes('final')) return 'final_test'" in page
     assert "if (title.includes('assignment') || title.includes('asm')) return 'skip'" in page

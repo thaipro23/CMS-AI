@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -14,7 +14,7 @@ def test_v62_version_and_docs_sync():
     assert f'NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{VERSION}}}' in text('docker-compose.prod.yml')
     assert 'Question Bank Quiz Creation/Auto-map Workflow Split' in text('README.md')
     assert 'question-bank-quiz-creation-automap-workflow-split.zip' in text('RUN_CURRENT.md')
-    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.12 — Question Bank Quiz Creation/Auto-map Workflow Split')
+    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.13 — Question Bank Quiz Creation/Auto-map Workflow Split')
 
 
 def test_v62_jobs_batch_summary_uses_aggregate_not_n_plus_one():

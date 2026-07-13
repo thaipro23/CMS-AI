@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -14,8 +14,8 @@ def test_v61_version_and_docs_synced():
     assert f'NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{VERSION}}}' in text('docker-compose.prod.yml')
     assert text('CHANGELOG.md').startswith(f'## v{VERSION} — Question Bank Quiz Creation/Auto-map Workflow Split')
     assert 'Question Bank Quiz Creation/Auto-map Workflow Split' in text('README.md')
-    assert 'RUN_V25_9_16_7_2_64_12.md' in text('README.md')
-    assert 'RELEASE_v25.9.16.7.2.64.12_QUESTION_BANK_QUIZ_CREATION_AUTOMAP_WORKFLOW_SPLIT.md' in '\n'.join(p.name for p in (ROOT / 'docs').glob('*64*'))
+    assert 'RUN_V25_9_16_7_2_64_13.md' in text('README.md')
+    assert 'RELEASE_v25.9.16.7.2.64.13_QUESTION_BANK_QUIZ_CREATION_AUTOMAP_WORKFLOW_SPLIT.md' in '\n'.join(p.name for p in (ROOT / 'docs').glob('*64*'))
 
 
 def test_v61_only_openedx_superuser_becomes_ai_admin():

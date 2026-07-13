@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.12'
+VERSION = '25.9.16.7.2.64.13'
 
 
 def text(path: str) -> str:
@@ -14,7 +14,7 @@ def test_v63_version_sync_and_docs():
     assert f'NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{VERSION}}}' in text('docker-compose.prod.yml')
     assert 'Question Bank Quiz Creation/Auto-map Workflow Split' in text('README.md')
     assert 'question-bank-quiz-creation-automap-workflow-split.zip' in text('RUN_CURRENT.md')
-    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.12 — Question Bank Quiz Creation/Auto-map Workflow Split')
+    assert text('CHANGELOG.md').startswith('## v25.9.16.7.2.64.13 — Question Bank Quiz Creation/Auto-map Workflow Split')
 
 
 def test_v63_readiness_pydantic_contracts_are_wired_to_health_routes():
@@ -77,7 +77,7 @@ def test_v63_scripts_review_runtime_include_maintainability_gate():
     review = text('scripts/claude-code-review-pack.sh')
     assert 'maintainability-contract-report.sh' in review
     assert 'MaintainabilityContractService' in review or 'maintainability-contract' in review
-    assert 'backend/app/schemas/readiness.py' in text('docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_64_12.md')
+    assert 'backend/app/schemas/readiness.py' in text('docs/CLAUDE_CODE_REVIEW_HANDOFF_V25_9_16_7_2_64_13.md')
 
 
 def test_v63_no_new_migration():
