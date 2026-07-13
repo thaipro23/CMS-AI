@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.7.2.64.13'
+    app_version: str = '25.9.16.7.2.64.14'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -173,7 +173,7 @@ class Settings(BaseSettings):
     academic_full_sync_learning_after_enrollment: bool = True
     academic_learning_low_progress_threshold_percent: float = 50.0
     academic_learning_low_grade_threshold_percent: float = 50.0
-    # v25.9.16.7.2.64.13 UAT-only destructive cleanup for wrong RollNumber identity mapping.
+    # v25.9.16.7.2.64.14 UAT-only destructive cleanup for wrong RollNumber identity mapping.
     # Keep this disabled in real production. Mutation also requires the exact
     # confirmation phrase in the request body.
     academic_identity_cleanup_allow_destructive: bool = False
@@ -204,7 +204,7 @@ class Settings(BaseSettings):
     analytics_backfill_max_jobs_per_request: int = 25
     analytics_backfill_max_active_jobs: int = 20
     analytics_recalculate_enqueue_cooldown_seconds: int = 300
-    # v25.9.16.7.2.64.13 post-ingest orchestrator. Ingest may run every
+    # v25.9.16.7.2.64.14 post-ingest orchestrator. Ingest may run every
     # minute, but recalculation must stay debounced and class-scoped so a
     # production term with thousands of enrollments does not rebuild all
     # analytics snapshots on every scheduler tick.
@@ -230,7 +230,7 @@ class Settings(BaseSettings):
     analytics_monitoring_stuck_job_minutes: int = 60
     analytics_monitoring_snapshot_stale_hours: int = 168
     analytics_monitoring_warning_active_jobs: int = 10
-    # v25.9.16.7.2.64.13 Bank Quiz Final Test Production QA.
+    # v25.9.16.7.2.64.14 Bank Quiz Final Test Production QA.
     # These are operational targets only; they drive admin SLA badges and do
     # not block ingest/recalculate jobs. Keep them conservative for UAT.
     analytics_sla_ingest_target_seconds: int = 300

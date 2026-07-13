@@ -1,9 +1,9 @@
-# Claude Code Review Handoff — v25.9.16.7.2.64.12
+# Claude Code Review Handoff — v25.9.16.7.2.64.13
 
 Baseline:
 
 ```text
-v25.9.16.7.2.64.12 — UAT Runtime Verification + Frontend Build Fix
+v25.9.16.7.2.64.13 — UAT Runtime Verification + Frontend Build Fix
 ```
 
 ## Review focus for `.53`
@@ -25,7 +25,7 @@ v25.9.16.7.2.64.12 — UAT Runtime Verification + Frontend Build Fix
 cd /opt/ai-server
 
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.12 \
+EXPECTED_VERSION=25.9.16.7.2.64.13 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh

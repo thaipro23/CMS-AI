@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 CURRENT_ZIP="${CURRENT_ZIP:-}"
 PREVIOUS_ZIP="${PREVIOUS_ZIP:-}"
-CURRENT_ROOT="${CURRENT_ROOT:-ai_server_openedx_v25_9_16_7_2_64_12}"
+CURRENT_ROOT="${CURRENT_ROOT:-ai_server_openedx_v25_9_16_7_2_64_14}"
 PREVIOUS_ROOT="${PREVIOUS_ROOT:-}"
 ENV_BACKUP="${ENV_BACKUP:-}"
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/ai-server}"

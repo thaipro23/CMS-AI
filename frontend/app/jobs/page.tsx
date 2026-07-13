@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getAcademicApSyncJobs,
   getAcademicBulkOperationJobs,
@@ -15,6 +15,8 @@ import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { AcademicBulkOperationJob, AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
+import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { formatVNDateTime } from '../../lib/time'
 
 function dateText(v?: string | null) { return formatVNDateTime(v) }
@@ -79,7 +81,7 @@ function jsonText(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-export default function JobsPage() {
+function JobsContent() {
   const { authHeaders, can } = useAppContext()
   const [operationJobs, setOperationJobs] = useState<BankOperationJob[]>([])
   const [classSyncJobs, setClassSyncJobs] = useState<AcademicClassSyncJob[]>([])
@@ -88,9 +90,8 @@ export default function JobsPage() {
   const [quizInstances, setQuizInstances] = useState<CourseQuizInstance[]>([])
   const [academicRuns, setAcademicRuns] = useState<AcademicSyncRun[]>([])
   const [analyticsOps, setAnalyticsOps] = useState<AnalyticsOpsStatus | null>(null)
-  const [status, setStatus] = useState('all')
-  const [operationGroup, setOperationGroup] = useState('all')
-  const [q, setQ] = useState('')
+  const { state, update } = useOpsTableState({ pageSize: 20 })
+  const { status, group: operationGroup, q, page, pageSize, density } = state
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<ActionMessageData | null>(null)
   const [quizOpen, setQuizOpen] = useState(false)
@@ -269,29 +270,53 @@ export default function JobsPage() {
     const needle = q.trim().toLowerCase()
     return rows.filter((row) => {
       if (operationGroup !== 'all' && row.group !== operationGroup) return false
+      if (status === 'active' && !['queued', 'running'].includes(row.status)) return false
+      if (!['all', 'active'].includes(status) && row.status !== status) return false
       return includesNeedle([row.id, row.label, row.status, row.scope, row.scopeDetail, row.requestedBy, row.message, row.error, row.rawType], needle)
     })
-  }, [rows, q, operationGroup])
+  }, [rows, q, operationGroup, status])
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageRows = filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize)
+
+  useEffect(() => {
+    if (page !== safePage) update({ page: safePage }, { resetPage: false })
+  }, [page, safePage, update])
+
+  const columns = useMemo<EnterpriseTableColumn<OperationRow>[]>(() => [
+    { key: 'stt', header: 'STT', width: 72, sticky: 'left', stickyOffset: 0, hideable: false, render: (_row, index) => (safePage - 1) * pageSize + index + 1 },
+    { key: 'job', header: 'Việc', minWidth: 210, sticky: 'left', stickyOffset: 72, render: (job) => <><b>{job.label}</b><small>ID {shortId(job.id)}</small></> },
+    { key: 'status', header: 'Trạng thái', minWidth: 125, render: (job) => <StatusBadge status={job.status} /> },
+    { key: 'progress', header: 'Tiến độ', minWidth: 180, render: (job) => <><div className="job-progress table-progress" role="progressbar" aria-label={`Tiến độ ${job.label}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progressPercent)}><i style={{ width: `${job.progressPercent}%` }} /></div><small>{Math.round(job.progressPercent)}% · {job.progressCurrent}/{job.progressTotal || 100}</small></> },
+    { key: 'scope', header: 'Phạm vi', minWidth: 190, render: (job) => <><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></> },
+    { key: 'requested_by', header: 'Người tạo', minWidth: 140, hideable: true, render: (job) => job.requestedBy || 'Hệ thống' },
+    { key: 'created_at', header: 'Thời điểm', minWidth: 150, hideable: true, render: (job) => <small>{dateText(job.createdAt)}</small> },
+    { key: 'message', header: 'Nội dung', minWidth: 280, render: (job) => <span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error || job.message || 'Đang chờ xử lý'}</span> },
+    { key: 'actions', header: 'Thao tác', minWidth: 110, sticky: 'right', hideable: false, render: (job) => job.canRetry ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span> },
+  ], [loading, pageSize, retryJob, safePage])
 
   const failed = rows.filter((j) => j.status === 'failed').length
   const running = rows.filter((j) => ['queued', 'running'].includes(j.status)).length
   const completed = rows.filter((j) => j.status === 'completed').length
 
   if (!can('view_jobs')) return <div className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</div>
-  return <div className="page-stack ops-console jobs-console">
+  return <div className="page-stack ops-console jobs-console ux-enterprise-page">
     <section className="ops-hero card">
       <div><span className="eyebrow">Tiến trình</span><h1>Jobs / Việc xử lý</h1><p>Theo dõi job chạy nền: đồng bộ lớp, đồng bộ AP, báo cáo giáo viên, học online, tạo câu hỏi và Quiz. Nhật ký thao tác xem riêng ở Audit.</p></div>
       <div className="button-row no-margin"><button className="btn secondary" onClick={() => setQuizOpen(true)}>Quiz gần đây</button><button className="btn" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại danh sách việc'}</button></div>
     </section>
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>AP sync gần đây</span><b>{academicRuns.length}</b></div></section>
-    <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">Tất cả</option><option value="active">Đang chạy</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => setOperationGroup(e.target.value)}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="analytics">Học online</option><option value="bulk_sync">Ghép Course CMS / đồng bộ hàng loạt</option><option value="bank">Bank / Quiz</option></select></label></div></section>
-    <section className="card"><div className="section-head"><div><h2>Danh sách việc</h2></div></div>
-      <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>STT</th><th>Việc</th><th>Trạng thái</th><th>Tiến độ</th><th>Phạm vi</th><th>Người tạo</th><th>Thời điểm</th><th>Nội dung</th><th>Thao tác</th></tr></thead><tbody>{filteredRows.length ? filteredRows.map((job, index) => <tr key={`${job.group}-${job.id}`} className={`row-${job.status}`}><td className="stt-cell">{index + 1}</td><td><b>{job.label}</b><small>ID {shortId(job.id)}</small></td><td><StatusBadge status={job.status} /><small>{statusText(job.status)}</small></td><td><div className="job-progress table-progress"><i style={{ width: `${job.progressPercent}%` }} /></div><small>{Math.round(job.progressPercent)}% · {job.progressCurrent}/{job.progressTotal || 100}</small></td><td><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></td><td>{job.requestedBy || 'Hệ thống'}</td><td><small>{dateText(job.createdAt)}</small></td><td><span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error || job.message || 'Đang chờ xử lý'}</span></td><td>{job.canRetry ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span>}</td></tr>) : <tr><td colSpan={9}><div className="empty-state">Không có việc phù hợp.</div></td></tr>}</tbody></table></div>
-    </section>
+    <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => update({ q: e.target.value })} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => update({ status: e.target.value })}><option value="all">Tất cả</option><option value="active">Đang chạy</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => update({ group: e.target.value })}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="analytics">Học online</option><option value="bulk_sync">Ghép Course CMS / đồng bộ hàng loạt</option><option value="bank">Bank / Quiz</option></select></label></div></section>
+    <EnterpriseDataTable tableId="ops-jobs" caption="Danh sách việc" rows={pageRows} columns={columns} rowKey={(job) => `${job.group}-${job.id}`} density={density} onDensityChange={(value) => update({ density: value }, { resetPage: false })} loading={loading} emptyTitle="Không có việc phù hợp" emptyDescription="Thử thay đổi từ khóa, trạng thái hoặc nhóm việc." page={safePage} pageSize={pageSize} total={filteredRows.length} totalPages={totalPages} onPageChange={(value) => update({ page: value }, { resetPage: false })} onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })} label="việc" getRowClassName={(job) => `row-${job.status}`} />
 
     <Popup open={quizOpen} title="Quiz gần đây" onClose={() => setQuizOpen(false)}>
       <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>STT</th><th>Khóa học</th><th>Quiz</th><th>Trạng thái</th><th>Bài kiểm tra</th><th>Ngày tạo</th></tr></thead><tbody>{quizInstances.slice(0, 50).map((item, index) => <tr key={item.id}><td className="stt-cell">{index + 1}</td><td><b>{item.openedx_course_id}</b><small>{item.bank_release_id}</small></td><td>{item.metadata_json?.quiz_title || 'Quiz trên CMS'}</td><td><StatusBadge status={item.status} /></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td><small>{dateText(item.created_at)}</small></td></tr>)}{!quizInstances.length ? <tr><td colSpan={6}><div className="empty-state">Chưa có Quiz trên CMS.</div></td></tr> : null}</tbody></table></div>
     </Popup>
   </div>
+}
+
+export default function JobsPage() {
+  return <Suspense fallback={<div className="card">Đang tải danh sách việc...</div>}><JobsContent /></Suspense>
 }

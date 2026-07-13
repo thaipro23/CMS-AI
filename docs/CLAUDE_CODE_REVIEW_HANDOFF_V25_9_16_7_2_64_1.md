@@ -1,6 +1,6 @@
-# Claude Code Review Handoff — v25.9.16.7.2.64.12
+# Claude Code Review Handoff — v25.9.16.7.2.64.13
 
-Review target: **AI Server / Open edX CMS v25.9.16.7.2.64.12 — Maintainability Service/UI Split Completion**.
+Review target: **AI Server / Open edX CMS v25.9.16.7.2.64.13 — Maintainability Service/UI Split Completion**.
 
 ## Review focus
 

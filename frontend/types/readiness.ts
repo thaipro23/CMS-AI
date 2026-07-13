@@ -1,4 +1,4 @@
-// v25.9.16.7.2.64.13 — split readiness contract types.
+// v25.9.16.7.2.64.14 — split readiness contract types.
 // Keep these re-exports backward compatible while new code imports from this file
 // instead of adding more operational report types to frontend/types/index.ts.
 export type {
@@ -92,4 +92,22 @@ export type SecurityAttackSimulationReport = {
   sections?: Array<Record<string, any>>
   next_actions?: string[]
   read_only_guarantees?: string[]
+}
+
+export type UxAcceptanceReport = {
+  version?: string
+  report_type?: 'uat_ux_acceptance_v1' | string
+  status: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  message?: string
+  blocker_count?: number
+  warning_count?: number
+  check_count?: number
+  passed_count?: number
+  checks?: Array<{ category?: string; code?: string; severity?: string; ok?: boolean; message?: string; action?: string; path?: string }>
+  sections?: Array<Record<string, any>>
+  browser_uat_checklist?: string[]
+  next_actions?: string[]
+  read_only_guarantees?: string[]
+  disclaimer?: string
 }

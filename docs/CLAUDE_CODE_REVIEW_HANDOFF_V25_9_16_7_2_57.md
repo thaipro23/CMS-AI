@@ -1,6 +1,6 @@
-# Claude Code Review Handoff — v25.9.16.7.2.64.12
+# Claude Code Review Handoff — v25.9.16.7.2.64.13
 
-Review target: **AI Server / Open edX CMS v25.9.16.7.2.64.12 — Performance Load Hardening**.
+Review target: **AI Server / Open edX CMS v25.9.16.7.2.64.13 — Performance Load Hardening**.
 
 ## Review focus
 
@@ -14,7 +14,7 @@ Review target: **AI Server / Open edX CMS v25.9.16.7.2.64.12 — Performance Loa
 
 ```bash
 OUT_DIR=/tmp/ai-server-claude-review-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.12 \
+EXPECTED_VERSION=25.9.16.7.2.64.13 \
 ./scripts/claude-code-review-pack.sh
 ```
 

@@ -1,4 +1,4 @@
-# Claude Code Review Handoff — v25.9.16.7.2.64.12
+# Claude Code Review Handoff — v25.9.16.7.2.64.13
 
 Review target: **Security Attack Simulation + 20 Common Attack Hardening**.
 

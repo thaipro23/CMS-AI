@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { useAppContext } from "../../context/AppContext";
 import {
   autoMapAcademicSubjectCourse,
@@ -20,6 +19,9 @@ import {
   AcademicSubjectManagementSummary,
   AcademicTerm,
 } from "../../types";
+import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
+import { useAcademicTableState } from "../../hooks/useAcademicTableState";
+import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import {
   InlineNotice,
   InlineNoticeData,
@@ -28,8 +30,6 @@ import {
   noticeSuccess,
   noticeWarning,
 } from "../../components/ui/InlineNotice";
-
-const PAGE_SIZE = 50;
 
 const EMPTY_SUBJECT_SUMMARY: AcademicSubjectManagementSummary = {
   subject_count: 0,
@@ -138,23 +138,15 @@ function buildSubjectClassesHref(
 }
 
 function StudentManagementSubjectsContent() {
-  const searchParams = useSearchParams();
   const { authHeaders } = useAppContext();
   const headers = useMemo(() => authHeaders(), [authHeaders]);
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders]);
   const [terms, setTerms] = useState<AcademicTerm[]>([]);
   const [campuses, setCampuses] = useState<AcademicCampus[]>([]);
   const [subjects, setSubjects] = useState<AcademicSubjectManagement[]>([]);
-  const [termId, setTermId] = useState(searchParams.get("term_id") || "");
-  const [branch, setBranch] = useState(searchParams.get("branch") || "poly");
-  const [campus, setCampus] = useState(
-    searchParams.get("campus") === "all"
-      ? ""
-      : searchParams.get("campus") || "",
-  );
-  const [search, setSearch] = useState(searchParams.get("search") || "");
-  const [learningStatus, setLearningStatus] = useState("all");
-  const [page, setPage] = useState(1);
+  const { state, update } = useAcademicTableState({ branch: "poly", status: "all", pageSize: 50 });
+  const { termId, branch, campus, q: search, status: learningStatus, page, pageSize, density } = state;
+  const debouncedSearch = useDebouncedValue(search, 350);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<AcademicSubjectManagementSummary>(
     EMPTY_SUBJECT_SUMMARY,
@@ -173,9 +165,8 @@ function StudentManagementSubjectsContent() {
         if (cancelled) return;
         setTerms(items);
         if (!items.some((item) => item.id === termId)) {
-          const preferred =
-            items.find((item) => item.term_name === "Summer 2026") || items[0];
-          setTermId(preferred?.id || "");
+          const preferred = items.find((item) => item.term_name === "Summer 2026") || items[0];
+          update({ termId: preferred?.id || "" });
         }
       })
       .catch((error) =>
@@ -192,8 +183,7 @@ function StudentManagementSubjectsContent() {
       .then((items) => {
         if (cancelled) return;
         setCampuses(items);
-        if (campus && !items.some((item) => item.campus_code === campus))
-          setCampus("");
+        if (campus && !items.some((item) => item.campus_code === campus)) update({ campus: "" });
       })
       .catch(() => setCampuses([]));
     return () => {
@@ -209,10 +199,10 @@ function StudentManagementSubjectsContent() {
         termId,
         branch,
         campus,
-        search,
+        search: debouncedSearch,
         learningStatus,
         page,
-        pageSize: PAGE_SIZE,
+        pageSize,
       });
       if (cancelledRef?.cancelled) return;
       setSubjects(result.items);
@@ -235,7 +225,7 @@ function StudentManagementSubjectsContent() {
     return () => {
       cancelledRef.cancelled = true;
     };
-  }, [headers, termId, branch, campus, search, learningStatus, page]);
+  }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize]);
 
   const loadBulkJobs = async () => {
     try {
@@ -266,7 +256,11 @@ function StudentManagementSubjectsContent() {
   };
 
   const selectedTerm = terms.find((item) => item.id === termId);
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) update({ page: totalPages }, { resetPage: false });
+  }, [page, totalPages, update]);
 
   useEffect(() => {
     loadBulkJobs();
@@ -296,7 +290,7 @@ function StudentManagementSubjectsContent() {
           termId,
           branch,
           campus,
-          search,
+          search: debouncedSearch,
           learningStatus,
           force: true,
           limit: 500,
@@ -340,10 +334,10 @@ function StudentManagementSubjectsContent() {
         termId,
         branch,
         campus,
-        search,
+        search: debouncedSearch,
         learningStatus,
         page,
-        pageSize: PAGE_SIZE,
+        pageSize,
       });
       setSubjects(refreshed.items);
       setTotal(refreshed.total);
@@ -355,8 +349,18 @@ function StudentManagementSubjectsContent() {
     }
   };
 
+  const columns = useMemo<EnterpriseTableColumn<AcademicSubjectManagement>[]>(() => [
+    { key: "stt", header: "STT", width: 72, sticky: "left", stickyOffset: 0, hideable: false, render: (_subject, index) => (page - 1) * pageSize + index + 1 },
+    { key: "subject", header: "Môn", minWidth: 220, sticky: "left", stickyOffset: 72, render: (subject) => <><b>{subject.subject_code}</b><small>{subject.subject_name}</small></> },
+    { key: "scale", header: "Quy mô", minWidth: 190, render: (subject) => <><b>{subject.class_count} lớp</b><small>{subject.student_count} SV · {subject.teacher_count} GV · {subject.campus_count} cơ sở</small></> },
+    { key: "cms", header: "Đồng bộ CMS", minWidth: 190, render: (subject) => <><span className={subject.cms_unsynced_count ? "status-pill warning" : "status-pill success"}>{subject.cms_synced_count}/{subject.student_count} đã đồng bộ</span><small>{subject.cms_unsynced_count} chưa/khác trạng thái</small></> },
+    { key: "course", header: "Course CMS", minWidth: 230, render: (subject) => <><span className={statusClass(subject.course_mapping_status)}>{subject.course_mapping_label || subject.course_mapping_status}</span><small>{subject.openedx_course_id || subject.suggested_openedx_course_id || "N/A"}</small></> },
+    { key: "learning", header: "Học tập CMS", minWidth: 300, render: (subject) => <><b>{subject.learning_enrolled_count || 0}/{subject.student_count} Ghi danh CMS</b><small>Dữ liệu: {subject.learning_synced_count || 0}/{subject.student_count} · Đã học: {subject.learning_active_count || 0}/{subject.student_count}</small><small>Tiến độ TB: {percentLabel(subject.learning_avg_progress_percent)} · Điểm tổng TB: {percentLabel(subject.learning_avg_grade_percent)}</small><small>TP: {componentSummaryLine(subject.learning_component_summaries)}</small><small>{alertText(subject.learning_alerts)}</small></> },
+    { key: "actions", header: "Thao tác", minWidth: 190, sticky: "right", hideable: false, render: (subject) => <div className="row-actions"><Link className="btn small primary" href={buildSubjectClassesHref(subject, { termId, termName: selectedTerm?.term_name, branch, campus })}>Xem lớp</Link>{!["mapped", "already_mapped", "auto_mapped"].includes(String(subject.course_mapping_status || "").toLowerCase()) && <button className="btn small secondary" type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? "Đang ghép..." : "Tự động ghép"}</button>}</div> },
+  ], [branch, campus, mappingSubjectId, page, pageSize, selectedTerm?.term_name, termId]);
+
   return (
-    <div className="page-stack student-management-page academic-flow-page">
+    <div className="page-stack student-management-page academic-flow-page ux-enterprise-page">
       <section className="card academic-unified-card">
         <div className="section-head list-card-head">
           <div>
@@ -368,7 +372,7 @@ function StudentManagementSubjectsContent() {
           </div>
           <div className="toolbar-actions">
             <span className="status-pill neutral">
-              {counterText(total, page, PAGE_SIZE)}
+              {counterText(total, page, pageSize)}
             </span>
             <button
               className="btn primary small"
@@ -388,9 +392,7 @@ function StudentManagementSubjectsContent() {
               className="input"
               value={branch}
               onChange={(event) => {
-                setBranch(event.target.value);
-                setCampus("");
-                setPage(1);
+                update({ branch: event.target.value, campus: "" });
               }}
             >
               <option value="poly">Poly</option>
@@ -403,8 +405,7 @@ function StudentManagementSubjectsContent() {
               className="input"
               value={termId}
               onChange={(event) => {
-                setTermId(event.target.value);
-                setPage(1);
+                update({ termId: event.target.value });
               }}
             >
               {!terms.length && (
@@ -423,8 +424,7 @@ function StudentManagementSubjectsContent() {
               className="input"
               value={campus}
               onChange={(event) => {
-                setCampus(event.target.value);
-                setPage(1);
+                update({ campus: event.target.value });
               }}
             >
               <option value="">Tất cả cơ sở</option>
@@ -441,8 +441,7 @@ function StudentManagementSubjectsContent() {
               className="input"
               value={learningStatus}
               onChange={(event) => {
-                setLearningStatus(event.target.value);
-                setPage(1);
+                update({ status: event.target.value });
               }}
             >
               <option value="all">Tất cả môn</option>
@@ -458,8 +457,7 @@ function StudentManagementSubjectsContent() {
               className="input"
               value={search}
               onChange={(event) => {
-                setSearch(event.target.value);
-                setPage(1);
+                update({ q: event.target.value });
               }}
               placeholder="WEB107, BUS2015, thiết kế..."
             />
@@ -470,7 +468,7 @@ function StudentManagementSubjectsContent() {
           <div>
             <span>Tổng số môn</span>
             <b>{countLabel(summary.subject_count)}</b>
-            <small>{counterText(total, page, PAGE_SIZE)}</small>
+            <small>{counterText(total, page, pageSize)}</small>
           </div>
           <div>
             <span>Tổng số lớp</span>
@@ -525,182 +523,29 @@ function StudentManagementSubjectsContent() {
 
         <InlineNotice notice={message} />
 
-        <div className="table-wrap academic-table-wrap">
-          <table className="data-table academic-data-table subject-table">
-            <thead>
-              <tr>
-                <th>STT</th>
-                <th>Môn</th>
-                <th>Quy mô</th>
-                <th>Đồng bộ CMS</th>
-                <th>Course CMS</th>
-                <th>Học tập CMS</th>
-                <th>Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading
-                ? Array.from({ length: 5 }).map((_, index) => (
-                    <tr
-                      key={`subject-skeleton-${index}`}
-                      className="ux-skeleton-row"
-                    >
-                      <td colSpan={7}>
-                        <span className="ux-skeleton-line wide" />
-                        <span className="ux-skeleton-line" />
-                      </td>
-                    </tr>
-                  ))
-                : null}
-              {!loading && !subjects.length ? (
-                <tr>
-                  <td colSpan={7}>
-                    <div className="ux-empty-state">
-                      <b>Chưa có môn phù hợp</b>
-                      <span>
-                        Đổi học kỳ, cơ sở, trạng thái học tập hoặc xóa từ khóa
-                        tìm kiếm. Nếu vẫn trống, kiểm tra phân quyền và dữ liệu
-                        AP sync.
-                      </span>
-                      <button
-                        className="btn secondary small"
-                        type="button"
-                        onClick={() => {
-                          setSearch("");
-                          setLearningStatus("all");
-                          setPage(1);
-                        }}
-                      >
-                        Xóa bộ lọc nhanh
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ) : null}
-              {subjects.map((subject, index) => (
-                <tr key={subject.id}>
-                  <td className="stt-cell">
-                    {(page - 1) * PAGE_SIZE + index + 1}
-                  </td>
-                  <td className="main-entity-cell">
-                    <b>{subject.subject_code}</b>
-                    <small>{subject.subject_name}</small>
-                  </td>
-                  <td>
-                    <b>{subject.class_count} lớp</b>
-                    <small>
-                      {subject.student_count} SV · {subject.teacher_count} GV ·{" "}
-                      {subject.campus_count} cơ sở
-                    </small>
-                  </td>
-                  <td>
-                    <span
-                      className={
-                        subject.cms_unsynced_count
-                          ? "status-pill warning"
-                          : "status-pill success"
-                      }
-                    >
-                      {subject.cms_synced_count}/{subject.student_count} đã đồng
-                      bộ
-                    </span>
-                    <small>
-                      {subject.cms_unsynced_count} chưa/khác trạng thái
-                    </small>
-                  </td>
-                  <td>
-                    <span
-                      className={statusClass(subject.course_mapping_status)}
-                    >
-                      {subject.course_mapping_label ||
-                        subject.course_mapping_status}
-                    </span>
-                    <small>
-                      {subject.openedx_course_id ||
-                        subject.suggested_openedx_course_id ||
-                        "N/A"}
-                    </small>
-                  </td>
-                  <td className="learning-cell">
-                    <b>
-                      {subject.learning_enrolled_count || 0}/
-                      {subject.student_count} Ghi danh CMS
-                    </b>
-                    <small>
-                      Dữ liệu: {subject.learning_synced_count || 0}/
-                      {subject.student_count} · Đã học:{" "}
-                      {subject.learning_active_count || 0}/
-                      {subject.student_count}
-                    </small>
-                    <small>
-                      Tiến độ TB:{" "}
-                      {percentLabel(subject.learning_avg_progress_percent)} ·
-                      Điểm tổng TB:{" "}
-                      {percentLabel(subject.learning_avg_grade_percent)}
-                    </small>
-                    <small>
-                      TP:{" "}
-                      {componentSummaryLine(
-                        subject.learning_component_summaries,
-                      )}
-                    </small>
-                    <small>{alertText(subject.learning_alerts)}</small>
-                  </td>
-                  <td>
-                    <div className="row-actions">
-                      <Link
-                        className="btn small primary"
-                        href={buildSubjectClassesHref(subject, {
-                          termId,
-                          termName: selectedTerm?.term_name,
-                          branch,
-                          campus,
-                        })}
-                      >
-                        Xem lớp
-                      </Link>
-                      {!["mapped", "already_mapped", "auto_mapped"].includes(
-                        String(
-                          subject.course_mapping_status || "",
-                        ).toLowerCase(),
-                      ) && (
-                        <button
-                          className="btn small secondary"
-                          type="button"
-                          disabled={mappingSubjectId === subject.id}
-                          onClick={() => runAutoMap(subject)}
-                        >
-                          {mappingSubjectId === subject.id
-                            ? "Đang ghép..."
-                            : "Tự động ghép"}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="pagination-row">
-          <button
-            className="btn secondary small"
-            disabled={page <= 1}
-            onClick={() => setPage((value) => Math.max(1, value - 1))}
-          >
-            Trang trước
-          </button>
-          <span>
-            {page} / {totalPages}
-          </span>
-          <button
-            className="btn secondary small"
-            disabled={page >= totalPages}
-            onClick={() => setPage((value) => value + 1)}
-          >
-            Trang sau
-          </button>
-        </div>
+        <EnterpriseDataTable
+          tableId="student-management-subjects"
+          caption="Danh sách môn"
+          rows={subjects}
+          columns={columns}
+          rowKey={(subject) => subject.id}
+          density={density}
+          onDensityChange={(value) => update({ density: value }, { resetPage: false })}
+          loading={loading}
+          error={message?.type === "error" ? message.body : undefined}
+          onRetry={() => loadSubjects()}
+          emptyTitle="Chưa có môn phù hợp"
+          emptyDescription="Đổi học kỳ, cơ sở, trạng thái hoặc xóa từ khóa. Nếu vẫn trống, kiểm tra phân quyền và dữ liệu AP sync."
+          emptyAction={<button className="btn secondary small" type="button" onClick={() => update({ q: "", status: "all", page: 1 }, { resetPage: false })}>Xóa bộ lọc nhanh</button>}
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          totalPages={totalPages}
+          onPageChange={(value) => update({ page: value }, { resetPage: false })}
+          onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })}
+          label="môn"
+        />
+
       </section>
     </div>
   );

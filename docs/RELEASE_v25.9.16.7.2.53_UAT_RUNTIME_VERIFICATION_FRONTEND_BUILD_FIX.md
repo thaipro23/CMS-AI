@@ -1,4 +1,4 @@
-# v25.9.16.7.2.64.12 — UAT Runtime Verification + Frontend Build Fix
+# v25.9.16.7.2.64.13 — UAT Runtime Verification + Frontend Build Fix
 
 ## Mục tiêu
 
@@ -9,8 +9,8 @@ Không thêm nghiệp vụ mới, không đổi schema, không đổi classifier
 ## Thay đổi chính
 
 1. Sửa metadata frontend build bị stale:
-   - `frontend/package-lock.json` version đồng bộ về `25.9.16.7.2.64.12`.
-   - `frontend/Dockerfile` `NEXT_PUBLIC_APP_VERSION` fallback đồng bộ về `25.9.16.7.2.64.12`.
+   - `frontend/package-lock.json` version đồng bộ về `25.9.16.7.2.64.13`.
+   - `frontend/Dockerfile` `NEXT_PUBLIC_APP_VERSION` fallback đồng bộ về `25.9.16.7.2.64.13`.
 
 2. Thêm `scripts/frontend-build-verify.sh`:
    - kiểm tra `package.json`, `package-lock.json`, `Dockerfile`, `next.config.js`,

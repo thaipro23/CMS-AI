@@ -1,4 +1,4 @@
-# v25.9.16.7.2.64.12 — Query Hotspot + Load Hardening
+# v25.9.16.7.2.64.13 — Query Hotspot + Load Hardening
 
 ## Mục tiêu
 

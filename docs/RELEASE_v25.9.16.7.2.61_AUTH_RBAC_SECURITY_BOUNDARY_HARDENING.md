@@ -1,4 +1,4 @@
-# v25.9.16.7.2.64.12 — Auth/RBAC Security Boundary Hardening
+# v25.9.16.7.2.64.13 — Auth/RBAC Security Boundary Hardening
 
 ## Mục tiêu
 

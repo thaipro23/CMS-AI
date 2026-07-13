@@ -18,6 +18,7 @@ from app.schemas.readiness import (
     SecurityReadinessReport,
     SecurityAttackSimulationReport,
     ProductionPilotFinalReport,
+    UxAcceptanceReport,
 )
 
 router = APIRouter()
@@ -232,6 +233,14 @@ def maintainability_contract_health(user: UserContext = Depends(require_permissi
     from app.services.maintainability_contract import MaintainabilityContractService
 
     return MaintainabilityContractService().report()
+
+
+@router.get('/health/uat-ux-acceptance', response_model=UxAcceptanceReport)
+def uat_ux_acceptance_health(user: UserContext = Depends(require_permission('view_jobs'))):
+    """Read-only static UX contract gate for Training/Ops UAT."""
+    from app.services.ux_acceptance import UxAcceptanceService
+
+    return UxAcceptanceService().report()
 
 
 @router.get('/health/production-pilot-final', response_model=ProductionPilotFinalReport)

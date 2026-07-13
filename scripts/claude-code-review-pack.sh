@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/claude-code-review-pack-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.12}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.14}"
 INCLUDE_BUILD_GATE="${INCLUDE_BUILD_GATE:-0}"
 STRICT_BUILD_GATE="${STRICT_BUILD_GATE:-0}"
 mkdir -p "$OUT_DIR"
@@ -151,6 +151,30 @@ else
   record_status FAIL BANK_HIERARCHY_UX_CONTRACT "Bank hierarchy/DataTable foundation contract is incomplete"
 fi
 
+# 8c) Bank workflow UX completion contract.
+BANK_WORKFLOW_FILES=(
+  "backend/app/services/question_bank/import_export.py"
+  "frontend/hooks/useBankQuestionTableState.ts"
+  "frontend/app/bank/_components/BankQuestionEnterpriseTable.tsx"
+  "frontend/app/bank/_components/BankQuestionImportModal.tsx"
+)
+bank_ux_missing=0
+for f in "${BANK_WORKFLOW_FILES[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    record_status FAIL BANK_WORKFLOW_MODULE_MISSING "$f is missing"
+    bank_ux_missing=$((bank_ux_missing+1))
+  fi
+done
+if [[ "$bank_ux_missing" == "0" ]] \
+  && grep -q "questions/import-preview" backend/app/api/routes/question_bank_v2.py \
+  && grep -q "questions/import-errors/{preview_token}.xlsx" backend/app/api/routes/question_bank_v2.py \
+  && grep -q "releases/{release_id}/preview" backend/app/api/routes/question_bank_v2.py \
+  && grep -q "Chọn toàn bộ" frontend/app/bank/_components/pages/ChapterWorkspacePage.tsx; then
+  record_status PASS BANK_WORKFLOW_UX_CONTRACT "Bank question paging/import/export/batch/preview contracts are present"
+else
+  record_status FAIL BANK_WORKFLOW_UX_CONTRACT "Bank workflow UX completion contract is incomplete"
+fi
+
 # 9) Dependency/build readiness evidence. This pack should tell reviewers whether
 # the current runtime was capable of running backend pytest and frontend typecheck.
 python - <<'PYDEP' > "$OUT_DIR/runtime-dependency-status.json" 2>&1
@@ -173,7 +197,7 @@ Run before UAT sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.12 \
+EXPECTED_VERSION=25.9.16.7.2.64.14 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
@@ -219,7 +243,7 @@ PY
 cat > "$OUT_DIR/CLAUDE_REVIEW_BRIEF.md" <<'MD'
 # Claude Code Review Brief
 
-Review target: AI Server / Open edX CMS v25.9.16.7.2.64.12 — Academic AP Sync + External Assignment Workflow Split.
+Review target: AI Server / Open edX CMS v25.9.16.7.2.64.14 — Training/Ops UX Completion + UAT UX Acceptance Gate.
 
 Static review services to inspect: SecurityReadinessService, SecurityAttackSimulationService, PerformanceReadinessService, QueryHotspotService, ReleaseCandidateService, PilotOperationsService, QuestionBankReleasePublishWorkflowService, QuestionBankQuizCreationWorkflowService, QuestionBankGenerationReviewWorkflowService, AcademicSyncEnrollmentWorkflowService.
 

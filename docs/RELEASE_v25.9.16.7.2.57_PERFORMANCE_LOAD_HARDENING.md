@@ -1,4 +1,4 @@
-# Release v25.9.16.7.2.64.12 — Performance Load Hardening
+# Release v25.9.16.7.2.64.13 — Performance Load Hardening
 
 ## Mục tiêu
 

@@ -1,4 +1,4 @@
-// v25.9.16.7.2.64.13 — split readiness API facade.
+// v25.9.16.7.2.64.14 — split readiness API facade.
 // The legacy frontend/lib/api.ts exports remain intact. New readiness/ops code
 // should import from this facade so the monolithic API client stops growing.
 export {
@@ -63,6 +63,17 @@ export async function getSecurityAttackSimulation(
 ): Promise<SecurityAttackSimulationReport> {
   return parseResponse(
     await apiFetch(`${API}/health/security-attack-simulation`, {
+      credentials: 'include',
+      headers,
+    }),
+  )
+}
+
+export async function getUxAcceptance(
+  headers: HeadersInit,
+): Promise<import('../../types/readiness').UxAcceptanceReport> {
+  return parseResponse(
+    await apiFetch(`${API}/health/uat-ux-acceptance`, {
       credentials: 'include',
       headers,
     }),

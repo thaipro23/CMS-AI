@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { useAppContext } from "../../context/AppContext";
 import {
   createAcademicTrainingTeacherExportJob,
@@ -21,6 +20,8 @@ import {
   AcademicTrainingTeacherReport,
 } from "../../types";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
+import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
+import { useAcademicTableState } from "../../hooks/useAcademicTableState";
 import {
   InlineNotice,
   InlineNoticeData,
@@ -29,8 +30,6 @@ import {
   noticeSuccess,
   noticeWarning,
 } from "../../components/ui/InlineNotice";
-
-const PAGE_SIZE = 50;
 
 type TrainingSummary = {
   teacher_count: number;
@@ -231,24 +230,15 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 function TeacherManagementContent() {
-  const searchParams = useSearchParams();
   const { authHeaders } = useAppContext();
   const headers = useMemo(() => authHeaders(), [authHeaders]);
   const [terms, setTerms] = useState<AcademicTerm[]>([]);
   const [campuses, setCampuses] = useState<AcademicCampus[]>([]);
   const [items, setItems] = useState<AcademicTrainingTeacherReport[]>([]);
   const [summary, setSummary] = useState<TrainingSummary>(EMPTY_SUMMARY);
-  const [termId, setTermId] = useState(searchParams.get("term_id") || "");
-  const [branch, setBranch] = useState(searchParams.get("branch") || "poly");
-  const [campus, setCampus] = useState(
-    searchParams.get("campus") === "all"
-      ? ""
-      : searchParams.get("campus") || "",
-  );
-  const [search, setSearch] = useState("");
+  const { state, update } = useAcademicTableState({ branch: "poly", status: "all", pageSize: 50 });
+  const { termId, branch, campus, q: search, status: learningStatus, page, pageSize, density } = state;
   const debouncedSearch = useDebouncedValue(search, 350);
-  const [learningStatus, setLearningStatus] = useState("all");
-  const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -263,13 +253,10 @@ function TeacherManagementContent() {
       .then((data) => {
         if (cancelled) return;
         setTerms(data);
-        setTermId((current) => {
-          if (current && data.some((item) => item.id === current))
-            return current;
-          const preferred =
-            data.find((item) => item.term_name === "Summer 2026") || data[0];
-          return preferred?.id || "";
-        });
+        if (!termId || !data.some((item) => item.id === termId)) {
+          const preferred = data.find((item) => item.term_name === "Summer 2026") || data[0];
+          update({ termId: preferred?.id || "" });
+        }
       })
       .catch((error) =>
         setMessage(noticeError(error, "Không tải được học kỳ.")),
@@ -277,7 +264,7 @@ function TeacherManagementContent() {
     return () => {
       cancelled = true;
     };
-  }, [headers, branch]);
+  }, [headers, branch, termId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -285,17 +272,13 @@ function TeacherManagementContent() {
       .then((data) => {
         if (cancelled) return;
         setCampuses(data);
-        setCampus((current) => {
-          if (current && data.some((item) => item.campus_code === current))
-            return current;
-          return "";
-        });
+        if (campus && !data.some((item) => item.campus_code === campus)) update({ campus: "" });
       })
       .catch(() => setCampuses([]));
     return () => {
       cancelled = true;
     };
-  }, [headers, branch]);
+  }, [headers, branch, campus]);
 
   const resetReportState = () => {
     setItems([]);
@@ -319,7 +302,7 @@ function TeacherManagementContent() {
         search: debouncedSearch,
         learningStatus,
         page,
-        pageSize: PAGE_SIZE,
+        pageSize,
         includeClasses: false,
       });
       if (cancelledRef?.cancelled) return;
@@ -343,7 +326,7 @@ function TeacherManagementContent() {
     return () => {
       cancelledRef.cancelled = true;
     };
-  }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page]);
+  }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize]);
 
   useEffect(() => {
     if (!exportJob || !["queued", "running"].includes(exportJob.status)) return;
@@ -367,7 +350,11 @@ function TeacherManagementContent() {
   }, [headers, exportJob?.id, exportJob?.status]);
 
   const selectedTerm = terms.find((item) => item.id === termId);
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) update({ page: totalPages }, { resetPage: false });
+  }, [page, totalPages, update]);
 
   const classComponentColumns = (item: AcademicTrainingTeacherReport) => {
     const columns: Array<{ key: string; name: string }> = [];
@@ -461,6 +448,16 @@ function TeacherManagementContent() {
     }
   };
 
+  const columns = useMemo<EnterpriseTableColumn<AcademicTrainingTeacherReport>[]>(() => [
+    { key: "stt", header: "STT", width: 72, sticky: "left", stickyOffset: 0, hideable: false, render: (_item, index) => (page - 1) * pageSize + index + 1 },
+    { key: "teacher", header: "Giảng viên", minWidth: 250, sticky: "left", stickyOffset: 72, render: (item) => <div className="teacher-identity"><span className="teacher-avatar">{(item.teacher_name || item.teacher_username || "GV").slice(0, 2).toUpperCase()}</span><div><b>{item.teacher_name || item.teacher_username}</b><small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ""}</small><small>{item.branch?.toUpperCase() || "N/A"}{item.campus ? ` · ${item.campus.toUpperCase()}` : ""}</small></div></div> },
+    { key: "scale", header: "Quy mô đào tạo", minWidth: 220, render: (item) => <><b>{item.class_count} lớp · {item.subject_count} môn</b><small>{item.subject_codes?.slice(0, 6).join(", ") || "N/A"}</small><small>{item.student_count} lượt SV · {item.unique_student_count} SV riêng biệt</small><small>Học lại: {countLabel(item.relearn_student_count)} SV · {countLabel(item.total_relearn_count)} lượt</small></> },
+    { key: "cms", header: "Đồng bộ CMS", minWidth: 220, render: (item) => <><span className={syncTone(item.cms_synced_count, item.student_count)}>User CMS match {ratioLabel(item.cms_synced_count, item.student_count)}</span><small>Ghi danh CMS {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>{item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa ghép Course CMS</small> : <small>Course CMS đã map cho các lớp có dữ liệu</small>}</> },
+    { key: "progress", header: "Tiến độ học", minWidth: 210, render: (item) => <><b>Completion {percentLabel(item.learning_avg_progress_percent)}</b><small>Điểm tổng {score10Label(item.learning_avg_grade_10)}</small><small>Có hoạt động {ratioLabel(item.learning_active_count, item.student_count)}</small><small>Trễ deadline {countLabel(item.deadline_late_student_count)} SV · {countLabel(item.deadline_late_quiz_count)} lượt quiz</small></> },
+    { key: "risk", header: "Tình hình sinh viên", minWidth: 260, render: (item) => { const statuses = item.status_counts || {}; return <><span className={riskTone(item)}>{item.risk_student_count ? `${item.risk_student_count} SV cần theo dõi` : "Ổn"}</span><small>Chưa học {countLabel(statuses.no_activity)} · Tiến độ thấp {countLabel(statuses.low_progress)} · Điểm thấp {countLabel(statuses.low_grade)}</small><small>Trễ deadline {countLabel(statuses.deadline_late)} SV · Không được thi {countLabel(statuses.exam_not_eligible)} SV</small><small>{alertText(item.learning_alerts)}</small></> } },
+    { key: "actions", header: "Thao tác", minWidth: 110, sticky: "right", hideable: false, render: (item) => { const params = new URLSearchParams(); if (termId) params.set("term_id", termId); if (branch) params.set("branch", branch); if (campus) params.set("campus", campus); params.set("list_campus", campus || "all"); if (selectedTerm?.term_name) params.set("term_name", selectedTerm.term_name); params.set("teacher_name", item.teacher_name || item.teacher_username); return <Link className="btn secondary small teacher-row-action" href={`/teacher-management/teachers/${encodeURIComponent(item.teacher_id)}/classes?${params.toString()}`}>Xem lớp</Link> } },
+  ], [branch, campus, page, pageSize, selectedTerm?.term_name, termId]);
+
   return (
     <div className="page-stack student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
       <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
@@ -472,7 +469,7 @@ function TeacherManagementContent() {
               {campus ? campus.toUpperCase() : "Tất cả cơ sở"}
             </b>
             <small>
-              Đang hiển thị {counterText(total, page, PAGE_SIZE)} giảng viên.
+              Đang hiển thị {counterText(total, page, pageSize)} giảng viên.
               Các số tổng tính theo bộ lọc hiện tại.
             </small>
           </div>
@@ -518,9 +515,7 @@ function TeacherManagementContent() {
               className="input"
               value={branch}
               onChange={(event) => {
-                setBranch(event.target.value);
-                setCampus("");
-                setPage(1);
+                update({ branch: event.target.value, campus: "" });
               }}
             >
               <option value="poly">Poly</option>
@@ -533,8 +528,7 @@ function TeacherManagementContent() {
               className="input"
               value={termId}
               onChange={(event) => {
-                setTermId(event.target.value);
-                setPage(1);
+                update({ termId: event.target.value });
               }}
             >
               {!terms.length && (
@@ -553,8 +547,7 @@ function TeacherManagementContent() {
               className="input"
               value={campus}
               onChange={(event) => {
-                setCampus(event.target.value);
-                setPage(1);
+                update({ campus: event.target.value });
               }}
             >
               <option value="">Tất cả cơ sở</option>
@@ -571,8 +564,7 @@ function TeacherManagementContent() {
               className="input"
               value={learningStatus}
               onChange={(event) => {
-                setLearningStatus(event.target.value);
-                setPage(1);
+                update({ status: event.target.value });
               }}
             >
               <option value="all">Tất cả giáo viên</option>
@@ -596,8 +588,7 @@ function TeacherManagementContent() {
               className="input"
               value={search}
               onChange={(event) => {
-                setSearch(event.target.value);
-                setPage(1);
+                update({ q: event.target.value });
               }}
               placeholder="Tên GV, username, COM1071, lớp..."
             />
@@ -675,228 +666,30 @@ function TeacherManagementContent() {
 
         <InlineNotice notice={message} />
 
-        <div className="table-wrap academic-table-wrap training-table-wrap ux-table-card">
-          <table className="data-table academic-data-table training-teacher-table">
-            <thead>
-              <tr>
-                <th>STT</th>
-                <th>Giảng viên</th>
-                <th>Quy mô đào tạo</th>
-                <th>Đồng bộ CMS</th>
-                <th>Tiến độ học</th>
-                <th>Sinh viên học như nào</th>
-                <th>Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading &&
-                Array.from({ length: 6 }).map((_, index) => (
-                  <tr
-                    key={`teacher-skeleton-${index}`}
-                    className="ux-skeleton-row"
-                  >
-                    <td colSpan={7}>
-                      <span className="ux-skeleton-line wide" />
-                      <span className="ux-skeleton-line" />
-                    </td>
-                  </tr>
-                ))}
-              {!loading && !items.length && (
-                <tr>
-                  <td colSpan={7}>
-                    <div className="ux-empty-state">
-                      <b>Chưa có dữ liệu theo bộ lọc hiện tại</b>
-                      <span>
-                        Đổi cơ sở, học kỳ hoặc xóa từ khóa tìm kiếm để xem danh
-                        sách giảng viên.
-                      </span>
-                      <button
-                        className="btn secondary small"
-                        type="button"
-                        onClick={() => {
-                          setSearch("");
-                          setLearningStatus("all");
-                          setPage(1);
-                        }}
-                      >
-                        Xóa bộ lọc nhanh
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )}
-              {!loading &&
-                items.map((item, index) => {
-                  const statuses = item.status_counts || {};
-                  const teacherClassesParams = new URLSearchParams();
-                  if (termId) teacherClassesParams.set("term_id", termId);
-                  if (branch) teacherClassesParams.set("branch", branch);
-                  if (campus) teacherClassesParams.set("campus", campus);
-                  teacherClassesParams.set("list_campus", campus || "all");
-                  if (selectedTerm?.term_name)
-                    teacherClassesParams.set(
-                      "term_name",
-                      selectedTerm.term_name,
-                    );
-                  teacherClassesParams.set(
-                    "teacher_name",
-                    item.teacher_name || item.teacher_username,
-                  );
-                  return (
-                    <tr key={item.teacher_id} className="teacher-row-compact">
-                      <td className="stt-cell">
-                        {(page - 1) * PAGE_SIZE + index + 1}
-                      </td>
-                      <td>
-                        <div className="teacher-identity">
-                          <span className="teacher-avatar">
-                            {(
-                              item.teacher_name ||
-                              item.teacher_username ||
-                              "GV"
-                            )
-                              .slice(0, 2)
-                              .toUpperCase()}
-                          </span>
-                          <div>
-                            <b>{item.teacher_name || item.teacher_username}</b>
-                            <small>
-                              {item.teacher_username}
-                              {item.teacher_email
-                                ? ` · ${item.teacher_email}`
-                                : ""}
-                            </small>
-                            <small>
-                              {item.branch?.toUpperCase() || "N/A"}
-                              {item.campus
-                                ? ` · ${item.campus.toUpperCase()}`
-                                : ""}
-                            </small>
-                          </div>
-                        </div>
-                      </td>
-                      <td>
-                        <b>
-                          {item.class_count} lớp · {item.subject_count} môn
-                        </b>
-                        <small>
-                          {item.subject_codes?.slice(0, 6).join(", ") || "N/A"}
-                        </small>
-                        <small>
-                          {item.student_count} lượt SV ·{" "}
-                          {item.unique_student_count} SV riêng biệt
-                        </small>
-                        <small>
-                          Học lại: {countLabel(item.relearn_student_count)} SV ·{" "}
-                          {countLabel(item.total_relearn_count)} lượt
-                        </small>
-                      </td>
-                      <td>
-                        <span
-                          className={syncTone(
-                            item.cms_synced_count,
-                            item.student_count,
-                          )}
-                        >
-                          User CMS match{" "}
-                          {ratioLabel(
-                            item.cms_synced_count,
-                            item.student_count,
-                          )}
-                        </span>
-                        <small>
-                          Ghi danh CMS{" "}
-                          {ratioLabel(
-                            item.learning_enrolled_count,
-                            item.student_count,
-                          )}
-                        </small>
-                        {item.classes_without_course_count ? (
-                          <small className="danger-text">
-                            {item.classes_without_course_count} lớp chưa ghép
-                            Course CMS
-                          </small>
-                        ) : (
-                          <small>
-                            Course CMS đã map cho các lớp có dữ liệu
-                          </small>
-                        )}
-                      </td>
-                      <td>
-                        <b>
-                          Completion{" "}
-                          {percentLabel(item.learning_avg_progress_percent)}
-                        </b>
-                        <small>
-                          Điểm tổng {score10Label(item.learning_avg_grade_10)}
-                        </small>
-                        <small>
-                          Có hoạt động{" "}
-                          {ratioLabel(
-                            item.learning_active_count,
-                            item.student_count,
-                          )}
-                        </small>
-                        <small>
-                          Trễ deadline{" "}
-                          {countLabel(item.deadline_late_student_count)} SV ·{" "}
-                          {countLabel(item.deadline_late_quiz_count)} lượt quiz
-                        </small>
-                      </td>
-                      <td>
-                        <span className={riskTone(item)}>
-                          {item.risk_student_count
-                            ? `${item.risk_student_count} SV cần theo dõi`
-                            : "Ổn"}
-                        </span>
-                        <small>
-                          Chưa học {countLabel(statuses.no_activity)} · Tiến độ
-                          thấp {countLabel(statuses.low_progress)} · Điểm thấp{" "}
-                          {countLabel(statuses.low_grade)}
-                        </small>
-                        <small>
-                          Trễ deadline {countLabel(statuses.deadline_late)} SV ·
-                          Không được thi{" "}
-                          {countLabel(statuses.exam_not_eligible)} SV
-                        </small>
-                        <small>{alertText(item.learning_alerts)}</small>
-                      </td>
-                      <td>
-                        <Link
-                          className="btn secondary small teacher-row-action"
-                          href={`/teacher-management/teachers/${encodeURIComponent(item.teacher_id)}/classes?${teacherClassesParams.toString()}`}
-                        >
-                          Xem lớp
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-            </tbody>
-          </table>
-        </div>
+        <EnterpriseDataTable
+          tableId="teacher-management"
+          caption="Danh sách giảng viên"
+          rows={items}
+          columns={columns}
+          rowKey={(item) => item.teacher_id}
+          density={density}
+          onDensityChange={(value) => update({ density: value }, { resetPage: false })}
+          loading={loading}
+          error={message?.type === "error" ? message.body : undefined}
+          onRetry={() => loadReport()}
+          emptyTitle="Chưa có dữ liệu theo bộ lọc hiện tại"
+          emptyDescription="Đổi cơ sở, học kỳ, trạng thái hoặc xóa từ khóa tìm kiếm."
+          emptyAction={<button className="btn secondary small" type="button" onClick={() => update({ q: "", status: "all", page: 1 }, { resetPage: false })}>Xóa bộ lọc nhanh</button>}
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          totalPages={totalPages}
+          onPageChange={(value) => update({ page: value }, { resetPage: false })}
+          onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })}
+          label="giảng viên"
+          getRowClassName={() => "teacher-row-compact"}
+        />
 
-        <div className="pagination-row">
-          <button
-            className="btn secondary"
-            type="button"
-            disabled={page <= 1 || loading}
-            onClick={() => setPage((value) => Math.max(1, value - 1))}
-          >
-            Trang trước
-          </button>
-          <span>
-            Trang {page}/{totalPages}
-          </span>
-          <button
-            className="btn secondary"
-            type="button"
-            disabled={page >= totalPages || loading}
-            onClick={() => setPage((value) => value + 1)}
-          >
-            Trang sau
-          </button>
-        </div>
       </section>
     </div>
   );

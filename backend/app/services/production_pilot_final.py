@@ -11,6 +11,7 @@ from app.services.performance_readiness import PerformanceReadinessService
 from app.services.pilot_operations import PilotOperationsService
 from app.services.query_hotspot import QueryHotspotService
 from app.services.security_readiness import SecurityReadinessService
+from app.services.ux_acceptance import UxAcceptanceService
 
 
 class ProductionPilotFinalService:
@@ -67,6 +68,7 @@ class ProductionPilotFinalService:
         performance = PerformanceReadinessService(self.db).performance_readiness_report()
         maintainability = MaintainabilityContractService().report() if include_static_scans else {}
         hotspots = QueryHotspotService().report(max_items=80) if include_static_scans else {}
+        ux_acceptance = UxAcceptanceService().report() if include_static_scans else {}
 
         gates = [
             self._gate('pilot_operations', 'Pilot operations', pilot.get('status'), pilot.get('blocker_count'), pilot.get('warning_count'), '/api/health/pilot-operations'),
@@ -77,6 +79,7 @@ class ProductionPilotFinalService:
             gates.extend([
                 self._gate('maintainability_contract', 'Maintainability contract', maintainability.get('status'), maintainability.get('blocker_count'), maintainability.get('warning_count'), '/api/health/maintainability-contract'),
                 self._gate('query_hotspots', 'Query hotspot scan', hotspots.get('status'), hotspots.get('blocker_count'), hotspots.get('warning_count'), '/api/health/query-hotspots'),
+                self._gate('uat_ux_acceptance', 'UAT UX acceptance', ux_acceptance.get('status'), ux_acceptance.get('blocker_count'), ux_acceptance.get('warning_count'), '/api/health/uat-ux-acceptance'),
             ])
 
         evidence_required = self._evidence_required()
@@ -136,6 +139,7 @@ class ProductionPilotFinalService:
                 'performance_readiness': self._compact(performance),
                 'maintainability_contract': self._compact(maintainability),
                 'query_hotspots': self._compact(hotspots),
+                'uat_ux_acceptance': self._compact(ux_acceptance),
             },
             'safe_policy': self.safe_policy,
             'read_only_guarantees': self.read_only_guarantees,
@@ -172,6 +176,7 @@ class ProductionPilotFinalService:
             'LOAD_TEST_HOT_ENDPOINTS_SUMMARY.md từ scripts/load-test-hot-endpoints.sh',
             'ROLLBACK_DRILL_SUMMARY.md từ scripts/rollback-drill-verify.sh',
             'OPENEDX_PUBLISH_VERIFY_SUMMARY.md nếu pilot có publish/quiz/final test thật',
+            'UAT_UX_ACCEPTANCE_SUMMARY.md và browser evidence cho bốn màn Training/Ops',
             'Deploy log gồm zip/root/version/image tag/thời điểm force recreate',
             '.env.production backup và artifact version trước để rollback',
         ]
@@ -231,6 +236,7 @@ class ProductionPilotFinalService:
             {'endpoint': '/api/audit?page=1&page_size=20', 'method': 'GET', 'target_p95_ms': 800, 'purpose': 'audit bounded scan'},
             {'endpoint': '/api/health/query-hotspots?max_items=80', 'method': 'GET', 'target_p95_ms': 1200, 'purpose': 'static hotspot gate'},
             {'endpoint': '/api/health/maintainability-contract', 'method': 'GET', 'target_p95_ms': 1200, 'purpose': 'maintainability contract gate'},
+            {'endpoint': '/api/health/uat-ux-acceptance', 'method': 'GET', 'target_p95_ms': 1200, 'purpose': 'static Training/Ops UX contract gate'},
             {'endpoint': '/api/health/pilot-operations?sample_limit=5', 'method': 'GET', 'target_p95_ms': 1800, 'purpose': 'pilot operations composition'},
         ]
 

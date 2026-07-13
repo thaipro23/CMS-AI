@@ -1,6 +1,6 @@
-# Claude Code Review Handoff — v25.9.16.7.2.64.12
+# Claude Code Review Handoff — v25.9.16.7.2.64.13
 
-Review target: **AI Server / Open edX CMS v25.9.16.7.2.64.12 — Query Hotspot + Load Hardening**.
+Review target: **AI Server / Open edX CMS v25.9.16.7.2.64.13 — Query Hotspot + Load Hardening**.
 
 ## Review focus
 

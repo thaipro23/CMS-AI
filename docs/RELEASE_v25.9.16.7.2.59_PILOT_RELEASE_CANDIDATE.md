@@ -1,4 +1,4 @@
-# v25.9.16.7.2.64.12 — Pilot Release Candidate
+# v25.9.16.7.2.64.13 — Pilot Release Candidate
 
 ## Mục tiêu
 

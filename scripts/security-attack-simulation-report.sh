@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 API_BASE_URL="${API_BASE_URL:-https://api-ai.cms-test.poly.edu.vn/api}"
 TOKEN="${TOKEN:-}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.12}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.14}"
 OUT_DIR="${OUT_DIR:-/tmp/ai-security-attack-simulation-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT_DIR"
 

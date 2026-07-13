@@ -1121,6 +1121,7 @@ export async function getAuditLogs(
     status?: string;
     errorType?: string;
     actorId?: string;
+    search?: string;
     page?: number;
     pageSize?: number;
   },
@@ -1133,6 +1134,7 @@ export async function getAuditLogs(
   if (query.errorType && query.errorType !== "all")
     params.set("error_type", query.errorType);
   if (query.actorId?.trim()) params.set("actor_id", query.actorId.trim());
+  if (query.search?.trim()) params.set("search", query.search.trim());
   params.set("page", String(query.page || 1));
   params.set("page_size", String(query.pageSize || 20));
   return parseResponse(
@@ -1141,6 +1143,20 @@ export async function getAuditLogs(
       headers,
     }),
   );
+}
+
+export async function downloadAuditLogsCsv(
+  query: { status?: string; errorType?: string; actorId?: string; search?: string } = {},
+  headers: HeadersInit,
+): Promise<Blob> {
+  const params = new URLSearchParams();
+  if (query.status && query.status !== "all") params.set("status", query.status);
+  if (query.errorType && query.errorType !== "all") params.set("error_type", query.errorType);
+  if (query.actorId?.trim()) params.set("actor_id", query.actorId.trim());
+  if (query.search?.trim()) params.set("search", query.search.trim());
+  const response = await apiFetch(`${API}/audit/export.csv?${params.toString()}`, { credentials: "include", headers });
+  if (!response.ok) throw new Error(await response.text() || response.statusText);
+  return response.blob();
 }
 
 export type OpenEdxSessionExchangeResponse = {

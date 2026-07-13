@@ -13,6 +13,7 @@ import {
   getReleaseCandidateReadiness,
   getSecurityReadiness,
   getSecurityAttackSimulation,
+  getUxAcceptance,
 } from '../../../lib/api/readiness'
 import type {
   MaintainabilityContractReport,
@@ -23,6 +24,7 @@ import type {
   ReleaseCandidateReport,
   SecurityReadinessReport,
   SecurityAttackSimulationReport,
+  UxAcceptanceReport,
 } from '../../../types/readiness'
 
 type ReportState = {
@@ -34,6 +36,7 @@ type ReportState = {
   queryHotspots?: QueryHotspotReport | null
   productionPilotFinal?: ProductionPilotFinalReport | null
   securityAttackSimulation?: SecurityAttackSimulationReport | null
+  uxAcceptance?: UxAcceptanceReport | null
 }
 
 function toneFromStatus(status?: string | null): OperationalGateTone {
@@ -80,7 +83,7 @@ export default function OpsReadinessPage() {
     setLoading(true)
     setError(null)
     try {
-      const [security, attackSimulation, performance, releaseCandidate, pilotOperations, maintainability, queryHotspots, productionPilotFinal] = await Promise.all([
+      const [security, attackSimulation, performance, releaseCandidate, pilotOperations, maintainability, queryHotspots, productionPilotFinal, uxAcceptance] = await Promise.all([
         getSecurityReadiness(headers).catch(() => null),
         getSecurityAttackSimulation(headers).catch(() => null),
         getPerformanceReadiness(headers).catch(() => null),
@@ -89,8 +92,9 @@ export default function OpsReadinessPage() {
         getMaintainabilityContract(headers).catch(() => null),
         getQueryHotspots(headers, { maxItems: 120 }).catch(() => null),
         getProductionPilotFinal(headers, { ...filters, includeStaticScans: true }).catch(() => null),
+        getUxAcceptance(headers).catch(() => null),
       ])
-      setReports({ security, securityAttackSimulation: attackSimulation, performance, releaseCandidate, pilotOperations, maintainability, queryHotspots, productionPilotFinal })
+      setReports({ security, securityAttackSimulation: attackSimulation, performance, releaseCandidate, pilotOperations, maintainability, queryHotspots, productionPilotFinal, uxAcceptance })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không tải được readiness reports')
     } finally {
@@ -126,6 +130,13 @@ export default function OpsReadinessPage() {
 
     {error && <div className="ops-readiness-error">{error}</div>}
 
+    <section className="ops-compact-summary" aria-label="Tóm tắt readiness">
+      <div><span>Final gate</span><b>{reports.productionPilotFinal?.decision || reports.productionPilotFinal?.status || 'UNKNOWN'}</b><small>{reports.productionPilotFinal?.blocker_count || 0} blocker</small></div>
+      <div><span>UX acceptance</span><b>{reports.uxAcceptance?.status || 'UNKNOWN'}</b><small>{reports.uxAcceptance?.passed_count || 0}/{reports.uxAcceptance?.check_count || 0} checks</small></div>
+      <div><span>Security</span><b>{reports.security?.status || 'UNKNOWN'}</b><small>{reports.security?.warning_count || 0} cảnh báo</small></div>
+      <div><span>Performance</span><b>{reports.performance?.status || 'UNKNOWN'}</b><small>{reports.performance?.warning_count || 0} cảnh báo</small></div>
+    </section>
+
     <div className="ops-readiness-grid">
 
       <OperationalGatePanel
@@ -136,6 +147,19 @@ export default function OpsReadinessPage() {
         counters={issueCounter(reports.productionPilotFinal)}
       >
         {Array.isArray(reports.productionPilotFinal?.final_checks) && reports.productionPilotFinal.final_checks.length ? <ul className="ops-readiness-list">{reports.productionPilotFinal.final_checks.slice(0, 5).map((item, index) => <li key={`${item.code || 'final'}-${index}`}><b>{item.code}</b>: {item.message}</li>)}</ul> : nextActions(reports.productionPilotFinal?.next_actions)}
+      </OperationalGatePanel>
+
+      <OperationalGatePanel
+        title="UAT UX acceptance"
+        subtitle={reports.uxAcceptance?.summary_label || 'Enterprise table, URL state, accessibility và Audit export contract'}
+        tone={toneFromStatus(reports.uxAcceptance?.status)}
+        status={reports.uxAcceptance?.status || 'UNKNOWN'}
+        counters={[
+          ...issueCounter(reports.uxAcceptance),
+          { label: 'passed', value: reports.uxAcceptance?.passed_count || 0, tone: 'success' as const },
+        ]}
+      >
+        {Array.isArray(reports.uxAcceptance?.browser_uat_checklist) && reports.uxAcceptance.browser_uat_checklist.length ? <ul className="ops-readiness-list">{reports.uxAcceptance.browser_uat_checklist.slice(0, 5).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : nextActions(reports.uxAcceptance?.next_actions)}
       </OperationalGatePanel>
 
       <OperationalGatePanel

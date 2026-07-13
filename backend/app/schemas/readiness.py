@@ -135,3 +135,10 @@ class ProductionPilotFinalReport(OperationReportBase):
     rollback_drill: dict[str, Any] | None = None
     signoff: dict[str, Any] | None = None
     reports: dict[str, Any] | None = None
+
+
+class UxAcceptanceReport(OperationReportBase):
+    report_type: Literal['uat_ux_acceptance_v1'] | str = 'uat_ux_acceptance_v1'
+    check_count: int | None = None
+    passed_count: int | None = None
+    browser_uat_checklist: list[str] | None = None

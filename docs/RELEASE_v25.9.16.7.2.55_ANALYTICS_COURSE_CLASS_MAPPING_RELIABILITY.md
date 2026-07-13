@@ -1,4 +1,4 @@
-# v25.9.16.7.2.64.12 — Analytics Course/Class Mapping Reliability
+# v25.9.16.7.2.64.13 — Analytics Course/Class Mapping Reliability
 
 Bản này tiếp tục từ `.54` và tập trung vào độ tin cậy mapping `course_id` Open edX → lớp AP trước khi mở rộng analytics/pilot.
 

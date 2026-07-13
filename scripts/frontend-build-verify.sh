@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 FRONTEND_DIR="${FRONTEND_DIR:-$ROOT_DIR/frontend}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/frontend-build-verify-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.12}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.14}"
 RUN_NPM_CI="${RUN_NPM_CI:-1}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-1}"
 mkdir -p "$OUT_DIR"

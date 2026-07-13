@@ -90,3 +90,15 @@ html[data-ai-theme='dark'] .bank-question-link-button small, html[data-ai-theme=
     grid-template-columns: 1fr;
   }
 }
+
+/* v25.9.16.7.2.64.14 — semantic status and accessible progress/table polish. */
+.status { display: inline-flex; align-items: center; gap: .38rem; white-space: nowrap; }
+.status .status-icon { display: inline-grid; place-items: center; width: 1.05rem; height: 1.05rem; border: 1px solid currentColor; border-radius: 999px; font-size: .72rem; font-weight: 800; line-height: 1; }
+.enterprise-data-table td > small, .enterprise-data-table td > span + small, .enterprise-data-table td > b + small { display: block; margin-top: .22rem; }
+.enterprise-data-table .row-actions { flex-wrap: nowrap; }
+.enterprise-data-table [role="progressbar"] { min-width: 8.5rem; }
+.ops-compact-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin-bottom: 1rem; }
+.ops-compact-summary > div { border: 1px solid var(--border, #dbe2ea); border-radius: .75rem; padding: .75rem; background: var(--surface, #fff); }
+.ops-compact-summary span, .ops-compact-summary small { display: block; }
+.ops-compact-summary b { display: block; margin-top: .25rem; font-size: 1.25rem; }
+@media (max-width: 720px) { .enterprise-table-controls { align-items: stretch; } .enterprise-table-view-actions { width: 100%; justify-content: space-between; } }
