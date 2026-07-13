@@ -221,6 +221,23 @@ def analytics_production_readiness(db: Session = Depends(get_db), user: UserCont
     return LearningAnalyticsCoreService(db).production_readiness_report(allowed_class_ids=allowed_class_ids)
 
 
+@router.get('/ops/sla')
+def analytics_sla_dashboard(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_dashboard')),
+):
+    """Read-only SLA dashboard for tracking.log ingest -> recalculate -> snapshot.
+
+    Operators need to know whether analytics is merely warming up or whether
+    worker/beat/recalculate is late. This endpoint never scans raw log files and
+    never mutates data; it uses checkpoints, normalized events, job rows and
+    materialized snapshots only.
+    """
+    allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
+    return LearningAnalyticsCoreService(db).analytics_sla_report(allowed_class_ids=allowed_class_ids, limit=limit)
+
+
 @router.get('/ops/rollout-control')
 def analytics_rollout_control(
     campus: str | None = None,
@@ -350,6 +367,92 @@ def analytics_pilot_acceptance(
     allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
     result = LearningAnalyticsCoreService(db).pilot_acceptance_report(class_id=class_id, course_id=course_id, campus=campus, branch=branch, sample_limit=sample_limit, allowed_class_ids=allowed_class_ids)
     log_audit(db, action='analytics.pilot_acceptance.view', status='success', message='Xem báo cáo pilot production học online', user=user, course_id=course_id, target_type='learning_analytics', target_id=class_id, metadata={'pilot_status': result.get('pilot_status'), 'signals_only_not_violation': True})
+    return result
+
+
+@router.get('/ops/course-class-mapping')
+def analytics_course_class_mapping_reliability(
+    campus: str | None = None,
+    branch: str | None = None,
+    term_id: str | None = None,
+    subject_id: str | None = None,
+    class_id: str | None = None,
+    course_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_dashboard')),
+):
+    """Read-only reliability report for Open edX course -> AP class mapping.
+
+    This helps UAT operators understand why tracking events may not produce
+    class snapshots: missing mapping, ambiguous mapping, no roster, no events,
+    or missing/stale snapshots. It never creates mappings or jobs.
+    """
+    if class_id:
+        _assert_analytics_class_access(db, user, class_id)
+    allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
+    result = LearningAnalyticsCoreService(db).analytics_course_class_mapping_reliability_report(
+        campus=campus,
+        branch=branch,
+        term_id=term_id,
+        subject_id=subject_id,
+        class_id=class_id,
+        course_id=course_id,
+        allowed_class_ids=allowed_class_ids,
+        limit=limit,
+    )
+    log_audit(
+        db,
+        action='analytics.course_class_mapping_reliability.view',
+        status='success',
+        message='Xem báo cáo độ tin cậy mapping Course CMS và lớp AP cho analytics',
+        user=user,
+        course_id=course_id,
+        target_type='learning_analytics',
+        target_id=class_id,
+        metadata={'status': result.get('status'), 'blocker_count': result.get('blocker_count'), 'warning_count': result.get('warning_count'), 'read_only': True},
+    )
+    return result
+
+
+@router.get('/ops/evidence-pack')
+def analytics_uat_evidence_pack(
+    class_id: str | None = None,
+    course_id: str | None = None,
+    campus: str | None = None,
+    branch: str | None = None,
+    sample_limit: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_dashboard')),
+):
+    """Read-only UAT evidence bundle for acceptance sign-off.
+
+    This route composes production readiness, SLA, pilot acceptance and optional
+    class doctor payloads into one exportable artifact. It does not enqueue,
+    recalculate, scan raw tracking.log, or mutate data.
+    """
+    if class_id:
+        _assert_analytics_class_access(db, user, class_id)
+    allowed_class_ids = _allowed_class_ids_for_analytics(db, user)
+    result = LearningAnalyticsCoreService(db).analytics_uat_evidence_pack(
+        class_id=class_id,
+        course_id=course_id,
+        campus=campus,
+        branch=branch,
+        sample_limit=sample_limit,
+        allowed_class_ids=allowed_class_ids,
+    )
+    log_audit(
+        db,
+        action='analytics.uat_evidence_pack.view',
+        status='success',
+        message='Xuất gói bằng chứng UAT analytics',
+        user=user,
+        course_id=course_id,
+        target_type='learning_analytics',
+        target_id=class_id,
+        metadata={'evidence_status': result.get('evidence_status'), 'signals_only_not_violation': True, 'read_only': True},
+    )
     return result
 
 

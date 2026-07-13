@@ -1,8 +1,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.38'
-TITLE = 'Bank Compact Table UX + Sidebar Taxonomy'
+VERSION = '25.9.16.7.2.64.12'
+TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
 def read(path: str) -> str:
@@ -18,7 +18,7 @@ def test_v38_version_and_docs_are_current():
     assert f'APP_VERSION={VERSION}' in read('.env.production.example')
     assert f'# AI Server Open edX — v{VERSION}' in read('README.md')
     assert f'# v{VERSION} — {TITLE}' in read('RUN_CURRENT.md')
-    assert f'# v{VERSION} — {TITLE}' in read('RUN_V25_9_16_7_2_38.md')
+    assert f'# v{VERSION} — {TITLE}' in read('RUN_V25_9_16_7_2_53.md')
 
 
 def test_v38_sidebar_group_taxonomy_matches_bank_training_admin_model():
@@ -63,7 +63,7 @@ def test_v38_chapter_workspace_embeds_stats_in_lesson_header_and_removes_large_r
 
 def test_v38_css_locks_compact_bank_table_and_inline_chapter_stats():
     css = read('frontend/app/globals.css')
-    assert 'v25.9.16.7.2.38 — compact bank table ux' in css
+    assert 'v25.9.16.7.2.64.12 — bank table production ux' in css
     assert '.bank-multipage .bank-compact-data-table' in css
     assert '.bank-table-link' in css
     assert '.bank-row-status' in css

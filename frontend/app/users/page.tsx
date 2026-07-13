@@ -37,7 +37,9 @@ const roleLabels: Record<string, string> = {
   DEPARTMENT_HEAD: 'Trưởng bộ môn',
   SUBJECT_OWNER: 'Chủ môn',
   QUESTION_REVIEWER: 'Người duyệt câu hỏi',
-  CAMPUS_MANAGER: 'Quản lý cơ sở',
+  CAMPUS_OWNER: 'Chủ cơ sở',
+  CAMPUS_MANAGER: 'Chủ cơ sở (legacy)',
+  TEACHER_ASSIGNED: 'Giáo viên được phân công AP',
 }
 
 const roleSubtitles: Record<string, string> = {
@@ -45,7 +47,9 @@ const roleSubtitles: Record<string, string> = {
   DEPARTMENT_HEAD: 'Quản lý các môn, phiên bản, bài và người duyệt trong một bộ môn.',
   SUBJECT_OWNER: 'Quản lý một môn hoặc một phiên bản/kỳ cụ thể.',
   QUESTION_REVIEWER: 'Chỉ xem, sửa, duyệt hoặc từ chối câu hỏi trong phạm vi được giao.',
-  CAMPUS_MANAGER: 'Toàn quyền vận hành đào tạo trong cơ sở được phân, bao gồm nhập điểm Assignment.',
+  CAMPUS_OWNER: 'Vận hành sinh viên/lớp/analytics trong cơ sở được phân công.',
+  CAMPUS_MANAGER: 'Legacy alias của Chủ cơ sở; dùng CAMPUS_OWNER cho gán mới.',
+  TEACHER_ASSIGNED: 'Giáo viên chỉ xem lớp được AP phân công; scope CLASS/CAMPUS chỉ là ràng buộc phụ.',
 }
 
 const roleTone: Record<string, string> = {
@@ -53,7 +57,9 @@ const roleTone: Record<string, string> = {
   DEPARTMENT_HEAD: 'blue',
   SUBJECT_OWNER: 'violet',
   QUESTION_REVIEWER: 'green',
+  CAMPUS_OWNER: 'orange',
   CAMPUS_MANAGER: 'orange',
+  TEACHER_ASSIGNED: 'blue',
 }
 
 const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
@@ -61,7 +67,9 @@ const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
   DEPARTMENT_HEAD: ['DEPARTMENT'],
   SUBJECT_OWNER: ['SUBJECT', 'SUBJECT_VERSION'],
   QUESTION_REVIEWER: ['SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'],
+  CAMPUS_OWNER: ['CAMPUS', 'SYSTEM'],
   CAMPUS_MANAGER: ['CAMPUS', 'SYSTEM'],
+  TEACHER_ASSIGNED: ['CLASS', 'CAMPUS', 'SYSTEM'],
 }
 
 const scopeLabel: Record<string, string> = {
@@ -138,7 +146,9 @@ export default function UsersPage() {
     { code: 'DEPARTMENT_HEAD', name: 'Trưởng bộ môn', description: roleSubtitles.DEPARTMENT_HEAD, rank: 70, status: 'active' },
     { code: 'SUBJECT_OWNER', name: 'Chủ môn', description: roleSubtitles.SUBJECT_OWNER, rank: 50, status: 'active' },
     { code: 'QUESTION_REVIEWER', name: 'Người duyệt câu hỏi', description: roleSubtitles.QUESTION_REVIEWER, rank: 30, status: 'active' },
-    { code: 'CAMPUS_MANAGER', name: 'Quản lý cơ sở', description: roleSubtitles.CAMPUS_MANAGER, rank: 60, status: 'active' },
+    { code: 'CAMPUS_OWNER', name: 'Chủ cơ sở', description: roleSubtitles.CAMPUS_OWNER, rank: 60, status: 'active' },
+    { code: 'CAMPUS_MANAGER', name: 'Chủ cơ sở (legacy)', description: roleSubtitles.CAMPUS_MANAGER, rank: 60, status: 'active' },
+    { code: 'TEACHER_ASSIGNED', name: 'Giáo viên được phân công AP', description: roleSubtitles.TEACHER_ASSIGNED, rank: 10, status: 'active' },
   ] as RBACRole[], [])
   const visibleRoles = roles.length ? roles : fallbackRoles
   const availableScopes = allowedScopesByRole[form.role_code] || ['SYSTEM']
@@ -176,7 +186,7 @@ export default function UsersPage() {
       heads: active.filter((a) => a.role_code === 'DEPARTMENT_HEAD').length,
       owners: active.filter((a) => a.role_code === 'SUBJECT_OWNER').length,
       reviewers: active.filter((a) => a.role_code === 'QUESTION_REVIEWER').length,
-      campusManagers: active.filter((a) => a.role_code === 'CAMPUS_MANAGER').length,
+      campusManagers: active.filter((a) => a.role_code === 'CAMPUS_MANAGER' || a.role_code === 'CAMPUS_OWNER').length,
     }
   }, [assignments])
 

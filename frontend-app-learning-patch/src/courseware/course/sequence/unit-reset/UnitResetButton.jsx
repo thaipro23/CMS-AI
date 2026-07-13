@@ -151,6 +151,13 @@ function getUnitIframes(unitUsageKey) {
   return candidates;
 }
 
+
+function targetOriginForFrame(frame) {
+  const rawSrc = getFrameSrc(frame);
+  if (!rawSrc) return window.location.origin;
+  try { return new URL(rawSrc, window.location.href).origin; } catch (error) { return window.location.origin; }
+}
+
 function postActiveSessionReloadToFrames({ unitUsageKey, reason, token }) {
   const message = {
     type: 'AI_QUIZ_ACTIVE_SESSION_READY_RELOAD',
@@ -159,7 +166,7 @@ function postActiveSessionReloadToFrames({ unitUsageKey, reason, token }) {
     token: String(token || Date.now()),
   };
   Array.from(document.querySelectorAll('iframe')).forEach((frame) => {
-    try { frame.contentWindow?.postMessage(message, '*'); } catch (error) { /* ignore cross-origin frame access */ }
+    try { frame.contentWindow?.postMessage(message, targetOriginForFrame(frame)); } catch (error) { /* ignore cross-origin frame access */ }
   });
 }
 
@@ -239,7 +246,7 @@ function broadcastAutoSubmitToProblemFrames(quizSessionPayload) {
     unit_usage_key: quizSessionPayload?.unit_usage_key,
   };
   Array.from(document.querySelectorAll('iframe')).forEach((frame) => {
-    try { frame.contentWindow?.postMessage(message, '*'); } catch (error) { /* ignore cross-origin frame access */ }
+    try { frame.contentWindow?.postMessage(message, targetOriginForFrame(frame)); } catch (error) { /* ignore cross-origin frame access */ }
   });
 }
 

@@ -49,7 +49,6 @@ const LEGACY_PERMISSION_BRIDGE: Record<string, string[]> = {
   view_user_analytics: ['user.manage_all'],
   view_training_reports: ['academic.view', 'view_training_reports'],
   manage_training_deadlines: ['academic.manage_campus'],
-  manage_assignment_scores: ['academic.manage_assignment_scores'],
 }
 
 

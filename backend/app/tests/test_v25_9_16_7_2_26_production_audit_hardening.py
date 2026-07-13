@@ -69,10 +69,10 @@ def test_version_is_synchronized_across_backend_frontend_and_footer():
     package = read('frontend/package.json')
     shell = read('frontend/components/layout/AppShell.tsx')
     compose = read('docker-compose.prod.yml')
-    assert "app_version: str = '25.9.16.7.2.38'" in config
-    assert '"version": "25.9.16.7.2.38"' in package
+    assert "app_version: str = '25.9.16.7.2.64.12'" in config
+    assert '"version": "25.9.16.7.2.64.12"' in package
     assert 'NEXT_PUBLIC_APP_VERSION' in shell
-    assert 'NEXT_PUBLIC_APP_VERSION: ${APP_VERSION:-25.9.16.7.2.38}' in compose
+    assert 'NEXT_PUBLIC_APP_VERSION: ${APP_VERSION:-25.9.16.7.2.64.12}' in compose
 
 
 def test_user_facing_vietnamese_replaces_auto_map_and_enrollment_in_management_pages():

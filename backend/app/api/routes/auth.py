@@ -116,15 +116,17 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
     and signed with the shared AI_CONNECTOR_HMAC_SECRET/OPENEDX_CONNECTOR_HMAC_SECRET.
     """
     data = _decode_bridge_ticket(payload.ticket)
-    base_role = _normalize_role(str(data.get('role') or 'viewer'))
+    is_super_admin = bool(data.get('is_superuser') or data.get('is_super_admin'))
+    # v25.9.16.7.2.64.12: Open edX staff/course author is not an AI legacy role.
+    # Only Open edX superuser/super_admin may receive legacy role=admin. All
+    # other users receive viewer and are authorized through business RBAC/AP
+    # assignments only.
+    base_role = 'admin' if is_super_admin else 'viewer'
     course_ids = _normalize_courses(data.get('course_ids') or data.get('courses'))
     ttl = int(settings.auth_session_token_ttl_seconds or 28800)
     now = int(time.time())
     user_id = str(data.get('sub') or data.get('user_id') or data.get('username') or 'openedx-user')
-    # Business RBAC can intentionally upgrade the UI/API legacy role after the
-    # user has been assigned SYSTEM_ADMIN/DEPARTMENT_HEAD/SUBJECT_OWNER/etc.
-    # Open edX is_staff alone is still not trusted as AI admin.
-    role = _normalize_role(BusinessRBACService(db).effective_legacy_role_for_user(user_id, base_role, email=data.get('email'), username=data.get('username')))
+    role = _normalize_role(base_role)
     claims = {
         'sub': user_id,
         'user_id': user_id,
@@ -137,6 +139,10 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
         'aud': settings.jwt_audience,
         'token_type': 'ai_session',
         'auth_source': 'openedx_cms_session_bridge',
+        'is_staff': bool(data.get('is_staff')),
+        'is_superuser': bool(data.get('is_superuser')),
+        'is_super_admin': bool(data.get('is_super_admin') or data.get('is_superuser')),
+        'ai_system_admin': bool(is_super_admin),
         'iat': now,
         'exp': now + ttl,
     }

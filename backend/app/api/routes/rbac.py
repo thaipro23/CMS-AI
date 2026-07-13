@@ -40,8 +40,9 @@ ROLE_HINTS = [
     ['QUESTION_REVIEWER', 'SUBJECT', 'SUBJECT_ID', 'Người duyệt toàn môn.'],
     ['QUESTION_REVIEWER', 'SUBJECT_VERSION', 'SUBJECT_VERSION_ID', 'Người duyệt trong một version/kỳ.'],
     ['QUESTION_REVIEWER', 'CHAPTER', 'CHAPTER_ID', 'Người duyệt đúng một bài/chapter.'],
-    ['CAMPUS_MANAGER', 'CAMPUS', 'PH', 'Quản lý cơ sở PH, được nhập/sửa điểm Assignment trong cơ sở.'],
-    ['CAMPUS_MANAGER', 'CAMPUS', '*', 'Quản lý tất cả cơ sở.'],
+    ['CAMPUS_OWNER', 'CAMPUS', 'PH', 'Chủ cơ sở PH, được vận hành sinh viên/lớp trong cơ sở.'],
+    ['CAMPUS_OWNER', 'CAMPUS', '*', 'Chủ cơ sở tất cả cơ sở.'],
+    ['TEACHER_ASSIGNED', 'CLASS', 'CLASS_ID', 'Giáo viên chỉ xem lớp AP được phân công; CLASS scope là ràng buộc phụ.'],
 ]
 
 
@@ -77,8 +78,8 @@ def _build_import_template() -> bytes:
     widths = [24, 32, 28, 22, 32, 42, 16]
     for idx, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + idx)].width = width
-    role_validation = DataValidation(type='list', formula1='"SYSTEM_ADMIN,DEPARTMENT_HEAD,SUBJECT_OWNER,QUESTION_REVIEWER,CAMPUS_MANAGER"', allow_blank=False)
-    scope_validation = DataValidation(type='list', formula1='"SYSTEM,DEPARTMENT,SUBJECT,SUBJECT_VERSION,CHAPTER,COURSE,CAMPUS"', allow_blank=False)
+    role_validation = DataValidation(type='list', formula1='"SYSTEM_ADMIN,DEPARTMENT_HEAD,SUBJECT_OWNER,QUESTION_REVIEWER,CAMPUS_OWNER,CAMPUS_MANAGER,TEACHER_ASSIGNED"', allow_blank=False)
+    scope_validation = DataValidation(type='list', formula1='"SYSTEM,DEPARTMENT,SUBJECT,SUBJECT_VERSION,CHAPTER,COURSE,CAMPUS,CLASS"', allow_blank=False)
     bool_validation = DataValidation(type='list', formula1='"false,true"', allow_blank=True)
     ws.add_data_validation(role_validation)
     ws.add_data_validation(scope_validation)
@@ -161,6 +162,54 @@ def effective_me(user: UserContext = Depends(get_user_context), db: Session = De
         ),
         'permissions': sorted(service.effective_permissions_for_user(user)),
         'assignments': [service.serialize_assignment(item) for item in assignments],
+    }
+
+
+
+@router.get('/scope-audit')
+def scope_audit(user: UserContext = Depends(get_user_context), db: Session = Depends(get_db)):
+    """Explain effective backend scope without exposing cross-campus data.
+
+    v25.9.16.7.2.50 uses this as an operator/debug endpoint so admins can see
+    whether a token is unrestricted, campus-scoped, subject-scoped, or only AP
+    teacher-assigned before opening /student-management, /teacher-management,
+    /analytics/learning, /jobs or /audit.
+    """
+    service = BusinessRBACService(db)
+    assignments = service.active_assignments_for_actor(user)
+    try:
+        from app.services.academic_service import AcademicService
+        decision = AcademicService(db).access_decision(user)
+        academic_scope = {
+            'unrestricted': bool(decision.unrestricted),
+            'teacher_ids': sorted(str(item) for item in (decision.teacher_ids or set())),
+            'subject_codes': sorted(str(item) for item in (decision.subject_codes or set())),
+            'campus_codes': sorted(str(item) for item in (decision.campus_codes or set())),
+        }
+    except Exception:
+        academic_scope = {'unrestricted': False, 'teacher_ids': [], 'subject_codes': [], 'campus_codes': [], 'error': 'academic_scope_unavailable'}
+    visibility = service.visibility_for_user(user)
+    return {
+        'user_id': user.user_id,
+        'email': user.email,
+        'username': user.username,
+        'legacy_role': user.role,
+        'is_system_admin': service.is_system_admin(user),
+        'permissions': sorted(service.effective_permissions_for_user(user)),
+        'campus_scope': service.campus_scope_for_user(user),
+        'academic_scope': academic_scope,
+        'bank_scope': {
+            'unrestricted': bool(visibility.unrestricted),
+            'parent_department_ids': sorted(visibility.parent_department_ids),
+            'parent_subject_ids': sorted(visibility.parent_subject_ids),
+            'parent_offering_ids': sorted(visibility.parent_offering_ids),
+            'broad_department_ids': sorted(visibility.broad_department_ids),
+            'broad_subject_ids': sorted(visibility.broad_subject_ids),
+            'broad_offering_ids': sorted(visibility.broad_offering_ids),
+            'exact_chapter_ids': sorted(visibility.exact_chapter_ids),
+        },
+        'assignments': [service.serialize_assignment(item) for item in assignments],
+        'backend_enforced': True,
     }
 
 

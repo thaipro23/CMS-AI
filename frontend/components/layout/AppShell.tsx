@@ -6,37 +6,40 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useAppContext } from '../../context/AppContext'
 import { ROLE_LABELS } from '../../types'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
+import { Breadcrumbs } from '../navigation/Breadcrumbs'
 
 type NavItem = {
   href: string
   label: string
   desc: string
   icon: string
-  group: 'work' | 'operations' | 'admin'
+  group: 'overview' | 'bank' | 'training' | 'operations'
   permission?: string
 }
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', desc: 'Số liệu & việc cần xử lý', icon: '⌁', group: 'work', permission: 'view_questions' },
-  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, phiên bản', icon: '▦', group: 'work', permission: 'view_questions' },
-  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Đưa bài kiểm tra lên CMS', icon: '◈', group: 'work', permission: 'publish_questions' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Đã tạo & khôi phục', icon: '◷', group: 'work', permission: 'publish_questions' },
-  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'admin', permission: 'manage_training_deadlines' },
-  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'admin', permission: 'manage_settings' },
-  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'admin', permission: 'manage_training_deadlines' },
-  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'operations', permission: 'view_training_reports' },
-  { href: '/teacher-management', label: 'Quản lý giảng viên', desc: 'GV, lớp, tiến độ', icon: '▤', group: 'operations', permission: 'view_training_reports' },
-  { href: '/analytics/learning', label: 'Học online', desc: 'Tín hiệu học theo log', icon: '◌', group: 'operations', permission: 'view_dashboard' },
-  { href: '/jobs', label: 'Tiến trình', desc: 'Việc đang xử lý', icon: '⚙', group: 'admin', permission: 'view_jobs' },
-  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'admin', permission: 'view_jobs' },
-  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'admin', permission: 'manage_settings' },
-  { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'admin', permission: 'manage_settings' },
+  { href: '/bank', label: 'Tổng quan ngân hàng', desc: 'Số liệu và việc cần xử lý', icon: '⌁', group: 'overview', permission: 'view_questions' },
+  { href: '/bank/departments', label: 'Ngân hàng câu hỏi', desc: 'Bộ môn → Môn → Phiên bản → Bài → Câu hỏi', icon: '▦', group: 'bank', permission: 'view_questions' },
+  { href: '/bank/quiz', label: 'Tạo Quiz từ bộ đề', desc: 'Luồng xuất bản sau ngân hàng', icon: '◈', group: 'bank', permission: 'publish_questions' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Quiz đã tạo và khôi phục', icon: '◷', group: 'bank', permission: 'publish_questions' },
+  { href: '/student-management', label: 'Sinh viên & lớp', desc: 'Danh sách AP, đồng bộ CMS', icon: '◎', group: 'training', permission: 'view_training_reports' },
+  { href: '/teacher-management', label: 'Quản lý giảng viên', desc: 'Giảng viên, lớp, tiến độ', icon: '▤', group: 'training', permission: 'view_training_reports' },
+  { href: '/analytics/learning', label: 'Học online', desc: 'Tín hiệu học theo dữ liệu', icon: '◌', group: 'training', permission: 'view_dashboard' },
+  { href: '/premises', label: 'Cơ sở', desc: 'Premises AP', icon: '▣', group: 'operations', permission: 'manage_training_deadlines' },
+  { href: '/semesters', label: 'Học kỳ', desc: 'Term & Block AP', icon: '◫', group: 'operations', permission: 'manage_settings' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', desc: 'Theo kỳ, theo hệ', icon: '⇄', group: 'operations', permission: 'manage_training_deadlines' },
+  { href: '/ops/readiness', label: 'Readiness', desc: 'Gate vận hành và pilot', icon: '◬', group: 'operations', permission: 'view_jobs' },
+  { href: '/jobs', label: 'Tác vụ nền', desc: 'Việc đang xử lý', icon: '⚙', group: 'operations', permission: 'view_jobs' },
+  { href: '/audit', label: 'Nhật ký', desc: 'Lịch sử thao tác', icon: '☷', group: 'operations', permission: 'view_jobs' },
+  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo phạm vi', icon: '◎', group: 'operations', permission: 'manage_settings' },
+  { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'operations', permission: 'manage_settings' },
 ]
 
 const navGroups: Array<{ key: NavItem['group']; label: string }> = [
-  { key: 'work', label: 'Quản lý ngân hàng đề' },
-  { key: 'operations', label: 'Quản lý sinh viên' },
-  { key: 'admin', label: 'Quản trị' },
+  { key: 'overview', label: 'Tổng quan' },
+  { key: 'bank', label: 'Ngân hàng câu hỏi' },
+  { key: 'training', label: 'Đào tạo' },
+  { key: 'operations', label: 'Vận hành & quản trị' },
 ]
 
 
@@ -59,6 +62,7 @@ function requiredPermissionForPath(pathname: string): string | null {
     [/^\/analytics(?:\/|$)/, 'view_dashboard'],
     [/^\/teacher-management(?:\/|$)/, 'view_training_reports'],
     [/^\/training-management(?:\/|$)/, 'view_training_reports'],
+    [/^\/ops\/readiness(?:\/|$)/, 'view_jobs'],
     [/^\/jobs(?:\/|$)/, 'view_jobs'],
     [/^\/audit(?:\/|$)/, 'view_jobs'],
     [/^\/users(?:\/|$)/, 'manage_settings'],
@@ -121,9 +125,9 @@ function buildStudentManagementTopbar(pathname: string, searchParams: { get(name
 }
 
 function AppFooter() {
-  const version = process.env.NEXT_PUBLIC_APP_VERSION || '25.9.16.7.2.38'
+  const version = process.env.NEXT_PUBLIC_APP_VERSION || '25.9.16.7.2.64.12'
   return <footer className="app-footer app-footer-compact product-footer">
-    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Vận hành đào tạo · Open edX CMS</span></div>
+    <div><b>Open edX AI Server</b><span>Ngân hàng câu hỏi · Vận hành đào tạo · Open edX CMS</span></div>
     <div className="footer-links"><span>v{version}</span></div>
   </footer>
 }
@@ -248,12 +252,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className={studentTopbar ? 'workspace-topbar workspace-topbar-minimal workspace-student-management-topbar product-command-topbar' : 'workspace-topbar workspace-topbar-minimal product-command-topbar'}>
         <div className="workspace-topbar-main product-topbar-copy">
           <h1>{currentTitle}</h1>
-          {studentTopbar && <nav className="workspace-breadcrumb" aria-label="Điều hướng Quản lý sinh viên">
-            {studentTopbar.map((item, index) => <span key={`${item.label}-${index}`} className="workspace-breadcrumb-item">
-              {index > 0 && <span className="workspace-breadcrumb-separator">/</span>}
-              {item.href ? <Link href={item.href}>{item.label}</Link> : <b>{item.label}</b>}
-            </span>)}
-          </nav>}
+          {studentTopbar && <Breadcrumbs items={studentTopbar} ariaLabel="Điều hướng Quản lý sinh viên" compact />}
         </div>
         <div className="product-topbar-meta" aria-label="Thông tin phiên làm việc">
           <span className={isAuthenticated ? 'topbar-session-pill ok' : 'topbar-session-pill wait'}>{isAuthenticated ? 'CMS OK' : 'Chờ CMS'}</span>

@@ -90,6 +90,9 @@ import {
   Breadcrumb,
   Toolbar,
   SearchActionBar,
+  BankTableToolbar,
+  BankTableStatusFilter,
+  bankStatusMatches,
   Modal,
   ConfirmDialog,
   EntityActions,
@@ -121,6 +124,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const [offerings, setOfferings] = useState<SubjectOffering[]>([])
   const [summaries, setSummaries] = useState<ChapterSummary[]>([])
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<BankTableStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
   const [chapterInput, setChapterInput] = useState('')
   const [editing, setEditing] = useState<SubjectChapter | null>(null)
@@ -143,7 +147,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const offering = offerings.find((item) => item.id === versionId)
   const subject = subjects.find((item) => item.id === offering?.subject_id)
   const department = departments.find((item) => item.id === subject?.department_id)
-  const visible = summaries.filter(({ chapter }) => matchesSearch(chapterDisplayName(chapter), search))
+  const visible = summaries.filter(({ chapter, stats }) => matchesSearch(chapterDisplayName(chapter), search) && bankStatusMatches(stats, statusFilter))
 
   const openEditChapter = (chapter: SubjectChapter) => {
     setEditing(chapter)
@@ -176,14 +180,14 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   }
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
+    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn' }, { label: 'Bài' }]} />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{offering ? `Danh sách bài trong ${offering.code}` : 'Danh sách bài trong version môn'}</h2><p className="helper">Click vào bài là vào ngay workspace, không cần bấm bắt đầu.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm bài" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
+      <BankTableToolbar search={search} setSearch={setSearch} statusFilter={statusFilter} setStatusFilter={setStatusFilter} resultCount={visible.length} totalCount={summaries.length} placeholder="Tìm bài, Final test hoặc Assignment" action={can('subject.update') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
       <div className="responsive-table-wrap bank-compact-table-wrap">
-        <table className="ops-data-table bank-compact-data-table bank-chapter-table">
+        <table className="ops-data-table bank-compact-data-table bank-production-table bank-chapter-table">
           <thead><tr><th>STT</th><th>Bài</th><th>Trạng thái</th><th>Tài liệu</th><th>Tổng câu</th><th>Đã duyệt</th><th>Chưa duyệt/lỗi</th><th>Bộ đề</th><th>Thao tác</th></tr></thead>
           <tbody>{visible.map(({ chapter, stats: rawStats }, index) => {
             const stats = rawStats || emptyReviewStats()
@@ -197,7 +201,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
               <td>{stats.approved_count || 0}</td>
               <td>{stats.unresolved_count || 0}</td>
               <td>{hasPublished ? 'Đã đưa lên CMS' : stats.ready_to_release ? 'Sẵn sàng chốt' : stats.release_count ? 'Đã chốt' : 'Chưa chốt'}</td>
-              <td><EntityActions canManage={can('subject.update') && !hasPublished} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} /></td>
+              <td><EntityActions variant="inline" canManage={can('subject.update') && !hasPublished} lockedLabel={hasPublished ? 'Đã khóa' : 'Không có quyền'} onEdit={() => openEditChapter(chapter)} onDelete={() => setDeleteTarget(chapter)} /></td>
             </tr>
           })}{!visible.length ? <tr><td colSpan={9}><div className="empty-state">Chưa có bài phù hợp.</div></td></tr> : null}</tbody>
         </table>

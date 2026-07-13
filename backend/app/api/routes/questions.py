@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import asc, desc, or_
+from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission, restrict_query_to_courses
@@ -102,7 +102,7 @@ def list_questions(
         ))
     sort_col = SORT_FIELDS.get(sort_by, Question.created_at)
     query = query.order_by(asc(sort_col) if sort_dir == 'asc' else desc(sort_col))
-    return query.limit(min(max(limit, 1), 1000)).all()
+    return query.limit(min(max(limit, 1), 300)).all()
 
 
 @router.get('/page')
@@ -184,12 +184,14 @@ def question_stats(course_id: str | None = None, db: Session = Depends(get_db), 
     query = restrict_query_to_courses(db.query(Question), Question, user)
     if course_id:
         query = query.filter(Question.course_id == course_id)
-    rows = query.all()
     counts = {s: 0 for s in ['pending_review', 'approved', 'rejected', 'published', 'draft_error']}
-    for q in rows:
-        if q.status in counts:
-            counts[q.status] += 1
-    return QuestionBankStatsOut(total=len(rows), **counts)
+    total = 0
+    for status_value, count in query.with_entities(Question.status, func.count(Question.id)).group_by(Question.status).all():
+        count = int(count or 0)
+        total += count
+        if status_value in counts:
+            counts[status_value] = count
+    return QuestionBankStatsOut(total=total, **counts)
 
 
 @router.get('/export/openedx-olx', response_model=OpenEdxExportOut)
@@ -252,12 +254,15 @@ def draft_error_reasons(course_id: str | None = None, db: Session = Depends(get_
     query = restrict_query_to_courses(db.query(Question), Question, user).filter(Question.status == 'draft_error')
     if course_id:
         query = query.filter(Question.course_id == course_id)
-    rows = query.all()
     counts: dict[str, int] = {}
-    for q in rows:
-        key = q.draft_error_reason or 'unknown'
-        counts[key] = counts.get(key, 0) + 1
-    return {'total': len(rows), 'by_reason': counts}
+    total = 0
+    rows = query.with_entities(Question.draft_error_reason, func.count(Question.id)).group_by(Question.draft_error_reason).all()
+    for reason, count in rows:
+        key = reason or 'unknown'
+        count = int(count or 0)
+        counts[key] = count
+        total += count
+    return {'total': total, 'by_reason': counts}
 
 
 @router.get('/{question_id}/source-trace')

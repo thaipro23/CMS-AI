@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import type { ReactNode } from 'react'
+import { Breadcrumbs } from '../../../components/navigation/Breadcrumbs'
+import type { MouseEvent, ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
@@ -156,18 +157,13 @@ export function useAsyncMessage() {
 }
 
 export function Breadcrumb({ items }: { items: Array<{ label: string; href?: string }> }) {
-  return <div className="breadcrumb-row">
-    {items.map((item, index) => <span key={`${item.label}-${index}`}>
-      {item.href ? <Link href={item.href}>{item.label}</Link> : <b>{item.label}</b>}
-      {index < items.length - 1 ? <em>›</em> : null}
-    </span>)}
-  </div>
+  return <Breadcrumbs items={items} ariaLabel="Điều hướng Ngân hàng câu hỏi" />
 }
 
 export function Toolbar({ title, helper, action }: { title: string; helper?: string; action?: React.ReactNode }) {
   return <div className="page-header compact-page-header">
     <div>
-      <div className="eyebrow">Ngân hàng đề</div>
+      <div className="eyebrow">Ngân hàng câu hỏi</div>
       <h1>{title}</h1>
       {helper ? <p>{helper}</p> : null}
     </div>
@@ -179,6 +175,92 @@ export function SearchActionBar({ search, setSearch, placeholder, action }: { se
   return <div className="search-action-bar">
     <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
     {action}
+  </div>
+}
+
+export type BankTableStatusFilter = 'all' | 'published' | 'ready' | 'needs_work' | 'empty'
+
+export function bankStatusBucket(stats?: Record<string, any> | null): BankTableStatusFilter | 'done' {
+  const s = stats || {}
+  const status = String(s.status || '')
+  const isPublished = Boolean(s.is_published || s.release_status === 'published' || Number(s.published_release_count || 0) > 0 || status === 'published')
+  if (isPublished) return 'published'
+  if (Boolean(s.ready_to_release) || Number(s.ready_to_release_chapter_count || 0) > 0 || status === 'ready') return 'ready'
+  const hasAnyData = Boolean(
+    Number(s.total_questions || 0) ||
+    Number(s.approved_count || 0) ||
+    Number(s.pending_review_count || 0) ||
+    Number(s.draft_error_count || 0) ||
+    Number(s.unresolved_count || 0) ||
+    Number(s.material_count || 0) ||
+    Number(s.subject_count || 0) ||
+    Number(s.subject_version_count || 0) ||
+    Number(s.chapter_count || 0) ||
+    Number(s.release_count || 0) ||
+    status && status !== 'empty'
+  )
+  if (!hasAnyData || status === 'empty') return 'empty'
+  if (
+    status === 'needs_review' ||
+    status === 'needs_fix' ||
+    status === 'not_ready' ||
+    Number(s.pending_review_count || 0) > 0 ||
+    Number(s.draft_error_count || 0) > 0 ||
+    Number(s.unresolved_count || 0) > 0 ||
+    Number(s.review_not_done_subject_count || 0) > 0 ||
+    Number(s.review_not_done_version_count || 0) > 0 ||
+    Number(s.review_not_done_chapter_count || 0) > 0
+  ) return 'needs_work'
+  return 'done'
+}
+
+export function bankStatusMatches(stats: Record<string, any> | null | undefined, filter: BankTableStatusFilter) {
+  if (filter === 'all') return true
+  return bankStatusBucket(stats) === filter
+}
+
+export function BankTableToolbar({
+  search,
+  setSearch,
+  placeholder,
+  statusFilter,
+  setStatusFilter,
+  resultCount,
+  totalCount,
+  action,
+}: {
+  search: string
+  setSearch: (value: string) => void
+  placeholder: string
+  statusFilter: BankTableStatusFilter
+  setStatusFilter: (value: BankTableStatusFilter) => void
+  resultCount: number
+  totalCount: number
+  action?: React.ReactNode
+}) {
+  const hasFilter = Boolean(search.trim()) || statusFilter !== 'all'
+  return <div className="bank-table-toolbar" aria-label="Bộ lọc bảng ngân hàng đề">
+    <div className="bank-table-toolbar-fields">
+      <label className="bank-table-filter-field bank-table-search-field">
+        <span>Tìm kiếm</span>
+        <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
+      </label>
+      <label className="bank-table-filter-field bank-table-status-field">
+        <span>Trạng thái</span>
+        <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as BankTableStatusFilter)} aria-label="Lọc trạng thái ngân hàng đề">
+          <option value="all">Tất cả</option>
+          <option value="published">Đã đưa lên CMS</option>
+          <option value="ready">Sẵn sàng chốt</option>
+          <option value="needs_work">Cần xử lý</option>
+          <option value="empty">Chưa có dữ liệu</option>
+        </select>
+      </label>
+    </div>
+    <div className="bank-table-toolbar-actions">
+      <span className="bank-table-result-count">Hiện <b>{resultCount}</b>/<b>{totalCount}</b></span>
+      {hasFilter ? <button className="btn small secondary" type="button" onClick={() => { setSearch(''); setStatusFilter('all') }}>Xóa lọc</button> : null}
+      {action}
+    </div>
   </div>
 }
 
@@ -227,19 +309,41 @@ export function ConfirmDialog({ open, title, description, confirmLabel = 'Xác n
   </Modal>
 }
 
-export function EntityActions({ canManage, onEdit, onDelete }: { canManage: boolean; onEdit: () => void; onDelete: () => void }) {
+export function EntityActions({
+  canManage,
+  onEdit,
+  onDelete,
+  variant = 'menu',
+  lockedLabel = '—',
+}: {
+  canManage: boolean
+  onEdit: () => void
+  onDelete: () => void
+  variant?: 'menu' | 'inline'
+  lockedLabel?: string
+}) {
   const [open, setOpen] = useState(false)
-  if (!canManage) return null
 
-  const stop = (event: React.MouseEvent) => {
+  if (!canManage) {
+    return <span className="entity-actions-placeholder" title={lockedLabel}>{lockedLabel}</span>
+  }
+
+  const stop = (event: MouseEvent) => {
     event.preventDefault()
     event.stopPropagation()
   }
 
-  const runAction = (event: React.MouseEvent, action: () => void) => {
+  const runAction = (event: MouseEvent, action: () => void) => {
     stop(event)
     setOpen(false)
     action()
+  }
+
+  if (variant === 'inline') {
+    return <div className="entity-actions-inline" onClick={stop} onMouseDown={stop} aria-label="Thao tác dòng">
+      <button type="button" className="btn small secondary" onClick={(event) => runAction(event, onEdit)}>Sửa</button>
+      <button type="button" className="btn small danger-soft" onClick={(event) => runAction(event, onDelete)}>Xóa</button>
+    </div>
   }
 
   return <div className={`entity-actions${open ? ' open' : ''}`} onClick={stop} onMouseDown={stop}>

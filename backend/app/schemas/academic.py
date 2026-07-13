@@ -524,6 +524,110 @@ class AcademicTeacherReportJobOut(BaseModel):
     model_config = {'from_attributes': True}
 
 
+class AcademicIdentityReconciliationItemOut(BaseModel):
+    student_id: str
+    student_code: str | None = None
+    full_name: str = ''
+    email: str | None = None
+    ap_username: str | None = None
+    canonical_username: str
+    openedx_username: str | None = None
+    openedx_user_id: str | None = None
+    openedx_is_active: bool | None = None
+    match_status: str = 'not_checked'
+    match_method: str = 'not_checked'
+    status: str
+    severity: str
+    can_enroll: bool = False
+    recommended_action: str
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    duplicate_rollnumber_count: int = 0
+    duplicate_canonical_mapping_count: int = 0
+
+
+class AcademicIdentityReconciliationOut(BaseModel):
+    ok: bool = True
+    class_id: str
+    class_code: str | None = None
+    status: str
+    message: str
+    policy: str = 'rollnumber_canonical_username'
+    dry_run: bool = True
+    mutation_performed: bool = False
+    counts: dict[str, int] = Field(default_factory=dict)
+    total: int = 0
+    page: int = 1
+    page_size: int = 200
+    total_pages: int = 1
+    has_next: bool = False
+    items: list[AcademicIdentityReconciliationItemOut] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class AcademicIdentityCleanupIn(BaseModel):
+    dry_run: bool = True
+    confirm_phrase: str | None = None
+    statuses: list[str] = Field(
+        default_factory=lambda: ['LEGACY_AP_USERNAME', 'CMS_USERNAME_MISMATCH', 'DUPLICATE_CMS_MAPPING', 'CANONICAL_INACTIVE'],
+        max_length=12,
+    )
+    student_ids: list[str] = Field(default_factory=list, max_length=1000)
+    delete_wrong_learning_snapshots: bool = True
+
+
+class AcademicIdentityCleanupOut(BaseModel):
+    ok: bool = True
+    class_id: str
+    class_code: str | None = None
+    dry_run: bool = True
+    mutation_performed: bool = False
+    destructive_allowed: bool = False
+    confirm_phrase_required: str = 'DELETE_WRONG_UAT_IDENTITY'
+    policy: str = 'uat_rollnumber_identity_cleanup'
+    counts: dict[str, int] = Field(default_factory=dict)
+    deleted_mapping_ids: list[str] = Field(default_factory=list)
+    deleted_snapshot_ids: list[str] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+    items: list[AcademicIdentityReconciliationItemOut] = Field(default_factory=list)
+    message: str = ''
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class AcademicIdentityMigrationItemOut(AcademicIdentityReconciliationItemOut):
+    class_id: str
+    class_code: str | None = None
+    class_name: str | None = None
+    term_id: str | None = None
+    term_name: str | None = None
+    subject_id: str | None = None
+    subject_code: str | None = None
+    subject_name: str | None = None
+    campus: str | None = None
+    branch: str | None = None
+
+
+class AcademicIdentityMigrationOut(BaseModel):
+    ok: bool = True
+    status: str
+    message: str
+    policy: str = 'rollnumber_identity_migration_assistant'
+    dry_run: bool = True
+    mutation_performed: bool = False
+    scope: dict[str, Any] = Field(default_factory=dict)
+    counts: dict[str, int] = Field(default_factory=dict)
+    severity_counts: dict[str, int] = Field(default_factory=dict)
+    total: int = 0
+    scanned: int = 0
+    page: int = 1
+    page_size: int = 200
+    total_pages: int = 1
+    has_next: bool = False
+    items: list[AcademicIdentityMigrationItemOut] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    export_hints: dict[str, Any] = Field(default_factory=dict)
+
+
 class AcademicManualMappingRecordIn(BaseModel):
     ap_username: str | None = None
     student_code: str | None = None

@@ -32,6 +32,7 @@ import {
   BankVersion,
   BankRelease,
   BankReleasePublishResult,
+  BankReleasePublishAudit,
   EdxCourseMapping,
   MappingValidation,
   EdxCourseChapterMapping,
@@ -91,6 +92,8 @@ import {
   AcademicAPSyncOptions,
   AcademicMappingSummary,
   AcademicLearningSummary,
+  AcademicIdentityCleanupResult,
+  AcademicIdentityReconciliationReport,
   AcademicEnrollmentSyncResult,
   AcademicLearningSyncResult,
   AcademicMappingResolveResult,
@@ -116,7 +119,14 @@ import {
   AnalyticsBackfillPlanResponse,
   AnalyticsBackfillJobsResponse,
   AnalyticsProductionReadinessReport,
+  AnalyticsSlaReport,
   AnalyticsPilotAcceptanceReport,
+  AnalyticsEvidencePackReport,
+  AnalyticsCourseClassMappingReport,
+  PerformanceReadinessReport,
+  SecurityReadinessReport,
+  ReleaseCandidateReport,
+  PilotOperationsReport,
   AnalyticsRolloutControlReport,
   AnalyticsMonitoringReport,
   AnalyticsOpsStatus,
@@ -134,7 +144,7 @@ export const API = normalizedApiBase.endsWith("/api")
   ? normalizedApiBase
   : `${normalizedApiBase}/api`;
 
-function apiFetch(
+export function apiFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
 ): Promise<Response> {
@@ -225,7 +235,7 @@ function normalizeApiErrorMessage(response: Response, data: unknown): string {
   return code ? `${message} [${code}]` : message;
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
+export async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   let data: unknown = null;
   try {
@@ -1756,6 +1766,19 @@ export async function createBankRelease(
   );
 }
 
+
+export async function getBankReleasePublishAudit(
+  headers: HeadersInit,
+  releaseId: string,
+) {
+  return parseResponse<BankReleasePublishAudit>(
+    await apiFetch(
+      `${API}/question-bank-v2/releases/${encodeURIComponent(releaseId)}/publish-audit`,
+      { credentials: "include", headers },
+    ),
+  );
+}
+
 export async function publishBankRelease(
   headers: HeadersInit,
   releaseId: string,
@@ -3256,6 +3279,49 @@ export async function getAcademicClassLearningSummary(
   );
 }
 
+export async function getAcademicClassIdentityReconciliation(
+  headers: HeadersInit,
+  classId: string,
+  filters: { statusFilter?: string; page?: number; pageSize?: number } = {},
+): Promise<AcademicIdentityReconciliationReport> {
+  const params = new URLSearchParams();
+  params.set("status_filter", filters.statusFilter || "all");
+  params.set("page", String(filters.page || 1));
+  params.set("page_size", String(filters.pageSize || 200));
+  return parseResponse(
+    await apiFetch(
+      `${API}/academic/classes/${encodeURIComponent(classId)}/identity-reconciliation?${params.toString()}`,
+      { credentials: "include", headers },
+    ),
+  );
+}
+
+
+export async function cleanupAcademicClassIdentityReconciliation(
+  headers: HeadersInit,
+  classId: string,
+  payload: {
+    dry_run?: boolean
+    confirm_phrase?: string
+    statuses?: string[]
+    student_ids?: string[]
+    delete_wrong_learning_snapshots?: boolean
+  } = {},
+): Promise<AcademicIdentityCleanupResult> {
+  return parseResponse(
+    await apiFetch(
+      `${API}/academic/classes/${encodeURIComponent(classId)}/identity-reconciliation/uat-cleanup`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    ),
+  );
+}
+
+
 export async function getAnalyticsDataQualityReport(
   headers: HeadersInit,
   filters: { classId?: string; courseId?: string } = {},
@@ -3272,11 +3338,87 @@ export async function getAnalyticsDataQualityReport(
   );
 }
 
+
+
+
+
+export async function getPilotOperationsReadiness(
+  headers: HeadersInit,
+  filters: { classId?: string; courseId?: string; branch?: string; campus?: string; sampleLimit?: number } = {},
+): Promise<PilotOperationsReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set("class_id", filters.classId.trim());
+  if (filters.courseId?.trim()) params.set("course_id", filters.courseId.trim());
+  if (filters.branch?.trim()) params.set("branch", filters.branch.trim());
+  if (filters.campus?.trim()) params.set("campus", filters.campus.trim());
+  params.set("sample_limit", String(filters.sampleLimit || 5));
+  return parseResponse(
+    await apiFetch(`${API}/health/pilot-operations?${params.toString()}`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+}
+
+export async function getReleaseCandidateReadiness(
+  headers: HeadersInit,
+  filters: { classId?: string; courseId?: string; branch?: string; campus?: string; sampleLimit?: number } = {},
+): Promise<ReleaseCandidateReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set("class_id", filters.classId.trim());
+  if (filters.courseId?.trim()) params.set("course_id", filters.courseId.trim());
+  if (filters.branch?.trim()) params.set("branch", filters.branch.trim());
+  if (filters.campus?.trim()) params.set("campus", filters.campus.trim());
+  params.set("sample_limit", String(filters.sampleLimit || 5));
+  return parseResponse(
+    await apiFetch(`${API}/health/release-candidate?${params.toString()}`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+}
+
+export async function getSecurityReadiness(
+  headers: HeadersInit,
+): Promise<SecurityReadinessReport> {
+  return parseResponse(
+    await apiFetch(`${API}/health/security-readiness`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+}
+
+export async function getPerformanceReadiness(
+  headers: HeadersInit,
+): Promise<PerformanceReadinessReport> {
+  return parseResponse(
+    await apiFetch(`${API}/health/performance-readiness`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+}
+
 export async function getAnalyticsProductionReadiness(
   headers: HeadersInit,
 ): Promise<AnalyticsProductionReadinessReport> {
   return parseResponse(
     await apiFetch(`${API}/analytics/ops/production-readiness`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+}
+
+export async function getAnalyticsSlaReport(
+  headers: HeadersInit,
+  limit = 20,
+): Promise<AnalyticsSlaReport> {
+  const params = new URLSearchParams();
+  params.set("limit", String(Math.max(1, Math.min(100, limit || 20))));
+  return parseResponse(
+    await apiFetch(`${API}/analytics/ops/sla?${params.toString()}`, {
       credentials: "include",
       headers,
     }),
@@ -3349,6 +3491,63 @@ export async function getAnalyticsPilotAcceptance(
       `${API}/analytics/ops/pilot-acceptance?${params.toString()}`,
       { credentials: "include", headers },
     ),
+  );
+}
+
+
+export async function getAnalyticsEvidencePack(
+  headers: HeadersInit,
+  filters: {
+    classId?: string;
+    courseId?: string;
+    campus?: string;
+    branch?: string;
+    sampleLimit?: number;
+  } = {},
+): Promise<AnalyticsEvidencePackReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set("class_id", filters.classId.trim());
+  if (filters.courseId?.trim())
+    params.set("course_id", filters.courseId.trim());
+  if (filters.campus?.trim()) params.set("campus", filters.campus.trim());
+  if (filters.branch?.trim()) params.set("branch", filters.branch.trim());
+  params.set(
+    "sample_limit",
+    String(Math.max(1, Math.min(20, filters.sampleLimit || 5))),
+  );
+  return parseResponse(
+    await apiFetch(`${API}/analytics/ops/evidence-pack?${params.toString()}`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+}
+
+export async function getAnalyticsCourseClassMappingReport(
+  headers: HeadersInit,
+  filters: {
+    classId?: string;
+    courseId?: string;
+    campus?: string;
+    branch?: string;
+    termId?: string;
+    subjectId?: string;
+    limit?: number;
+  } = {},
+): Promise<AnalyticsCourseClassMappingReport> {
+  const params = new URLSearchParams();
+  if (filters.classId?.trim()) params.set("class_id", filters.classId.trim());
+  if (filters.courseId?.trim()) params.set("course_id", filters.courseId.trim());
+  if (filters.campus?.trim()) params.set("campus", filters.campus.trim());
+  if (filters.branch?.trim()) params.set("branch", filters.branch.trim());
+  if (filters.termId?.trim()) params.set("term_id", filters.termId.trim());
+  if (filters.subjectId?.trim()) params.set("subject_id", filters.subjectId.trim());
+  params.set("limit", String(Math.max(1, Math.min(500, filters.limit || 50))));
+  return parseResponse(
+    await apiFetch(`${API}/analytics/ops/course-class-mapping?${params.toString()}`, {
+      credentials: "include",
+      headers,
+    }),
   );
 }
 

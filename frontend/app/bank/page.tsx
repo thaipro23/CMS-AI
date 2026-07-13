@@ -5,7 +5,7 @@ function BankDashboardFallback() {
   return <div className="page-stack bank-multipage dashboard-modern-page">
     <div className="dashboard-hero card">
       <div>
-        <h1>Đang tải Tổng quan Ngân hàng đề...</h1>
+        <h1>Đang tải Tổng quan Ngân hàng câu hỏi...</h1>
       </div>
     </div>
     <div className="dashboard-kpi-grid">

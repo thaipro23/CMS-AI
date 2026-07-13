@@ -90,6 +90,9 @@ import {
   Breadcrumb,
   Toolbar,
   SearchActionBar,
+  BankTableToolbar,
+  BankTableStatusFilter,
+  bankStatusMatches,
   Modal,
   ConfirmDialog,
   EntityActions,
@@ -119,6 +122,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   const [departments, setDepartments] = useState<Department[]>([])
   const [summaries, setSummaries] = useState<SubjectSummary[]>([])
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<BankTableStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
@@ -137,7 +141,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   useEffect(() => { load().catch(() => null) }, [departmentId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const department = departments.find((item) => item.id === departmentId)
-  const visible = summaries.filter(({ subject }) => matchesSearch(`${subject.code} ${subject.name}`, search))
+  const visible = summaries.filter(({ subject, stats }) => matchesSearch(`${subject.code} ${subject.name}`, search) && bankStatusMatches(stats, statusFilter))
 
   const openEditSubject = (subject: Subject) => {
     setEditing(subject)
@@ -160,14 +164,14 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   }
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
+    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn' }]} />
     <QuickSearchBox compact />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Click vào môn để quản lý các phiên bản theo kỳ.</p></div></div>
-      <SearchActionBar search={search} setSearch={setSearch} placeholder="Tìm môn" action={can('subject.create') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
+      <BankTableToolbar search={search} setSearch={setSearch} statusFilter={statusFilter} setStatusFilter={setStatusFilter} resultCount={visible.length} totalCount={summaries.length} placeholder="Tìm môn, mã môn hoặc tên môn" action={can('subject.create') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
       <div className="responsive-table-wrap bank-compact-table-wrap">
-        <table className="ops-data-table bank-compact-data-table bank-subject-table">
+        <table className="ops-data-table bank-compact-data-table bank-production-table bank-subject-table">
           <thead><tr><th>STT</th><th>Môn</th><th>Trạng thái</th><th>Phiên bản</th><th>Đã duyệt</th><th>Chưa duyệt</th><th>Tổng câu</th><th>Cần xử lý</th><th>Sẵn sàng chốt</th><th>Thao tác</th></tr></thead>
           <tbody>{visible.map(({ subject, stats: rawStats }, index) => {
             const stats = rawStats || emptyReviewStats()
@@ -181,7 +185,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
               <td>{stats.total_questions || 0}</td>
               <td>{stats.unresolved_count || 0}</td>
               <td>{stats.ready_to_release_chapter_count || 0}</td>
-              <td><EntityActions canManage={can('subject.update')} onEdit={() => openEditSubject(subject)} onDelete={() => setDeleteTarget(subject)} /></td>
+              <td><EntityActions variant="inline" canManage={can('subject.update')} lockedLabel="Không có quyền" onEdit={() => openEditSubject(subject)} onDelete={() => setDeleteTarget(subject)} /></td>
             </tr>
           })}{!visible.length ? <tr><td colSpan={10}><div className="empty-state">Chưa có môn phù hợp.</div></td></tr> : null}</tbody>
         </table>

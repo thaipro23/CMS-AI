@@ -82,6 +82,27 @@ function actionStatusText(item: EffectiveQuizMapping) {
   return 'Cần Release + Section'
 }
 
+function productionStatusClass(item: EffectiveQuizMapping) {
+  if (!item.effectiveRequiresQuiz) return 'pending'
+  const severity = String((item as any).status_severity || '').toLowerCase()
+  if (severity === 'success') return 'success'
+  if (severity === 'danger' || severity === 'error') return 'danger'
+  if (severity === 'warning') return 'warning'
+  return item.effectiveReady ? 'success' : 'danger'
+}
+
+function missingRequirementLabel(code: string) {
+  if (code === 'SECTION') return 'Thiếu Section'
+  if (code === 'RELEASE') return 'Thiếu Release'
+  return code
+}
+
+function actionTypeBadge(item: EffectiveQuizMapping) {
+  if (item.action === 'final_test') return { label: 'Final test', tone: 'warning' }
+  if (item.action === 'quiz') return { label: 'Quiz', tone: 'pending' }
+  return { label: 'Không tạo', tone: 'neutral' }
+}
+
 function buildPlan(mappings: EffectiveQuizMapping[]): QuizChapterPlanItem[] {
   return mappings.map((item) => ({ chapter_id: item.chapter_id, action: item.action }))
 }
@@ -146,6 +167,11 @@ export default function BankQuizPage() {
   const canCreateQuiz = applied && readyRows.length > 0
   const matchedCount = autoMap?.summary?.matched_count || 0
   const chapterCount = autoMap?.summary?.chapter_count || 0
+  const productionGate = autoMap?.summary?.production_gate || {}
+  const regularQuizCount = effectiveMappings.filter((item) => item.action === 'quiz').length
+  const finalTestCount = effectiveMappings.filter((item) => item.action === 'final_test').length
+  const missingSectionCount = effectiveMappings.filter((item: any) => item.effectiveRequiresQuiz && (!item.openedx_section_id || (item.missing_requirements || []).includes('SECTION'))).length
+  const missingReleaseCount = effectiveMappings.filter((item: any) => item.effectiveRequiresQuiz && (!item.release_id || (item.missing_requirements || []).includes('RELEASE'))).length
   const quizDifficultyTotal = quizConfig.easy + quizConfig.medium + quizConfig.hard
   const finalDifficultyTotal = finalConfig.easy + finalConfig.medium + finalConfig.hard
 
@@ -421,8 +447,10 @@ export default function BankQuizPage() {
             <span className="status pending">{selectedQuizCount} tạo · {skippedCount} bỏ qua</span>
           </div>
           <div className="quiz-config-summary-list">
-            <span><b>Quiz:</b> {quizConfig.totalQuestions} câu · {quizConfig.timeLimitMinutes} phút</span>
-            <span><b>Final test:</b> {finalConfig.totalQuestions} câu · {finalConfig.timeLimitMinutes} phút</span>
+            <span><b>Quiz:</b> {regularQuizCount} dòng · {quizConfig.totalQuestions} câu · {quizConfig.timeLimitMinutes} phút</span>
+            <span><b>Final test:</b> {finalTestCount} dòng · {finalConfig.totalQuestions} câu · {finalConfig.timeLimitMinutes} phút</span>
+            <span><b>Bỏ qua:</b> {skippedCount} dòng · Không yêu cầu Release.</span>
+            <span><b>Thiếu điều kiện:</b> {missingSectionCount} Section · {missingReleaseCount} Release.</span>
             <span>Easy/Medium/Hard tách riêng theo từng loại bài kiểm tra.</span>
           </div>
         </div>
@@ -440,17 +468,27 @@ export default function BankQuizPage() {
             </div>
             <span className={classNames('status', autoMap.can_apply ? 'success' : 'warning')}>{autoMap.can_apply ? 'Có thể lưu cấu hình' : 'Cần xử lý'}</span>
           </div>
+          <div className="quiz-production-gate-strip" aria-label="Trạng thái vận hành tạo Quiz/Final test">
+            <div><span>Quiz</span><b>{regularQuizCount}</b><small>{quizConfig.totalQuestions} câu/bài</small></div>
+            <div><span>Final test</span><b>{finalTestCount}</b><small>{finalConfig.totalQuestions} câu/bài</small></div>
+            <div><span>Không tạo</span><b>{skippedCount}</b><small>Không chặn lưu</small></div>
+            <div><span>Thiếu Section</span><b>{missingSectionCount}</b><small>Course CMS/Open edX</small></div>
+            <div><span>Thiếu Release</span><b>{missingReleaseCount}</b><small>Bank Release published</small></div>
+            <div><span>Gate</span><b>{missingSectionCount || missingReleaseCount ? 'Cần xử lý' : 'Sẵn sàng'}</b><small>{missingSectionCount || missingReleaseCount ? 'Sửa dòng bị chặn hoặc đổi sang Không tạo.' : String(productionGate?.next_action || 'Lưu cấu hình rồi tạo bài kiểm tra.')}</small></div>
+          </div>
           {autoMap.blocking_errors?.length ? <div className="alert danger"><b>Chưa thể lưu/tạo</b><ul>{autoMap.blocking_errors.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
           {autoMap.warnings?.length ? <div className="alert warning"><b>Cảnh báo</b><ul>{autoMap.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
           <div className="table-wrap quiz-map-table-wrap">
             <table className="data-table compact-table quiz-map-table">
-              <thead><tr><th>STT</th><th>Bài trong ngân hàng</th><th>Mục trong khóa học</th><th>Bộ đề</th><th>Khớp</th><th>Trạng thái</th><th></th></tr></thead>
+              <thead><tr><th>STT</th><th>Bài trong ngân hàng</th><th>Loại</th><th>Mục trong khóa học</th><th>Bộ đề</th><th>Khớp</th><th>Điều kiện</th><th>Trạng thái</th><th></th></tr></thead>
               <tbody>{effectiveMappings.map((item, index) => <tr key={item.chapter_id} className={item.effectiveReady || !item.effectiveRequiresQuiz ? 'row-ready' : 'row-blocked'}>
                 <td className="stt-cell">{index + 1}</td>
                 <td><b>{item.chapter_title}</b></td>
-                <td>{item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small><code>{item.openedx_section_id}</code></small></> : <span className="status danger">Chưa tìm thấy</span>}</td>
+                <td>{(() => { const badge = actionTypeBadge(item); return <span className={classNames('status', badge.tone)}>{badge.label}</span> })()}</td>
+                <td>{item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small><code>{item.openedx_section_id}</code></small></> : <span className={classNames('status', item.effectiveRequiresQuiz ? 'danger' : 'pending')}>Chưa tìm thấy</span>}</td>
                 <td>{item.release_code ? <><b>{item.release_code}</b><small>{item.openedx_library_key}</small></> : item.effectiveRequiresQuiz ? <span className="status danger">Chưa publish</span> : <span className="muted">Không cần Release</span>}</td>
                 <td>{percent(item.match_score)}<small>{item.match_reason}</small></td>
+                <td><div className="quiz-requirement-stack"><span className={classNames('status', productionStatusClass(item))}>{item.effectiveRequiresQuiz ? ((item as any).status_label || actionStatusText(item)) : 'Không tạo'}</span>{item.effectiveRequiresQuiz && ((item as any).missing_requirements || []).length ? <small>{((item as any).missing_requirements || []).map(missingRequirementLabel).join(' · ')}</small> : <small>{item.effectiveRequiresQuiz ? 'Đủ Section + Release' : 'Không yêu cầu'}</small>}</div></td>
                 <td className="quiz-status-cell">
                   <div className="quiz-status-control">
                   <select className="input compact-select" value={item.action === 'assignment' ? 'skip' : item.action} disabled={busy || Boolean(creatingKey)} onChange={(event) => {
@@ -515,7 +553,7 @@ export default function BankQuizPage() {
           </div>
           <div className="quiz-create-preview">
             <b>Quy tắc tạo</b>
-            <span>Quiz: tạo Subsection/Unit dạng Quiz. Final test: dùng title và timer riêng, không ép theo cấu hình Quiz tự luyện.</span>
+            <span>Quiz: tạo Subsection/Unit dạng Quiz. Final test: dùng title và timer riêng. Dòng Không tạo sẽ bị bỏ qua và không yêu cầu Release.</span>
             <small>Khóa học ID: {courseId.trim() || '—'} · {createModal.kind === 'all' ? `${readyRows.length} bài kiểm tra` : createModal.item.chapter_title}</small>
           </div>
           <div className="modal-actions">

@@ -11,6 +11,14 @@ import {
   getAnalyticsClassLearningBehaviorSummary,
   getAnalyticsClassResultDoctor,
   getAnalyticsProductionReadiness,
+  getAnalyticsSlaReport,
+  getAnalyticsPilotAcceptance,
+  getAnalyticsEvidencePack,
+  getAnalyticsCourseClassMappingReport,
+  getPerformanceReadiness,
+  getSecurityReadiness,
+  getReleaseCandidateReadiness,
+  getPilotOperationsReadiness,
   enqueueAnalyticsClassDoctorRecalculate,
   getAnalyticsStudentLearningBehaviorDetail,
   getAnalyticsSubjectClassBehaviorOverview,
@@ -25,6 +33,15 @@ import {
   AnalyticsLearningBehaviorRow,
   AnalyticsLearningBehaviorSummary,
   AnalyticsProductionReadinessReport,
+  AnalyticsSlaReport,
+  AnalyticsPilotAcceptanceReport,
+  AnalyticsEvidencePackReport,
+  AnalyticsCourseClassMappingReport,
+  PerformanceReadinessReport,
+  SecurityReadinessReport,
+  ReleaseCandidateReport,
+  PilotOperationsReport,
+  AnalyticsDataQualityIssue,
   AnalyticsStudentLearningBehaviorDetail,
 } from '../../../types'
 import { formatVNDateTime } from '../../../lib/time'
@@ -130,6 +147,219 @@ function doctorGapLabel(gap?: string | null) {
   if (value === 'NO_ROSTER') return 'Chưa có roster AP'
   if (value === 'CLASS_NOT_FOUND') return 'Không tìm thấy lớp'
   return value || 'Chưa kiểm tra'
+}
+
+
+
+function slaTone(report?: AnalyticsSlaReport | null) {
+  const status = String(report?.sla_status || '').toUpperCase()
+  if (status === 'OK') return 'success'
+  if (status === 'BLOCKED') return 'danger'
+  return 'warning'
+}
+
+function slaSectionTone(status?: string | null) {
+  const value = String(status || '').toUpperCase()
+  if (value === 'OK') return 'status-pill success'
+  if (value === 'BLOCKED') return 'status-pill danger'
+  return 'status-pill warning'
+}
+
+function pilotTone(report?: AnalyticsPilotAcceptanceReport | null) {
+  const status = String(report?.pilot_status || '').toUpperCase()
+  if (status === 'PASS') return 'success'
+  if (status === 'FAIL') return 'danger'
+  return 'warning'
+}
+
+function pilotLabel(report?: AnalyticsPilotAcceptanceReport | null) {
+  if (!report) return 'Chưa kiểm tra pilot'
+  const status = String(report.pilot_status || '').toUpperCase()
+  if (status === 'PASS') return 'Đạt điều kiện pilot'
+  if (status === 'PASS_WITH_WARNINGS') return 'Có thể pilot, cần theo dõi'
+  if (status === 'FAIL') return 'Chưa đạt pilot'
+  return report.ready_for_pilot ? 'Có thể pilot' : 'Chưa đạt pilot'
+}
+
+
+function evidenceTone(report?: AnalyticsEvidencePackReport | null) {
+  const status = String(report?.evidence_status || '').toUpperCase()
+  if (status === 'PASS') return 'success'
+  if (status === 'FAIL') return 'danger'
+  return 'warning'
+}
+
+function evidenceLabel(report?: AnalyticsEvidencePackReport | null) {
+  if (!report) return 'Chưa xuất gói bằng chứng'
+  const status = String(report.evidence_status || '').toUpperCase()
+  if (status === 'PASS') return 'Gói bằng chứng đạt'
+  if (status === 'PASS_WITH_WARNINGS') return 'Gói bằng chứng có cảnh báo'
+  if (status === 'FAIL') return 'Gói bằng chứng chưa đạt'
+  return report.evidence_status || 'Chưa kiểm tra'
+}
+
+function mappingReliabilityTone(report?: AnalyticsCourseClassMappingReport | null) {
+  const status = String(report?.status || '').toUpperCase()
+  if (status === 'READY') return 'success'
+  if (status === 'BLOCKED') return 'danger'
+  return 'warning'
+}
+
+function mappingReliabilityLabel(report?: AnalyticsCourseClassMappingReport | null) {
+  if (!report) return 'Chưa kiểm tra mapping Course/Lớp'
+  const status = String(report.status || '').toUpperCase()
+  if (status === 'READY') return 'Mapping đủ tin cậy'
+  if (status === 'READY_WITH_WARNINGS') return 'Mapping đủ rõ, còn cảnh báo'
+  if (status === 'BLOCKED') return 'Mapping chưa đủ tin cậy'
+  return report.summary_label || report.status || 'Chưa kiểm tra mapping'
+}
+
+
+function securityReadinessTone(report?: SecurityReadinessReport | null) {
+  const status = String(report?.status || '').toUpperCase()
+  if (status === 'READY') return 'success'
+  if (status === 'BLOCKED') return 'danger'
+  return 'warning'
+}
+
+function securityReadinessLabel(report?: SecurityReadinessReport | null) {
+  if (!report) return 'Chưa kiểm tra security gate'
+  const status = String(report.status || '').toUpperCase()
+  if (status === 'READY') return 'Security gate đạt'
+  if (status === 'READY_WITH_WARNINGS') return 'Security gate có cảnh báo'
+  if (status === 'BLOCKED') return 'Security gate còn blocker'
+  return report.summary_label || report.status || 'Chưa kiểm tra security gate'
+}
+
+function securitySectionClass(status?: string | null) {
+  const value = String(status || '').toUpperCase()
+  if (value === 'OK') return 'status-pill success'
+  if (value === 'BLOCKED') return 'status-pill danger'
+  return 'status-pill warning'
+}
+
+
+function releaseCandidateTone(report?: ReleaseCandidateReport | null) {
+  const status = String(report?.status || '').toUpperCase()
+  if (status === 'PASS') return 'success'
+  if (status === 'FAIL') return 'danger'
+  return 'warning'
+}
+
+function releaseCandidateLabel(report?: ReleaseCandidateReport | null) {
+  if (!report) return 'Chưa kiểm tra release candidate'
+  const status = String(report.status || '').toUpperCase()
+  if (status === 'PASS') return 'Release candidate đạt'
+  if (status === 'PASS_WITH_WARNINGS') return 'Release candidate có cảnh báo'
+  if (status === 'FAIL') return 'Release candidate còn blocker'
+  return report.summary_label || report.status || 'Chưa kiểm tra release candidate'
+}
+
+function releaseGateClass(status?: string | null) {
+  const value = String(status || '').toUpperCase()
+  if (value === 'OK') return 'status-pill success'
+  if (value === 'BLOCKED') return 'status-pill danger'
+  return 'status-pill warning'
+}
+
+
+function pilotOperationsTone(report?: PilotOperationsReport | null) {
+  const status = String(report?.status || '').toUpperCase()
+  if (status === 'PILOT_READY') return 'success'
+  if (status === 'HOLD') return 'danger'
+  return 'warning'
+}
+
+function pilotOperationsLabel(report?: PilotOperationsReport | null) {
+  if (!report) return 'Chưa kiểm tra runbook pilot'
+  const status = String(report.status || '').toUpperCase()
+  if (status === 'PILOT_READY') return 'Sẵn sàng chạy pilot'
+  if (status === 'PILOT_WITH_MONITORING') return 'Pilot có kiểm soát, cần theo dõi'
+  if (status === 'HOLD') return 'Tạm dừng pilot, còn blocker'
+  return report.summary_label || report.status || 'Chưa kiểm tra runbook pilot'
+}
+
+function pilotPhaseClass(status?: string | null) {
+  const value = String(status || '').toUpperCase()
+  if (value === 'READY') return 'status-pill success'
+  if (value === 'BLOCKED') return 'status-pill danger'
+  return 'status-pill warning'
+}
+
+function performanceReadinessTone(report?: PerformanceReadinessReport | null) {
+  const status = String(report?.status || '').toUpperCase()
+  if (status === 'READY') return 'success'
+  if (status === 'BLOCKED') return 'danger'
+  return 'warning'
+}
+
+function performanceReadinessLabel(report?: PerformanceReadinessReport | null) {
+  if (!report) return 'Chưa kiểm tra hiệu năng'
+  const status = String(report.status || '').toUpperCase()
+  if (status === 'READY') return 'Hiệu năng đủ điều kiện UAT/pilot'
+  if (status === 'READY_WITH_WARNINGS') return 'Có thể UAT, cần theo dõi hiệu năng'
+  if (status === 'BLOCKED') return 'Cần xử lý hiệu năng trước khi mở rộng'
+  return report.summary_label || report.status || 'Chưa kiểm tra hiệu năng'
+}
+
+function performanceSectionClass(status?: string | null) {
+  const value = String(status || '').toUpperCase()
+  if (value === 'OK') return 'status-pill success'
+  if (value === 'BLOCKED') return 'status-pill danger'
+  return 'status-pill warning'
+}
+
+function mappingReliabilityStatusClass(status?: string | null) {
+  const value = String(status || '').toUpperCase()
+  if (value === 'READY') return 'status-pill success'
+  if (value.includes('AMBIGUOUS') || value.includes('NO_COURSE') || value.includes('NO_ROSTER')) return 'status-pill danger'
+  return 'status-pill warning'
+}
+
+function pilotChecklistCount(report?: AnalyticsPilotAcceptanceReport | null) {
+  const items = Array.isArray(report?.checklist) ? report!.checklist! : []
+  const passed = items.filter((item) => item.passed).length
+  return { passed, total: items.length }
+}
+
+function pilotAcceptanceStatusClass(status?: string | null) {
+  const value = String(status || '').toUpperCase()
+  if (value === 'PASS') return 'status-pill success'
+  if (value === 'WARN' || value === 'PASS_WITH_WARNINGS') return 'status-pill warning'
+  return 'status-pill danger'
+}
+
+function formatDurationSeconds(value?: number | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 'Chưa có'
+  if (value < 60) return `${value}s`
+  if (value < 3600) return `${Math.round(value / 60)} phút`
+  return `${Math.round((value / 3600) * 10) / 10} giờ`
+}
+
+function readinessTone(report?: AnalyticsProductionReadinessReport | null) {
+  const status = String(report?.stage_status || report?.readiness || '').toUpperCase()
+  if (status.includes('READY') && !status.includes('WARNING') && report?.ready_for_production) return 'success'
+  if (status.includes('BLOCKED') || (!report?.ready_for_production && (report?.blocker_count || 0) > 0)) return 'danger'
+  return 'warning'
+}
+
+function readinessLabel(report?: AnalyticsProductionReadinessReport | null) {
+  if (!report) return 'Chưa kiểm tra'
+  if (report.summary_label) return report.summary_label
+  if (report.ready_for_production && (report.warning_count || 0) <= 0) return 'Sẵn sàng production'
+  if (report.ready_for_production) return 'Có thể pilot, còn cảnh báo'
+  return 'Chưa sẵn sàng production'
+}
+
+function readinessIssueLabel(issue: AnalyticsDataQualityIssue) {
+  return issue.code || issue.message || 'UNKNOWN_CHECK'
+}
+
+function readinessSeverityLabel(severity?: string | null) {
+  const value = String(severity || '').toUpperCase()
+  if (value === 'BLOCKER' || value === 'ERROR') return 'Blocker'
+  if (value === 'WARNING') return 'Cảnh báo'
+  return 'Thông tin'
 }
 
 function campusLabel(campus: string, campuses: AcademicCampus[]) {
@@ -297,6 +527,15 @@ export default function AnalyticsLearningPage() {
   const [detail, setDetail] = useState<AnalyticsStudentLearningBehaviorDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [productionReadiness, setProductionReadiness] = useState<AnalyticsProductionReadinessReport | null>(null)
+  const [slaReport, setSlaReport] = useState<AnalyticsSlaReport | null>(null)
+  const [pilotAcceptance, setPilotAcceptance] = useState<AnalyticsPilotAcceptanceReport | null>(null)
+  const [evidencePack, setEvidencePack] = useState<AnalyticsEvidencePackReport | null>(null)
+  const [mappingReliability, setMappingReliability] = useState<AnalyticsCourseClassMappingReport | null>(null)
+  const [performanceReadiness, setPerformanceReadiness] = useState<PerformanceReadinessReport | null>(null)
+  const [securityReadiness, setSecurityReadiness] = useState<SecurityReadinessReport | null>(null)
+  const [releaseCandidate, setReleaseCandidate] = useState<ReleaseCandidateReport | null>(null)
+  const [pilotOperations, setPilotOperations] = useState<PilotOperationsReport | null>(null)
+  const [pilotLoading, setPilotLoading] = useState(false)
   const [classDoctor, setClassDoctor] = useState<AnalyticsClassResultDoctor | null>(null)
   const [doctorLoading, setDoctorLoading] = useState(false)
   const [recalculateLoading, setRecalculateLoading] = useState(false)
@@ -352,8 +591,71 @@ export default function AnalyticsLearningPage() {
     getAnalyticsProductionReadiness(headers)
       .then((report) => { if (!cancelled) setProductionReadiness(report) })
       .catch(() => { if (!cancelled) setProductionReadiness(null) })
+    getAnalyticsSlaReport(headers, 20)
+      .then((report) => { if (!cancelled) setSlaReport(report) })
+      .catch(() => { if (!cancelled) setSlaReport(null) })
+    getPerformanceReadiness(headers)
+      .then((report) => { if (!cancelled) setPerformanceReadiness(report) })
+      .catch(() => { if (!cancelled) setPerformanceReadiness(null) })
+    getSecurityReadiness(headers)
+      .then((report) => { if (!cancelled) setSecurityReadiness(report) })
+      .catch(() => { if (!cancelled) setSecurityReadiness(null) })
     return () => { cancelled = true }
   }, [headers])
+
+  useEffect(() => {
+    let cancelled = false
+    setPilotLoading(true)
+    getAnalyticsPilotAcceptance(headers, {
+      branch,
+      campus,
+      classId: classId || undefined,
+      courseId: effectiveCourseId || undefined,
+      sampleLimit: 5,
+    })
+      .then((report) => { if (!cancelled) setPilotAcceptance(report) })
+      .catch(() => { if (!cancelled) setPilotAcceptance(null) })
+    getAnalyticsEvidencePack(headers, {
+      branch,
+      campus,
+      classId: classId || undefined,
+      courseId: effectiveCourseId || undefined,
+      sampleLimit: 5,
+    })
+      .then((report) => { if (!cancelled) setEvidencePack(report) })
+      .catch(() => { if (!cancelled) setEvidencePack(null) })
+      .finally(() => { if (!cancelled) setPilotLoading(false) })
+    getReleaseCandidateReadiness(headers, {
+      branch,
+      campus,
+      classId: classId || undefined,
+      courseId: effectiveCourseId || undefined,
+      sampleLimit: 5,
+    })
+      .then((report) => { if (!cancelled) setReleaseCandidate(report) })
+      .catch(() => { if (!cancelled) setReleaseCandidate(null) })
+    getPilotOperationsReadiness(headers, {
+      branch,
+      campus,
+      classId: classId || undefined,
+      courseId: effectiveCourseId || undefined,
+      sampleLimit: 5,
+    })
+      .then((report) => { if (!cancelled) setPilotOperations(report) })
+      .catch(() => { if (!cancelled) setPilotOperations(null) })
+    getAnalyticsCourseClassMappingReport(headers, {
+      branch,
+      campus,
+      termId: termId || undefined,
+      subjectId: subjectId || undefined,
+      classId: classId || undefined,
+      courseId: effectiveCourseId || undefined,
+      limit: 50,
+    })
+      .then((report) => { if (!cancelled) setMappingReliability(report) })
+      .catch(() => { if (!cancelled) setMappingReliability(null) })
+    return () => { cancelled = true }
+  }, [headers, branch, campus, termId, subjectId, classId, effectiveCourseId])
 
   useEffect(() => {
     let cancelled = false
@@ -621,9 +923,323 @@ export default function AnalyticsLearningPage() {
         <span>{selectedClassOverview?.class_code || 'Chưa chọn lớp'}</span>
       </div>
 
-      {productionReadiness && <div className={productionReadiness.ready_for_production ? 'alert success compact-alert' : 'alert warning compact-alert'}>
-        <b>Production readiness</b> · {productionReadiness.ready_for_production ? 'Sẵn sàng production' : 'Chưa sẵn sàng production'} · Cần xử lý trước production: {productionReadiness.blocker_count || 0} blocker, {productionReadiness.warning_count || 0} cảnh báo.
-        {!productionReadiness.ready_for_production && Array.isArray(productionReadiness.issues) && productionReadiness.issues.length > 0 && <span className="analytics-readiness-issues"> · {productionReadiness.issues.slice(0, 3).map((item) => item.code || item.message).filter(Boolean).join(', ')}</span>}
+      {productionReadiness && <div className={`analytics-production-readiness-panel ${readinessTone(productionReadiness)}`}>
+        <div className="analytics-readiness-head">
+          <div>
+            <b>Production readiness</b>
+            <span>{readinessLabel(productionReadiness)}</span>
+          </div>
+          <div className="analytics-readiness-counters">
+            <span className={(productionReadiness.blocker_count || 0) > 0 ? 'status-pill danger' : 'status-pill success'}>{productionReadiness.blocker_count || 0} blocker</span>
+            <span className={(productionReadiness.warning_count || 0) > 0 ? 'status-pill warning' : 'status-pill neutral'}>{productionReadiness.warning_count || 0} cảnh báo</span>
+          </div>
+        </div>
+        {productionReadiness.message && <p className="analytics-readiness-message">Cần xử lý trước production theo checklist bên dưới. {productionReadiness.message}</p>}
+        {productionReadiness.primary_blocker && <div className="analytics-primary-blocker">
+          <b>Blocker chính:</b> {readinessIssueLabel(productionReadiness.primary_blocker)} · {productionReadiness.primary_blocker.message}
+          {productionReadiness.primary_blocker.action && <span> · Cách xử lý: {productionReadiness.primary_blocker.action}</span>}
+        </div>}
+        {Array.isArray(productionReadiness.issues) && productionReadiness.issues.length > 0 && <div className="analytics-readiness-issue-list">
+          {productionReadiness.issues.slice(0, 5).map((item, index) => <div key={`${item.code || item.message || 'issue'}-${index}`} className="analytics-readiness-issue">
+            <span className={String(item.severity || '').toUpperCase() === 'BLOCKER' || String(item.severity || '').toUpperCase() === 'ERROR' ? 'status-pill danger' : 'status-pill warning'}>{readinessSeverityLabel(item.severity)}</span>
+            <div><b>{item.category || readinessIssueLabel(item)}</b><small>{readinessIssueLabel(item)} · {item.message}</small>{item.action && <small>Cách xử lý: {item.action}</small>}</div>
+          </div>)}
+        </div>}
+      </div>}
+
+      {slaReport && <div className={`analytics-sla-panel ${slaTone(slaReport)}`}>
+        <div className="analytics-sla-head">
+          <div>
+            <b>SLA vận hành analytics</b>
+            <span>{slaReport.summary_label || 'Đang theo dõi ingest → tính lại → snapshot'}</span>
+          </div>
+          <div className="analytics-sla-counters">
+            <span className={slaTone(slaReport) === 'success' ? 'status-pill success' : slaTone(slaReport) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{slaReport.sla_status || 'UNKNOWN'}</span>
+            <span className="status-pill neutral">{slaReport.counters?.events_last_hour || 0} event/giờ</span>
+            <span className="status-pill neutral">{slaReport.counters?.recalculate_active_jobs || 0} job active</span>
+            <span className={(slaReport.counters?.classes_with_roster_gap || 0) > 0 ? 'status-pill warning' : 'status-pill success'}>{slaReport.counters?.classes_with_roster_gap || 0} lớp thiếu snapshot</span>
+          </div>
+        </div>
+        <div className="analytics-sla-grid">
+          <div><span>Ingest gần nhất</span><b>{formatDurationSeconds(slaReport.latency?.seconds_since_last_ingest)}</b><small>Mục tiêu {formatDurationSeconds(slaReport.targets?.ingest_target_seconds)}</small></div>
+          <div><span>Snapshot gần nhất</span><b>{formatDurationSeconds(slaReport.latency?.seconds_since_latest_snapshot)}</b><small>Mục tiêu {formatDurationSeconds(slaReport.targets?.snapshot_target_seconds)}</small></div>
+          <div><span>Recalculate thành công/giờ</span><b>{slaReport.counters?.recalculate_completed_last_hour || 0}</b><small>Lỗi {slaReport.counters?.recalculate_failed_last_hour || 0}</small></div>
+          <div><span>Snapshot mới/giờ</span><b>{slaReport.counters?.snapshots_last_hour || 0}</b><small>Tổng {slaReport.counters?.behavior_snapshot_count || 0}</small></div>
+        </div>
+        {Array.isArray(slaReport.sections) && slaReport.sections.length > 0 && <div className="analytics-sla-sections">
+          {slaReport.sections.slice(0, 4).map((section) => <div key={section.key} className="analytics-sla-section">
+            <span className={slaSectionTone(section.status)}>{section.status}</span>
+            <div><b>{section.title}</b>{typeof section.actual_seconds === 'number' && <small>Độ trễ: {formatDurationSeconds(section.actual_seconds)}</small>}</div>
+          </div>)}
+        </div>}
+        {Array.isArray(slaReport.classes_needing_snapshot) && slaReport.classes_needing_snapshot.length > 0 && <div className="analytics-sla-gap-list">
+          <b>Lớp cần ưu tiên tính lại</b>
+          <div>
+            {slaReport.classes_needing_snapshot.slice(0, 5).map((item) => <span key={item.class_id} className="status-pill warning">{item.class_code || item.class_id}: {item.snapshot_count}/{item.student_count}</span>)}
+          </div>
+        </div>}
+        {Array.isArray(slaReport.issues) && slaReport.issues.length > 0 && <div className="analytics-readiness-issue-list analytics-sla-issues">
+          {slaReport.issues.slice(0, 3).map((item, index) => <div key={`${item.code || item.message || 'sla'}-${index}`} className="analytics-readiness-issue">
+            <span className={String(item.severity || '').toUpperCase() === 'BLOCKER' ? 'status-pill danger' : 'status-pill warning'}>{readinessSeverityLabel(item.severity)}</span>
+            <div><b>{item.code || item.category || 'SLA'}</b><small>{item.message}</small>{item.action && <small>Cách xử lý: {item.action}</small>}</div>
+          </div>)}
+        </div>}
+      </div>}
+
+      {performanceReadiness && <div className={`analytics-performance-readiness-panel ${performanceReadinessTone(performanceReadiness)}`}>
+        <div className="analytics-pilot-head">
+          <div>
+            <b>Hiệu năng vận hành</b>
+            <span>{performanceReadinessLabel(performanceReadiness)}</span>
+          </div>
+          <div className="analytics-pilot-counters">
+            <span className={performanceReadinessTone(performanceReadiness) === 'success' ? 'status-pill success' : performanceReadinessTone(performanceReadiness) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{performanceReadiness.status || 'UNKNOWN'}</span>
+            <span className={(performanceReadiness.blocker_count || 0) > 0 ? 'status-pill danger' : 'status-pill success'}>{performanceReadiness.blocker_count || 0} blocker</span>
+            <span className={(performanceReadiness.warning_count || 0) > 0 ? 'status-pill warning' : 'status-pill neutral'}>{performanceReadiness.warning_count || 0} cảnh báo</span>
+          </div>
+        </div>
+        <div className="analytics-pilot-grid">
+          <div><span>DB pool</span><b>{performanceReadiness.limits?.db_pool_size ?? 'N/A'}</b><small>Overflow {performanceReadiness.limits?.db_max_overflow ?? 'N/A'}</small></div>
+          <div><span>Statement timeout</span><b>{performanceReadiness.limits?.db_statement_timeout_ms ?? 'N/A'}ms</b><small>Chống query runaway</small></div>
+          <div><span>Active jobs</span><b>{performanceReadiness.queue_pressure?.active_total ?? 0}</b><small>Lỗi/giờ {performanceReadiness.queue_pressure?.failed_last_hour_total ?? 0}</small></div>
+          <div><span>Page analytics</span><b>{performanceReadiness.limits?.analytics_dashboard_max_page_size ?? 'N/A'}</b><small>Giới hạn response</small></div>
+          <div><span>Batch connector</span><b>{performanceReadiness.limits?.openedx_connector_max_batch_size ?? 'N/A'}</b><small>CMS/Open edX</small></div>
+        </div>
+        {Array.isArray(performanceReadiness.sections) && performanceReadiness.sections.length > 0 && <div className="analytics-sla-sections">
+          {performanceReadiness.sections.slice(0, 5).map((section) => <div key={section.key} className="analytics-sla-section">
+            <span className={performanceSectionClass(section.status)}>{section.status}</span>
+            <div><b>{section.title || section.key}</b><small>{section.check_count || 0} check · {section.blocker_count || 0} blocker · {section.warning_count || 0} cảnh báo</small></div>
+          </div>)}
+        </div>}
+        {Array.isArray(performanceReadiness.checks) && performanceReadiness.checks.length > 0 && <div className="analytics-readiness-issue-list analytics-sla-issues">
+          {performanceReadiness.checks.filter((item) => item.severity === 'BLOCKER' || item.severity === 'WARNING').slice(0, 4).map((item, index) => <div key={`${item.code || item.message || 'perf'}-${index}`} className="analytics-readiness-issue">
+            <span className={String(item.severity || '').toUpperCase() === 'BLOCKER' ? 'status-pill danger' : 'status-pill warning'}>{readinessSeverityLabel(item.severity)}</span>
+            <div><b>{item.code || item.category || 'Performance'}</b><small>{item.message}</small>{item.action && <small>Cách xử lý: {item.action}</small>}</div>
+          </div>)}
+        </div>}
+        {Array.isArray(performanceReadiness.next_actions) && performanceReadiness.next_actions.length > 0 && <div className="analytics-pilot-next-actions">
+          <b>Việc tiếp theo cho hiệu năng</b>
+          <ul>{performanceReadiness.next_actions.slice(0, 4).map((action, index) => <li key={`${action}-${index}`}>{action}</li>)}</ul>
+        </div>}
+        {Array.isArray(performanceReadiness.read_only_guarantees) && performanceReadiness.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {performanceReadiness.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
+      </div>}
+
+
+      {securityReadiness && <div className={`analytics-security-readiness-panel ${securityReadinessTone(securityReadiness)}`}>
+        <div className="analytics-pilot-head">
+          <div>
+            <b>Security production gate</b>
+            <span>{securityReadinessLabel(securityReadiness)}</span>
+          </div>
+          <div className="analytics-pilot-counters">
+            <span className={securityReadinessTone(securityReadiness) === 'success' ? 'status-pill success' : securityReadinessTone(securityReadiness) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{securityReadiness.status || 'UNKNOWN'}</span>
+            <span className={(securityReadiness.blocker_count || 0) > 0 ? 'status-pill danger' : 'status-pill success'}>{securityReadiness.blocker_count || 0} blocker</span>
+            <span className={(securityReadiness.warning_count || 0) > 0 ? 'status-pill warning' : 'status-pill neutral'}>{securityReadiness.warning_count || 0} cảnh báo</span>
+            <span className={securityReadiness.can_pilot ? 'status-pill success' : 'status-pill danger'}>{securityReadiness.can_pilot ? 'Có thể pilot' : 'Chưa pilot'}</span>
+          </div>
+        </div>
+        <div className="analytics-pilot-grid">
+          <div><span>Môi trường</span><b>{securityReadiness.app_env || 'N/A'}</b><small>Không trả secret</small></div>
+          <div><span>Auth/Cookie</span><b>{securityReadiness.sections?.find((item) => item.key === 'auth')?.status || 'N/A'}</b><small>SSO/JWT + cookie</small></div>
+          <div><span>CORS/Network</span><b>{securityReadiness.sections?.find((item) => item.key === 'network')?.status || 'N/A'}</b><small>Whitelist origin</small></div>
+          <div><span>Connector</span><b>{securityReadiness.sections?.find((item) => item.key === 'integration')?.status || 'N/A'}</b><small>Open edX/AP HMAC</small></div>
+          <div><span>Data safety</span><b>{securityReadiness.sections?.find((item) => item.key === 'data_safety')?.status || 'N/A'}</b><small>Cleanup/destructive guard</small></div>
+        </div>
+        {Array.isArray(securityReadiness.sections) && securityReadiness.sections.length > 0 && <div className="analytics-sla-sections">
+          {securityReadiness.sections.slice(0, 6).map((section) => <div key={section.key} className="analytics-sla-section">
+            <span className={securitySectionClass(section.status)}>{section.status}</span>
+            <div><b>{section.title || section.key}</b><small>{section.check_count || 0} check · {section.blocker_count || 0} blocker · {section.warning_count || 0} cảnh báo</small></div>
+          </div>)}
+        </div>}
+        {securityReadiness.primary_blocker && <div className="analytics-primary-blocker">
+          <b>Blocker security chính:</b> {securityReadiness.primary_blocker.code || securityReadiness.primary_blocker.category} · {securityReadiness.primary_blocker.message}
+          {securityReadiness.primary_blocker.action && <span> · Cách xử lý: {securityReadiness.primary_blocker.action}</span>}
+        </div>}
+        {Array.isArray(securityReadiness.checks) && securityReadiness.checks.length > 0 && <div className="analytics-readiness-issue-list analytics-sla-issues">
+          {securityReadiness.checks.filter((item) => item.severity === 'BLOCKER' || item.severity === 'WARNING').slice(0, 5).map((item, index) => <div key={`${item.code || item.message || 'security'}-${index}`} className="analytics-readiness-issue">
+            <span className={String(item.severity || '').toUpperCase() === 'BLOCKER' ? 'status-pill danger' : 'status-pill warning'}>{readinessSeverityLabel(item.severity)}</span>
+            <div><b>{item.code || item.category || 'Security'}</b><small>{item.message}</small>{item.action && <small>Cách xử lý: {item.action}</small>}</div>
+          </div>)}
+        </div>}
+        {Array.isArray(securityReadiness.next_actions) && securityReadiness.next_actions.length > 0 && <div className="analytics-pilot-next-actions">
+          <b>Việc tiếp theo cho security</b>
+          <ul>{securityReadiness.next_actions.slice(0, 5).map((action, index) => <li key={`${action}-${index}`}>{action}</li>)}</ul>
+        </div>}
+        {Array.isArray(securityReadiness.read_only_guarantees) && securityReadiness.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {securityReadiness.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
+      </div>}
+
+      {releaseCandidate && <div className={`analytics-release-candidate-panel ${releaseCandidateTone(releaseCandidate)}`}>
+        <div className="analytics-pilot-head">
+          <div>
+            <b>Pilot Release Candidate</b>
+            <span>{releaseCandidateLabel(releaseCandidate)}</span>
+          </div>
+          <div className="analytics-pilot-counters">
+            <span className={releaseCandidateTone(releaseCandidate) === 'success' ? 'status-pill success' : releaseCandidateTone(releaseCandidate) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{releaseCandidate.status || 'UNKNOWN'}</span>
+            <span className={releaseCandidate.go_no_go === 'HOLD' ? 'status-pill danger' : 'status-pill success'}>{releaseCandidate.go_no_go || 'GO/NO-GO'}</span>
+            <span className={(releaseCandidate.blocker_count || 0) > 0 ? 'status-pill danger' : 'status-pill success'}>{releaseCandidate.blocker_count || 0} blocker</span>
+            <span className={(releaseCandidate.warning_count || 0) > 0 ? 'status-pill warning' : 'status-pill neutral'}>{releaseCandidate.warning_count || 0} cảnh báo</span>
+          </div>
+        </div>
+        <div className="analytics-pilot-grid">
+          <div><span>Ready pilot</span><b>{releaseCandidate.ready_for_pilot ? 'Có' : 'Chưa'}</b><small>Go/no-go UAT</small></div>
+          <div><span>Ready mở rộng</span><b>{releaseCandidate.ready_for_broad_production ? 'Có' : 'Chưa'}</b><small>Broad rollout</small></div>
+          <div><span>RC</span><b>{releaseCandidate.release_candidate || 'v25.9.16.7.2.64.12'}</b><small>Ứng viên pilot</small></div>
+          <div><span>Gate</span><b>{releaseCandidate.gates?.length || 0}</b><small>Readiness/security/performance/evidence</small></div>
+          <div><span>Policy</span><b>Read-only</b><small>Không mutate dữ liệu</small></div>
+        </div>
+        {Array.isArray(releaseCandidate.gates) && releaseCandidate.gates.length > 0 && <div className="analytics-sla-sections">
+          {releaseCandidate.gates.map((gate) => <div key={gate.key} className="analytics-sla-section">
+            <span className={releaseGateClass(gate.status)}>{gate.status}</span>
+            <div><b>{gate.title || gate.key}</b><small>{gate.blocker_count || 0} blocker · {gate.warning_count || 0} cảnh báo · {gate.report_endpoint}</small>{gate.message && <small>{gate.message}</small>}</div>
+          </div>)}
+        </div>}
+        {Array.isArray(releaseCandidate.blockers) && releaseCandidate.blockers.length > 0 && <div className="analytics-readiness-issue-list analytics-sla-issues">
+          {releaseCandidate.blockers.slice(0, 4).map((item, index) => <div key={`${item.source || 'rc'}-${item.code || index}`} className="analytics-readiness-issue">
+            <span className="status-pill danger">Blocker</span>
+            <div><b>{item.source || 'release_candidate'} · {item.code || 'BLOCKER'}</b><small>{item.message}</small>{item.action && <small>Cách xử lý: {item.action}</small>}</div>
+          </div>)}
+        </div>}
+        {Array.isArray(releaseCandidate.next_actions) && releaseCandidate.next_actions.length > 0 && <div className="analytics-pilot-next-actions">
+          <b>Việc cần làm trước pilot</b>
+          <ul>{releaseCandidate.next_actions.slice(0, 5).map((action, index) => <li key={`${action}-${index}`}>{action}</li>)}</ul>
+        </div>}
+        {Array.isArray(releaseCandidate.read_only_guarantees) && releaseCandidate.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {releaseCandidate.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
+      </div>}
+
+
+
+      {pilotOperations && <div className={`analytics-pilot-operations-panel ${pilotOperationsTone(pilotOperations)}`}>
+        <div className="analytics-pilot-head">
+          <div>
+            <b>Pilot operations runbook</b>
+            <span>{pilotOperationsLabel(pilotOperations)}</span>
+          </div>
+          <div className="analytics-pilot-counters">
+            <span className={pilotOperationsTone(pilotOperations) === 'success' ? 'status-pill success' : pilotOperationsTone(pilotOperations) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{pilotOperations.status || 'UNKNOWN'}</span>
+            <span className={pilotOperations.decision === 'NO_GO' ? 'status-pill danger' : 'status-pill success'}>{pilotOperations.decision || 'GO/NO-GO'}</span>
+            <span className={(pilotOperations.blocker_count || 0) > 0 ? 'status-pill danger' : 'status-pill success'}>{pilotOperations.blocker_count || 0} blocker</span>
+            <span className={(pilotOperations.warning_count || 0) > 0 ? 'status-pill warning' : 'status-pill neutral'}>{pilotOperations.warning_count || 0} cảnh báo</span>
+          </div>
+        </div>
+        <div className="analytics-pilot-grid">
+          <div><span>Ready pilot</span><b>{pilotOperations.ready_for_pilot ? 'Có' : 'Chưa'}</b><small>Điều kiện mở pilot</small></div>
+          <div><span>Ready mở rộng</span><b>{pilotOperations.ready_for_broad_production ? 'Có' : 'Chưa'}</b><small>Broad production</small></div>
+          <div><span>RC status</span><b>{pilotOperations.release_candidate_summary?.status || 'N/A'}</b><small>{pilotOperations.release_candidate_summary?.go_no_go || 'GO/NO-GO'}</small></div>
+          <div><span>Phase</span><b>{pilotOperations.phases?.length || 0}</b><small>Preflight → sign-off</small></div>
+          <div><span>Rollback trigger</span><b>{pilotOperations.rollback_triggers?.length || 0}</b><small>Điều kiện dừng/rollback</small></div>
+        </div>
+        {Array.isArray(pilotOperations.phases) && pilotOperations.phases.length > 0 && <div className="analytics-sla-sections">
+          {pilotOperations.phases.slice(0, 5).map((phase) => <div key={phase.key} className="analytics-sla-section">
+            <span className={pilotPhaseClass(phase.status)}>{phase.status}</span>
+            <div><b>{phase.title || phase.key}</b><small>{(phase.checks || []).slice(0, 2).join(' · ')}</small></div>
+          </div>)}
+        </div>}
+        {Array.isArray(pilotOperations.rollback_triggers) && pilotOperations.rollback_triggers.length > 0 && <div className="analytics-readiness-issue-list analytics-sla-issues">
+          {pilotOperations.rollback_triggers.slice(0, 4).map((item, index) => <div key={`${item.code || 'rollback'}-${index}`} className="analytics-readiness-issue">
+            <span className={String(item.severity || '').toUpperCase() === 'BLOCKER' ? 'status-pill danger' : 'status-pill warning'}>{readinessSeverityLabel(item.severity)}</span>
+            <div><b>{item.code || 'ROLLBACK_TRIGGER'}</b><small>{item.condition}</small>{item.action && <small>Cách xử lý: {item.action}</small>}</div>
+          </div>)}
+        </div>}
+        {Array.isArray(pilotOperations.next_actions) && pilotOperations.next_actions.length > 0 && <div className="analytics-pilot-next-actions">
+          <b>Việc tiếp theo để chạy pilot</b>
+          <ul>{pilotOperations.next_actions.slice(0, 5).map((action, index) => <li key={`${action}-${index}`}>{action}</li>)}</ul>
+        </div>}
+        {Array.isArray(pilotOperations.read_only_guarantees) && pilotOperations.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {pilotOperations.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
+      </div>}
+
+      {(pilotAcceptance || pilotLoading) && <div className={`analytics-pilot-acceptance-panel ${pilotTone(pilotAcceptance)}`}>
+        <div className="analytics-pilot-head">
+          <div>
+            <b>Kiểm thử pilot UAT</b>
+            <span>{pilotLoading ? 'Đang kiểm tra readiness + SLA + sample lớp...' : pilotLabel(pilotAcceptance)}</span>
+          </div>
+          <div className="analytics-pilot-counters">
+            {pilotAcceptance && <span className={pilotTone(pilotAcceptance) === 'success' ? 'status-pill success' : pilotTone(pilotAcceptance) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{pilotAcceptance.pilot_status || 'UNKNOWN'}</span>}
+            {pilotAcceptance && <span className={pilotAcceptance.ready_for_pilot ? 'status-pill success' : 'status-pill danger'}>{pilotAcceptance.ready_for_pilot ? 'Có thể pilot' : 'Chưa pilot'}</span>}
+            {pilotAcceptance && <span className={pilotAcceptance.ready_for_broad_production ? 'status-pill success' : 'status-pill warning'}>{pilotAcceptance.ready_for_broad_production ? 'Có thể mở rộng' : 'Chưa mở rộng'}</span>}
+          </div>
+        </div>
+        {pilotAcceptance && <div className="analytics-pilot-grid">
+          <div><span>Checklist</span><b>{pilotChecklistCount(pilotAcceptance).passed}/{pilotChecklistCount(pilotAcceptance).total || 0}</b><small>Điều kiện kỹ thuật</small></div>
+          <div><span>Blocker</span><b>{pilotAcceptance.blocker_count || 0}</b><small>{(pilotAcceptance.blocker_codes || []).slice(0, 2).join(', ') || 'Không có'}</small></div>
+          <div><span>Cảnh báo</span><b>{pilotAcceptance.warning_count || 0}</b><small>{(pilotAcceptance.warning_codes || []).slice(0, 2).join(', ') || 'Không có'}</small></div>
+          <div><span>Lớp mẫu</span><b>{pilotAcceptance.classes?.length || 0}</b><small>Sample kiểm thử</small></div>
+          <div><span>Sinh viên mẫu</span><b>{pilotAcceptance.sample_students?.length || 0}</b><small>Tín hiệu mềm</small></div>
+        </div>}
+        {Array.isArray(pilotAcceptance?.checklist) && pilotAcceptance!.checklist!.length > 0 && <div className="analytics-pilot-checklist">
+          {pilotAcceptance!.checklist!.slice(0, 6).map((item) => <div key={item.key} className="analytics-pilot-check-item">
+            <span className={item.passed ? 'status-pill success' : 'status-pill danger'}>{item.passed ? 'Đạt' : 'Chưa đạt'}</span>
+            <b>{item.label}</b>
+          </div>)}
+        </div>}
+        {Array.isArray(pilotAcceptance?.classes) && pilotAcceptance!.classes!.length > 0 && <div className="analytics-pilot-class-list">
+          <b>Lớp pilot cần chú ý</b>
+          <div>{pilotAcceptance!.classes!.slice(0, 5).map((item) => <span key={item.class_id} className={pilotAcceptanceStatusClass(item.acceptance_status)}>{item.class_code || item.class_id}: {item.behavior_snapshot_count}/{item.student_count}</span>)}</div>
+        </div>}
+        {Array.isArray(pilotAcceptance?.next_actions) && pilotAcceptance!.next_actions!.length > 0 && <div className="analytics-pilot-next-actions">
+          <b>Việc tiếp theo</b>
+          <ul>{pilotAcceptance!.next_actions!.slice(0, 4).map((action, index) => <li key={`${action}-${index}`}>{action}</li>)}</ul>
+        </div>}
+        <p className="analytics-pilot-disclaimer">Pilot chỉ xác nhận pipeline ingest/recalculate/snapshot và sample dữ liệu; không kết luận vi phạm cá nhân.</p>
+      </div>}
+      {evidencePack && <div className={`analytics-evidence-pack-panel ${evidenceTone(evidencePack)}`}>
+        <div className="analytics-pilot-head">
+          <div>
+            <b>Gói bằng chứng UAT</b>
+            <span>{evidenceLabel(evidencePack)}</span>
+          </div>
+          <div className="analytics-pilot-counters">
+            <span className={evidenceTone(evidencePack) === 'success' ? 'status-pill success' : evidenceTone(evidencePack) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{evidencePack.evidence_status || 'UNKNOWN'}</span>
+            <span className={(evidencePack.summary?.blocker_count || 0) > 0 ? 'status-pill danger' : 'status-pill success'}>{evidencePack.summary?.blocker_count || 0} blocker</span>
+            <span className={(evidencePack.summary?.warning_count || 0) > 0 ? 'status-pill warning' : 'status-pill neutral'}>{evidencePack.summary?.warning_count || 0} cảnh báo</span>
+          </div>
+        </div>
+        <div className="analytics-pilot-grid">
+          <div><span>Ready pilot</span><b>{evidencePack.summary?.ready_for_pilot ? 'Có' : 'Chưa'}</b><small>Acceptance gate</small></div>
+          <div><span>Ready mở rộng</span><b>{evidencePack.summary?.ready_for_broad_production ? 'Có' : 'Chưa'}</b><small>Broad rollout</small></div>
+          <div><span>SLA</span><b>{evidencePack.summary?.sla_status || 'UNKNOWN'}</b><small>Ingest → snapshot</small></div>
+          <div><span>Lớp mẫu</span><b>{evidencePack.summary?.pilot_class_count || 0}</b><small>Trong gói bằng chứng</small></div>
+          <div><span>Sinh viên mẫu</span><b>{evidencePack.summary?.sample_student_count || 0}</b><small>Tín hiệu mềm</small></div>
+        </div>
+        {Array.isArray(evidencePack.next_actions) && evidencePack.next_actions.length > 0 && <div className="analytics-pilot-next-actions">
+          <b>Action còn lại trong evidence pack</b>
+          <ul>{evidencePack.next_actions.slice(0, 4).map((action, index) => <li key={`${action}-${index}`}>{action}</li>)}</ul>
+        </div>}
+        {Array.isArray(evidencePack.read_only_guarantees) && evidencePack.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {evidencePack.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
+      </div>}
+      {mappingReliability && <div className={`analytics-mapping-reliability-panel ${mappingReliabilityTone(mappingReliability)}`}>
+        <div className="analytics-pilot-head">
+          <div>
+            <b>Độ tin cậy mapping Course/Lớp</b>
+            <span>{mappingReliabilityLabel(mappingReliability)}</span>
+          </div>
+          <div className="analytics-pilot-counters">
+            <span className={mappingReliabilityTone(mappingReliability) === 'success' ? 'status-pill success' : mappingReliabilityTone(mappingReliability) === 'danger' ? 'status-pill danger' : 'status-pill warning'}>{mappingReliability.status || 'UNKNOWN'}</span>
+            <span className={(mappingReliability.blocker_count || 0) > 0 ? 'status-pill danger' : 'status-pill success'}>{mappingReliability.blocker_count || 0} blocker</span>
+            <span className={(mappingReliability.warning_count || 0) > 0 ? 'status-pill warning' : 'status-pill neutral'}>{mappingReliability.warning_count || 0} cảnh báo</span>
+          </div>
+        </div>
+        <div className="analytics-pilot-grid">
+          <div><span>Lớp trong scope</span><b>{mappingReliability.total_scope_classes || 0}</b><small>Trả về {mappingReliability.returned_classes || 0}</small></div>
+          <div><span>Course resolved</span><b>{mappingReliability.resolved_course_count || 0}</b><small>Mapping rõ</small></div>
+          <div><span>Course có event chưa map</span><b>{mappingReliability.courses_with_events_without_class_mapping_count || 0}</b><small>Cần xử lý trước pilot rộng</small></div>
+          <div><span>Thiếu mapping</span><b>{mappingReliability.counts?.NO_COURSE_MAPPING || 0}</b><small>Ghép Course CMS</small></div>
+          <div><span>Ambiguous</span><b>{mappingReliability.counts?.AMBIGUOUS_MAPPING || 0}</b><small>Cần class override</small></div>
+        </div>
+        {Array.isArray(mappingReliability.items) && mappingReliability.items.length > 0 && <div className="analytics-pilot-class-list">
+          <b>Lớp cần chú ý mapping</b>
+          <div>{mappingReliability.items.filter((item) => item.reliability_status !== 'READY').slice(0, 5).map((item) => <span key={item.class_id} className={mappingReliabilityStatusClass(item.reliability_status)}>{item.class_code || item.class_id}: {item.reliability_status}</span>)}</div>
+        </div>}
+        {Array.isArray(mappingReliability.courses_with_events_without_class_mapping) && mappingReliability.courses_with_events_without_class_mapping.length > 0 && <div className="analytics-pilot-class-list">
+          <b>Course có event nhưng chưa resolve class</b>
+          <div>{mappingReliability.courses_with_events_without_class_mapping.slice(0, 5).map((item) => <span key={item.course_id} className="status-pill danger">{item.course_id}: {item.event_count} event</span>)}</div>
+        </div>}
+        {Array.isArray(mappingReliability.next_actions) && mappingReliability.next_actions.length > 0 && <div className="analytics-pilot-next-actions">
+          <b>Việc tiếp theo cho mapping</b>
+          <ul>{mappingReliability.next_actions.slice(0, 4).map((action, index) => <li key={`${action}-${index}`}>{action}</li>)}</ul>
+        </div>}
+        {Array.isArray(mappingReliability.read_only_guarantees) && mappingReliability.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {mappingReliability.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
       </div>}
       <div className="alert info compact-alert">{permissionText}</div>
       {message && <div className="academic-inline-error"><b>Cần kiểm tra</b><span>{message}</span></div>}

@@ -55,7 +55,7 @@ function DashboardEmptyState({ role }: { role?: string }) {
   return <div className="dashboard-empty-state">
     <b>Chưa có dữ liệu trong phạm vi này.</b>
     <p>{role === 'QUESTION_REVIEWER' ? 'Bạn chưa được giao câu hỏi hoặc chapter nào để duyệt, hoặc chapter được giao chưa có dữ liệu.' : 'Hãy upload tài liệu hoặc tạo câu hỏi đầu tiên trong phạm vi được phân quyền.'}</p>
-    <Link className="btn secondary small" href="/bank/departments">Đi tới Ngân hàng đề</Link>
+    <Link className="btn secondary small" href="/bank/departments">Đi tới Ngân hàng câu hỏi</Link>
   </div>
 }
 
@@ -292,12 +292,12 @@ export function BankDashboardPage() {
   }
 
   return <div className="page-stack bank-multipage dashboard-analytics-page">
-    <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
+    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi' }]} />
 
     <section className="dashboard-command-hero">
       <div className="dashboard-hero-glow" />
       <div className="dashboard-hero-copy">
-        <h1>Tổng quan Ngân hàng đề</h1>
+        <h1>Tổng quan Ngân hàng câu hỏi</h1>
         <div className="dashboard-scope-strip">
           <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
           {data?.cache ? <span className="dashboard-scope-chip subtle">Dữ liệu: {data.cache.hit ? 'đã lưu tạm' : 'mới cập nhật'}</span> : null}

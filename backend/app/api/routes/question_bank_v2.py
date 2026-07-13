@@ -99,6 +99,7 @@ from app.schemas.question_bank import (
 )
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.question_bank_service import VersionedQuestionBankService
+from app.services.question_bank.helpers import safe_upload_filename
 from app.services.business_rbac import BusinessRBACService
 from app.services.bank_dashboard_stats import BankDashboardStatsService
 from app.services.dashboard_analytics import DashboardAnalyticsService
@@ -1167,7 +1168,7 @@ async def upload_material_to_bank_version_job(
         content_type=file.content_type or '',
     )
     pending_dir = operation_pending_dir()
-    safe_name = (file.filename or 'uploaded-file').replace('/', '_').replace('\\', '_')
+    safe_name = safe_upload_filename(file.filename or 'uploaded-file')
     pending_name = f'{uuid.uuid4()}-{safe_name}'
     pending_path = pending_dir / pending_name
     pending_path.write_bytes(raw)
@@ -1605,6 +1606,15 @@ def cancel_failed_release(release_id: str, db: Session = Depends(get_db), user: 
         log_audit(db, action='question_bank.release.cancel_failed', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+
+
+@router.get('/releases/{release_id}/publish-audit')
+def release_publish_audit(release_id: str, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+    _require_release(db, user, 'bank.view', release_id)
+    # Read-only QA endpoint: do not write audit rows, enqueue jobs, call Open edX,
+    # or mutate Release state. Operators can export the response as UAT evidence.
+    return VersionedQuestionBankService(db).release_publish_audit(release_id=release_id)
 
 
 @router.post('/releases/{release_id}/publish-openedx-job', response_model=BankOperationJobQueuedOut)

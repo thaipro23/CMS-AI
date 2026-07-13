@@ -1,3 +1,7 @@
+@import '../styles/enterprise-ui.css';
+@import '../styles/ops-readiness.css';
+/* v25.9.16.7.2.64.12 compatibility markers: ops/readiness panel styles live in frontend/styles/ops-readiness.css.
+   .analytics-performance-readiness-panel .analytics-security-readiness-panel .analytics-release-candidate-panel .analytics-pilot-operations-panel .ops-gate-panel */
 * { box-sizing: border-box; }
 :root {
   --bg: #f4f6fb;
@@ -8327,7 +8331,7 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
   .nav-icon { display: none; }
 }
 
-/* v25.9.16.7.2.38 — analytics class result doctor.
+/* v25.9.16.7.2.41 — analytics class result doctor.
    Make the 0/N analytics state explainable: roster, mapping, events, snapshots,
    and recalculate readiness are visible before the student table. */
 .analytics-class-doctor-panel {
@@ -8370,7 +8374,7 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
   }
 }
 
-/* v25.9.16.7.2.38 — compact bank table ux + sidebar group taxonomy.
+/* v25.9.16.7.2.64.12 — compact bank table ux + sidebar group taxonomy.
    Bank hierarchy pages can contain hundreds of subjects/versions, so dense tables
    replace large entity cards. Tables keep STT, compact status, and action menus while
    preserving horizontal scrolling inside the table wrapper only. */
@@ -8529,4 +8533,215 @@ html[data-theme='dark'] .chapter-inline-stats > span {
   border-color: rgba(148, 163, 184, .18);
   background: rgba(15, 23, 42, .74);
   color: #cbd5e1;
+}
+
+/* v25.9.16.7.2.64.12 — bank compact row actions visible fix.
+   The v40 compact table moved card actions into table cells, but the old
+   absolute-positioned kebab menu could render outside the cell or be clipped by
+   the horizontal scroll wrapper. Compact hierarchy tables now use inline row
+   actions so the “Thao tác” column is always visible. */
+.bank-multipage .bank-compact-data-table td:last-child {
+  width: 136px;
+  min-width: 136px;
+  text-align: right;
+}
+.bank-multipage .bank-compact-data-table .entity-actions-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 118px;
+}
+.bank-multipage .bank-compact-data-table .entity-actions-inline .btn.small {
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.bank-multipage .bank-compact-data-table .entity-actions-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.btn.danger-soft {
+  border-color: rgba(220, 38, 38, .18);
+  background: #fef2f2;
+  color: #b91c1c;
+}
+.btn.danger-soft:hover:not(:disabled) {
+  border-color: rgba(220, 38, 38, .32);
+  background: #fee2e2;
+  color: #991b1b;
+}
+@media (max-width: 720px) {
+  .bank-multipage .bank-compact-data-table td:last-child {
+    width: 124px;
+    min-width: 124px;
+  }
+  .bank-multipage .bank-compact-data-table .entity-actions-inline {
+    min-width: 108px;
+    gap: 4px;
+  }
+  .bank-multipage .bank-compact-data-table .entity-actions-inline .btn.small {
+    padding: 6px 8px;
+  }
+}
+
+/* v25.9.16.7.2.64.12 — bank table production ux.
+   Bank hierarchy screens must scale to hundreds of subjects/versions. A compact
+   filter toolbar, result count, and sticky action column keep operators oriented
+   without returning to large cards. Horizontal overflow stays inside the table
+   wrapper only. */
+.bank-table-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+.bank-table-toolbar-fields {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.bank-table-filter-field {
+  display: grid;
+  gap: 5px;
+  min-width: 160px;
+}
+.bank-table-filter-field span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .02em;
+}
+.bank-table-search-field {
+  min-width: min(360px, 44vw);
+  flex: 1 1 320px;
+}
+.bank-table-status-field {
+  width: 190px;
+  flex: 0 0 190px;
+}
+.bank-table-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bank-table-result-count {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #fff;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.bank-table-result-count b {
+  color: #0f172a;
+  margin: 0 2px;
+}
+.bank-multipage .bank-production-table th:last-child,
+.bank-multipage .bank-production-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  background: #fff;
+  box-shadow: -12px 0 18px -18px rgba(15, 23, 42, .55);
+}
+.bank-multipage .bank-production-table th:last-child {
+  background: #f8fafc;
+  z-index: 4;
+}
+.bank-multipage .bank-production-table th:first-child,
+.bank-multipage .bank-production-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+  box-shadow: 12px 0 18px -20px rgba(15, 23, 42, .5);
+}
+.bank-multipage .bank-production-table th:first-child {
+  background: #f8fafc;
+  z-index: 4;
+}
+.bank-multipage .bank-production-table tr:hover td {
+  background: #f8fafc;
+}
+.bank-multipage .bank-production-table tr:hover td:first-child,
+.bank-multipage .bank-production-table tr:hover td:last-child {
+  background: #f8fafc;
+}
+html[data-ai-theme='dark'] .bank-table-toolbar,
+html[data-theme='dark'] .bank-table-toolbar {
+  border-color: rgba(148, 163, 184, .18);
+  background: linear-gradient(180deg, rgba(15, 23, 42, .92), rgba(15, 23, 42, .78));
+}
+html[data-ai-theme='dark'] .bank-table-result-count,
+html[data-theme='dark'] .bank-table-result-count {
+  border-color: rgba(148, 163, 184, .18);
+  background: rgba(2, 6, 23, .52);
+  color: #cbd5e1;
+}
+html[data-ai-theme='dark'] .bank-table-result-count b,
+html[data-theme='dark'] .bank-table-result-count b {
+  color: #f8fafc;
+}
+html[data-ai-theme='dark'] .bank-multipage .bank-production-table th:first-child,
+html[data-ai-theme='dark'] .bank-multipage .bank-production-table th:last-child,
+html[data-theme='dark'] .bank-multipage .bank-production-table th:first-child,
+html[data-theme='dark'] .bank-multipage .bank-production-table th:last-child {
+  background: #0f172a;
+}
+html[data-ai-theme='dark'] .bank-multipage .bank-production-table td:first-child,
+html[data-ai-theme='dark'] .bank-multipage .bank-production-table td:last-child,
+html[data-theme='dark'] .bank-multipage .bank-production-table td:first-child,
+html[data-theme='dark'] .bank-multipage .bank-production-table td:last-child {
+  background: #111827;
+}
+html[data-ai-theme='dark'] .bank-multipage .bank-production-table tr:hover td,
+html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
+  background: rgba(30, 41, 59, .88);
+}
+@media (max-width: 900px) {
+  .bank-table-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .bank-table-toolbar-fields {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .bank-table-search-field,
+  .bank-table-status-field {
+    min-width: 0;
+    width: 100%;
+    flex: 1 1 auto;
+  }
+  .bank-table-toolbar-actions {
+    justify-content: space-between;
+  }
 }

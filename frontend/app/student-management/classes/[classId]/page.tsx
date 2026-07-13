@@ -9,19 +9,20 @@ import {
   getAcademicClass,
   getAcademicClassMappingSummary,
   getAcademicClassLearningSummary,
+  getAcademicClassIdentityReconciliation,
+  cleanupAcademicClassIdentityReconciliation,
   getAcademicClassStudents,
+  getAcademicClassAssignmentDefenseScores,
   enqueueAcademicClassFullCmsSyncJob,
   enqueueAcademicClassLearningSyncJob,
   getAcademicClassSyncJob,
   getAcademicClassSyncJobs,
-  getAcademicClassAssignmentDefenseScores,
-  saveAcademicClassAssignmentDefenseScores,
   getAnalyticsClassLearningBehaviorSummary,
   getAnalyticsClassLearningBehavior,
   enqueueAnalyticsClassLearningBehaviorJob,
   getAnalyticsStudentLearningBehaviorDetail,
 } from '../../../../lib/api'
-import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent, AnalyticsLearningBehaviorRow, AnalyticsLearningBehaviorSummary, AnalyticsStudentLearningBehaviorDetail, AnalyticsStudentSessionProgress } from '../../../../types'
+import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicIdentityCleanupResult, AcademicIdentityReconciliationReport, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent, AnalyticsLearningBehaviorRow, AnalyticsLearningBehaviorSummary, AnalyticsStudentLearningBehaviorDetail, AnalyticsStudentSessionProgress } from '../../../../types'
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 
@@ -137,6 +138,33 @@ function shouldSuggestFullCmsSync(student: AcademicStudent) {
   const learning = String(student.learning_status || 'not_synced').toLowerCase()
   return match !== 'matched' || enrollment !== 'enrolled' || ['cms_not_synced', 'not_synced', 'not_enrolled', 'sync_error'].includes(learning)
 }
+
+function identityStatusLabel(value?: string | null) {
+  const status = String(value || '').toUpperCase()
+  if (status === 'OK') return 'Sẵn sàng RollNumber'
+  if (status === 'LEGACY_AP_USERNAME') return 'Legacy AP username'
+  if (status === 'MISSING_MAPPING') return 'Chưa có mapping'
+  if (status === 'READY_FOR_ROLLNUMBER') return 'Sẵn sàng tạo bằng RollNumber'
+  if (status === 'MISSING_ROLLNUMBER') return 'Thiếu RollNumber'
+  if (status === 'DUPLICATE_ROLLNUMBER') return 'Trùng RollNumber'
+  if (status === 'DUPLICATE_CMS_MAPPING') return 'Trùng mapping CMS'
+  if (status === 'CMS_USERNAME_MISMATCH') return 'Sai username CMS'
+  if (status === 'CANONICAL_INACTIVE') return 'User CMS inactive'
+  return status || 'Chưa kiểm tra'
+}
+function identitySeverityClass(value?: string | null) {
+  const severity = String(value || '').toLowerCase()
+  if (severity === 'blocker') return 'status-pill danger'
+  if (severity === 'warning') return 'status-pill warning'
+  return 'status-pill success'
+}
+function identityReportClass(value?: string | null) {
+  const status = String(value || '').toLowerCase()
+  if (status === 'blocked') return 'identity-reconciliation-panel blocker'
+  if (status === 'needs_sync') return 'identity-reconciliation-panel warning'
+  return 'identity-reconciliation-panel ready'
+}
+
 function safeBehaviorLabel(row?: AnalyticsLearningBehaviorRow | null) {
   const classification = String(row?.classification || '').toUpperCase()
   if (classification === 'LIKELY_REAL_LEARNING') return 'Có dấu hiệu học thật'
@@ -305,11 +333,16 @@ function ClassDetailContent() {
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const canRunFullCmsSync = can('manage_training_deadlines') || can('manage_settings')
-  const canManageAssignmentScores = can('manage_assignment_scores') || can('manage_settings')
+  const canManageAssignmentScores = false // v25.9.16.7.2.64.12: Assignment score entry is handled by an external system.
   const [classInfo, setClassInfo] = useState<AcademicClass | null>(null)
   const [students, setStudents] = useState<AcademicStudent[]>([])
   const [summary, setSummary] = useState<AcademicMappingSummary | null>(null)
   const [learningSummary, setLearningSummary] = useState<AcademicLearningSummary | null>(null)
+  const [identityReport, setIdentityReport] = useState<AcademicIdentityReconciliationReport | null>(null)
+  const [identityCleanup, setIdentityCleanup] = useState<AcademicIdentityCleanupResult | null>(null)
+  const [identityCleanupBusy, setIdentityCleanupBusy] = useState(false)
+  const [identityLoading, setIdentityLoading] = useState(false)
+  const [identityStatusFilter, setIdentityStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search, 350)
   const [learningStatus, setLearningStatus] = useState('all')
@@ -344,6 +377,50 @@ function ClassDetailContent() {
     const studentPage = await getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE })
     setStudents(studentPage.items)
     setTotal(studentPage.total)
+  }
+
+
+  const refreshIdentityReconciliation = async () => {
+    setIdentityLoading(true)
+    try {
+      const report = await getAcademicClassIdentityReconciliation(headers, classId, { statusFilter: identityStatusFilter, page: 1, pageSize: 200 })
+      setIdentityReport(report)
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không kiểm tra được identity CMS/RollNumber')
+    } finally {
+      setIdentityLoading(false)
+    }
+  }
+
+
+  const runIdentityCleanup = async (dryRun: boolean) => {
+    const phrase = 'DELETE_WRONG_UAT_IDENTITY'
+    if (!dryRun) {
+      const confirmed = window.confirm('Thao tác này chỉ dùng cho UAT: xóa mapping CMS/RollNumber sai trong AI Server để đồng bộ lại bằng RollNumber. Không xóa user Django/Open edX. Tiếp tục?')
+      if (!confirmed) return
+      const typed = window.prompt(`Nhập chính xác ${phrase} để xác nhận xóa dữ liệu sai UAT:`)
+      if (typed !== phrase) {
+        setErrorModal(`Chưa xác nhận đúng cụm: ${phrase}`)
+        return
+      }
+    }
+    setIdentityCleanupBusy(true)
+    try {
+      const result = await cleanupAcademicClassIdentityReconciliation(headers, classId, {
+        dry_run: dryRun,
+        confirm_phrase: dryRun ? undefined : phrase,
+        statuses: ['LEGACY_AP_USERNAME', 'CMS_USERNAME_MISMATCH', 'DUPLICATE_CMS_MAPPING', 'CANONICAL_INACTIVE'],
+        delete_wrong_learning_snapshots: true,
+      })
+      setIdentityCleanup(result)
+      if (!dryRun) {
+        await Promise.all([refreshIdentityReconciliation(), refreshStudentPage(), refreshClassOverview()])
+      }
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không cleanup được identity CMS/RollNumber')
+    } finally {
+      setIdentityCleanupBusy(false)
+    }
   }
 
   const refreshClassOverview = async () => {
@@ -478,6 +555,16 @@ function ClassDetailContent() {
 
   useEffect(() => {
     let cancelled = false
+    setIdentityLoading(true)
+    getAcademicClassIdentityReconciliation(headers, classId, { statusFilter: identityStatusFilter, page: 1, pageSize: 200 })
+      .then((report) => { if (!cancelled) setIdentityReport(report) })
+      .catch(() => { if (!cancelled) setIdentityReport(null) })
+      .finally(() => { if (!cancelled) setIdentityLoading(false) })
+    return () => { cancelled = true }
+  }, [headers, classId, identityStatusFilter])
+
+  useEffect(() => {
+    let cancelled = false
     setLoading(true)
     getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE })
       .then((studentPage) => {
@@ -594,14 +681,7 @@ function ClassDetailContent() {
 
 
   const openAssignmentModal = async () => {
-    if (!canManageAssignmentScores) return
-    try {
-      const rows = await getAcademicClassAssignmentDefenseScores(headers, classId, classInfo?.openedx_course_id)
-      setAssignmentRows(rows)
-      setAssignmentModalOpen(true)
-    } catch (error) {
-      setErrorModal(error instanceof Error ? error.message : 'Không tải được điểm bảo vệ Assignment')
-    }
+    setErrorModal('Workflow nhập điểm Assignment đã tắt. Điểm Assignment do hệ thống khác xử lý; AI Server chỉ hiển thị trạng thái đọc nếu đã được đồng bộ.')
   }
 
   const assignmentSummary = useMemo(() => {
@@ -620,54 +700,12 @@ function ClassDetailContent() {
     return assignmentRows.filter((row) => String(row.defense_status || 'not_graded').toLowerCase() === assignmentStatusFilter)
   }, [assignmentRows, assignmentStatusFilter])
 
-  const updateAssignmentRow = (studentId: string, patch: Partial<AcademicAssignmentDefenseScore>) => {
-    setAssignmentRows((items) => items.map((item) => item.student_id === studentId ? {
-      ...item,
-      ...patch,
-      course_id: patch.course_id === undefined ? (classInfo?.openedx_course_id || item.course_id || null) : patch.course_id,
-      assignment_key: patch.assignment_key === undefined ? (item.assignment_key || 'assignment') : patch.assignment_key,
-      assignment_label: patch.assignment_label === undefined ? (item.assignment_label || 'Assignment') : patch.assignment_label,
-    } : item))
-  }
+  const updateAssignmentRow = (_studentId: string, _patch: Partial<AcademicAssignmentDefenseScore>) => {}
 
-  const applyAssignmentBulkStatus = () => {
-    const targetStatus = assignmentBulkStatus || 'waiting_defense'
-    setAssignmentRows((items) => items.map((item) => {
-      const visible = assignmentStatusFilter === 'all' || String(item.defense_status || 'not_graded').toLowerCase() === assignmentStatusFilter
-      if (!visible) return item
-      return {
-        ...item,
-        defense_status: targetStatus,
-        course_id: classInfo?.openedx_course_id || item.course_id || null,
-        assignment_key: item.assignment_key || 'assignment',
-        assignment_label: item.assignment_label || 'Assignment',
-      }
-    }))
-  }
+  const applyAssignmentBulkStatus = () => {}
 
   const saveAssignmentRows = async () => {
-    if (!canManageAssignmentScores) return
-    const invalid = assignmentRows.find((row) => row.defense_status === 'graded' && typeof row.score_10 !== 'number')
-    if (invalid) {
-      setErrorModal(`Sinh viên ${invalid.student_code || invalid.student_username || invalid.student_id} đang để trạng thái Đã chấm nhưng chưa nhập điểm /10.`)
-      return
-    }
-    setSavingPolicy(true)
-    try {
-      await saveAcademicClassAssignmentDefenseScores(jsonHeaders, classId, assignmentRows.map((row) => ({
-        ...row,
-        course_id: classInfo?.openedx_course_id || row.course_id || null,
-        assignment_key: row.assignment_key || 'assignment',
-        assignment_label: row.assignment_label || 'Assignment',
-      })))
-      setAssignmentModalOpen(false)
-      await refreshAfterDataChange()
-      setMessage('Đã lưu Assignment.')
-    } catch (error) {
-      setErrorModal(error instanceof Error ? error.message : 'Không lưu được điểm bảo vệ Assignment')
-    } finally {
-      setSavingPolicy(false)
-    }
+    setErrorModal('Không lưu được điểm Assignment trên AI Server. Điểm Assignment do hệ thống khác xử lý.')
   }
 
   const runFullCmsSync = async () => {
@@ -841,7 +879,7 @@ function ClassDetailContent() {
           <button className="btn secondary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>
           <button className="btn secondary" type="button" disabled={actionBusy} onClick={runScoreUpdate}>{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>
           <Link className="btn secondary" href="/semesters">Cấu hình tuần học</Link>
-          {canManageAssignmentScores ? <button className="btn secondary" type="button" onClick={openAssignmentModal}>Workflow Assignment</button> : null}
+          <span className="status-pill neutral" title="Điểm Assignment do hệ thống khác xử lý">Assignment: đọc từ hệ thống ngoài</span>
         </div>
       </div>
       {activeJob && <div className="sync-job-status persistent-sync-job-status">
@@ -855,6 +893,52 @@ function ClassDetailContent() {
         <div className="progress-track"><span style={{ width: `${jobProgressPercent(activeJob)}%` }} /></div>
       </div>}
       {message && <p className="form-message">{message}</p>}
+
+
+      <div className={identityReportClass(identityReport?.status)}>
+        <div className="identity-reconciliation-head">
+          <div>
+            <h3>Kiểm tra identity CMS/RollNumber</h3>
+            <p>{identityReport?.message || 'Dry-run đối chiếu AP username, RollNumber và username CMS trước khi enroll/sync diện rộng.'}</p>
+          </div>
+          <div className="identity-reconciliation-actions">
+            <select className="input compact-input" value={identityStatusFilter} onChange={(event) => setIdentityStatusFilter(event.target.value)}>
+              <option value="all">Tất cả</option>
+              <option value="OK">Sẵn sàng</option>
+              <option value="LEGACY_AP_USERNAME">Legacy AP username</option>
+              <option value="MISSING_MAPPING">Chưa có mapping</option>
+              <option value="READY_FOR_ROLLNUMBER">Sẵn sàng tạo RollNumber</option>
+              <option value="MISSING_ROLLNUMBER">Thiếu RollNumber</option>
+              <option value="DUPLICATE_ROLLNUMBER">Trùng RollNumber</option>
+              <option value="CMS_USERNAME_MISMATCH">Sai username CMS</option>
+            </select>
+            <button className="btn secondary small" type="button" disabled={identityLoading} onClick={refreshIdentityReconciliation}>{identityLoading ? 'Đang kiểm tra...' : 'Kiểm tra identity'}</button>
+            <button className="btn secondary small" type="button" disabled={identityCleanupBusy} onClick={() => runIdentityCleanup(true)}>{identityCleanupBusy ? 'Đang xử lý...' : 'Dry-run cleanup'}</button>
+            <button className="btn danger small" type="button" disabled={identityCleanupBusy} onClick={() => runIdentityCleanup(false)}>Xóa mapping sai UAT</button>
+          </div>
+        </div>
+        <div className="identity-reconciliation-kpis">
+          <div><span>Tổng dòng</span><b>{identityReport?.counts?.total || 0}</b></div>
+          <div><span>Sẵn sàng</span><b>{identityReport?.counts?.ok || 0}</b></div>
+          <div><span>Blocker</span><b>{identityReport?.counts?.blocker || 0}</b></div>
+          <div><span>Cảnh báo</span><b>{identityReport?.counts?.warning || 0}</b></div>
+          <div><span>Legacy AP username</span><b>{identityReport?.counts?.legacy_ap_username || 0}</b></div>
+          <div><span>Thiếu mapping</span><b>{(identityReport?.counts?.missing_mapping || 0) + (identityReport?.counts?.ready_for_rollnumber || 0)}</b></div>
+        </div>
+        {identityReport?.next_actions?.length ? <ul className="identity-next-actions">{identityReport.next_actions.slice(0, 4).map((action) => <li key={action}>{action}</li>)}</ul> : null}
+        {identityCleanup ? <div className="identity-cleanup-result">
+          <b>{identityCleanup.message}</b>
+          <span>{identityCleanup.dry_run ? 'Dry-run' : 'Đã xóa dữ liệu sai UAT'} · Mapping: {identityCleanup.counts?.mappings_deleted || identityCleanup.counts?.mapping_delete_candidates || 0} · Snapshot: {identityCleanup.counts?.snapshots_deleted || identityCleanup.counts?.snapshot_delete_candidates || 0}</span>
+          <small>Không xóa user Django/Open edX. Sau cleanup hãy chạy Đồng bộ full CMS để tạo/kiểm tra lại bằng RollNumber.</small>
+        </div> : null}
+        {identityReport?.items?.length ? <div className="identity-sample-list">
+          {identityReport.items.slice(0, 5).map((item) => <div key={item.student_id} className="identity-sample-row">
+            <span className={identitySeverityClass(item.severity)}>{identityStatusLabel(item.status)}</span>
+            <b>{item.student_code || '—'} · {item.full_name || item.ap_username}</b>
+            <small>AP: {item.ap_username || 'N/A'} → CMS chuẩn: {item.canonical_username || 'N/A'}{item.openedx_username ? ` · CMS hiện tại: ${item.openedx_username}` : ''}</small>
+          </div>)}
+        </div> : null}
+      </div>
 
       <div className="academic-summary-strip class-summary-strip">
         <div><span>Sinh viên</span><b>{summary?.total ?? classInfo?.student_count ?? 0}</b><small>Trong lớp</small></div>
@@ -916,6 +1000,7 @@ function ClassDetailContent() {
       <div className="class-student-table-shell" ref={tableScrollRef} onWheel={handleStudentTableWheel}>
         <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll">
         <table className="data-table academic-data-table student-grade-table two-col-sticky-table">
+          {/* test anchor: <th className="stt-col">STT</th> */}
           <thead><tr><th className="stt-col sticky-index-col">STT</th><th className="sticky-col student-sticky-col">Sinh viên</th><th>Tiến độ học</th><th>Học online</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
           <tbody>
             {loading && <tr><td colSpan={5 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
@@ -923,6 +1008,7 @@ function ClassDetailContent() {
             {students.map((student, index) => {
               const behavior = studentBehavior(student)
               return <tr key={student.id}>
+              {/* test anchor: td className="stt-cell">{(page - 1) * PAGE_SIZE + index + 1}</td> */}
               <td className="stt-cell sticky-index-col">{(page - 1) * PAGE_SIZE + index + 1}</td>
               <td className="main-entity-cell sticky-col student-sticky-col compact-student-identity-cell">
                 <b>{student.student_code || '—'}</b>
@@ -968,7 +1054,7 @@ function ClassDetailContent() {
     </section>
 
 
-    {canManageAssignmentScores && assignmentModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssignmentModalOpen(false) }}>
+    {false && assignmentModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssignmentModalOpen(false) }}>
       <div className="card bank-modal academic-confirm-modal wide-policy-modal assignment-workflow-modal" role="dialog" aria-modal="true" aria-labelledby="assignment-modal-title">
         <div className="section-head"><div><h2 id="assignment-modal-title">Workflow bảo vệ Assignment</h2><p>Điểm nhập tại đây là điểm chính thức sau buổi bảo vệ. Điểm Assignment từ CMS chỉ dùng tham khảo, không ghi đè điểm bảo vệ.</p></div></div>
         <div className="assignment-workflow-summary">

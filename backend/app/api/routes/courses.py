@@ -647,13 +647,20 @@ def list_topics(course_id: str, refresh: bool = Query(default=False), db: Sessio
     labels for real Vietnamese/Open edX courses. Use /courses/{course_id}/nodes
     and /courses/{course_id}/tree instead.
     """
-    topics = db.query(Topic).filter(Topic.course_id == course_id).order_by(Topic.importance_score.desc()).all()
-    counts = {}
-    token_counts = {}
-    for chunk in db.query(ContentChunk).filter(ContentChunk.course_id == course_id).all():
-        if chunk.topic_id:
-            counts[chunk.topic_id] = counts.get(chunk.topic_id, 0) + 1
-            token_counts[chunk.topic_id] = token_counts.get(chunk.topic_id, 0) + chunk.token_count
+    topics = db.query(Topic).filter(Topic.course_id == course_id).order_by(Topic.importance_score.desc()).limit(300).all()
+    topic_stats = {
+        row.topic_id: row
+        for row in db.query(
+            ContentChunk.topic_id.label('topic_id'),
+            func.count(ContentChunk.id).label('chunk_count'),
+            func.coalesce(func.sum(ContentChunk.token_count), 0).label('token_count'),
+        )
+        .filter(ContentChunk.course_id == course_id, ContentChunk.topic_id.isnot(None))
+        .group_by(ContentChunk.topic_id)
+        .all()
+    }
+    counts = {topic_id: int(getattr(row, 'chunk_count', 0) or 0) for topic_id, row in topic_stats.items()}
+    token_counts = {topic_id: int(getattr(row, 'token_count', 0) or 0) for topic_id, row in topic_stats.items()}
     return [TopicResponse(
         id=t.id,
         course_id=t.course_id,

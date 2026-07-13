@@ -5,6 +5,7 @@ import json
 import re
 import socket
 import time
+import secrets
 from html import unescape
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -134,11 +135,13 @@ class RealOpenEdXConnector(OpenEdXConnector):
         if not secret:
             return {}
         timestamp = str(int(time.time()))
+        nonce = secrets.token_urlsafe(18)
         body_hash = hashlib.sha256(body or b'').hexdigest()
-        message = f'{timestamp}.{method.upper()}.{self._signature_path(url)}.{body_hash}'
+        message = f'{timestamp}.{method.upper()}.{self._signature_path(url)}.{body_hash}.{nonce}'
         signature = hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
         return {
             'X-AI-Connector-Timestamp': timestamp,
+            'X-AI-Connector-Nonce': nonce,
             'X-AI-Connector-Signature': signature,
         }
 

@@ -1,8 +1,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.38'
-TITLE = 'Bank Compact Table UX + Sidebar Taxonomy'
+VERSION = '25.9.16.7.2.64.12'
+TITLE = 'Bank Release Publish Reliability + Rollback QA'
 
 
 def read(path: str) -> str:
@@ -18,7 +18,7 @@ def test_v37_version_and_docs_are_current():
     assert f'APP_VERSION={VERSION}' in read('.env.production.example')
     assert f'# AI Server Open edX — v{VERSION}' in read('README.md')
     assert f'# v{VERSION} — {TITLE}' in read('RUN_CURRENT.md')
-    assert f'# v{VERSION} — {TITLE}' in read('RUN_V25_9_16_7_2_38.md')
+    assert f'# v{VERSION} — {TITLE}' in read('RUN_V25_9_16_7_2_53.md')
 
 
 def test_v37_backend_class_result_doctor_contract_and_safe_recalculate_route():
@@ -67,7 +67,7 @@ def test_v37_frontend_has_data_status_panel_and_manual_safe_actions():
     assert 'classDoctor?.tracking_event_count' in page
     assert 'classDoctor?.video_progress_count' in page
     assert 'classDoctor?.session_progress_count' in page
-    assert 'v25.9.16.7.2.38 — compact bank table ux' in css
+    assert 'v25.9.16.7.2.64.12 — bank table production ux' in css
 
 
 def test_v37_changelog_order_and_no_migration():

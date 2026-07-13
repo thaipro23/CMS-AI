@@ -132,7 +132,7 @@ async def list_audit_logs(
     # Non-admin audit is fail-closed. We intentionally do not expose global logs.
     # Pull a bounded window and filter by RBAC/actor server-side so users only see
     # their own actions or actions inside their assigned Bank scope.
-    candidate_rows = ordered.limit(max(1000, page * page_size * 10)).all()
+    candidate_rows = ordered.limit(min(500, max(100, page * page_size * 5))).all()
     visible = [row for row in candidate_rows if _visible_audit_row(db, service, user, row)]
     total = len(visible)
     rows = visible[(page - 1) * page_size: page * page_size]

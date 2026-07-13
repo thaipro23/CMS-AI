@@ -975,6 +975,30 @@ export type MaterialVersion = {
   created_at: string
 }
 
+
+export type BankReleasePublishAudit = {
+  ok: boolean
+  audit_status: string
+  release_id: string
+  release_code?: string
+  release_status?: string
+  bank_version_id?: string
+  chapter_id?: string
+  subject_id?: string
+  openedx_library_key?: string | null
+  expected_openedx_library_key?: string | null
+  published_at?: string | null
+  message: string
+  counts: Record<string, number>
+  checks: Array<{ code: string; status: string; message: string; blocking?: boolean; detail?: Record<string, any> }>
+  blockers?: Array<{ code: string; status: string; message: string; blocking?: boolean; detail?: Record<string, any> }>
+  warnings?: Array<{ code: string; status: string; message: string; blocking?: boolean; detail?: Record<string, any> }>
+  next_actions?: string[]
+  quiz_instances?: Array<{ id: string; openedx_course_id?: string; status?: string; openedx_unit_node_id?: string | null; openedx_quiz_node_id?: string | null; created_at?: string | null; updated_at?: string | null }>
+  read_only?: boolean
+  mutation_performed?: boolean
+}
+
 export type BankReleasePublishResult = {
   ok: boolean
   release_id: string
@@ -1441,10 +1465,19 @@ export type QuizAutoMapResult = BackendUiNotice & {
     match_reason: string
     action?: QuizChapterAction
     action_label?: string
+    assessment_type?: 'quiz' | 'final_test' | 'skip' | string
     requires_quiz?: boolean
+    requires_release?: boolean
+    requires_section?: boolean
     skipped?: boolean
     ready: boolean
     can_create?: boolean
+    production_ready?: boolean
+    status_code?: string | null
+    status_label?: string | null
+    status_severity?: 'success' | 'warning' | 'danger' | 'info' | string | null
+    missing_requirements?: string[]
+    recommended_action?: string | null
     recommended_quiz_title?: string | null
     recommended_unit_title?: string | null
     mapping_status?: string | null
@@ -1648,8 +1681,8 @@ export type SubjectSummary = { subject: Subject; stats: BankReviewStatusStats }
 export type SubjectVersionSummary = { subject_version: SubjectOffering; stats: BankReviewStatusStats }
 export type ChapterSummary = { chapter: SubjectChapter; stats: BankReviewStatusStats }
 
-export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER' | 'CAMPUS_MANAGER'
-export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE' | 'CAMPUS'
+export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER' | 'CAMPUS_OWNER' | 'CAMPUS_MANAGER' | 'TEACHER_ASSIGNED'
+export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE' | 'CAMPUS' | 'CLASS'
 
 export type RBACRole = {
   code: BusinessRoleCode | string
@@ -1995,6 +2028,67 @@ export type AcademicLearningSummary = {
   source_counts?: Record<string, number>
   diagnostic_note?: string | null
 }
+
+export type AcademicIdentityReconciliationItem = {
+  student_id: string
+  student_code?: string | null
+  full_name: string
+  email?: string | null
+  ap_username?: string | null
+  canonical_username: string
+  openedx_username?: string | null
+  openedx_user_id?: string | null
+  openedx_is_active?: boolean | null
+  match_status: string
+  match_method: string
+  status: string
+  severity: 'blocker' | 'warning' | 'info' | string
+  can_enroll: boolean
+  recommended_action: string
+  blockers: string[]
+  warnings: string[]
+  duplicate_rollnumber_count: number
+  duplicate_canonical_mapping_count: number
+}
+
+export type AcademicIdentityReconciliationReport = {
+  ok: boolean
+  class_id: string
+  class_code?: string | null
+  status: 'ready' | 'needs_sync' | 'blocked' | string
+  message: string
+  policy: string
+  dry_run: boolean
+  mutation_performed: boolean
+  counts: Record<string, number>
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  has_next: boolean
+  items: AcademicIdentityReconciliationItem[]
+  next_actions: string[]
+}
+
+
+export type AcademicIdentityCleanupResult = {
+  ok: boolean
+  class_id: string
+  class_code?: string | null
+  dry_run: boolean
+  mutation_performed: boolean
+  destructive_allowed: boolean
+  confirm_phrase_required: string
+  policy: string
+  counts: Record<string, number>
+  deleted_mapping_ids: string[]
+  deleted_snapshot_ids: string[]
+  skipped: Array<Record<string, unknown>>
+  items: AcademicIdentityReconciliationItem[]
+  message: string
+  next_actions: string[]
+}
+
 
 export type AcademicLearningSyncResult = AcademicLearningSummary & {
   ok: boolean
@@ -2460,10 +2554,15 @@ export type AnalyticsStudentLearningBehaviorDetail = {
 
 
 export type AnalyticsDataQualityIssue = {
-  severity: 'error' | 'warning' | 'info' | string
+  severity: 'BLOCKER' | 'WARNING' | 'INFO' | 'error' | 'warning' | 'info' | string
   code: string
+  category?: string | null
   message: string
   action?: string | null
+  command?: string | null
+  source?: string | null
+  blocking?: boolean
+  details?: Record<string, any>
 }
 
 export type AnalyticsDataQualityReport = {
@@ -2482,16 +2581,77 @@ export type AnalyticsDataQualityReport = {
   disclaimer?: string
 }
 
+export type AnalyticsProductionReadinessSection = {
+  category: string
+  status: 'OK' | 'BLOCKED' | 'WARNING' | 'INFO' | string
+  blocker_count: number
+  warning_count: number
+  issues?: AnalyticsDataQualityIssue[]
+}
+
 export type AnalyticsProductionReadinessReport = {
   version?: string
   ready_for_production: boolean
-  readiness: 'PRODUCTION_READY' | 'NOT_READY' | string
+  readiness: 'PRODUCTION_READY' | 'PRODUCTION_READY_WITH_WARNINGS' | 'NOT_READY' | string
+  stage_status?: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  message?: string
   blocker_count: number
   warning_count: number
+  info_count?: number
   issue_count: number
+  primary_blocker?: AnalyticsDataQualityIssue | null
+  blockers?: AnalyticsDataQualityIssue[]
+  warnings?: AnalyticsDataQualityIssue[]
+  infos?: AnalyticsDataQualityIssue[]
   issues?: AnalyticsDataQualityIssue[]
+  sections?: AnalyticsProductionReadinessSection[]
   checks?: Record<string, any>
   next_actions?: string[]
+  can_pilot?: boolean
+  can_broad_rollout?: boolean
+  safe_policy?: string
+  disclaimer?: string
+}
+
+
+export type AnalyticsSlaClassGap = {
+  class_id: string
+  class_code?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count: number
+  snapshot_count: number
+  missing_snapshot_count: number
+  latest_snapshot_at?: string | null
+  snapshot_age_seconds?: number | null
+  gap_status: 'NO_SNAPSHOT' | 'PARTIAL_SNAPSHOT' | 'STALE_SNAPSHOT' | string
+}
+
+export type AnalyticsSlaSection = {
+  key: string
+  title: string
+  status: 'OK' | 'WARNING' | 'BLOCKED' | string
+  target_seconds?: number | null
+  actual_seconds?: number | null
+  metrics?: Record<string, any>
+}
+
+export type AnalyticsSlaReport = {
+  version?: string
+  sla_status: 'OK' | 'WARNING' | 'BLOCKED' | string
+  summary_label?: string
+  generated_at?: string
+  targets?: Record<string, number>
+  counters?: Record<string, number>
+  latency?: Record<string, number | null>
+  ingest?: Record<string, any>
+  post_ingest_recalculate?: Record<string, any>
+  sections?: AnalyticsSlaSection[]
+  issues?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  classes_needing_snapshot?: AnalyticsSlaClassGap[]
   safe_policy?: string
   disclaimer?: string
 }
@@ -2624,6 +2784,90 @@ export type AnalyticsPilotAcceptanceReport = {
   data_quality?: AnalyticsDataQualityReport
   backfill_plan?: AnalyticsBackfillPlanResponse
   safe_policy?: string
+  disclaimer?: string
+}
+
+
+export type AnalyticsEvidencePackReport = {
+  version?: string
+  artifact_type?: string
+  evidence_status: 'PASS' | 'PASS_WITH_WARNINGS' | 'FAIL' | string
+  generated_at?: string | null
+  filters?: Record<string, any>
+  summary?: {
+    ready_for_production?: boolean
+    ready_for_pilot?: boolean
+    ready_for_broad_production?: boolean
+    sla_status?: string | null
+    pilot_status?: string | null
+    blocker_count?: number
+    warning_count?: number
+    pilot_class_count?: number
+    sample_student_count?: number
+  }
+  blockers?: AnalyticsDataQualityIssue[]
+  warnings?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  reports?: Record<string, any>
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+export type AnalyticsCourseClassMappingItem = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  term_id?: string | null
+  term_name?: string | null
+  subject_id?: string | null
+  subject_code?: string | null
+  subject_name?: string | null
+  mapping_status: string
+  reliability_status: string
+  resolved_course_id?: string | null
+  mapping_source?: string | null
+  candidate_count: number
+  confidence_score: number
+  roster_count: number
+  tracking_event_count: number
+  tracking_user_count: number
+  latest_tracking_event_at?: string | null
+  course_session_count: number
+  video_progress_count: number
+  session_progress_count: number
+  snapshot_count: number
+  latest_snapshot_at?: string | null
+  missing_snapshot_count: number
+  reasons?: string[]
+  recommended_action?: string | null
+  mapping?: Record<string, any>
+}
+
+export type AnalyticsCourseClassMappingReport = {
+  version?: string
+  report_type?: string
+  status: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  generated_at?: string | null
+  filters?: Record<string, any>
+  dry_run: boolean
+  read_only: boolean
+  mutation_performed: boolean
+  total_scope_classes: number
+  returned_classes: number
+  blocker_count: number
+  warning_count: number
+  counts?: Record<string, number>
+  resolved_course_count?: number
+  courses_with_events_without_class_mapping_count?: number
+  courses_with_events_without_class_mapping?: Array<{ course_id: string; event_count: number; user_count: number; latest_event_at?: string | null; recommended_action?: string | null }>
+  items?: AnalyticsCourseClassMappingItem[]
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
   disclaimer?: string
 }
 
@@ -2879,3 +3123,155 @@ export type AcademicSubjectCourseAutoMapResult = {
   mapping?: AcademicCourseMapping | null
 }
 
+
+
+export type SecurityReadinessCheck = {
+  category?: string
+  code?: string
+  severity?: 'BLOCKER' | 'WARNING' | 'INFO' | string
+  ok?: boolean
+  message?: string
+  action?: string
+  actual?: any
+  target?: string
+}
+
+export type SecurityReadinessReport = {
+  version?: string
+  report_type?: string
+  generated_at?: string | null
+  app_env?: string
+  status: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  blocker_count: number
+  warning_count: number
+  info_count?: number
+  can_pilot?: boolean
+  can_broad_production?: boolean
+  primary_blocker?: SecurityReadinessCheck | null
+  checks?: SecurityReadinessCheck[]
+  sections?: Array<{ key: string; title?: string; status?: string; blocker_count?: number; warning_count?: number; check_count?: number }>
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+
+
+export type ReleaseCandidateGate = {
+  key: string
+  title?: string
+  status?: 'OK' | 'WARNING' | 'BLOCKED' | string
+  blocker_count?: number
+  warning_count?: number
+  message?: string
+  report_endpoint?: string
+}
+
+export type ReleaseCandidateIssue = {
+  source?: string
+  severity?: 'BLOCKER' | 'WARNING' | 'INFO' | string
+  code?: string
+  message?: string
+  action?: string
+}
+
+export type ReleaseCandidateReport = {
+  version?: string
+  report_type?: string
+  release_candidate?: string
+  generated_at?: string | null
+  status: 'PASS' | 'PASS_WITH_WARNINGS' | 'FAIL' | string
+  go_no_go?: 'GO_PILOT' | 'GO_PILOT_WITH_MONITORING' | 'GO_BROAD_PRODUCTION' | 'HOLD' | string
+  summary_label?: string
+  ready_for_pilot?: boolean
+  ready_for_broad_production?: boolean
+  blocker_count?: number
+  warning_count?: number
+  filters?: Record<string, any>
+  gates?: ReleaseCandidateGate[]
+  blockers?: ReleaseCandidateIssue[]
+  warnings?: ReleaseCandidateIssue[]
+  next_actions?: string[]
+  reports?: Record<string, any>
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+
+
+export type PilotOperationsPhase = {
+  key: string
+  title?: string
+  status?: string
+  checks?: string[]
+}
+
+export type PilotOperationsTrigger = {
+  code?: string
+  severity?: string
+  condition?: string
+  action?: string
+}
+
+export type PilotOperationsReport = {
+  version?: string
+  report_type?: string
+  release_candidate?: string
+  generated_at?: string | null
+  status: 'PILOT_READY' | 'PILOT_WITH_MONITORING' | 'HOLD' | string
+  decision?: 'GO_PILOT' | 'GO_CONTROLLED_PILOT' | 'NO_GO' | string
+  summary_label?: string
+  ready_for_pilot?: boolean
+  ready_for_broad_production?: boolean
+  blocker_count?: number
+  warning_count?: number
+  filters?: Record<string, any>
+  release_candidate_summary?: Record<string, any>
+  gates?: ReleaseCandidateGate[]
+  phases?: PilotOperationsPhase[]
+  monitoring_cadence?: Array<{ window?: string; frequency?: string; check?: string }>
+  rollback_triggers?: PilotOperationsTrigger[]
+  evidence_required?: string[]
+  signoff?: Record<string, any>
+  blockers?: ReleaseCandidateIssue[]
+  warnings?: ReleaseCandidateIssue[]
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+export type PerformanceReadinessCheck = {
+  category?: string
+  code?: string
+  severity?: 'BLOCKER' | 'WARNING' | 'INFO' | string
+  ok?: boolean
+  message?: string
+  action?: string
+  actual?: any
+  target?: string
+  table?: string
+  missing_indexes?: string[]
+}
+
+export type PerformanceReadinessReport = {
+  version?: string
+  report_type?: string
+  generated_at?: string | null
+  status: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  blocker_count: number
+  warning_count: number
+  checks?: PerformanceReadinessCheck[]
+  sections?: Array<{ key: string; title?: string; status?: string; blocker_count?: number; warning_count?: number; check_count?: number }>
+  table_estimates?: { source?: string; items?: Array<{ table: string; estimated_rows?: number }>; error_type?: string }
+  queue_pressure?: Record<string, any>
+  limits?: Record<string, any>
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}

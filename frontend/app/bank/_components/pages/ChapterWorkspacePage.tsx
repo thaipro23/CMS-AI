@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import {
   BankRelease,
+  BankReleasePublishAudit,
   BankDashboardOverview,
   BankSearchResult,
   DepartmentSummary,
@@ -57,6 +58,7 @@ import {
   getBankMaterialChunks,
   getBankReleaseReadiness,
   getBankReleases,
+  getBankReleasePublishAudit,
   getBankVersionQuestion,
   getBankVersionQuestionPage,
   getBankVersions,
@@ -141,6 +143,7 @@ type ChapterActionKey =
   | 'diff_apply'
   | 'release_create'
   | 'release_publish'
+  | 'release_audit'
   | 'bulk_approve'
   | 'question_review'
   | 'question_edit'
@@ -276,6 +279,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [questionHasNext, setQuestionHasNext] = useState(false)
   const [questionLoadingMore, setQuestionLoadingMore] = useState(false)
   const [readiness, setReadiness] = useState<BankReleaseReadiness | null>(null)
+  const [releaseAudit, setReleaseAudit] = useState<BankReleasePublishAudit | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [generateCount, setGenerateCount] = useState('10')
   const [difficultyEasy, setDifficultyEasy] = useState('50')
@@ -320,6 +324,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setQuestionCursor(null)
       setQuestionHasNext(false)
       setReadiness(null)
+      setReleaseAudit(null)
       return
     }
     const [nextMaterials, questionPage, nextReadiness] = await Promise.all([
@@ -477,6 +482,23 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const diffBaseBankVersionId = String((metadata as any).diff_base_bank_version_id || selectedBankVersion?.based_on_version_id || '')
   const publishedRelease = releases.find((item) => item.status === 'published')
   const latestRelease = releases[0]
+
+  const refreshReleaseAudit = async (releaseId?: string | null) => {
+    if (!releaseId) {
+      setReleaseAudit(null)
+      return
+    }
+    try {
+      const audit = await getBankReleasePublishAudit(headers, releaseId)
+      setReleaseAudit(audit)
+    } catch {
+      setReleaseAudit(null)
+    }
+  }
+
+  useEffect(() => {
+    refreshReleaseAudit(latestRelease?.id).catch(() => null)
+  }, [latestRelease?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const chapterPublished = Boolean(
     publishedRelease
     || selectedBankVersion?.status === 'published'
@@ -731,6 +753,7 @@ ${chunk.content}`).join('\n\n')
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
         }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra thay đổi'}</button> : null}
+        {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_audit')} onClick={() => runAction('release_audit', async () => { await refreshReleaseAudit(latestRelease.id) }, 'Đã kiểm tra trạng thái bộ đề.', undefined, 'Không kiểm tra được trạng thái bộ đề.')}>{isActionBusy('release_audit') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra bộ đề'}</button> : null}
         {can('publish_questions') ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => runAction('release_create', async () => {
           if (!selectedBankVersion) return
           await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
@@ -738,6 +761,23 @@ ${chunk.content}`).join('\n\n')
       </div>
       {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
+
+    {latestRelease && releaseAudit ? <section className={`card bank-release-audit-panel status-${String(releaseAudit.audit_status || '').toLowerCase()}`}>
+      <div className="section-head"><div><div className="eyebrow">QA publish/rollback</div><h3>Độ tin cậy bộ đề</h3><p className="helper">Kiểm tra nhanh Release trước khi đưa lên CMS, tạo Quiz/Final test hoặc rollback. Báo cáo này chỉ đọc dữ liệu AI Server, không gọi Open edX và không thay đổi dữ liệu.</p></div><span className={`status-badge ${releaseAudit.ok ? 'success' : 'danger'}`}>{releaseAudit.audit_status}</span></div>
+      <div className="chapter-inline-stats bank-release-audit-stats" aria-label="Tóm tắt QA bộ đề">
+        <span>Release <b>{releaseAudit.release_code || latestRelease.release_code}</b><small>{releaseAudit.release_status || latestRelease.status}</small></span>
+        <span>Câu trong bộ <b>{releaseAudit.counts?.release_question_count ?? 0}</b><small>Component {releaseAudit.counts?.component_count ?? 0}</small></span>
+        <span>Quiz/Final test <b>{releaseAudit.counts?.active_course_quiz_instance_count ?? 0}</b><small>Tổng {releaseAudit.counts?.course_quiz_instance_count ?? 0}</small></span>
+        <span>Blocker <b>{releaseAudit.blockers?.length || 0}</b></span>
+        <span>Cảnh báo <b>{releaseAudit.warnings?.length || 0}</b></span>
+      </div>
+      {releaseAudit.message ? <div className={releaseAudit.ok ? 'alert success' : 'alert warning'}><b>{releaseAudit.message}</b></div> : null}
+      {(releaseAudit.blockers?.length || releaseAudit.warnings?.length) ? <div className="bank-release-audit-grid">
+        {(releaseAudit.blockers || []).slice(0, 4).map((item) => <div className="bank-release-audit-item danger" key={`blocker-${item.code}`}><b>{item.code}</b><span>{item.message}</span></div>)}
+        {(releaseAudit.warnings || []).slice(0, 4).map((item) => <div className="bank-release-audit-item warning" key={`warning-${item.code}`}><b>{item.code}</b><span>{item.message}</span></div>)}
+      </div> : null}
+      {releaseAudit.next_actions?.length ? <div className="bank-release-next-actions"><b>Việc cần làm tiếp theo</b><ul>{releaseAudit.next_actions.slice(0, 5).map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+    </section> : null}
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">

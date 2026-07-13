@@ -1,4 +1,5 @@
 import hmac
+import time
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
@@ -9,6 +10,7 @@ from app.api.router import api_router
 from app.core.config import cors_origin_list, settings, validate_security_settings
 from app.core.errors import http_exception_handler, validation_exception_handler
 from app.core.origin_guard import enforce_mutating_origin_guard
+from app.core.security_headers import apply_security_headers
 from app.db.init_db import init_db
 from app.services.runtime_settings import apply_runtime_settings
 
@@ -18,12 +20,15 @@ validate_security_settings()
 app = FastAPI(title=settings.app_name, version=settings.app_version, debug=settings.debug)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+_base_cors_headers = ['Authorization', 'Content-Type', 'X-Requested-With', 'X-Metrics-Token', 'Idempotency-Key']
+if (settings.app_env or '').lower() not in {'prod', 'production'} and settings.allow_demo_role_header:
+    _base_cors_headers.extend(['X-User-Id', 'X-User-Role', 'X-User-Email', 'X-Course-Ids'])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origin_list(),
     allow_credentials=True,
     allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allow_headers=['Authorization', 'Content-Type', 'X-Requested-With', 'X-User-Id', 'X-User-Role', 'X-User-Email', 'X-Course-Ids', 'X-Metrics-Token', 'Idempotency-Key'],
+    allow_headers=_base_cors_headers,
 )
 
 
@@ -33,6 +38,22 @@ async def mutating_origin_guard_middleware(request: Request, call_next):
     if blocked is not None:
         return blocked
     return await call_next(request)
+
+
+@app.middleware('http')
+async def request_timing_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    response.headers['X-Process-Time-Ms'] = f'{elapsed_ms:.2f}'
+    return response
+
+
+@app.middleware('http')
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    apply_security_headers(response)
+    return response
 
 
 @app.on_event('startup')

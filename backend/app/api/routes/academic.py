@@ -59,6 +59,10 @@ from app.schemas.academic import (
     AcademicLearningSyncOut,
     AcademicLearningSummaryOut,
     AcademicImportResultOut,
+    AcademicIdentityCleanupIn,
+    AcademicIdentityCleanupOut,
+    AcademicIdentityReconciliationOut,
+    AcademicIdentityMigrationOut,
     AcademicMappingResolveOut,
     AcademicMappingSummaryOut,
     AcademicManualMappingImportIn,
@@ -81,6 +85,8 @@ from app.schemas.academic import (
     AcademicAssignmentDefenseScoreOut,
 )
 from app.services.academic_service import AcademicService
+from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
+from app.services.academic.assignment_external import AcademicAssignmentExternalWorkflowService
 from app.services.ap_academic_sync import AcademicImportService
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
@@ -362,6 +368,9 @@ def _enqueue_class_sync_job(
 ) -> AcademicClassSyncJob:
     service = AcademicService(db)
     service.assert_can_access_class(user, class_id)
+    class_row = db.get(AcademicClass, class_id)
+    if not class_row:
+        raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
     clean_limit = max(1, min(500, int(limit or 500)))
 
     _advisory_xact_lock_for_key(db, f'academic-class-sync:{class_id}')
@@ -392,7 +401,18 @@ def _enqueue_class_sync_job(
         progress_current=0,
         progress_total=100,
         progress_label='Đang chờ xử lý',
-        request_json=json_safe_value({'force': bool(force), 'limit': clean_limit, 'mode': mode, 'auto_map_course': auto_map_course, 'sync_learning': sync_learning, 'requester_context': _requester_context_json(user), 'approved_class_id': class_id}),
+        request_json=json_safe_value({
+            'force': bool(force),
+            'limit': clean_limit,
+            'mode': mode,
+            'auto_map_course': auto_map_course,
+            'sync_learning': sync_learning,
+            'requester_context': _requester_context_json(user),
+            'approved_class_id': class_id,
+            'approved_campus_codes': [str(class_row.campus or '').strip().lower()] if class_row.campus else [],
+            'approved_branch': str(class_row.branch or '').strip().lower() or None,
+            'scope_enforced_by_backend': True,
+        }),
         result_json={},
     )
     db.add(job)
@@ -409,12 +429,16 @@ def _require_academic_sync_permission(
     user: UserContext = Depends(get_user_context),
     db: Session = Depends(get_db),
 ) -> UserContext:
-    """Allow academic CMS/Open edX mutations only for sync-capable users."""
-    if 'sync_course' in user.permissions or 'manage_settings' in user.permissions:
+    """Allow Student Ops CMS/Open edX mutations only for campus/system admins.
+
+    v25.9.16.7.2.64.12 splits Quiz Bank roles from Student Ops. Bank permissions
+    such as course.sync no longer authorize AP/CMS class/enrollment mutations.
+    """
+    if 'manage_settings' in user.permissions:
         return user
     try:
         service = BusinessRBACService(db)
-        if service.has_any_business_permission(user, 'sync_course') or service.has_any_business_permission(user, 'manage_settings'):
+        if service.has_any_business_permission(user, 'manage_settings') or service.has_any_business_permission(user, 'academic.manage_campus'):
             return user
     except HTTPException:
         raise
@@ -436,11 +460,14 @@ def _require_academic_view_permission(
     This keeps campus-management users out of Question Bank read routes while
     still letting them open terms/campuses/teacher-management.
     """
-    if {'view_questions', 'manage_settings'}.intersection(set(user.permissions or [])):
+    if 'manage_settings' in set(user.permissions or []):
         return user
     try:
         service = BusinessRBACService(db)
         if service.has_any_business_permission(user, 'view_training_reports') or service.has_any_business_permission(user, 'academic.view'):
+            return user
+        decision = AcademicService(db).access_decision(user)
+        if decision.unrestricted or decision.teacher_ids or decision.campus_codes:
             return user
     except HTTPException:
         raise
@@ -454,7 +481,7 @@ def _require_training_write_permission(
     db: Session = Depends(get_db),
 ) -> UserContext:
     """Allow deadline/class training mutations for training-capable users."""
-    allowed = {'manage_training_deadlines', 'view_training_reports', 'sync_course', 'manage_settings'}
+    allowed = {'manage_training_deadlines', 'view_training_reports', 'manage_settings'}
     if allowed.intersection(set(user.permissions or [])):
         return user
     try:
@@ -485,6 +512,18 @@ def _enqueue_teacher_report_job(
 ) -> AcademicTeacherReportJob:
     if not term_id:
         raise HTTPException(status_code=422, detail='Thiếu học kỳ để chạy báo cáo giáo viên')
+    rbac = BusinessRBACService(db)
+    # A limited CAMPUS_MANAGER must choose a concrete campus before materializing
+    # cache/export files. Otherwise a durable worker job with campus=None could
+    # build all-campus data outside the actor scope. Subject/teacher scoped users
+    # remain constrained by AcademicService in the report query itself.
+    rbac.ensure_requested_campus_filter_allowed(
+        user,
+        campus,
+        require_filter_when_scoped=True,
+        action='tạo báo cáo giáo viên',
+    )
+    campus_scope = rbac.campus_scope_for_user(user)
     # Cache rebuild is idempotent by scope; export jobs are allowed to differ by search/status.
     if job_type == 'rebuild_cache':
         active = db.query(AcademicTeacherReportJob).filter(
@@ -513,6 +552,10 @@ def _enqueue_teacher_report_job(
             'search': search,
             'learning_status': learning_status,
             'teacher_id': teacher_id,
+            'requester_context': _requester_context_json(user),
+            'approved_campus_codes': campus_scope.get('campus_codes') or ([] if campus_scope.get('unrestricted') else []),
+            'campus_scope_unrestricted': bool(campus_scope.get('unrestricted')),
+            'scope_enforced_by_backend': True,
         }),
         result_json={},
     )
@@ -562,7 +605,15 @@ def list_training_teacher_report_jobs(
         query = query.filter(AcademicTeacherReportJob.status.in_(['queued', 'running']))
     elif status_filter and status_filter != 'all':
         query = query.filter(AcademicTeacherReportJob.status == status_filter)
-    return query.order_by(AcademicTeacherReportJob.created_at.desc()).limit(limit).all()
+    service = BusinessRBACService(db)
+    candidates = query.order_by(AcademicTeacherReportJob.created_at.desc()).limit(max(limit * 5, 50)).all()
+    visible: list[AcademicTeacherReportJob] = []
+    for job in candidates:
+        if service.can_access_academic_scope(user, campus=job.campus, requested_by=job.requested_by, request_json=job.request_json if isinstance(job.request_json, dict) else {}):
+            visible.append(job)
+        if len(visible) >= limit:
+            break
+    return visible
 
 
 @router.get('/training/teachers/report-jobs/{job_id}', response_model=AcademicTeacherReportJobOut)
@@ -574,6 +625,7 @@ def get_training_teacher_report_job(
     job = db.get(AcademicTeacherReportJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail='Không tìm thấy job báo cáo giáo viên')
+    BusinessRBACService(db).require_academic_scope(user, campus=job.campus, requested_by=job.requested_by, request_json=job.request_json if isinstance(job.request_json, dict) else {}, action='xem job báo cáo giáo viên')
     return job
 
 
@@ -586,6 +638,7 @@ def download_training_teacher_report_job_file(
     job = db.get(AcademicTeacherReportJob, job_id)
     if not job or job.status != 'completed' or not job.file_path:
         raise HTTPException(status_code=404, detail='File báo cáo chưa sẵn sàng')
+    BusinessRBACService(db).require_academic_scope(user, campus=job.campus, requested_by=job.requested_by, request_json=job.request_json if isinstance(job.request_json, dict) else {}, action='tải file báo cáo giáo viên')
     root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
     path = Path(job.file_path).expanduser().resolve()
     if root not in path.parents and path != root:
@@ -853,6 +906,14 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         raise HTTPException(status_code=422, detail='Thiếu học kỳ để auto map tất cả')
     branch_value = payload.branch.strip().lower() if payload.branch and payload.branch.strip() else None
     campus_value = payload.campus.strip().lower() if payload.campus and payload.campus.strip() else None
+    rbac = BusinessRBACService(db)
+    rbac.ensure_requested_campus_filter_allowed(
+        user,
+        campus_value,
+        require_filter_when_scoped=True,
+        action='chạy Auto map tất cả',
+    )
+    campus_scope = rbac.campus_scope_for_user(user)
     request_json = json_safe_value({
         'term_id': payload.term_id,
         'branch': branch_value,
@@ -866,6 +927,9 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         'max_classes': max(1, min(5000, int(payload.max_classes or 3000))),
         'requester_context': _requester_context_json(user),
         'scope_enforced_in_worker': True,
+        'approved_campus_codes': campus_scope.get('campus_codes') or ([] if campus_scope.get('unrestricted') else []),
+        'campus_scope_unrestricted': bool(campus_scope.get('unrestricted')),
+        'scope_enforced_by_backend': True,
     })
 
     active_candidates = (
@@ -892,6 +956,8 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         ):
             active = candidate
             break
+    if active and not rbac.can_access_academic_scope(user, campus=active.campus, requested_by=active.requested_by, request_json=active.request_json if isinstance(active.request_json, dict) else {}):
+        active = None
     if active:
         message = 'Đang có job Auto map tất cả chạy cho bộ lọc này. Hệ thống dùng lại job hiện có, F5 không làm mất tiến trình.'
         return {
@@ -932,6 +998,7 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         request_json['approved_class_ids'] = list(approved_preview.get('class_ids') or [])
         request_json['approved_class_total'] = int(approved_preview.get('class_total') or 0)
         request_json['approved_subject_ids'] = list(approved_preview.get('subject_ids') or [])
+        request_json['approved_campus_codes_from_preview'] = sorted({str(item.get('campus') or '').strip().lower() for item in (approved_preview.get('classes') or []) if isinstance(item, dict) and str(item.get('campus') or '').strip()})
     except Exception as exc:
         raise HTTPException(status_code=403, detail=f'Không thể xác định phạm vi được phân quyền cho Auto map tất cả: {exc}')
 
@@ -999,7 +1066,15 @@ def list_academic_bulk_operation_jobs(
             query = query.filter(AcademicBulkOperationJob.status.in_(['queued', 'running']))
         else:
             query = query.filter(AcademicBulkOperationJob.status == status_filter)
-    return query.order_by(AcademicBulkOperationJob.created_at.desc()).limit(limit).all()
+    service = BusinessRBACService(db)
+    candidates = query.order_by(AcademicBulkOperationJob.created_at.desc()).limit(max(limit * 5, 100)).all()
+    visible: list[AcademicBulkOperationJob] = []
+    for job in candidates:
+        if service.can_access_academic_scope(user, campus=job.campus, requested_by=job.requested_by, request_json=job.request_json if isinstance(job.request_json, dict) else {}):
+            visible.append(job)
+        if len(visible) >= limit:
+            break
+    return visible
 
 
 @router.get('/bulk-operation-jobs/{job_id}', response_model=AcademicBulkOperationJobOut)
@@ -1011,6 +1086,7 @@ def get_academic_bulk_operation_job(
     job = db.get(AcademicBulkOperationJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail='Không tìm thấy job xử lý hàng loạt')
+    BusinessRBACService(db).require_academic_scope(user, campus=job.campus, requested_by=job.requested_by, request_json=job.request_json if isinstance(job.request_json, dict) else {}, action='xem job xử lý hàng loạt')
     return job
 
 @router.get('/subjects/{subject_id}/classes', response_model=AcademicClassListOut)
@@ -1286,51 +1362,16 @@ def save_class_quiz_deadline_overrides(
 def list_class_assignment_defense_scores(
     class_id: str,
     course_id: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=500),
     user: UserContext = Depends(require_permission('view_questions')),
     db: Session = Depends(get_db),
 ):
     AcademicService(db).assert_can_access_class(user, class_id)
-    score_join_conditions = [
-        AcademicAssignmentDefenseScore.class_id == AcademicClassStudent.class_id,
-        AcademicAssignmentDefenseScore.student_id == AcademicClassStudent.student_id,
-    ]
-    if course_id:
-        score_join_conditions.append(or_(
-            AcademicAssignmentDefenseScore.course_id == course_id,
-            AcademicAssignmentDefenseScore.course_id.is_(None),
-        ))
-    rows = db.query(AcademicClassStudent, AcademicStudent, AcademicAssignmentDefenseScore).join(
-        AcademicStudent,
-        AcademicStudent.id == AcademicClassStudent.student_id,
-    ).outerjoin(
-        AcademicAssignmentDefenseScore,
-        and_(*score_join_conditions),
-    ).filter(AcademicClassStudent.class_id == class_id).order_by(AcademicStudent.student_code.asc().nullslast(), AcademicStudent.username.asc()).all()
-    result: list[dict[str, Any]] = []
-    seen_students: set[str] = set()
-    for _class_student, student, score in rows:
-        if student.id in seen_students:
-            continue
-        seen_students.add(student.id)
-        result.append({
-            'id': score.id if score else f'new:{student.id}',
-            'class_id': class_id,
-            'student_id': student.id,
-            'student_code': student.student_code,
-            'student_username': student.username,
-            'student_name': student.full_name,
-            'course_id': score.course_id if score else course_id,
-            'assignment_key': score.assignment_key if score else None,
-            'assignment_label': score.assignment_label if score else 'Assignment',
-            'score_10': score.score_10 if score else None,
-            'defense_status': score.defense_status if score else 'not_graded',
-            'graded_by': score.graded_by if score else None,
-            'graded_at': score.graded_at if score else None,
-            'note': score.note if score else '',
-            'created_at': score.created_at if score else None,
-            'updated_at': score.updated_at if score else None,
-        })
-    return result
+    return AcademicAssignmentExternalWorkflowService(db).list_class_assignment_scores(
+        class_id=class_id, course_id=course_id, page=page, page_size=page_size
+    )
+
 
 
 @router.put('/classes/{class_id}/assignment-defense-scores', response_model=list[AcademicAssignmentDefenseScoreOut])
@@ -1341,66 +1382,8 @@ def save_class_assignment_defense_scores(
     db: Session = Depends(get_db),
 ):
     AcademicService(db).assert_can_access_class(user, class_id)
-    _require_assignment_score_permission_for_class(db, user, class_id)
-    now = datetime.utcnow()
-    saved: list[AcademicAssignmentDefenseScore] = []
-    allowed_status = {'not_graded', 'waiting_defense', 'graded', 'absent', 'needs_regrade', 'submitted'}
-    audit_changes: list[dict[str, Any]] = []
-    response_course_id: str | None = None
-    for item in payload.items:
-        course_id = (item.course_id or '').strip() or None
-        response_course_id = response_course_id or course_id
-        assignment_key = (item.assignment_key or 'assignment').strip() or 'assignment'
-        row = db.query(AcademicAssignmentDefenseScore).filter(
-            AcademicAssignmentDefenseScore.class_id == class_id,
-            AcademicAssignmentDefenseScore.student_id == item.student_id,
-            AcademicAssignmentDefenseScore.course_id.is_(None) if course_id is None else AcademicAssignmentDefenseScore.course_id == course_id,
-            AcademicAssignmentDefenseScore.assignment_key == assignment_key,
-        ).first()
-        if not row:
-            row = AcademicAssignmentDefenseScore(
-                class_id=class_id,
-                student_id=item.student_id,
-                course_id=course_id,
-                assignment_key=assignment_key,
-                created_at=now,
-            )
-            db.add(row)
-        old_score = row.score_10
-        old_status = row.defense_status
-        row.assignment_label = (item.assignment_label or 'Assignment').strip()
-        status_value = (item.defense_status or 'not_graded').strip().lower()
-        if status_value not in allowed_status:
-            status_value = 'not_graded'
-        if status_value == 'graded' and item.score_10 is None:
-            raise HTTPException(status_code=422, detail='Trạng thái Đã chấm bắt buộc có điểm Assignment /10')
-        row.score_10 = None if status_value in {'not_graded', 'absent'} else item.score_10
-        row.defense_status = status_value
-        row.graded_by = user.user_id if row.defense_status == 'graded' else row.graded_by
-        row.graded_at = now if row.defense_status == 'graded' else row.graded_at
-        row.note = (item.note or '').strip()
-        if old_score != row.score_10 or old_status != row.defense_status:
-            audit_changes.append({
-                'student_id': item.student_id,
-                'assignment_key': assignment_key,
-                'old_score': old_score,
-                'new_score': row.score_10,
-                'old_status': old_status,
-                'new_status': row.defense_status,
-            })
-        row.updated_at = now
-        history = []
-        if isinstance(row.metadata_json, dict):
-            history = list(row.metadata_json.get('history') or [])[-20:]
-        if audit_changes and (old_score != row.score_10 or old_status != row.defense_status):
-            history.append({'at': now.isoformat(), 'by': user.user_id, 'old_score': old_score, 'new_score': row.score_10, 'old_status': old_status, 'new_status': row.defense_status})
-        row.metadata_json = {'source': 'manual_ui_assignment_defense_workflow', 'history': history[-20:]}
-        saved.append(row)
-    db.commit()
-    for row in saved:
-        db.refresh(row)
-    log_audit(db, action='academic.assignment_defense_score.save', status='success', message='Lưu điểm bảo vệ Assignment thành công', user=user, target_type='academic_class', target_id=class_id, metadata={'count': len(saved), 'changes': audit_changes[:200]})
-    return list_class_assignment_defense_scores(class_id, course_id=response_course_id, user=user, db=db)
+    AcademicAssignmentExternalWorkflowService(db).reject_assignment_score_write()
+
 
 
 @router.post('/classes/{class_id}/cms-sync-check/jobs', response_model=AcademicClassSyncJobOut)
@@ -1674,6 +1657,80 @@ def resolve_class_openedx_users_legacy_alias(
     return _run_class_cms_sync_check(class_id, payload, user, db)
 
 
+@router.get('/classes/{class_id}/identity-reconciliation', response_model=AcademicIdentityReconciliationOut)
+def get_class_identity_reconciliation(
+    class_id: str,
+    status_filter: str | None = Query('all', description='ALL/OK/LEGACY_AP_USERNAME/MISSING_MAPPING/MISSING_ROLLNUMBER/DUPLICATE_ROLLNUMBER/CMS_USERNAME_MISMATCH'),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=500),
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    """Dry-run RollNumber identity audit for a class.
+
+    This endpoint is intentionally read-only.  It helps admins identify legacy
+    CMS users created from AP username/email before the RollNumber username
+    policy is used for broad enrollment and learning sync.
+    """
+    return AcademicService(db).identity_reconciliation_for_class(
+        user,
+        class_id,
+        status_filter=status_filter,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.post('/classes/{class_id}/identity-reconciliation/uat-cleanup', response_model=AcademicIdentityCleanupOut)
+def cleanup_class_identity_reconciliation_uat(
+    class_id: str,
+    payload: AcademicIdentityCleanupIn,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    """UAT-only cleanup for wrong RollNumber identity mappings.
+
+    This is intentionally explicit and guarded. It deletes AI Server mapping rows
+    and stale class learning snapshots that point to legacy AP usernames so the
+    next CMS sync can recreate/check users by RollNumber. It does not delete
+    Open edX Django users.
+    """
+    return AcademicService(db).cleanup_identity_reconciliation_for_class(user, class_id, payload.model_dump())
+
+
+@router.get('/identity/rollnumber-migration', response_model=AcademicIdentityMigrationOut)
+def get_rollnumber_identity_migration_report(
+    class_id: str | None = Query(None),
+    term_id: str | None = Query(None),
+    campus: str | None = Query(None),
+    branch: str | None = Query(None),
+    subject_id: str | None = Query(None),
+    status_filter: str | None = Query('all', description='ALL/OK/BLOCKERS/WARNINGS/LEGACY_AP_USERNAME/MISSING_MAPPING/...'),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=500),
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    """Read-only RollNumber identity migration assistant.
+
+    This endpoint is for UAT/pilot migration planning only.  It scans AP roster
+    rows under the caller scope, compares AP username/email with RollNumber-based
+    canonical CMS username, and returns blocker/warning rows before broad CMS sync.
+    It never mutates mapping rows or Open edX users.
+    """
+    return AcademicService(db).rollnumber_identity_migration_report(
+        user,
+        class_id=class_id,
+        term_id=term_id,
+        campus=campus,
+        branch=branch,
+        subject_id=subject_id,
+        status_filter=status_filter,
+        page=page,
+        page_size=page_size,
+    )
+
+
 @router.post('/openedx-user-mappings/import', response_model=AcademicManualMappingImportOut)
 def import_openedx_user_mappings(
     payload: AcademicManualMappingImportIn,
@@ -1779,17 +1836,7 @@ def sync_academic_campuses_from_ap(
     db: Session = Depends(get_db),
 ):
     _require_academic_admin(db, user)
-    try:
-        items = AcademicImportService(db).sync_campuses_from_ap(branch=branch)
-        log_audit(db, action='academic.campus.sync_from_ap', status='success', message='Đồng bộ danh sách cơ sở từ AP thành công', user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch, 'count': len(items)})
-        return items
-    except HTTPException:
-        raise
-    except Exception as exc:
-        db.rollback()
-        message = str(exc) or 'Không đồng bộ được danh sách cơ sở từ AP CMS.'
-        log_audit(db, action='academic.campus.sync_from_ap', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=message, user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch})
-        raise HTTPException(status_code=502, detail=f'Đồng bộ danh sách cơ sở từ AP CMS thất bại: {message}') from exc
+    return AcademicAPSyncWorkflowService(db).sync_campuses_from_ap(branch=branch, user=user)
 
 
 @router.delete('/campuses/{campus_id}', response_model=AcademicCampusOut)
@@ -1821,7 +1868,7 @@ def get_ap_sync_options(
     user: UserContext = Depends(require_permission('manage_settings')),
     db: Session = Depends(get_db),
 ):
-    return AcademicImportService(db).get_ap_sync_options(term_name=term_name or None, branch=branch, campus=campus, include_subjects=include_subjects)
+    return AcademicAPSyncWorkflowService(db).get_sync_options(term_name=term_name or None, branch=branch, campus=campus, include_subjects=include_subjects)
 
 
 @router.post('/sync/from-json', response_model=AcademicImportResultOut)
@@ -1831,27 +1878,8 @@ def sync_from_json(
     db: Session = Depends(get_db),
 ):
     _require_academic_admin(db, user)
-    importer = AcademicImportService(db)
-    run = importer.create_run(source=payload.source or 'ap_json', mode='json', requested_by=user.user_id, campus=payload.campus, branch=payload.branch)
-    try:
-        counters = importer.import_payload(payload.payload, run=run, campus=payload.campus, branch=payload.branch)
-        run = importer.finish_run(run, counters)
-        log_audit(
-            db,
-            action='academic.ap.import_json',
-            status='success',
-            message='Đồng bộ dữ liệu AP từ JSON thành công',
-            user=user,
-            target_type='academic_sync_run',
-            target_id=run.id,
-            metadata={'counters': counters.as_dict(), 'campus': payload.campus, 'branch': payload.branch},
-        )
-        return {'ok': True, 'message': 'Đã import dữ liệu AP từ JSON', 'sync_run': run, 'counters': counters.as_dict()}
-    except Exception as exc:
-        db.rollback()
-        run = importer.finish_run(run, error=str(exc))
-        log_audit(db, action='academic.ap.import_json', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=user, target_type='academic_sync_run', target_id=run.id)
-        raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
+    return AcademicAPSyncWorkflowService(db).sync_from_json(payload, user=user)
+
 
 
 
@@ -1862,77 +1890,8 @@ def enqueue_sync_from_ap_job(
     db: Session = Depends(get_db),
 ):
     _require_academic_admin(db, user)
-    branch = (payload.branch or 'poly').strip().lower() or 'poly'
-    term_name = (payload.term_name or '').strip()
-    if not term_name:
-        raise HTTPException(status_code=400, detail='Vui lòng chọn kỳ trước khi đồng bộ AP.')
-    scope = (payload.sync_scope or 'all').strip().lower() or 'all'
-    active = (
-        db.query(AcademicSyncRun)
-        .filter(
-            AcademicSyncRun.source == 'ap',
-            AcademicSyncRun.status.in_(['queued', 'running']),
-            AcademicSyncRun.term_name == term_name,
-            AcademicSyncRun.branch == branch,
-        )
-        .order_by(AcademicSyncRun.created_at.desc())
-        .first()
-    )
-    if active:
-        return {'ok': True, 'message': 'Hệ thống đang có job đồng bộ AP đang chạy. Trạng thái sẽ tự cập nhật.', 'sync_run': active, 'counters': AcademicSyncCounters()}
+    return AcademicAPSyncWorkflowService(db).enqueue_sync_from_ap_job(payload, user=user)
 
-    request_json = json_safe_value({
-        'term_name': term_name,
-        'sync_scope': scope,
-        'campus': payload.campus,
-        'campuses': payload.campuses or [],
-        'branch': branch,
-        'subject_codes': payload.subject_codes or [],
-        'max_subjects': int(payload.max_subjects or 0),
-        'dry_run': bool(payload.dry_run),
-    })
-    importer = AcademicImportService(db)
-    run = importer.create_run(
-        source='ap',
-        mode=f'api_{scope}_job_dry_run' if payload.dry_run else f'api_{scope}_job',
-        requested_by=user.user_id,
-        term_name=term_name,
-        campus=','.join((payload.campuses or [])[:10]) if payload.campuses else payload.campus,
-        branch=branch,
-        status='queued',
-        counters_json={
-            'request': request_json,
-            'progress': {'current': 0, 'total': 1, 'label': 'Đã đưa job đồng bộ AP vào hàng đợi', 'updated_at': None},
-        },
-    )
-    try:
-        from app.worker import academic_ap_sync_task
-        async_result = academic_ap_sync_task.delay(run.id)
-        data = run.counters_json if isinstance(run.counters_json, dict) else {}
-        data['enqueue'] = {'task_name': 'academic_ap_sync_task', 'celery_task_id': getattr(async_result, 'id', None)}
-        run.counters_json = json_safe_value(data)
-        db.add(run)
-        db.commit()
-        db.refresh(run)
-    except Exception as exc:
-        run.status = 'failed'
-        run.error_message = f'Không đưa job đồng bộ AP vào Celery/Redis: {exc}'[:4000]
-        db.add(run)
-        db.commit()
-        db.refresh(run)
-        raise HTTPException(status_code=503, detail='Không đưa job đồng bộ AP vào hàng đợi. Kiểm tra Redis/worker rồi thử lại.') from exc
-
-    log_audit(
-        db,
-        action='academic.ap.sync_api.enqueue',
-        status='success',
-        message='Đã đưa job đồng bộ AP vào hàng đợi',
-        user=user,
-        target_type='academic_sync_run',
-        target_id=run.id,
-        metadata=request_json,
-    )
-    return {'ok': True, 'message': 'Đã đưa job đồng bộ AP vào hàng đợi. Trạng thái sẽ tự cập nhật.', 'sync_run': run, 'counters': AcademicSyncCounters()}
 
 
 @router.get('/sync/ap/jobs', response_model=list[AcademicSyncRunOut])
@@ -1945,16 +1904,8 @@ def list_ap_sync_jobs(
     db: Session = Depends(get_db),
 ):
     _require_academic_admin(db, user)
-    query = db.query(AcademicSyncRun).filter(AcademicSyncRun.source == 'ap')
-    if term_name.strip():
-        query = query.filter(AcademicSyncRun.term_name == term_name.strip())
-    if branch.strip():
-        query = query.filter(AcademicSyncRun.branch == branch.strip().lower())
-    if status_filter == 'active':
-        query = query.filter(AcademicSyncRun.status.in_(['queued', 'running']))
-    elif status_filter and status_filter != 'all':
-        query = query.filter(AcademicSyncRun.status == status_filter)
-    return query.order_by(AcademicSyncRun.created_at.desc()).limit(limit).all()
+    return AcademicAPSyncWorkflowService(db).list_sync_jobs(term_name=term_name, branch=branch, status_filter=status_filter, limit=limit)
+
 
 
 @router.get('/sync/ap/jobs/{run_id}', response_model=AcademicSyncRunOut)
@@ -1964,10 +1915,8 @@ def get_ap_sync_job(
     db: Session = Depends(get_db),
 ):
     _require_academic_admin(db, user)
-    run = db.get(AcademicSyncRun, run_id)
-    if not run or run.source != 'ap':
-        raise HTTPException(status_code=404, detail='Không tìm thấy job đồng bộ AP')
-    return run
+    return AcademicAPSyncWorkflowService(db).get_sync_job(run_id)
+
 
 
 @router.post('/sync/ap', response_model=AcademicImportResultOut)
@@ -1977,39 +1926,4 @@ def sync_from_ap(
     db: Session = Depends(get_db),
 ):
     _require_academic_admin(db, user)
-    importer = AcademicImportService(db)
-    run, counters = importer.sync_from_ap(
-        requested_by=user.user_id,
-        term_name=payload.term_name,
-        campus=payload.campus,
-        branch=payload.branch,
-        subject_codes=payload.subject_codes,
-        max_subjects=payload.max_subjects,
-        dry_run=payload.dry_run,
-        sync_scope=payload.sync_scope,
-        campuses=payload.campuses,
-    )
-    status = 'success' if run.status == 'completed' else 'failed'
-    log_audit(
-        db,
-        action='academic.ap.sync_api',
-        status=status,
-        error_type=None if status == 'success' else AuditErrorType.EXTERNAL_SERVICE_ERROR,
-        message='Đồng bộ dữ liệu AP qua API hoàn tất' if status == 'success' else run.error_message,
-        user=user,
-        target_type='academic_sync_run',
-        target_id=run.id,
-        metadata={
-            'term_name': payload.term_name,
-            'sync_scope': payload.sync_scope,
-            'campus': payload.campus,
-            'campuses': payload.campuses,
-            'branch': payload.branch,
-            'subject_count': len(payload.subject_codes),
-            'dry_run': payload.dry_run,
-            'counters': counters.as_dict(),
-        },
-    )
-    if run.status != 'completed':
-        raise HTTPException(status_code=502, detail=run.error_message or 'Đồng bộ AP thất bại')
-    return {'ok': True, 'message': 'Đã đồng bộ dữ liệu AP', 'sync_run': run, 'counters': counters.as_dict()}
+    return AcademicAPSyncWorkflowService(db).sync_from_ap(payload, user=user)
