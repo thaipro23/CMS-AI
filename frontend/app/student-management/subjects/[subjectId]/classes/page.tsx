@@ -6,7 +6,7 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../../context/AppContext'
 import { getAcademicBlocks, getAcademicSubjectClasses } from '../../../../../lib/api'
 import { AcademicBlock, AcademicClass } from '../../../../../types'
-import { PageHeader } from '../../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../../../components/table/EnterpriseDataTable'
 import { InlineNotice, InlineNoticeData, noticeError } from '../../../../../components/ui/InlineNotice'
 import { TrainingContextChips, TrainingKpiStrip } from '../../../../../components/training/TrainingWorkspace'
@@ -136,14 +136,13 @@ function SubjectClassesContent() {
     { key: 'students', header: 'Sinh viên', kind: 'number', width: 116, priority: 'important', hideable: true, render: (item) => <><b>{item.student_count} SV</b><small>CMS {item.cms_synced_count || 0}/{item.student_count}</small></> },
     { key: 'course', header: 'Course CMS', kind: 'status', minWidth: 145, priority: 'important', hideable: true, render: (item) => <><span className={mappingClass(item.openedx_mapping_source)}>{mappingSourceLabel(item.openedx_mapping_source)}</span><small className="enterprise-clamp-1">{item.openedx_course_id || 'Chưa có Course ID'}</small></> },
     { key: 'learning', header: 'Học tập', kind: 'progress', minWidth: 165, priority: 'optional', defaultVisible: false, hideable: true, render: (item) => <><b>{item.learning_enrolled_count || 0}/{item.student_count} ghi danh</b><small>{item.learning_active_count || 0} đã học · TB {percentLabel(item.learning_avg_progress_percent)}</small></> },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: (item) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết</Link><details className="row-action-menu"><summary className="btn small ghost" aria-label="Mở thêm thao tác">•••</summary><div className="row-action-popover"><Link href={learningBehaviorHref(item)}>Phân tích học tập</Link></div></details></div> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: (item) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết</Link><Link className="btn small secondary" href={learningBehaviorHref(item)}>Phân tích</Link></div> },
   ], [branch, campus, page, pageSize, subjectId, termId])
 
-  return <div className="page-stack student-management-page academic-flow-page training-operations-page">
+  return <PageRoot className="page-stack student-management-page academic-flow-page training-operations-page">
     <PageHeader
       eyebrow="Vận hành đào tạo"
       title={`Lớp của môn ${subjectCode || subjectName || ''}`.trim()}
-      description={`${total.toLocaleString('vi-VN')} lớp trong phạm vi được phân quyền`}
       secondaryActions={<Link className="btn secondary" href={listHref}>Quay lại danh sách môn</Link>}
     />
 
@@ -203,7 +202,7 @@ function SubjectClassesContent() {
         label="lớp"
       />
     </section>
-  </div>
+  </PageRoot>
 }
 
 export default function SubjectClassesPage() {

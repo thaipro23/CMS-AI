@@ -2,13 +2,14 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { buildCmsSessionBridgeUrl } from '../../lib/api'
 import { SHOW_DIAGNOSTICS_UI } from '../../lib/runtime'
 import { ROLE_LABELS } from '../../types'
 import { AppIcon, type AppIconName } from '../icons/AppIcon'
-import { Breadcrumbs, type BreadcrumbItem } from '../navigation/Breadcrumbs'
+import { PageShellProvider, type PageChrome } from './PageShellContext'
+import { VisualIcon } from '../ui/VisualIcon'
 
 type NavGroupKey = 'overview' | 'bank' | 'training' | 'operations' | 'catalog' | 'admin'
 
@@ -82,14 +83,23 @@ function pageLabel(pathname: string) {
     .sort((a, b) => b.href.length - a.href.length)[0]?.label || 'AI Server'
 }
 
-function breadcrumbsForPath(pathname: string): BreadcrumbItem[] {
-  if (pathname.startsWith('/bank/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }]
-  if (pathname.startsWith('/student-management/classes/')) return [{ label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Chi tiết lớp' }]
-  if (pathname.startsWith('/student-management/subjects/')) return [{ label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Danh sách lớp' }]
-  if (pathname.startsWith('/teacher-management/teachers/')) return [{ label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Lớp giảng viên' }]
-  if (pathname.startsWith('/teacher-management/classes/')) return [{ label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Chi tiết lớp' }]
-  const item = navItems.find((candidate) => isPathActive(pathname, candidate.href))
-  return item ? [{ label: item.label }] : [{ label: pageLabel(pathname) }]
+function fallbackPageLayoutClass(pathname: string) {
+  const classes = ['page-stack']
+  if (pathname.startsWith('/bank')) classes.push('bank-multipage')
+  if (pathname === '/bank') classes.push('dashboard-modern-page')
+  if (pathname.startsWith('/bank/quiz')) classes.push('bank-quiz-page', 'quiz-creation-workbench')
+  if (pathname.startsWith('/bank/search')) classes.push('dashboard-search-page')
+  if (pathname.startsWith('/student-management')) classes.push('student-management-page', 'academic-flow-page', 'training-operations-page')
+  if (pathname.startsWith('/teacher-management')) classes.push('training-management-page', 'teacher-management-page', 'training-operations-page')
+  if (pathname.startsWith('/analytics')) classes.push('learning-analytics-page', 'academic-flow-page', 'training-operations-page')
+  if (pathname.startsWith('/jobs')) classes.push('ops-console', 'jobs-console', 'ux-enterprise-page')
+  if (pathname.startsWith('/audit')) classes.push('ops-console', 'audit-console', 'ux-enterprise-page')
+  if (pathname.startsWith('/ap-sync')) classes.push('ap-sync-page')
+  if (pathname.startsWith('/premises')) classes.push('premises-page')
+  if (pathname.startsWith('/semesters')) classes.push('semesters-page')
+  if (pathname.startsWith('/settings')) classes.push('settings-page')
+  if (pathname.startsWith('/users')) classes.push('access-console', 'access-console-v2')
+  return classes.join(' ')
 }
 
 function loadGroupPreference(): Record<NavGroupKey, boolean> {
@@ -108,11 +118,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const drawerRef = useRef<HTMLElement>(null)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   const userMenuRef = useRef<HTMLDetailsElement>(null)
+  const layoutRegistrationRef = useRef<string | null>(null)
   const [collapsed, setCollapsed] = useState(true)
   const [mobile, setMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
+  const [pageChrome, setPageChrome] = useState<PageChrome | null>(null)
+  const [pageLayoutClass, setPageLayoutClass] = useState(() => fallbackPageLayoutClass(pathname))
   const { courseId, role, userId, can, isAuthenticated, authReady } = useAppContext()
+
+  const registerChrome = useCallback((value: PageChrome) => {
+    setPageChrome(value)
+    return () => setPageChrome((current) => current?.registrationId === value.registrationId ? null : current)
+  }, [])
+
+  const registerLayout = useCallback((registrationId: string, className: string) => {
+    layoutRegistrationRef.current = registrationId
+    setPageLayoutClass(className)
+    return () => {
+      if (layoutRegistrationRef.current !== registrationId) return
+      layoutRegistrationRef.current = null
+      setPageLayoutClass(fallbackPageLayoutClass(pathname))
+    }
+  }, [pathname])
+
+  const pageShellRegistration = useMemo(() => ({ registerChrome, registerLayout }), [registerChrome, registerLayout])
 
   const availableItems = useMemo(() => navItems.filter((item) => !item.diagnostic || SHOW_DIAGNOSTICS_UI), [])
   const visibleItems = useMemo(() => authReady ? availableItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, availableItems, can])
@@ -270,7 +300,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <p>{authReady ? 'Hệ thống đang chuyển về màn hình phù hợp với phạm vi được phân công.' : 'Vui lòng chờ trong khi hệ thống xác định quyền từ phiên CMS.'}</p>
   </section>
 
-  return <div className="enterprise-app-shell">
+  return <PageShellProvider value={pageShellRegistration}><div className="enterprise-app-shell">
     <a className="skip-link" href="#main-content">Bỏ qua điều hướng</a>
     {drawerOpen && mobile && <button className="enterprise-sidebar-overlay" aria-label="Đóng menu" type="button" onClick={() => setDrawerOpen(false)} />}
 
@@ -321,7 +351,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <button ref={menuButtonRef} className="enterprise-icon-button" type="button" aria-label={mobile ? 'Mở menu' : collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'} aria-expanded={mobile ? drawerOpen : !collapsed} onClick={toggleSidebar}>
             <AppIcon name={mobile ? 'menu' : collapsed ? 'panel-left-open' : 'panel-left-close'} />
           </button>
-          <Breadcrumbs items={breadcrumbsForPath(pathname)} compact />
+          <div className="enterprise-topbar-page-heading" aria-live="polite">
+            {pageChrome?.icon ? <VisualIcon label={pageChrome.title} icon={pageChrome.icon} tone={pageChrome.tone} size={17} className="enterprise-topbar-page-icon" /> : null}
+            <span className="enterprise-topbar-page-copy">
+              {pageChrome?.eyebrow ? <small>{pageChrome.eyebrow}</small> : null}
+              <h1>{pageChrome?.title || pageLabel(pathname)}</h1>
+            </span>
+          </div>
         </div>
         <div className="enterprise-topbar-end">
           <span className={`enterprise-cms-pill ${isAuthenticated ? 'ok' : 'wait'}`} role="status" aria-live="polite"><span aria-hidden="true" />{isAuthenticated ? 'CMS OK' : 'Đang kết nối'}</span>
@@ -339,7 +375,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main id="main-content" className="enterprise-content" tabIndex={-1}>{guardedChildren}</main>
+      <main id="main-content" className={`enterprise-content ${pageLayoutClass}`.trim()} tabIndex={-1}>{guardedChildren}</main>
     </div>
-  </div>
+  </div></PageShellProvider>
 }

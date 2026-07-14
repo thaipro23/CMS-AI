@@ -1,8 +1,9 @@
+import { PageRoot } from '../../../components/layout/PageHeader'
 import { Suspense } from 'react'
 import SearchPageClient from './SearchPageClient'
 
 function BankSearchFallback() {
-  return <div className="page-stack bank-multipage dashboard-search-page">
+  return <PageRoot className="page-stack bank-multipage dashboard-search-page">
     <div className="dashboard-search-hero card">
       <div>
         <span className="eyebrow">Drill-down</span>
@@ -15,7 +16,7 @@ function BankSearchFallback() {
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
     </div>
-  </div>
+  </PageRoot>
 }
 
 export default function BankSearchPage() {

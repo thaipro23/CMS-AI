@@ -24,7 +24,7 @@ import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, Ac
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
-import { PageHeader } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState } from '../../../../components/training/TrainingWorkspace'
 
 const PAGE_SIZE = 50
@@ -787,11 +787,10 @@ function ClassDetailContent() {
   behaviorParams.set('classification', 'all')
   const behaviorHref = `/analytics/learning?${behaviorParams.toString()}`
 
-  return <div className="page-stack student-management-page academic-flow-page class-detail-flow training-operations-page">
+  return <PageRoot className="page-stack student-management-page academic-flow-page class-detail-flow training-operations-page">
     <PageHeader
       eyebrow="Vận hành đào tạo"
       title={`Chi tiết lớp ${classInfo?.class_code || ''}`.trim()}
-      description={`${classInfo?.subject_code || ''}${classInfo?.subject_name ? ` · ${classInfo.subject_name}` : ''} · ${classInfo?.campus?.toUpperCase() || 'Chưa rõ cơ sở'}`}
       secondaryActions={<Link className="btn secondary" href={operationalBackHref}>Quay lại danh sách lớp</Link>}
       primaryAction={<Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
     />
@@ -1019,7 +1018,7 @@ function ClassDetailContent() {
         <div className="modal-actions"><button className="btn primary" type="button" onClick={() => setErrorModal('')}>Đã hiểu</button></div>
       </div>
     </div>}
-  </div>
+  </PageRoot>
 }
 
 export default function ClassDetailPage() {

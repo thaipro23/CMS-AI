@@ -1,0 +1,292 @@
+/* v25.9.16.7.2.64.16.5.3 — final flow, spacing and separation contract. */
+:root {
+  --layout-space-1: 4px;
+  --layout-space-2: 8px;
+  --layout-space-3: 12px;
+  --layout-space-4: 16px;
+  --layout-space-5: 20px;
+  --layout-space-6: 24px;
+  --layout-section-gap: 18px;
+  --layout-card-padding: 16px;
+  --layout-divider: #dbe4ee;
+  --layout-divider-soft: #e9eef5;
+}
+
+html, body { min-width: 320px; }
+body { overflow-x: hidden; }
+.enterprise-app-shell,
+.enterprise-workspace,
+.enterprise-content { min-width: 0; }
+.enterprise-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-section-gap);
+  width: 100%;
+  max-width: none;
+  padding: var(--layout-space-5) clamp(16px, 2vw, 28px) var(--layout-space-6);
+  overflow: visible;
+}
+.enterprise-content > * { min-width: 0; margin: 0; }
+.page-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-section-gap);
+}
+
+/* Page title is owned by the top bar; page header is actions only. */
+.enterprise-topbar { min-height: 56px; gap: var(--layout-space-3); }
+.enterprise-topbar-start { min-width: 0; flex: 1 1 auto; gap: var(--layout-space-3); }
+.enterprise-topbar-page-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.enterprise-topbar-page-icon { flex: 0 0 auto; }
+.enterprise-topbar-page-copy { min-width: 0; display: grid; gap: 1px; }
+.enterprise-topbar-page-copy small {
+  color: var(--ui-text-muted, #64748b);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.enterprise-topbar-page-copy h1 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ui-text, #172033);
+  font-size: clamp(16px, 1.45vw, 20px);
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.enterprise-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--layout-space-3);
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.enterprise-page-header-actions-only:empty { display: none; }
+.enterprise-page-actions,
+.button-row,
+.row-actions,
+.enterprise-row-actions,
+.training-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--layout-space-2);
+  min-width: 0;
+}
+
+/* Every readable region remains in normal flow and has explicit separation. */
+.card,
+.visual-section-card,
+.workspace-section,
+.quiz-workbench-step,
+.quiz-create-panel,
+.history-workspace,
+.filter-card,
+.enterprise-filter-panel,
+.compact-filter-bar {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  margin: 0 !important;
+  padding: var(--layout-card-padding);
+  border: 1px solid var(--layout-divider);
+  border-radius: 14px;
+  background: #fff;
+}
+.card > * + *,
+.visual-section-card > * + *,
+.workspace-section-body > * + * { margin-top: var(--layout-space-3); }
+.workspace-section,
+.workspace-section-body,
+.mini-form,
+.settings-form,
+.academic-flow-page,
+.training-operations-page,
+.ops-console,
+.bank-multipage,
+.access-console {
+  min-width: 0;
+}
+.workspace-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-space-4);
+  min-width: 0;
+  padding-top: var(--layout-space-3);
+  border-top: 1px solid var(--layout-divider-soft);
+}
+.workspace-section-body > .enterprise-table-shell { margin: 0 !important; }
+.section-head,
+.workspace-section-header,
+.card-header,
+.enterprise-table-controls {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--layout-space-3);
+}
+.section-head > *,
+.workspace-section-header > *,
+.card-header > * { min-width: 0; }
+
+/* Dividers and natural wrapping keep tables readable without hiding data. */
+.enterprise-table-shell {
+  min-width: 0;
+  margin: 0 !important;
+  overflow: hidden;
+  border: 1px solid var(--layout-divider) !important;
+  border-radius: 14px !important;
+  background: #fff;
+}
+.enterprise-table-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+.enterprise-data-table { width: 100%; table-layout: auto !important; border-collapse: separate; border-spacing: 0; }
+.enterprise-data-table th,
+.enterprise-data-table td {
+  min-width: 0;
+  padding: 10px 11px;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  vertical-align: top;
+  border-right: 1px solid var(--layout-divider-soft);
+  border-bottom: 1px solid var(--layout-divider-soft);
+}
+.enterprise-data-table th:last-child,
+.enterprise-data-table td:last-child { border-right: 0; }
+.enterprise-data-table tbody tr:last-child td { border-bottom: 0; }
+.enterprise-data-table .enterprise-kind-number,
+.enterprise-data-table .enterprise-kind-index { white-space: nowrap; text-align: center; }
+.enterprise-data-table .enterprise-kind-actions { white-space: normal; }
+.enterprise-data-table .sticky-left,
+.enterprise-data-table .sticky-right { background-clip: padding-box; }
+.enterprise-data-table .sticky-left::after {
+  content: '';
+  position: absolute;
+  inset: 0 -1px 0 auto;
+  width: 1px;
+  background: var(--layout-divider);
+  pointer-events: none;
+}
+.enterprise-data-table .sticky-right::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 -1px;
+  width: 1px;
+  background: var(--layout-divider);
+  pointer-events: none;
+}
+
+/* Alerts and decorative layers cannot cover copy. */
+.alert,
+.form-message,
+.inline-notice,
+.action-message {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--layout-space-3);
+  min-width: 0;
+  padding: 12px 14px !important;
+}
+.alert::before,
+.form-message::before {
+  position: static !important;
+  flex: 0 0 auto;
+  align-self: start;
+}
+.alert > *, .form-message > * { min-width: 0; }
+.visual-section-card::after,
+.dashboard-hero-glow { display: none !important; }
+
+/* Dialogs, drawers and popovers keep headers/body/actions separated. */
+.modal-card,
+.bank-modal,
+.side-drawer,
+.bank-popup-panel { min-width: 0; overflow: hidden; }
+.side-drawer > header,
+.bank-modal-head,
+.modal-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--layout-space-3);
+  padding: var(--layout-space-4);
+  border-bottom: 1px solid var(--layout-divider);
+}
+.side-drawer-body,
+.bank-modal-body,
+.modal-card > .modal-body {
+  min-width: 0;
+  padding: var(--layout-space-4);
+  overflow: auto;
+}
+.side-drawer > footer,
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--layout-space-2);
+  padding-top: var(--layout-space-3);
+  border-top: 1px solid var(--layout-divider);
+}
+
+/* Forms and grids must collapse instead of overlapping. */
+.form-grid,
+.settings-form-grid,
+.kpi-grid,
+.dashboard-kpi-grid,
+.operations-kpi-strip,
+.training-kpi-strip,
+.info-pair-grid {
+  min-width: 0;
+  gap: var(--layout-space-3);
+}
+label, input, select, textarea, button, a { min-width: 0; }
+input, select, textarea { max-width: 100%; }
+
+@media (max-width: 767px) {
+  .enterprise-content { padding: 14px 12px 22px; gap: 14px; }
+  .enterprise-topbar-end .enterprise-cms-pill { display: none; }
+  .enterprise-topbar-page-copy small { display: none; }
+  .enterprise-page-actions,
+  .row-actions,
+  .enterprise-row-actions,
+  .training-row-actions { justify-content: flex-start; width: 100%; }
+  .enterprise-page-actions .btn,
+  .row-actions .btn,
+  .training-row-actions .btn { flex: 1 1 auto; }
+  .card,
+  .visual-section-card,
+  .workspace-section { padding: 13px; }
+}
+
+@media (forced-colors: active) {
+  .card, .workspace-section, .enterprise-table-shell { border: 1px solid CanvasText !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}

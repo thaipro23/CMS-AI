@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/claude-code-review-pack-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.2}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.3}"
 INCLUDE_BUILD_GATE="${INCLUDE_BUILD_GATE:-0}"
 STRICT_BUILD_GATE="${STRICT_BUILD_GATE:-0}"
 mkdir -p "$OUT_DIR"
@@ -197,11 +197,23 @@ Run before UAT sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.2 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.3 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
 TXT
+fi
+
+# Runtime import/name and frontend layout integrity gates.
+if ./scripts/backend-runtime-name-audit.sh "$OUT_DIR/backend-runtime-name-audit" > "$OUT_DIR/backend-runtime-name-audit.log" 2>&1; then
+  record_status PASS BACKEND_RUNTIME_NAME_AUDIT "Backend runtime symbol audit passed" "backend-runtime-name-audit/backend-runtime-name-audit.json"
+else
+  record_status FAIL BACKEND_RUNTIME_NAME_AUDIT "Backend runtime symbol audit failed" "backend-runtime-name-audit.log"
+fi
+if ./scripts/frontend-layout-integrity-report.sh "$OUT_DIR/frontend-layout-integrity" > "$OUT_DIR/frontend-layout-integrity.log" 2>&1; then
+  record_status PASS FRONTEND_LAYOUT_INTEGRITY "Frontend spacing/overlap contract passed" "frontend-layout-integrity/frontend-layout-integrity.json"
+else
+  record_status FAIL FRONTEND_LAYOUT_INTEGRITY "Frontend spacing/overlap contract failed" "frontend-layout-integrity.log"
 fi
 
 # 10) Optional build gate. Default is off because artifact sandboxes may not include
@@ -243,7 +255,7 @@ PY
 cat > "$OUT_DIR/CLAUDE_REVIEW_BRIEF.md" <<'MD'
 # Claude Code Review Brief
 
-Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.2 — App Shell & Enterprise UI Rebuild + Production UI Hardening.
+Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.3 — Frontend Layout Integrity + Runtime Reliability Hotfix.
 
 Static review services to inspect: SecurityReadinessService, SecurityAttackSimulationService, PerformanceReadinessService, QueryHotspotService, ReleaseCandidateService, PilotOperationsService, QuestionBankReleasePublishWorkflowService, QuestionBankQuizCreationWorkflowService, QuestionBankGenerationReviewWorkflowService, AcademicSyncEnrollmentWorkflowService.
 

@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
-import { PageHeader } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { ChapterSummary, Department, Subject, SubjectChapter, SubjectOffering } from '../../../../types'
 import { createSubjectChapter, deleteSubjectChapter, getChapterSummaries, getDepartment, getSubject, getSubjectOffering, updateSubjectChapter } from '../../../../lib/api'
@@ -49,12 +49,12 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.approved_count || 0 },
     { key: 'unresolved', header: 'Chờ/lỗi', kind: 'number', width: 78, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
     { key: 'release', header: 'Bộ đề', kind: 'status', width: 126, priority: 'important', hideable: true, render: ({ stats }) => { const published = Boolean(stats?.is_published || stats?.release_status === 'published' || (stats?.published_release_count || 0) > 0); return published ? 'Đã đưa CMS' : stats?.ready_to_release ? 'Sẵn sàng chốt' : stats?.release_count ? 'Đã chốt' : 'Chưa chốt' } },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ chapter, stats }) => { const published = Boolean(stats?.is_published || stats?.release_status === 'published' || (stats?.published_release_count || 0) > 0); return <EntityActions variant="inline" canManage={canUpdateOffering && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(chapter); setEditLesson(normalizeLessonInput(chapterDisplayName(chapter))) }} onDelete={() => setDeleteTarget(chapter)} /> } },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ chapter, stats }) => { const published = Boolean(stats?.is_published || stats?.release_status === 'published' || (stats?.published_release_count || 0) > 0); return <EntityActions canManage={canUpdateOffering && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(chapter); setEditLesson(normalizeLessonInput(chapterDisplayName(chapter))) }} onDelete={() => setDeleteTarget(chapter)} /> } },
   ], [canUpdateOffering, safePage, tableState.pageSize])
 
-  return <div className="page-stack bank-multipage">
+  return <PageRoot className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Phiên bản môn' }]} />
-    <PageHeader eyebrow="Ngân hàng đề" title="Bài học" description="Mở từng bài để quản lý tài liệu, tạo câu hỏi, duyệt và chốt Release." />
+    <PageHeader eyebrow="Ngân hàng đề" title="Bài học" />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm bài, Final test hoặc Assignment" action={canUpdateOffering ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
@@ -72,5 +72,5 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       const nextNo = (summaries.reduce((max, item) => Math.max(max, Number(item.chapter.sort_order || item.chapter.chapter_no || 0)), 0) || 0) + 1
       await createSubjectChapter(headers, { subject_id: offering.subject_id, subject_offering_id: offering.id, title: buildChapterTitle(chapterInput), sort_order: nextNo }); setChapterInput(''); setCreateOpen(false)
     }, 'Đã thêm bài', load)}>Tạo bài</button></div></div></Modal>
-  </div>
+  </PageRoot>
 }

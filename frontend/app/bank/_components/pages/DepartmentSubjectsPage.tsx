@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
-import { PageHeader } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, Subject, SubjectSummary } from '../../../../types'
 import { createSubject, deleteSubject, getDepartment, getSubjectSummaries, updateSubject } from '../../../../lib/api'
@@ -71,12 +71,12 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     { key: 'questions', header: 'Tổng câu', kind: 'number', width: 82, priority: 'optional', hideable: true, render: ({ stats }) => stats?.total_questions || 0 },
     { key: 'unresolved', header: 'Cần xử lý', kind: 'number', width: 86, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
     { key: 'ready', header: 'Sẵn sàng', kind: 'number', width: 82, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject }) => <EntityActions variant="inline" canManage={canUpdateSubject} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject }) => <EntityActions canManage={canUpdateSubject} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
-  return <div className="page-stack bank-multipage">
+  return <PageRoot className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }]} />
-    <PageHeader eyebrow="Ngân hàng đề" title="Môn học" description="Mỗi môn chỉ có một phiên bản môn cuối trong từng học kỳ." />
+    <PageHeader eyebrow="Ngân hàng đề" title="Môn học" />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm mã môn hoặc tên môn" action={canCreateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
@@ -123,5 +123,5 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
         }, 'Đã thêm môn', load)}>Lưu môn</button></div>
       </div>
     </Modal>
-  </div>
+  </PageRoot>
 }

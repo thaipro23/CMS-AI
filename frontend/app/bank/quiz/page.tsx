@@ -5,7 +5,7 @@ import { inlineMessageFromBackend } from '../../../lib/backendNotice'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
-import { PageHeader } from '../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
 import { VisualIcon } from '../../../components/ui/VisualIcon'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { CourseQuizInstance, QuizAutoMapResult, QuizChapterAction, QuizChapterPlanItem } from '../../../types'
@@ -454,11 +454,10 @@ export default function BankQuizPage() {
 
   const workflowStep = !autoMap ? 1 : !applied ? 2 : 3
 
-  return <div className="page-stack bank-quiz-page quiz-creation-workbench">
+  return <PageRoot className="page-stack bank-quiz-page quiz-creation-workbench">
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Tạo Quiz trên Open edX"
-      description="Map Course CMS, chọn hành động cho từng bài và tạo Quiz hoặc Final test từ Release đã chốt."
       secondaryActions={<><Link className="btn secondary" href="/bank/departments">Ngân hàng đề</Link><Link className="btn secondary" href="/bank/history">Lịch sử Quiz</Link></>}
     />
 
@@ -543,5 +542,5 @@ export default function BankQuizPage() {
         </div>
       </section>
     </div> : null}
-  </div>
+  </PageRoot>
 }

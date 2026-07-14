@@ -17,7 +17,7 @@ import {
 } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
-import { PageHeader } from '../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { CompactFilterBar, OperationsKpiStrip, SideDrawer, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
@@ -332,11 +332,10 @@ export default function UsersPage() {
 
   const selectedRole = allRoles.find((role) => role.code === form.role_code)
 
-  return <div className="page-stack access-console access-console-v2">
+  return <PageRoot className="page-stack access-console access-console-v2">
     <PageHeader
       eyebrow="Quản trị"
       title="Người dùng & phân quyền"
-      description="Danh sách theo người dùng; mở chi tiết để kiểm tra vai trò, phạm vi và nguồn cấp trước khi thu hồi hoặc gán thêm."
       secondaryActions={<>
         {isSystemAdmin && <button className="btn secondary" type="button" onClick={downloadTemplate}>Tải template</button>}
         {isSystemAdmin && <button className="btn secondary" type="button" onClick={() => setImportOpen(true)}>Import Excel</button>}
@@ -394,5 +393,5 @@ export default function UsersPage() {
       <div className="button-row"><button className="btn" onClick={submitImport}>{dryRun ? 'Kiểm tra file' : 'Import phân quyền'}</button></div>
       {importResult && <div className="import-result"><div className="summary-grid"><div><span>Tổng dòng</span><b>{importResult.total_rows}</b></div><div><span>Hợp lệ</span><b>{importResult.valid_rows}</b></div><div><span>Đã tạo</span><b>{importResult.created_count}</b></div><div><span>Lỗi</span><b>{importResult.failed_count}</b></div></div><div className="import-row-list">{importResult.rows.slice(0, 30).map((row) => <div key={row.row_index} className="stat-row"><span>Dòng {row.row_index} · {row.user_id} · {row.role_code}</span><b className={`status ${resultClass(row.status)}`}>{row.status}</b><small>{row.message}</small></div>)}</div></div>}
     </SideDrawer>}
-  </div>
+  </PageRoot>
 }

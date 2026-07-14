@@ -6,7 +6,7 @@ import { useAppContext } from '../../context/AppContext'
 import { AuditLogRow } from '../../types'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { StatusBadge } from '../../components/ui/StatusBadge'
-import { PageHeader } from '../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { useDebouncedValue } from '../../lib/useDebouncedValue'
@@ -118,11 +118,10 @@ function AuditContent() {
   const successCount = rows.filter((row) => row.status === 'success').length
   const resetFilters = () => update({ q: '', status: 'all', errorType: 'all', actorId: '', page: 1 }, { resetPage: false })
 
-  return <div className="page-stack ops-console audit-console ux-enterprise-page">
+  return <PageRoot className="page-stack ops-console audit-console ux-enterprise-page">
     <PageHeader
       eyebrow="Vận hành hệ thống"
       title="Nhật ký hoạt động"
-      description="Tra cứu thao tác theo phạm vi RBAC. Dùng Chi tiết để xem nội dung và đối tượng đầy đủ thay vì dàn nhiều cột trên bảng."
       secondaryActions={<button className="btn secondary" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>}
       primaryAction={<button className="btn" type="button" onClick={exportCurrentFilter} disabled={exporting || loading}>{exporting ? 'Đang xuất...' : 'Xuất CSV'}</button>}
     />
@@ -150,7 +149,7 @@ function AuditContent() {
         { label: 'Nội dung', value: selectedLog.message || 'Không có nội dung mô tả.', wide: true },
       ]} /></div> : null}
     </SideDrawer>
-  </div>
+  </PageRoot>
 }
 
 export default function AuditPage() {

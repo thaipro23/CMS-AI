@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
-import { PageHeader } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import {
   BankRelease,
@@ -166,12 +166,12 @@ export function DepartmentsPage() {
     { key: 'pending', header: 'Chờ duyệt', kind: 'number', width: 86, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_not_done_subject_count || 0 },
     { key: 'unresolved', header: 'Cần xử lý', kind: 'number', width: 86, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
     { key: 'ready', header: 'Sẵn sàng', kind: 'number', width: 82, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ department }) => <EntityActions variant="inline" canManage={canScope('manage_department', { scopeType: 'DEPARTMENT', scopeId: department.id, departmentId: department.id })} lockedLabel="Không có quyền" onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ department }) => <EntityActions canManage={canScope('manage_department', { scopeType: 'DEPARTMENT', scopeId: department.id, departmentId: department.id })} lockedLabel="Không có quyền" onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /> },
   ], [canScope, safePage, tableState.pageSize])
 
-  return <div className="page-stack bank-multipage">
+  return <PageRoot className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }]} />
-    <PageHeader eyebrow="Ngân hàng đề" title="Bộ môn" description="Quản lý cây môn học theo đúng phạm vi được giao." />
+    <PageHeader eyebrow="Ngân hàng đề" title="Bộ môn" />
     {message ? <div className="alert info">{message}</div> : null}
     {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel || 'Hệ thống đang xử lý. Bạn có thể tiếp tục xem dữ liệu hiện có.'}</div> : null}
     <section className="card">
@@ -235,6 +235,6 @@ export function DepartmentsPage() {
         }, 'Đã thêm bộ môn')}>{busy ? <span className="inline-busy-label"><span className="spinner tiny" aria-hidden="true" />Đang lưu</span> : 'Lưu bộ môn'}</button>
       </div>
     </Modal>
-  </div>
+  </PageRoot>
 }
 

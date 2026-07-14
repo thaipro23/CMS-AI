@@ -121,7 +121,7 @@
 .card > h2:first-child,
 .card > h3:first-child {
   position: relative;
-  margin-top: -2px !important;
+  margin-top: 0 !important;
   padding: 9px 12px 9px 15px;
   border-left: 3px solid #3b82f6;
   border-radius: 0 10px 10px 0;

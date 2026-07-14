@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
-import { PageHeader } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, Subject, SubjectOffering, SubjectVersionSummary } from '../../../../types'
 import { createSubjectOffering, deleteSubjectOffering, getDepartment, getSubject, getSubjectVersionSummaries, updateSubjectOffering } from '../../../../lib/api'
@@ -53,12 +53,12 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.approved_count || 0 },
     { key: 'unresolved', header: 'Chờ/lỗi', kind: 'number', width: 78, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
     { key: 'published', header: 'Đã đưa CMS', kind: 'number', width: 92, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => `${stats?.published_release_count || 0}/${stats?.chapter_count || 0}` },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject_version, stats }) => { const published = Boolean(stats?.is_published || (stats?.published_release_count || 0) > 0 || stats?.status === 'published'); return <EntityActions variant="inline" canManage={canUpdateSubject && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(subject_version); setEditCode(subject_version.code || ''); setEditName(subject_version.name || '') }} onDelete={() => setDeleteTarget(subject_version)} /> } },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject_version, stats }) => { const published = Boolean(stats?.is_published || (stats?.published_release_count || 0) > 0 || stats?.status === 'published'); return <EntityActions canManage={canUpdateSubject && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(subject_version); setEditCode(subject_version.code || ''); setEditName(subject_version.name || '') }} onDelete={() => setDeleteTarget(subject_version)} /> } },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
-  return <div className="page-stack bank-multipage">
+  return <PageRoot className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }]} />
-    <PageHeader eyebrow="Ngân hàng đề" title="Phiên bản môn" description="Một học kỳ chỉ có một phiên bản môn cuối; Release và Quiz là workflow đầu ra." />
+    <PageHeader eyebrow="Ngân hàng đề" title="Phiên bản môn" />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm phiên bản, mã môn hoặc học kỳ" action={canUpdateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined} />
@@ -76,5 +76,5 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
         const created = await createSubjectOffering(headers, { subject_id: subjectId, term, clone_from_offering_id: mode === 'clone' ? cloneFromId : null, version_code: term, clone_chapters: true, clone_materials: true, clone_questions: true }); setCreateOpen(false); router.push(`/bank/subject-versions/${created.id}/chapters`)
       }, 'Đã tạo phiên bản môn')}>Tạo phiên bản</button></div>
     </div></Modal>
-  </div>
+  </PageRoot>
 }

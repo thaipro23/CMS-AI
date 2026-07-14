@@ -6,7 +6,7 @@ import { useAppContext } from '../../context/AppContext'
 import { ROLE_LABELS, ROLE_PERMISSIONS, RuntimeSettings, RuntimeSettingsUpdate, PricingResponse } from '../../types'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { LoadingButton } from '../../components/ui/LoadingButton'
-import { PageHeader } from '../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { WorkspaceSection, WorkspaceTabs } from '../../components/operations/OperationsWorkspace'
 import { CoursePolicyPanel } from '../../components/settings/CoursePolicyPanel'
 
@@ -161,7 +161,7 @@ export default function SettingsPage() {
   useEffect(() => { if (can('manage_settings')) load() }, [role])
 
   if (!can('manage_settings')) {
-    return <div className="page-stack">
+    return <PageRoot className="page-stack">
       <section className="card warning-card">
         <div className="eyebrow">403 / Admin only</div>
         <h2>Trang Settings chỉ dành cho admin</h2>
@@ -171,14 +171,13 @@ export default function SettingsPage() {
         <h2>RBAC hiện tại</h2>
         <div className="role-box large"><b>{ROLE_LABELS[role]}</b><small>{ROLE_PERMISSIONS[role].join(', ')}</small></div>
       </section>
-    </div>
+    </PageRoot>
   }
 
-  return <div className="page-stack settings-page">
+  return <PageRoot className="page-stack settings-page">
     <PageHeader
       eyebrow="Quản trị"
       title="Cài đặt hệ thống"
-      description="Cấu hình theo từng nhóm. Secret chỉ được quản lý qua biến môi trường hoặc secret manager."
       secondaryActions={<><LoadingButton className="btn secondary" onClick={load}>Tải lại</LoadingButton>{activeTab === 'cost' ? <LoadingButton className="btn secondary" loading={pricingLoading} onClick={fetchPricing}>Cập nhật giá</LoadingButton> : null}</>}
       primaryAction={<LoadingButton className="btn" loading={saving} onClick={save}>Lưu cấu hình</LoadingButton>}
     />
@@ -266,5 +265,5 @@ export default function SettingsPage() {
         </WorkspaceSection> : null}
       </div>
     </section>
-  </div>
+  </PageRoot>
 }

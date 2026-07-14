@@ -1,5 +1,7 @@
 'use client'
 
+import { PageRoot } from '../../../../components/layout/PageHeader'
+
 import { formatVNDateTime } from '../../../../lib/time'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -880,7 +882,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const materialPreviewText = materialPreviewChunks.map((chunk, index) => `Đoạn ${index + 1}
 ${chunk.content}`).join('\n\n')
 
-  return <div className="page-stack bank-multipage">
+  return <PageRoot className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }]} />
     {message ? <div className="alert info">{message}</div> : null}
     {activeOperation ? <ChapterOperationStatus operation={activeOperation} /> : null}
@@ -1227,6 +1229,6 @@ ${chunk.content}`).join('\n\n')
         </div>
       </div> : null}
     </Modal>
-  </div>
+  </PageRoot>
 }
 

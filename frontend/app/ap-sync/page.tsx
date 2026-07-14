@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions, syncAcademicCampusesFromAp } from '../../lib/api'
-import { PageHeader } from '../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult, AcademicSyncRun } from '../../types'
@@ -258,11 +258,10 @@ export default function ApSyncPage() {
     }
   }
 
-  return <div className="page-stack ap-sync-page">
+  return <PageRoot className="page-stack ap-sync-page">
     <PageHeader
       eyebrow="Vận hành hệ thống"
       title="Đồng bộ AP"
-      description="Chọn học kỳ và phạm vi, kiểm tra kế hoạch rồi chạy job nền. Tiến trình được lưu trên backend và không mất khi F5."
       secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
       primaryAction={canManageAcademicOps ? <button className="btn" type="button" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang cập nhật...' : 'Cập nhật danh mục cơ sở'}</button> : undefined}
     />
@@ -305,5 +304,5 @@ export default function ApSyncPage() {
     </div>
 
     {syncConfirm ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => !running && setSyncConfirm(null)}><div className="card bank-modal academic-confirm-modal" onMouseDown={(event) => event.stopPropagation()}><div className="bank-modal-head"><div><div className="eyebrow">Xác nhận phạm vi</div><h2>{dryRun ? 'Kiểm tra kế hoạch AP' : 'Chạy đồng bộ AP'}</h2></div><button className="btn small secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Đóng</button></div><div className="bank-modal-body academic-confirm-body"><p>{dryRun ? 'Hệ thống chỉ kiểm tra kế hoạch và không ghi dữ liệu.' : 'Hệ thống sẽ gọi AP và ghi dữ liệu lớp, giảng viên, sinh viên vào AI Server.'}</p><div className="academic-confirm-summary"><span>Học kỳ</span><b>{termName}</b><span>Phạm vi</span><b>{syncConfirm.label}</b><span>Số hệ</span><b>{syncConfirm.runnable.length}</b><span>Số cơ sở</span><b>{syncConfirm.campusCount}</b></div><div className="modal-actions"><button className="btn" disabled={running} onClick={executeConfirmedSync}>{dryRun ? 'Xác nhận kiểm tra' : 'Xác nhận đồng bộ'}</button><button className="btn secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Hủy</button></div></div></div></div> : null}
-  </div>
+  </PageRoot>
 }

@@ -46,7 +46,7 @@ import {
 import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../lib/runtime'
-import { PageHeader } from '../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState, TrainingWorkflowSteps } from '../../../components/training/TrainingWorkspace'
 
@@ -948,11 +948,10 @@ export default function AnalyticsLearningPage() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 106, hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => openReason(row)}>Chi tiết</button> },
   ], [effectiveCourseId])
 
-  return <div className="page-stack analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
+  return <PageRoot className="page-stack analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
     <PageHeader
       eyebrow="Vận hành đào tạo"
       title="Phân tích học tập"
-      description="Chọn môn, chọn lớp và xem kết quả. Dữ liệu luôn được backend lọc theo phạm vi được phân công."
       secondaryActions={SHOW_DIAGNOSTICS_UI && can('view_ops_readiness') ? <button className="btn secondary" type="button" aria-expanded={showOperations} onClick={() => setShowOperations((value) => !value)}>{showOperations ? 'Ẩn kiểm tra vận hành' : 'Mở kiểm tra vận hành'}</button> : undefined}
     />
     <section className="card academic-unified-card">
@@ -1445,5 +1444,5 @@ export default function AnalyticsLearningPage() {
     </section>}
 
     <DetailDrawer row={selectedRow} detail={detail} loading={detailLoading} onClose={() => { setSelectedRow(null); setDetail(null) }} />
-  </div>
+  </PageRoot>
 }

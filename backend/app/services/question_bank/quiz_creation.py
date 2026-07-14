@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from difflib import SequenceMatcher
 import re
 import uuid
 
@@ -21,6 +22,7 @@ from app.models.question_bank import (
     SubjectOffering,
 )
 from app.modules.openedx_connector.factory import get_openedx_connector
+from app.services.question_family import normalize_difficulty
 from app.services.question_bank.helpers import (
     _check,
     _ui_notice,

@@ -88,7 +88,7 @@
 .workspace-section-head p { margin: 3px 0 0; color: var(--ui-text-muted); font-size: 12px; }
 .workspace-section-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .workspace-section-body { min-width: 0; padding: 12px 14px 14px; }
-.workspace-section-body > .enterprise-table-shell { margin: -12px -14px -14px; border: 0; border-radius: 0 0 var(--ui-radius-lg) var(--ui-radius-lg); }
+.workspace-section-body > .enterprise-table-shell { margin: 0; }
 
 .side-drawer-backdrop {
   position: fixed;

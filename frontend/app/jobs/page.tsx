@@ -15,7 +15,7 @@ import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { AcademicBulkOperationJob, AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
-import { PageHeader } from '../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { formatVNDateTime } from '../../lib/time'
@@ -297,11 +297,10 @@ function JobsContent() {
   ], [])
 
   if (!can('view_jobs')) return <div className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</div>
-  return <div className="page-stack ops-console jobs-console ux-enterprise-page">
+  return <PageRoot className="page-stack ops-console jobs-console ux-enterprise-page">
     <PageHeader
       eyebrow="Vận hành hệ thống"
       title="Tác vụ nền"
-      description="Theo dõi tiến trình Celery theo nhóm nghiệp vụ. Nhật ký thao tác được quản lý riêng tại Nhật ký hoạt động."
       secondaryActions={<button className="btn secondary" type="button" onClick={() => setQuizOpen(true)}>Quiz gần đây</button>}
       primaryAction={<button className="btn" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>}
     />
@@ -335,7 +334,7 @@ function JobsContent() {
     <SideDrawer open={quizOpen} title="Quiz gần đây" description="Các Quiz đã tạo trên Open edX CMS." onClose={() => setQuizOpen(false)}>
       <EnterpriseDataTable tableId="ops-recent-quizzes" caption="Quiz gần đây" rows={quizInstances.slice(0, 50)} columns={quizColumns} rowKey={(item) => item.id} density="compact" label="Quiz" emptyTitle="Chưa có Quiz trên CMS" />
     </SideDrawer>
-  </div>
+  </PageRoot>
 }
 
 export default function JobsPage() {

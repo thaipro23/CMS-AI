@@ -1739,7 +1739,7 @@ body { background: #ffffff; }
   border-bottom: 1px dashed #fed7aa;
 }
 .course-auto-hint {
-  margin-top: -4px;
+  margin-top: 0;
   padding: 8px 10px;
   border: 1px solid #fed7aa;
   border-radius: 12px;
@@ -8138,7 +8138,7 @@ pre, code { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
 }
 .bank-quiz-page .quiz-status-control small {
   display: block;
-  margin-top: -2px;
+  margin-top: 0;
   color: #64748b;
   line-height: 1.25;
 }

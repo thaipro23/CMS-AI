@@ -19,7 +19,7 @@ import {
   AcademicSubjectManagementSummary,
   AcademicTerm,
 } from "../../types";
-import { PageHeader } from '../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
@@ -358,15 +358,14 @@ function StudentManagementSubjectsContent() {
     { key: "cms", header: "Đồng bộ CMS", kind: "status", minWidth: 155, priority: "important", hideable: true, render: (subject) => <><span className={subject.cms_unsynced_count ? "status-pill warning" : "status-pill success"}>{subject.cms_synced_count}/{subject.student_count} đã match</span><small>{subject.cms_unsynced_count} cần xử lý</small></> },
     { key: "course", header: "Course CMS", kind: "status", minWidth: 170, priority: "optional", hideable: true, render: (subject) => <><span className={statusClass(subject.course_mapping_status)}>{subject.course_mapping_label || subject.course_mapping_status}</span><small>{subject.openedx_course_id || subject.suggested_openedx_course_id || "N/A"}</small></> },
     { key: "learning", header: "Học tập", kind: "progress", minWidth: 190, priority: "important", hideable: true, render: (subject) => <><b>{subject.learning_enrolled_count || 0}/{subject.student_count} ghi danh</b><small>{subject.learning_active_count || 0} đã học · TB {percentLabel(subject.learning_avg_progress_percent)}</small>{subject.learning_alerts?.length ? <small className="danger-text">{alertText(subject.learning_alerts)}</small> : null}</> },
-    { key: "actions", header: "Thao tác", kind: "actions", width: 126, sticky: "right", hideable: false, render: (subject) => <div className="row-actions"><Link className="btn small primary" href={buildSubjectClassesHref(subject, { termId, termName: selectedTerm?.term_name, branch, campus })}>Xem lớp</Link>{!["mapped", "already_mapped", "auto_mapped"].includes(String(subject.course_mapping_status || "").toLowerCase()) && <details className="row-action-menu"><summary className="btn small ghost" aria-label="Mở thêm thao tác">•••</summary><div className="row-action-popover"><button type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? "Đang ghép..." : "Tự động ghép Course CMS"}</button></div></details>}</div> },
+    { key: "actions", header: "Thao tác", kind: "actions", width: 126, sticky: "right", hideable: false, render: (subject) => <div className="row-actions"><Link className="btn small primary" href={buildSubjectClassesHref(subject, { termId, termName: selectedTerm?.term_name, branch, campus })}>Xem lớp</Link>{!["mapped", "already_mapped", "auto_mapped"].includes(String(subject.course_mapping_status || "").toLowerCase()) && <button className="btn small secondary" type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? "Đang ghép..." : "Tự động ghép"}</button>}</div> },
   ], [branch, campus, mappingSubjectId, page, pageSize, selectedTerm?.term_name, termId]);
 
   return (
-    <div className="page-stack student-management-page academic-flow-page ux-enterprise-page">
+    <PageRoot className="page-stack student-management-page academic-flow-page ux-enterprise-page">
       <PageHeader
         eyebrow="Vận hành đào tạo"
         title="Quản lý sinh viên"
-        description={`Tổng hợp môn, lớp và sinh viên theo hệ, học kỳ và cơ sở đang chọn · ${counterText(total, page, pageSize)}`}
         primaryAction={<button className="btn" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}</button>}
       />
       <section className="card academic-unified-card">
@@ -506,7 +505,7 @@ function StudentManagementSubjectsContent() {
         />
 
       </section>
-    </div>
+    </PageRoot>
   );
 }
 

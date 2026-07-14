@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -19,6 +19,7 @@ from app.models.academic import (
     AcademicStudentLearningSnapshot,
     AcademicSubject,
     AcademicTeacher,
+    AcademicTerm,
     OpenEdXUserMapping,
 )
 from app.services.academic.helpers import _boolish, _derive_mapping_status, _json_safe_value, _validation_result

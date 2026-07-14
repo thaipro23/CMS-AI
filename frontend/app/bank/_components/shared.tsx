@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { Breadcrumbs } from '../../../components/navigation/Breadcrumbs'
-import type { MouseEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
@@ -313,54 +313,20 @@ export function EntityActions({
   canManage,
   onEdit,
   onDelete,
-  variant = 'menu',
   lockedLabel = '—',
 }: {
   canManage: boolean
   onEdit: () => void
   onDelete: () => void
-  variant?: 'menu' | 'inline'
   lockedLabel?: string
 }) {
-  const [open, setOpen] = useState(false)
-
   if (!canManage) {
     return <span className="entity-actions-placeholder" title={lockedLabel}>{lockedLabel}</span>
   }
 
-  const stop = (event: MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-
-  const runAction = (event: MouseEvent, action: () => void) => {
-    stop(event)
-    setOpen(false)
-    action()
-  }
-
-  if (variant === 'inline') {
-    return <div className="entity-actions-inline" onClick={stop} onMouseDown={stop} aria-label="Thao tác dòng">
-      <button type="button" className="btn small secondary" onClick={(event) => runAction(event, onEdit)}>Sửa</button>
-      <button type="button" className="btn small danger-soft" onClick={(event) => runAction(event, onDelete)}>Xóa</button>
-    </div>
-  }
-
-  return <div className={`entity-actions${open ? ' open' : ''}`} onClick={stop} onMouseDown={stop}>
-    <button
-      type="button"
-      className="entity-actions-trigger"
-      aria-label="Mở menu hành động"
-      aria-expanded={open}
-      title="Hành động"
-      onClick={(event) => { stop(event); setOpen((current) => !current) }}
-    >
-      ⋮
-    </button>
-    {open ? <div className="entity-actions-menu" role="menu">
-      <button type="button" role="menuitem" onClick={(event) => runAction(event, onEdit)}>Sửa thông tin</button>
-      <button type="button" role="menuitem" className="danger" onClick={(event) => runAction(event, onDelete)}>Xóa</button>
-    </div> : null}
+  return <div className="entity-actions-inline" aria-label="Thao tác dòng">
+    <button type="button" className="btn small secondary" onClick={onEdit}>Sửa</button>
+    <button type="button" className="btn small danger-soft" onClick={onDelete}>Xóa</button>
   </div>
 }
 

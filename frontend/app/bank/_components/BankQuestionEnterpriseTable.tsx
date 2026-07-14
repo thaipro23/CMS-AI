@@ -105,14 +105,6 @@ export function BankQuestionEnterpriseTable({
       key: 'actions', header: 'Thao tác', kind: 'actions', width: 126, sticky: 'right', hideable: false,
       render: (row) => <div className="question-row-actions question-row-actions-review-first">
         <button className="btn small" type="button" onClick={() => onPreview(row)}>{reviewActionLabel(row)}</button>
-        {!locked && canReview && row.status !== 'published' && <details className="row-action-menu">
-          <summary className="btn small ghost" aria-label="Mở thêm thao tác">•••</summary>
-          <div className="row-action-popover">
-            <button type="button" onClick={() => onEdit(row)}>Sửa câu hỏi</button>
-            {!['rejected', 'published'].includes(row.status) && <button type="button" className="danger-text" onClick={() => onReject(row)}>{row.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Từ chối câu'}</button>}
-            {row.status === 'approved' && <button type="button" onClick={() => onBackToReview(row)}>Đưa về chờ duyệt</button>}
-          </div>
-        </details>}
       </div>,
     },
   ], [canReview, locked, onBackToReview, onEdit, onPreview, onReject, page, pageSize])

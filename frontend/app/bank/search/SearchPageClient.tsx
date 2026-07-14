@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { getBankDashboardDrilldown, searchBankDashboard } from '../../../lib/api'
 import type { BankSearchResult } from '../../../types'
-import { PageHeader } from '../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
 import { VisualIcon } from '../../../components/ui/VisualIcon'
 
 function labelStatus(value?: string | null) {
@@ -191,8 +191,8 @@ export default function SearchPageClient() {
 
   const isQuestionTable = hasQuestionFilters && items.every((item) => item.type === 'question')
 
-  return <div className="page-stack bank-multipage dashboard-search-page">
-    <PageHeader eyebrow="Ngân hàng đề" title="Câu hỏi trong phạm vi được giao" description="Kết quả được lọc theo quyền hiện tại của tài khoản." icon="search" primaryAction={<Link className="btn secondary" href="/bank">Về Tổng quan</Link>} />
+  return <PageRoot className="page-stack bank-multipage dashboard-search-page">
+    <PageHeader eyebrow="Ngân hàng đề" title="Câu hỏi trong phạm vi được giao" icon="search" primaryAction={<Link className="btn secondary" href="/bank">Về Tổng quan</Link>} />
     <section className="card visual-section-card dashboard-search-filter-card">
       <div className="visual-section-heading"><VisualIcon label="Bộ lọc đang áp dụng" icon="filter" tone="blue" /><div><h2>Bộ lọc đang áp dụng</h2><p className="helper">Các điều kiện được lấy trực tiếp từ URL hiện tại.</p></div></div>
         <div className="dashboard-filter-row">
@@ -226,5 +226,5 @@ export default function SearchPageClient() {
       <p>Dữ liệu có thể chưa được tạo hoặc bạn không có quyền trong phạm vi đó.</p>
       <Link className="btn secondary small" href="/bank">Quay lại Tổng quan</Link></div>
     </div>}
-  </div>
+  </PageRoot>
 }

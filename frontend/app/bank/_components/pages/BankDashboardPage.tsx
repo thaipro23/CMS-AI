@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useBankData, Breadcrumb, QuickSearchBox, Modal } from '../shared'
 import { getBankDashboardAnalytics } from '../../../../lib/api'
-import { PageHeader } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { VisualIcon } from '../../../../components/ui/VisualIcon'
 import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
@@ -294,13 +294,12 @@ export function BankDashboardPage() {
     updateUrl('custom', from, to)
   }
 
-  return <div className="page-stack bank-multipage dashboard-analytics-page">
+  return <PageRoot className="page-stack bank-multipage dashboard-analytics-page">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi' }]} />
 
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Tổng quan Ngân hàng câu hỏi"
-      description="Theo dõi khối lượng câu hỏi, hàng chờ duyệt và hoạt động trong phạm vi được giao."
       secondaryActions={<DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />}
     />
     <div className="dashboard-scope-strip dashboard-scope-strip-compact">
@@ -356,5 +355,5 @@ export function BankDashboardPage() {
         <ActivityFeed items={data.activity_feed || []} />
       </Modal>
     </> : null}
-  </div>
+  </PageRoot>
 }

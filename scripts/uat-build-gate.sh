@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/uat-build-gate-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.2}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.3}"
 STRICT="${STRICT:-0}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-0}"
 RUN_FRONTEND_INSTALL="${RUN_FRONTEND_INSTALL:-0}"
@@ -135,7 +135,19 @@ else
   warn_or_fail_when_strict BACKEND_TEST_DEPS_MISSING "pytest/psycopg not available; install backend requirements before UAT sign-off" "python-dependency-check.json"
 fi
 
-# Frontend typecheck/build. v25.9.16.7.2.64.16.5.2 delegates the deep
+# Runtime import/name and frontend layout integrity gates.
+if ./scripts/backend-runtime-name-audit.sh "$OUT_DIR/backend-runtime-name-audit" > "$OUT_DIR/backend-runtime-name-audit.log" 2>&1; then
+  record_status PASS BACKEND_RUNTIME_NAME_AUDIT "Backend runtime symbol audit passed" "backend-runtime-name-audit/backend-runtime-name-audit.json"
+else
+  record_status FAIL BACKEND_RUNTIME_NAME_AUDIT "Backend runtime symbol audit failed" "backend-runtime-name-audit.log"
+fi
+if ./scripts/frontend-layout-integrity-report.sh "$OUT_DIR/frontend-layout-integrity" > "$OUT_DIR/frontend-layout-integrity.log" 2>&1; then
+  record_status PASS FRONTEND_LAYOUT_INTEGRITY "Frontend spacing/overlap contract passed" "frontend-layout-integrity/frontend-layout-integrity.json"
+else
+  record_status FAIL FRONTEND_LAYOUT_INTEGRITY "Frontend spacing/overlap contract failed" "frontend-layout-integrity.log"
+fi
+
+# Frontend typecheck/build. v25.9.16.7.2.64.16.5.3 delegates the deep
 # frontend verification to scripts/frontend-build-verify.sh so package-lock,
 # Dockerfile build args, tsc, next build and standalone output are validated
 # consistently in one report.
@@ -152,7 +164,7 @@ Run on UAT before sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.2 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.3 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh

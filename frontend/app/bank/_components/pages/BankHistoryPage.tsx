@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { PageHeader } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { OperationsKpiStrip } from '../../../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
@@ -91,9 +91,9 @@ export function BankHistoryPage() {
   const rolledBack = quizHistory.filter((item) => item.status === 'rolled_back').length
   const failed = quizHistory.filter((item) => item.status === 'failed').length
 
-  return <div className="page-stack bank-multipage history-console">
+  return <PageRoot className="page-stack bank-multipage history-console">
     <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Lịch sử Quiz' }]} />
-    <PageHeader eyebrow="Ngân hàng đề" title="Lịch sử bộ đề và Quiz" description="Theo dõi Release đã chốt, bài kiểm tra đã tạo và thao tác khôi phục theo đúng phạm vi RBAC." primaryAction={<Link className="btn" href="/bank/quiz">Tạo Quiz trên CMS</Link>} />
+    <PageHeader eyebrow="Ngân hàng đề" title="Lịch sử bộ đề và Quiz" primaryAction={<Link className="btn" href="/bank/quiz">Tạo Quiz trên CMS</Link>} />
     {message ? <div className="alert info">{message}</div> : null}
 
     <OperationsKpiStrip ariaLabel="Tổng quan lịch sử bộ đề" items={[
@@ -115,5 +115,5 @@ export function BankHistoryPage() {
       </div>
       {activeView === 'quiz' ? <EnterpriseDataTable tableId="bank-history-quizzes" caption="Quiz trên CMS" rows={quizRows} columns={quizColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredQuiz.length} totalPages={quizTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="Quiz" emptyTitle="Chưa có Quiz phù hợp" emptyDescription="Thử xóa bộ lọc hoặc tạo Quiz từ Release đã chốt." /> : <EnterpriseDataTable tableId="bank-history-releases" caption="Bộ đề đã chốt" rows={releaseRows} columns={releaseColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredReleases.length} totalPages={releaseTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="bộ đề" emptyTitle="Chưa có bộ đề phù hợp" emptyDescription="Thử xóa bộ lọc hoặc chốt Release từ workspace của bài." />}
     </section>
-  </div>
+  </PageRoot>
 }

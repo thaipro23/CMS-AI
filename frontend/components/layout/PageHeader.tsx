@@ -1,11 +1,12 @@
-import type { ReactNode } from 'react'
+'use client'
+
+import { useId, useLayoutEffect, type ReactNode } from 'react'
 import type { AppIconName } from '../icons/AppIcon'
 import type { VisualTone } from '../ui/VisualIcon'
-import { VisualIcon } from '../ui/VisualIcon'
+import { usePageShellRegistration } from './PageShellContext'
 
 export function PageHeader({
   title,
-  description,
   eyebrow,
   primaryAction,
   secondaryActions,
@@ -14,7 +15,6 @@ export function PageHeader({
   tone,
 }: {
   title: string
-  description?: ReactNode
   eyebrow?: string
   primaryAction?: ReactNode
   secondaryActions?: ReactNode
@@ -22,18 +22,21 @@ export function PageHeader({
   icon?: AppIconName
   tone?: VisualTone
 }) {
-  return <header className={`enterprise-page-header ${className}`.trim()}>
-    <div className="enterprise-page-header-leading">
-      <VisualIcon label={`${eyebrow || ''} ${title}`} icon={icon} tone={tone} size={21} className="enterprise-page-header-icon" />
-      <div className="enterprise-page-header-copy">
-      {eyebrow && <span className="enterprise-page-eyebrow">{eyebrow}</span>}
-      <h1>{title}</h1>
-      {description && <div className="enterprise-page-description">{description}</div>}
-      </div>
-    </div>
-    {(primaryAction || secondaryActions) && <div className="enterprise-page-actions">
+  const registration = usePageShellRegistration()
+  const registrationId = useId()
+
+  useLayoutEffect(() => {
+    if (!registration) return undefined
+    return registration.registerChrome({ registrationId, eyebrow, title, icon, tone })
+  }, [eyebrow, icon, registration, registrationId, title, tone])
+
+  if (!primaryAction && !secondaryActions) return null
+
+  return <header className={`enterprise-page-header enterprise-page-header-actions-only ${className}`.trim()}>
+    <div className="enterprise-page-actions">
       {secondaryActions}
       {primaryAction}
-    </div>}
+    </div>
   </header>
 }
+export { PageRoot } from './PageShellContext'

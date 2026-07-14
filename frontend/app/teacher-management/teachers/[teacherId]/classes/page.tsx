@@ -6,7 +6,7 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../../context/AppContext'
 import { getAcademicTrainingTeacherReport } from '../../../../../lib/api'
 import { AcademicLearningComponentScore, AcademicTrainingClassReport, AcademicTrainingTeacherReport } from '../../../../../types'
-import { PageHeader } from '../../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../../../components/table/EnterpriseDataTable'
 import { InlineNotice, InlineNoticeData, noticeError } from '../../../../../components/ui/InlineNotice'
 import { TrainingContextChips, TrainingKpiStrip } from '../../../../../components/training/TrainingWorkspace'
@@ -147,14 +147,13 @@ export default function TeacherClassesPage() {
     { key: 'assessment', header: 'Đầu điểm', kind: 'text', minWidth: 190, priority: 'optional', defaultVisible: false, hideable: true, truncateLines: 2, render: (cls) => <small>{componentSummary(cls.learning_component_summaries)}</small> },
     { key: 'eligibility', header: 'Điều kiện thi', kind: 'status', minWidth: 145, priority: 'optional', defaultVisible: false, hideable: true, render: (cls) => <><b>{countLabel(cls.exam_eligible_student_count)} được thi</b><small>{countLabel(cls.exam_not_eligible_student_count)} chưa đủ · {countLabel(cls.exam_insufficient_data_student_count)} thiếu dữ liệu</small></> },
     { key: 'risk', header: 'Cảnh báo', kind: 'status', minWidth: 145, priority: 'important', hideable: true, render: (cls) => <><span className={riskTone(cls)}>{riskLabel(cls)}</span><small>Trễ {countLabel(cls.deadline_late_student_count)} · Học lại {countLabel(cls.relearn_student_count)}</small></> },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: (cls) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(cls, teacher, filters)}>Chi tiết</Link><details className="row-action-menu"><summary className="btn small ghost" aria-label="Mở thêm thao tác">•••</summary><div className="row-action-popover"><Link href={learningBehaviorHref(cls, filters)}>Phân tích học tập</Link></div></details></div> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: (cls) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(cls, teacher, filters)}>Chi tiết</Link><Link className="btn small secondary" href={learningBehaviorHref(cls, filters)}>Phân tích</Link></div> },
   ], [teacher, termId, branch, campus, termName])
 
-  return <div className="page-stack training-management-page teacher-management-page teacher-classes-page training-operations-page">
+  return <PageRoot className="page-stack training-management-page teacher-management-page teacher-classes-page training-operations-page">
     <PageHeader
       eyebrow="Vận hành đào tạo"
       title={`Lớp của ${teacherTitle}`}
-      description={`${classes.length} lớp · ${teacher?.subject_count || 0} môn trong phạm vi được phân quyền`}
       secondaryActions={<><Link className="btn secondary" href={backHref}>Quay lại giảng viên</Link><button className="btn secondary" type="button" onClick={() => load()} disabled={loading}>Tải lại</button></>}
     />
 
@@ -205,5 +204,5 @@ export default function TeacherClassesPage() {
         label="lớp"
       />
     </section>
-  </div>
+  </PageRoot>
 }

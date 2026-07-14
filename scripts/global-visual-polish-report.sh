@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/global-visual-polish-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.2}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.3}"
 mkdir -p "$OUT_DIR"
 
 python - "$ROOT_DIR" "$EXPECTED_VERSION" "$OUT_DIR/global-visual-polish.json" <<'PY'
@@ -18,6 +18,7 @@ layout = read('frontend/app/layout.tsx')
 css = read('frontend/styles/global-visual-polish.css')
 visual = read('frontend/components/ui/VisualIcon.tsx')
 page_header = read('frontend/components/layout/PageHeader.tsx')
+app_shell = read('frontend/components/layout/AppShell.tsx')
 table = read('frontend/components/table/EnterpriseDataTable.tsx')
 training = read('frontend/components/training/TrainingWorkspace.tsx')
 operations = read('frontend/components/operations/OperationsWorkspace.tsx')
@@ -27,8 +28,8 @@ active_pages = [p for p in (root / 'frontend/app').rglob('page.tsx') if 'ops/rea
 redirect_pages = [p for p in active_pages if 'redirect(' in p.read_text(encoding='utf-8')]
 checks = {
     'version': expected in read('backend/app/core/config.py') and expected in read('frontend/package.json'),
-    'visual_css_loaded_last': "import '../styles/global-visual-polish.css'" in layout and layout.rfind('global-visual-polish.css') > layout.rfind('production-ux-browser-hotfix.css'),
-    'page_header_icon': '<VisualIcon' in page_header and 'enterprise-page-header-leading' in page_header,
+    'visual_css_precedes_integrity_layer': "import '../styles/global-visual-polish.css'" in layout and layout.rfind('layout-integrity.css') > layout.rfind('global-visual-polish.css') > layout.rfind('production-ux-browser-hotfix.css'),
+    'topbar_page_icon': '<VisualIcon' in app_shell and 'enterprise-topbar-page-icon' in app_shell and '<h1>{pageChrome?.title || pageLabel(pathname)}</h1>' in app_shell and 'enterprise-page-header-copy' not in page_header,
     'semantic_icon_resolver': 'inferVisualMeta' in visual and "words: ['sinh viên'" in visual,
     'kpi_icons': '<VisualIcon' in training and '<VisualIcon' in operations,
     'notice_icons': notices.count('<VisualIcon') >= 2,
@@ -49,7 +50,7 @@ result = {
     'redirect_page_files': len(redirect_pages),
     'visual_contract': [
         'Sidebar tối; topbar và workspace sáng.',
-        'PageHeader, KPI, section, notice, empty state và table summary có SVG icon.',
+        'Topbar page title, KPI, section, notice, empty state và table summary có SVG icon.',
         'Card bo tròn nhẹ, border nhạt, shadow thấp và nền semantic.',
         'Bảng giữ đầy đủ cột mặc định, tự co giãn/xuống dòng và chỉ cuộn trong container.',
         'Không thêm Bootstrap, React-Bootstrap, jQuery hoặc Metronic.',
