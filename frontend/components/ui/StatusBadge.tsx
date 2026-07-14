@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { AppIcon, type AppIconName } from '../icons/AppIcon'
 
 const LABELS: Record<string, string> = {
   pending_review: 'Chờ duyệt', needs_review: 'Cần review', approved: 'Đã duyệt', rejected: 'Từ chối', published: 'Đã publish', draft_error: 'Cần sửa',
@@ -14,13 +15,13 @@ function tone(status: string) {
   return 'neutral'
 }
 
-const ICONS: Record<string, string> = { success: '✓', danger: '!', warning: '•', neutral: '–' }
+const ICONS: Record<string, AppIconName> = { success: 'check', danger: 'alert', warning: 'clock', neutral: 'info' }
 
 export function StatusBadge({ status, label }: { status: string; label?: ReactNode }) {
   const normalized = String(status || 'neutral').toLowerCase()
   const semanticTone = tone(normalized)
   return <span className={`status ${semanticTone}`} data-status={normalized}>
-    <span className="status-icon" aria-hidden="true">{ICONS[semanticTone]}</span>
+    <span className="status-icon" aria-hidden="true"><AppIcon name={ICONS[semanticTone]} size={13} /></span>
     <span>{label ?? LABELS[normalized] ?? status ?? 'Chưa xác định'}</span>
   </span>
 }

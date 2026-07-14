@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { PageHeader } from '../../../components/layout/PageHeader'
+import { VisualIcon } from '../../../components/ui/VisualIcon'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { CourseQuizInstance, QuizAutoMapResult, QuizChapterAction, QuizChapterPlanItem } from '../../../types'
 import {
@@ -465,9 +466,9 @@ export default function BankQuizPage() {
 
     <section className="card quiz-course-setup" aria-labelledby="quiz-course-setup-title">
       <div className="quiz-workflow-steps" aria-label="Quy trình tạo bài kiểm tra">
-        <div className={classNames('quiz-workflow-step', workflowStep >= 1 && 'active', autoMap && 'done')}><span>1</span><div><b>Map khóa học</b><small>Nhập Course ID và chọn version</small></div></div>
-        <div className={classNames('quiz-workflow-step', workflowStep >= 2 && 'active', applied && 'done')}><span>2</span><div><b>Chọn phạm vi</b><small>Quiz, Final test hoặc bỏ qua</small></div></div>
-        <div className={classNames('quiz-workflow-step', workflowStep >= 3 && 'active')}><span>3</span><div><b>Tạo trên CMS</b><small>Kiểm tra cấu hình và xác nhận</small></div></div>
+        <div className={classNames('quiz-workflow-step', workflowStep >= 1 && 'active', autoMap && 'done')}><VisualIcon label="Map khóa học" icon="link" tone="blue" size={16} /><div><b>Map khóa học</b><small>Nhập Course ID và chọn version</small></div></div>
+        <div className={classNames('quiz-workflow-step', workflowStep >= 2 && 'active', applied && 'done')}><VisualIcon label="Chọn phạm vi" icon="filter" tone="violet" size={16} /><div><b>Chọn phạm vi</b><small>Quiz, Final test hoặc bỏ qua</small></div></div>
+        <div className={classNames('quiz-workflow-step', workflowStep >= 3 && 'active')}><VisualIcon label="Tạo trên CMS" icon="quiz" tone="green" size={16} /><div><b>Tạo trên CMS</b><small>Kiểm tra cấu hình và xác nhận</small></div></div>
       </div>
       <div className="section-heading quiz-course-setup-heading">
         <div><h2 id="quiz-course-setup-title">Khóa học và phiên bản môn</h2><p className="muted">Hệ thống tự resolve org/course/run, version môn và Section tương ứng. Không cần chọn cây thủ công.</p></div>
@@ -489,7 +490,7 @@ export default function BankQuizPage() {
     </section>
 
     {!autoMap ? <section className="card quiz-empty-guide quiz-empty-guide-full">
-      <div className="quiz-empty-icon" aria-hidden="true">1</div>
+      <VisualIcon label="Chưa có kết quả map" icon="link" tone="slate" className="quiz-empty-icon" />
       <div><h2>Chưa có kết quả map</h2><p>Nhập Course ID ở trên. Sau khi resolve thành công, bảng bài học và trạng thái Release sẽ xuất hiện tại đây.</p></div>
     </section> : <section className="card quiz-mapping-workspace">
       <div className="section-heading result-heading">

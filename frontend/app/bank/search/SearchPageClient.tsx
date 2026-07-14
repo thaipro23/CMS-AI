@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { getBankDashboardDrilldown, searchBankDashboard } from '../../../lib/api'
 import type { BankSearchResult } from '../../../types'
+import { PageHeader } from '../../../components/layout/PageHeader'
+import { VisualIcon } from '../../../components/ui/VisualIcon'
 
 function labelStatus(value?: string | null) {
   const labels: Record<string, string> = {
@@ -190,11 +192,9 @@ export default function SearchPageClient() {
   const isQuestionTable = hasQuestionFilters && items.every((item) => item.type === 'question')
 
   return <div className="page-stack bank-multipage dashboard-search-page">
-    <div className="dashboard-search-hero card">
-      <div>
-        <span className="eyebrow">Danh sách</span>
-        <h1>Câu hỏi trong phạm vi được giao</h1>
-        <p>Kết quả được lọc theo quyền hiện tại của tài khoản.</p>
+    <PageHeader eyebrow="Ngân hàng đề" title="Câu hỏi trong phạm vi được giao" description="Kết quả được lọc theo quyền hiện tại của tài khoản." icon="search" primaryAction={<Link className="btn secondary" href="/bank">Về Tổng quan</Link>} />
+    <section className="card visual-section-card dashboard-search-filter-card">
+      <div className="visual-section-heading"><VisualIcon label="Bộ lọc đang áp dụng" icon="filter" tone="blue" /><div><h2>Bộ lọc đang áp dụng</h2><p className="helper">Các điều kiện được lấy trực tiếp từ URL hiện tại.</p></div></div>
         <div className="dashboard-filter-row">
           {q ? <Chip>Từ khóa: {q}</Chip> : null}
           {status ? <Chip>Trạng thái: {labelStatus(status)}</Chip> : null}
@@ -205,28 +205,26 @@ export default function SearchPageClient() {
           {chapterId ? <Chip>Chapter: {chapterId}</Chip> : null}
           {subjectId ? <Chip>Môn: {subjectId}</Chip> : null}
         </div>
-      </div>
-      <Link className="btn secondary" href="/bank">Về Tổng quan</Link>
-    </div>
+    </section>
 
     {loading ? <div className="dashboard-search-list">
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
-    </div> : error ? <div className="dashboard-error-state">
+    </div> : error ? <div className="dashboard-error-state visual-state"><VisualIcon label="Không tải được dữ liệu" icon="alert" tone="red" /><div>
       <b>Không tải được dữ liệu.</b>
       <p>{error}</p>
-      <button className="btn small" onClick={load} type="button">Thử lại</button>
+      <button className="btn small" onClick={load} type="button">Thử lại</button></div>
     </div> : items.length ? <>
       <div className="dashboard-search-count">
         Đang hiển thị <b>{returned || items.length}</b>{total ? <> / <b>{total}</b></> : null} kết quả phù hợp
         {source === 'search_index' ? <small> · Dữ liệu lấy từ chỉ mục tìm kiếm</small> : null}
       </div>
       {isQuestionTable ? <SearchResultTable items={items} /> : <SearchResultCards items={items} />}
-    </> : <div className="dashboard-empty-state">
+    </> : <div className="dashboard-empty-state visual-state"><VisualIcon label="Không có kết quả" icon="database" tone="slate" /><div>
       <b>Không có kết quả trong phạm vi của bạn.</b>
       <p>Dữ liệu có thể chưa được tạo hoặc bạn không có quyền trong phạm vi đó.</p>
-      <Link className="btn secondary small" href="/bank">Quay lại Tổng quan</Link>
+      <Link className="btn secondary small" href="/bank">Quay lại Tổng quan</Link></div>
     </div>}
   </div>
 }

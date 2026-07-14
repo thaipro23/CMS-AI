@@ -1,5 +1,7 @@
 "use client";
 
+import { VisualIcon } from "./VisualIcon";
+
 export type ActionMessageType = "success" | "error" | "info" | "warning";
 
 export type ActionMessageData = {
@@ -55,7 +57,8 @@ export function ActionMessage({
       role={message.type === "error" ? "alert" : "status"}
       aria-live="polite"
     >
-      <div>
+      <VisualIcon label={message.title || titleFor(message.type)} icon={message.type === "success" ? "check" : message.type === "info" ? "info" : "alert"} tone={message.type === "success" ? "green" : message.type === "error" ? "red" : message.type === "warning" ? "amber" : "blue"} className="notice-visual-icon" />
+      <div className="notice-copy">
         <strong>{message.title || titleFor(message.type)}</strong>
         <p>{message.body}</p>
         {message.detail && <small>{message.detail}</small>}

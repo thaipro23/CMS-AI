@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useBankData, Breadcrumb, QuickSearchBox, Modal } from '../shared'
 import { getBankDashboardAnalytics } from '../../../../lib/api'
 import { PageHeader } from '../../../../components/layout/PageHeader'
+import { VisualIcon } from '../../../../components/ui/VisualIcon'
 import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -53,32 +54,33 @@ function SkeletonBlock({ height = 120 }: { height?: number }) {
 }
 
 function DashboardEmptyState({ role }: { role?: string }) {
-  return <div className="dashboard-empty-state">
-    <b>Chưa có dữ liệu trong phạm vi này.</b>
+  return <div className="dashboard-empty-state visual-state"><VisualIcon label="Chưa có dữ liệu" icon="database" tone="slate" />
+    <div><b>Chưa có dữ liệu trong phạm vi này.</b>
     <p>{role === 'QUESTION_REVIEWER' ? 'Bạn chưa được giao câu hỏi hoặc chapter nào để duyệt, hoặc chapter được giao chưa có dữ liệu.' : 'Hãy upload tài liệu hoặc tạo câu hỏi đầu tiên trong phạm vi được phân quyền.'}</p>
-    <Link className="btn secondary small" href="/bank/departments">Đi tới Ngân hàng câu hỏi</Link>
+    <Link className="btn secondary small" href="/bank/departments">Đi tới Ngân hàng câu hỏi</Link></div>
   </div>
 }
 
 function DashboardErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return <div className="dashboard-error-state">
-    <b>Không tải được dashboard.</b>
+  return <div className="dashboard-error-state visual-state"><VisualIcon label="Không tải được dashboard" icon="alert" tone="red" />
+    <div><b>Không tải được dashboard.</b>
     <p>{message || 'API trả về lỗi. Vui lòng thử lại hoặc kiểm tra backend logs.'}</p>
-    <button className="btn small" type="button" onClick={onRetry}>Thử lại</button>
+    <button className="btn small" type="button" onClick={onRetry}>Thử lại</button></div>
   </div>
 }
 
 function KpiCard({ item, tone }: { item: DashboardKpi; tone?: string }) {
-  return <Link className={`dashboard-kpi-card ${tone || ''}`} href={drilldownUrl(item.drilldown)}>
-    <span>{item.label}</span>
+  return <Link className={`dashboard-kpi-card visual-card ${tone || ''}`} href={drilldownUrl(item.drilldown)}>
+    <VisualIcon label={item.label} tone={tone === 'success' ? 'green' : tone === 'warning' ? 'amber' : tone === 'danger' ? 'red' : undefined} />
+    <div className="dashboard-kpi-copy"><span>{item.label}</span>
     <b>{formatNumber(item.value)}</b>
-    <small>{item.overdue ? `${formatNumber(item.overdue)} quá hạn · ` : ''}{item.percent !== undefined ? `${item.percent}% trong tổng số` : item.delta_label}</small>
+    <small>{item.overdue ? `${formatNumber(item.overdue)} quá hạn · ` : ''}{item.percent !== undefined ? `${item.percent}% trong tổng số` : item.delta_label}</small></div>
   </Link>
 }
 
 function ChartCard({ title, children, empty }: { title: string; children: React.ReactNode; empty?: boolean }) {
-  return <section className="card dashboard-chart-card">
-    <div className="section-head compact-section-head"><div><h2>{title}</h2></div></div>
+  return <section className="card dashboard-chart-card visual-section-card">
+    <div className="section-head compact-section-head visual-section-heading"><VisualIcon label={title} /><div><h2>{title}</h2></div></div>
     {empty ? <div className="dashboard-chart-empty">Chưa có dữ liệu phù hợp.</div> : children}
   </section>
 }
@@ -200,11 +202,11 @@ function GroupedBarChart({ chart }: { chart: DashboardChart }) {
 
 function AlertPanel({ alerts }: { alerts: DashboardAnalytics['alerts'] }) {
   const router = useRouter()
-  return <section className="card dashboard-alert-panel">
-    <div className="section-head compact-section-head"><div><h2>Cảnh báo cần xử lý</h2><p className="helper">Ưu tiên các việc đang chậm hoặc có nguy cơ thiếu dữ liệu.</p></div></div>
+  return <section className="card dashboard-alert-panel visual-section-card">
+    <div className="section-head compact-section-head visual-section-heading"><VisualIcon label="Cảnh báo cần xử lý" icon="alert" tone="red" /><div><h2>Cảnh báo cần xử lý</h2><p className="helper">Ưu tiên các việc đang chậm hoặc có nguy cơ thiếu dữ liệu.</p></div></div>
     <div className="dashboard-alert-list">
       {alerts.length ? alerts.map((alert) => <button key={alert.id} type="button" className={`dashboard-alert-item ${alert.severity}`} onClick={() => alert.drilldown && router.push(drilldownUrl(alert.drilldown))}>
-        <span>{alert.severity === 'critical' ? '🔴' : alert.severity === 'warning' ? '🟡' : '🔵'}</span>
+        <VisualIcon label={alert.title} icon="alert" tone={alert.severity === 'critical' ? 'red' : alert.severity === 'warning' ? 'amber' : 'blue'} size={16} />
         <div><b>{alert.title}</b>{alert.description ? <small>{alert.description}</small> : null}</div>
       </button>) : <div className="dashboard-chart-empty">Chưa có cảnh báo trong phạm vi này.</div>}
     </div>
@@ -213,11 +215,11 @@ function AlertPanel({ alerts }: { alerts: DashboardAnalytics['alerts'] }) {
 
 function ActivityFeed({ items }: { items: DashboardAnalytics['activity_feed'] }) {
   const router = useRouter()
-  return <section className="card dashboard-activity-panel">
-    <div className="section-head compact-section-head"><div><h2>Hoạt động gần đây</h2><p className="helper">10 thao tác mới nhất trong phạm vi bạn được xem.</p></div></div>
+  return <section className="card dashboard-activity-panel visual-section-card">
+    <div className="section-head compact-section-head visual-section-heading"><VisualIcon label="Hoạt động gần đây" icon="audit" tone="slate" /><div><h2>Hoạt động gần đây</h2><p className="helper">10 thao tác mới nhất trong phạm vi bạn được xem.</p></div></div>
     <div className="dashboard-activity-list">
       {items.length ? items.map((item) => <button key={item.id} type="button" className="dashboard-activity-item" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))}>
-        <span>{item.status === 'failed' ? '⚠️' : '•'}</span>
+        <VisualIcon label={item.message} icon={item.status === 'failed' ? 'alert' : 'audit'} tone={item.status === 'failed' ? 'red' : 'blue'} size={16} />
         <div><b>{item.message}</b><small>{item.relative_time || item.created_at || ''}</small></div>
       </button>) : <div className="dashboard-chart-empty">Chưa có hoạt động gần đây.</div>}
     </div>
@@ -327,9 +329,9 @@ export function BankDashboardPage() {
         <span><b>{formatNumber(Number(data.meta?.chapters_total || 0))}</b> bài</span>
       </section>
 
-      <section className="card bank-search-card">
-        <div className="section-head">
-          <div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, phiên bản, bài hoặc câu hỏi trong phạm vi được giao.</p></div>
+      <section className="card bank-search-card visual-section-card">
+        <div className="section-head visual-section-heading">
+          <VisualIcon label="Tìm nhanh" icon="search" tone="blue" /><div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, phiên bản, bài hoặc câu hỏi trong phạm vi được giao.</p></div>
           <div className="button-row compact">
             <button className="btn small secondary" type="button" onClick={() => setAlertsOpen(true)}>Cảnh báo ({formatNumber((data.alerts || []).length)})</button>
             <button className="btn small secondary" type="button" onClick={() => setActivityOpen(true)}>Hoạt động ({formatNumber((data.activity_feed || []).length)})</button>

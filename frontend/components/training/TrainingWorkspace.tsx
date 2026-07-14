@@ -1,6 +1,8 @@
 'use client'
 
 import type { ReactNode } from 'react'
+import { AppIcon, type AppIconName } from '../icons/AppIcon'
+import { VisualIcon } from '../ui/VisualIcon'
 
 export type TrainingWorkflowStep = {
   key: string
@@ -33,7 +35,7 @@ export function TrainingWorkflowSteps({
         aria-current={active ? 'step' : undefined}
         onClick={() => onChange(step.key)}
       >
-        <span className="training-workflow-index" aria-hidden="true">{completed ? '✓' : index + 1}</span>
+        <span className="training-workflow-index" aria-hidden="true">{completed ? <AppIcon name="check" size={15} /> : index + 1}</span>
         <span className="training-workflow-copy">
           <b>{step.label}</b>
           {step.description ? <small>{step.description}</small> : null}
@@ -57,14 +59,14 @@ export type TrainingKpi = {
   value: ReactNode
   hint?: ReactNode
   tone?: 'neutral' | 'success' | 'warning' | 'danger'
+  icon?: AppIconName
 }
 
 export function TrainingKpiStrip({ items, compact = false }: { items: TrainingKpi[]; compact?: boolean }) {
   return <div className={`training-kpi-strip${compact ? ' is-compact' : ''}`}>
-    {items.map((item) => <div key={item.key} className={`training-kpi training-kpi-${item.tone || 'neutral'}`}>
-      <span>{item.label}</span>
-      <b>{item.value}</b>
-      {item.hint ? <small>{item.hint}</small> : null}
+    {items.map((item) => <div key={item.key} className={`training-kpi visual-card training-kpi-${item.tone || 'neutral'}`}>
+      <VisualIcon label={item.label} icon={item.icon} tone={item.tone === 'success' ? 'green' : item.tone === 'warning' ? 'amber' : item.tone === 'danger' ? 'red' : undefined} />
+      <div className="training-kpi-copy"><span>{item.label}</span><b>{item.value}</b>{item.hint ? <small>{item.hint}</small> : null}</div>
     </div>)}
   </div>
 }
@@ -79,7 +81,7 @@ export function TrainingMappingEmptyState({
   action?: ReactNode
 }) {
   return <div className="training-mapping-empty-state" role="status">
-    <span className="training-mapping-empty-icon" aria-hidden="true">!</span>
+    <VisualIcon label={title} icon="link" tone="amber" className="training-mapping-empty-icon" />
     <div>
       <b>{title}</b>
       <p>{description}</p>

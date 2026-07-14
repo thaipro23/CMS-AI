@@ -2,32 +2,36 @@
 
 import { useEffect, useId, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
+import type { AppIconName } from '../icons/AppIcon'
+import type { VisualTone } from '../ui/VisualIcon'
+import { VisualIcon } from '../ui/VisualIcon'
 
 export type OperationsMetric = {
   label: string
   value: ReactNode
   hint?: ReactNode
   tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info'
+  icon?: AppIconName
 }
 
 export function OperationsKpiStrip({ items, ariaLabel = 'Tổng quan vận hành' }: { items: OperationsMetric[]; ariaLabel?: string }) {
   return <section className="operations-kpi-strip" aria-label={ariaLabel}>
-    {items.map((item) => <div className={`operations-kpi tone-${item.tone || 'neutral'}`} key={item.label}>
-      <span>{item.label}</span>
-      <b>{item.value}</b>
-      {item.hint ? <small>{item.hint}</small> : null}
+    {items.map((item) => <div className={`operations-kpi visual-card tone-${item.tone || 'neutral'}`} key={item.label}>
+      <VisualIcon label={item.label} icon={item.icon} tone={toneFromOperation(item.tone)} />
+      <div className="operations-kpi-copy"><span>{item.label}</span><b>{item.value}</b>{item.hint ? <small>{item.hint}</small> : null}</div>
     </div>)}
   </section>
 }
 
 export function CompactFilterBar({ children, actions, ariaLabel = 'Bộ lọc' }: { children: ReactNode; actions?: ReactNode; ariaLabel?: string }) {
-  return <section className="operations-filter-bar" aria-label={ariaLabel}>
+  return <section className="operations-filter-bar visual-filter-card" aria-label={ariaLabel}>
+    <VisualIcon label={ariaLabel} icon="filter" tone="blue" className="visual-filter-icon" />
     <div className="operations-filter-fields">{children}</div>
     {actions ? <div className="operations-filter-actions">{actions}</div> : null}
   </section>
 }
 
-export type WorkspaceTab = { key: string; label: string; count?: number }
+export type WorkspaceTab = { key: string; label: string; count?: number; icon?: AppIconName }
 export function WorkspaceTabs({ tabs, active, onChange, ariaLabel = 'Nhóm cấu hình' }: { tabs: WorkspaceTab[]; active: string; onChange: (key: string) => void; ariaLabel?: string }) {
   function handleKey(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     if (!['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
@@ -55,15 +59,15 @@ export function WorkspaceTabs({ tabs, active, onChange, ariaLabel = 'Nhóm cấu
       onKeyDown={(event) => handleKey(event, index)}
       onClick={() => onChange(tab.key)}
     >
-      <span>{tab.label}</span>{typeof tab.count === 'number' ? <small>{tab.count}</small> : null}
+      <VisualIcon label={tab.label} icon={tab.icon} size={14} className="workspace-tab-icon" /><span>{tab.label}</span>{typeof tab.count === 'number' ? <small>{tab.count}</small> : null}
     </button>)}
   </div>
 }
 
-export function WorkspaceSection({ title, description, actions, children, className = '' }: { title: string; description?: string; actions?: ReactNode; children: ReactNode; className?: string }) {
-  return <section className={`card workspace-section ${className}`.trim()}>
+export function WorkspaceSection({ title, description, actions, children, className = '', icon, tone }: { title: string; description?: string; actions?: ReactNode; children: ReactNode; className?: string; icon?: AppIconName; tone?: VisualTone }) {
+  return <section className={`card workspace-section visual-section-card ${className}`.trim()}>
     <div className="workspace-section-head">
-      <div><h2>{title}</h2>{description ? <p>{description}</p> : null}</div>
+      <div className="visual-section-heading"><VisualIcon label={title} icon={icon} tone={tone} /><div><h2>{title}</h2>{description ? <p>{description}</p> : null}</div></div>
       {actions ? <div className="workspace-section-actions">{actions}</div> : null}
     </div>
     <div className="workspace-section-body">{children}</div>
@@ -125,4 +129,12 @@ export function InfoPairGrid({ items }: { items: Array<{ label: string; value: R
   return <dl className="info-pair-grid">
     {items.map((item) => <div className={item.wide ? 'wide' : ''} key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}
   </dl>
+}
+
+function toneFromOperation(tone?: OperationsMetric['tone']): VisualTone {
+  if (tone === 'success') return 'green'
+  if (tone === 'warning') return 'amber'
+  if (tone === 'danger') return 'red'
+  if (tone === 'info') return 'blue'
+  return 'slate'
 }

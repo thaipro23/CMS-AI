@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ActionMessageType } from "./ActionMessage";
+import { VisualIcon } from "./VisualIcon";
 
 export type InlineNoticeData = {
   type: ActionMessageType;
@@ -21,8 +22,9 @@ export function InlineNotice({ notice }: { notice: InlineNoticeData | null }) {
       role={notice.type === "error" ? "alert" : "status"}
       aria-live="polite"
     >
-      <b>{notice.title || titleFor(notice.type)}</b>
-      <span>{notice.body}</span>
+      <VisualIcon label={notice.title || titleFor(notice.type)} icon={noticeIcon(notice.type)} tone={noticeTone(notice.type)} className="notice-visual-icon" />
+      <div className="notice-copy"><b>{notice.title || titleFor(notice.type)}</b>
+      <span>{notice.body}</span></div>
       {notice.actionHref && notice.actionLabel ? (
         <Link
           className="btn secondary small notice-action-btn"
@@ -95,4 +97,16 @@ function titleFor(type: ActionMessageType) {
   if (type === "error") return "Có lỗi";
   if (type === "warning") return "Cần kiểm tra";
   return "Thông báo";
+}
+
+function noticeIcon(type: ActionMessageType) {
+  if (type === "success") return "check" as const;
+  if (type === "error" || type === "warning") return "alert" as const;
+  return "info" as const;
+}
+function noticeTone(type: ActionMessageType) {
+  if (type === "success") return "green" as const;
+  if (type === "error") return "red" as const;
+  if (type === "warning") return "amber" as const;
+  return "blue" as const;
 }

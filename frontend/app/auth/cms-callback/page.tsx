@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { exchangeOpenEdxSessionTicket } from '../../../lib/api'
 import { useAppContext } from '../../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../../components/ui/ActionMessage'
+import { PageHeader } from '../../../components/layout/PageHeader'
 
 function CmsCallbackContent() {
   const router = useRouter()
@@ -36,28 +37,14 @@ function CmsCallbackContent() {
   }, [params, applyAuthSession, router])
 
   return <div className="page-stack">
-    <section className="card page-intro">
-      <div>
-        <div className="eyebrow">CMS SSO</div>
-        <h2>Đăng nhập bằng phiên CMS/Open edX</h2>
-        <p className="helper">Nếu bạn đã đăng nhập CMS, AI Server sẽ đổi session bridge ticket thành token nội bộ ngắn hạn.</p>
-      </div>
-      <Link className="btn secondary" href="/dashboard">Về dashboard</Link>
-    </section>
+    <PageHeader eyebrow="CMS SSO" title="Đăng nhập bằng phiên CMS/Open edX" description="Nếu bạn đã đăng nhập CMS, AI Server sẽ đổi session bridge ticket thành token nội bộ ngắn hạn." icon="shield" primaryAction={<Link className="btn secondary" href="/dashboard">Về dashboard</Link>} />
     <ActionMessage message={message} onClose={() => setMessage(null)} />
   </div>
 }
 
 function CmsCallbackFallback() {
   return <div className="page-stack">
-    <section className="card page-intro">
-      <div>
-        <div className="eyebrow">CMS SSO</div>
-        <h2>Đang chuẩn bị nhận phiên CMS...</h2>
-        <p className="helper">Vui lòng chờ trong giây lát.</p>
-      </div>
-      <Link className="btn secondary" href="/dashboard">Về dashboard</Link>
-    </section>
+    <PageHeader eyebrow="CMS SSO" title="Đang chuẩn bị nhận phiên CMS..." description="Vui lòng chờ trong giây lát." icon="shield" primaryAction={<Link className="btn secondary" href="/dashboard">Về dashboard</Link>} />
   </div>
 }
 

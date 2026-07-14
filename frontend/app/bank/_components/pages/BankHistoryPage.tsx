@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { PageHeader } from '../../../../components/layout/PageHeader'
+import { OperationsKpiStrip } from '../../../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import { formatVNDateTime } from '../../../../lib/time'
@@ -95,12 +96,12 @@ export function BankHistoryPage() {
     <PageHeader eyebrow="Ngân hàng đề" title="Lịch sử bộ đề và Quiz" description="Theo dõi Release đã chốt, bài kiểm tra đã tạo và thao tác khôi phục theo đúng phạm vi RBAC." primaryAction={<Link className="btn" href="/bank/quiz">Tạo Quiz trên CMS</Link>} />
     {message ? <div className="alert info">{message}</div> : null}
 
-    <section className="ops-kpi-grid history-kpi-strip">
-      <div><span>Bộ đề</span><b>{releases.length}</b></div>
-      <div><span>Quiz hiệu lực</span><b>{created}</b></div>
-      <div><span>Đã khôi phục</span><b>{rolledBack}</b></div>
-      <div className={failed ? 'is-warning' : ''}><span>Lỗi</span><b>{failed}</b></div>
-    </section>
+    <OperationsKpiStrip ariaLabel="Tổng quan lịch sử bộ đề" items={[
+      { label: 'Bộ đề đã chốt', value: releases.length, icon: 'release', tone: 'info' },
+      { label: 'Quiz hiệu lực', value: created, icon: 'quiz', tone: 'success' },
+      { label: 'Đã khôi phục', value: rolledBack, icon: 'sync', tone: 'neutral' },
+      { label: 'Lỗi cần kiểm tra', value: failed, icon: 'alert', tone: failed ? 'danger' : 'success' },
+    ]} />
 
     <section className="card history-workspace">
       <div className="history-view-tabs" role="tablist" aria-label="Loại lịch sử">

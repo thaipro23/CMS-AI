@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { PaginationControls } from '../ui/PaginationControls'
 import { TableEmptyState, TableErrorState, TableLoadingState } from './TableStates'
+import { VisualIcon } from '../ui/VisualIcon'
 import type { TableDensity } from '../../hooks/useUrlTableState'
 
 export type EnterpriseColumnKind = 'index' | 'selection' | 'identity' | 'number' | 'status' | 'date' | 'progress' | 'actions' | 'text'
@@ -249,10 +250,10 @@ export function EnterpriseDataTable<Row>({
 
   return <section ref={shellRef} className={`enterprise-table-shell density-${density}`} aria-busy={loading} data-column-contract="full-content">
     <div className="enterprise-table-controls">
-      <div className="enterprise-table-summary" aria-live="polite"><b>{caption}</b><span>{(total ?? rows.length).toLocaleString('vi-VN')} {label}</span>{loading && <span className="soft-tag"><span className="spinner tiny" /> Đang cập nhật</span>}</div>
+      <div className="enterprise-table-summary" aria-live="polite"><VisualIcon label={caption} icon="database" tone="blue" className="enterprise-table-summary-icon" /><div className="enterprise-table-summary-copy"><b>{caption}</b><span>{(total ?? rows.length).toLocaleString('vi-VN')} {label}</span>{loading && <span className="soft-tag"><span className="spinner tiny" /> Đang cập nhật</span>}</div></div>
       <div className="enterprise-table-view-actions">
         {onDensityChange && <label className="enterprise-density-control"><span>Mật độ</span><select className="input" value={density} onChange={(event) => onDensityChange(event.target.value as TableDensity)}><option value="compact">Thu gọn</option><option value="standard">Tiêu chuẩn</option><option value="comfortable">Thoáng</option></select></label>}
-        <details className="enterprise-column-menu"><summary className="btn small secondary">Cột hiển thị</summary><div className="enterprise-column-menu-popover"><b>Chọn cột</b>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={visibleKeys.includes(column.key)} disabled={!column.hideable} onChange={() => toggleColumn(column.key)} />{column.header}</label>)}<button className="btn small secondary" type="button" onClick={() => persistColumns(defaultKeys)}>Hiện tất cả</button></div></details>
+        <details className="enterprise-column-menu"><summary className="btn small secondary"><VisualIcon icon="layers" tone="slate" size={15} /> Cột hiển thị</summary><div className="enterprise-column-menu-popover"><b>Chọn cột</b>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={visibleKeys.includes(column.key)} disabled={!column.hideable} onChange={() => toggleColumn(column.key)} />{column.header}</label>)}<button className="btn small secondary" type="button" onClick={() => persistColumns(defaultKeys)}>Hiện tất cả</button></div></details>
       </div>
     </div>
     {!rows.length ? <TableEmptyState title={emptyTitle} description={emptyDescription} action={emptyAction} /> : <div className="enterprise-table-scroll" tabIndex={0} role="region" aria-label={`${caption}. Bảng hiển thị đầy đủ các cột; chỉ cuộn ngang khi nội dung thực sự không thể xuống dòng.`}>

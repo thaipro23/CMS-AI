@@ -5,6 +5,8 @@ export type AppIconName =
   | 'analytics' | 'jobs' | 'audit' | 'sync' | 'readiness' | 'campus' | 'semester'
   | 'users' | 'settings' | 'menu' | 'panel-left-close' | 'panel-left-open'
   | 'sun' | 'moon' | 'chevron-down' | 'chevron-right' | 'user' | 'logout' | 'close' | 'check'
+  | 'book' | 'layers' | 'link' | 'alert' | 'clock' | 'calendar' | 'filter' | 'info'
+  | 'database' | 'server' | 'shield' | 'upload' | 'download' | 'file' | 'money' | 'sparkles' | 'eye' | 'edit'
 
 const paths: Record<AppIconName, ReactNode> = {
   dashboard: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
@@ -34,6 +36,24 @@ const paths: Record<AppIconName, ReactNode> = {
   logout: <><path d="M10 17l5-5-5-5M15 12H3"/><path d="M14 3h7v18h-7"/></>,
   close: <><path d="m6 6 12 12M18 6 6 18"/></>,
   check: <path d="m5 12 4 4L19 6"/>,
+  book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v16h4.5a2.5 2.5 0 0 1 2.5 2.5z"/></>,
+  layers: <><path d="m12 2 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></>,
+  link: <><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.1-1.1"/></>,
+  alert: <><path d="M12 3 2.8 20h18.4z"/><path d="M12 9v4M12 17h.01"/></>,
+  clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+  calendar: <><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></>,
+  filter: <><path d="M4 5h16M7 12h10M10 19h4"/></>,
+  info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></>,
+  database: <><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></>,
+  server: <><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></>,
+  shield: <><path d="M12 3 4 6v6c0 5 3.3 8 8 9 4.7-1 8-4 8-9V6z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></>,
+  upload: <><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 20h14"/></>,
+  download: <><path d="M12 4v12M7 11l5 5 5-5"/><path d="M5 20h14"/></>,
+  file: <><path d="M6 3h9l3 3v15H6z"/><path d="M14 3v4h4"/></>,
+  money: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h.01M17 15h.01"/><circle cx="12" cy="12" r="2.5"/></>,
+  sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/><path d="m5 14 .8 1.7L8 16.5l-2.2.8L5 19l-.8-1.7L2 16.5l2.2-.8z"/></>,
+  eye: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></>,
+  edit: <><path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></>,
 }
 
 export function AppIcon({ name, size = 18, ...props }: SVGProps<SVGSVGElement> & { name: AppIconName; size?: number }) {
