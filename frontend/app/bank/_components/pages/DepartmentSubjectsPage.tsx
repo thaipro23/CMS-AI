@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { PageHeader } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, Subject, SubjectSummary } from '../../../../types'
 import { createSubject, deleteSubject, getDepartment, getSubjectSummaries, updateSubject } from '../../../../lib/api'
@@ -13,7 +14,6 @@ import {
   ConfirmDialog,
   EntityActions,
   Modal,
-  QuickSearchBox,
   bankStatusMatches,
   emptyReviewStats,
   matchesSearch,
@@ -62,24 +62,23 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   }
 
   const columns = useMemo<EnterpriseTableColumn<SubjectSummary>[]>(() => [
-    { key: 'stt', header: 'STT', width: 64, minWidth: 64, sticky: 'left', stickyOffset: 0, hideable: false, className: 'stt-cell', render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
-    { key: 'subject', header: 'Môn học', minWidth: 260, sticky: 'left', stickyOffset: 64, hideable: false, render: ({ subject }) => <Link className="bank-table-link" href={`/bank/subjects/${subject.id}/versions`}><b>{subject.code}</b><small>{subject.name}</small></Link> },
-    { key: 'status', header: 'Trạng thái', minWidth: 160, hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); return <span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span> } },
-    { key: 'versions', header: 'Phiên bản môn', align: 'right', hideable: true, render: ({ stats }) => stats?.subject_version_count || 0 },
-    { key: 'approved', header: 'Đã duyệt', align: 'right', hideable: true, render: ({ stats }) => stats?.review_done_version_count || 0 },
-    { key: 'pending', header: 'Chưa duyệt', align: 'right', hideable: true, render: ({ stats }) => stats?.review_not_done_version_count || 0 },
-    { key: 'questions', header: 'Tổng câu', align: 'right', hideable: true, render: ({ stats }) => stats?.total_questions || 0 },
-    { key: 'unresolved', header: 'Cần xử lý', align: 'right', hideable: true, render: ({ stats }) => stats?.unresolved_count || 0 },
-    { key: 'ready', header: 'Sẵn sàng chốt', align: 'right', hideable: true, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
-    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ subject }) => <EntityActions variant="inline" canManage={canUpdateSubject} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
+    { key: 'subject', header: 'Môn học', kind: 'identity', minWidth: 300, sticky: 'left', hideable: false, render: ({ subject }) => <Link className="bank-table-link" href={`/bank/subjects/${subject.id}/versions`}><b>{subject.code}</b><small>{subject.name}</small></Link> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 132, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); return <span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span> } },
+    { key: 'versions', header: 'Phiên bản', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.subject_version_count || 0 },
+    { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_done_version_count || 0 },
+    { key: 'pending', header: 'Chờ duyệt', kind: 'number', width: 86, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_not_done_version_count || 0 },
+    { key: 'questions', header: 'Tổng câu', kind: 'number', width: 82, priority: 'optional', hideable: true, render: ({ stats }) => stats?.total_questions || 0 },
+    { key: 'unresolved', header: 'Cần xử lý', kind: 'number', width: 86, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
+    { key: 'ready', header: 'Sẵn sàng', kind: 'number', width: 82, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject }) => <EntityActions variant="inline" canManage={canUpdateSubject} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn học' }]} />
-    <QuickSearchBox compact />
+    <PageHeader eyebrow="Ngân hàng đề" title={department ? `Môn học · ${department.name}` : 'Môn học'} description="Mỗi môn chỉ có một phiên bản môn cuối trong từng học kỳ." />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>{department ? `Danh sách môn trong ${department.name}` : 'Danh sách môn trong bộ môn'}</h2><p className="helper">Mỗi môn có tối đa một phiên bản môn cuối cho mỗi học kỳ.</p></div></div>
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm mã môn hoặc tên môn" action={canCreateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
       <EnterpriseDataTable
         tableId={`bank-subjects-${departmentId}`}

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { PageHeader } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import {
   BankRelease,
@@ -99,7 +100,6 @@ import {
   reviewStatusClass,
   emptyReviewStats,
   StatLine,
-  QuickSearchBox,
   questionStats,
   nextReleaseText,
   bankAnswerRows,
@@ -158,28 +158,24 @@ export function DepartmentsPage() {
   }
 
   const columns = useMemo<EnterpriseTableColumn<DepartmentSummary>[]>(() => [
-    { key: 'stt', header: 'STT', width: 64, minWidth: 64, sticky: 'left', stickyOffset: 0, hideable: false, className: 'stt-cell', render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
-    { key: 'department', header: 'Bộ môn', minWidth: 240, sticky: 'left', stickyOffset: 64, hideable: false, render: ({ department }) => <Link className="bank-table-link" href={`/bank/departments/${department.id}/subjects`}><b>{department.name}</b><small>{department.code}</small></Link> },
-    { key: 'status', header: 'Trạng thái', minWidth: 150, hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); return <span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span> } },
-    { key: 'subjects', header: 'Môn', align: 'right', hideable: true, render: ({ stats }) => stats?.subject_count || 0 },
-    { key: 'approved', header: 'Đã duyệt', align: 'right', hideable: true, render: ({ stats }) => stats?.review_done_subject_count || 0 },
-    { key: 'pending', header: 'Chưa duyệt', align: 'right', hideable: true, render: ({ stats }) => stats?.review_not_done_subject_count || 0 },
-    { key: 'unresolved', header: 'Cần xử lý', align: 'right', hideable: true, render: ({ stats }) => stats?.unresolved_count || 0 },
-    { key: 'ready', header: 'Sẵn sàng chốt', align: 'right', hideable: true, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
-    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ department }) => <EntityActions variant="inline" canManage={canScope('manage_department', { scopeType: 'DEPARTMENT', scopeId: department.id, departmentId: department.id })} lockedLabel="Không có quyền" onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /> },
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
+    { key: 'department', header: 'Bộ môn', kind: 'identity', minWidth: 280, sticky: 'left', hideable: false, render: ({ department }) => <Link className="bank-table-link" href={`/bank/departments/${department.id}/subjects`}><b>{department.name}</b><small>{department.code}</small></Link> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 132, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); return <span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span> } },
+    { key: 'subjects', header: 'Môn', kind: 'number', width: 72, priority: 'important', hideable: true, render: ({ stats }) => stats?.subject_count || 0 },
+    { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_done_subject_count || 0 },
+    { key: 'pending', header: 'Chờ duyệt', kind: 'number', width: 86, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_not_done_subject_count || 0 },
+    { key: 'unresolved', header: 'Cần xử lý', kind: 'number', width: 86, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
+    { key: 'ready', header: 'Sẵn sàng', kind: 'number', width: 82, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ department }) => <EntityActions variant="inline" canManage={canScope('manage_department', { scopeType: 'DEPARTMENT', scopeId: department.id, departmentId: department.id })} lockedLabel="Không có quyền" onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /> },
   ], [canScope, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn' }]} />
-    <QuickSearchBox compact />
+    <PageHeader eyebrow="Ngân hàng đề" title="Bộ môn" description="Quản lý cây môn học theo đúng phạm vi được giao." />
     {message ? <div className="alert info">{message}</div> : null}
     {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel || 'Hệ thống đang xử lý. Bạn có thể tiếp tục xem dữ liệu hiện có.'}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>Danh sách bộ môn</h2><p className="helper">Cấu trúc chuẩn: Bộ môn → Môn học → Phiên bản môn theo học kỳ → Bài/Chapter → Câu hỏi. Release và Quiz là thao tác đầu ra, không phải cấp trong cây.</p></div></div>
       <BankTableToolbar search={search} setSearch={(value) => updateTableState({ q: value })} statusFilter={statusFilter} setStatusFilter={(value) => updateTableState({ status: value })} resultCount={visible.length} totalCount={summaries.length} placeholder="Tìm bộ môn" action={can('manage_settings') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined} />
-      <div className="bank-status-legend bank-status-legend-compact" aria-label="Chú giải trạng thái">
-        <span><i className="dot-empty" />Chưa có dữ liệu</span><span><i className="dot-incomplete" />Cần hoàn thiện</span><span><i className="dot-published" />Đã đưa lên CMS</span>
-      </div>
       <EnterpriseDataTable
         tableId="bank-departments"
         caption="Danh sách bộ môn"

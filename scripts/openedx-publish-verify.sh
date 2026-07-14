@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v25.9.16.7.2.64.16 — Production Pilot Final QA + Rollback Drill
+# v25.9.16.7.2.64.16.5 — Production Pilot Final QA + Rollback Drill
 set -Eeuo pipefail
 
 API_BASE_URL="${API_BASE_URL:-https://api-ai.cms-test.poly.edu.vn/api}"

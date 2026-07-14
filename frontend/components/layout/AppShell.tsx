@@ -24,7 +24,6 @@ type NavItem = {
 
 const SIDEBAR_STORAGE_KEY = 'ai-shell-sidebar'
 const GROUP_STORAGE_KEY = 'ai-shell-nav-groups'
-const THEME_STORAGE_KEY = 'ai-shell-theme'
 
 const navGroups: Array<{ key: NavGroupKey; label: string }> = [
   { key: 'overview', label: 'Tổng quan' },
@@ -119,10 +118,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const drawerRef = useRef<HTMLElement>(null)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const userMenuRef = useRef<HTMLDetailsElement>(null)
   const [collapsed, setCollapsed] = useState(true)
   const [mobile, setMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
   const [autoLoginMessage, setAutoLoginMessage] = useState('')
   const { courseId, role, userId, can, isAuthenticated, authReady } = useAppContext()
@@ -139,15 +138,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const media = window.matchMedia('(max-width: 767px)')
     const updateMobile = () => setMobile(media.matches)
     updateMobile()
-    media.addEventListener('change', updateMobile)
+    if (typeof media.addEventListener === 'function') media.addEventListener('change', updateMobile)
+    else media.addListener(updateMobile)
     const sidebarPreference = window.localStorage.getItem(SIDEBAR_STORAGE_KEY)
     const nextCollapsed = sidebarPreference ? sidebarPreference !== 'expanded' : true
     setCollapsed(nextCollapsed)
     document.documentElement.dataset.sidebar = nextCollapsed ? 'collapsed' : 'expanded'
     setOpenGroups(loadGroupPreference())
-    const htmlTheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
-    setTheme(htmlTheme)
-    return () => media.removeEventListener('change', updateMobile)
+    document.documentElement.dataset.theme = 'light'
+    document.documentElement.dataset.aiTheme = 'light'
+    return () => {
+      if (typeof media.removeEventListener === 'function') media.removeEventListener('change', updateMobile)
+      else media.removeListener(updateMobile)
+    }
   }, [])
 
   useEffect(() => {
@@ -162,7 +165,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.mobileNav = drawerOpen ? 'open' : 'closed'
     const drawer = drawerRef.current
-    if (drawer) drawer.inert = mobile && !drawerOpen
+    if (drawer) {
+      const shouldDisable = mobile && !drawerOpen
+      if ('inert' in drawer) drawer.inert = shouldDisable
+      drawer.toggleAttribute('inert', shouldDisable)
+      const controls = drawer.querySelectorAll<HTMLElement>('a[href], button, summary, input, select, textarea, [tabindex]')
+      controls.forEach((control) => {
+        if (shouldDisable) {
+          if (!control.hasAttribute('data-shell-tabindex')) control.setAttribute('data-shell-tabindex', control.getAttribute('tabindex') ?? '')
+          control.setAttribute('tabindex', '-1')
+        } else if (control.hasAttribute('data-shell-tabindex')) {
+          const previous = control.getAttribute('data-shell-tabindex') || ''
+          if (previous) control.setAttribute('tabindex', previous)
+          else control.removeAttribute('tabindex')
+          control.removeAttribute('data-shell-tabindex')
+        }
+      })
+    }
     document.body.style.overflow = drawerOpen && mobile ? 'hidden' : ''
     if (!drawerOpen || !mobile) return () => { document.body.style.overflow = '' }
     const focusable = drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), summary, input, select, textarea, [tabindex]:not([tabindex="-1"])')
@@ -191,6 +210,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       document.body.style.overflow = ''
     }
   }, [drawerOpen, mobile])
+
+  useEffect(() => {
+    const details = userMenuRef.current
+    if (!details) return undefined
+    const close = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key !== 'Escape') return
+      if (event instanceof MouseEvent && details.contains(event.target as Node)) return
+      details.open = false
+    }
+    document.addEventListener('keydown', close)
+    document.addEventListener('pointerdown', close)
+    return () => {
+      document.removeEventListener('keydown', close)
+      document.removeEventListener('pointerdown', close)
+    }
+  }, [])
 
   useEffect(() => {
     if (!authReady || routeAllowed || pathname.startsWith('/auth/')) return
@@ -236,14 +271,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     })
   }
 
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    document.documentElement.dataset.theme = next
-    document.documentElement.dataset.aiTheme = next
-    window.localStorage.setItem(THEME_STORAGE_KEY, next)
-  }
-
   const reconnectCms = () => {
     try {
       window.location.href = buildCmsSessionBridgeUrl(courseId)
@@ -261,7 +288,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <a className="skip-link" href="#main-content">Bỏ qua điều hướng</a>
     {drawerOpen && mobile && <button className="enterprise-sidebar-overlay" aria-label="Đóng menu" type="button" onClick={() => setDrawerOpen(false)} />}
 
-    <aside ref={drawerRef} className={`enterprise-sidebar${drawerOpen ? ' mobile-open' : ''}`} aria-label="Điều hướng chính" aria-hidden={mobile && !drawerOpen ? true : undefined}>
+    <aside ref={drawerRef} className={`enterprise-sidebar${drawerOpen ? ' mobile-open' : ''}`} aria-label="Điều hướng chính" aria-hidden={mobile && !drawerOpen ? true : undefined} role={mobile ? 'dialog' : undefined} aria-modal={mobile && drawerOpen ? true : undefined}>
       <div className="enterprise-sidebar-header">
         <Link href="/bank" className="enterprise-brand" aria-label="AI Server ACMS">
           <span className="enterprise-brand-mark">AI</span>
@@ -315,11 +342,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Breadcrumbs items={breadcrumbsForPath(pathname)} compact />
         </div>
         <div className="enterprise-topbar-end">
-          <span className={`enterprise-cms-pill ${isAuthenticated ? 'ok' : 'wait'}`}><span aria-hidden="true" />{isAuthenticated ? 'CMS OK' : 'Đang kết nối'}</span>
-          <button className="enterprise-icon-button" type="button" aria-label={theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'} onClick={toggleTheme}>
-            <AppIcon name={theme === 'dark' ? 'sun' : 'moon'} />
-          </button>
-          <details className="enterprise-user-menu">
+          <span className={`enterprise-cms-pill ${isAuthenticated ? 'ok' : 'wait'}`} role="status" aria-live="polite"><span aria-hidden="true" />{isAuthenticated ? 'CMS OK' : 'Đang kết nối'}</span>
+          <details ref={userMenuRef} className="enterprise-user-menu">
             <summary aria-label="Mở menu tài khoản">
               <span className="enterprise-avatar">{String(userId || 'U').slice(0, 2).toUpperCase()}</span>
               <span className="enterprise-user-summary"><b>{userId || 'Người dùng'}</b><small>{ROLE_LABELS[role]}</small></span>

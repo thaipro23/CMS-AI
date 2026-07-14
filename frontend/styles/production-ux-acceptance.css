@@ -1,0 +1,107 @@
+/* v25.9.16.7.2.64.16.5 — responsive, cross-browser and accessibility acceptance overrides. */
+
+html { color-scheme: light; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { min-width: 320px; }
+button, input, select, textarea { font: inherit; }
+button, summary, select { touch-action: manipulation; }
+.enterprise-app-shell, .enterprise-workspace, .enterprise-content, .page-stack, .workspace-section-body { min-width: 0; }
+
+.enterprise-responsive-note {
+  max-width: 230px;
+  color: var(--ui-text-muted);
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: right;
+}
+.enterprise-responsive-details-column { width: 44px; min-width: 44px; max-width: 44px; padding-inline: 5px !important; text-align: center !important; }
+.enterprise-row-details-toggle {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--ui-border);
+  border-radius: 7px;
+  background: var(--ui-surface);
+  color: var(--ui-text-muted);
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.enterprise-row-details-toggle:hover { border-color: var(--ui-accent); color: var(--ui-accent); }
+.enterprise-row-details-toggle[aria-expanded='true'] { border-color: var(--ui-accent); background: var(--ui-accent-soft); color: var(--ui-accent); }
+.enterprise-responsive-details-row > td { padding: 0 !important; background: var(--ui-surface-subtle) !important; }
+.enterprise-responsive-details-row dl { margin: 0; padding: 10px 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.enterprise-responsive-details-row dl > div { min-width: 0; padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); }
+.enterprise-responsive-details-row dt { color: var(--ui-text-muted); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.enterprise-responsive-details-row dd { min-width: 0; margin: 4px 0 0; overflow-wrap: anywhere; }
+.enterprise-table-shell[data-responsive-mode='tablet'] .enterprise-data-table,
+.enterprise-table-shell[data-responsive-mode='mobile'] .enterprise-data-table { min-width: 100% !important; }
+.enterprise-table-shell[data-responsive-mode='mobile'] .enterprise-table-controls { align-items: flex-start; }
+.enterprise-table-shell[data-responsive-mode='mobile'] .enterprise-table-view-actions { justify-content: flex-end; }
+.enterprise-table-shell[data-responsive-mode='mobile'] .enterprise-density-control { display: none; }
+
+.pagination-bar { min-width: 0; }
+.page-size-control { margin: 0; }
+.pagination-actions button, .pagination-actions select { min-height: 36px; }
+.page-number[aria-current='page'] { outline: 2px solid color-mix(in srgb, var(--ui-accent) 35%, transparent); outline-offset: 1px; }
+
+.side-drawer { height: 100vh; height: 100dvh; padding-bottom: env(safe-area-inset-bottom); }
+.enterprise-sidebar { padding-bottom: env(safe-area-inset-bottom); }
+.enterprise-topbar { padding-top: max(0px, env(safe-area-inset-top)); }
+.enterprise-content { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+
+@supports not (color: color-mix(in srgb, white, black)) {
+  .page-number[aria-current='page'] { outline-color: rgba(37, 99, 235, .35); }
+}
+
+@media (max-width: 1080px) {
+  .enterprise-responsive-note { max-width: none; }
+  .operations-kpi-strip, .training-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workspace-section-head { min-height: 52px; }
+}
+
+@media (max-width: 760px) {
+  .enterprise-topbar { min-height: 52px; padding-inline: 10px; }
+  .enterprise-content { padding: 12px 10px max(16px, env(safe-area-inset-bottom)); }
+  .enterprise-page-header { gap: 10px; }
+  .enterprise-page-header h1 { font-size: 20px; }
+  .enterprise-page-actions { width: 100%; }
+  .enterprise-page-actions > .btn, .enterprise-page-actions > button, .enterprise-page-actions > a { flex: 1 1 auto; justify-content: center; }
+  .enterprise-table-controls { gap: 8px; padding: 9px 10px; }
+  .enterprise-table-summary span { white-space: normal; }
+  .enterprise-table-view-actions { width: 100%; }
+  .enterprise-column-menu { margin-left: auto; }
+  .enterprise-responsive-details-row dl { grid-template-columns: 1fr; }
+  .operations-kpi-strip, .training-kpi-strip { grid-template-columns: 1fr 1fr; }
+  .operations-filter-actions, .workspace-section-actions { width: 100%; }
+  .operations-filter-actions > .btn, .workspace-section-actions > .btn { flex: 1 1 auto; justify-content: center; }
+  .pagination-bar { align-items: stretch; }
+  .pagination-actions { width: 100%; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .page-number-list { grid-column: 1 / -1; justify-content: center; order: -1; }
+  .page-size-control { grid-column: 1 / -1; }
+  .page-size-select { width: 100%; }
+  .enterprise-nav-link, .enterprise-nav-group-toggle, .enterprise-icon-button, .workspace-tabs button { min-height: 44px; }
+  .side-drawer > header, .side-drawer > footer { padding-inline: 12px; }
+  .side-drawer-body { padding: 12px; }
+}
+
+@media (max-width: 420px) {
+  .operations-kpi-strip, .training-kpi-strip { grid-template-columns: 1fr; }
+  .enterprise-cms-pill { display: none; }
+  .enterprise-user-summary { display: none; }
+  .enterprise-breadcrumbs.compact li:not(:last-child) { display: none; }
+  .enterprise-breadcrumbs.compact .enterprise-breadcrumb-separator { display: none; }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .btn, button, summary, a.enterprise-nav-link { min-height: 44px; }
+  input[type='checkbox'], input[type='radio'] { min-width: 20px; min-height: 20px; }
+}
+
+@media (forced-colors: active) {
+  .enterprise-sidebar, .enterprise-nav-link.active, .status-badge, .btn, .enterprise-row-details-toggle { forced-color-adjust: auto; border: 1px solid ButtonText; }
+  .enterprise-nav-link.active::before, .enterprise-session-indicator, .enterprise-cms-pill > span { background: Highlight; }
+  :focus-visible { outline: 2px solid Highlight !important; box-shadow: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

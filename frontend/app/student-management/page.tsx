@@ -20,6 +20,7 @@ import {
   AcademicTerm,
 } from "../../types";
 import { PageHeader } from '../../components/layout/PageHeader'
+import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -351,13 +352,13 @@ function StudentManagementSubjectsContent() {
   };
 
   const columns = useMemo<EnterpriseTableColumn<AcademicSubjectManagement>[]>(() => [
-    { key: "stt", header: "STT", width: 72, sticky: "left", stickyOffset: 0, hideable: false, render: (_subject, index) => (page - 1) * pageSize + index + 1 },
-    { key: "subject", header: "Môn", minWidth: 220, sticky: "left", stickyOffset: 72, render: (subject) => <><b>{subject.subject_code}</b><small>{subject.subject_name}</small></> },
-    { key: "scale", header: "Quy mô", minWidth: 190, render: (subject) => <><b>{subject.class_count} lớp</b><small>{subject.student_count} SV · {subject.teacher_count} GV · {subject.campus_count} cơ sở</small></> },
-    { key: "cms", header: "Đồng bộ CMS", minWidth: 190, render: (subject) => <><span className={subject.cms_unsynced_count ? "status-pill warning" : "status-pill success"}>{subject.cms_synced_count}/{subject.student_count} đã đồng bộ</span><small>{subject.cms_unsynced_count} chưa/khác trạng thái</small></> },
-    { key: "course", header: "Course CMS", minWidth: 230, render: (subject) => <><span className={statusClass(subject.course_mapping_status)}>{subject.course_mapping_label || subject.course_mapping_status}</span><small>{subject.openedx_course_id || subject.suggested_openedx_course_id || "N/A"}</small></> },
-    { key: "learning", header: "Học tập CMS", minWidth: 300, render: (subject) => <><b>{subject.learning_enrolled_count || 0}/{subject.student_count} Ghi danh CMS</b><small>Dữ liệu: {subject.learning_synced_count || 0}/{subject.student_count} · Đã học: {subject.learning_active_count || 0}/{subject.student_count}</small><small>Tiến độ TB: {percentLabel(subject.learning_avg_progress_percent)} · Điểm tổng TB: {percentLabel(subject.learning_avg_grade_percent)}</small><small>TP: {componentSummaryLine(subject.learning_component_summaries)}</small><small>{alertText(subject.learning_alerts)}</small></> },
-    { key: "actions", header: "Thao tác", minWidth: 190, sticky: "right", hideable: false, render: (subject) => <div className="row-actions"><Link className="btn small primary" href={buildSubjectClassesHref(subject, { termId, termName: selectedTerm?.term_name, branch, campus })}>Xem lớp</Link>{!["mapped", "already_mapped", "auto_mapped"].includes(String(subject.course_mapping_status || "").toLowerCase()) && <button className="btn small secondary" type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? "Đang ghép..." : "Tự động ghép"}</button>}</div> },
+    { key: "stt", header: "STT", kind: "index", width: 52, sticky: "left", hideable: false, render: (_subject, index) => (page - 1) * pageSize + index + 1 },
+    { key: "subject", header: "Môn", kind: "identity", minWidth: 230, sticky: "left", priority: "required", hideable: false, render: (subject) => <><b>{subject.subject_code}</b><small>{subject.subject_name}</small></> },
+    { key: "scale", header: "Quy mô", kind: "number", width: 132, priority: "important", hideable: true, render: (subject) => <><b>{subject.class_count} lớp · {subject.student_count} SV</b><small>{subject.teacher_count} GV · {subject.campus_count} cơ sở</small></> },
+    { key: "cms", header: "Đồng bộ CMS", kind: "status", minWidth: 155, priority: "important", hideable: true, render: (subject) => <><span className={subject.cms_unsynced_count ? "status-pill warning" : "status-pill success"}>{subject.cms_synced_count}/{subject.student_count} đã match</span><small>{subject.cms_unsynced_count} cần xử lý</small></> },
+    { key: "course", header: "Course CMS", kind: "status", minWidth: 170, priority: "optional", hideable: true, render: (subject) => <><span className={statusClass(subject.course_mapping_status)}>{subject.course_mapping_label || subject.course_mapping_status}</span><small>{subject.openedx_course_id || subject.suggested_openedx_course_id || "N/A"}</small></> },
+    { key: "learning", header: "Học tập", kind: "progress", minWidth: 190, priority: "important", hideable: true, render: (subject) => <><b>{subject.learning_enrolled_count || 0}/{subject.student_count} ghi danh</b><small>{subject.learning_active_count || 0} đã học · TB {percentLabel(subject.learning_avg_progress_percent)}</small>{subject.learning_alerts?.length ? <small className="danger-text">{alertText(subject.learning_alerts)}</small> : null}</> },
+    { key: "actions", header: "Thao tác", kind: "actions", width: 126, sticky: "right", hideable: false, render: (subject) => <div className="row-actions"><Link className="btn small primary" href={buildSubjectClassesHref(subject, { termId, termName: selectedTerm?.term_name, branch, campus })}>Xem lớp</Link>{!["mapped", "already_mapped", "auto_mapped"].includes(String(subject.course_mapping_status || "").toLowerCase()) && <details className="row-action-menu"><summary className="btn small ghost" aria-label="Mở thêm thao tác">•••</summary><div className="row-action-popover"><button type="button" disabled={mappingSubjectId === subject.id} onClick={() => runAutoMap(subject)}>{mappingSubjectId === subject.id ? "Đang ghép..." : "Tự động ghép Course CMS"}</button></div></details>}</div> },
   ], [branch, campus, mappingSubjectId, page, pageSize, selectedTerm?.term_name, termId]);
 
   return (
@@ -448,39 +449,13 @@ function StudentManagementSubjectsContent() {
           </label>
         </div>
 
-        <div className="academic-summary-strip">
-          <div>
-            <span>Tổng số môn</span>
-            <b>{countLabel(summary.subject_count)}</b>
-            <small>{counterText(total, page, pageSize)}</small>
-          </div>
-          <div>
-            <span>Tổng số lớp</span>
-            <b>{countLabel(summary.class_count)}</b>
-            <small>Theo bộ lọc hiện tại</small>
-          </div>
-          <div>
-            <span>Tổng số sinh viên theo bộ lọc</span>
-            <b>{countLabel(summary.student_count)}</b>
-            <small>Theo hệ · học kỳ · cơ sở đang chọn</small>
-          </div>
-          <div>
-            <span>Course CMS đã ghép</span>
-            <b>
-              {countLabel(summary.course_mapped_count)}/
-              {countLabel(summary.subject_count)}
-            </b>
-            <small>
-              {countLabel(summary.course_missing_count)} môn chưa tìm thấy/ghép
-              Course CMS
-            </small>
-          </div>
-          <div>
-            <span>Cần kiểm tra</span>
-            <b>{countLabel(summary.alert_subject_count)}</b>
-            <small>Môn có vấn đề học tập cần kiểm tra</small>
-          </div>
-        </div>
+        <TrainingKpiStrip compact items={[
+          { key: 'subjects', label: 'Môn', value: countLabel(summary.subject_count), hint: counterText(total, page, pageSize) },
+          { key: 'classes', label: 'Lớp', value: countLabel(summary.class_count), hint: 'Theo bộ lọc hiện tại' },
+          { key: 'students', label: 'Sinh viên', value: countLabel(summary.student_count), hint: 'Không đếm theo trang' },
+          { key: 'course', label: 'Course CMS', value: `${countLabel(summary.course_mapped_count)}/${countLabel(summary.subject_count)}`, hint: `${countLabel(summary.course_missing_count)} môn chưa ghép`, tone: summary.course_missing_count > 0 ? 'warning' : 'success' },
+          { key: 'alerts', label: 'Cần kiểm tra', value: countLabel(summary.alert_subject_count), hint: 'Môn có cảnh báo học tập', tone: summary.alert_subject_count > 0 ? 'warning' : 'success' },
+        ]} />
 
         {bulkJobs.length ? (
           <InlineNotice

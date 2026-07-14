@@ -13,6 +13,13 @@ function difficultyLabel(value?: string | null) {
   return value || '—'
 }
 
+function reviewActionLabel(row: BankVersionQuestion) {
+  if (row.status === 'approved') return 'Xem lại'
+  if (row.status === 'rejected') return 'Duyệt lại'
+  if (row.status === 'draft_error') return 'Xử lý lỗi'
+  return 'Mở duyệt'
+}
+
 export function BankQuestionEnterpriseTable({
   rows,
   density,
@@ -25,6 +32,7 @@ export function BankQuestionEnterpriseTable({
   error,
   locked,
   canReview,
+  activeQuestionId,
   onDensityChange,
   onPageChange,
   onPageSizeChange,
@@ -32,7 +40,7 @@ export function BankQuestionEnterpriseTable({
   onTogglePage,
   onPreview,
   onEdit,
-  onApprove,
+  onApprove: _onApprove,
   onReject,
   onBackToReview,
   onRetry,
@@ -48,6 +56,7 @@ export function BankQuestionEnterpriseTable({
   error?: string
   locked?: boolean
   canReview?: boolean
+  activeQuestionId?: string | null
   onDensityChange: (density: TableDensity) => void
   onPageChange: (page: number) => void
   onPageSizeChange: (pageSize: number) => void
@@ -61,25 +70,55 @@ export function BankQuestionEnterpriseTable({
   onRetry?: () => void
 }) {
   const columns = useMemo<EnterpriseTableColumn<BankVersionQuestion>[]>(() => [
-    { key: 'stt', header: 'STT', width: 64, minWidth: 64, sticky: 'left', stickyOffset: 44, hideable: false, className: 'stt-cell', render: (_row, index) => (page - 1) * pageSize + index + 1 },
-    { key: 'question', header: 'Câu hỏi', minWidth: 380, sticky: 'left', stickyOffset: 108, hideable: false, render: (row) => <button className="bank-question-link-button" type="button" onClick={() => onPreview(row)}><b>{row.question_text || 'Câu hỏi chưa có nội dung'}</b><small>{row.question_family_id ? `Family: ${row.question_family_id}` : row.concept_title || 'Chưa gắn concept'}</small></button> },
-    { key: 'status', header: 'Trạng thái', minWidth: 145, hideable: true, render: (row) => <span className={statusClass(row.status)}>{statusLabel(row.status)}</span> },
-    { key: 'difficulty', header: 'Độ khó', minWidth: 120, hideable: true, render: (row) => difficultyLabel(row.difficulty) },
-    { key: 'concept', header: 'Concept', minWidth: 180, hideable: true, render: (row) => row.concept_title || '—' },
-    { key: 'answer', header: 'Đáp án', align: 'center', minWidth: 90, hideable: true, render: (row) => <b>{row.correct_answer || '—'}</b> },
-    { key: 'quality', header: 'Chất lượng', align: 'right', minWidth: 110, hideable: true, render: (row) => `${Math.round(Number(row.quality_score || 0) * 100)}%` },
-    { key: 'source', header: 'Nguồn', minWidth: 150, hideable: true, defaultVisible: false, render: (row) => row.source_type || (row.is_carry_over ? 'Clone kỳ trước' : 'AI/Bank') },
-    { key: 'actions', header: 'Thao tác', minWidth: 260, sticky: 'right', stickyOffset: 0, hideable: false, render: (row) => <div className="enterprise-row-actions">
-      <button className="btn small secondary" onClick={() => onPreview(row)}>Xem trước</button>
-      {!locked && canReview && row.status !== 'published' && <button className="btn small secondary" onClick={() => onEdit(row)}>Sửa</button>}
-      {!locked && canReview && ['pending_review', 'needs_review', 'rejected'].includes(row.status) && <button className="btn small success" onClick={() => onApprove(row)}>{row.status === 'rejected' ? 'Duyệt lại' : 'Duyệt'}</button>}
-      {!locked && canReview && !['rejected', 'published'].includes(row.status) && <button className="btn small danger" onClick={() => onReject(row)}>{row.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button>}
-      {!locked && canReview && row.status === 'approved' && <button className="btn small secondary" onClick={() => onBackToReview(row)}>Hoàn tác</button>}
-    </div> },
-  ], [canReview, locked, onApprove, onBackToReview, onEdit, onPreview, onReject, page, pageSize])
+    {
+      key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false,
+      render: (_row, index) => (page - 1) * pageSize + index + 1,
+    },
+    {
+      key: 'question', header: 'Câu hỏi', kind: 'identity', minWidth: 390, priority: 'required', hideable: false, truncateLines: 2,
+      render: (row) => <button className="bank-question-link-button" type="button" onClick={() => onPreview(row)} aria-label={`Mở duyệt câu hỏi: ${row.question_text || 'chưa có nội dung'}`}>
+        <b>{row.question_text || 'Câu hỏi chưa có nội dung'}</b>
+        <small>{row.question_family_id ? `Family: ${row.question_family_id}` : row.concept_title || 'Chưa gắn concept'}</small>
+      </button>,
+    },
+    {
+      key: 'status', header: 'Trạng thái', kind: 'status', width: 116, priority: 'important', hideable: true,
+      render: (row) => <span className={statusClass(row.status)}>{statusLabel(row.status)}</span>,
+    },
+    {
+      key: 'difficulty', header: 'Độ khó', kind: 'status', width: 90, priority: 'important', hideable: true,
+      render: (row) => difficultyLabel(row.difficulty),
+    },
+    {
+      key: 'quality', header: 'Chất lượng', kind: 'number', width: 88, priority: 'important', align: 'center', hideable: true,
+      render: (row) => <span className={`quality-score ${Number(row.quality_score || 0) < .6 ? 'low' : ''}`}>{Math.round(Number(row.quality_score || 0) * 100)}%</span>,
+    },
+    {
+      key: 'concept', header: 'Concept', kind: 'text', minWidth: 150, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2,
+      render: (row) => row.concept_title || '—',
+    },
+    {
+      key: 'source', header: 'Nguồn', kind: 'text', minWidth: 130, priority: 'optional', hideable: true, defaultVisible: false,
+      render: (row) => row.source_type || (row.is_carry_over ? 'Clone kỳ trước' : 'AI/Bank'),
+    },
+    {
+      key: 'actions', header: 'Thao tác', kind: 'actions', width: 126, sticky: 'right', hideable: false,
+      render: (row) => <div className="question-row-actions question-row-actions-review-first">
+        <button className="btn small" type="button" onClick={() => onPreview(row)}>{reviewActionLabel(row)}</button>
+        {!locked && canReview && row.status !== 'published' && <details className="row-action-menu">
+          <summary className="btn small ghost" aria-label="Mở thêm thao tác">•••</summary>
+          <div className="row-action-popover">
+            <button type="button" onClick={() => onEdit(row)}>Sửa câu hỏi</button>
+            {!['rejected', 'published'].includes(row.status) && <button type="button" className="danger-text" onClick={() => onReject(row)}>{row.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Từ chối câu'}</button>}
+            {row.status === 'approved' && <button type="button" onClick={() => onBackToReview(row)}>Đưa về chờ duyệt</button>}
+          </div>
+        </details>}
+      </div>,
+    },
+  ], [canReview, locked, onBackToReview, onEdit, onPreview, onReject, page, pageSize])
 
   return <EnterpriseDataTable
-    tableId="bank-chapter-questions"
+    tableId="bank-chapter-questions-v3"
     caption="Danh sách câu hỏi"
     rows={rows}
     columns={columns}
@@ -97,6 +136,7 @@ export function BankQuestionEnterpriseTable({
     onPageChange={onPageChange}
     onPageSizeChange={onPageSizeChange}
     label="câu hỏi"
+    getRowClassName={(row) => row.id === activeQuestionId ? 'is-active-review-row' : ''}
     emptyTitle="Không có câu hỏi phù hợp"
     emptyDescription="Xóa bộ lọc, import câu hỏi hoặc sinh câu hỏi từ tài liệu để tiếp tục."
   />

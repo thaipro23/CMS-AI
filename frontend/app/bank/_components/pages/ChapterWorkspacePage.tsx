@@ -679,6 +679,48 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     setPreviewQuestion(detail)
   }
 
+
+  const moveQuestionPreview = async (direction: -1 | 1) => {
+    if (!previewQuestion || !questions.length) return
+    const currentIndex = questions.findIndex((item) => item.id === previewQuestion.id)
+    const nextIndex = currentIndex < 0 ? 0 : Math.min(Math.max(currentIndex + direction, 0), questions.length - 1)
+    const next = questions[nextIndex]
+    if (next && next.id !== previewQuestion.id) await openQuestionPreview(next)
+  }
+
+  const approvePreviewQuestion = async () => {
+    if (!selectedBankVersion || !previewQuestion || chapterPublished || !canReviewQuestions) return
+    const currentIndex = questions.findIndex((item) => item.id === previewQuestion.id)
+    const next = questions[currentIndex + 1] || questions[currentIndex - 1] || null
+    await run(async () => {
+      await reviewBankQuestion(headers, selectedBankVersion.id, previewQuestion.id, { action: 'approve', note: 'Duyệt trong panel xem câu hỏi' })
+    }, 'Đã duyệt câu hỏi', refreshCurrent)
+    if (next && next.id !== previewQuestion.id) await openQuestionPreview(next)
+    else setPreviewQuestion(null)
+  }
+
+  useEffect(() => {
+    if (!previewQuestion) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      if (event.key === 'Escape') { event.preventDefault(); setPreviewQuestion(null); return }
+      if (event.key.toLowerCase() === 'j') { event.preventDefault(); moveQuestionPreview(1).catch(() => null); return }
+      if (event.key.toLowerCase() === 'k') { event.preventDefault(); moveQuestionPreview(-1).catch(() => null); return }
+      if (!chapterPublished && canReviewQuestions && event.key.toLowerCase() === 'a' && ['pending_review', 'needs_review', 'rejected'].includes(previewQuestion.status)) {
+        event.preventDefault(); approvePreviewQuestion().catch(() => null); return
+      }
+      if (!chapterPublished && canReviewQuestions && event.key.toLowerCase() === 'e') {
+        event.preventDefault(); const item = previewQuestion; setPreviewQuestion(null); startEditQuestion(item).catch(() => null); return
+      }
+      if (!chapterPublished && canReviewQuestions && event.key.toLowerCase() === 'r' && !['rejected', 'published'].includes(previewQuestion.status)) {
+        event.preventDefault(); const item = previewQuestion; setPreviewQuestion(null); openRejectQuestion(item).catch(() => null)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [previewQuestion, questions, selectedBankVersion?.id, chapterPublished, canReviewQuestions]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const toggleQuestion = (question: BankVersionQuestion) => {
     setSelectAllFiltered(false)
     setSelectedQuestionIds((current) => {
@@ -844,7 +886,6 @@ ${chunk.content}`).join('\n\n')
     {activeOperation ? <ChapterOperationStatus operation={activeOperation} /> : null}
     {chapterPublished ? <div className="alert success"><b>Bài đã publish.</b> Các thao tác sửa tài liệu, tạo câu hỏi, duyệt/bỏ câu, kiểm tra thay đổi và chốt lại đã được khóa. Muốn thay đổi, hãy clone/tạo version mới.</div> : null}
     {!chapterPublished && diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
-    {!chapterPublished && unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
 
     <section className="card chapter-command-bar">
       <div>
@@ -895,13 +936,9 @@ ${chunk.content}`).join('\n\n')
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">
-        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Bảng phân trang phía server, lưu bộ lọc trong URL và hỗ trợ chọn theo trang hoặc toàn bộ kết quả lọc.</p></div><div className="button-row no-margin">
+        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Chọn một câu để xem đầy đủ đáp án, nguồn và thao tác duyệt trong panel bên phải.</p></div><div className="button-row no-margin">
           {!chapterPublished && canEditQuestions ? <button className="btn secondary" onClick={() => setImportOpen(true)}>Import Excel</button> : null}
           <button className="btn secondary" disabled={isActionBusy('question_export')} onClick={saveQuestionExport}>{isActionBusy('question_export') ? <BusyLabel text="Đang xuất" /> : 'Xuất CSV'}</button>
-          {!chapterPublished && canReviewQuestions ? <button className="btn secondary chapter-action-button review" disabled={isActionBusy('bulk_approve') || stats.pending === 0} onClick={() => runAction('bulk_approve', async () => {
-            if (!selectedBankVersion) return
-            await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
-          }, 'Hệ thống đã duyệt hết câu chờ.', refreshCurrent, 'Không duyệt được câu hỏi. Vui lòng thử lại.')}>{isActionBusy('bulk_approve') ? <BusyLabel text="Đang duyệt" /> : 'Duyệt hết câu chờ'}</button> : null}
         </div></div>
         <div className="question-filter-bar enterprise-filter-bar">
           <label>Tìm câu hỏi<input className="input" value={questionSearchDraft} onChange={(event) => setQuestionSearchDraft(event.target.value)} placeholder="Nội dung, concept hoặc family" /></label>
@@ -911,7 +948,7 @@ ${chunk.content}`).join('\n\n')
           <button className="btn secondary" type="button" onClick={() => { setQuestionSearchDraft(''); updateQuestionTableState({ q: '', status: 'all', difficulty: 'all', sort: 'needs_review', page: 1 }, { resetPage: false }) }}>Xóa lọc</button>
           <span className="filter-result-count">{questionTotal.toLocaleString('vi-VN')} kết quả</span>
         </div>
-        {!chapterPublished && canReviewQuestions && (selectedQuestionCount > 0 || questions.length > 0) ? <div className="bank-batch-action-bar" role="region" aria-label="Thao tác hàng loạt câu hỏi">
+        {!chapterPublished && canReviewQuestions && selectedQuestionCount > 0 ? <div className="bank-batch-action-bar" role="region" aria-label="Thao tác hàng loạt câu hỏi">
           <div><b>{selectAllFiltered ? `Đã chọn toàn bộ ${questionTotal.toLocaleString('vi-VN')} kết quả lọc` : `Đã chọn ${selectedQuestionIds.size} câu trên trang`}</b><small>{selectAllFiltered ? 'Hành động áp dụng theo bộ lọc hiện tại.' : 'Checkbox chọn tất cả chỉ chọn các dòng trên trang hiện tại.'}</small></div>
           <div className="button-row no-margin">
             {questionTotal > questions.length && <button className={selectAllFiltered ? 'btn small' : 'btn small secondary'} onClick={() => { setSelectAllFiltered((value) => !value); setSelectedQuestionIds(new Set()) }}>{selectAllFiltered ? 'Bỏ chọn toàn bộ kết quả lọc' : `Chọn toàn bộ ${questionTotal.toLocaleString('vi-VN')} kết quả lọc`}</button>}
@@ -933,6 +970,7 @@ ${chunk.content}`).join('\n\n')
           error={questionError}
           locked={chapterPublished}
           canReview={canReviewQuestions}
+          activeQuestionId={previewQuestion?.id}
           onDensityChange={(density) => updateQuestionTableState({ density }, { resetPage: false })}
           onPageChange={(page) => updateQuestionTableState({ page }, { resetPage: false })}
           onPageSizeChange={(pageSize) => updateQuestionTableState({ pageSize, page: 1 }, { resetPage: false })}
@@ -1069,18 +1107,43 @@ ${chunk.content}`).join('\n\n')
       onQueued={(text) => { setMessage(text); setPopupMessage({ type: 'success', text }); loadDetail(selectedBankVersion.id).catch(() => null) }}
     /> : null}
 
-    <Modal open={Boolean(previewQuestion)} title="Xem trước câu hỏi" onClose={() => setPreviewQuestion(null)} wide>
-      {previewQuestion ? <div className="bank-question-preview">
-        <div className="question-main-head"><span className={statusClass(previewQuestion.status)}>{statusLabel(previewQuestion.status)}</span><span className="soft-tag">{previewQuestion.difficulty || '—'}</span><span className="soft-tag">Chất lượng {Math.round(Number(previewQuestion.quality_score || 0) * 100)}%</span></div>
-        <div className="question-prompt">{previewQuestion.question_text}</div>
-        <div className="answer-grid">{bankAnswerRows.map(([letter, field]) => <div key={letter} className={previewQuestion.correct_answer === letter ? 'answer-option correct' : 'answer-option'}><span className="answer-letter">{letter}</span><span>{previewQuestion[field] || '—'}</span></div>)}</div>
-        <div className="question-meta-row"><span>Concept: <b>{previewQuestion.concept_title || 'Chưa gắn'}</b></span>{previewQuestion.question_family_id ? <span>Family: <code>{previewQuestion.question_family_id}</code></span> : null}{previewQuestion.source_type ? <span>Nguồn: <b>{previewQuestion.source_type}</b></span> : null}</div>
-        {previewQuestion.explanation ? <div className="question-explanation"><b>Giải thích:</b> {previewQuestion.explanation}</div> : null}
-        {previewQuestion.source_evidence ? <div className="question-explanation"><b>Bằng chứng nguồn:</b> {previewQuestion.source_evidence}</div> : null}
-        {previewQuestion.status === 'draft_error' ? <div className="draft-error-reason"><b>Lý do lỗi:</b> {bankQuestionErrorMessage(previewQuestion) || 'Không rõ'}</div> : null}
-        <div className="modal-actions"><button className="btn secondary" onClick={() => setPreviewQuestion(null)}>Đóng</button>{!chapterPublished && canReviewQuestions && previewQuestion.status !== 'published' ? <button className="btn" onClick={() => { setPreviewQuestion(null); startEditQuestion(previewQuestion) }}>Sửa câu hỏi</button> : null}</div>
-      </div> : null}
-    </Modal>
+    {previewQuestion ? <div className="question-review-overlay" role="presentation" onMouseDown={() => setPreviewQuestion(null)}>
+      <aside className="question-review-drawer" role="dialog" aria-modal="true" aria-label="Xem trước câu hỏi và duyệt" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="question-review-drawer__header">
+          <div><span className="eyebrow">Duyệt câu hỏi</span><h2>Câu {(questions.findIndex((item) => item.id === previewQuestion.id) + 1) || '—'} / {questions.length}</h2></div>
+          <button className="enterprise-icon-button" type="button" aria-label="Đóng panel duyệt" onClick={() => setPreviewQuestion(null)}>×</button>
+        </header>
+        <div className="question-review-drawer__meta">
+          <span className={statusClass(previewQuestion.status)}>{statusLabel(previewQuestion.status)}</span>
+          <span className="soft-tag">{previewQuestion.difficulty === 'easy' ? 'Dễ' : previewQuestion.difficulty === 'hard' ? 'Khó' : previewQuestion.difficulty === 'medium' ? 'Trung bình' : '—'}</span>
+          <span className="soft-tag">Quality {Math.round(Number(previewQuestion.quality_score || 0) * 100)}%</span>
+        </div>
+        <div className="question-review-drawer__body">
+          <section className="question-review-block"><span className="question-review-label">Nội dung câu hỏi</span><div className="question-prompt">{previewQuestion.question_text || 'Câu hỏi chưa có nội dung'}</div></section>
+          <section className="question-review-block"><span className="question-review-label">Các lựa chọn</span><div className="answer-grid review-answer-grid">{bankAnswerRows.map(([letter, field]) => <div key={letter} className={previewQuestion.correct_answer === letter ? 'answer-option correct' : 'answer-option'}><span className="answer-letter">{letter}</span><span>{previewQuestion[field] || '—'}</span></div>)}</div></section>
+          {previewQuestion.explanation ? <section className="question-review-block"><span className="question-review-label">Giải thích</span><p>{previewQuestion.explanation}</p></section> : null}
+          {previewQuestion.source_evidence ? <section className="question-review-block"><span className="question-review-label">Bằng chứng nguồn</span><p>{previewQuestion.source_evidence}</p></section> : null}
+          <section className="question-review-metadata">
+            <div><span>Concept</span><b>{previewQuestion.concept_title || 'Chưa gắn'}</b></div>
+            <div><span>Family</span><b>{previewQuestion.question_family_id || '—'}</b></div>
+            <div><span>Nguồn</span><b>{previewQuestion.source_type || (previewQuestion.is_carry_over ? 'Clone kỳ trước' : 'AI/Bank')}</b></div>
+          </section>
+          {previewQuestion.status === 'draft_error' ? <div className="draft-error-reason"><b>Lý do lỗi:</b> {bankQuestionErrorMessage(previewQuestion) || 'Không rõ'}</div> : null}
+        </div>
+        <footer className="question-review-drawer__footer">
+          <div className="question-review-navigation">
+            <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) <= 0} onClick={() => moveQuestionPreview(-1)}>← Câu trước</button>
+            <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) >= questions.length - 1} onClick={() => moveQuestionPreview(1)}>Câu sau →</button>
+          </div>
+          {!chapterPublished && canReviewQuestions && previewQuestion.status !== 'published' ? <div className="question-review-primary-actions">
+            <button className="btn secondary" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); startEditQuestion(item) }}>Sửa</button>
+            {!['rejected', 'published'].includes(previewQuestion.status) ? <button className="btn danger secondary-danger" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); openRejectQuestion(item) }}>Từ chối</button> : null}
+            {['pending_review', 'needs_review', 'rejected'].includes(previewQuestion.status) ? <button className="btn success" type="button" onClick={approvePreviewQuestion}>{previewQuestion.status === 'rejected' ? 'Duyệt lại' : 'Duyệt câu'}</button> : null}
+          </div> : null}
+          <small className="question-review-shortcuts">Phím tắt: J/K chuyển câu · A duyệt · R từ chối · E sửa · Esc đóng</small>
+        </footer>
+      </aside>
+    </div> : null}
 
     <Modal open={Boolean(rejectingQuestion)} title={rejectingQuestion?.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ câu hỏi'} onClose={() => { setRejectingQuestion(null); setRejectReason('') }}>
       <div className="mini-form">

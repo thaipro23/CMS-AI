@@ -13,6 +13,7 @@ export type AcademicTableState = {
   termId: string
   branch: string
   campus: string
+  blockId: string
 }
 
 const PAGE_SIZES = new Set([20, 50, 100])
@@ -41,8 +42,9 @@ export function useAcademicTableState(defaults: Partial<AcademicTableState> = {}
       termId: searchParams.get('term_id') ?? defaults.termId ?? '',
       branch: searchParams.get('branch') ?? defaults.branch ?? 'poly',
       campus: rawCampus === 'all' ? '' : rawCampus,
+      blockId: searchParams.get('block_id') ?? defaults.blockId ?? '',
     }
-  }, [defaults.branch, defaults.campus, defaults.density, defaults.page, defaults.pageSize, defaults.q, defaults.status, defaults.termId, searchParams])
+  }, [defaults.branch, defaults.campus, defaults.density, defaults.page, defaults.pageSize, defaults.q, defaults.status, defaults.termId, defaults.blockId, searchParams])
 
   const update = useCallback((patch: Partial<AcademicTableState>, options: { replace?: boolean; resetPage?: boolean } = {}) => {
     const next = new URLSearchParams(searchParams.toString())
@@ -58,6 +60,7 @@ export function useAcademicTableState(defaults: Partial<AcademicTableState> = {}
       ['term_id', merged.termId, ''],
       ['branch', merged.branch, 'poly'],
       ['campus', merged.campus, ''],
+      ['block_id', merged.blockId, ''],
     ]
     next.delete('search')
     for (const [key, value, defaultValue] of values) {

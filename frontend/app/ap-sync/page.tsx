@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions, syncAcademicCampusesFromAp } from '../../lib/api'
 import { PageHeader } from '../../components/layout/PageHeader'
+import { OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
+import { StatusBadge } from '../../components/ui/StatusBadge'
 import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult, AcademicSyncRun } from '../../types'
 
 type BranchCode = 'poly' | 'ptcd'
@@ -89,7 +91,7 @@ export default function ApSyncPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
-  const [termName, setTermName] = useState('Summer 2026')
+  const [termName, setTermName] = useState('')
   const [selectedBranch, setSelectedBranch] = useState<BranchCode>('poly')
   const [optionsByBranch, setOptionsByBranch] = useState<BranchState>({ poly: EMPTY_OPTIONS, ptcd: EMPTY_OPTIONS })
   const [loadingOptions, setLoadingOptions] = useState(false)
@@ -260,94 +262,48 @@ export default function ApSyncPage() {
     <PageHeader
       eyebrow="Vận hành hệ thống"
       title="Đồng bộ AP"
-      description="Đồng bộ dữ liệu phân công đào tạo theo kỳ. Tác vụ chạy nền và tiếp tục hoạt động khi người dùng tải lại trang."
-      secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới'}</button>}
-      primaryAction={canManageAcademicOps ? <button className="btn" type="button" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang đồng bộ...' : 'Đồng bộ cơ sở'}</button> : undefined}
+      description="Chọn học kỳ và phạm vi, kiểm tra kế hoạch rồi chạy job nền. Tiến trình được lưu trên backend và không mất khi F5."
+      secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
+      primaryAction={canManageAcademicOps ? <button className="btn" type="button" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang cập nhật...' : 'Cập nhật danh mục cơ sở'}</button> : undefined}
     />
 
     {message ? <div className="alert">{message}</div> : null}
 
-    {activeRuns.length ? <section className="card sync-job-status persistent-sync-job-status" role="status" aria-live="polite" aria-busy="true">
-      <div className="section-head">
-        <div>
-          <h2>Hệ thống đang đồng bộ AP</h2>
-          <p>Job chạy ở nền. F5 hoặc mở máy khác vẫn đọc lại trạng thái từ backend.</p>
-        </div>
-        <button className="btn secondary small" type="button" onClick={() => refreshActiveRuns().catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được trạng thái job'))}>Làm mới tiến trình</button>
-      </div>
-      <div className="operation-stack">
-        {activeRuns.map(({ branch, run }) => {
-          const progress = runProgress(run)
-          return <div className="operation-row" key={run.id}>
-            <div>
-              <b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b>
-              <p>{progress.label}</p>
-              <small>Run ID {run.id.slice(0, 8)} · {run.status}</small>
-            </div>
-            <div className="operation-progress">
-              <span>{progress.percent}%</span>
-              <progress value={progress.current} max={progress.total} aria-label="Tiến độ đồng bộ AP" />
-            </div>
-          </div>
-        })}
-      </div>
-    </section> : null}
+    <OperationsKpiStrip items={[
+      { label: 'Học kỳ', value: termName || 'Chưa chọn', hint: 'Phạm vi đồng bộ hiện tại' },
+      { label: 'Cơ sở khả dụng', value: totalCampuses, hint: 'Poly và PTCĐ', tone: totalCampuses ? 'success' : 'warning' },
+      { label: 'Job đang chạy', value: activeRuns.length, hint: activeRuns.length ? 'Không tạo job trùng' : 'Sẵn sàng chạy', tone: activeRuns.length ? 'info' : 'neutral' },
+      { label: 'Kết quả gần nhất', value: lastResults.length, hint: dryRun ? 'Chế độ kiểm tra kế hoạch' : 'Chế độ ghi dữ liệu' },
+    ]} />
 
-    <section className="card">
-      <div className="section-head">
-        <div>
-          <h2>Thiết lập kỳ đồng bộ</h2>
-          <p>Thông thường mỗi kỳ chỉ cần chạy một vài lần: đồng bộ toàn bộ hoặc đồng bộ riêng từng hệ.</p>
+    <div className="ap-sync-workspace">
+      <WorkspaceSection title="Kế hoạch đồng bộ" description="Thông thường chỉ chạy vài lần mỗi học kỳ. Hãy kiểm tra kế hoạch trước khi ghi dữ liệu nếu phạm vi lớn." className="ap-sync-plan">
+        <div className="settings-form-grid">
+          <label>Học kỳ<select className="input" value={termName} onChange={(event) => setTermName(event.target.value)} disabled={!termOptions.length}>{termOptions.length ? termOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">Chưa có học kỳ</option>}</select></label>
+          <label>Hệ khi chạy riêng<select className="input" value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value as BranchCode)}>{BRANCHES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         </div>
-      </div>
-      <div className="filter-grid academic-filter-grid">
-        <label>Kỳ
-          <select className="input" value={termName} onChange={(event) => setTermName(event.target.value)} disabled={!termOptions.length}>
-            {termOptions.length ? termOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">Chưa có học kỳ. Tạo ở trang Học kỳ trước.</option>}
-          </select>
-        </label>
-        <label>Hệ cần đồng bộ riêng
-          <select className="input" value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value as BranchCode)}>
-            {BRANCHES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>
-        </label>
-        <label className="check-row align-end">
-          <input type="checkbox" checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} />
-          Chỉ kiểm tra kế hoạch, chưa ghi dữ liệu
-        </label>
-      </div>
-      {canManageAcademicOps && <div className="toolbar-actions ap-sync-actions ap-sync-actions-primary">
-        <button className="btn" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>
-          {running ? 'Đang chạy...' : 'Đồng bộ tất cả'}
-        </button>
-        <button className="btn secondary" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>
-          {running ? 'Đang chạy...' : `Đồng bộ theo hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label || ''}`}
-        </button>
-      </div>}
-      {!totalCampuses ? <div className="alert soft-alert">Chưa có cơ sở đang bật. Bấm Đồng bộ danh sách cơ sở để lấy từ AP CMS get-campus và lưu vào /premises, hoặc vào trang Cơ sở để thêm thủ công.</div> : null}
-    </section>
-
-    {lastResults.length ? <section className="card">
-      <div className="section-head">
-        <div>
-          <h2>Kết quả gần nhất</h2>
-          <p>{lastResults.length} hệ đã xử lý</p>
+        <label className="check-row"><input type="checkbox" checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} /> Chỉ kiểm tra kế hoạch, chưa ghi dữ liệu</label>
+        <div className="ap-sync-summary">
+          <div><span>Poly</span><b>{optionsByBranch.poly.campuses?.length || 0}</b><small>cơ sở khả dụng</small></div>
+          <div><span>PTCĐ</span><b>{optionsByBranch.ptcd.campuses?.length || 0}</b><small>cơ sở khả dụng</small></div>
+          <div><span>Phạm vi riêng</span><b>{BRANCHES.find((item) => item.value === selectedBranch)?.label}</b><small>{currentBranchOptions.campuses?.length || 0} cơ sở</small></div>
         </div>
-      </div>
-      <div className="table-wrap">
-        <table className="data-table compact-table">
-          <thead><tr><th>STT</th><th>Hệ</th><th>Trạng thái</th><th>Kết quả</th><th>Run ID</th></tr></thead>
-          <tbody>{lastResults.map(({ branch, result }, index) => <tr key={`${branch}-${result.sync_run?.id}`}>
-            <td className="stt-cell">{index + 1}</td>
-            <td><b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b></td>
-            <td><span className={result.sync_run?.status === 'completed' ? 'status-pill success' : 'status-pill danger'}>{result.sync_run?.status || 'unknown'}</span></td>
-            <td>{summarizeCounters(result)}{result.sync_run?.error_message ? <small>{result.sync_run.error_message}</small> : null}</td>
-            <td><small>{result.sync_run?.id || '—'}</small></td>
-          </tr>)}</tbody>
-        </table>
-      </div>
-    </section> : null}
+        {!totalCampuses ? <div className="alert warning">Chưa có cơ sở đang bật. Cập nhật danh mục cơ sở từ AP hoặc thêm thủ công tại trang Cơ sở.</div> : null}
+        {canManageAcademicOps ? <div className="ap-sync-actions">
+          <button className="btn" type="button" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || totalCampuses === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>{dryRun ? 'Kiểm tra toàn bộ' : 'Đồng bộ toàn bộ'}</button>
+          <button className="btn secondary" type="button" disabled={running || loadingOptions || syncingCampuses || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>{dryRun ? `Kiểm tra hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}` : `Đồng bộ hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}`}</button>
+        </div> : <div className="alert warning">Bạn không có quyền chạy đồng bộ AP.</div>}
+      </WorkspaceSection>
 
-    {syncConfirm ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => !running && setSyncConfirm(null)}><div className="card bank-modal academic-confirm-modal" onMouseDown={(event) => event.stopPropagation()}><div className="bank-modal-head"><div><div className="eyebrow">Xác nhận đồng bộ</div><h2>{dryRun ? 'Kiểm tra kế hoạch AP' : 'Chạy đồng bộ AP'}</h2></div><button className="btn small secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Đóng</button></div><div className="bank-modal-body academic-confirm-body"><p>{dryRun ? 'Hệ thống sẽ chỉ kiểm tra kế hoạch, chưa ghi dữ liệu vào AI Server.' : 'Hệ thống sẽ gọi AP và ghi dữ liệu lớp, giảng viên, sinh viên vào AI Server.'}</p><div className="academic-confirm-summary"><span>Kỳ</span><b>{termName}</b><span>Phạm vi</span><b>{syncConfirm.label}</b><span>Số hệ</span><b>{syncConfirm.runnable.length}</b><span>Số cơ sở</span><b>{syncConfirm.campusCount}</b></div><div className="modal-actions"><button className="btn" disabled={running} onClick={executeConfirmedSync}>{dryRun ? 'Xác nhận kiểm tra' : 'Xác nhận đồng bộ'}</button><button className="btn secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Hủy</button></div></div></div></div> : null}
+      <WorkspaceSection title="Tiến trình & kết quả" description="Các job đang chạy và kết quả gần nhất theo hệ." actions={activeRuns.length ? <button className="btn small secondary" type="button" onClick={() => refreshActiveRuns().catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được trạng thái job'))}>Làm mới</button> : undefined} className="ap-sync-recent">
+        <div className="operation-compact-list" aria-live="polite">
+          {activeRuns.map(({ branch, run }) => { const progress = runProgress(run); return <div className="operation-compact-item" key={run.id}><header><b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b><StatusBadge status={run.status} /></header><div className="job-progress table-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent}><i style={{ width: `${progress.percent}%` }} /></div><p>{progress.percent}% · {progress.label}</p><small>Run {run.id.slice(0, 8)}</small></div> })}
+          {lastResults.map(({ branch, result }) => <div className="operation-compact-item" key={`${branch}-${result.sync_run?.id}`}><header><b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b><StatusBadge status={result.sync_run?.status || 'unknown'} /></header><p>{summarizeCounters(result)}</p>{result.sync_run?.error_message ? <small className="table-error-text">{result.sync_run.error_message}</small> : <small>Run {result.sync_run?.id?.slice(0, 8) || '—'}</small>}</div>)}
+          {!activeRuns.length && !lastResults.length ? <div className="empty-state small-empty">Chưa có job trong phiên này. Sau khi bắt đầu, tiến trình sẽ xuất hiện tại đây và trong Tác vụ nền.</div> : null}
+        </div>
+      </WorkspaceSection>
+    </div>
+
+    {syncConfirm ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => !running && setSyncConfirm(null)}><div className="card bank-modal academic-confirm-modal" onMouseDown={(event) => event.stopPropagation()}><div className="bank-modal-head"><div><div className="eyebrow">Xác nhận phạm vi</div><h2>{dryRun ? 'Kiểm tra kế hoạch AP' : 'Chạy đồng bộ AP'}</h2></div><button className="btn small secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Đóng</button></div><div className="bank-modal-body academic-confirm-body"><p>{dryRun ? 'Hệ thống chỉ kiểm tra kế hoạch và không ghi dữ liệu.' : 'Hệ thống sẽ gọi AP và ghi dữ liệu lớp, giảng viên, sinh viên vào AI Server.'}</p><div className="academic-confirm-summary"><span>Học kỳ</span><b>{termName}</b><span>Phạm vi</span><b>{syncConfirm.label}</b><span>Số hệ</span><b>{syncConfirm.runnable.length}</b><span>Số cơ sở</span><b>{syncConfirm.campusCount}</b></div><div className="modal-actions"><button className="btn" disabled={running} onClick={executeConfirmedSync}>{dryRun ? 'Xác nhận kiểm tra' : 'Xác nhận đồng bộ'}</button><button className="btn secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Hủy</button></div></div></div></div> : null}
   </div>
 }

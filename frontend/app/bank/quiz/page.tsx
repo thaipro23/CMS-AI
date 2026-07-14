@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { PageHeader } from '../../../components/layout/PageHeader'
+import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { CourseQuizInstance, QuizAutoMapResult, QuizChapterAction, QuizChapterPlanItem } from '../../../types'
 import {
   applyQuizAutoMap,
@@ -386,176 +387,158 @@ export default function BankQuizPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId])
 
+  const mappingColumns = useMemo<EnterpriseTableColumn<EffectiveQuizMapping>[]>(() => [
+    {
+      key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false,
+      render: (_row, index) => index + 1,
+    },
+    {
+      key: 'chapter', header: 'Bài trong ngân hàng', kind: 'identity', minWidth: 230, priority: 'required', hideable: false,
+      render: (item) => <div className="quiz-map-identity"><b>{item.chapter_title}</b><small>{titleForItem(item)}</small></div>,
+    },
+    {
+      key: 'cms_mapping', header: 'Map Course CMS', kind: 'identity', minWidth: 290, priority: 'required', hideable: false, truncateLines: 2,
+      render: (item) => <div className="quiz-map-target">
+        {item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small>{item.openedx_section_id}</small></> : <span className={classNames('status', item.effectiveRequiresQuiz ? 'danger' : 'pending')}>Chưa tìm thấy Section</span>}
+        {item.release_code ? <small><strong>Release:</strong> {item.release_code}{item.openedx_library_key ? ` · ${item.openedx_library_key}` : ''}</small> : <small>{item.effectiveRequiresQuiz ? 'Chưa có Release published' : 'Không yêu cầu Release'}</small>}
+      </div>,
+    },
+    {
+      key: 'action', header: 'Tạo gì', kind: 'status', width: 172, priority: 'required', hideable: false,
+      render: (item) => <select className="input compact-select" value={item.action === 'assignment' ? 'skip' : item.action} disabled={busy || Boolean(creatingKey)} onChange={(event) => {
+        const next = event.target.value as QuizChapterAction
+        setChapterActions((current) => ({ ...current, [item.chapter_id]: next }))
+      }} aria-label={`Chọn hành động cho ${item.chapter_title}`}>
+        <option value="quiz">Tạo Quiz</option>
+        <option value="final_test">Tạo Final test</option>
+        <option value="skip">Không tạo</option>
+      </select>,
+    },
+    {
+      key: 'readiness', header: 'Điều kiện', kind: 'status', width: 168, priority: 'important', hideable: true,
+      render: (item) => <div className="quiz-requirement-stack"><span className={classNames('status', productionStatusClass(item))}>{item.effectiveRequiresQuiz ? ((item as any).status_label || actionStatusText(item)) : 'Không tạo'}</span>{item.effectiveRequiresQuiz && ((item as any).missing_requirements || []).length ? <small>{((item as any).missing_requirements || []).map(missingRequirementLabel).join(' · ')}</small> : <small>{item.effectiveRequiresQuiz ? 'Đủ Section + Release' : 'Không yêu cầu'}</small>}</div>,
+    },
+    {
+      key: 'match', header: 'Khớp', kind: 'number', width: 86, priority: 'optional', hideable: true, defaultVisible: false,
+      render: (item) => <span title={item.match_reason || ''}>{percent(item.match_score)}</span>,
+    },
+    {
+      key: 'actions', header: 'Thao tác', kind: 'actions', width: 126, sticky: 'right', hideable: false,
+      render: (item) => item.effectiveRequiresQuiz ? <button className="btn small" disabled={!item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final' : 'Tạo Quiz'}</button> : <span className="muted">Bỏ qua</span>,
+    },
+  ], [busy, creatingKey, titleForItem])
+
+  const historyColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_row, index) => index + 1 },
+    { key: 'quiz', header: 'Bài kiểm tra', kind: 'identity', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="quiz-history-identity"><b>{item.metadata_json?.quiz_title || 'Bài kiểm tra Open edX'}</b><small>{item.openedx_unit_node_id || item.bank_release_id}</small></div> },
+    { key: 'type', header: 'Loại', kind: 'status', width: 108, priority: 'important', hideable: true, render: (item) => item.metadata_json?.assessment_type === 'final_test' ? <span className="status warning">Final test</span> : <span className="status pending">Quiz</span> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 122, priority: 'important', hideable: true, render: (item) => <span className={classNames('status', item.status === 'created' || item.status === 'published' ? 'success' : item.status === 'rolled_back' || item.status === 'failed' ? 'danger' : 'pending')}>{item.status}</span> },
+    { key: 'timer', header: 'Timer', kind: 'number', width: 94, priority: 'optional', hideable: true, render: (item) => item.metadata_json?.timer_config?.custom_timer_enabled ? `${item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút` : 'Tắt' },
+    { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 138, priority: 'important', hideable: true, render: (item) => formatVNDateTime(item.created_at) },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 116, hideable: false, render: (item) => <button className="btn small secondary" disabled={busy || item.status === 'rolled_back'} onClick={async () => {
+      setBusy(true)
+      try {
+        const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử bài kiểm tra' })
+        setMessage(inlineMessageFromBackend(result, result.message || 'Đã khôi phục bài kiểm tra.', result.ok ? 'success' : 'warning'))
+        await loadHistory(courseId.trim())
+      } catch (error) {
+        setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Khôi phục thất bại' })
+      } finally {
+        setBusy(false)
+      }
+    }}>Khôi phục</button> },
+  ], [busy, courseId, headers])
+
   if (!can('publish_questions')) return <div className="card empty-state">Bạn không có quyền map khóa học hoặc tạo quiz.</div>
 
-  return <div className="page-stack bank-quiz-page quiz-workbench">
+  const workflowStep = !autoMap ? 1 : !applied ? 2 : 3
+
+  return <div className="page-stack bank-quiz-page quiz-creation-workbench">
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Tạo Quiz trên Open edX"
-      description="Map khóa học và chọn bài cần tạo Quiz, Final test hoặc bỏ qua theo đúng Release đã chốt."
-      secondaryActions={<><Link className="btn secondary" href="/bank">Tổng quan</Link><Link className="btn secondary" href="/bank/departments">Ngân hàng đề</Link></>}
+      description="Map Course CMS, chọn hành động cho từng bài và tạo Quiz hoặc Final test từ Release đã chốt."
+      secondaryActions={<><Link className="btn secondary" href="/bank/departments">Ngân hàng đề</Link><Link className="btn secondary" href="/bank/history">Lịch sử Quiz</Link></>}
     />
 
     {message ? <div className={classNames('alert quiz-inline-message', messageClass(message))}>{message.text}</div> : null}
 
-    <div className="quiz-workbench-grid">
-      <aside className="quiz-settings-panel card" aria-label="Cấu hình tạo bài kiểm tra">
-        <div className="settings-panel-head">
-          <div>
-            <div className="eyebrow">Cấu hình</div>
-            <h2>Version và phạm vi tạo</h2>
-            <p>Chọn version môn, sau đó đặt Trạng thái cho từng bài: Tạo Quiz, Tạo Final test hoặc Không tạo.</p>
-          </div>
-          {applied ? <span className="status success">Đã lưu cấu hình</span> : autoMap ? <span className="status warning">Preview</span> : <span className="status pending">Chưa kiểm tra</span>}
+    <section className="card quiz-course-setup" aria-labelledby="quiz-course-setup-title">
+      <div className="quiz-workflow-steps" aria-label="Quy trình tạo bài kiểm tra">
+        <div className={classNames('quiz-workflow-step', workflowStep >= 1 && 'active', autoMap && 'done')}><span>1</span><div><b>Map khóa học</b><small>Nhập Course ID và chọn version</small></div></div>
+        <div className={classNames('quiz-workflow-step', workflowStep >= 2 && 'active', applied && 'done')}><span>2</span><div><b>Chọn phạm vi</b><small>Quiz, Final test hoặc bỏ qua</small></div></div>
+        <div className={classNames('quiz-workflow-step', workflowStep >= 3 && 'active')}><span>3</span><div><b>Tạo trên CMS</b><small>Kiểm tra cấu hình và xác nhận</small></div></div>
+      </div>
+      <div className="section-heading quiz-course-setup-heading">
+        <div><h2 id="quiz-course-setup-title">Khóa học và phiên bản môn</h2><p className="muted">Hệ thống tự resolve org/course/run, version môn và Section tương ứng. Không cần chọn cây thủ công.</p></div>
+        {applied ? <span className="status success">Đã lưu cấu hình</span> : autoMap ? <span className="status warning">Đang preview</span> : <span className="status pending">Chưa map</span>}
+      </div>
+      <div className="quiz-course-form">
+        <label className="quiz-course-id-field">Khóa học ID<input className="input" value={courseId} onChange={(event) => { setCourseId(event.target.value); setSelectedOfferingId(''); setAutoMap(null); setChapterActions({}) }} placeholder="course-v1:FPT+WEB107+SU26" /></label>
+        <label>Version môn<select className="input" value={selectedOfferingId || autoMap?.offering?.id || ''} disabled={busy || !candidates.length} onChange={async (event) => {
+          const next = event.target.value
+          setSelectedOfferingId(next)
+          if (next) await runPreview(next, false)
+        }}><option value="">{candidates.length ? 'Chọn version môn...' : 'Hệ thống tự xác định'}</option>{candidates.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.offering_code}{item.course_run_match ? ' · khớp Course ID' : ''} · {item.ready_chapter_count}/{item.chapter_count} bài có Release</option>)}</select></label>
+        <div className="quiz-course-form-actions">
+          <button className="btn secondary" type="button" disabled={busy || !courseId.trim()} onClick={() => runPreview(selectedOfferingId, true)}>{busy ? 'Đang kiểm tra...' : autoMap ? 'Kiểm tra lại' : 'Kiểm tra map'}</button>
+          <button className="btn" type="button" disabled={busy || !autoMap} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
         </div>
+      </div>
+      <div className="course-auto-hint" role="status">{busy ? 'Đang tìm version môn và Section phù hợp...' : autoMap ? `Đã khớp ${matchedCount}/${chapterCount || 0} bài. ${selectedQuizCount} bài sẽ tạo, ${skippedCount} bài bỏ qua.` : 'Nhập Khóa học ID để bắt đầu. Hệ thống chỉ dùng Release đã publish.'}</div>
+    </section>
 
-        <div className="settings-section course-control-section">
-          <label>Khóa học ID
-            <input className="input" value={courseId} onChange={(event) => { setCourseId(event.target.value); setSelectedOfferingId(''); setAutoMap(null); setChapterActions({}) }} placeholder="course-v1:FPT+WEB107+SU26" />
-          </label>
-          <div className="course-auto-hint">
-            {busy ? 'Đang tự tìm version và Section...' : autoMap ? `Đã tìm thấy ${matchedCount}/${chapterCount || 0} Section khớp.` : 'Nhập Khóa học ID, hệ thống sẽ tự tìm version và Section.'}
-          </div>
-          {candidates.length ? <label>Version môn
-            <select className="input" value={selectedOfferingId || autoMap?.offering?.id || ''} disabled={busy} onChange={async (event) => {
-              const next = event.target.value
-              setSelectedOfferingId(next)
-              if (next) await runPreview(next, false)
-            }}>
-              <option value="">Chọn version môn...</option>
-              {candidates.map((item) => <option key={item.offering_id} value={item.offering_id}>
-                {item.offering_code}{item.course_run_match ? ' · khớp Khóa học ID' : ''} · {item.ready_chapter_count}/{item.chapter_count} bài có Release{item.all_ready ? '' : ' · vẫn có thể chọn'}
-              </option>)}
-            </select>
-          </label> : null}
-          <div className="settings-actions settings-actions-top">
-            <button className="btn secondary full-width" disabled={busy || !autoMap} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
-            <button className="btn success full-width" disabled={!canCreateQuiz || busy || Boolean(creatingKey)} onClick={() => setCreateModal({ kind: 'all' })}>Tạo bài kiểm tra ({readyRows.length || 0})</button>
-          </div>
-        </div>
+    {!autoMap ? <section className="card quiz-empty-guide quiz-empty-guide-full">
+      <div className="quiz-empty-icon" aria-hidden="true">1</div>
+      <div><h2>Chưa có kết quả map</h2><p>Nhập Course ID ở trên. Sau khi resolve thành công, bảng bài học và trạng thái Release sẽ xuất hiện tại đây.</p></div>
+    </section> : <section className="card quiz-mapping-workspace">
+      <div className="section-heading result-heading">
+        <div><h2>Phạm vi tạo bài kiểm tra</h2><p className="muted">Mỗi dòng chỉ cần chọn một hành động. “Không tạo” không yêu cầu Section hoặc Release.</p></div>
+        <div className="quiz-workspace-actions"><button className="btn secondary" disabled={busy} onClick={() => setCreateModal({ kind: 'all' })}>Cấu hình Quiz/Final</button><button className="btn" disabled={!canCreateQuiz || busy || Boolean(creatingKey)} onClick={() => setCreateModal({ kind: 'all' })}>Tạo bài kiểm tra ({readyRows.length})</button></div>
+      </div>
 
-        <div className="settings-section settings-card-soft quiz-config-summary">
-          <div className="section-heading compact-heading">
-            <div>
-              <h3>Phạm vi hiện tại</h3>
-              <p className="muted">Có thể đổi từng dòng trong bảng map.</p>
-            </div>
-            <span className="status pending">{selectedQuizCount} tạo · {skippedCount} bỏ qua</span>
-          </div>
-          <div className="quiz-config-summary-list">
-            <span><b>Quiz:</b> {regularQuizCount} dòng · {quizConfig.totalQuestions} câu · {quizConfig.timeLimitMinutes} phút</span>
-            <span><b>Final test:</b> {finalTestCount} dòng · {finalConfig.totalQuestions} câu · {finalConfig.timeLimitMinutes} phút</span>
-            <span><b>Bỏ qua:</b> {skippedCount} dòng · Không yêu cầu Release.</span>
-            <span><b>Thiếu điều kiện:</b> {missingSectionCount} Section · {missingReleaseCount} Release.</span>
-            <span>Easy/Medium/Hard tách riêng theo từng loại bài kiểm tra.</span>
-          </div>
-        </div>
-      </aside>
+      <div className="quiz-summary-strip" aria-label="Tóm tắt phạm vi tạo">
+        <div><span>Quiz</span><b>{regularQuizCount}</b><small>{quizConfig.totalQuestions} câu · {quizConfig.timeLimitMinutes} phút</small></div>
+        <div><span>Final test</span><b>{finalTestCount}</b><small>{finalConfig.totalQuestions} câu · {finalConfig.timeLimitMinutes} phút</small></div>
+        <div><span>Bỏ qua</span><b>{skippedCount}</b><small>Không tạo trên CMS</small></div>
+        <div className={missingSectionCount ? 'is-warning' : ''}><span>Thiếu Section</span><b>{missingSectionCount}</b><small>Course CMS</small></div>
+        <div className={missingReleaseCount ? 'is-warning' : ''}><span>Thiếu Release</span><b>{missingReleaseCount}</b><small>Bank published</small></div>
+      </div>
 
-      <main className="quiz-workspace-main">
-        {!autoMap ? <section className="card empty-state quiz-empty-guide">
-          <b>Chưa có kết quả map.</b>
-          <span>Nhập Khóa học ID ở panel bên phải. Hệ thống tự tìm version môn và Section phù hợp, kết quả sẽ hiện tại đây.</span>
-        </section> : <section className="card quiz-result-card">
-          <div className="section-heading result-heading">
-            <div>
-              <h2>Kết quả map</h2>
-              <p className="muted">Chỉ các dòng chọn Tạo Quiz hoặc Tạo Final test mới cần Release published. Dòng Không tạo không chặn lưu cấu hình.</p>
-            </div>
-            <span className={classNames('status', autoMap.can_apply ? 'success' : 'warning')}>{autoMap.can_apply ? 'Có thể lưu cấu hình' : 'Cần xử lý'}</span>
-          </div>
-          <div className="quiz-production-gate-strip" aria-label="Trạng thái vận hành tạo Quiz/Final test">
-            <div><span>Quiz</span><b>{regularQuizCount}</b><small>{quizConfig.totalQuestions} câu/bài</small></div>
-            <div><span>Final test</span><b>{finalTestCount}</b><small>{finalConfig.totalQuestions} câu/bài</small></div>
-            <div><span>Không tạo</span><b>{skippedCount}</b><small>Không chặn lưu</small></div>
-            <div><span>Thiếu Section</span><b>{missingSectionCount}</b><small>Course CMS/Open edX</small></div>
-            <div><span>Thiếu Release</span><b>{missingReleaseCount}</b><small>Bank Release published</small></div>
-            <div><span>Gate</span><b>{missingSectionCount || missingReleaseCount ? 'Cần xử lý' : 'Sẵn sàng'}</b><small>{missingSectionCount || missingReleaseCount ? 'Sửa dòng bị chặn hoặc đổi sang Không tạo.' : String(productionGate?.next_action || 'Lưu cấu hình rồi tạo bài kiểm tra.')}</small></div>
-          </div>
-          {autoMap.blocking_errors?.length ? <div className="alert danger"><b>Chưa thể lưu/tạo</b><ul>{autoMap.blocking_errors.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
-          {autoMap.warnings?.length ? <div className="alert warning"><b>Cảnh báo</b><ul>{autoMap.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
-          <div className="table-wrap quiz-map-table-wrap">
-            <table className="data-table compact-table quiz-map-table">
-              <thead><tr><th>STT</th><th>Bài trong ngân hàng</th><th>Loại</th><th>Mục trong khóa học</th><th>Bộ đề</th><th>Khớp</th><th>Điều kiện</th><th>Trạng thái</th><th></th></tr></thead>
-              <tbody>{effectiveMappings.map((item, index) => <tr key={item.chapter_id} className={item.effectiveReady || !item.effectiveRequiresQuiz ? 'row-ready' : 'row-blocked'}>
-                <td className="stt-cell">{index + 1}</td>
-                <td><b>{item.chapter_title}</b></td>
-                <td>{(() => { const badge = actionTypeBadge(item); return <span className={classNames('status', badge.tone)}>{badge.label}</span> })()}</td>
-                <td>{item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small><code>{item.openedx_section_id}</code></small></> : <span className={classNames('status', item.effectiveRequiresQuiz ? 'danger' : 'pending')}>Chưa tìm thấy</span>}</td>
-                <td>{item.release_code ? <><b>{item.release_code}</b><small>{item.openedx_library_key}</small></> : item.effectiveRequiresQuiz ? <span className="status danger">Chưa publish</span> : <span className="muted">Không cần Release</span>}</td>
-                <td>{percent(item.match_score)}<small>{item.match_reason}</small></td>
-                <td><div className="quiz-requirement-stack"><span className={classNames('status', productionStatusClass(item))}>{item.effectiveRequiresQuiz ? ((item as any).status_label || actionStatusText(item)) : 'Không tạo'}</span>{item.effectiveRequiresQuiz && ((item as any).missing_requirements || []).length ? <small>{((item as any).missing_requirements || []).map(missingRequirementLabel).join(' · ')}</small> : <small>{item.effectiveRequiresQuiz ? 'Đủ Section + Release' : 'Không yêu cầu'}</small>}</div></td>
-                <td className="quiz-status-cell">
-                  <div className="quiz-status-control">
-                  <select className="input compact-select" value={item.action === 'assignment' ? 'skip' : item.action} disabled={busy || Boolean(creatingKey)} onChange={(event) => {
-                    const next = event.target.value as QuizChapterAction
-                    setChapterActions((current) => ({ ...current, [item.chapter_id]: next }))
-                  }} aria-label={`Chọn trạng thái ${item.chapter_title}`}>
-                    <option value="quiz">Tạo Quiz</option>
-                    <option value="final_test">Tạo Final test</option>
-                    <option value="skip">Không tạo</option>
-                  </select>
-                  <span className={classNames('status', actionStatusClass(item))}>{actionStatusText(item)}</span>
-                  {item.course_chapter_mapping_id ? <small>Đã lưu cấu hình</small> : applied && item.effectiveRequiresQuiz ? <small>Cần bấm Lưu cấu hình</small> : null}
-                  </div>
-                </td>
-                <td><button className="btn small" disabled={!item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final test' : 'Tạo Quiz'}</button></td>
-              </tr>)}</tbody>
-            </table>
-          </div>
-        </section>}
+      {autoMap.blocking_errors?.length ? <div className="alert danger"><b>Chưa thể lưu hoặc tạo</b><ul>{autoMap.blocking_errors.slice(0, 5).map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
+      {autoMap.warnings?.length ? <details className="quiz-warning-details"><summary>Có {autoMap.warnings.length} cảnh báo cần xem</summary><ul>{autoMap.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
 
-        <section className="card quiz-history-card">
-          <div className="section-heading result-heading">
-            <div>
-              <h2>Lịch sử bài kiểm tra</h2>
-              <p className="muted">Chỉ hiển thị lịch sử của Khóa học ID đang nhập. Nếu tạo nhầm, bấm khôi phục.</p>
-            </div>
-            {historyBusy ? <span className="status pending">Đang tải</span> : <span className="status pending">{history.length} bản ghi</span>}
-          </div>
-          {!courseId.trim() ? <div className="empty-state">Nhập Khóa học ID để xem lịch sử bài kiểm tra của đúng khóa học đó.</div> : null}
-          {courseId.trim() && historyBusy ? <div className="empty-state">Đang tải lịch sử bài kiểm tra...</div> : null}
-          {courseId.trim() ? <div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>STT</th><th>Khóa học</th><th>Loại</th><th>Trạng thái</th><th>Bài kiểm tra Open edX</th><th>Timer</th><th>Thời gian</th><th></th></tr></thead><tbody>{history.map((item, index) => <tr key={item.id}><td className="stt-cell">{index + 1}</td><td><b>{item.openedx_course_id}</b><small>{item.metadata_json?.quiz_title || item.bank_release_id}</small></td><td>{item.metadata_json?.assessment_type === 'final_test' ? <span className="status warning">Final test</span> : <span className="status pending">Quiz</span>}</td><td><span className={classNames('status', item.status === 'created' ? 'success' : item.status?.includes('khôi phục') || item.status === 'failed' ? 'danger' : 'pending')}>{item.status}</span></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td>{item.metadata_json?.timer_config?.custom_timer_enabled ? <span className="status pending">{item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút</span> : <span className="muted">Không bật</span>}</td><td>{formatVNDateTime(item.created_at)}</td><td><button className="btn small secondary" disabled={busy || item.status === 'rolled_back'} onClick={async () => {
-            setBusy(true)
-            try {
-              const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử bài kiểm tra' })
-              setMessage(inlineMessageFromBackend(result, result.message || 'Đã khôi phục bài kiểm tra.', result.ok ? 'success' : 'warning'))
-              await loadHistory(courseId.trim())
-            } catch (error) {
-              setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Khôi phục thất bại' })
-            } finally {
-              setBusy(false)
-            }
-          }}>Khôi phục</button></td></tr>)}</tbody></table></div> : null}
-          {courseId.trim() && !history.length && !historyBusy ? <div className="empty-state">Chưa có bài kiểm tra nào được tạo cho Khóa học ID này.</div> : null}
-        </section>
-      </main>
-    </div>
+      <EnterpriseDataTable
+        tableId="bank-quiz-course-mappings"
+        caption="Danh sách bài và mapping"
+        rows={effectiveMappings}
+        columns={mappingColumns}
+        rowKey={(item) => item.chapter_id}
+        density="compact"
+        emptyTitle="Version môn chưa có bài"
+        emptyDescription="Kiểm tra lại version môn hoặc dữ liệu Chapter trong ngân hàng đề."
+        label="bài"
+      />
+
+      <div className="quiz-mapping-action-bar">
+        <div><b>{applied ? 'Cấu hình đã được lưu.' : 'Cần lưu cấu hình trước khi tạo.'}</b><small>{missingSectionCount || missingReleaseCount ? 'Đổi dòng bị chặn sang Không tạo hoặc hoàn thiện Section/Release.' : `${readyRows.length} bài đã sẵn sàng tạo trên Open edX.`}</small></div>
+        <div className="button-row no-margin"><button className="btn secondary" disabled={busy || !autoMap} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu cấu hình'}</button><button className="btn" disabled={!canCreateQuiz || busy || Boolean(creatingKey)} onClick={() => setCreateModal({ kind: 'all' })}>Tạo {readyRows.length} bài kiểm tra</button></div>
+      </div>
+    </section>}
+
+    <section className="card quiz-history-card">
+      <div className="section-heading result-heading"><div><h2>Lịch sử của khóa học</h2><p className="muted">Chỉ hiển thị bài kiểm tra thuộc Course ID đang nhập. Khôi phục là thao tác có audit.</p></div>{historyBusy ? <span className="status pending">Đang tải</span> : <span className="status pending">{history.length} bản ghi</span>}</div>
+      {!courseId.trim() ? <div className="empty-state">Nhập Course ID để xem lịch sử đúng khóa học.</div> : <EnterpriseDataTable tableId="bank-quiz-course-history" caption="Lịch sử bài kiểm tra" rows={history} columns={historyColumns} rowKey={(item) => item.id} density="compact" loading={historyBusy} label="bản ghi" emptyTitle="Chưa có bài kiểm tra" emptyDescription="Khóa học này chưa có Quiz hoặc Final test được tạo từ AI Server." />}
+    </section>
 
     {createModal ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => setCreateModal(null)}>
-      <section className="modal-card bank-modal bank-modal-wide quiz-config-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="section-heading bank-modal-head">
-          <div>
-            <div className="eyebrow">Cấu hình tạo bài kiểm tra</div>
-            <h2>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : `${actionLabel(createModal.item.action)} cho ${createModal.item.chapter_title}`}</h2>
-            <p className="muted">Quiz tự luyện và Final test có cấu hình riêng. Dòng Không tạo sẽ được bỏ qua.</p>
-          </div>
-          <button className="btn secondary" type="button" onClick={() => setCreateModal(null)}>Đóng</button>
-        </div>
+      <section className="modal-card bank-modal bank-modal-wide quiz-config-modal" role="dialog" aria-modal="true" aria-label="Cấu hình tạo bài kiểm tra" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="section-heading bank-modal-head"><div><div className="eyebrow">Bước 3 · Xác nhận tạo</div><h2>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : `${actionLabel(createModal.item.action)} cho ${createModal.item.chapter_title}`}</h2><p className="muted">Quiz tự luyện và Final test có cấu hình riêng. Kiểm tra tỷ lệ độ khó trước khi xác nhận.</p></div><button className="btn secondary" type="button" onClick={() => setCreateModal(null)}>Đóng</button></div>
         <div className="bank-modal-body quiz-config-modal-body">
-          <div className="quiz-modal-grid">
-            {(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} /> : null}
-            {(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} /> : null}
-          </div>
-          <div className="quiz-create-preview">
-            <b>Quy tắc tạo</b>
-            <span>Quiz: tạo Subsection/Unit dạng Quiz. Final test: dùng title và timer riêng. Dòng Không tạo sẽ bị bỏ qua và không yêu cầu Release.</span>
-            <small>Khóa học ID: {courseId.trim() || '—'} · {createModal.kind === 'all' ? `${readyRows.length} bài kiểm tra` : createModal.item.chapter_title}</small>
-          </div>
-          <div className="modal-actions">
-            <button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button>
-            <button className="btn" type="button" disabled={busy || Boolean(creatingKey) || quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button>
-          </div>
+          <div className="quiz-modal-grid">{(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} /> : null}{(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} /> : null}</div>
+          <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {courseId.trim() || '—'} · Quiz {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
+          {(quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100) ? <div className="alert warning">Tổng tỷ lệ Easy/Medium/Hard của mỗi loại phải bằng 100%.</div> : null}
+          <div className="modal-actions"><button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button><button className="btn" type="button" disabled={busy || Boolean(creatingKey) || quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100 || (createModal.kind === 'all' && !readyRows.length)} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button></div>
         </div>
       </section>
     </div> : null}

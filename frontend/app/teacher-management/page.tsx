@@ -21,6 +21,7 @@ import {
 } from "../../types";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import { PageHeader } from '../../components/layout/PageHeader'
+import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
 import {
@@ -450,13 +451,13 @@ function TeacherManagementContent() {
   };
 
   const columns = useMemo<EnterpriseTableColumn<AcademicTrainingTeacherReport>[]>(() => [
-    { key: "stt", header: "STT", width: 72, sticky: "left", stickyOffset: 0, hideable: false, render: (_item, index) => (page - 1) * pageSize + index + 1 },
-    { key: "teacher", header: "Giảng viên", minWidth: 250, sticky: "left", stickyOffset: 72, render: (item) => <div className="teacher-identity"><span className="teacher-avatar">{(item.teacher_name || item.teacher_username || "GV").slice(0, 2).toUpperCase()}</span><div><b>{item.teacher_name || item.teacher_username}</b><small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ""}</small><small>{item.branch?.toUpperCase() || "N/A"}{item.campus ? ` · ${item.campus.toUpperCase()}` : ""}</small></div></div> },
-    { key: "scale", header: "Quy mô đào tạo", minWidth: 220, render: (item) => <><b>{item.class_count} lớp · {item.subject_count} môn</b><small>{item.subject_codes?.slice(0, 6).join(", ") || "N/A"}</small><small>{item.student_count} lượt SV · {item.unique_student_count} SV riêng biệt</small><small>Học lại: {countLabel(item.relearn_student_count)} SV · {countLabel(item.total_relearn_count)} lượt</small></> },
-    { key: "cms", header: "Đồng bộ CMS", minWidth: 220, render: (item) => <><span className={syncTone(item.cms_synced_count, item.student_count)}>User CMS match {ratioLabel(item.cms_synced_count, item.student_count)}</span><small>Ghi danh CMS {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>{item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa ghép Course CMS</small> : <small>Course CMS đã map cho các lớp có dữ liệu</small>}</> },
-    { key: "progress", header: "Tiến độ học", minWidth: 210, render: (item) => <><b>Completion {percentLabel(item.learning_avg_progress_percent)}</b><small>Điểm tổng {score10Label(item.learning_avg_grade_10)}</small><small>Có hoạt động {ratioLabel(item.learning_active_count, item.student_count)}</small><small>Trễ deadline {countLabel(item.deadline_late_student_count)} SV · {countLabel(item.deadline_late_quiz_count)} lượt quiz</small></> },
-    { key: "risk", header: "Tình hình sinh viên", minWidth: 260, render: (item) => { const statuses = item.status_counts || {}; return <><span className={riskTone(item)}>{item.risk_student_count ? `${item.risk_student_count} SV cần theo dõi` : "Ổn"}</span><small>Chưa học {countLabel(statuses.no_activity)} · Tiến độ thấp {countLabel(statuses.low_progress)} · Điểm thấp {countLabel(statuses.low_grade)}</small><small>Trễ deadline {countLabel(statuses.deadline_late)} SV · Không được thi {countLabel(statuses.exam_not_eligible)} SV</small><small>{alertText(item.learning_alerts)}</small></> } },
-    { key: "actions", header: "Thao tác", minWidth: 110, sticky: "right", hideable: false, render: (item) => { const params = new URLSearchParams(); if (termId) params.set("term_id", termId); if (branch) params.set("branch", branch); if (campus) params.set("campus", campus); params.set("list_campus", campus || "all"); if (selectedTerm?.term_name) params.set("term_name", selectedTerm.term_name); params.set("teacher_name", item.teacher_name || item.teacher_username); return <Link className="btn secondary small teacher-row-action" href={`/teacher-management/teachers/${encodeURIComponent(item.teacher_id)}/classes?${params.toString()}`}>Xem lớp</Link> } },
+    { key: "stt", header: "STT", kind: "index", width: 52, sticky: "left", hideable: false, render: (_item, index) => (page - 1) * pageSize + index + 1 },
+    { key: "teacher", header: "Giảng viên", kind: "identity", minWidth: 225, sticky: "left", priority: "required", hideable: false, render: (item) => <div className="teacher-identity"><span className="teacher-avatar">{(item.teacher_name || item.teacher_username || "GV").slice(0, 2).toUpperCase()}</span><div><b>{item.teacher_name || item.teacher_username}</b><small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ""}</small><small>{item.branch?.toUpperCase() || "N/A"}{item.campus ? ` · ${item.campus.toUpperCase()}` : ""}</small></div></div> },
+    { key: "scale", header: "Quy mô", kind: "number", minWidth: 150, priority: "important", hideable: true, render: (item) => <><b>{item.class_count} lớp · {item.subject_count} môn</b><small>{item.student_count} lượt SV · {item.unique_student_count} SV</small></> },
+    { key: "cms", header: "Đồng bộ CMS", kind: "status", minWidth: 165, priority: "important", hideable: true, render: (item) => <><span className={syncTone(item.cms_synced_count, item.student_count)}>CMS {ratioLabel(item.cms_synced_count, item.student_count)}</span><small>Enroll {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>{item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa ghép course</small> : null}</> },
+    { key: "progress", header: "Tiến độ", kind: "progress", minWidth: 155, priority: "optional", hideable: true, render: (item) => <><b>Completion {percentLabel(item.learning_avg_progress_percent)}</b><small>{ratioLabel(item.learning_active_count, item.student_count)} có hoạt động</small></> },
+    { key: "risk", header: "Cảnh báo", kind: "status", minWidth: 170, priority: "important", hideable: true, render: (item) => { const statuses = item.status_counts || {}; return <><span className={riskTone(item)}>{item.risk_student_count ? `${item.risk_student_count} SV cần xem` : "Ổn"}</span><small>Trễ {countLabel(statuses.deadline_late)} · Không đủ thi {countLabel(statuses.exam_not_eligible)}</small></> } },
+    { key: "actions", header: "Thao tác", kind: "actions", width: 106, sticky: "right", hideable: false, render: (item) => { const params = new URLSearchParams(); if (termId) params.set("term_id", termId); if (branch) params.set("branch", branch); if (campus) params.set("campus", campus); params.set("list_campus", campus || "all"); if (selectedTerm?.term_name) params.set("term_name", selectedTerm.term_name); params.set("teacher_name", item.teacher_name || item.teacher_username); return <Link className="btn secondary small teacher-row-action" href={`/teacher-management/teachers/${encodeURIComponent(item.teacher_id)}/classes?${params.toString()}`}>Xem lớp</Link> } },
   ], [branch, campus, page, pageSize, selectedTerm?.term_name, termId]);
 
   return (
@@ -556,53 +557,14 @@ function TeacherManagementContent() {
           </label>
         </div>
 
-        <div className="academic-summary-strip training-summary-strip ux-kpi-grid">
-          <div>
-            <span>Tổng giảng viên</span>
-            <b>{countLabel(summary.teacher_count)}</b>
-            <small>Theo bộ lọc hiện tại</small>
-          </div>
-          <div>
-            <span>Tổng số lớp</span>
-            <b>{countLabel(summary.class_count)}</b>
-            <small>Theo hệ · học kỳ · cơ sở đang chọn</small>
-          </div>
-          <div>
-            <span>Tổng số sinh viên</span>
-            <b>{countLabel(summary.student_count)}</b>
-            <small>Theo bộ lọc hiện tại</small>
-          </div>
-          <div>
-            <span>User CMS match</span>
-            <b>{countLabel(summary.cms_synced_count)}</b>
-            <small>Theo bộ lọc hiện tại</small>
-          </div>
-          <div>
-            <span>Ghi danh CMS</span>
-            <b>{countLabel(summary.learning_enrolled_count)}</b>
-            <small>Theo bộ lọc hiện tại</small>
-          </div>
-          <div>
-            <span>Cần theo dõi</span>
-            <b>{countLabel(summary.risk_student_count)}</b>
-            <small>Nhãn mềm, cần GV xác minh</small>
-          </div>
-          <div>
-            <span>Trễ deadline</span>
-            <b>{countLabel(summary.deadline_late_student_count)}</b>
-            <small>
-              {countLabel(summary.deadline_late_quiz_count)} lượt quiz trễ
-            </small>
-          </div>
-          <div>
-            <span>Không được thi</span>
-            <b>{countLabel(summary.exam_not_eligible_student_count)}</b>
-            <small>
-              {countLabel(summary.exam_insufficient_data_student_count)} SV chưa
-              đủ dữ liệu xét thi
-            </small>
-          </div>
-        </div>
+        <TrainingKpiStrip compact items={[
+          { key: 'teachers', label: 'Giảng viên', value: countLabel(summary.teacher_count), hint: 'Theo bộ lọc hiện tại' },
+          { key: 'classes', label: 'Lớp', value: countLabel(summary.class_count), hint: 'Không đếm theo trang' },
+          { key: 'students', label: 'Sinh viên', value: countLabel(summary.student_count), hint: 'Theo hệ · kỳ · cơ sở' },
+          { key: 'cms', label: 'CMS match', value: countLabel(summary.cms_synced_count), hint: `${countLabel(summary.learning_enrolled_count)} đã ghi danh` },
+          { key: 'risk', label: 'Cần theo dõi', value: countLabel(summary.risk_student_count), hint: `${countLabel(summary.deadline_late_student_count)} trễ · ${countLabel(summary.exam_not_eligible_student_count)} chưa đủ thi`, tone: summary.risk_student_count > 0 ? 'warning' : 'success' },
+          { key: 'data', label: 'Thiếu dữ liệu xét thi', value: countLabel(summary.exam_insufficient_data_student_count), hint: 'Cần hoàn tất đồng bộ học tập', tone: summary.exam_insufficient_data_student_count > 0 ? 'warning' : 'neutral' },
+        ]} />
 
         {exportJob &&
           ["queued", "running", "failed"].includes(exportJob.status) && (

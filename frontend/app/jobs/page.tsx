@@ -19,6 +19,7 @@ import { PageHeader } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { formatVNDateTime } from '../../lib/time'
+import { CompactFilterBar, InfoPairGrid, OperationsKpiStrip, SideDrawer } from '../../components/operations/OperationsWorkspace'
 
 function dateText(v?: string | null) { return formatVNDateTime(v) }
 function shortId(v?: string | null) { return v ? v.slice(0, 8) : '—' }
@@ -36,22 +37,6 @@ function progressPercent(current?: number, total?: number, explicit?: number) {
 function includesNeedle(values: Array<unknown>, needle: string) {
   if (!needle) return true
   return values.filter(Boolean).some((value) => String(value).toLowerCase().includes(needle))
-}
-
-function Popup({ open, title, children, onClose }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void }) {
-  useEffect(() => {
-    if (!open) return undefined
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('keydown', onKey) }
-  }, [open, onClose])
-  if (!open) return null
-  return <div className="modal-backdrop bank-popup-backdrop" onMouseDown={onClose}>
-    <section className="modal-card bank-modal bank-modal-wide" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-      <div className="section-head bank-modal-head"><div><h2>{title}</h2></div><button className="btn small secondary" onClick={onClose}>Đóng</button></div>
-      <div className="bank-modal-body">{children}</div>
-    </section>
-  </div>
 }
 
 type OperationRow = {
@@ -96,6 +81,7 @@ function JobsContent() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<ActionMessageData | null>(null)
   const [quizOpen, setQuizOpen] = useState(false)
+  const [selectedJob, setSelectedJob] = useState<OperationRow | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -286,38 +272,69 @@ function JobsContent() {
   }, [page, safePage, update])
 
   const columns = useMemo<EnterpriseTableColumn<OperationRow>[]>(() => [
-    { key: 'stt', header: 'STT', width: 72, sticky: 'left', stickyOffset: 0, hideable: false, render: (_row, index) => (safePage - 1) * pageSize + index + 1 },
-    { key: 'job', header: 'Việc', minWidth: 210, sticky: 'left', stickyOffset: 72, render: (job) => <><b>{job.label}</b><small>ID {shortId(job.id)}</small></> },
-    { key: 'status', header: 'Trạng thái', minWidth: 125, render: (job) => <StatusBadge status={job.status} /> },
-    { key: 'progress', header: 'Tiến độ', minWidth: 180, render: (job) => <><div className="job-progress table-progress" role="progressbar" aria-label={`Tiến độ ${job.label}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progressPercent)}><i style={{ width: `${job.progressPercent}%` }} /></div><small>{Math.round(job.progressPercent)}% · {job.progressCurrent}/{job.progressTotal || 100}</small></> },
-    { key: 'scope', header: 'Phạm vi', minWidth: 190, render: (job) => <><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></> },
-    { key: 'requested_by', header: 'Người tạo', minWidth: 140, hideable: true, render: (job) => job.requestedBy || 'Hệ thống' },
-    { key: 'created_at', header: 'Thời điểm', minWidth: 150, hideable: true, render: (job) => <small>{dateText(job.createdAt)}</small> },
-    { key: 'message', header: 'Nội dung', minWidth: 280, render: (job) => <span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error || job.message || 'Đang chờ xử lý'}</span> },
-    { key: 'actions', header: 'Thao tác', minWidth: 110, sticky: 'right', hideable: false, render: (job) => job.canRetry ? <button className="btn small secondary" type="button" onClick={() => retryJob(job.id)} disabled={loading}>Chạy lại</button> : <span className="muted">—</span> },
-  ], [loading, pageSize, retryJob, safePage])
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * pageSize + index + 1 },
+    { key: 'job', header: 'Việc', kind: 'identity', minWidth: 250, sticky: 'left', priority: 'required', hideable: false, render: (job) => <><b>{job.label}</b><small>{job.scope}{job.scopeDetail ? ` · ${shortId(job.scopeDetail)}` : ''}</small></> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 116, priority: 'required', hideable: false, render: (job) => <StatusBadge status={job.status} /> },
+    { key: 'progress', header: 'Tiến độ', kind: 'progress', minWidth: 165, priority: 'important', hideable: true, render: (job) => <><div className="job-progress table-progress" role="progressbar" aria-label={`Tiến độ ${job.label}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progressPercent)}><i style={{ width: `${job.progressPercent}%` }} /></div><small>{Math.round(job.progressPercent)}% · {job.progressCurrent}/{job.progressTotal || 100}</small></> },
+    { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 138, priority: 'important', hideable: true, render: (job) => <small>{dateText(job.createdAt)}</small> },
+    { key: 'scope', header: 'Phạm vi chi tiết', kind: 'text', minWidth: 175, priority: 'optional', hideable: true, defaultVisible: false, render: (job) => <><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></> },
+    { key: 'requested_by', header: 'Người tạo', kind: 'text', width: 120, priority: 'optional', hideable: true, defaultVisible: false, render: (job) => job.requestedBy || 'Hệ thống' },
+    { key: 'message', header: 'Nội dung', kind: 'text', minWidth: 230, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2, render: (job) => <span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error || job.message || 'Đang chờ xử lý'}</span> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 92, sticky: 'right', hideable: false, render: (job) => <button className="btn small secondary" type="button" onClick={() => setSelectedJob(job)}>Chi tiết</button> },
+  ], [pageSize, safePage])
 
   const failed = rows.filter((j) => j.status === 'failed').length
   const running = rows.filter((j) => ['queued', 'running'].includes(j.status)).length
   const completed = rows.filter((j) => j.status === 'completed').length
+  const resetFilters = () => update({ q: '', status: 'all', group: 'all', page: 1 }, { resetPage: false })
+
+  const quizColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_item, index) => index + 1 },
+    { key: 'course', header: 'Khóa học', kind: 'identity', minWidth: 260, hideable: false, render: (item) => <><b>{item.openedx_course_id}</b><small>{item.metadata_json?.quiz_title || 'Quiz trên CMS'}</small></> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 116, hideable: false, render: (item) => <StatusBadge status={item.status} /> },
+    { key: 'node', header: 'Node CMS', kind: 'text', minWidth: 160, priority: 'optional', hideable: true, render: (item) => <code>{item.openedx_unit_node_id || '—'}</code> },
+    { key: 'created', header: 'Ngày tạo', kind: 'date', width: 138, priority: 'important', hideable: true, render: (item) => <small>{dateText(item.created_at)}</small> },
+  ], [])
 
   if (!can('view_jobs')) return <div className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</div>
   return <div className="page-stack ops-console jobs-console ux-enterprise-page">
     <PageHeader
       eyebrow="Vận hành hệ thống"
       title="Tác vụ nền"
-      description="Theo dõi tiến trình đồng bộ, báo cáo, analytics, tạo câu hỏi và Quiz. Nhật ký thao tác được quản lý riêng tại Nhật ký hoạt động."
+      description="Theo dõi tiến trình Celery theo nhóm nghiệp vụ. Nhật ký thao tác được quản lý riêng tại Nhật ký hoạt động."
       secondaryActions={<button className="btn secondary" type="button" onClick={() => setQuizOpen(true)}>Quiz gần đây</button>}
       primaryAction={<button className="btn" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>}
     />
     <ActionMessage message={message} onClose={() => setMessage(null)} />
-    <section className="ops-kpi-grid"><div><span>Đang chạy</span><b>{running}</b></div><div><span>Hoàn tất</span><b>{completed}</b></div><div><span>Thất bại</span><b>{failed}</b></div><div><span>AP sync gần đây</span><b>{academicRuns.length}</b></div></section>
-    <section className="card ops-filter-card"><div className="grid grid-3"><label>Tìm việc<input className="input" value={q} onChange={(e) => update({ q: e.target.value })} placeholder="mã việc, loại việc, lớp, người tạo..." /></label><label>Trạng thái<select className="input" value={status} onChange={(e) => update({ status: e.target.value })}><option value="all">Tất cả</option><option value="active">Đang chạy</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label><label>Nhóm việc<select className="input" value={operationGroup} onChange={(e) => update({ group: e.target.value })}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giáo viên</option><option value="analytics">Học online</option><option value="bulk_sync">Ghép Course CMS / đồng bộ hàng loạt</option><option value="bank">Bank / Quiz</option></select></label></div></section>
-    <EnterpriseDataTable tableId="ops-jobs" caption="Danh sách việc" rows={pageRows} columns={columns} rowKey={(job) => `${job.group}-${job.id}`} density={density} onDensityChange={(value) => update({ density: value }, { resetPage: false })} loading={loading} emptyTitle="Không có việc phù hợp" emptyDescription="Thử thay đổi từ khóa, trạng thái hoặc nhóm việc." page={safePage} pageSize={pageSize} total={filteredRows.length} totalPages={totalPages} onPageChange={(value) => update({ page: value }, { resetPage: false })} onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })} label="việc" getRowClassName={(job) => `row-${job.status}`} />
+    <OperationsKpiStrip items={[
+      { label: 'Đang xử lý', value: running, hint: 'Đang chờ hoặc đang chạy', tone: running ? 'info' : 'neutral' },
+      { label: 'Hoàn tất', value: completed, hint: 'Trong dữ liệu vừa tải', tone: 'success' },
+      { label: 'Thất bại', value: failed, hint: failed ? 'Cần mở chi tiết để xử lý' : 'Không có lỗi gần đây', tone: failed ? 'danger' : 'neutral' },
+      { label: 'Đồng bộ AP', value: academicRuns.length, hint: 'Lần chạy gần đây' },
+    ]} />
+    <CompactFilterBar actions={<button className="btn secondary" type="button" onClick={resetFilters} disabled={!q && status === 'all' && operationGroup === 'all'}>Xóa lọc</button>}>
+      <label>Tìm việc<input className="input" value={q} onChange={(event) => update({ q: event.target.value })} placeholder="Mã việc, lớp, phạm vi..." /></label>
+      <label>Trạng thái<select className="input" value={status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="active">Đang xử lý</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label>
+      <label>Nhóm việc<select className="input" value={operationGroup} onChange={(event) => update({ group: event.target.value })}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giảng viên</option><option value="analytics">Học online</option><option value="bulk_sync">Ghép Course CMS hàng loạt</option><option value="bank">Bank / Quiz</option></select></label>
+    </CompactFilterBar>
+    <EnterpriseDataTable tableId="ops-jobs-v2" caption="Danh sách việc" rows={pageRows} columns={columns} rowKey={(job) => `${job.group}-${job.id}`} density={density} onDensityChange={(value) => update({ density: value }, { resetPage: false })} loading={loading} emptyTitle="Không có việc phù hợp" emptyDescription="Thử thay đổi từ khóa, trạng thái hoặc nhóm việc." page={safePage} pageSize={pageSize} total={filteredRows.length} totalPages={totalPages} onPageChange={(value) => update({ page: value }, { resetPage: false })} onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })} label="việc" getRowClassName={(job) => `row-${job.status}`} />
 
-    <Popup open={quizOpen} title="Quiz gần đây" onClose={() => setQuizOpen(false)}>
-      <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>STT</th><th>Khóa học</th><th>Quiz</th><th>Trạng thái</th><th>Bài kiểm tra</th><th>Ngày tạo</th></tr></thead><tbody>{quizInstances.slice(0, 50).map((item, index) => <tr key={item.id}><td className="stt-cell">{index + 1}</td><td><b>{item.openedx_course_id}</b><small>{item.bank_release_id}</small></td><td>{item.metadata_json?.quiz_title || 'Quiz trên CMS'}</td><td><StatusBadge status={item.status} /></td><td><code>{item.openedx_unit_node_id || '—'}</code></td><td><small>{dateText(item.created_at)}</small></td></tr>)}{!quizInstances.length ? <tr><td colSpan={6}><div className="empty-state">Chưa có Quiz trên CMS.</div></td></tr> : null}</tbody></table></div>
-    </Popup>
+    <SideDrawer open={Boolean(selectedJob)} title={selectedJob?.label || 'Chi tiết tác vụ'} description={selectedJob ? `ID ${selectedJob.id}` : undefined} onClose={() => setSelectedJob(null)} footer={selectedJob?.canRetry ? <button className="btn" type="button" onClick={() => { retryJob(selectedJob.id); setSelectedJob(null) }} disabled={loading}>Chạy lại tác vụ</button> : undefined}>
+      {selectedJob ? <div className="page-stack compact-stack"><StatusBadge status={selectedJob.status} label={statusText(selectedJob.status)} /><InfoPairGrid items={[
+        { label: 'Nhóm việc', value: selectedJob.group },
+        { label: 'Loại kỹ thuật', value: selectedJob.rawType || '—' },
+        { label: 'Phạm vi', value: selectedJob.scope },
+        { label: 'Đối tượng', value: selectedJob.scopeDetail || '—' },
+        { label: 'Người tạo', value: selectedJob.requestedBy || 'Hệ thống' },
+        { label: 'Thời điểm', value: dateText(selectedJob.createdAt) },
+        { label: 'Tiến độ', value: `${Math.round(selectedJob.progressPercent)}% · ${selectedJob.progressCurrent}/${selectedJob.progressTotal || 100}`, wide: true },
+        { label: selectedJob.error ? 'Lỗi' : 'Nội dung', value: selectedJob.error || selectedJob.message || 'Không có mô tả.', wide: true },
+      ]} /></div> : null}
+    </SideDrawer>
+
+    <SideDrawer open={quizOpen} title="Quiz gần đây" description="Các Quiz đã tạo trên Open edX CMS." onClose={() => setQuizOpen(false)}>
+      <EnterpriseDataTable tableId="ops-recent-quizzes" caption="Quiz gần đây" rows={quizInstances.slice(0, 50)} columns={quizColumns} rowKey={(item) => item.id} density="compact" label="Quiz" emptyTitle="Chưa có Quiz trên CMS" />
+    </SideDrawer>
   </div>
 }
 

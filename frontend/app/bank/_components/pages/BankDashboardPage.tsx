@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useBankData, Breadcrumb, QuickSearchBox, Modal } from '../shared'
 import { getBankDashboardAnalytics } from '../../../../lib/api'
+import { PageHeader } from '../../../../components/layout/PageHeader'
 import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -294,20 +295,17 @@ export function BankDashboardPage() {
   return <div className="page-stack bank-multipage dashboard-analytics-page">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi' }]} />
 
-    <section className="dashboard-command-hero">
-      <div className="dashboard-hero-glow" />
-      <div className="dashboard-hero-copy">
-        <h1>Tổng quan Ngân hàng câu hỏi</h1>
-        <div className="dashboard-scope-strip">
-          <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
-          {data?.cache ? <span className="dashboard-scope-chip subtle">Dữ liệu: {data.cache.hit ? 'đã lưu tạm' : 'mới cập nhật'}</span> : null}
-          {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {formatVNDateTime(data.generated_at)}</span> : null}
-        </div>
-      </div>
-      <div className="dashboard-hero-actions">
-        <DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />
-      </div>
-    </section>
+    <PageHeader
+      eyebrow="Ngân hàng đề"
+      title="Tổng quan Ngân hàng câu hỏi"
+      description="Theo dõi khối lượng câu hỏi, hàng chờ duyệt và hoạt động trong phạm vi được giao."
+      secondaryActions={<DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />}
+    />
+    <div className="dashboard-scope-strip dashboard-scope-strip-compact">
+      <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
+      {data?.cache ? <span className="dashboard-scope-chip subtle">Dữ liệu: {data.cache.hit ? 'đã lưu tạm' : 'mới cập nhật'}</span> : null}
+      {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {formatVNDateTime(data.generated_at)}</span> : null}
+    </div>
 
     {loading ? <>
       <section className="dashboard-kpi-grid"><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /></section>

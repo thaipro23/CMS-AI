@@ -1,5 +1,10 @@
 import './globals.css'
 import '../styles/production-ui.css'
+import '../styles/enterprise-visual-foundation.css'
+import '../styles/bank-workflow-ux.css'
+import '../styles/training-analytics-ux.css'
+import '../styles/operations-catalog-rbac-ux.css'
+import '../styles/production-ux-acceptance.css'
 import type { Metadata, Viewport } from 'next'
 import { AppProvider } from '../context/AppContext'
 import { AppShell } from '../components/layout/AppShell'
@@ -15,7 +20,7 @@ export const viewport: Viewport = {
   viewportFit: 'cover'
 }
 
-const shellBootstrap = `(function(){try{var d=document.documentElement;var t=localStorage.getItem('ai-shell-theme');if(t!=='dark'&&t!=='light'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}d.dataset.theme=t;d.dataset.aiTheme=t;var s=localStorage.getItem('ai-shell-sidebar');d.dataset.sidebar=s==='expanded'?'expanded':'collapsed';d.dataset.mobileNav='closed'}catch(e){}})();`
+const shellBootstrap = `(function(){try{var d=document.documentElement;d.dataset.theme='light';d.dataset.aiTheme='light';var s=localStorage.getItem('ai-shell-sidebar');d.dataset.sidebar=s==='expanded'?'expanded':'collapsed';d.dataset.mobileNav='closed'}catch(e){}})();`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return <html lang="vi-VN" suppressHydrationWarning>

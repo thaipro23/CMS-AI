@@ -4,10 +4,11 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { PageHeader } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, Subject, SubjectOffering, SubjectVersionSummary } from '../../../../types'
 import { createSubjectOffering, deleteSubjectOffering, getDepartment, getSubject, getSubjectVersionSummaries, updateSubjectOffering } from '../../../../lib/api'
-import { BankTableStatusFilter, BankTableToolbar, Breadcrumb, ConfirmDialog, EntityActions, Modal, QuickSearchBox, TERMS, bankStatusMatches, emptyReviewStats, matchesSearch, reviewStatusText, useAsyncMessage, useBankData } from '../shared'
+import { BankTableStatusFilter, BankTableToolbar, Breadcrumb, ConfirmDialog, EntityActions, Modal, TERMS, bankStatusMatches, emptyReviewStats, matchesSearch, reviewStatusText, useAsyncMessage, useBankData } from '../shared'
 
 export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const { headers, canScope } = useBankData()
@@ -43,24 +44,23 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const pageRows = filtered.slice((safePage - 1) * tableState.pageSize, safePage * tableState.pageSize)
 
   const columns = useMemo<EnterpriseTableColumn<SubjectVersionSummary>[]>(() => [
-    { key: 'stt', header: 'STT', width: 64, minWidth: 64, sticky: 'left', stickyOffset: 0, hideable: false, className: 'stt-cell', render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
-    { key: 'version', header: 'Phiên bản môn', minWidth: 280, sticky: 'left', stickyOffset: 64, hideable: false, render: ({ subject_version }) => <Link className="bank-table-link" href={`/bank/subject-versions/${subject_version.id}/chapters`}><b>{subject_version.code}</b><small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small></Link> },
-    { key: 'term', header: 'Học kỳ', minWidth: 110, hideable: true, render: ({ subject_version }) => subject_version.term || '—' },
-    { key: 'status', header: 'Trạng thái', minWidth: 160, hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); const published = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published'); return <span className={`bank-row-status status-${published ? 'published' : (stats.status || 'empty')}`}>{published ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span> } },
-    { key: 'chapters', header: 'Bài', align: 'right', hideable: true, render: ({ stats }) => stats?.chapter_count || 0 },
-    { key: 'questions', header: 'Tổng câu', align: 'right', hideable: true, render: ({ stats }) => { const capacity = stats?.question_capacity || ((stats?.chapter_count || 0) * (stats?.chapter_question_limit || 100)); return `${stats?.total_questions || 0}/${capacity}` } },
-    { key: 'approved', header: 'Đã duyệt', align: 'right', hideable: true, render: ({ stats }) => stats?.approved_count || 0 },
-    { key: 'unresolved', header: 'Chưa duyệt/lỗi', align: 'right', hideable: true, render: ({ stats }) => stats?.unresolved_count || 0 },
-    { key: 'published', header: 'Đã đưa CMS', align: 'right', hideable: true, render: ({ stats }) => `${stats?.published_release_count || 0}/${stats?.chapter_count || 0}` },
-    { key: 'actions', header: 'Thao tác', minWidth: 150, sticky: 'right', stickyOffset: 0, hideable: false, render: ({ subject_version, stats }) => { const published = Boolean(stats?.is_published || (stats?.published_release_count || 0) > 0 || stats?.status === 'published'); return <EntityActions variant="inline" canManage={canUpdateSubject && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(subject_version); setEditCode(subject_version.code || ''); setEditName(subject_version.name || '') }} onDelete={() => setDeleteTarget(subject_version)} /> } },
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
+    { key: 'version', header: 'Phiên bản môn', kind: 'identity', minWidth: 300, sticky: 'left', hideable: false, render: ({ subject_version }) => <Link className="bank-table-link" href={`/bank/subject-versions/${subject_version.id}/chapters`}><b>{subject_version.code}</b><small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small></Link> },
+    { key: 'term', header: 'Học kỳ', kind: 'status', width: 96, priority: 'important', hideable: true, render: ({ subject_version }) => subject_version.term || '—' },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 136, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); const published = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published'); return <span className={`bank-row-status status-${published ? 'published' : (stats.status || 'empty')}`}>{published ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span> } },
+    { key: 'chapters', header: 'Bài', kind: 'number', width: 68, priority: 'important', hideable: true, render: ({ stats }) => stats?.chapter_count || 0 },
+    { key: 'questions', header: 'Tổng câu', kind: 'number', width: 92, priority: 'important', hideable: true, render: ({ stats }) => { const capacity = stats?.question_capacity || ((stats?.chapter_count || 0) * (stats?.chapter_question_limit || 100)); return `${stats?.total_questions || 0}/${capacity}` } },
+    { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.approved_count || 0 },
+    { key: 'unresolved', header: 'Chờ/lỗi', kind: 'number', width: 78, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
+    { key: 'published', header: 'Đã đưa CMS', kind: 'number', width: 92, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => `${stats?.published_release_count || 0}/${stats?.chapter_count || 0}` },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject_version, stats }) => { const published = Boolean(stats?.is_published || (stats?.published_release_count || 0) > 0 || stats?.status === 'published'); return <EntityActions variant="inline" canManage={canUpdateSubject && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(subject_version); setEditCode(subject_version.code || ''); setEditName(subject_version.name || '') }} onDelete={() => setDeleteTarget(subject_version)} /> } },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
     <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
-    <QuickSearchBox compact />
+    <PageHeader eyebrow="Ngân hàng đề" title={subject ? `Phiên bản môn · ${subject.code}` : 'Phiên bản môn'} description="Một học kỳ chỉ có một phiên bản môn cuối; Release và Quiz là workflow đầu ra." />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
-      <div className="section-head"><div><h2>{subject ? `Phiên bản môn theo học kỳ của ${subject.code}` : 'Danh sách phiên bản môn'}</h2><p className="helper">Mỗi học kỳ chỉ có một phiên bản môn cuối. Release và Quiz là workflow đầu ra, không phải cấp trong cây.</p></div></div>
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm phiên bản, mã môn hoặc học kỳ" action={canUpdateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined} />
       <EnterpriseDataTable tableId={`bank-versions-${subjectId}`} caption="Danh sách phiên bản môn" rows={pageRows} columns={columns} rowKey={({ subject_version }) => subject_version.id} density={tableState.density} onDensityChange={(density) => updateTableState({ density }, { resetPage: false })} page={safePage} pageSize={tableState.pageSize} total={filtered.length} totalPages={totalPages} onPageChange={(page) => updateTableState({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => updateTableState({ pageSize, page: 1 }, { resetPage: false })} label="phiên bản môn" emptyTitle={tableState.q || statusFilter !== 'all' ? 'Không có phiên bản phù hợp' : 'Chưa có phiên bản môn'} emptyDescription="Tạo phiên bản môn cuối cho học kỳ cần biên soạn." />
     </section>

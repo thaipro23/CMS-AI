@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/claude-code-review-pack-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5}"
 INCLUDE_BUILD_GATE="${INCLUDE_BUILD_GATE:-0}"
 STRICT_BUILD_GATE="${STRICT_BUILD_GATE:-0}"
 mkdir -p "$OUT_DIR"
@@ -197,7 +197,7 @@ Run before UAT sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
@@ -243,7 +243,7 @@ PY
 cat > "$OUT_DIR/CLAUDE_REVIEW_BRIEF.md" <<'MD'
 # Claude Code Review Brief
 
-Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16 — App Shell & Enterprise UI Rebuild + Production UI Hardening.
+Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5 — App Shell & Enterprise UI Rebuild + Production UI Hardening.
 
 Static review services to inspect: SecurityReadinessService, SecurityAttackSimulationService, PerformanceReadinessService, QueryHotspotService, ReleaseCandidateService, PilotOperationsService, QuestionBankReleasePublishWorkflowService, QuestionBankQuizCreationWorkflowService, QuestionBankGenerationReviewWorkflowService, AcademicSyncEnrollmentWorkflowService.
 

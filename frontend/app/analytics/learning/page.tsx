@@ -47,6 +47,8 @@ import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../lib/runtime'
 import { PageHeader } from '../../../components/layout/PageHeader'
+import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
+import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState, TrainingWorkflowSteps } from '../../../components/training/TrainingWorkspace'
 
 const PAGE_SIZE = 200
 const SUBJECT_PAGE_SIZE = 50
@@ -98,6 +100,18 @@ const EMPTY_SUBJECT_SUMMARY = {
 function percent(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A'
   return `${Math.round(value * 10) / 10}%`
+}
+
+
+function analyticsErrorMessage(error: unknown, fallback: string) {
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (!raw) return fallback
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return 'Không kết nối được API phân tích học tập. Vui lòng tải lại; nếu lớp chưa ghép Course CMS, hãy hoàn tất mapping trước.'
+  }
+  if (/403|forbidden|permission/i.test(raw)) return 'Bạn không có quyền xem dữ liệu lớp này trong phạm vi hiện tại.'
+  if (/404|not found/i.test(raw)) return 'Không tìm thấy dữ liệu lớp hoặc Course CMS tương ứng.'
+  return raw.length > 220 ? fallback : raw
 }
 
 function resultLabel(value?: string | null, fallback?: string | null) {
@@ -685,7 +699,7 @@ export default function AnalyticsLearningPage() {
         const preferred = items.find((item) => item.term_name === 'Summer 2026') || items[0]
         setTermId((current) => items.some((item) => item.id === current) ? current : (preferred?.id || ''))
       })
-      .catch((error) => { if (!cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được học kỳ') })
+      .catch((error) => { if (!cancelled) setMessage(analyticsErrorMessage(error, 'Không tải được học kỳ')) })
       .finally(() => { if (!cancelled) setLoadingTerms(false) })
     return () => { cancelled = true }
   }, [headers, branch])
@@ -724,7 +738,7 @@ export default function AnalyticsLearningPage() {
         setSubjectSummary(result.summary || EMPTY_SUBJECT_SUMMARY)
         setSubjectId((current) => items.some((item) => item.id === current) ? current : '')
       })
-      .catch((error) => { if (!cancelled) setMessage(error instanceof Error ? error.message : 'Không tải được môn') })
+      .catch((error) => { if (!cancelled) setMessage(analyticsErrorMessage(error, 'Không tải được môn')) })
       .finally(() => { if (!cancelled) setLoadingSubjects(false) })
     return () => { cancelled = true }
   }, [headers, termId, campus, branch, debouncedSubjectSearch, subjectPage])
@@ -772,7 +786,7 @@ export default function AnalyticsLearningPage() {
           setClassOverview([])
           setClassOverviewTotal(0)
           setClassOverviewSummary(EMPTY_CLASS_OVERVIEW_SUMMARY)
-          setMessage(error instanceof Error ? error.message : 'Không tải được danh sách lớp theo quyền')
+          setMessage(analyticsErrorMessage(error, 'Không tải được danh sách lớp theo quyền'))
         }
       })
       .finally(() => { if (!cancelled) setLoadingClassOverview(false) })
@@ -813,7 +827,7 @@ export default function AnalyticsLearningPage() {
           setRows([])
           setTotalRows(0)
           setClassDoctor(null)
-          setMessage(error instanceof Error ? error.message : 'Không tải được kết quả học online')
+          setMessage(analyticsErrorMessage(error, 'Không tải được kết quả học online'))
         }
       })
       .finally(() => { if (!cancelled) { setLoadingResults(false); setDoctorLoading(false) } })
@@ -853,7 +867,7 @@ export default function AnalyticsLearningPage() {
       const next = await getAnalyticsStudentLearningBehaviorDetail(headers, classId, row.username, effectiveCourseId)
       setDetail(next)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không tải được lý do chi tiết')
+      setMessage(analyticsErrorMessage(error, 'Không tải được lý do chi tiết'))
     } finally {
       setDetailLoading(false)
     }
@@ -867,7 +881,7 @@ export default function AnalyticsLearningPage() {
       const doctor = await getAnalyticsClassResultDoctor(headers, classId, effectiveCourseId)
       setClassDoctor(doctor)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái dữ liệu lớp')
+      setMessage(analyticsErrorMessage(error, 'Không kiểm tra được trạng thái dữ liệu lớp'))
     } finally {
       setDoctorLoading(false)
     }
@@ -887,7 +901,7 @@ export default function AnalyticsLearningPage() {
       setMessage(`Đã đưa tác vụ tính lại lớp vào hàng đợi: #${job.id || 'job'}. Theo dõi ở /jobs.`)
       await refreshClassDoctor()
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không đưa được tác vụ tính lại vào hàng đợi')
+      setMessage(analyticsErrorMessage(error, 'Không đưa được tác vụ tính lại vào hàng đợi'))
     } finally {
       setRecalculateLoading(false)
     }
@@ -897,6 +911,42 @@ export default function AnalyticsLearningPage() {
   const permissionText = scopeMode === 'all'
     ? 'Quyền xem: toàn hệ thống.'
     : 'Quyền xem: hệ thống đã lọc theo phân quyền cơ sở, môn hoặc lớp AP được phân công.'
+
+  const workflowSteps = [
+    { key: 'subjects', label: 'Chọn môn', description: 'Tìm môn trong phạm vi' },
+    { key: 'classes', label: 'Chọn lớp', description: 'Xem lớp và mức dữ liệu', disabled: !subjectId },
+    { key: 'results', label: 'Xem kết quả', description: 'Phân tích sinh viên', disabled: !classId },
+  ]
+
+  const subjectColumns = useMemo<EnterpriseTableColumn<AcademicSubjectManagement>[]>(() => [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_item, index) => (subjectPage - 1) * SUBJECT_PAGE_SIZE + index + 1 },
+    { key: 'subject', header: 'Môn', kind: 'identity', minWidth: 250, priority: 'required', hideable: false, render: (item) => <><b>{compactSubjectLabel(item)}</b><small>{item.branch?.toUpperCase() || branch.toUpperCase()}</small></> },
+    { key: 'classes', header: 'Lớp', kind: 'number', width: 76, priority: 'important', hideable: true, render: (item) => item.class_count || 0 },
+    { key: 'students', header: 'Sinh viên', kind: 'number', width: 88, priority: 'important', hideable: true, render: (item) => item.student_count || 0 },
+    { key: 'course', header: 'Course CMS', kind: 'status', minWidth: 128, priority: 'important', hideable: true, render: (item) => <span className={item.openedx_course_id ? 'status-pill success' : 'status-pill warning'}>{item.openedx_course_id ? 'Đã ghép' : 'Chưa ghép'}</span> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 112, hideable: false, render: (item) => <button className="btn small primary" type="button" onClick={() => setFlowStep('classes', { subjectId: item.id, classId: '' })}>Xem lớp</button> },
+  ], [branch, subjectPage])
+
+  const classColumns = useMemo<EnterpriseTableColumn<AnalyticsClassBehaviorOverviewItem>[]>(() => [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_item, index) => (classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE + index + 1 },
+    { key: 'class', header: 'Lớp', kind: 'identity', minWidth: 220, priority: 'required', hideable: false, render: (item) => <><b>{item.class_code || item.class_name || item.class_id}</b><small>{item.campus?.toUpperCase() || 'N/A'} · {classDataStatusLabel(item)}</small></> },
+    { key: 'result', header: 'Kết quả lớp', kind: 'status', minWidth: 160, priority: 'important', hideable: true, render: (item) => <span className={resultClass(item.dominant_classification)}>{item.data_status === 'not_calculated' ? 'Chưa có kết quả' : resultLabel(item.dominant_classification, item.dominant_label)}</span> },
+    { key: 'real', header: 'Học thật', kind: 'number', width: 82, priority: 'important', hideable: true, render: (item) => item.likely_real_learning_count || 0 },
+    { key: 'review', header: 'Cần xem', kind: 'number', width: 86, priority: 'important', hideable: true, render: (item) => (item.possible_idle_count || 0) + (item.possible_suspicious_count || 0) },
+    { key: 'insufficient', header: 'Thiếu dữ liệu', kind: 'number', width: 98, priority: 'optional', hideable: true, render: (item) => item.insufficient_data_count || 0 },
+    { key: 'course', header: 'Course CMS', kind: 'status', minWidth: 135, priority: 'optional', defaultVisible: false, hideable: true, render: (item) => item.openedx_course_id ? <span className="status-pill success">Đã ghép</span> : <span className="status-pill warning">Chưa ghép</span> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 120, hideable: false, render: (item) => <button className="btn small primary" type="button" onClick={() => setFlowStep('results', { classId: item.class_id })}>Xem kết quả</button> },
+  ], [classOverviewPage])
+
+  const resultColumns = useMemo<EnterpriseTableColumn<AnalyticsLearningBehaviorRow>[]>(() => [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => index + 1 },
+    { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 245, sticky: 'left', priority: 'required', hideable: false, render: (row) => <><b>{row.student_code || row.username}</b><small>{row.full_name || row.username}</small></> },
+    { key: 'result', header: 'Kết quả', kind: 'status', minWidth: 185, priority: 'important', hideable: false, render: (row) => <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}><span className={resultClass(row.classification)}>{resultLabel(row.classification, row.display_label)}</span></button> },
+    { key: 'confidence', header: 'Tin cậy', kind: 'number', width: 86, priority: 'important', hideable: true, render: (row) => percent(row.confidence_score) },
+    { key: 'activity', header: 'Hoạt động cuối', kind: 'date', width: 150, priority: 'optional', hideable: true, render: (row) => row.last_activity_at ? formatVNDateTime(row.last_activity_at) : 'N/A' },
+    { key: 'course', header: 'Course CMS', kind: 'text', minWidth: 175, priority: 'optional', defaultVisible: false, hideable: true, truncateLines: 1, render: (row) => row.course_id || effectiveCourseId || 'N/A' },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 106, hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => openReason(row)}>Chi tiết</button> },
+  ], [effectiveCourseId])
 
   return <div className="page-stack analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
     <PageHeader
@@ -931,18 +981,17 @@ export default function AnalyticsLearningPage() {
         </label>
       </div>
 
-      <div className="analytics-stepper" aria-label="Luồng phân tích hành vi học">
-        <button className={step === 'subjects' ? 'active' : ''} type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>1. Môn</button>
-        <button className={step === 'classes' ? 'active' : ''} type="button" disabled={!subjectId} onClick={() => setFlowStep('classes', { classId: '' })}>2. Lớp</button>
-        <button className={step === 'results' ? 'active' : ''} type="button" disabled={!classId} onClick={() => setFlowStep('results')}>3. Xem kết quả</button>
-      </div>
-
-      <div className="analytics-flow-context">
-        <span>{selectedTerm?.term_name || 'Chưa chọn kỳ'}</span>
-        <span>{campusLabel(campus, campuses)}</span>
-        <span>{selectedSubject?.subject_code || 'Chưa chọn môn'}</span>
-        <span>{selectedClassOverview?.class_code || 'Chưa chọn lớp'}</span>
-      </div>
+      <TrainingWorkflowSteps
+        steps={workflowSteps}
+        activeKey={step}
+        ariaLabel="Luồng phân tích học tập"
+        onChange={(key) => {
+          if (key === 'subjects') setFlowStep('subjects', { subjectId: '', classId: '' })
+          else if (key === 'classes') setFlowStep('classes', { classId: '' })
+          else setFlowStep('results')
+        }}
+      />
+      <TrainingContextChips items={[selectedTerm?.term_name || 'Chưa chọn kỳ', campusLabel(campus, campuses), selectedSubject?.subject_code || 'Chưa chọn môn', selectedClassOverview?.class_code || 'Chưa chọn lớp']} />
 
       {SHOW_DIAGNOSTICS_UI && showOperations && can('view_ops_readiness') && <>
       {productionReadiness && <div className={`analytics-production-readiness-panel ${readinessTone(productionReadiness)}`}>
@@ -1266,47 +1315,40 @@ export default function AnalyticsLearningPage() {
       </>}
       <div className="alert info compact-alert">{permissionText}</div>
       {message && <div className="academic-inline-error"><b>Cần kiểm tra</b><span>{message}</span></div>}
-      {!effectiveCourseId && step === 'results' && classId && <div className="alert warning compact-alert">Lớp này chưa ghép Course CMS nên kết quả học online có thể chưa đủ. Giáo viên vẫn xem được trạng thái Chưa đủ dữ liệu.</div>}
     </section>
 
-    {step === 'subjects' && <section className="card academic-unified-card analytics-subject-picker-card">
-      <div className="section-head list-card-head">
+    {step === 'subjects' && <section className="card academic-unified-card analytics-subject-picker-card analytics-workspace-section">
+      <div className="analytics-results-head">
         <div>
-          <h3>Môn</h3>
-          <p>Chọn môn trước, sau đó mới sang màn danh sách lớp.</p>
+          <h3>Chọn môn</h3>
+          <p>Chỉ hiển thị môn nằm trong phạm vi cơ sở, bộ môn hoặc lớp AP được phân công.</p>
         </div>
-        <span className="status-pill neutral">{subjectTotal ? `${(subjectPage - 1) * SUBJECT_PAGE_SIZE + 1}-${Math.min(subjectTotal, subjectPage * SUBJECT_PAGE_SIZE)} / ${subjectTotal}` : '0 môn'}</span>
+        <span className="status-pill neutral">{subjectTotal.toLocaleString('vi-VN')} môn</span>
       </div>
-      <div className="academic-filter-bar compact-filter-row">
-        <label>Tìm môn
+      <div className="training-compact-filter">
+        <label className="is-wide">Tìm môn
           <input className="input" value={subjectSearch} onChange={(event) => { setSubjectSearch(event.target.value); setSubjectPage(1); setStep('subjects') }} placeholder="COM1071, Tin học..." />
         </label>
       </div>
-      <div className="academic-summary-strip analytics-class-overview-summary">
-        <div><span>Môn</span><b>{subjectSummary.subject_count}</b></div>
-        <div><span>Lớp</span><b>{subjectSummary.class_count}</b></div>
-        <div><span>Sinh viên</span><b>{subjectSummary.student_count}</b></div>
-        <div><span>Course CMS</span><b>{subjectSummary.course_mapped_count}/{subjectSummary.subject_count}</b></div>
-        <div><span>Ghi danh CMS</span><b>{subjectSummary.learning_enrolled_count}</b></div>
-      </div>
-      <div className="table-wrap analytics-dashboard-table-wrap">
-        <table className="data-table academic-data-table analytics-subject-picker-table">
-          <thead>
-            <tr><th>STT</th><th>Môn</th><th>Lớp</th><th>Sinh viên</th><th>Course CMS</th><th>Thao tác</th></tr>
-          </thead>
-          <tbody>
-            {subjects.map((item, index) => <tr key={item.id}>
-              <td className="stt-cell">{(subjectPage - 1) * SUBJECT_PAGE_SIZE + index + 1}</td>
-              <td><b>{compactSubjectLabel(item)}</b><small>{item.branch?.toUpperCase() || branch.toUpperCase()}</small></td>
-              <td>{item.class_count || 0}</td>
-              <td>{item.student_count || 0}</td>
-              <td><span className={item.openedx_course_id ? 'status-pill success' : 'status-pill warning'}>{item.openedx_course_id ? 'Đã ghép' : 'Chưa ghép'}</span></td>
-              <td><button className="btn small primary" type="button" onClick={() => setFlowStep('classes', { subjectId: item.id, classId: '' })}>Xem lớp</button></td>
-            </tr>)}
-            {!subjects.length && <tr><td colSpan={6}><div className="empty-state compact">{loadingSubjects ? 'Đang tải môn theo phân quyền...' : 'Không có môn nào trong phân quyền/bộ lọc hiện tại.'}</div></td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <TrainingKpiStrip compact items={[
+        { key: 'subjects', label: 'Môn', value: subjectSummary.subject_count },
+        { key: 'classes', label: 'Lớp', value: subjectSummary.class_count },
+        { key: 'students', label: 'Sinh viên', value: subjectSummary.student_count },
+        { key: 'course', label: 'Course CMS', value: `${subjectSummary.course_mapped_count}/${subjectSummary.subject_count}`, tone: subjectSummary.course_mapped_count < subjectSummary.subject_count ? 'warning' : 'success' },
+        { key: 'enrolled', label: 'Ghi danh', value: subjectSummary.learning_enrolled_count },
+      ]} />
+      <EnterpriseDataTable
+        tableId="analytics-subjects"
+        caption="Danh sách môn"
+        rows={subjects}
+        columns={subjectColumns}
+        rowKey={(item) => item.id}
+        density="compact"
+        loading={loadingSubjects}
+        emptyTitle="Không có môn trong phạm vi hiện tại"
+        emptyDescription="Đổi học kỳ, cơ sở hoặc từ khóa tìm kiếm."
+        label="môn"
+      />
       {subjectTotal > SUBJECT_PAGE_SIZE && <div className="pagination-row">
         <button className="btn secondary" type="button" disabled={subjectPage <= 1 || loadingSubjects} onClick={() => setSubjectPage((value) => Math.max(1, value - 1))}>Trang trước</button>
         <span>Trang {subjectPage}/{Math.max(1, subjectTotalPages || Math.ceil(subjectTotal / SUBJECT_PAGE_SIZE))}</span>
@@ -1314,58 +1356,33 @@ export default function AnalyticsLearningPage() {
       </div>}
     </section>}
 
-    {step === 'classes' && <section className="card academic-unified-card analytics-class-overview-card">
-      <div className="section-head list-card-head">
+    {step === 'classes' && <section className="card academic-unified-card analytics-class-overview-card analytics-workspace-section">
+      <div className="analytics-results-head">
         <div>
           <h3>Lớp của môn {selectedSubject?.subject_code || ''}</h3>
-          <p>{selectedSubject ? `${compactSubjectLabel(selectedSubject)} · ${classOverviewSummary.total_classes || 0} lớp · ${classOverviewSummary.total_students || 0} sinh viên` : 'Chọn môn để xem lớp.'}</p>
+          <p>{selectedSubject ? compactSubjectLabel(selectedSubject) : 'Chọn môn để xem lớp.'}</p>
         </div>
-        <div className="teacher-compact-actions">
-          <button className="btn secondary small" type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>Quay lại môn</button>
-          <span className="status-pill neutral">{classOverviewTotal ? `${(classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE + 1}-${Math.min(classOverviewTotal, classOverviewPage * CLASS_OVERVIEW_PAGE_SIZE)} / ${classOverviewTotal}` : '0 lớp'}</span>
-        </div>
+        <button className="btn secondary small" type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>Quay lại môn</button>
       </div>
-
-      <div className="academic-summary-strip analytics-class-overview-summary">
-        <div><span>Tổng lớp</span><b>{classOverviewSummary.total_classes || 0}</b></div>
-        <div><span>Tổng sinh viên</span><b>{classOverviewSummary.total_students || 0}</b></div>
-        <div><span>Có dấu hiệu học thật</span><b>{classOverviewSummary.likely_real_learning_count || 0}</b></div>
-        <div><span>Cần kiểm tra</span><b>{(classOverviewSummary.possible_idle_count || 0) + (classOverviewSummary.possible_suspicious_count || 0)}</b></div>
-        <div><span>Chưa đủ dữ liệu</span><b>{classOverviewSummary.insufficient_data_count || 0}</b></div>
-      </div>
-
-      <div className="table-wrap analytics-dashboard-table-wrap analytics-class-overview-table-wrap">
-        <table className="data-table academic-data-table analytics-class-overview-table">
-          <thead>
-            <tr>
-              <th>STT</th>
-              <th>Lớp</th>
-              <th>Cơ sở</th>
-              <th>Kết quả lớp</th>
-              <th>Học thật</th>
-              <th>Cần xem</th>
-              <th>Chưa đủ dữ liệu</th>
-              <th>Thao tác</th>
-            </tr>
-          </thead>
-          <tbody>
-            {classOverview.map((item, index) => <tr key={item.class_id}>
-              <td className="stt-cell">{(classOverviewPage - 1) * CLASS_OVERVIEW_PAGE_SIZE + index + 1}</td>
-              <td>
-                <b>{item.class_code || item.class_name || item.class_id}</b>
-                <small>{classDataStatusLabel(item)}{item.openedx_course_id ? ` · ${item.openedx_course_id}` : ' · Chưa ghép Course CMS'}</small>
-              </td>
-              <td>{item.campus?.toUpperCase() || 'N/A'}</td>
-              <td><span className={resultClass(item.dominant_classification)}>{item.data_status === 'not_calculated' ? 'Chưa có kết quả' : resultLabel(item.dominant_classification, item.dominant_label)}</span></td>
-              <td>{item.likely_real_learning_count || 0}</td>
-              <td>{(item.possible_idle_count || 0) + (item.possible_suspicious_count || 0)}</td>
-              <td>{item.insufficient_data_count || 0}</td>
-              <td><button className="btn small primary" type="button" onClick={() => setFlowStep('results', { classId: item.class_id })}>Xem kết quả</button></td>
-            </tr>)}
-            {!classOverview.length && <tr><td colSpan={8}><div className="empty-state compact">{loadingClassOverview ? 'Đang tải lớp theo phân quyền...' : subjectId ? 'Không có lớp phù hợp với phân quyền/bộ lọc kết quả.' : 'Chọn môn để xem lớp.'}</div></td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <TrainingKpiStrip compact items={[
+        { key: 'classes', label: 'Lớp', value: classOverviewSummary.total_classes || 0 },
+        { key: 'students', label: 'Sinh viên', value: classOverviewSummary.total_students || 0 },
+        { key: 'real', label: 'Có dấu hiệu học thật', value: classOverviewSummary.likely_real_learning_count || 0, tone: 'success' },
+        { key: 'review', label: 'Cần giáo viên xem', value: (classOverviewSummary.possible_idle_count || 0) + (classOverviewSummary.possible_suspicious_count || 0), tone: 'warning' },
+        { key: 'insufficient', label: 'Chưa đủ dữ liệu', value: classOverviewSummary.insufficient_data_count || 0 },
+      ]} />
+      <EnterpriseDataTable
+        tableId="analytics-classes"
+        caption="Danh sách lớp"
+        rows={classOverview}
+        columns={classColumns}
+        rowKey={(item) => item.class_id}
+        density="compact"
+        loading={loadingClassOverview}
+        emptyTitle={subjectId ? 'Không có lớp phù hợp' : 'Chưa chọn môn'}
+        emptyDescription={subjectId ? 'Không có lớp trong phân quyền hoặc bộ lọc kết quả hiện tại.' : 'Chọn môn ở bước đầu tiên.'}
+        label="lớp"
+      />
       {classOverviewTotal > CLASS_OVERVIEW_PAGE_SIZE && <div className="pagination-row">
         <button className="btn secondary" type="button" disabled={classOverviewPage <= 1 || loadingClassOverview} onClick={() => setClassOverviewPage((value) => Math.max(1, value - 1))}>Trang trước</button>
         <span>Trang {classOverviewPage}/{Math.max(1, Math.ceil(classOverviewTotal / CLASS_OVERVIEW_PAGE_SIZE))}</span>
@@ -1373,24 +1390,28 @@ export default function AnalyticsLearningPage() {
       </div>}
     </section>}
 
-    {step === 'results' && <section className="card academic-unified-card">
-      <div className="section-head list-card-head">
+    {step === 'results' && <section className="card academic-unified-card analytics-workspace-section">
+      <div className="analytics-results-head">
         <div>
-          <h3>Xem kết quả lớp</h3>
-          <p>{selectedClassOverview ? `${selectedClassOverview.class_code} · ${selectedSubject?.subject_code || ''} · ${selectedClassOverview.campus?.toUpperCase() || campusLabel(campus, campuses)} · ${selectedClassOverview.snapshot_count}/${selectedClassOverview.student_count} SV có kết quả` : 'Đang tải lớp đã chọn.'}</p>
+          <h3>Kết quả lớp {selectedClassOverview?.class_code || ''}</h3>
+          <p>{selectedClassOverview ? `${selectedSubject?.subject_code || ''} · ${selectedClassOverview.campus?.toUpperCase() || campusLabel(campus, campuses)} · ${selectedClassOverview.snapshot_count}/${selectedClassOverview.student_count} sinh viên có snapshot` : 'Đang tải lớp đã chọn.'}</p>
         </div>
         <div className="teacher-compact-actions">
           <button className="btn secondary small" type="button" onClick={() => setFlowStep('classes', { classId: '' })}>Quay lại lớp</button>
-          <button className="btn secondary small" type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>Quay lại môn</button>
-          <span className="status-pill neutral">{totalRows ? `1-${Math.min(totalRows, PAGE_SIZE)} / ${totalRows}` : '0 sinh viên'}</span>
+          <button className="btn secondary small" type="button" onClick={() => setFlowStep('subjects', { subjectId: '', classId: '' })}>Chọn môn khác</button>
         </div>
       </div>
+
+      {!effectiveCourseId && classId ? <TrainingMappingEmptyState
+        description="Lớp chưa ghép Course CMS nên hệ thống chỉ có thể hiển thị roster và trạng thái Chưa đủ dữ liệu. Hoàn tất mapping để nhận kết quả học online."
+        action={<a className="btn secondary small" href={`/student-management/classes/${encodeURIComponent(classId)}`}>Mở chi tiết lớp</a>}
+      /> : null}
 
       {SHOW_DIAGNOSTICS_UI && <div className="analytics-class-doctor-panel">
         <div className="section-head list-card-head compact-head">
           <div>
             <h4>Trạng thái dữ liệu lớp</h4>
-            <p>{doctorLoading ? 'Đang kiểm tra roster, mapping, event và snapshot...' : (classDoctor?.message || 'Kiểm tra nhanh để biết vì sao lớp có thể đang 0/N snapshot.')}</p>
+            <p>{doctorLoading ? 'Đang kiểm tra roster, mapping, event và snapshot...' : (classDoctor?.message || 'Kiểm tra nhanh để biết vì sao lớp có thể đang thiếu snapshot.')}</p>
           </div>
           <div className="teacher-compact-actions">
             {classDoctor && <span className={doctorStatusClass(classDoctor.status)}>{doctorGapLabel(classDoctor.data_gap)}</span>}
@@ -1398,62 +1419,29 @@ export default function AnalyticsLearningPage() {
             <button className="btn primary small" type="button" onClick={enqueueClassRecalculate} disabled={recalculateLoading || doctorLoading || !classDoctor?.recalculate?.can_enqueue}>{recalculateLoading ? 'Đang đưa job...' : 'Tính lại lớp này'}</button>
           </div>
         </div>
-        <div className="academic-summary-strip analytics-doctor-strip">
-          <div><span>Roster AP</span><b>{classDoctor?.roster_count ?? summary.roster_count ?? 0}</b></div>
-          <div><span>Snapshot</span><b>{classDoctor?.snapshot_count ?? summary.snapshot_count ?? 0}</b></div>
-          <div><span>Thiếu snapshot</span><b>{classDoctor?.missing_snapshot_count ?? summary.missing_snapshot_count ?? 0}</b></div>
-          <div><span>Course CMS</span><b>{classDoctor?.resolved_course_id || effectiveCourseId || 'Chưa ghép'}</b></div>
-          <div><span>Event đã ingest</span><b>{classDoctor?.tracking_event_count ?? 0}</b></div>
-          <div><span>User có event</span><b>{classDoctor?.tracking_user_count ?? 0}</b></div>
-          <div><span>Video progress</span><b>{classDoctor?.video_progress_count ?? 0}</b></div>
-          <div><span>Session progress</span><b>{classDoctor?.session_progress_count ?? 0}</b></div>
-        </div>
-        {classDoctor && <div className="alert info compact-alert">
-          <b>Gợi ý xử lý</b> · {classDoctor.recommended_action || 'Theo dõi ingest/recalculate.'}
-          {classDoctor.active_recalculate_job ? ` · Đang có job ${classDoctor.active_recalculate_job.status || ''}` : ''}
-          {classDoctor.latest_tracking_event_at ? ` · Event gần nhất: ${formatVNDateTime(classDoctor.latest_tracking_event_at)}` : ''}
-        </div>}
-        {classDoctor?.course_mapping?.status === 'ambiguous' && <div className="alert warning compact-alert">Có nhiều Course CMS có thể khớp lớp này. Hệ thống không tự tính bừa; hãy tạo mapping lớp rõ ràng trước.</div>}
       </div>}
 
-      <div className="academic-summary-strip analytics-summary-strip analytics-result-only-summary">
-        <div><span>Tổng sinh viên</span><b>{summary.total_students || 0}</b></div>
-        <div><span>Snapshot nhận định</span><b>{summary.snapshot_count ?? rows.length}/{summary.roster_count ?? summary.total_students ?? 0}</b></div>
-        <div><span>Thiếu snapshot</span><b>{summary.missing_snapshot_count ?? Math.max(0, (summary.roster_count ?? summary.total_students ?? 0) - (summary.snapshot_count ?? rows.length))}</b></div>
-        <div><span>Có dấu hiệu học thật</span><b>{summary.likely_real_learning_count || 0}</b></div>
-        <div><span>Có khả năng treo máy</span><b>{summary.possible_idle_count || 0}</b></div>
-        <div><span>Dấu hiệu bất thường cần kiểm tra</span><b>{summary.possible_suspicious_count || 0}</b></div>
-        <div><span>Chưa đủ dữ liệu</span><b>{summary.insufficient_data_count || 0}</b></div>
-        <div><span>Chưa thấy bất thường rõ</span><b>{summary.normal_count || 0}</b></div>
-      </div>
+      <TrainingKpiStrip compact items={[
+        { key: 'students', label: 'Sinh viên', value: summary.roster_count ?? summary.total_students ?? 0 },
+        { key: 'snapshots', label: 'Có snapshot', value: summary.snapshot_count ?? rows.length },
+        { key: 'missing', label: 'Thiếu snapshot', value: summary.missing_snapshot_count ?? Math.max(0, (summary.roster_count ?? summary.total_students ?? 0) - (summary.snapshot_count ?? rows.length)), tone: (summary.missing_snapshot_count || 0) > 0 ? 'warning' : 'success' },
+        { key: 'real', label: 'Có dấu hiệu học thật', value: summary.likely_real_learning_count || 0, tone: 'success' },
+        { key: 'review', label: 'Cần giáo viên xem', value: (summary.possible_idle_count || 0) + (summary.possible_suspicious_count || 0), tone: 'warning' },
+        { key: 'insufficient', label: 'Chưa đủ dữ liệu', value: summary.insufficient_data_count || 0 },
+      ]} />
 
-      <div className="table-wrap analytics-dashboard-table-wrap">
-        <table className="data-table academic-data-table analytics-learning-table analytics-result-table two-col-sticky-table analytics-two-col-sticky-table">
-          <thead>
-            <tr>
-              <th className="stt-col sticky-index-col">STT</th>
-              <th className="student-sticky-col">Sinh viên</th>
-              <th>Kết quả</th>
-              <th>Độ tin cậy</th>
-              <th>Lần học cuối</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => <tr key={`${row.class_id}-${row.course_id}-${row.username}`}>
-              <td className="stt-cell sticky-index-col">{index + 1}</td>
-              <td className="student-sticky-col analytics-student-identity-cell"><b>{row.student_code || row.username}</b><small>{row.full_name || row.username}</small><small>{row.course_id || effectiveCourseId || 'Course CMS N/A'}</small></td>
-              <td>
-                <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}>
-                  <span className={resultClass(row.classification)}>{resultLabel(row.classification, row.display_label)}</span>
-                </button>
-              </td>
-              <td>{percent(row.confidence_score)}</td>
-              <td>{row.last_activity_at ? formatVNDateTime(row.last_activity_at) : 'N/A'}</td>
-            </tr>)}
-            {!rows.length && <tr><td colSpan={5}><div className="empty-state compact">{loadingResults ? 'Đang tải kết quả...' : classId ? 'Chưa có kết quả cho lớp/bộ lọc này.' : 'Chọn lớp trong danh sách để xem chi tiết kết quả.'}</div></td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <EnterpriseDataTable
+        tableId="analytics-results"
+        caption="Kết quả sinh viên"
+        rows={rows}
+        columns={resultColumns}
+        rowKey={(row) => `${row.class_id}-${row.course_id}-${row.username}`}
+        density="compact"
+        loading={loadingResults}
+        emptyTitle={classId ? 'Chưa có kết quả cho lớp này' : 'Chưa chọn lớp'}
+        emptyDescription={classId ? 'Roster vẫn được giữ; các sinh viên chưa có snapshot sẽ hiển thị Chưa đủ dữ liệu khi backend trả kết quả.' : 'Chọn một lớp ở bước trước.'}
+        label="sinh viên"
+      />
     </section>}
 
     <DetailDrawer row={selectedRow} detail={detail} loading={detailLoading} onClose={() => { setSelectedRow(null); setDetail(null) }} />

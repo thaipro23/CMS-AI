@@ -11,6 +11,7 @@ import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/tab
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { useDebouncedValue } from '../../lib/useDebouncedValue'
 import { formatVNDateTime } from '../../lib/time'
+import { CompactFilterBar, InfoPairGrid, OperationsKpiStrip, SideDrawer } from '../../components/operations/OperationsWorkspace'
 
 const actionLabel: Record<string, string> = {
   'question_bank.material.upload.async': 'Tách tài liệu',
@@ -62,6 +63,7 @@ function AuditContent() {
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState<ActionMessageData | null>(null)
+  const [selectedLog, setSelectedLog] = useState<AuditLogRow | null>(null)
   const debugMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1'
 
   const load = useCallback(async () => {
@@ -100,37 +102,54 @@ function AuditContent() {
   }
 
   const columns = useMemo<EnterpriseTableColumn<AuditLogRow>[]>(() => [
-    { key: 'stt', header: 'STT', width: 72, sticky: 'left', stickyOffset: 0, hideable: false, render: (_row, index) => (page - 1) * pageSize + index + 1 },
-    { key: 'created_at', header: 'Thời điểm', minWidth: 150, render: (row) => <small>{formatVNDateTime(row.created_at)}</small> },
-    { key: 'actor', header: 'Người thực hiện', minWidth: 170, render: (row) => <><b>{actorLabel(row)}</b><small>{row.actor_role || '—'}</small></> },
-    { key: 'action', header: 'Hành động', minWidth: 220, render: (row) => <><b>{actionText(row.action)}</b>{debugMode ? <small>{row.action}</small> : null}</> },
-    { key: 'status', header: 'Kết quả', minWidth: 120, render: (row) => <StatusBadge status={row.status} /> },
-    { key: 'error_type', header: 'Nguồn lỗi', minWidth: 150, hideable: true, render: (row) => errorText(row.error_type) },
-    { key: 'target', header: 'Đối tượng', minWidth: 170, hideable: true, render: (row) => <small>{debugMode ? targetLabel(row) : (row.target_type || '—')}</small> },
-    { key: 'message', header: 'Nội dung', minWidth: 300, render: (row) => <span className={row.status === 'failed' ? 'table-error-text' : ''}>{row.message || 'Không có nội dung mô tả.'}</span> },
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (page - 1) * pageSize + index + 1 },
+    { key: 'actor', header: 'Người thực hiện', kind: 'identity', minWidth: 170, priority: 'required', hideable: false, render: (row) => <><b>{actorLabel(row)}</b><small>{row.actor_role || 'Không có vai trò'}</small></> },
+    { key: 'action', header: 'Hành động', kind: 'identity', minWidth: 240, priority: 'required', hideable: false, render: (row) => <><b>{actionText(row.action)}</b>{debugMode ? <small>{row.action}</small> : <small>{row.target_type || 'Hệ thống'}</small>}</> },
+    { key: 'status', header: 'Kết quả', kind: 'status', width: 110, priority: 'required', hideable: false, render: (row) => <StatusBadge status={row.status} /> },
+    { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 142, priority: 'important', hideable: true, render: (row) => <small>{formatVNDateTime(row.created_at)}</small> },
+    { key: 'message', header: 'Nội dung', kind: 'text', minWidth: 240, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2, render: (row) => <span className={row.status === 'failed' ? 'table-error-text' : ''}>{row.message || 'Không có nội dung mô tả.'}</span> },
+    { key: 'error_type', header: 'Nguồn lỗi', kind: 'status', width: 130, priority: 'optional', hideable: true, defaultVisible: false, render: (row) => errorText(row.error_type) },
+    { key: 'target', header: 'Đối tượng', kind: 'text', minWidth: 150, priority: 'optional', hideable: true, defaultVisible: false, render: (row) => <small>{targetLabel(row)}</small> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 92, sticky: 'right', hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => setSelectedLog(row)}>Chi tiết</button> },
   ], [debugMode, page, pageSize])
 
   if (!can('view_jobs')) return <div className="card empty-state">Bạn không có quyền xem nhật ký hoạt động.</div>
   const failedCount = rows.filter((row) => row.status === 'failed').length
   const successCount = rows.filter((row) => row.status === 'success').length
+  const resetFilters = () => update({ q: '', status: 'all', errorType: 'all', actorId: '', page: 1 }, { resetPage: false })
 
   return <div className="page-stack ops-console audit-console ux-enterprise-page">
     <PageHeader
       eyebrow="Vận hành hệ thống"
       title="Nhật ký hoạt động"
-      description="Tra cứu lịch sử thao tác theo đúng phạm vi RBAC. Bộ lọc, phân trang và mật độ bảng được lưu trong URL."
+      description="Tra cứu thao tác theo phạm vi RBAC. Dùng Chi tiết để xem nội dung và đối tượng đầy đủ thay vì dàn nhiều cột trên bảng."
       secondaryActions={<button className="btn secondary" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>}
       primaryAction={<button className="btn" type="button" onClick={exportCurrentFilter} disabled={exporting || loading}>{exporting ? 'Đang xuất...' : 'Xuất CSV'}</button>}
     />
     <ActionMessage message={message} onClose={() => setMessage(null)} />
-    <section className="ops-kpi-grid"><div><span>Tổng theo bộ lọc</span><b>{total}</b></div><div><span>Thành công trên trang</span><b>{successCount}</b></div><div><span>Thất bại trên trang</span><b>{failedCount}</b></div><div><span>Trang hiện tại</span><b>{page}/{totalPages}</b></div></section>
-    <section className="card ops-filter-card"><div className="grid grid-4">
-      <label>Tìm nhanh<input className="input" value={q} onChange={(event) => update({ q: event.target.value })} placeholder="hành động, người, nội dung..." /></label>
+    <OperationsKpiStrip items={[
+      { label: 'Tổng theo bộ lọc', value: total, hint: `${totalPages} trang` },
+      { label: 'Thành công', value: successCount, hint: 'Trên trang hiện tại', tone: 'success' },
+      { label: 'Thất bại', value: failedCount, hint: failedCount ? 'Cần kiểm tra chi tiết' : 'Không có lỗi trên trang', tone: failedCount ? 'danger' : 'neutral' },
+    ]} />
+    <CompactFilterBar actions={<button className="btn secondary" type="button" onClick={resetFilters} disabled={!q && status === 'all' && errorType === 'all' && !actorId}>Xóa lọc</button>}>
+      <label>Tìm nhanh<input className="input" value={q} onChange={(event) => update({ q: event.target.value })} placeholder="Hành động, nội dung, đối tượng..." /></label>
       <label>Trạng thái<select className="input" value={status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="success">Thành công</option><option value="failed">Thất bại</option></select></label>
-      <label>Nguồn lỗi<select className="input" value={errorType} onChange={(event) => update({ errorType: event.target.value })}><option value="all">Tất cả</option><option value="USER_ERROR">Do người dùng/cấu hình</option><option value="SYSTEM_ERROR">Do hệ thống</option><option value="EXTERNAL_SERVICE_ERROR">Dịch vụ ngoài</option><option value="VALIDATION_ERROR">Dữ liệu đầu vào</option><option value="AUTH_ERROR">Phân quyền</option></select></label>
+      <label>Nguồn lỗi<select className="input" value={errorType} onChange={(event) => update({ errorType: event.target.value })}><option value="all">Tất cả</option><option value="USER_ERROR">Người dùng/cấu hình</option><option value="SYSTEM_ERROR">Hệ thống</option><option value="EXTERNAL_SERVICE_ERROR">Dịch vụ ngoài</option><option value="VALIDATION_ERROR">Dữ liệu đầu vào</option><option value="AUTH_ERROR">Phân quyền</option></select></label>
       <label>Người thực hiện<input className="input" value={actorId} onChange={(event) => update({ actorId: event.target.value })} placeholder="admin, system..." /></label>
-    </div></section>
-    <EnterpriseDataTable tableId="ops-audit" caption="Nhật ký hoạt động" rows={rows} columns={columns} rowKey={(row) => row.id} density={density} onDensityChange={(value) => update({ density: value }, { resetPage: false })} loading={loading} error={error} onRetry={load} emptyTitle="Không có log phù hợp" emptyDescription="Thử thay đổi từ khóa, trạng thái, nguồn lỗi hoặc người thực hiện." page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={(value) => update({ page: value }, { resetPage: false })} onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })} label="log" getRowClassName={(row) => `row-${row.status}`} />
+    </CompactFilterBar>
+    <EnterpriseDataTable tableId="ops-audit-v2" caption="Nhật ký hoạt động" rows={rows} columns={columns} rowKey={(row) => row.id} density={density} onDensityChange={(value) => update({ density: value }, { resetPage: false })} loading={loading} error={error} onRetry={load} emptyTitle="Không có log phù hợp" emptyDescription="Thử thay đổi từ khóa, trạng thái, nguồn lỗi hoặc người thực hiện." page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={(value) => update({ page: value }, { resetPage: false })} onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })} label="log" getRowClassName={(row) => `row-${row.status}`} />
+
+    <SideDrawer open={Boolean(selectedLog)} title={selectedLog ? actionText(selectedLog.action) : 'Chi tiết nhật ký'} description={selectedLog ? formatVNDateTime(selectedLog.created_at) : undefined} onClose={() => setSelectedLog(null)}>
+      {selectedLog ? <div className="page-stack compact-stack"><StatusBadge status={selectedLog.status} /><InfoPairGrid items={[
+        { label: 'Người thực hiện', value: actorLabel(selectedLog) },
+        { label: 'Vai trò', value: selectedLog.actor_role || '—' },
+        { label: 'Nguồn lỗi', value: errorText(selectedLog.error_type) },
+        { label: 'Đối tượng', value: targetLabel(selectedLog) },
+        { label: 'Mã hành động', value: <code>{selectedLog.action}</code>, wide: true },
+        { label: 'Nội dung', value: selectedLog.message || 'Không có nội dung mô tả.', wide: true },
+      ]} /></div> : null}
+    </SideDrawer>
   </div>
 }
 

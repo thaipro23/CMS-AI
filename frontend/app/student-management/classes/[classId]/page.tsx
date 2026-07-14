@@ -24,6 +24,8 @@ import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, Ac
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
+import { PageHeader } from '../../../../components/layout/PageHeader'
+import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState } from '../../../../components/training/TrainingWorkspace'
 
 const PAGE_SIZE = 50
 
@@ -785,12 +787,17 @@ function ClassDetailContent() {
   behaviorParams.set('classification', 'all')
   const behaviorHref = `/analytics/learning?${behaviorParams.toString()}`
 
-  return <div className="page-stack student-management-page academic-flow-page class-detail-flow">
-    <section className="card academic-unified-card">
-      <div className="teacher-breadcrumb-row clean-breadcrumb-row"><Link className="btn secondary small" href={operationalBackHref}>← Quay lại danh sách lớp</Link></div>
+  return <div className="page-stack student-management-page academic-flow-page class-detail-flow training-operations-page">
+    <PageHeader
+      eyebrow="Vận hành đào tạo"
+      title={`Chi tiết lớp ${classInfo?.class_code || ''}`.trim()}
+      description={`${classInfo?.subject_code || ''}${classInfo?.subject_name ? ` · ${classInfo.subject_name}` : ''} · ${classInfo?.campus?.toUpperCase() || 'Chưa rõ cơ sở'}`}
+      secondaryActions={<Link className="btn secondary" href={operationalBackHref}>Quay lại danh sách lớp</Link>}
+      primaryAction={<Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
+    />
+    <section className="card academic-unified-card training-workspace-section">
       <div className="class-action-row compact-sync-action-strip clean-sync-action-strip">
         <div className="toolbar-actions">
-          <Link className="btn primary" href={behaviorHref}>Hành vi học</Link>
           {canRunFullCmsSync && <button className="btn secondary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>}
           {canRunFullCmsSync && <button className="btn secondary" type="button" disabled={actionBusy} onClick={runScoreUpdate}>{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>}
           {can('manage_settings') && <Link className="btn secondary" href="/semesters">Cấu hình tuần học</Link>}
@@ -810,22 +817,16 @@ function ClassDetailContent() {
       {message && <p className="form-message">{message}</p>}
 
 
-      <div className="academic-summary-strip class-summary-strip">
-        <div><span>Sinh viên</span><b>{summary?.total ?? classInfo?.student_count ?? 0}</b><small>Trong lớp</small></div>
-        <div><span>Tài khoản CMS</span><b>{matched}</b><small>Cần xử lý: {needsCmsAction}</small></div>
-        <div><span>Đã enroll</span><b>{learningSummary?.counts?.enrolled || 0}</b><small>{learningSummary?.openedx_course_id || classInfo?.openedx_course_id || 'N/A'}</small></div>
-        <div><span>Đã vào học</span><b>{learningSummary?.active_count || 0}</b><small>Có tiến độ</small></div>
-        <div><span>Hoàn thành TB</span><b>{percentLabel(learningSummary?.avg_progress_percent)}</b><small>{learningSummary?.total || 0} sinh viên</small></div>
-        <div><span>Điểm tổng TB</span><b>{grade10Label(learningSummary?.avg_grade_percent)}</b><small>{learningSummary?.last_synced_at ? `Cập nhật: ${formatVNDateTime(learningSummary.last_synced_at)}` : 'Chưa cập nhật'}</small></div>
-      </div>
-
-
-      <div className="academic-detail-grid compact-class-info">
-        <div><span>Mã lớp</span><b>{classInfo?.class_code || '—'}</b></div>
-        <div><span>Block</span><b>{classInfo?.block_name || '—'}</b></div>
-        <div><span>Giảng viên</span><b>{classInfo?.teacher_name || classInfo?.teacher_username || '—'}</b></div>
-        <div><span>Course CMS</span><b>{classInfo?.openedx_course_id || 'N/A'}</b></div>
-      </div>
+      <TrainingContextChips items={[classInfo?.block_name || 'Chưa có block', classInfo?.teacher_name || classInfo?.teacher_username || 'Chưa phân công giảng viên', classInfo?.openedx_course_id || 'Chưa ghép Course CMS']} />
+      <TrainingKpiStrip compact items={[
+        { key: 'students', label: 'Sinh viên', value: summary?.total ?? classInfo?.student_count ?? 0 },
+        { key: 'cms', label: 'CMS match', value: `${matched}/${summary?.total ?? classInfo?.student_count ?? 0}`, hint: `${needsCmsAction} cần xử lý`, tone: needsCmsAction > 0 ? 'warning' : 'success' },
+        { key: 'enrolled', label: 'Đã ghi danh', value: learningSummary?.counts?.enrolled || 0 },
+        { key: 'active', label: 'Đã vào học', value: learningSummary?.active_count || 0 },
+        { key: 'progress', label: 'Hoàn thành TB', value: percentLabel(learningSummary?.avg_progress_percent) },
+        { key: 'grade', label: 'Điểm tổng TB', value: grade10Label(learningSummary?.avg_grade_percent), hint: learningSummary?.last_synced_at ? `Cập nhật ${formatVNTimeDate(learningSummary.last_synced_at)}` : 'Chưa cập nhật' },
+      ]} />
+      {!effectiveCourseId ? <TrainingMappingEmptyState action={canRunFullCmsSync ? <button className="btn secondary small" type="button" disabled={actionBusy} onClick={runFullCmsSync}>Đồng bộ full CMS</button> : undefined} /> : null}
 
     </section>
 
@@ -922,33 +923,6 @@ function ClassDetailContent() {
     </section>
 
 
-    {false && assignmentModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssignmentModalOpen(false) }}>
-      <div className="card bank-modal academic-confirm-modal wide-policy-modal assignment-workflow-modal" role="dialog" aria-modal="true" aria-labelledby="assignment-modal-title">
-        <div className="section-head"><div><h2 id="assignment-modal-title">Workflow bảo vệ Assignment</h2><p>Điểm nhập tại đây là điểm chính thức sau buổi bảo vệ. Điểm Assignment từ CMS chỉ dùng tham khảo, không ghi đè điểm bảo vệ.</p></div></div>
-        <div className="assignment-workflow-summary">
-          <div><span>Tổng SV</span><b>{assignmentSummary.total}</b></div>
-          <div><span>Đã nộp</span><b>{assignmentSummary.submitted}</b></div>
-          <div><span>Chờ bảo vệ</span><b>{assignmentSummary.waiting_defense}</b></div>
-          <div><span>Đã chấm</span><b>{assignmentSummary.graded}</b></div>
-          <div><span>Cần xử lý</span><b>{assignmentSummary.not_graded + assignmentSummary.needs_regrade + assignmentSummary.missing_score}</b></div>
-        </div>
-        <div className="modal-filter-bar assignment-workflow-toolbar">
-          <label>Trạng thái<select className="input" value={assignmentStatusFilter} onChange={(event) => setAssignmentStatusFilter(event.target.value)}>
-            <option value="all">Tất cả</option>
-            {DEFENSE_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select></label>
-          <label>Chuyển nhanh<select className="input" value={assignmentBulkStatus} onChange={(event) => setAssignmentBulkStatus(event.target.value)}>
-            {DEFENSE_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select></label>
-          <button className="btn secondary" type="button" onClick={applyAssignmentBulkStatus}>Áp dụng cho danh sách đang lọc</button>
-        </div>
-        <div className="policy-edit-table-wrap assignment-workflow-table-wrap"><table className="data-table compact-table"><thead><tr><th>STT</th><th>Sinh viên</th><th>Trạng thái bảo vệ</th><th>Điểm /10</th><th>Ghi chú vận hành</th><th>Kiểm soát</th></tr></thead><tbody>
-          {filteredAssignmentRows.map((row, index) => <tr key={row.student_id}><td className="stt-cell">{index + 1}</td><td><b>{row.student_code || row.student_username}</b><small>{row.student_name}</small></td><td><select className="input" value={row.defense_status || 'not_graded'} onChange={(event) => updateAssignmentRow(row.student_id, { defense_status: event.target.value })}>{DEFENSE_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className={defenseStatusClass(row.defense_status)}>{defenseStatusLabel(row.defense_status)}</span></td><td><input className="input score-input" type="number" min="0" max="10" step="0.1" value={row.score_10 ?? ''} onChange={(event) => updateAssignmentRow(row.student_id, { score_10: event.target.value === '' ? null : Number(event.target.value) })} /><small>{row.defense_status === 'graded' && typeof row.score_10 !== 'number' ? 'Bắt buộc nhập điểm khi đã chấm' : '0 → 10'}</small></td><td><input className="input" value={row.note || ''} placeholder="VD: vắng bảo vệ, cần chấm lại, đã bảo vệ ca 2..." onChange={(event) => updateAssignmentRow(row.student_id, { note: event.target.value })} /></td><td><div className="assignment-row-actions"><button className="btn tiny secondary" type="button" onClick={() => updateAssignmentRow(row.student_id, { defense_status: 'waiting_defense' })}>Chờ BV</button><button className="btn tiny secondary" type="button" onClick={() => updateAssignmentRow(row.student_id, { defense_status: 'graded' })}>Đã chấm</button><button className="btn tiny danger" type="button" onClick={() => updateAssignmentRow(row.student_id, { defense_status: 'absent', score_10: null })}>Vắng</button></div></td></tr>)}
-          {!filteredAssignmentRows.length && <tr><td colSpan={6}>Không có sinh viên theo trạng thái đang lọc.</td></tr>}
-        </tbody></table></div>
-        <div className="modal-actions"><button className="btn secondary" onClick={() => setAssignmentModalOpen(false)}>Đóng</button><button className="btn primary" disabled={savingPolicy} onClick={saveAssignmentRows}>{savingPolicy ? 'Đang lưu...' : 'Lưu workflow Assignment'}</button></div>
-      </div>
-    </div>}
 
     {selectedBehavior && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSelectedBehavior(null); setSelectedBehaviorDetail(null) } }}>
       <div className="card bank-modal academic-confirm-modal online-behavior-modal online-behavior-deadline-modal" role="dialog" aria-modal="true" aria-labelledby="online-behavior-modal-title">
