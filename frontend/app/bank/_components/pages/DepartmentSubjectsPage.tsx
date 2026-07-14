@@ -75,8 +75,8 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }, { label: 'Môn học' }]} />
-    <PageHeader eyebrow="Ngân hàng đề" title={department ? `Môn học · ${department.name}` : 'Môn học'} description="Mỗi môn chỉ có một phiên bản môn cuối trong từng học kỳ." />
+    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn' }]} />
+    <PageHeader eyebrow="Ngân hàng đề" title="Môn học" description="Mỗi môn chỉ có một phiên bản môn cuối trong từng học kỳ." />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm mã môn hoặc tên môn" action={canCreateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />

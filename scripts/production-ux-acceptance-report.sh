@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/production-ux-acceptance-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.1}"
 mkdir -p "$OUT_DIR"
 
 python - "$ROOT_DIR" "$EXPECTED_VERSION" "$OUT_DIR/production-ux-source-contract.json" <<'PY'
@@ -16,8 +16,9 @@ def read(path):
 
 checks = {
     'version': expected in read('backend/app/core/config.py') and expected in read('frontend/package.json'),
-    'responsive_table_observer': 'ResizeObserver' in read('frontend/components/table/EnterpriseDataTable.tsx'),
-    'responsive_row_details': 'enterprise-responsive-details-row' in read('frontend/components/table/EnterpriseDataTable.tsx'),
+    'full_content_table_contract': 'data-column-contract="full-content"' in read('frontend/components/table/EnterpriseDataTable.tsx'),
+    'natural_width_table': 'table-layout: auto !important' in read('frontend/styles/production-ux-browser-hotfix.css'),
+    'no_automatic_column_hiding': 'responsiveHiddenColumns' not in read('frontend/components/table/EnterpriseDataTable.tsx'),
     'indeterminate_selection': '.indeterminate = somePageSelected' in read('frontend/components/table/EnterpriseDataTable.tsx'),
     'mobile_drawer_inert_fallback': "toggleAttribute('inert'" in read('frontend/components/layout/AppShell.tsx'),
     'safari_match_media_fallback': 'media.addListener(updateMobile)' in read('frontend/components/layout/AppShell.tsx'),
@@ -39,7 +40,7 @@ result = {
         'Safari iPhone: 390x844',
         'Chrome Android: 360x800',
         'iPad/Safari: 768x1024',
-        'Bàn phím: skip link, sidebar, drawer, table details, pagination',
+        'Bàn phím: skip link, sidebar, drawer, table, column menu và pagination',
         'Windows High Contrast / forced colors',
         'prefers-reduced-motion',
         'RBAC bằng tài khoản thật cho từng vai trò',
@@ -63,7 +64,7 @@ lines = [
 lines.extend(f'- [ ] {item}' for item in data['browser_matrix'])
 lines += ['', '## Acceptance',
           '- [ ] Không có body horizontal scroll.',
-          '- [ ] Cột phụ của bảng truy cập được qua Chi tiết trên tablet/mobile.',
+          '- [ ] Bảng giữ đầy đủ nội dung; cột tự co giãn/xuống dòng và chỉ cuộn ngang trong container khi thực sự cần.',
           '- [ ] Sidebar/drawer không để focus lọt ra nền.',
           '- [ ] Escape đóng drawer và focus quay về nút mở.',
           '- [ ] Pagination và column menu dùng được hoàn toàn bằng bàn phím.',

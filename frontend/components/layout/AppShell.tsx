@@ -15,7 +15,6 @@ type NavGroupKey = 'overview' | 'bank' | 'training' | 'operations' | 'catalog' |
 type NavItem = {
   href: string
   label: string
-  description: string
   icon: AppIconName
   group: NavGroupKey
   permission?: string
@@ -35,22 +34,22 @@ const navGroups: Array<{ key: NavGroupKey; label: string }> = [
 ]
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', description: 'Số liệu và việc cần xử lý', icon: 'dashboard', group: 'overview', permission: 'view_questions' },
-  { href: '/bank/departments', label: 'Ngân hàng đề', description: 'Bộ môn, môn, phiên bản và câu hỏi', icon: 'bank', group: 'bank', permission: 'view_questions' },
-  { href: '/bank/search', label: 'Tìm kiếm câu hỏi', description: 'Tra cứu trên toàn bộ phạm vi được giao', icon: 'search', group: 'bank', permission: 'view_questions' },
-  { href: '/bank/quiz', label: 'Tạo Quiz', description: 'Tạo Quiz và Final test trên Open edX', icon: 'quiz', group: 'bank', permission: 'publish_questions' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', description: 'Theo dõi publish và rollback', icon: 'release', group: 'bank', permission: 'publish_questions' },
-  { href: '/student-management', label: 'Quản lý sinh viên', description: 'Lớp, sinh viên và trạng thái CMS', icon: 'students', group: 'training', permission: 'view_training_reports' },
-  { href: '/teacher-management', label: 'Quản lý giảng viên', description: 'Giảng viên và lớp được phân công', icon: 'teachers', group: 'training', permission: 'view_training_reports' },
-  { href: '/analytics/learning', label: 'Phân tích học tập', description: 'Tiến độ và tín hiệu học online', icon: 'analytics', group: 'training', permission: 'view_training_reports' },
-  { href: '/jobs', label: 'Tác vụ nền', description: 'Theo dõi tiến trình Celery', icon: 'jobs', group: 'operations', permission: 'view_jobs' },
-  { href: '/audit', label: 'Nhật ký hoạt động', description: 'Lịch sử thao tác và thay đổi', icon: 'audit', group: 'operations', permission: 'view_jobs' },
-  { href: '/ap-sync', label: 'Đồng bộ AP', description: 'Đồng bộ dữ liệu đào tạo', icon: 'sync', group: 'operations', permission: 'manage_training_deadlines' },
-  { href: '/ops/readiness', label: 'Kiểm tra vận hành', description: 'Gate kỹ thuật dành cho môi trường kiểm thử', icon: 'readiness', group: 'operations', permission: 'view_ops_readiness', diagnostic: true },
-  { href: '/premises', label: 'Cơ sở', description: 'Danh mục cơ sở đào tạo', icon: 'campus', group: 'catalog', permission: 'manage_training_deadlines' },
-  { href: '/semesters', label: 'Học kỳ', description: 'Kỳ, block và cấu hình tuần học', icon: 'semester', group: 'catalog', permission: 'manage_settings' },
-  { href: '/users', label: 'Người dùng & phân quyền', description: 'Gán vai trò theo phạm vi', icon: 'users', group: 'admin', permission: 'view_rbac' },
-  { href: '/settings', label: 'Cài đặt', description: 'Cấu hình vận hành hệ thống', icon: 'settings', group: 'admin', permission: 'manage_settings' },
+  { href: '/bank', label: 'Tổng quan', icon: 'dashboard', group: 'overview', permission: 'view_questions' },
+  { href: '/bank/departments', label: 'Ngân hàng đề', icon: 'bank', group: 'bank', permission: 'view_questions' },
+  { href: '/bank/search', label: 'Tìm kiếm câu hỏi', icon: 'search', group: 'bank', permission: 'view_questions' },
+  { href: '/bank/quiz', label: 'Tạo Quiz', icon: 'quiz', group: 'bank', permission: 'publish_questions' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', icon: 'release', group: 'bank', permission: 'publish_questions' },
+  { href: '/student-management', label: 'Quản lý sinh viên', icon: 'students', group: 'training', permission: 'view_training_reports' },
+  { href: '/teacher-management', label: 'Quản lý giảng viên', icon: 'teachers', group: 'training', permission: 'view_training_reports' },
+  { href: '/analytics/learning', label: 'Phân tích học tập', icon: 'analytics', group: 'training', permission: 'view_training_reports' },
+  { href: '/jobs', label: 'Tác vụ nền', icon: 'jobs', group: 'operations', permission: 'view_jobs' },
+  { href: '/audit', label: 'Nhật ký hoạt động', icon: 'audit', group: 'operations', permission: 'view_jobs' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', icon: 'sync', group: 'operations', permission: 'manage_training_deadlines' },
+  { href: '/ops/readiness', label: 'Kiểm tra vận hành', icon: 'readiness', group: 'operations', permission: 'view_ops_readiness', diagnostic: true },
+  { href: '/premises', label: 'Cơ sở', icon: 'campus', group: 'catalog', permission: 'manage_training_deadlines' },
+  { href: '/semesters', label: 'Học kỳ', icon: 'semester', group: 'catalog', permission: 'manage_settings' },
+  { href: '/users', label: 'Người dùng & phân quyền', icon: 'users', group: 'admin', permission: 'view_rbac' },
+  { href: '/settings', label: 'Cài đặt', icon: 'settings', group: 'admin', permission: 'manage_settings' },
 ]
 
 function isPathActive(pathname: string, href: string) {
@@ -84,17 +83,7 @@ function pageLabel(pathname: string) {
 }
 
 function breadcrumbsForPath(pathname: string): BreadcrumbItem[] {
-  if (pathname.startsWith('/bank/departments/')) {
-    const items: BreadcrumbItem[] = [
-      { label: 'Ngân hàng đề', href: '/bank/departments' },
-      { label: 'Bộ môn' },
-    ]
-    if (pathname.includes('/subjects/')) items.push({ label: 'Môn học' })
-    return items
-  }
-  if (pathname.startsWith('/bank/subjects/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Môn học' }, { label: 'Phiên bản môn' }]
-  if (pathname.startsWith('/bank/subject-versions/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn' }, { label: 'Bài học' }]
-  if (pathname.startsWith('/bank/chapters/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bài học' }, { label: 'Câu hỏi' }]
+  if (pathname.startsWith('/bank/')) return [{ label: 'Ngân hàng đề', href: '/bank/departments' }]
   if (pathname.startsWith('/student-management/classes/')) return [{ label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Chi tiết lớp' }]
   if (pathname.startsWith('/student-management/subjects/')) return [{ label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Danh sách lớp' }]
   if (pathname.startsWith('/teacher-management/teachers/')) return [{ label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Lớp giảng viên' }]
@@ -123,7 +112,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobile, setMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
-  const [autoLoginMessage, setAutoLoginMessage] = useState('')
   const { courseId, role, userId, can, isAuthenticated, authReady } = useAppContext()
 
   const availableItems = useMemo(() => navItems.filter((item) => !item.diagnostic || SHOW_DIAGNOSTICS_UI), [])
@@ -239,15 +227,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const startedAt = Number(window.sessionStorage.getItem('ai_openedx_cms_bridge_started_at') || 0)
     const now = Date.now()
     if (startedAt && now - startedAt < 30000) {
-      setAutoLoginMessage('Đang chờ CMS xác thực...')
       return
     }
     try {
-      setAutoLoginMessage('Đang chuyển sang CMS...')
       window.sessionStorage.setItem('ai_openedx_cms_bridge_started_at', String(now))
       window.location.href = buildCmsSessionBridgeUrl(courseId)
     } catch (error) {
-      setAutoLoginMessage(error instanceof Error ? error.message : 'Không tạo được liên kết CMS')
+      console.error('Không tạo được liên kết CMS', error)
     }
   }, [authReady, courseId, isAuthenticated, pathname])
 
@@ -292,7 +278,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="enterprise-sidebar-header">
         <Link href="/bank" className="enterprise-brand" aria-label="AI Server ACMS">
           <span className="enterprise-brand-mark">AI</span>
-          <span className="enterprise-brand-copy"><b>AI Server ACMS</b><small>FPT Polytechnic</small></span>
+          <span className="enterprise-brand-copy"><b>AI Server ACMS</b></span>
         </Link>
         {mobile && <button className="enterprise-icon-button sidebar-mobile-close" type="button" aria-label="Đóng menu" onClick={() => setDrawerOpen(false)}><AppIcon name="close" /></button>}
       </div>
@@ -319,7 +305,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   data-tooltip={item.label}
                 >
                   <span className="enterprise-nav-icon"><AppIcon name={item.icon}/></span>
-                  <span className="enterprise-nav-copy"><b>{item.label}</b><small>{item.description}</small></span>
+                  <span className="enterprise-nav-copy"><b>{item.label}</b></span>
                 </Link>
               })}
             </div>}
@@ -327,10 +313,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         })}
       </nav>
 
-      <div className="enterprise-sidebar-session" title={isAuthenticated ? `Đã đăng nhập: ${userId}` : autoLoginMessage || 'Chưa có phiên CMS'}>
-        <span className={`enterprise-session-indicator ${isAuthenticated ? 'ok' : 'wait'}`} aria-hidden="true" />
-        <span className="enterprise-sidebar-session-copy"><b>{isAuthenticated ? 'CMS đã kết nối' : 'Đang kết nối CMS'}</b><small>{isAuthenticated ? userId || 'Tài khoản hiện tại' : autoLoginMessage || 'Vui lòng chờ'}</small></span>
-      </div>
     </aside>
 
     <div className="enterprise-workspace">
@@ -346,7 +328,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <details ref={userMenuRef} className="enterprise-user-menu">
             <summary aria-label="Mở menu tài khoản">
               <span className="enterprise-avatar">{String(userId || 'U').slice(0, 2).toUpperCase()}</span>
-              <span className="enterprise-user-summary"><b>{userId || 'Người dùng'}</b><small>{ROLE_LABELS[role]}</small></span>
+              <span className="enterprise-user-summary"><b>{ROLE_LABELS[role]}</b></span>
               <AppIcon name="chevron-down" size={14}/>
             </summary>
             <div className="enterprise-user-popover">

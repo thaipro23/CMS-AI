@@ -57,8 +57,8 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
   return <div className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }, { label: 'Phiên bản môn' }]} />
-    <PageHeader eyebrow="Ngân hàng đề" title={subject ? `Phiên bản môn · ${subject.code}` : 'Phiên bản môn'} description="Một học kỳ chỉ có một phiên bản môn cuối; Release và Quiz là workflow đầu ra." />
+    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }]} />
+    <PageHeader eyebrow="Ngân hàng đề" title="Phiên bản môn" description="Một học kỳ chỉ có một phiên bản môn cuối; Release và Quiz là workflow đầu ra." />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm phiên bản, mã môn hoặc học kỳ" action={canUpdateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined} />

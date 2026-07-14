@@ -1,0 +1,122 @@
+/* v25.9.16.7.2.64.16.5.1 — production browser hotfix.
+   Keep all table content visible by default, remove sidebar helper text/session footer,
+   and let content determine column width before horizontal scrolling. */
+
+.enterprise-sidebar { grid-template-rows: auto minmax(0, 1fr) !important; }
+.enterprise-navigation { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.enterprise-nav-link { min-height: 38px; align-items: center; }
+.enterprise-nav-copy { display: flex !important; align-items: center; min-width: 0; }
+.enterprise-nav-copy b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enterprise-brand-copy { display: flex !important; align-items: center; }
+.enterprise-brand-copy b { white-space: nowrap; }
+.enterprise-sidebar-session,
+.enterprise-sidebar-session-copy { display: none !important; }
+.enterprise-user-summary { max-width: 190px; }
+.enterprise-user-summary b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The content breadcrumb owns entity hierarchy. The topbar only names the module. */
+.enterprise-topbar .enterprise-breadcrumbs.compact { max-width: min(34vw, 360px); }
+
+/* Full-content table contract. No automatic column hiding. */
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-data-table,
+.enterprise-data-table {
+  width: 100% !important;
+  min-width: 100% !important;
+  table-layout: auto !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] col.enterprise-priority-required,
+.enterprise-table-shell[data-column-contract='full-content'] col.enterprise-priority-important,
+.enterprise-table-shell[data-column-contract='full-content'] col.enterprise-priority-optional {
+  display: table-column !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] th.enterprise-priority-required,
+.enterprise-table-shell[data-column-contract='full-content'] th.enterprise-priority-important,
+.enterprise-table-shell[data-column-contract='full-content'] th.enterprise-priority-optional,
+.enterprise-table-shell[data-column-contract='full-content'] td.enterprise-priority-required,
+.enterprise-table-shell[data-column-contract='full-content'] td.enterprise-priority-important,
+.enterprise-table-shell[data-column-contract='full-content'] td.enterprise-priority-optional {
+  display: table-cell !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-data-table th,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-data-table td {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-index,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-number,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-actions {
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-status,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-date,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-progress {
+  white-space: normal !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-identity,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-text,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-kind-progress {
+  width: auto !important;
+  max-width: none !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-clamp-1,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-clamp-2,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-clamp-3,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-clamp-1 > *,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-clamp-2 > *,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-clamp-3 > * {
+  display: block !important;
+  overflow: visible !important;
+  -webkit-line-clamp: unset !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] .row-actions,
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-row-actions {
+  flex-wrap: wrap !important;
+}
+.enterprise-table-shell[data-column-contract='full-content'] .enterprise-table-scroll {
+  overflow-x: auto !important;
+  scrollbar-gutter: stable;
+}
+
+/* Legacy tables also prefer wrapping and natural column sizing. */
+.table,
+.bank-production-table,
+.academic-table,
+.training-table,
+.student-grade-table,
+.table-wrap > table,
+.responsive-table-wrap > table,
+.academic-table-wrap > table,
+.training-table-wrap > table,
+.bank-table-wrap > table,
+.class-student-table-scroll > table,
+.data-table,
+.ops-data-table {
+  width: 100% !important;
+  min-width: 100% !important;
+  table-layout: auto !important;
+}
+.table td,
+.bank-production-table td,
+.academic-table td,
+.training-table td,
+.student-grade-table td,
+.table-wrap > table td,
+.responsive-table-wrap > table td,
+.academic-table-wrap > table td,
+.training-table-wrap > table td,
+.bank-table-wrap > table td,
+.class-student-table-scroll > table td,
+.data-table td,
+.ops-data-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .enterprise-table-shell[data-column-contract='full-content'] .enterprise-data-table { min-width: 100% !important; }
+  .enterprise-table-shell[data-column-contract='full-content'] .enterprise-table-controls { align-items: stretch; }
+  .enterprise-table-shell[data-column-contract='full-content'] .enterprise-table-view-actions { width: 100%; justify-content: flex-end; }
+}

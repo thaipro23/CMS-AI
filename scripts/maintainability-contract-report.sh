@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 API_BASE_URL="${API_BASE_URL:-https://api-ai.cms-test.poly.edu.vn/api}"
 TOKEN="${TOKEN:-}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.1}"
 OUT_DIR="${OUT_DIR:-/tmp/ai-maintainability-contract-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT_DIR"
 

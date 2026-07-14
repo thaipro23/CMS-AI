@@ -12,6 +12,7 @@ from app.models.question import Question
 from app.models.question_bank import (
     BankReleaseQuestion,
     CourseQuizInstance,
+    Department,
     EdxCourseChapterMapping,
     EdxCourseMapping,
     QuestionBankRelease,
