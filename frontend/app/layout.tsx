@@ -8,9 +8,11 @@ import '../styles/production-ux-acceptance.css'
 import '../styles/production-ux-browser-hotfix.css'
 import '../styles/global-visual-polish.css'
 import '../styles/layout-integrity.css'
+import '../styles/frontend-runtime-contracts.css'
 import type { Metadata, Viewport } from 'next'
 import { AppProvider } from '../context/AppContext'
 import { AppShell } from '../components/layout/AppShell'
+import { FeedbackProvider } from '../components/ui/FeedbackProvider'
 
 export const metadata: Metadata = {
   title: 'Open edX AI Server · FPT Polytechnic',
@@ -28,7 +30,7 @@ const shellBootstrap = `(function(){try{var d=document.documentElement;d.dataset
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return <html lang="vi-VN" suppressHydrationWarning>
     <head><script dangerouslySetInnerHTML={{ __html: shellBootstrap }} /></head>
-    <body><AppProvider><AppShell>{children}</AppShell></AppProvider></body>
+    <body><AppProvider><FeedbackProvider><AppShell>{children}</AppShell></FeedbackProvider></AppProvider></body>
   </html>
 }
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { EditQuestionForm, Question } from '../../types'
+import { AccessibleDialog } from '../ui/AccessibleDialog'
 
 type Props = {
   question: Question
@@ -12,9 +13,15 @@ type Props = {
 }
 
 export function QuestionEditPanel({ question, form, canEdit, onChange, onSave, onCancel }: Props) {
-  return <div className="modal-backdrop"><section className="card edit-panel modal-card">
-    <h2>Sửa câu hỏi</h2>
-    <p className="helper"><b>ID:</b> {question.id} · <b>Phiên bản:</b> {question.version} · <b>Trạng thái:</b> {question.status}</p>
+  return <AccessibleDialog
+    open
+    title="Sửa câu hỏi"
+    description={`ID: ${question.id} · Phiên bản: ${question.version} · Trạng thái: ${question.status}`}
+    onClose={onCancel}
+    size="xlarge"
+    className="edit-panel"
+    footer={<div className="dialog-action-row"><button className="btn secondary" onClick={onCancel}>Hủy</button><button className="btn" data-dialog-autofocus disabled={!canEdit} onClick={onSave}>Lưu chỉnh sửa</button></div>}
+  >
     <div className="grid grid-3">
       <div><label>Node / Phạm vi</label><input className="input" value={form.node_title} onChange={(event) => onChange('node_title', event.target.value)} /></div>
       <div><label>Độ khó</label><select className="input" value={form.difficulty} onChange={(event) => onChange('difficulty', event.target.value)}><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></div>
@@ -32,6 +39,5 @@ export function QuestionEditPanel({ question, form, canEdit, onChange, onSave, o
     <label>Trích đoạn nguồn</label><textarea className="input" rows={2} value={form.source_excerpt} onChange={(event) => onChange('source_excerpt', event.target.value)} />
     <label>Source evidence / bằng chứng nguồn</label><textarea className="input" rows={2} value={form.source_evidence} onChange={(event) => onChange('source_evidence', event.target.value)} />
     <label>Tags, ngăn cách bằng dấu phẩy</label><input className="input" value={form.tags_text} onChange={(event) => onChange('tags_text', event.target.value)} />
-    <div className="button-row"><button className="btn" disabled={!canEdit} onClick={onSave}>Lưu chỉnh sửa</button><button className="btn secondary" onClick={onCancel}>Hủy</button></div>
-  </section></div>
+  </AccessibleDialog>
 }

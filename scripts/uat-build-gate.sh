@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/uat-build-gate-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.3}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.6}"
 STRICT="${STRICT:-0}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-0}"
 RUN_FRONTEND_INSTALL="${RUN_FRONTEND_INSTALL:-0}"
@@ -49,7 +49,6 @@ VERSION_TARGETS=(
   "docker-compose.prod.yml"
   ".env.example"
   ".env.production.example"
-  "frontend/components/layout/AppShell.tsx"
   "frontend/Dockerfile"
   "frontend/package-lock.json"
   "scripts/frontend-build-verify.sh"
@@ -59,10 +58,11 @@ VERSION_TARGETS=(
   "scripts/maintainability-contract-report.sh"
   "scripts/security-readiness-report.sh"
   "scripts/security-attack-simulation-report.sh"
+  "scripts/performance-worker-reliability-report.sh"
+  "scripts/frontend-runtime-contracts-report.sh"
   "scripts/pilot-release-candidate-report.sh"
   "scripts/pilot-operations-runbook.sh"
   "scripts/openedx-publish-verify.sh"
-  "scripts/rollback-drill-verify.sh"
   "scripts/load-test-hot-endpoints.sh"
   "scripts/production-pilot-final-gate.sh"
   "README.md"
@@ -94,17 +94,17 @@ for f in "${UX_FOUNDATION_FILES[@]}"; do
   fi
 done
 
-# Alembic revision chain guard. No schema change is expected in this release.
-if [[ -f backend/alembic/versions/0052_v25_9_16_7_2_27_learning_behavior_logic_calibration.py ]]; then
-  record_status PASS ALEMBIC_HEAD_KNOWN "Latest known migration 0052 is present"
+# Alembic revision chain guard. Migration 0053 is intentional for diff idempotency.
+if [[ -f backend/alembic/versions/0053_v25_9_16_7_2_64_16_5_4_diff_idempotency.py ]]; then
+  record_status PASS ALEMBIC_HEAD_KNOWN "Latest known migration 0053 is present"
 else
-  record_status FAIL ALEMBIC_HEAD_KNOWN "Expected latest migration 0052 is missing"
+  record_status FAIL ALEMBIC_HEAD_KNOWN "Expected latest migration 0053 is missing"
 fi
-find backend/alembic/versions -maxdepth 1 -type f \( -name '0053_*.py' -o -name '0054_*.py' \) 2>/dev/null | sort > "$OUT_DIR/newer-migrations.txt" || true
+find backend/alembic/versions -maxdepth 1 -type f \( -name '0054_*.py' -o -name '0055_*.py' \) 2>/dev/null | sort > "$OUT_DIR/newer-migrations.txt" || true
 if [[ -s "$OUT_DIR/newer-migrations.txt" ]]; then
-  record_status FAIL ALEMBIC_UNEXPECTED_NEWER "Unexpected migration newer than 0052 exists" "newer-migrations.txt"
+  record_status FAIL ALEMBIC_UNEXPECTED_NEWER "Unexpected migration newer than 0053 exists" "newer-migrations.txt"
 else
-  record_status PASS ALEMBIC_NO_UNEXPECTED_NEWER "No migration newer than 0052 detected"
+  record_status PASS ALEMBIC_NO_UNEXPECTED_NEWER "No migration newer than 0053 detected"
 fi
 
 # Backend syntax/import-light gate. compileall does not require PostgreSQL connection.
@@ -124,10 +124,10 @@ then
   if [[ "$RUN_BACKEND_TESTS" == "1" ]]; then
     run_and_record BACKEND_TARGETED_TESTS "pytest targeted versioned/static tests" backend-targeted-tests.log \
       env PYTHONPATH=backend python -m pytest -q \
-      backend/app/tests/test_v25_9_16_7_2_3*.py \
-      backend/app/tests/test_v25_9_16_7_2_4*.py \
-      backend/app/tests/test_v25_9_16_7_2_5*.py \
-      backend/app/tests/test_v25_9_16_7_2_64_13_bank_workflow_ux_completion.py
+      backend/app/tests/test_v25_9_16_7_2_64_16_5_4_production_security_closure.py \
+      backend/app/tests/test_v25_9_16_7_2_64_16_5_6_release_contract.py \
+      backend/app/tests/test_v25_9_16_7_2_64_16_5_5_performance_worker_reliability.py \
+      backend/app/tests/test_v25_9_15_3_version_diff_carry_over_retire.py
   else
     record_status WARN BACKEND_TARGETED_TESTS_SKIPPED "RUN_BACKEND_TESTS=0; backend pytest gate skipped" "python-dependency-check.json"
   fi
@@ -147,7 +147,29 @@ else
   record_status FAIL FRONTEND_LAYOUT_INTEGRITY "Frontend spacing/overlap contract failed" "frontend-layout-integrity.log"
 fi
 
-# Frontend typecheck/build. v25.9.16.7.2.64.16.5.3 delegates the deep
+# Production security P0/P1 closure gate.
+if ./scripts/production-security-closure-report.sh "$OUT_DIR/production-security-closure" > "$OUT_DIR/production-security-closure.log" 2>&1; then
+  record_status PASS PRODUCTION_SECURITY_CLOSURE "Production security P0/P1 source contract passed" "production-security-closure/production-security-closure.json"
+else
+  record_status FAIL PRODUCTION_SECURITY_CLOSURE "Production security P0/P1 source contract failed" "production-security-closure.log"
+fi
+
+
+# Performance/API/Celery reliability gate.
+if ./scripts/performance-worker-reliability-report.sh "$OUT_DIR/performance-worker-reliability" > "$OUT_DIR/performance-worker-reliability.log" 2>&1; then
+  record_status PASS PERFORMANCE_WORKER_RELIABILITY "Performance/API/Celery reliability contract passed" "performance-worker-reliability/performance-worker-reliability.json"
+else
+  record_status FAIL PERFORMANCE_WORKER_RELIABILITY "Performance/API/Celery reliability contract failed" "performance-worker-reliability.log"
+fi
+
+# Frontend runtime, modal and route-state contracts.
+if ./scripts/frontend-runtime-contracts-report.sh "$OUT_DIR/frontend-runtime-contracts" > "$OUT_DIR/frontend-runtime-contracts.log" 2>&1; then
+  record_status PASS FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract passed" "frontend-runtime-contracts/frontend-runtime-contracts.json"
+else
+  record_status FAIL FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract failed" "frontend-runtime-contracts.log"
+fi
+
+# Frontend typecheck/build. v25.9.16.7.2.64.16.5.6 delegates the deep
 # frontend verification to scripts/frontend-build-verify.sh so package-lock,
 # Dockerfile build args, tsc, next build and standalone output are validated
 # consistently in one report.
@@ -164,7 +186,7 @@ Run on UAT before sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.3 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.6 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh

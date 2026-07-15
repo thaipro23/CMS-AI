@@ -10,6 +10,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy.orm import Session
 
+from app.core.errors import public_http_exception
 from app.core.config import is_production, settings
 from app.core.rbac import UserContext, get_user_context, require_permission
 from app.db.session import get_db
@@ -272,8 +273,8 @@ def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends
     except HTTPException:
         raise
     except Exception as exc:
-        log_audit(db, action='rbac.assignment.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='rbac_assignment')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='rbac.assignment.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác phân quyền.', user=user, target_type='rbac_assignment')
+        raise public_http_exception(status_code=400, code='RBAC_OPERATION_FAILED', message='Không thể hoàn tất thao tác phân quyền.', logger_name=__name__) from exc
 
 
 @router.delete('/assignments/{assignment_id}', response_model=RoleAssignmentOut)
@@ -295,8 +296,8 @@ def revoke_assignment(assignment_id: str, payload: RoleAssignmentRevoke | None =
     except HTTPException:
         raise
     except Exception as exc:
-        log_audit(db, action='rbac.assignment.revoke', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='rbac_assignment', target_id=assignment_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='rbac.assignment.revoke', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác phân quyền.', user=user, target_type='rbac_assignment', target_id=assignment_id)
+        raise public_http_exception(status_code=400, code='RBAC_OPERATION_FAILED', message='Không thể hoàn tất thao tác phân quyền.', logger_name=__name__) from exc
 
 
 @router.get('/assignments/import-template')

@@ -1,6 +1,7 @@
 'use client'
 
 import { PageRoot } from '../../../../components/layout/PageHeader'
+import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
 
 import { formatVNDateTime } from '../../../../lib/time'
 import Link from 'next/link'
@@ -1109,12 +1110,28 @@ ${chunk.content}`).join('\n\n')
       onQueued={(text) => { setMessage(text); setPopupMessage({ type: 'success', text }); loadDetail(selectedBankVersion.id).catch(() => null) }}
     /> : null}
 
-    {previewQuestion ? <div className="question-review-overlay" role="presentation" onMouseDown={() => setPreviewQuestion(null)}>
-      <aside className="question-review-drawer" role="dialog" aria-modal="true" aria-label="Xem trước câu hỏi và duyệt" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="question-review-drawer__header">
-          <div><span className="eyebrow">Duyệt câu hỏi</span><h2>Câu {(questions.findIndex((item) => item.id === previewQuestion.id) + 1) || '—'} / {questions.length}</h2></div>
-          <button className="enterprise-icon-button" type="button" aria-label="Đóng panel duyệt" onClick={() => setPreviewQuestion(null)}>×</button>
-        </header>
+    <AccessibleDialog
+      open={Boolean(previewQuestion)}
+      title={previewQuestion ? `Câu ${(questions.findIndex((item) => item.id === previewQuestion.id) + 1) || '—'} / ${questions.length}` : 'Duyệt câu hỏi'}
+      description="Đọc đầy đủ nội dung, đáp án, giải thích và bằng chứng trước khi duyệt."
+      onClose={() => setPreviewQuestion(null)}
+      size="xlarge"
+      className="question-review-dialog"
+      bodyClassName="question-review-dialog-body"
+      footer={previewQuestion ? <div className="question-review-dialog-footer">
+        <div className="question-review-navigation">
+          <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) <= 0} onClick={() => moveQuestionPreview(-1)}>← Câu trước</button>
+          <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) >= questions.length - 1} onClick={() => moveQuestionPreview(1)}>Câu sau →</button>
+        </div>
+        {!chapterPublished && canReviewQuestions && previewQuestion.status !== 'published' ? <div className="question-review-primary-actions">
+          <button className="btn secondary" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); startEditQuestion(item) }}>Sửa</button>
+          {!['rejected', 'published'].includes(previewQuestion.status) ? <button className="btn danger secondary-danger" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); openRejectQuestion(item) }}>Từ chối</button> : null}
+          {['pending_review', 'needs_review', 'rejected'].includes(previewQuestion.status) ? <button className="btn success" data-dialog-autofocus type="button" onClick={approvePreviewQuestion}>{previewQuestion.status === 'rejected' ? 'Duyệt lại' : 'Duyệt câu'}</button> : null}
+        </div> : null}
+        <small className="question-review-shortcuts">Phím tắt: J/K chuyển câu · A duyệt · R từ chối · E sửa · Esc đóng</small>
+      </div> : null}
+    >
+      {previewQuestion ? <>
         <div className="question-review-drawer__meta">
           <span className={statusClass(previewQuestion.status)}>{statusLabel(previewQuestion.status)}</span>
           <span className="soft-tag">{previewQuestion.difficulty === 'easy' ? 'Dễ' : previewQuestion.difficulty === 'hard' ? 'Khó' : previewQuestion.difficulty === 'medium' ? 'Trung bình' : '—'}</span>
@@ -1132,20 +1149,8 @@ ${chunk.content}`).join('\n\n')
           </section>
           {previewQuestion.status === 'draft_error' ? <div className="draft-error-reason"><b>Lý do lỗi:</b> {bankQuestionErrorMessage(previewQuestion) || 'Không rõ'}</div> : null}
         </div>
-        <footer className="question-review-drawer__footer">
-          <div className="question-review-navigation">
-            <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) <= 0} onClick={() => moveQuestionPreview(-1)}>← Câu trước</button>
-            <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) >= questions.length - 1} onClick={() => moveQuestionPreview(1)}>Câu sau →</button>
-          </div>
-          {!chapterPublished && canReviewQuestions && previewQuestion.status !== 'published' ? <div className="question-review-primary-actions">
-            <button className="btn secondary" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); startEditQuestion(item) }}>Sửa</button>
-            {!['rejected', 'published'].includes(previewQuestion.status) ? <button className="btn danger secondary-danger" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); openRejectQuestion(item) }}>Từ chối</button> : null}
-            {['pending_review', 'needs_review', 'rejected'].includes(previewQuestion.status) ? <button className="btn success" type="button" onClick={approvePreviewQuestion}>{previewQuestion.status === 'rejected' ? 'Duyệt lại' : 'Duyệt câu'}</button> : null}
-          </div> : null}
-          <small className="question-review-shortcuts">Phím tắt: J/K chuyển câu · A duyệt · R từ chối · E sửa · Esc đóng</small>
-        </footer>
-      </aside>
-    </div> : null}
+      </> : null}
+    </AccessibleDialog>
 
     <Modal open={Boolean(rejectingQuestion)} title={rejectingQuestion?.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ câu hỏi'} onClose={() => { setRejectingQuestion(null); setRejectReason('') }}>
       <div className="mini-form">

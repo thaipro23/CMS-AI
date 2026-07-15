@@ -1,17 +1,18 @@
 'use client'
 
 import { formatVNDateTime } from '../../lib/time'
+import { useDebouncedValue } from '../../lib/useDebouncedValue'
 import { ChangeEvent, useEffect, useMemo, useState } from 'react'
 import {
   createRoleAssignment,
   getAcademicCampuses,
   downloadRBACImportTemplate,
-  getDepartments,
+  searchDepartments,
   getRBACRoles,
   getRoleAssignments,
-  getSubjectChapters,
-  getSubjectOfferings,
-  getSubjects,
+  searchSubjectChapters,
+  searchSubjectOfferings,
+  searchSubjects,
   importRoleAssignmentsFromExcel,
   revokeRoleAssignment,
 } from '../../lib/api'
@@ -112,6 +113,8 @@ export default function UsersPage() {
   const [dryRun, setDryRun] = useState(true)
   const [importResult, setImportResult] = useState<RoleAssignmentImportResponse | null>(null)
   const [scopeSearch, setScopeSearch] = useState('')
+  const debouncedScopeSearch = useDebouncedValue(scopeSearch, 300)
+  const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [scopeDropdownOpen, setScopeDropdownOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
@@ -221,24 +224,16 @@ export default function UsersPage() {
     setLoading(true)
     try {
       const headers = authHeaders()
-      const [roleRows, assignmentRows, departmentRows] = await Promise.all([
+      const [roleRows, assignmentRows, departmentRows, campusPolyRows, campusPtcdRows] = await Promise.all([
         getRBACRoles(headers),
         getRoleAssignments(headers, { includeRevoked }),
-        getDepartments(headers),
+        searchDepartments(headers),
+        getAcademicCampuses(headers, { active: true, branch: 'poly' }),
+        getAcademicCampuses(headers, { active: true, branch: 'ptcd' }),
       ])
       setRoles(roleRows)
       setAssignments(assignmentRows.items)
       setDepartments(departmentRows)
-      const [subjectRows, offeringRows, chapterRows, campusPolyRows, campusPtcdRows] = await Promise.all([
-        getSubjects(headers),
-        getSubjectOfferings(headers),
-        getSubjectChapters(headers),
-        getAcademicCampuses(headers, { active: true, branch: 'poly' }),
-        getAcademicCampuses(headers, { active: true, branch: 'ptcd' }),
-      ])
-      setSubjects(subjectRows)
-      setOfferings(offeringRows)
-      setChapters(chapterRows)
       const campusMap = new Map<string, AcademicCampus>()
       ;[...campusPolyRows, ...campusPtcdRows].forEach((campus) => {
         const key = campus.campus_code.toLowerCase()
@@ -252,6 +247,31 @@ export default function UsersPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (!scopeDropdownOpen) return
+    if (!['DEPARTMENT', 'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'].includes(form.scope_type)) return
+    const controller = new AbortController()
+    const headers = authHeaders()
+    setScopeOptionsLoading(true)
+    const run = async () => {
+      if (form.scope_type === 'DEPARTMENT') {
+        setDepartments(await searchDepartments(headers, debouncedScopeSearch, controller.signal))
+      } else if (form.scope_type === 'SUBJECT') {
+        setSubjects(await searchSubjects(headers, { query: debouncedScopeSearch, signal: controller.signal }))
+      } else if (form.scope_type === 'SUBJECT_VERSION') {
+        setOfferings(await searchSubjectOfferings(headers, { query: debouncedScopeSearch, signal: controller.signal }))
+      } else if (form.scope_type === 'CHAPTER') {
+        setChapters(await searchSubjectChapters(headers, { query: debouncedScopeSearch, signal: controller.signal }))
+      }
+    }
+    run().catch((error) => {
+      if (!controller.signal.aborted) setMessage(toUserError(error, 'Không tải được danh mục phạm vi.'))
+    }).finally(() => {
+      if (!controller.signal.aborted) setScopeOptionsLoading(false)
+    })
+    return () => controller.abort()
+  }, [authHeaders, debouncedScopeSearch, form.scope_type, scopeDropdownOpen])
 
   async function submitAssignment() {
     try {

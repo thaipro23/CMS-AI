@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 import uuid
-import re
 import unicodedata
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -12,6 +11,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -1518,7 +1518,7 @@ class VersionedQuestionBankService:
             Question.is_duplicate.is_(False),
         ).order_by(Question.difficulty.asc(), Question.question_family_id.asc().nullslast(), Question.variant_no.asc().nullslast(), Question.created_at.asc()).all()
 
-    def preview_bank_version_diff(self, *, from_bank_version_id: str, to_bank_version_id: str, actor: str | None = None, persist: bool = True) -> dict:
+    def preview_bank_version_diff(self, *, from_bank_version_id: str, to_bank_version_id: str, actor: str | None = None, persist: bool = False) -> dict:
         source, target = self._require_same_subject_chapter_versions(from_bank_version_id=from_bank_version_id, to_bank_version_id=to_bank_version_id)
         source_material_hashes = self._material_hash_set(source.id)
         target_material_hashes = self._material_hash_set(target.id)
@@ -1589,18 +1589,74 @@ class VersionedQuestionBankService:
         }
         diff = None
         if persist:
+            fingerprint_payload = {
+                'from_bank_version_id': source.id,
+                'to_bank_version_id': target.id,
+                'source_material_hashes': sorted(source_material_hashes),
+                'target_material_hashes': sorted(target_material_hashes),
+                'changed_concepts': changed_concepts,
+                'new_concepts': new_concepts,
+                'removed_concepts': removed_concepts,
+            }
+            idempotency_key = hashlib.sha256(
+                json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+            ).hexdigest()
+            existing = self.db.query(BankVersionDiff).filter(
+                BankVersionDiff.from_bank_version_id == source.id,
+                BankVersionDiff.to_bank_version_id == target.id,
+                BankVersionDiff.idempotency_key == idempotency_key,
+            ).order_by(BankVersionDiff.created_at.desc()).first()
+            if existing:
+                return {
+                    'ok': True,
+                    'diff_id': existing.id,
+                    'summary': existing.summary_json or summary,
+                    'material_similarity': existing.material_similarity,
+                    'carry_over_candidates': [q.id for q in carry_over_candidates],
+                    'retire_candidates': [q.id for q in retire_candidates],
+                    'review_candidates': [q.id for q in review_candidates],
+                    'already_exists': [q.id for q in already_exists],
+                    'idempotent_reuse': True,
+                    'message': 'Đã sử dụng lại bản so sánh đã lưu cho cùng nội dung phiên bản.',
+                }
             diff = BankVersionDiff(
                 id=str(uuid.uuid4()),
                 from_bank_version_id=source.id,
                 to_bank_version_id=target.id,
                 status='preview',
                 material_similarity=material_similarity,
+                idempotency_key=idempotency_key,
                 summary_json=summary,
                 created_by=actor,
                 created_at=datetime.utcnow(),
             )
             self.db.add(diff)
-            self.db.flush()
+            try:
+                self.db.flush()
+            except IntegrityError:
+                # Another request may persist the same deterministic diff between
+                # our read and flush. Roll back the failed insert and reuse the
+                # row protected by the database unique constraint.
+                self.db.rollback()
+                existing = self.db.query(BankVersionDiff).filter(
+                    BankVersionDiff.from_bank_version_id == source.id,
+                    BankVersionDiff.to_bank_version_id == target.id,
+                    BankVersionDiff.idempotency_key == idempotency_key,
+                ).order_by(BankVersionDiff.created_at.desc()).first()
+                if existing:
+                    return {
+                        'ok': True,
+                        'diff_id': existing.id,
+                        'summary': existing.summary_json or summary,
+                        'material_similarity': existing.material_similarity,
+                        'carry_over_candidates': [q.id for q in carry_over_candidates],
+                        'retire_candidates': [q.id for q in retire_candidates],
+                        'review_candidates': [q.id for q in review_candidates],
+                        'already_exists': [q.id for q in already_exists],
+                        'idempotent_reuse': True,
+                        'message': 'Đã sử dụng lại bản so sánh được tạo đồng thời cho cùng nội dung phiên bản.',
+                    }
+                raise
             for question in carry_over_candidates:
                 self.db.add(BankVersionDiffItem(id=str(uuid.uuid4()), diff_id=diff.id, item_type='question', source_id=question.id, target_id=None, change_type='carry_over_candidate', confidence=0.95 if stable_concept_identity(question) in unchanged_concept_set else material_similarity, reason='Concept giữ nguyên hoặc tài liệu rất giống; có thể carry-over nhưng vẫn giữ audit lineage.', metadata_json={'question_text': question.question_text[:300], 'difficulty': question.difficulty, 'family': question.question_family_id}))
             for question in retire_candidates:
@@ -1624,6 +1680,15 @@ class VersionedQuestionBankService:
             'already_exists': [q.id for q in already_exists],
             'message': 'Đã so sánh Bank Version. Có thể carry-over câu còn đúng, retire câu không còn phù hợp và review phần thay đổi.',
         }
+
+
+    def create_bank_version_diff(self, *, from_bank_version_id: str, to_bank_version_id: str, actor: str | None = None) -> dict:
+        return self.preview_bank_version_diff(
+            from_bank_version_id=from_bank_version_id,
+            to_bank_version_id=to_bank_version_id,
+            actor=actor,
+            persist=True,
+        )
 
     def _ensure_target_concept_for_question(self, *, target: QuestionBankVersion, source_question: Question) -> ConceptVersion:
         key = stable_concept_identity(source_question)

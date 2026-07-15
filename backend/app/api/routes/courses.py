@@ -4,6 +4,7 @@ from sqlalchemy import func
 from datetime import datetime
 import hashlib
 import uuid
+from app.core.errors import public_http_exception
 from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.models.course import ContentChunk, CourseSyncState, Topic
@@ -215,7 +216,7 @@ async def sync_course(payload: SyncCourseRequest, db: Session = Depends(get_db),
         seen, changed = CourseSyncService(db).sync_blocks(payload.course_id, blocks, payload.force)
         log_audit(db, action='course.sync', status='success', message='Đồng bộ học liệu thành công', user=user, course_id=payload.course_id, target_type='course', metadata={'blocks_seen': seen, 'changed_blocks': changed, 'force': payload.force})
     except Exception as exc:
-        log_audit(db, action='course.sync', status='failed', error_type='external', message=str(exc), user=user, course_id=payload.course_id, target_type='course', metadata={'force': payload.force})
+        log_audit(db, action='course.sync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=payload.course_id, target_type='course', metadata={'force': payload.force})
         raise
     return SyncCourseResponse(course_id=payload.course_id, blocks_seen=seen, changed_blocks=changed, status='completed')
 
@@ -265,7 +266,7 @@ async def clean_resync_course(
         )
     except Exception as exc:
         db.rollback()
-        log_audit(db, action='course.clean_resync', status='failed', error_type='external', message=str(exc), user=user, course_id=course_id, target_type='course', metadata={'confirm': confirm})
+        log_audit(db, action='course.clean_resync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=course_id, target_type='course', metadata={'confirm': confirm})
         raise
 
     return CourseCleanResyncResponse(
@@ -388,7 +389,7 @@ async def upload_file_to_node(
             'strict': True,
         }, parent_block_id=upload_node_id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise public_http_exception(status_code=status.HTTP_400_BAD_REQUEST, code='COURSE_OPERATION_FAILED', message='Không thể hoàn tất thao tác khóa học.', logger_name=__name__) from exc
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'Không đọc được file {filename}: {exc}')
 

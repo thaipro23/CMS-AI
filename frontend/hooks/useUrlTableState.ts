@@ -14,7 +14,7 @@ export type UrlTableState = {
   density: TableDensity
 }
 
-const PAGE_SIZES = new Set([20, 50, 100])
+const PAGE_SIZES = new Set([10, 20, 50, 100])
 const DENSITIES = new Set<TableDensity>(['compact', 'standard', 'comfortable'])
 
 function positiveInt(value: string | null, fallback: number) {

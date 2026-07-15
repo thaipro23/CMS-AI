@@ -1,8 +1,16 @@
+import sys
+import types
+
+if 'openai' not in sys.modules:
+    module = types.ModuleType('openai')
+    module.AsyncOpenAI = object
+    sys.modules['openai'] = module
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
-from app.models import course, question, question_bank  # noqa: F401
+from app.models import course, job, question, question_bank  # noqa: F401
 from app.models.question import Question
 from app.models.question_bank import LearningMaterialVersion, MaterialChunk
 from app.services.question_bank_service import VersionedQuestionBankService
@@ -36,8 +44,11 @@ def test_diff_preview_creates_carry_over_candidates_without_mutating_questions()
     db = make_session()
     try:
         svc, v1, v2, q = seed_versions(db)
-        result = svc.preview_bank_version_diff(from_bank_version_id=v1.id, to_bank_version_id=v2.id, actor='admin')
-        assert result['ok'] is True
+        preview = svc.preview_bank_version_diff(from_bank_version_id=v1.id, to_bank_version_id=v2.id, actor='viewer')
+        assert preview['ok'] is True
+        assert preview['diff_id'] is None
+        assert db.query(question_bank.BankVersionDiff).count() == 0
+        result = svc.create_bank_version_diff(from_bank_version_id=v1.id, to_bank_version_id=v2.id, actor='admin')
         assert result['diff_id']
         assert result['summary']['source_approved_question_count'] == 1
         assert q.id in result['carry_over_candidates'] or q.id in result['review_candidates']

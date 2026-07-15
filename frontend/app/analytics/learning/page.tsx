@@ -47,6 +47,7 @@ import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../lib/runtime'
 import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
+import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState, TrainingWorkflowSteps } from '../../../components/training/TrainingWorkspace'
 
@@ -419,15 +420,16 @@ function DetailDrawer({
   const sessions = detail?.sessions || []
   const videos = detail?.videos || []
 
-  return <div className="analytics-result-drawer-backdrop" role="dialog" aria-modal="true" aria-labelledby="analytics-result-title">
-    <div className="analytics-result-drawer">
-      <div className="section-head list-card-head">
-        <div>
-          <h3 id="analytics-result-title">Lý do ra kết quả</h3>
-          <p>{row.username} · {row.class_id || 'Lớp N/A'}</p>
-        </div>
-        <button className="btn secondary small" type="button" onClick={onClose} aria-label="Đóng chi tiết kết quả">Đóng</button>
-      </div>
+  return <AccessibleDialog
+    open={Boolean(row)}
+    title="Lý do ra kết quả"
+    description={`${row.username} · ${row.class_id || 'Lớp N/A'}`}
+    onClose={onClose}
+    placement="right"
+    size="large"
+    className="analytics-result-drawer"
+    bodyClassName="analytics-result-drawer-body"
+  >
 
       <div className="analytics-result-main">
         <span className={resultClass(behavior.classification)}>{resultLabel(behavior.classification, behavior.display_label)}</span>
@@ -491,8 +493,7 @@ function DetailDrawer({
           </table>
         </div>}
       </>}
-    </div>
-  </div>
+  </AccessibleDialog>
 }
 
 export default function AnalyticsLearningPage() {

@@ -5,12 +5,12 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useAppContext } from "../../context/AppContext";
 import {
   createAcademicTrainingTeacherExportJob,
-  downloadAcademicTrainingTeacherReport,
   downloadAcademicTrainingTeacherReportJob,
   getAcademicCampuses,
   getAcademicTerms,
   getAcademicTrainingTeacherReport,
-  getAcademicTrainingTeacherReportJob,
+  getAcademicTrainingTeacherReportJobs,
+  waitForAcademicTrainingTeacherReportJob,
 } from "../../lib/api";
 import {
   AcademicCampus,
@@ -331,24 +331,39 @@ function TeacherManagementContent() {
   }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize]);
 
   useEffect(() => {
+    if (!termId || exportJob) return
+    const controller = new AbortController()
+    getAcademicTrainingTeacherReportJobs(headers, { status: "active", limit: 20 })
+      .then((jobs) => {
+        if (controller.signal.aborted) return
+        const match = jobs.find((job) => {
+          const request = (job.request_json || {}) as Record<string, unknown>
+          return job.job_type === "export_excel"
+            && job.term_id === termId
+            && String(job.branch || "") === String(branch || "")
+            && String(job.campus || "") === String(campus || "")
+            && String(request.search || "") === String(debouncedSearch || "")
+            && String(request.learning_status || "") === String(learningStatus === "all" ? "" : learningStatus || "")
+        })
+        if (match) setExportJob(match)
+      })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [branch, campus, debouncedSearch, exportJob, headers, learningStatus, termId])
+
+  useEffect(() => {
     if (!exportJob || !["queued", "running"].includes(exportJob.status)) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const latest = await getAcademicTrainingTeacherReportJob(
-          headers,
-          exportJob.id,
-        );
+    const controller = new AbortController();
+    waitForAcademicTrainingTeacherReportJob(headers, exportJob.id, { signal: controller.signal })
+      .then((latest) => {
         setExportJob(latest);
-        if (latest.status === "completed") {
-          setMessage(noticeSuccess("File Excel đã sẵn sàng."));
-        }
-      } catch (error) {
-        setMessage(
-          noticeError(error, "Không kiểm tra được trạng thái xuất Excel."),
-        );
-      }
-    }, 2500);
-    return () => window.clearInterval(timer);
+        setMessage(noticeSuccess("File Excel đã sẵn sàng."));
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setMessage(noticeError(error, "Không kiểm tra được trạng thái xuất Excel."));
+      });
+    return () => controller.abort();
   }, [headers, exportJob?.id, exportJob?.status]);
 
   const selectedTerm = terms.find((item) => item.id === termId);
@@ -384,33 +399,6 @@ function TeacherManagementContent() {
           componentKey(score) === column.key || score.name === column.name,
       ) || null
     );
-  };
-
-  const exportExcel = async () => {
-    setExporting(true);
-    setMessage(null);
-    try {
-      const blob = await downloadAcademicTrainingTeacherReport(headers, {
-        termId,
-        branch,
-        campus,
-        search: debouncedSearch,
-        learningStatus,
-      });
-      const termPart = (selectedTerm?.term_name || "term").replace(
-        /[^a-zA-Z0-9]+/g,
-        "-",
-      );
-      downloadBlob(
-        blob,
-        `bao-cao-quan-ly-giang-vien-${branch}-${termPart}.xlsx`,
-      );
-      setMessage(noticeSuccess("Đã xuất Excel."));
-    } catch (error) {
-      setMessage(noticeError(error, "Không xuất được file Excel."));
-    } finally {
-      setExporting(false);
-    }
   };
 
   const exportExcelBackground = async () => {
@@ -465,8 +453,8 @@ function TeacherManagementContent() {
       <PageHeader
         eyebrow="Vận hành đào tạo"
         title="Quản lý giảng viên"
-        secondaryActions={<><button className="btn secondary" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === "queued" || exportJob?.status === "running"}>{exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel nền"}</button>{exportJob?.status === "completed" && <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button>}</>}
-        primaryAction={<button className="btn" type="button" onClick={exportExcel} disabled={exporting || loading}>{exporting ? "Đang xuất..." : "Xuất trực tiếp"}</button>}
+        primaryAction={<button className="btn" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === "queued" || exportJob?.status === "running"}>{exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel"}</button>}
+        secondaryActions={exportJob?.status === "completed" ? <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button> : undefined}
       />
       <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
         <div className="academic-filter-bar ux-filter-grid teacher-filter-bar">

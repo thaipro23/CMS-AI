@@ -8,6 +8,7 @@ import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { CompactFilterBar, OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { AccessibleDialog } from '../../components/ui/AccessibleDialog'
 
 const EMPTY_FORM = { campus_code: '', campus_name: '', branch: 'poly', active: true }
 type CampusForm = typeof EMPTY_FORM
@@ -103,7 +104,32 @@ export default function PremisesPage() {
     <WorkspaceSection title="Danh sách cơ sở" description="Danh mục dùng cho đồng bộ AP và scope Chủ cơ sở.">
       <EnterpriseDataTable tableId="premises-v2" caption="Danh sách cơ sở" rows={filtered} columns={columns} rowKey={(item) => item.id} density="compact" loading={loading} label="cơ sở" emptyTitle="Chưa có cơ sở phù hợp" emptyDescription="Thay đổi bộ lọc hoặc thêm cơ sở mới." />
     </WorkspaceSection>
-    {modalOpen ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => !saving && setModalOpen(false)}><div className="card bank-modal" onMouseDown={(event) => event.stopPropagation()}><div className="bank-modal-head"><div><div className="eyebrow">{editingId ? 'Sửa cơ sở' : 'Thêm mới cơ sở'}</div><h2>{editingId ? codeLabel(form.campus_code) : 'Cơ sở mới'}</h2></div><button className="btn small secondary" disabled={saving} onClick={() => setModalOpen(false)}>Đóng</button></div><div className="bank-modal-body"><div className="academic-modal-form"><label>Mã cơ sở<input className="input" value={form.campus_code} onChange={(event) => setForm((value) => ({ ...value, campus_code: event.target.value.toUpperCase() }))} placeholder="PT" /></label><label>Tên cơ sở<input className="input" value={form.campus_name} onChange={(event) => setForm((value) => ({ ...value, campus_name: event.target.value }))} placeholder="Thái Nguyên" /></label><label>Hệ<select className="input" value={form.branch} onChange={(event) => setForm((value) => ({ ...value, branch: event.target.value }))}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label><label>Trạng thái<select className="input" value={form.active ? 'true' : 'false'} onChange={(event) => setForm((value) => ({ ...value, active: event.target.value === 'true' }))}><option value="true">Đang dùng</option><option value="false">Đã xóa</option></select></label></div><div className="modal-actions"><button className="btn" disabled={saving} onClick={save}>{saving ? 'Đang lưu...' : 'Lưu cơ sở'}</button><button className="btn secondary" disabled={saving} onClick={() => setModalOpen(false)}>Hủy</button></div></div></div></div> : null}
-    {deleteTarget ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => !saving && setDeleteTarget(null)}><div className="card bank-modal academic-confirm-modal" onMouseDown={(event) => event.stopPropagation()}><div className="bank-modal-head"><div><div className="eyebrow danger-text">Xác nhận xóa</div><h2>Xóa cơ sở {codeLabel(deleteTarget.campus_code)}?</h2></div><button className="btn small secondary" disabled={saving} onClick={() => setDeleteTarget(null)}>Đóng</button></div><div className="bank-modal-body academic-confirm-body"><p>Cơ sở <b>{codeLabel(deleteTarget.campus_code)} · {deleteTarget.campus_name || 'Không có tên'}</b> sẽ bị chuyển sang trạng thái đã xóa và không còn xuất hiện trong dropdown đồng bộ AP.</p><div className="academic-confirm-summary"><span>Hệ</span><b>{branchLabel(deleteTarget.branch)}</b><span>Mã cơ sở</span><b>{codeLabel(deleteTarget.campus_code)}</b></div><div className="modal-actions"><button className="btn danger" disabled={saving} onClick={confirmDelete}>{saving ? 'Đang xóa...' : 'Xác nhận xóa'}</button><button className="btn secondary" disabled={saving} onClick={() => setDeleteTarget(null)}>Hủy</button></div></div></div></div> : null}
+    <AccessibleDialog
+      open={modalOpen}
+      title={editingId ? `Sửa cơ sở ${codeLabel(form.campus_code)}` : 'Thêm cơ sở'}
+      description="Cơ sở được dùng cho đồng bộ AP và phạm vi quản lý đào tạo."
+      onClose={() => !saving && setModalOpen(false)}
+      busy={saving}
+      size="medium"
+      footer={<div className="dialog-action-row"><button className="btn secondary" disabled={saving} onClick={() => setModalOpen(false)}>Hủy</button><button className="btn" data-dialog-autofocus disabled={saving} onClick={save}>{saving ? 'Đang lưu...' : 'Lưu cơ sở'}</button></div>}
+    >
+      <div className="academic-modal-form">
+        <label>Mã cơ sở<input className="input" value={form.campus_code} onChange={(event) => setForm((value) => ({ ...value, campus_code: event.target.value.toUpperCase() }))} placeholder="PT" /></label>
+        <label>Tên cơ sở<input className="input" value={form.campus_name} onChange={(event) => setForm((value) => ({ ...value, campus_name: event.target.value }))} placeholder="Thái Nguyên" /></label>
+        <label>Hệ<select className="input" value={form.branch} onChange={(event) => setForm((value) => ({ ...value, branch: event.target.value }))}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label>
+        <label>Trạng thái<select className="input" value={form.active ? 'true' : 'false'} onChange={(event) => setForm((value) => ({ ...value, active: event.target.value === 'true' }))}><option value="true">Đang dùng</option><option value="false">Đã xóa</option></select></label>
+      </div>
+    </AccessibleDialog>
+    <AccessibleDialog
+      open={Boolean(deleteTarget)}
+      title={`Xóa cơ sở ${deleteTarget ? codeLabel(deleteTarget.campus_code) : ''}?`}
+      description="Thao tác này chỉ chuyển cơ sở sang trạng thái đã xóa; dữ liệu lịch sử được giữ nguyên."
+      onClose={() => !saving && setDeleteTarget(null)}
+      busy={saving}
+      size="small"
+      footer={<div className="dialog-action-row"><button className="btn secondary" disabled={saving} onClick={() => setDeleteTarget(null)}>Hủy</button><button className="btn danger" data-dialog-autofocus disabled={saving} onClick={confirmDelete}>{saving ? 'Đang xóa...' : 'Xác nhận xóa'}</button></div>}
+    >
+      {deleteTarget ? <div className="academic-confirm-body"><p>Cơ sở <b>{codeLabel(deleteTarget.campus_code)} · {deleteTarget.campus_name || 'Không có tên'}</b> sẽ không còn xuất hiện trong dropdown đồng bộ AP.</p><div className="academic-confirm-summary"><span>Hệ</span><b>{branchLabel(deleteTarget.branch)}</b><span>Mã cơ sở</span><b>{codeLabel(deleteTarget.campus_code)}</b></div></div> : null}
+    </AccessibleDialog>
   </PageRoot>
 }

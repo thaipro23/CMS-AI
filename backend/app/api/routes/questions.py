@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session
+from app.core.errors import public_http_exception
 from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission, restrict_query_to_courses
 from app.models.question import Question
@@ -42,7 +43,7 @@ def _question_for_user(db: Session, question_id: str, user: UserContext) -> Ques
     try:
         question = QuestionService(db).get_or_raise(question_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise public_http_exception(status_code=404, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
     ensure_course_access(user, question.course_id)
     return question
 
@@ -238,8 +239,8 @@ def bulk_approve(payload: BulkApproveRequest, db: Session = Depends(get_db), use
         )
         return result
     except ValueError as exc:
-        log_audit(db, action='question.bulk_approve', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=payload.course_id, target_type='question')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.bulk_approve', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=payload.course_id, target_type='question')
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/diversity/report')
@@ -351,8 +352,8 @@ def update_question(question_id: str, payload: QuestionUpdateRequest, db: Sessio
         log_audit(db, action='question.update', status='success', message='Cập nhật câu hỏi thành công', user=user, course_id=updated.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'new_status': updated.status})
         return updated
     except ValueError as exc:
-        log_audit(db, action='question.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=question.course_id, target_type='question', target_id=question_id)
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.delete('/{question_id}')
@@ -367,8 +368,8 @@ def delete_question(question_id: str, db: Session = Depends(get_db), user: UserC
         log_audit(db, action='question.delete', status='success', message='Xóa câu hỏi chưa publish thành công', user=user, course_id=course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'difficulty': difficulty, 'source_node_id': source_node_id})
         return result
     except ValueError as exc:
-        log_audit(db, action='question.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/{question_id}/repair', response_model=QuestionOut)
@@ -381,8 +382,8 @@ def repair_draft_error(question_id: str, payload: DraftErrorRepairRequest, db: S
         log_audit(db, action='question.repair', status='success', message='Repair draft_error thành công', user=user, course_id=repaired.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'new_status': repaired.status, 'draft_error_reason': old_draft_error_reason, 'repair_attempt_count': repaired.repair_attempt_count})
         return repaired
     except ValueError as exc:
-        log_audit(db, action='question.repair', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.repair', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=question.course_id, target_type='question', target_id=question_id)
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/{question_id}/keep-anyway', response_model=QuestionOut)
@@ -395,8 +396,8 @@ def keep_draft_error_anyway(question_id: str, payload: KeepDraftErrorRequest, db
         log_audit(db, action='question.keep_anyway', status='success', message='Giữ câu draft_error theo quyết định của giáo viên', user=user, course_id=kept.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'new_status': kept.status, 'draft_error_reason': old_draft_error_reason, 'note': payload.note})
         return kept
     except ValueError as exc:
-        log_audit(db, action='question.keep_anyway', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.keep_anyway', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=question.course_id, target_type='question', target_id=question_id)
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/{question_id}/status', response_model=QuestionOut)
@@ -408,8 +409,8 @@ def change_status(question_id: str, payload: ChangeQuestionStatusRequest, db: Se
         log_audit(db, action='question.status_change', status='success', message='Đổi trạng thái câu hỏi thành công', user=user, course_id=changed.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'new_status': changed.status, 'note': payload.note})
         return changed
     except ValueError as exc:
-        log_audit(db, action='question.status_change', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'target_status': payload.target_status})
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.status_change', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'target_status': payload.target_status})
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/{question_id}/approve', response_model=QuestionOut)
@@ -421,8 +422,8 @@ def approve_question(question_id: str, payload: ReviewQuestionRequest, db: Sessi
         log_audit(db, action='question.approve', status='success', message='Duyệt câu hỏi thành công', user=user, course_id=approved.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'new_status': approved.status, 'difficulty': approved.difficulty})
         return approved
     except ValueError as exc:
-        log_audit(db, action='question.approve', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.approve', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/{question_id}/reject', response_model=QuestionOut)
@@ -434,8 +435,8 @@ def reject_question(question_id: str, payload: ReviewQuestionRequest, db: Sessio
         log_audit(db, action='question.reject', status='success', message='Từ chối câu hỏi thành công', user=user, course_id=rejected.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'new_status': rejected.status, 'difficulty': rejected.difficulty})
         return rejected
     except ValueError as exc:
-        log_audit(db, action='question.reject', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.reject', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/{question_id}/publish', response_model=QuestionOut)
@@ -447,5 +448,5 @@ def publish_question(question_id: str, payload: ReviewQuestionRequest, db: Sessi
         log_audit(db, action='question.publish_local', status='success', message='Đánh dấu câu hỏi đã publish trong AI Server', user=user, course_id=published.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status, 'new_status': published.status, 'target_library_key': published.target_library_key})
         return published
     except ValueError as exc:
-        log_audit(db, action='question.publish_local', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question.publish_local', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác câu hỏi.', user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'old_status': old_status})
+        raise public_http_exception(status_code=400, code='QUESTION_OPERATION_FAILED', message='Không thể hoàn tất thao tác câu hỏi.', logger_name=__name__) from exc

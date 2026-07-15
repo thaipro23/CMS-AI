@@ -572,11 +572,18 @@ class LearningAnalyticsCoreService:
                 best = (score, value)
         return best[1] if best[0] > 0 else None
 
-    def recalculate_course_video_progress(self, *, course_id: str, username: str | None = None) -> dict[str, Any]:
+    def recalculate_course_video_progress(self, *, course_id: str, username: str | None = None, class_id: str | None = None) -> dict[str, Any]:
         video_session_lookup = self._video_session_lookup(course_id=course_id)
         query = self.db.query(AnalyticsTrackingEvent).filter(AnalyticsTrackingEvent.course_id == course_id, AnalyticsTrackingEvent.event_type.in_(list(VIDEO_EVENT_TYPES)))
+        target_usernames: list[str] | None = None
         if username:
-            query = query.filter(AnalyticsTrackingEvent.username == username)
+            target_usernames = [username]
+        elif class_id:
+            target_usernames = self._student_usernames_for_class(class_id=class_id, course_id=course_id)
+        if target_usernames is not None:
+            if not target_usernames:
+                return {'course_id': course_id, 'class_id': class_id, 'username': username, 'video_progress_rows': 0, 'message': 'Lớp chưa có username hợp lệ để tính video.'}
+            query = query.filter(AnalyticsTrackingEvent.username.in_(target_usernames))
         events = query.order_by(AnalyticsTrackingEvent.username.asc(), AnalyticsTrackingEvent.video_id.asc(), AnalyticsTrackingEvent.event_time.asc()).all()
         grouped: dict[tuple[str, str], list[AnalyticsTrackingEvent]] = defaultdict(list)
         for ev in events:
@@ -625,15 +632,22 @@ class LearningAnalyticsCoreService:
             row.calculated_at = now
             saved += 1
         self.db.commit()
-        return {'course_id': course_id, 'username': username, 'video_progress_rows': saved}
+        return {'course_id': course_id, 'class_id': class_id, 'username': username, 'video_progress_rows': saved}
 
-    def recalculate_course_quiz_attempts(self, *, course_id: str, username: str | None = None) -> dict[str, Any]:
+    def recalculate_course_quiz_attempts(self, *, course_id: str, username: str | None = None, class_id: str | None = None) -> dict[str, Any]:
         query = self.db.query(AnalyticsTrackingEvent).filter(
             AnalyticsTrackingEvent.course_id == course_id,
             AnalyticsTrackingEvent.event_type.in_(list(QUIZ_ANALYTICS_EVENT_TYPES)),
         )
+        target_usernames: list[str] | None = None
         if username:
-            query = query.filter(AnalyticsTrackingEvent.username == username)
+            target_usernames = [username]
+        elif class_id:
+            target_usernames = self._student_usernames_for_class(class_id=class_id, course_id=course_id)
+        if target_usernames is not None:
+            if not target_usernames:
+                return {'course_id': course_id, 'class_id': class_id, 'username': username, 'quiz_attempt_rows': 0, 'message': 'Lớp chưa có username hợp lệ để tính quiz.'}
+            query = query.filter(AnalyticsTrackingEvent.username.in_(target_usernames))
         rows = query.order_by(AnalyticsTrackingEvent.username.asc(), AnalyticsTrackingEvent.event_time.asc()).all()
         features = build_quiz_attempt_features([
             EventLike(
@@ -685,7 +699,7 @@ class LearningAnalyticsCoreService:
             row.calculated_at = now
             saved += 1
         self.db.commit()
-        return {'course_id': course_id, 'username': username, 'quiz_attempt_rows': saved}
+        return {'course_id': course_id, 'class_id': class_id, 'username': username, 'quiz_attempt_rows': saved}
 
     @staticmethod
     def _key_match(left: str | None, right: str | None) -> bool:
@@ -822,7 +836,7 @@ class LearningAnalyticsCoreService:
         if not sessions:
             return {'class_id': class_id, 'course_id': course_id, 'processed': 0, 'sessions': 0, 'message': 'Chưa có cấu trúc Bài/Session. Hãy rebuild session structure trước.'}
         users = self._student_usernames_for_class(class_id=class_id, course_id=course_id, username=username)
-        self.recalculate_course_quiz_attempts(course_id=course_id, username=username)
+        self.recalculate_course_quiz_attempts(course_id=course_id, username=username, class_id=class_id)
         snapshots = self._learning_snapshots_by_username(class_id=class_id, course_id=course_id)
         academic_service = AcademicService(self.db)
         now = datetime.utcnow()

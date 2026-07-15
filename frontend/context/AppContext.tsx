@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { Permission, Role, ROLE_PERMISSIONS } from '../types'
-import { API } from '../lib/api'
+import { API, apiFetch } from '../lib/api'
 
 type AppContextValue = {
   authReady: boolean
@@ -18,7 +18,8 @@ type AppContextValue = {
   businessPermissions: string[]
   isSystemAdmin: boolean
   assignments: EffectiveAssignment[]
-  applyAuthSession: (session: { access_token: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => void
+  applyAuthSession: (session: { access_token?: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => void
+  clearAuthSession: () => void
   can: (permission: Permission | string) => boolean
   canScope: (permission: Permission | string, target: ScopeTarget) => boolean
   authHeaders: (json?: boolean) => HeadersInit
@@ -168,6 +169,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
 
   useEffect(() => {
+    const handleExpired = () => {
+      setAccessTokenState('')
+      setCookieAuthenticated(false)
+      setBusinessPermissions([])
+      setIsSystemAdmin(false)
+      setAssignments([])
+      setUserIdState('')
+      setAuthReady(true)
+      window.sessionStorage.removeItem(STORAGE_KEYS.sessionToken)
+      window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
+      if (IS_PRODUCTION && !window.location.pathname.startsWith('/auth/')) {
+        window.location.assign('/auth/logged-out?reason=session-expired')
+      }
+    }
+    window.addEventListener('ai:auth-expired', handleExpired)
+    return () => window.removeEventListener('ai:auth-expired', handleExpired)
+  }, [])
+
+  useEffect(() => {
     if (!clientReady) return
     const token = accessToken.trim() || getStoredSession()?.access_token || ''
     if (!token && !IS_PRODUCTION) {
@@ -180,7 +200,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     let cancelled = false
     setAuthReady(false)
-    fetch(`${API}/rbac/me`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: 'include' })
+    apiFetch(`${API}/rbac/me`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: 'include', timeoutMs: 20_000, retries: 1, skipAuthExpiredEvent: true })
       .then(async (response) => {
         if (!response.ok) throw new Error(response.statusText)
         return response.json() as Promise<{ user_id?: string; effective_legacy_role?: Role | string; role?: Role | string; is_system_admin?: boolean; permissions?: string[]; business_permissions?: string[]; assignments?: EffectiveAssignment[] }>
@@ -238,7 +258,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const applyAuthSession = (session: { access_token: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => {
+  const applyAuthSession = (session: { access_token?: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => {
     const token = session.access_token || ''
     setAccessTokenState(token)
     setCookieAuthenticated(true)
@@ -260,6 +280,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const clearAuthSession = () => {
+    setAccessTokenState('')
+    setCookieAuthenticated(false)
+    setAuthReady(true)
+    setBusinessPermissions([])
+    setIsSystemAdmin(false)
+    setAssignments([])
+    setUserIdState('')
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(STORAGE_KEYS.sessionToken)
+      window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
+      if (!IS_PRODUCTION) window.localStorage.removeItem(STORAGE_KEYS.userId)
+    }
+  }
+
   const value = useMemo<AppContextValue>(() => {
     const canUseLegacyRoleFallback = !IS_PRODUCTION && !cookieAuthenticated
     return {
@@ -277,6 +312,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       isSystemAdmin,
       assignments,
       applyAuthSession,
+      clearAuthSession,
       can: (permission: Permission | string) => {
         if (isSystemAdmin) return true
         if (cookieAuthenticated) return hasBusinessPermission(permission, businessPermissions)
@@ -295,7 +331,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       },
       authHeaders: (json = false) => {
         const headers: Record<string, string> = {}
-        const sessionToken = accessToken.trim() || getStoredSession()?.access_token || ''
+        const sessionToken = !IS_PRODUCTION ? (accessToken.trim() || getStoredSession()?.access_token || '') : ''
         if (sessionToken) {
           headers.Authorization = `Bearer ${sessionToken}`
         } else if (!IS_PRODUCTION) {

@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
+from app.core.errors import public_http_exception
 from app.core.rbac import UserContext, get_user_context, require_permission
 from app.core.config import settings
 from app.db.session import get_db
@@ -69,6 +70,7 @@ from app.schemas.question_bank import (
     BankVersionQuestionOut,
     BankQuestionListItemOut,
     BankQuestionDetailOut,
+    BankVersionDiffCreateRequest,
     BankVersionDiffPreviewRequest,
     BankVersionDiffPreviewOut,
     BankCarryOverRequest,
@@ -720,8 +722,8 @@ def rebuild_bank_stats(chapter_id: str | None = Query(None), db: Session = Depen
         log_audit(db, action='question_bank.stats.rebuild', status='success', message='Rebuild Bank Dashboard stats thành công', user=user, target_type='chapter' if chapter_id else 'bank_dashboard_stats', target_id=chapter_id)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.stats.rebuild', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter' if chapter_id else 'bank_dashboard_stats', target_id=chapter_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.stats.rebuild', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='chapter' if chapter_id else 'bank_dashboard_stats', target_id=chapter_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/admin/search/health')
@@ -738,8 +740,8 @@ def rebuild_bank_search_index(bank_version_id: str | None = Query(None), chapter
         log_audit(db, action='question_bank.search.rebuild', status='success', message='Rebuild Bank Search index thành công', user=user, target_type='bank_search_index', target_id=bank_version_id or chapter_id)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.search.rebuild', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_search_index', target_id=bank_version_id or chapter_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.search.rebuild', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_search_index', target_id=bank_version_id or chapter_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/admin/material-cleanup/health')
@@ -764,8 +766,8 @@ def purge_deleted_bank_materials(
         log_audit(db, action='question_bank.material.cleanup.purge', status='success', message=result.get('message', 'Purge tài liệu đã xóa mềm'), user=user, target_type='bank_material_cleanup', target_id=bank_version_id or chapter_id, metadata={k: v for k, v in result.items() if k not in {'purgable', 'blocked'}})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.material.cleanup.purge', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_material_cleanup', target_id=bank_version_id or chapter_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.material.cleanup.purge', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_material_cleanup', target_id=bank_version_id or chapter_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/departments/summary')
@@ -820,8 +822,11 @@ def chapter_summaries(subject_offering_id: str, db: Session = Depends(get_db), u
 
 
 @router.get('/departments', response_model=PaginatedOut[DepartmentOut])
-def list_departments(page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=50), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+def list_departments(q: str | None = Query(None, max_length=120), page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=50), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_department_filter(db.query(Department), user)
+    if q and q.strip():
+        needle = f'%{q.strip()}%'
+        query = query.filter(or_(Department.code.ilike(needle), Department.name.ilike(needle)))
     return _paginate(query.order_by(Department.code.asc()), page=page, page_size=page_size, max_page_size=50)
 
 
@@ -842,8 +847,8 @@ def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), 
         log_audit(db, action='question_bank.department.create', status='success', message='Tạo bộ môn thành công', user=user, target_type='department', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.department.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='department')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.department.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='department')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.patch('/departments/{department_id}', response_model=DepartmentOut)
@@ -854,8 +859,8 @@ def update_department(department_id: str, payload: DepartmentUpdate, db: Session
         log_audit(db, action='question_bank.department.update', status='success', message='Sửa bộ môn thành công', user=user, target_type='department', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.department.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='department', target_id=department_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.department.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='department', target_id=department_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.delete('/departments/{department_id}', response_model=EntityDeleteOut)
@@ -866,13 +871,16 @@ def delete_department(department_id: str, db: Session = Depends(get_db), user: U
         log_audit(db, action='question_bank.department.delete', status='success', message=result.get('message', 'Đã xóa bộ môn'), user=user, target_type='department', target_id=department_id)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.department.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='department', target_id=department_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.department.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='department', target_id=department_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/subjects', response_model=PaginatedOut[SubjectOut])
-def list_subjects(department_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+def list_subjects(department_id: str | None = None, q: str | None = Query(None, max_length=120), page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_subject_filter(db.query(Subject), user)
+    if q and q.strip():
+        needle = f'%{q.strip()}%'
+        query = query.filter(or_(Subject.code.ilike(needle), Subject.name.ilike(needle)))
     if department_id:
         _require_visible(db, user, 'DEPARTMENT', department_id)
         query = query.filter(Subject.department_id == department_id)
@@ -896,8 +904,8 @@ def create_subject(payload: SubjectCreate, db: Session = Depends(get_db), user: 
         log_audit(db, action='question_bank.subject.create', status='success', message='Tạo môn học thành công', user=user, target_type='subject', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.subject.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.subject.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='subject')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.patch('/subjects/{subject_id}', response_model=SubjectOut)
@@ -908,8 +916,8 @@ def update_subject(subject_id: str, payload: SubjectUpdate, db: Session = Depend
         log_audit(db, action='question_bank.subject.update', status='success', message='Sửa môn thành công', user=user, target_type='subject', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.subject.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject', target_id=subject_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.subject.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='subject', target_id=subject_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.delete('/subjects/{subject_id}', response_model=EntityDeleteOut)
@@ -920,14 +928,17 @@ def delete_subject(subject_id: str, db: Session = Depends(get_db), user: UserCon
         log_audit(db, action='question_bank.subject.delete', status='success', message=result.get('message', 'Đã xóa môn'), user=user, target_type='subject', target_id=subject_id)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.subject.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject', target_id=subject_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.subject.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='subject', target_id=subject_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/subject-offerings', response_model=PaginatedOut[SubjectOfferingOut])
 @router.get('/subject-versions', response_model=PaginatedOut[SubjectOfferingOut])
-def list_subject_offerings(subject_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+def list_subject_offerings(subject_id: str | None = None, q: str | None = Query(None, max_length=120), page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_subject_offering_filter(db.query(SubjectOffering), user)
+    if q and q.strip():
+        needle = f'%{q.strip()}%'
+        query = query.filter(or_(SubjectOffering.code.ilike(needle), SubjectOffering.name.ilike(needle), SubjectOffering.term.ilike(needle), SubjectOffering.version_code.ilike(needle)))
     if subject_id:
         _require_visible(db, user, 'SUBJECT', subject_id)
         query = query.filter(SubjectOffering.subject_id == subject_id)
@@ -953,8 +964,8 @@ def create_subject_offering(payload: SubjectOfferingCreate, db: Session = Depend
         log_audit(db, action='question_bank.subject_offering.create', status='success', message='Tạo phiên bản môn thành công', user=user, target_type='subject_offering', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.subject_offering.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject_offering')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.subject_offering.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='subject_offering')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.patch('/subject-offerings/{subject_offering_id}', response_model=SubjectOfferingOut)
@@ -966,8 +977,8 @@ def update_subject_offering(subject_offering_id: str, payload: SubjectOfferingUp
         log_audit(db, action='question_bank.subject_offering.update', status='success', message='Sửa phiên bản môn thành công', user=user, target_type='subject_offering', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.subject_offering.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject_offering', target_id=subject_offering_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.subject_offering.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='subject_offering', target_id=subject_offering_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.delete('/subject-offerings/{subject_offering_id}', response_model=EntityDeleteOut)
@@ -979,13 +990,16 @@ def delete_subject_offering(subject_offering_id: str, db: Session = Depends(get_
         log_audit(db, action='question_bank.subject_offering.delete', status='success', message=result.get('message', 'Đã xóa phiên bản môn'), user=user, target_type='subject_offering', target_id=subject_offering_id)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.subject_offering.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='subject_offering', target_id=subject_offering_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.subject_offering.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='subject_offering', target_id=subject_offering_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/chapters', response_model=PaginatedOut[ChapterOut])
-def list_chapters(subject_id: str | None = None, subject_offering_id: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
+def list_chapters(subject_id: str | None = None, subject_offering_id: str | None = None, q: str | None = Query(None, max_length=120), page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_questions'))):
     query = _biz(db).apply_chapter_filter(db.query(SubjectChapter), user)
+    if q and q.strip():
+        needle = f'%{q.strip()}%'
+        query = query.filter(or_(SubjectChapter.title.ilike(needle), SubjectChapter.description.ilike(needle)))
     if subject_id:
         _require_visible(db, user, 'SUBJECT', subject_id)
         query = query.filter(SubjectChapter.subject_id == subject_id)
@@ -1015,8 +1029,8 @@ def create_chapter(payload: ChapterCreate, db: Session = Depends(get_db), user: 
         log_audit(db, action='question_bank.chapter.create', status='success', message='Tạo chapter/bài học thành công', user=user, target_type='chapter', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.chapter.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.chapter.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='chapter')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.patch('/chapters/{chapter_id}', response_model=ChapterOut)
@@ -1027,8 +1041,8 @@ def update_chapter(chapter_id: str, payload: ChapterUpdate, db: Session = Depend
         log_audit(db, action='question_bank.chapter.update', status='success', message='Sửa bài/chapter thành công', user=user, target_type='chapter', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.chapter.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter', target_id=chapter_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.chapter.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='chapter', target_id=chapter_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.delete('/chapters/{chapter_id}', response_model=EntityDeleteOut)
@@ -1039,8 +1053,8 @@ def delete_chapter(chapter_id: str, db: Session = Depends(get_db), user: UserCon
         log_audit(db, action='question_bank.chapter.delete', status='success', message=result.get('message', 'Đã xóa bài/chapter'), user=user, target_type='chapter', target_id=chapter_id)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.chapter.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='chapter', target_id=chapter_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.chapter.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='chapter', target_id=chapter_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/bank-versions', response_model=PaginatedOut[BankVersionOut])
@@ -1066,8 +1080,8 @@ def create_bank_version(payload: BankVersionCreate, db: Session = Depends(get_db
         log_audit(db, action='question_bank.version.create', status='success', message='Tạo phiên bản ngân hàng câu hỏi thành công', user=user, target_type='bank_version', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.version.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/material-versions', response_model=PaginatedOut[MaterialVersionOut])
@@ -1089,8 +1103,8 @@ def create_material_version(payload: MaterialVersionCreate, db: Session = Depend
         log_audit(db, action='question_bank.material_version.create', status='success', message='Tạo phiên bản tài liệu thành công', user=user, target_type='material_version', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.material_version.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='material_version')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.material_version.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='material_version')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 
@@ -1108,8 +1122,8 @@ def delete_material_version(material_version_id: str, force_hard: bool = Query(F
         log_audit(db, action='question_bank.material.delete', status='success', message=result.get('message', ''), user=user, target_type='material_version', target_id=material_version_id, metadata=result)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.material.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='material_version', target_id=material_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.material.delete', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='material_version', target_id=material_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/materials/upload', response_model=MaterialUploadOut)
@@ -1153,8 +1167,8 @@ async def upload_material_to_bank_version(
         )
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.material.upload', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.material.upload', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 
@@ -1255,8 +1269,8 @@ async def preview_generate_questions_from_bank_version(bank_version_id: str, pay
         log_audit(db, action='question_bank.bank_version.generate.preview', status='success', message='Đã tính chi phí dự kiến trước khi tạo câu hỏi', user=user, target_type='bank_version', target_id=bank_version_id, metadata={'question_count': payload.question_count, 'estimated_cost_usd': result.get('estimated_cost_usd'), 'difficulty_counts': result.get('difficulty_counts')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.bank_version.generate.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.bank_version.generate.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 
@@ -1310,8 +1324,8 @@ async def generate_questions_from_bank_version(bank_version_id: str, payload: Ba
         )
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.bank_version.generate', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.bank_version.generate', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=502, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 def _preview_text(value: str | None, *, limit: int = 500) -> str:
@@ -1530,7 +1544,7 @@ async def preview_bank_question_import(
             'message': 'File hợp lệ, có thể xác nhận import.' if parsed['error_count'] == 0 else 'File còn lỗi. Hãy sửa các dòng lỗi rồi upload lại.',
         }
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/bank-versions/{bank_version_id}/questions/import-errors/{preview_token}.xlsx')
@@ -1673,8 +1687,8 @@ def recheck_carry_over_after_material_change(bank_version_id: str, db: Session =
         log_audit(db, action='question_bank.material.recheck_carry_over', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={k: v for k, v in result.items() if k not in {'kept_question_ids', 'retired_question_ids', 'safe_skipped_question_ids'}})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.material.recheck_carry_over', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.material.recheck_carry_over', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/diff/preview', response_model=BankVersionDiffPreviewOut)
@@ -1691,13 +1705,36 @@ def preview_bank_version_diff(bank_version_id: str, payload: BankVersionDiffPrev
             from_bank_version_id=base_id,
             to_bank_version_id=bank_version_id,
             actor=user.user_id,
-            persist=payload.persist,
+            persist=False,
         )
         log_audit(db, action='question_bank.version.diff.preview', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={'diff_id': result.get('diff_id'), 'summary': result.get('summary')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.version.diff.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.diff.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể xem trước so sánh phiên bản.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise HTTPException(status_code=400, detail={'code': 'BANK_VERSION_DIFF_PREVIEW_FAILED', 'message': 'Không thể xem trước thay đổi giữa các phiên bản bộ đề.'}) from exc
+
+
+@router.post('/bank-versions/{bank_version_id}/diffs', response_model=BankVersionDiffPreviewOut)
+def create_bank_version_diff(bank_version_id: str, payload: BankVersionDiffCreateRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('edit_questions'))):
+    _require_bank_version(db, user, 'question.edit', bank_version_id)
+    try:
+        base_id = payload.base_bank_version_id
+        if not base_id:
+            target = db.get(QuestionBankVersion, bank_version_id)
+            if not target or not target.based_on_version_id:
+                raise ValueError('Hãy truyền base_bank_version_id hoặc tạo Bank Version mới với based_on_version_id.')
+            base_id = target.based_on_version_id
+        _require_bank_version(db, user, 'bank.view', base_id)
+        result = VersionedQuestionBankService(db).create_bank_version_diff(
+            from_bank_version_id=base_id,
+            to_bank_version_id=bank_version_id,
+            actor=user.user_id,
+        )
+        log_audit(db, action='question_bank.version.diff.create', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={'diff_id': result.get('diff_id'), 'summary': result.get('summary')})
+        return result
+    except Exception as exc:
+        log_audit(db, action='question_bank.version.diff.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể lưu bản so sánh phiên bản.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise HTTPException(status_code=400, detail={'code': 'BANK_VERSION_DIFF_CREATE_FAILED', 'message': 'Không thể lưu bản so sánh phiên bản bộ đề.'}) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/carry-over', response_model=BankCarryOverOut)
@@ -1716,8 +1753,8 @@ def carry_over_bank_questions(bank_version_id: str, payload: BankCarryOverReques
         log_audit(db, action='question_bank.version.carry_over', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={'created_count': result.get('created_count'), 'skipped_count': result.get('skipped_count')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.version.carry_over', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.carry_over', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/questions/retire', response_model=BankRetireQuestionsOut)
@@ -1733,8 +1770,8 @@ def retire_bank_questions(bank_version_id: str, payload: BankRetireQuestionsRequ
         log_audit(db, action='question_bank.version.questions.retire', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={'retired_count': result.get('retired_count')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.version.questions.retire', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.questions.retire', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.patch('/bank-versions/{bank_version_id}/questions/{question_id}', response_model=BankVersionQuestionOut)
@@ -1750,8 +1787,8 @@ def update_bank_question(bank_version_id: str, question_id: str, payload: BankQu
         log_audit(db, action='question_bank.version.question.update', status='success', message='Đã sửa câu hỏi trong ngân hàng đề', user=user, target_type='question', target_id=question_id, metadata={'bank_version_id': bank_version_id, 'new_status': question.status})
         return question
     except Exception as exc:
-        log_audit(db, action='question_bank.version.question.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='question', target_id=question_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.question.update', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='question', target_id=question_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/questions/{question_id}/review', response_model=BankQuestionReviewOut)
@@ -1768,8 +1805,8 @@ def review_bank_question(bank_version_id: str, question_id: str, payload: BankQu
         log_audit(db, action='question_bank.version.question.review', status='success', message=result.get('message', ''), user=user, target_type='question', target_id=question_id, metadata={'bank_version_id': bank_version_id, 'new_status': result.get('new_status')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.version.question.review', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='question', target_id=question_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.question.review', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='question', target_id=question_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/questions/bulk-review', response_model=BankQuestionBulkReviewOut)
@@ -1791,8 +1828,8 @@ def bulk_review_bank_questions(bank_version_id: str, payload: BankQuestionBulkRe
         log_audit(db, action='question_bank.version.question.bulk_review', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id, metadata={'changed_count': result.get('changed_count'), 'action': payload.action})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.version.question.bulk_review', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.question.bulk_review', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/diff/mark-resolved', response_model=BankDocumentDiffResolveOut)
@@ -1803,8 +1840,8 @@ def mark_bank_diff_resolved(bank_version_id: str, payload: BankDocumentDiffResol
         log_audit(db, action='question_bank.version.diff.mark_resolved', status='success', message=result.get('message', ''), user=user, target_type='bank_version', target_id=bank_version_id)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.version.diff.mark_resolved', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.version.diff.mark_resolved', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_version', target_id=bank_version_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/bank-versions/{bank_version_id}/release/readiness', response_model=BankReleaseReadinessOut)
@@ -1833,8 +1870,8 @@ def create_release(payload: BankReleaseCreate, db: Session = Depends(get_db), us
         log_audit(db, action='question_bank.release.create', status='success', message='Tạo Bank Release thành công; 1 release = 1 Open edX Library', user=user, target_type='bank_release', target_id=item.id, metadata={'openedx_library_key': item.openedx_library_key})
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.release.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.release.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_release')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.delete('/releases/{release_id}', response_model=EntityDeleteOut)
@@ -1845,8 +1882,8 @@ def cancel_failed_release(release_id: str, db: Session = Depends(get_db), user: 
         log_audit(db, action='question_bank.release.cancel_failed', status='success', message=result.get('message', ''), user=user, target_type='bank_release', target_id=release_id, metadata=result)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.release.cancel_failed', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.release.cancel_failed', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_release', target_id=release_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 
@@ -1933,8 +1970,8 @@ async def publish_release_to_openedx(release_id: str, payload: BankReleasePublis
         log_audit(db, action='question_bank.release.publish_openedx', status='success', message='Publish Bank Release sang Open edX Library thành công', user=user, target_type='bank_release', target_id=release_id, metadata={'openedx_library_key': result.get('openedx_library_key'), 'question_count': result.get('question_count')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.release.publish_openedx', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.release.publish_openedx', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_release', target_id=release_id)
+        raise public_http_exception(status_code=502, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/releases/{release_id}/quiz/preview', response_model=BankReleaseQuizPlanOut)
@@ -1952,8 +1989,8 @@ def preview_quiz_from_release(release_id: str, payload: BankReleaseQuizPreviewRe
         log_audit(db, action='question_bank.release.quiz.preview', status='success', message=result.get('message', ''), user=user, target_type='bank_release', target_id=release_id, metadata={'slot_count': result.get('total_questions'), 'warnings': result.get('warnings')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.release.quiz.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.release.quiz.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_release', target_id=release_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 
@@ -2034,11 +2071,11 @@ async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCrea
         log_audit(db, action='question_bank.release.quiz.create', status='success', message='Tạo Quiz từ Bank Release thành công', user=user, course_id=result.get('openedx_course_id'), target_type='course_quiz_instance', target_id=result.get('course_quiz_instance_id'), metadata={'bank_release_id': release_id, 'openedx_unit_node_id': result.get('openedx_unit_node_id')})
         return result
     except ValueError as exc:
-        log_audit(db, action='question_bank.release.quiz.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.release.quiz.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_release', target_id=release_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
     except Exception as exc:
-        log_audit(db, action='question_bank.release.quiz.create', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='bank_release', target_id=release_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.release.quiz.create', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='bank_release', target_id=release_id)
+        raise public_http_exception(status_code=502, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 
@@ -2052,8 +2089,8 @@ async def preview_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depen
         log_audit(db, action='question_bank.quiz.auto_map.preview', status='success' if result.get('ok') else 'failed', error_type=None if result.get('ok') else AuditErrorType.VALIDATION_ERROR, message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'blocking_errors': result.get('blocking_errors')})
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.quiz.auto_map.preview', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.quiz.auto_map.preview', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
+        raise public_http_exception(status_code=502, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.post('/quiz/auto-map/apply', response_model=QuizAutoMapOut)
@@ -2065,11 +2102,11 @@ async def apply_quiz_auto_map(payload: QuizAutoMapRequest, db: Session = Depends
         log_audit(db, action='question_bank.quiz.auto_map.apply', status='success', message=result.get('message', ''), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map', metadata={'summary': result.get('summary'), 'mapping_count': len(result.get('mappings') or [])})
         return result
     except ValueError as exc:
-        log_audit(db, action='question_bank.quiz.auto_map.apply', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.quiz.auto_map.apply', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
     except Exception as exc:
-        log_audit(db, action='question_bank.quiz.auto_map.apply', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.quiz.auto_map.apply', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, course_id=payload.openedx_course_id, target_type='quiz_auto_map')
+        raise public_http_exception(status_code=502, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/course-mappings', response_model=PaginatedOut[CourseMappingOut])
@@ -2097,8 +2134,8 @@ def create_course_mapping(payload: CourseMappingCreate, db: Session = Depends(ge
         log_audit(db, action='question_bank.course_mapping.create', status='success', message='Map khóa học Open edX vào môn học thành công', user=user, course_id=item.openedx_course_id, target_type='course_mapping', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.course_mapping.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='course_mapping')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.course_mapping.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='course_mapping')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/course-chapter-mappings', response_model=PaginatedOut[CourseChapterMappingOut])
@@ -2143,8 +2180,8 @@ def create_course_chapter_mapping(payload: CourseChapterMappingCreate, db: Sessi
         log_audit(db, action='question_bank.course_chapter_mapping.create', status='success', message='Map chapter Open edX vào Bank Release thành công', user=user, target_type='course_chapter_mapping', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.course_chapter_mapping.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='course_chapter_mapping')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.course_chapter_mapping.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='course_chapter_mapping')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/course-quiz-instances', response_model=PaginatedOut[CourseQuizInstanceOut])
@@ -2172,8 +2209,8 @@ async def rollback_course_quiz_instance(instance_id: str, payload: CourseQuizRol
         log_audit(db, action='question_bank.course_quiz.rollback', status='success', message=result.get('message', ''), user=user, target_type='course_quiz_instance', target_id=instance_id, metadata=result)
         return result
     except Exception as exc:
-        log_audit(db, action='question_bank.course_quiz.rollback', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='course_quiz_instance', target_id=instance_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.course_quiz.rollback', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='course_quiz_instance', target_id=instance_id)
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc
 
 
 @router.get('/quiz-blueprints', response_model=PaginatedOut[QuizBlueprintOut])
@@ -2193,5 +2230,5 @@ def create_quiz_blueprint(payload: QuizBlueprintCreate, db: Session = Depends(ge
         log_audit(db, action='question_bank.quiz_blueprint.create', status='success', message='Tạo blueprint quiz thành công', user=user, target_type='quiz_blueprint', target_id=item.id)
         return item
     except Exception as exc:
-        log_audit(db, action='question_bank.quiz_blueprint.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='quiz_blueprint')
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='question_bank.quiz_blueprint.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', user=user, target_type='quiz_blueprint')
+        raise public_http_exception(status_code=400, code='BANK_OPERATION_FAILED', message='Không thể hoàn tất thao tác ngân hàng câu hỏi.', logger_name=__name__) from exc

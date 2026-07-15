@@ -26,6 +26,7 @@ import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState } from '../../../../components/training/TrainingWorkspace'
+import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
 
 const PAGE_SIZE = 50
 
@@ -923,14 +924,15 @@ function ClassDetailContent() {
 
 
 
-    {selectedBehavior && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSelectedBehavior(null); setSelectedBehaviorDetail(null) } }}>
-      <div className="card bank-modal academic-confirm-modal online-behavior-modal online-behavior-deadline-modal" role="dialog" aria-modal="true" aria-labelledby="online-behavior-modal-title">
-        <div className="section-head">
-          <div>
-            <h2 id="online-behavior-modal-title">Chi tiết học online</h2>
-            <p>{selectedBehavior.username}</p>
-          </div>
-        </div>
+    <AccessibleDialog
+      open={Boolean(selectedBehavior)}
+      title="Chi tiết học online"
+      description={selectedBehavior?.username}
+      onClose={() => { setSelectedBehavior(null); setSelectedBehaviorDetail(null) }}
+      size="xlarge"
+      className="online-behavior-modal online-behavior-deadline-modal"
+    >
+      {selectedBehavior ? <>
         <div className="quiz-detail-grid online-behavior-grid">
           <div><span>Nhận định</span><b>{safeBehaviorLabel(selectedBehavior)}</b></div>
           <div><span>Độ tin cậy</span><b>{Math.round(selectedBehavior.confidence_score || 0)}%</b></div>
@@ -989,17 +991,18 @@ function ClassDetailContent() {
 
         <p className="online-learning-disclaimer">Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.</p>
         <div className="modal-actions"><button className="btn primary" type="button" onClick={() => { setSelectedBehavior(null); setSelectedBehaviorDetail(null) }}>Đóng</button></div>
-      </div>
-    </div>}
+      </> : null}
+    </AccessibleDialog>
 
-    {selectedQuiz && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedQuiz(null) }}>
-      <div className="card bank-modal academic-confirm-modal quiz-detail-modal" role="dialog" aria-modal="true" aria-labelledby="quiz-detail-modal-title">
-        <div className="section-head">
-          <div>
-            <h2 id="quiz-detail-modal-title">{selectedQuiz.column.name}</h2>
-            <p>{selectedQuiz.student.student_code || selectedQuiz.student.username} · {selectedQuiz.student.full_name}</p>
-          </div>
-        </div>
+    <AccessibleDialog
+      open={Boolean(selectedQuiz)}
+      title={selectedQuiz?.column.name || 'Chi tiết đầu điểm'}
+      description={selectedQuiz ? `${selectedQuiz.student.student_code || selectedQuiz.student.username} · ${selectedQuiz.student.full_name}` : undefined}
+      onClose={() => setSelectedQuiz(null)}
+      size="medium"
+      className="quiz-detail-modal"
+    >
+      {selectedQuiz ? <>
         <div className="quiz-detail-grid">
           <div><span>Điểm</span><b>{componentScoreText(selectedQuiz.score)}</b></div>
           <div><span>Trạng thái</span><b>{quizStatusLabel(selectedQuiz.score)}</b></div>
@@ -1010,14 +1013,17 @@ function ClassDetailContent() {
         </div>
         {(selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning) && <p className="form-message warning-message">{selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning}</p>}
         <div className="modal-actions"><button className="btn primary" type="button" onClick={() => setSelectedQuiz(null)}>Đóng</button></div>
-      </div>
-    </div>}
-    {errorModal && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setErrorModal('') }}>
-      <div className="card bank-modal academic-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="error-modal-title">
-        <div className="section-head"><div><h2 id="error-modal-title">Không thực hiện được thao tác</h2><p>{errorModal}</p></div></div>
-        <div className="modal-actions"><button className="btn primary" type="button" onClick={() => setErrorModal('')}>Đã hiểu</button></div>
-      </div>
-    </div>}
+      </> : null}
+    </AccessibleDialog>
+    <AccessibleDialog
+      open={Boolean(errorModal)}
+      title="Không thực hiện được thao tác"
+      onClose={() => setErrorModal('')}
+      size="small"
+      footer={<div className="dialog-action-row"><button className="btn primary" data-dialog-autofocus type="button" onClick={() => setErrorModal('')}>Đã hiểu</button></div>}
+    >
+      <p>{errorModal}</p>
+    </AccessibleDialog>
   </PageRoot>
 }
 

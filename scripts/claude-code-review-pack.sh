@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/claude-code-review-pack-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.3}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.6}"
 INCLUDE_BUILD_GATE="${INCLUDE_BUILD_GATE:-0}"
 STRICT_BUILD_GATE="${STRICT_BUILD_GATE:-0}"
 mkdir -p "$OUT_DIR"
@@ -31,18 +31,18 @@ from pathlib import Path
 root = Path.cwd()
 ignored = {'.git', 'node_modules', '.next', '__pycache__', '.pytest_cache', '.mypy_cache', '.runtime'}
 items = []
-for path in sorted(root.rglob('*')):
-    if not path.is_file():
-        continue
-    rel = path.relative_to(root).as_posix()
-    if any(part in ignored for part in path.parts):
-        continue
-    data = path.read_bytes()
-    items.append({
-        'path': rel,
-        'bytes': len(data),
-        'sha256': hashlib.sha256(data).hexdigest(),
-    })
+for current, dirs, files in os.walk(root):
+    dirs[:] = sorted(name for name in dirs if name not in ignored)
+    base = Path(current)
+    for name in sorted(files):
+        path = base / name
+        rel = path.relative_to(root).as_posix()
+        data = path.read_bytes()
+        items.append({
+            'path': rel,
+            'bytes': len(data),
+            'sha256': hashlib.sha256(data).hexdigest(),
+        })
 print(json.dumps({'file_count': len(items), 'files': items}, ensure_ascii=False, indent=2))
 PY
 
@@ -53,7 +53,6 @@ VERSION_TARGETS=(
   "docker-compose.prod.yml"
   ".env.example"
   ".env.production.example"
-  "frontend/components/layout/AppShell.tsx"
   "frontend/Dockerfile"
   "frontend/package-lock.json"
   "scripts/frontend-build-verify.sh"
@@ -72,16 +71,16 @@ for f in "${VERSION_TARGETS[@]}"; do
 done
 
 # 3) Confirm latest migration has not been silently changed.
-if [[ -f backend/alembic/versions/0052_v25_9_16_7_2_27_learning_behavior_logic_calibration.py ]]; then
-  record_status PASS ALEMBIC_HEAD_KNOWN "Latest known migration 0052 is present"
+if [[ -f backend/alembic/versions/0053_v25_9_16_7_2_64_16_5_4_diff_idempotency.py ]]; then
+  record_status PASS ALEMBIC_HEAD_KNOWN "Latest known migration 0053 is present"
 else
-  record_status FAIL ALEMBIC_HEAD_KNOWN "Expected latest migration 0052 is missing"
+  record_status FAIL ALEMBIC_HEAD_KNOWN "Expected latest migration 0053 is missing"
 fi
-find backend/alembic/versions -maxdepth 1 -type f -name '0053_*.py' -o -name '0054_*.py' 2>/dev/null | sort > "$OUT_DIR/newer-migrations.txt" || true
+find backend/alembic/versions -maxdepth 1 -type f -name '0054_*.py' -o -name '0055_*.py' 2>/dev/null | sort > "$OUT_DIR/newer-migrations.txt" || true
 if [[ -s "$OUT_DIR/newer-migrations.txt" ]]; then
   record_status WARN ALEMBIC_NEWER_FOUND "Newer migration files exist; verify down_revision chain"
 else
-  record_status PASS ALEMBIC_NO_UNEXPECTED_NEWER "No migration newer than 0052 detected"
+  record_status PASS ALEMBIC_NO_UNEXPECTED_NEWER "No migration newer than 0053 detected"
 fi
 
 # 4) UI wording policy guard: source code must not display hard violation wording.
@@ -120,7 +119,7 @@ else
 fi
 
 # 8) Shell syntax for release scripts.
-if bash -n scripts/analytics-uat-evidence-pack.sh && bash -n scripts/analytics-uat-acceptance.sh && bash -n scripts/claude-code-review-pack.sh && bash -n scripts/uat-build-gate.sh && bash -n scripts/frontend-build-verify.sh && bash -n scripts/uat-runtime-verify.sh && bash -n scripts/performance-readiness-report.sh && bash -n scripts/query-hotspot-report.sh && bash -n scripts/maintainability-contract-report.sh && bash -n scripts/security-readiness-report.sh && bash -n scripts/security-attack-simulation-report.sh && bash -n scripts/pilot-release-candidate-report.sh && bash -n scripts/pilot-operations-runbook.sh && bash -n scripts/production-pilot-final-gate.sh && bash -n scripts/load-test-hot-endpoints.sh && bash -n scripts/rollback-drill-verify.sh && bash -n scripts/openedx-publish-verify.sh && bash -n scripts/production-pilot-final-gate.sh; then
+if bash -n scripts/analytics-uat-evidence-pack.sh && bash -n scripts/analytics-uat-acceptance.sh && bash -n scripts/claude-code-review-pack.sh && bash -n scripts/uat-build-gate.sh && bash -n scripts/frontend-build-verify.sh && bash -n scripts/uat-runtime-verify.sh && bash -n scripts/performance-readiness-report.sh && bash -n scripts/query-hotspot-report.sh && bash -n scripts/maintainability-contract-report.sh && bash -n scripts/security-readiness-report.sh && bash -n scripts/security-attack-simulation-report.sh && bash -n scripts/production-security-closure-report.sh && bash -n scripts/performance-worker-reliability-report.sh && bash -n scripts/frontend-runtime-contracts-report.sh && bash -n scripts/pilot-release-candidate-report.sh && bash -n scripts/pilot-operations-runbook.sh && bash -n scripts/production-pilot-final-gate.sh && bash -n scripts/load-test-hot-endpoints.sh && bash -n scripts/rollback-drill-verify.sh && bash -n scripts/openedx-publish-verify.sh && bash -n scripts/production-pilot-final-gate.sh; then
   record_status PASS SHELL_SYNTAX "release helper scripts pass bash -n"
 else
   record_status FAIL SHELL_SYNTAX "one or more release helper scripts fail bash -n"
@@ -145,7 +144,7 @@ done
 if [[ "$ux_missing" == "0" ]]; then
   record_status PASS UX_FOUNDATION_MODULES "Enterprise navigation/DataTable modules are present"
 fi
-if grep -q 'Bộ môn → Môn → Phiên bản → Bài → Câu hỏi' frontend/components/layout/AppShell.tsx   && grep -q '<EnterpriseDataTable' frontend/app/bank/_components/pages/DepartmentsPage.tsx   && grep -q 'useUrlTableState' frontend/app/bank/_components/pages/DepartmentsPage.tsx; then
+if grep -q "label: 'Ngân hàng đề'" frontend/components/layout/AppShell.tsx   && grep -q '<EnterpriseDataTable' frontend/app/bank/_components/pages/DepartmentsPage.tsx   && grep -q 'useUrlTableState' frontend/app/bank/_components/pages/DepartmentsPage.tsx; then
   record_status PASS BANK_HIERARCHY_UX_CONTRACT "Five-level Bank hierarchy and first EnterpriseDataTable migration are present"
 else
   record_status FAIL BANK_HIERARCHY_UX_CONTRACT "Bank hierarchy/DataTable foundation contract is incomplete"
@@ -197,11 +196,33 @@ Run before UAT sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.3 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.6 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
 TXT
+fi
+
+# Production security P0/P1 closure gate.
+if ./scripts/production-security-closure-report.sh "$OUT_DIR/production-security-closure" > "$OUT_DIR/production-security-closure.log" 2>&1; then
+  record_status PASS PRODUCTION_SECURITY_CLOSURE "Production security P0/P1 source contract passed" "production-security-closure/production-security-closure.json"
+else
+  record_status FAIL PRODUCTION_SECURITY_CLOSURE "Production security P0/P1 source contract failed" "production-security-closure.log"
+fi
+
+
+# Performance and worker reliability gate.
+if ./scripts/performance-worker-reliability-report.sh "$OUT_DIR/performance-worker-reliability" > "$OUT_DIR/performance-worker-reliability.log" 2>&1; then
+  record_status PASS PERFORMANCE_WORKER_RELIABILITY "Performance/API/Celery reliability contract passed" "performance-worker-reliability/performance-worker-reliability.json"
+else
+  record_status FAIL PERFORMANCE_WORKER_RELIABILITY "Performance/API/Celery reliability contract failed" "performance-worker-reliability.log"
+fi
+
+# Frontend runtime, modal and route-state contracts.
+if ./scripts/frontend-runtime-contracts-report.sh "$OUT_DIR/frontend-runtime-contracts" > "$OUT_DIR/frontend-runtime-contracts.log" 2>&1; then
+  record_status PASS FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract passed" "frontend-runtime-contracts/frontend-runtime-contracts.json"
+else
+  record_status FAIL FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract failed" "frontend-runtime-contracts.log"
 fi
 
 # Runtime import/name and frontend layout integrity gates.
@@ -255,7 +276,7 @@ PY
 cat > "$OUT_DIR/CLAUDE_REVIEW_BRIEF.md" <<'MD'
 # Claude Code Review Brief
 
-Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.3 — Frontend Layout Integrity + Runtime Reliability Hotfix.
+Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.6 — Frontend Runtime Contracts + Modal/Error Boundary.
 
 Static review services to inspect: SecurityReadinessService, SecurityAttackSimulationService, PerformanceReadinessService, QueryHotspotService, ReleaseCandidateService, PilotOperationsService, QuestionBankReleasePublishWorkflowService, QuestionBankQuizCreationWorkflowService, QuestionBankGenerationReviewWorkflowService, AcademicSyncEnrollmentWorkflowService.
 
@@ -273,7 +294,7 @@ This version continues workflow-by-workflow maintainability work after the Teach
 
 ## Reviewer guardrails
 
-- Latest Alembic migration should remain `0052_v25_9_16_7_2_27_learning_behavior_logic_calibration.py` unless an intentional schema change exists.
+- Latest Alembic migration should remain `0053_v25_9_16_7_2_64_16_5_4_diff_idempotency.py` unless a later intentional schema change exists.
 - UI must not use hard wording such as “gian lận/cheating/vi phạm chắc chắn”.
 - Heavy analytics work must be queued as jobs, not executed in HTTP requests.
 - Production destructive cleanup must remain disabled unless explicit UAT env and confirm phrase are supplied.

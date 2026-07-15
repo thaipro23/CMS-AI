@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.errors import public_http_exception
 from app.core.rbac import UserContext, require_permission
 from app.schemas.settings import RuntimeSettingsUpdate
 from app.services.model_gateway import ModelGateway
@@ -33,8 +34,8 @@ def patch_runtime_settings(
         log_audit(db, action='settings.update', status='success', message='Admin đã cập nhật cấu hình hệ thống', user=user, target_type='runtime_settings', metadata={'model': payload.model.openai_model if payload.model else None, 'mock_llm': payload.model.mock_llm if payload.model else None, 'auth_mode': payload.sso.auth_mode if payload.sso else None})
         return data
     except ValueError as exc:
-        log_audit(db, action='settings.update', status='failed', error_type='user', message=str(exc), user=user, target_type='runtime_settings')
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        log_audit(db, action='settings.update', status='failed', error_type='user', message='Không thể cập nhật cấu hình hệ thống.', user=user, target_type='runtime_settings')
+        raise public_http_exception(status_code=status.HTTP_400_BAD_REQUEST, code='SETTINGS_OPERATION_FAILED', message='Không thể cập nhật cấu hình hệ thống.', logger_name=__name__) from exc
 
 
 @router.post('/runtime/test-model')
@@ -66,8 +67,8 @@ async def test_model_gateway(user: UserContext = Depends(require_permission('man
             'first_question': (questions[0].get('question') or questions[0].get('question_text')) if questions else None,
         }
     except Exception as exc:
-        log_audit(db, action='settings.test_model', status='failed', error_type='external', message=str(exc), user=user, target_type='model_gateway')
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        log_audit(db, action='settings.test_model', status='failed', error_type='external', message='Không thể cập nhật cấu hình hệ thống.', user=user, target_type='model_gateway')
+        raise public_http_exception(status_code=status.HTTP_400_BAD_REQUEST, code='SETTINGS_OPERATION_FAILED', message='Không thể cập nhật cấu hình hệ thống.', logger_name=__name__) from exc
 
 
 @router.post('/openedx/test')
@@ -79,5 +80,5 @@ async def test_openedx_settings(course_id: str | None = None, user: UserContext 
         log_audit(db, action='settings.test_openedx', status='success' if result.get('ok', True) else 'failed', error_type=None if result.get('ok', True) else 'external', message=result.get('message') or 'Đã kiểm tra Open edX', user=user, course_id=course_id, target_type='openedx_connector', metadata=result)
         return result
     except Exception as exc:
-        log_audit(db, action='settings.test_openedx', status='failed', error_type='external', message=str(exc), user=user, course_id=course_id, target_type='openedx_connector')
+        log_audit(db, action='settings.test_openedx', status='failed', error_type='external', message='Không thể cập nhật cấu hình hệ thống.', user=user, course_id=course_id, target_type='openedx_connector')
         raise

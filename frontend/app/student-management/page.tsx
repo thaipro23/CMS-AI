@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useAppContext } from "../../context/AppContext";
+import { useFeedback } from "../../components/ui/FeedbackProvider";
 import {
   autoMapAcademicSubjectCourse,
   autoMapAllAcademicSubjectCoursesAndSync,
@@ -141,6 +142,7 @@ function buildSubjectClassesHref(
 
 function StudentManagementSubjectsContent() {
   const { authHeaders } = useAppContext();
+  const { confirmAction } = useFeedback();
   const headers = useMemo(() => authHeaders(), [authHeaders]);
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders]);
   const [terms, setTerms] = useState<AcademicTerm[]>([]);
@@ -277,12 +279,12 @@ function StudentManagementSubjectsContent() {
       );
       return;
     }
-    if (
-      !confirm(
-        "Tự động ghép Course CMS môn trong bộ lọc hiện tại. Môn nào ghép được sẽ được đưa các lớp vào hàng đợi đồng bộ user CMS + ghi danh CMS + điểm học tập. Tiếp tục?",
-      )
-    )
-      return;
+    const accepted = await confirmAction({
+      title: "Tự động ghép Course CMS?",
+      description: "Hệ thống sẽ ghép các môn trong bộ lọc hiện tại, sau đó đưa lớp phù hợp vào hàng đợi đồng bộ tài khoản CMS, ghi danh và dữ liệu học tập.",
+      confirmLabel: "Tạo tác vụ nền",
+    });
+    if (!accepted) return;
     setBulkMapping(true);
     setMessage(noticeInfo("Đang tạo tác vụ nền."));
     try {

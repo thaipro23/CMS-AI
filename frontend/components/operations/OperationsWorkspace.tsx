@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useId, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import type { AppIconName } from '../icons/AppIcon'
 import type { VisualTone } from '../ui/VisualIcon'
 import { VisualIcon } from '../ui/VisualIcon'
+import { AccessibleDialog } from '../ui/AccessibleDialog'
 
 export type OperationsMetric = {
   label: string
@@ -74,55 +74,20 @@ export function WorkspaceSection({ title, description, actions, children, classN
   </section>
 }
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
 export function SideDrawer({ open, title, description, children, footer, onClose, width = 'large' }: { open: boolean; title: string; description?: string; children: ReactNode; footer?: ReactNode; onClose: () => void; width?: 'medium' | 'large' }) {
-  const titleId = useId()
-  const descriptionId = useId()
-  const closeRef = useRef<HTMLButtonElement | null>(null)
-  const panelRef = useRef<HTMLElement | null>(null)
-
-  useEffect(() => {
-    if (!open) return undefined
-    const previous = document.activeElement as HTMLElement | null
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-        return
-      }
-      if (event.key !== 'Tab') return
-      const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) || []).filter((item) => item.offsetParent !== null)
-      if (!focusable.length) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    window.setTimeout(() => closeRef.current?.focus(), 0)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previousOverflow
-      previous?.focus?.()
-    }
-  }, [open, onClose])
-
-  if (!open) return null
-  return <div className="side-drawer-backdrop" onMouseDown={onClose}>
-    <aside ref={panelRef} className={`side-drawer side-drawer-${width}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2 id={titleId}>{title}</h2>{description ? <p id={descriptionId}>{description}</p> : null}</div><button ref={closeRef} type="button" className="btn small secondary" aria-label={`Đóng ${title}`} onClick={onClose}>Đóng</button></header>
-      <div className="side-drawer-body">{children}</div>
-      {footer ? <footer>{footer}</footer> : null}
-    </aside>
-  </div>
+  return <AccessibleDialog
+    open={open}
+    title={title}
+    description={description}
+    onClose={onClose}
+    placement="right"
+    size={width === 'large' ? 'large' : 'medium'}
+    className={`side-drawer side-drawer-${width}`}
+    bodyClassName="side-drawer-body"
+    footer={footer}
+  >
+    {children}
+  </AccessibleDialog>
 }
 
 export function InfoPairGrid({ items }: { items: Array<{ label: string; value: ReactNode; wide?: boolean }> }) {

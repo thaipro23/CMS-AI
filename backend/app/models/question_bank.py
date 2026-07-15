@@ -263,6 +263,7 @@ class BankVersionDiff(Base):
     to_bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
     status: Mapped[str] = mapped_column(String(50), default='preview', index=True)  # preview | applied | archived
     material_similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     applied_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -271,6 +272,7 @@ class BankVersionDiff(Base):
 
     __table_args__ = (
         Index('ix_ai_bank_version_diffs_pair_status', 'from_bank_version_id', 'to_bank_version_id', 'status'),
+        UniqueConstraint('from_bank_version_id', 'to_bank_version_id', 'idempotency_key', name='uq_ai_bank_version_diff_idempotency'),
     )
 
 

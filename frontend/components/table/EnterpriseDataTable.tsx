@@ -59,6 +59,9 @@ export type EnterpriseDataTableProps<Row> = {
   onPageSizeChange?: (pageSize: number) => void
   label?: string
   getRowClassName?: (row: Row) => string
+  sortKey?: string
+  sortDirection?: 'asc' | 'desc'
+  onSortChange?: (key: string, direction: 'asc' | 'desc') => void
 }
 
 type ColumnLayout<Row> = {
@@ -152,12 +155,16 @@ export function EnterpriseDataTable<Row>({
   onPageSizeChange,
   label = 'bản ghi',
   getRowClassName,
+  sortKey,
+  sortDirection = 'asc',
+  onSortChange,
 }: EnterpriseDataTableProps<Row>) {
   // v2 deliberately resets the old responsive preferences that automatically hid columns.
   const storageKey = `ai-enterprise-table:${tableId}:columns:full-v2`
   const shellRef = useRef<HTMLElement | null>(null)
   const headerCheckboxRef = useRef<HTMLInputElement | null>(null)
-  const defaultKeys = useMemo(() => columns.map((column) => column.key), [columns])
+  const defaultKeys = useMemo(() => columns.filter((column) => column.defaultVisible !== false).map((column) => column.key), [columns])
+  const allColumnKeys = useMemo(() => columns.map((column) => column.key), [columns])
   const [visibleKeys, setVisibleKeys] = useState<string[]>(defaultKeys)
 
   useEffect(() => {
@@ -253,7 +260,7 @@ export function EnterpriseDataTable<Row>({
       <div className="enterprise-table-summary" aria-live="polite"><VisualIcon label={caption} icon="database" tone="blue" className="enterprise-table-summary-icon" /><div className="enterprise-table-summary-copy"><b>{caption}</b><span>{(total ?? rows.length).toLocaleString('vi-VN')} {label}</span>{loading && <span className="soft-tag"><span className="spinner tiny" /> Đang cập nhật</span>}</div></div>
       <div className="enterprise-table-view-actions">
         {onDensityChange && <label className="enterprise-density-control"><span>Mật độ</span><select className="input" value={density} onChange={(event) => onDensityChange(event.target.value as TableDensity)}><option value="compact">Thu gọn</option><option value="standard">Tiêu chuẩn</option><option value="comfortable">Thoáng</option></select></label>}
-        <details className="enterprise-column-menu"><summary className="btn small secondary"><VisualIcon icon="layers" tone="slate" size={15} /> Cột hiển thị</summary><div className="enterprise-column-menu-popover"><b>Chọn cột</b>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={visibleKeys.includes(column.key)} disabled={!column.hideable} onChange={() => toggleColumn(column.key)} />{column.header}</label>)}<button className="btn small secondary" type="button" onClick={() => persistColumns(defaultKeys)}>Hiện tất cả</button></div></details>
+        <details className="enterprise-column-menu"><summary className="btn small secondary"><VisualIcon icon="layers" tone="slate" size={15} /> Cột hiển thị</summary><div className="enterprise-column-menu-popover"><b>Chọn cột</b>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={visibleKeys.includes(column.key)} disabled={!column.hideable} onChange={() => toggleColumn(column.key)} />{column.header}</label>)}<button className="btn small secondary" type="button" onClick={() => persistColumns(allColumnKeys)}>Hiện tất cả</button><button className="btn small ghost" type="button" onClick={() => persistColumns(defaultKeys)}>Mặc định</button></div></details>
       </div>
     </div>
     {!rows.length ? <TableEmptyState title={emptyTitle} description={emptyDescription} action={emptyAction} /> : <div className="enterprise-table-scroll" tabIndex={0} role="region" aria-label={`${caption}. Bảng hiển thị đầy đủ các cột; chỉ cuộn ngang khi nội dung thực sự không thể xuống dòng.`}>
@@ -265,13 +272,24 @@ export function EnterpriseDataTable<Row>({
         </colgroup>
         <thead><tr>
           {selection && <th className="enterprise-select-column sticky-left" style={{ width: `${SELECTION_COLUMN_WIDTH}px`, minWidth: `${SELECTION_COLUMN_WIDTH}px`, '--sticky-offset': '0px' } as CSSProperties}><input ref={headerCheckboxRef} type="checkbox" aria-label="Chọn tất cả bản ghi trên trang" checked={allPageSelected} onChange={(event) => selection.onTogglePage(selectableRows, event.target.checked)} /></th>}
-          {columnLayouts.map((layout) => <th key={layout.column.key} className={cellClass(layout)} style={cellStyle(layout)} scope="col">{layout.column.header}</th>)}
+          {columnLayouts.map((layout) => {
+            const sorted = sortKey === layout.column.key
+            const sortHandler = layout.column.sortable ? onSortChange : undefined
+            return <th key={layout.column.key} className={cellClass(layout)} style={cellStyle(layout)} scope="col" aria-sort={sorted ? (sortDirection === 'asc' ? 'ascending' : 'descending') : undefined}>
+              {sortHandler ? <button className="enterprise-sort-button" type="button" onClick={() => sortHandler(layout.column.key, sorted && sortDirection === 'asc' ? 'desc' : 'asc')}>
+                <span>{layout.column.header}</span><span className="enterprise-sort-indicator" aria-hidden="true">{sorted ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}</span>
+              </button> : layout.column.header}
+            </th>
+          })}
         </tr></thead>
         <tbody>{rows.map((row, rowIndex) => {
           const key = rowKey(row)
           return <tr className={getRowClassName?.(row) || ''} key={key}>
             {selection && <td className="enterprise-select-column sticky-left" style={{ width: `${SELECTION_COLUMN_WIDTH}px`, minWidth: `${SELECTION_COLUMN_WIDTH}px`, '--sticky-offset': '0px' } as CSSProperties}><input type="checkbox" aria-label={`Chọn dòng ${rowIndex + 1}`} disabled={selection.isSelectable?.(row) === false} checked={selection.selectedKeys.has(key)} onChange={() => selection.onToggle(row)} /></td>}
-            {columnLayouts.map((layout) => <td key={layout.column.key} className={cellClass(layout)} style={cellStyle(layout)}>{layout.column.render(row, rowIndex)}</td>)}
+            {columnLayouts.map((layout) => {
+              const content = layout.column.render(row, rowIndex)
+              return <td key={layout.column.key} className={cellClass(layout)} style={cellStyle(layout)}>{layout.column.truncateLines ? <div className={`truncate-lines-${layout.column.truncateLines}`} title={typeof content === 'string' ? content : undefined}>{content}</div> : content}</td>
+            })}
           </tr>
         })}</tbody>
       </table>

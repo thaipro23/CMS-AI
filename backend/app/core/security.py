@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import Header, HTTPException, Request, status
 from jose import JWTError, jwt
 from app.core.config import settings
+from app.core.session_security import is_session_revoked
 
 
 @dataclass
@@ -86,6 +87,11 @@ def _principal_from_jwt(token: str) -> Principal:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token claims')
     if claims.get('token_type') != 'ai_session':
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token type')
+    if is_session_revoked(str(claims.get('jti') or '') or None):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={'code': 'SESSION_REVOKED', 'message': 'Phiên đăng nhập đã được thu hồi.'},
+        )
     role = _normalize_role(claims.get('role'))
     if role == 'admin' and not (claims.get('is_superuser') is True or claims.get('is_super_admin') is True or claims.get('ai_system_admin') is True):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='AI admin token requires Open edX superuser/super_admin proof')

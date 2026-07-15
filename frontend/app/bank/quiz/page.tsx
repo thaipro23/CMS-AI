@@ -8,6 +8,7 @@ import { useAppContext } from '../../../context/AppContext'
 import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
 import { VisualIcon } from '../../../components/ui/VisualIcon'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
+import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
 import { CourseQuizInstance, QuizAutoMapResult, QuizChapterAction, QuizChapterPlanItem } from '../../../types'
 import {
   applyQuizAutoMap,
@@ -531,16 +532,21 @@ export default function BankQuizPage() {
       {!courseId.trim() ? <div className="empty-state">Nhập Course ID để xem lịch sử đúng khóa học.</div> : <EnterpriseDataTable tableId="bank-quiz-course-history" caption="Lịch sử bài kiểm tra" rows={history} columns={historyColumns} rowKey={(item) => item.id} density="compact" loading={historyBusy} label="bản ghi" emptyTitle="Chưa có bài kiểm tra" emptyDescription="Khóa học này chưa có Quiz hoặc Final test được tạo từ AI Server." />}
     </section>
 
-    {createModal ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => setCreateModal(null)}>
-      <section className="modal-card bank-modal bank-modal-wide quiz-config-modal" role="dialog" aria-modal="true" aria-label="Cấu hình tạo bài kiểm tra" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="section-heading bank-modal-head"><div><div className="eyebrow">Bước 3 · Xác nhận tạo</div><h2>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : `${actionLabel(createModal.item.action)} cho ${createModal.item.chapter_title}`}</h2><p className="muted">Quiz tự luyện và Final test có cấu hình riêng. Kiểm tra tỷ lệ độ khó trước khi xác nhận.</p></div><button className="btn secondary" type="button" onClick={() => setCreateModal(null)}>Đóng</button></div>
-        <div className="bank-modal-body quiz-config-modal-body">
+    <AccessibleDialog
+      open={Boolean(createModal)}
+      title={createModal?.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : createModal ? `${actionLabel(createModal.item.action)} cho ${createModal.item.chapter_title}` : 'Cấu hình tạo bài kiểm tra'}
+      description="Quiz tự luyện và Final test có cấu hình riêng. Kiểm tra tỷ lệ độ khó trước khi xác nhận."
+      onClose={() => setCreateModal(null)}
+      size="xlarge"
+      className="quiz-config-modal"
+      bodyClassName="quiz-config-modal-body"
+    >
+      {createModal ? <>
           <div className="quiz-modal-grid">{(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} /> : null}{(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} /> : null}</div>
           <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {courseId.trim() || '—'} · Quiz {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
           {(quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100) ? <div className="alert warning">Tổng tỷ lệ Easy/Medium/Hard của mỗi loại phải bằng 100%.</div> : null}
           <div className="modal-actions"><button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button><button className="btn" type="button" disabled={busy || Boolean(creatingKey) || quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100 || (createModal.kind === 'all' && !readyRows.length)} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button></div>
-        </div>
-      </section>
-    </div> : null}
+      </> : null}
+    </AccessibleDialog>
   </PageRoot>
 }

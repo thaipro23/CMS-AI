@@ -479,7 +479,7 @@ def recalculate_video_progress(course_id: str, username: str | None = None, db: 
 def recalculate_class_behavior(class_id: str, course_id: str, username: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('manage_training_deadlines'))):
     _assert_analytics_class_access(db, user, class_id)
     service = LearningAnalyticsCoreService(db)
-    service.recalculate_course_video_progress(course_id=course_id, username=username)
+    service.recalculate_course_video_progress(course_id=course_id, username=username, class_id=class_id)
     service.recalculate_student_session_progress(class_id=class_id, course_id=course_id, username=username)
     result = service.recalculate_learning_behavior(class_id=class_id, course_id=course_id, username=username)
     log_audit(db, action='analytics.learning_behavior.recalculate', status='success', message='Tính lại nhận định học online theo tín hiệu mềm', user=user, course_id=course_id, target_type='academic_class', target_id=class_id, metadata={'username': username, 'result': result})

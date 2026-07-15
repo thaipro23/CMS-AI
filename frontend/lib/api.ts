@@ -147,11 +147,129 @@ export const API = normalizedApiBase.endsWith("/api")
   ? normalizedApiBase
   : `${normalizedApiBase}/api`;
 
-export function apiFetch(
+export class ApiRequestError extends Error {
+  code: string;
+  status?: number;
+  requestId?: string;
+
+  constructor(message: string, options: { code: string; status?: number; requestId?: string; cause?: unknown }) {
+    super(message, { cause: options.cause });
+    this.name = "ApiRequestError";
+    this.code = options.code;
+    this.status = options.status;
+    this.requestId = options.requestId;
+  }
+}
+
+export type ApiFetchInit = RequestInit & {
+  timeoutMs?: number;
+  retries?: number;
+  retryDelayMs?: number;
+  skipAuthExpiredEvent?: boolean;
+};
+
+const DEFAULT_GET_TIMEOUT_MS = Math.max(5_000, Number(process.env.NEXT_PUBLIC_API_GET_TIMEOUT_MS || 45_000));
+const DEFAULT_WRITE_TIMEOUT_MS = Math.max(10_000, Number(process.env.NEXT_PUBLIC_API_WRITE_TIMEOUT_MS || 120_000));
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 502, 503, 504]);
+
+function requestIdValue(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function retryAfterMs(response: Response, fallbackMs: number): number {
+  const value = response.headers.get("Retry-After");
+  if (!value) return fallbackMs;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.min(10_000, Math.max(fallbackMs, seconds * 1_000));
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.min(10_000, Math.max(fallbackMs, date - Date.now())) : fallbackMs;
+}
+
+function dispatchAuthExpired(input: RequestInfo | URL, skip: boolean): void {
+  if (skip || typeof window === "undefined") return;
+  const url = String(input);
+  if (/\/auth\/(exchange|session|logout|cms-callback)/.test(url)) return;
+  window.dispatchEvent(new CustomEvent("ai:auth-expired"));
+}
+
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason || new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason || new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+export async function apiFetch(
   input: RequestInfo | URL,
-  init: RequestInit = {},
+  init: ApiFetchInit = {},
 ): Promise<Response> {
-  return fetch(input, { credentials: "include", ...init });
+  const {
+    timeoutMs,
+    retries,
+    retryDelayMs = 750,
+    skipAuthExpiredEvent = false,
+    signal: rawCallerSignal,
+    ...requestInit
+  } = init;
+  const callerSignal = rawCallerSignal || undefined;
+  const method = String(requestInit.method || "GET").toUpperCase();
+  const safeToRetry = method === "GET" || method === "HEAD";
+  const maxRetries = Math.max(0, retries ?? (safeToRetry ? 1 : 0));
+  const effectiveTimeout = Math.max(1_000, timeoutMs ?? (safeToRetry ? DEFAULT_GET_TIMEOUT_MS : DEFAULT_WRITE_TIMEOUT_MS));
+  const headers = new Headers(requestInit.headers);
+  if (!headers.has("X-Request-ID")) headers.set("X-Request-ID", requestIdValue());
+  const requestId = headers.get("X-Request-ID") || undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const abortFromCaller = () => controller.abort(callerSignal?.reason);
+    if (callerSignal?.aborted) controller.abort(callerSignal.reason);
+    else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(new DOMException("Request timeout", "TimeoutError")), effectiveTimeout);
+    try {
+      const response = await fetch(input, {
+        credentials: "include",
+        ...requestInit,
+        headers,
+        signal: controller.signal,
+      });
+      if (response.status === 401) dispatchAuthExpired(input, skipAuthExpiredEvent);
+      if (attempt < maxRetries && RETRYABLE_STATUS_CODES.has(response.status)) {
+        await response.body?.cancel().catch(() => undefined);
+        await sleepWithSignal(retryAfterMs(response, retryDelayMs * 2 ** attempt), callerSignal);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      if (callerSignal?.aborted) throw error;
+      const timedOut = controller.signal.aborted;
+      if (attempt < maxRetries && safeToRetry) {
+        await sleepWithSignal(Math.min(5_000, retryDelayMs * 2 ** attempt), callerSignal);
+        continue;
+      }
+      throw new ApiRequestError(
+        timedOut
+          ? "Yêu cầu quá thời gian chờ. Vui lòng thử lại hoặc kiểm tra trạng thái hệ thống."
+          : "Không kết nối được máy chủ. Vui lòng kiểm tra mạng và thử lại.",
+        { code: timedOut ? "REQUEST_TIMEOUT" : "NETWORK_ERROR", requestId, cause: error },
+      );
+    } finally {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
+    }
+  }
+  throw new ApiRequestError("Không thể hoàn tất yêu cầu.", { code: "REQUEST_FAILED", requestId });
 }
 
 function withIdempotency(
@@ -239,24 +357,28 @@ function normalizeApiErrorMessage(response: Response, data: unknown): string {
 }
 
 export async function parseResponse<T>(response: Response): Promise<T> {
+  const requestId = response.headers.get("X-Request-ID") || undefined;
   const text = await response.text();
   let data: unknown = null;
   try {
     data = text ? JSON.parse(text) : null;
-  } catch {
-    throw new Error(
+  } catch (error) {
+    throw new ApiRequestError(
       response.ok
         ? "Phản hồi máy chủ không đúng định dạng JSON."
         : `Máy chủ trả lỗi ${response.status}. Vui lòng thử lại hoặc kiểm tra backend/proxy.`,
+      { code: "INVALID_API_RESPONSE", status: response.status, requestId, cause: error },
     );
   }
   if (!response.ok) {
-    throw new Error(normalizeApiErrorMessage(response, data));
+    throw new ApiRequestError(normalizeApiErrorMessage(response, data), {
+      code: `HTTP_${response.status}`,
+      status: response.status,
+      requestId,
+    });
   }
   return data as T;
 }
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function getBankOperationJobs(
   headers: HeadersInit,
@@ -311,31 +433,39 @@ export async function retryBankOperationJob(
 export async function waitForBankOperationJob(
   headers: HeadersInit,
   jobId: string,
-  options: { timeoutMs?: number; intervalMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    initialIntervalMs?: number;
+    maxIntervalMs?: number;
+    backoffMultiplier?: number;
+    signal?: AbortSignal;
+  } = {},
 ) {
   const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
-  const intervalMs = options.intervalMs ?? 1200;
+  const initialIntervalMs = Math.max(750, options.initialIntervalMs ?? 1_500);
+  const maxIntervalMs = Math.max(initialIntervalMs, options.maxIntervalMs ?? 10_000);
+  const multiplier = Math.max(1.1, options.backoffMultiplier ?? 1.7);
   const start = Date.now();
+  let intervalMs = initialIntervalMs;
   let last: BankOperationJob | null = null;
   while (Date.now() - start < timeoutMs) {
-    last = await getBankOperationJob(headers, jobId);
+    if (options.signal?.aborted) throw options.signal.reason || new DOMException("Aborted", "AbortError");
+    last = await parseResponse<BankOperationJob>(
+      await apiFetch(
+        `${API}/question-bank-v2/operation-jobs/${encodeURIComponent(jobId)}`,
+        { credentials: "include", headers, signal: options.signal, retries: 1 },
+      ),
+    );
     if (["completed", "failed", "canceled"].includes(last.status)) {
       if (last.status === "completed") return last;
       const result = (last.result || {}) as Record<string, unknown>;
-      const userMessage =
-        typeof result.user_message === "string" ? result.user_message : "";
-      const suggestion =
-        typeof result.suggestion === "string" ? result.suggestion : "";
-      const baseMessage =
-        userMessage ||
-        last.error_message ||
-        last.progress_label ||
-        `Job ${last.status}`;
-      throw new Error(
-        suggestion ? `${baseMessage} ${suggestion}` : baseMessage,
-      );
+      const userMessage = typeof result.user_message === "string" ? result.user_message : "";
+      const suggestion = typeof result.suggestion === "string" ? result.suggestion : "";
+      const baseMessage = userMessage || last.error_message || last.progress_label || `Job ${last.status}`;
+      throw new Error(suggestion ? `${baseMessage} ${suggestion}` : baseMessage);
     }
-    await sleep(intervalMs);
+    await sleepWithSignal(intervalMs, options.signal);
+    intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * multiplier));
   }
   throw new Error(
     last?.progress_label
@@ -388,19 +518,36 @@ async function parsePageItems<T>(response: Response): Promise<T[]> {
 
 async function fetchAllPageItems<T>(
   buildUrl: (page: number) => string,
-  init: RequestInit,
-  options: { maxPages?: number } = {},
+  init: ApiFetchInit,
+  options: { maxPages?: number; maxItems?: number; concurrency?: number } = {},
 ): Promise<T[]> {
-  const maxPages = Math.max(1, options.maxPages || 250);
-  const items: T[] = [];
-  let page = 1;
-  while (page <= maxPages) {
-    const data = await parsePage<T>(await apiFetch(buildUrl(page), init));
-    items.push(...(data.items || []));
-    if (!data.has_next) break;
-    page += 1;
+  const maxPages = Math.max(1, options.maxPages || 50);
+  const maxItems = Math.max(100, options.maxItems || 5_000);
+  const concurrency = Math.max(1, Math.min(6, options.concurrency || 4));
+  const first = await parsePage<T>(await apiFetch(buildUrl(1), init));
+  const totalPages = Math.min(maxPages, Math.max(1, first.total_pages || 1));
+  if ((first.total || 0) > maxItems || totalPages > maxPages) {
+    throw new ApiRequestError(
+      `Danh mục có ${first.total || 0} bản ghi, vượt giới hạn tải toàn bộ ${maxItems}. Hãy dùng tìm kiếm phía máy chủ.`,
+      { code: "CATALOG_REQUIRES_SERVER_SEARCH" },
+    );
   }
-  return items;
+  const pages = new Map<number, T[]>();
+  pages.set(1, first.items || []);
+  for (let start = 2; start <= totalPages; start += concurrency) {
+    const batch = Array.from(
+      { length: Math.min(concurrency, totalPages - start + 1) },
+      (_, index) => start + index,
+    );
+    const results = await Promise.all(
+      batch.map(async (page) => ({
+        page,
+        data: await parsePage<T>(await apiFetch(buildUrl(page), init)),
+      })),
+    );
+    results.forEach(({ page, data }) => pages.set(page, data.items || []));
+  }
+  return Array.from({ length: totalPages }, (_, index) => pages.get(index + 1) || []).flat();
 }
 
 async function parseCursorPageItems<T>(response: Response): Promise<T[]> {
@@ -1161,7 +1308,7 @@ export async function downloadAuditLogsCsv(
 }
 
 export type OpenEdxSessionExchangeResponse = {
-  access_token: string;
+  access_token?: string;
   token_type: string;
   expires_in: number;
   user_id: string;
@@ -1181,6 +1328,16 @@ export async function exchangeOpenEdxSessionTicket(
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({ ticket }),
+    }),
+  );
+}
+
+
+export async function logoutAuthSession() {
+  return parseResponse(
+    await apiFetch(`${API}/auth/logout`, {
+      method: "POST",
+      credentials: "include",
     }),
   );
 }
@@ -1439,6 +1596,63 @@ export async function getBankSummary(headers: HeadersInit) {
     await apiFetch(`${API}/question-bank-v2/summary`, {
       credentials: "include",
       headers,
+    }),
+  );
+}
+
+export async function searchDepartments(
+  headers: HeadersInit,
+  query = "",
+  signal?: AbortSignal,
+): Promise<Department[]> {
+  const params = new URLSearchParams({ page: "1", page_size: "50" });
+  if (query.trim()) params.set("q", query.trim());
+  return parsePageItems<Department>(
+    await apiFetch(`${API}/question-bank-v2/departments?${params.toString()}`, {
+      credentials: "include", headers, signal, retries: 1,
+    }),
+  );
+}
+
+export async function searchSubjects(
+  headers: HeadersInit,
+  options: { query?: string; departmentId?: string; signal?: AbortSignal } = {},
+): Promise<Subject[]> {
+  const params = new URLSearchParams({ page: "1", page_size: "100" });
+  if (options.query?.trim()) params.set("q", options.query.trim());
+  if (options.departmentId) params.set("department_id", options.departmentId);
+  return parsePageItems<Subject>(
+    await apiFetch(`${API}/question-bank-v2/subjects?${params.toString()}`, {
+      credentials: "include", headers, signal: options.signal, retries: 1,
+    }),
+  );
+}
+
+export async function searchSubjectOfferings(
+  headers: HeadersInit,
+  options: { query?: string; subjectId?: string; signal?: AbortSignal } = {},
+): Promise<SubjectOffering[]> {
+  const params = new URLSearchParams({ page: "1", page_size: "100" });
+  if (options.query?.trim()) params.set("q", options.query.trim());
+  if (options.subjectId) params.set("subject_id", options.subjectId);
+  return parsePageItems<SubjectOffering>(
+    await apiFetch(`${API}/question-bank-v2/subject-versions?${params.toString()}`, {
+      credentials: "include", headers, signal: options.signal, retries: 1,
+    }),
+  );
+}
+
+export async function searchSubjectChapters(
+  headers: HeadersInit,
+  options: { query?: string; subjectId?: string; subjectOfferingId?: string; signal?: AbortSignal } = {},
+): Promise<SubjectChapter[]> {
+  const params = new URLSearchParams({ page: "1", page_size: "100" });
+  if (options.query?.trim()) params.set("q", options.query.trim());
+  if (options.subjectId) params.set("subject_id", options.subjectId);
+  if (options.subjectOfferingId) params.set("subject_offering_id", options.subjectOfferingId);
+  return parsePageItems<SubjectChapter>(
+    await apiFetch(`${API}/question-bank-v2/chapters?${params.toString()}`, {
+      credentials: "include", headers, signal: options.signal, retries: 1,
     }),
   );
 }
@@ -3108,6 +3322,33 @@ export async function getAcademicTrainingTeacherReportJob(
       { credentials: "include", headers },
     ),
   );
+}
+
+export async function waitForAcademicTrainingTeacherReportJob(
+  headers: HeadersInit,
+  jobId: string,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<AcademicTeacherReportJob> {
+  const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 20 * 60 * 1000;
+  let intervalMs = 1_500;
+  let latest: AcademicTeacherReportJob | null = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (options.signal?.aborted) throw options.signal.reason || new DOMException("Aborted", "AbortError");
+    latest = await parseResponse<AcademicTeacherReportJob>(
+      await apiFetch(
+        `${API}/academic/training/teachers/report-jobs/${encodeURIComponent(jobId)}`,
+        { credentials: "include", headers, signal: options.signal, retries: 1 },
+      ),
+    );
+    if (latest.status === "completed") return latest;
+    if (["failed", "canceled"].includes(latest.status)) {
+      throw new Error(latest.error_message || latest.progress_label || "Xuất báo cáo giáo viên thất bại.");
+    }
+    await sleepWithSignal(intervalMs, options.signal);
+    intervalMs = Math.min(10_000, Math.round(intervalMs * 1.7));
+  }
+  throw new Error(latest?.progress_label || "Tác vụ xuất báo cáo quá thời gian chờ. Vui lòng kiểm tra trang Tác vụ nền.");
 }
 
 export async function getAcademicTrainingTeacherReportJobs(

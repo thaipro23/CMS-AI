@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from app.core.errors import public_http_exception
 from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.schemas.generation import GenerateQuestionsRequest, GenerateQuestionsResponse
@@ -52,8 +53,8 @@ async def generate_questions(payload: GenerateQuestionsRequest, db: Session = De
         # overrun. Actual cost logged by worker does not use safety factor.
         cost_svc.hard_stop_or_raise(payload.course_id, payload.question_count, est.cost_usd)
     except ValueError as exc:
-        log_audit(db, action='generation.hard_stop', status='failed', error_type='user', message=str(exc), user=user, course_id=payload.course_id, target_type='generation_request', metadata={'question_count': payload.question_count, 'estimated_cost_usd': est.cost_usd})
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        log_audit(db, action='generation.hard_stop', status='failed', error_type='user', message='Không thể hoàn tất thao tác tạo câu hỏi.', user=user, course_id=payload.course_id, target_type='generation_request', metadata={'question_count': payload.question_count, 'estimated_cost_usd': est.cost_usd})
+        raise public_http_exception(status_code=403, code='GENERATION_OPERATION_FAILED', message='Không thể hoàn tất thao tác tạo câu hỏi.', logger_name=__name__) from exc
 
     scope_title = plan.node_allocations[0]['title'] if plan.node_allocations else None
     job = GenerationJob(

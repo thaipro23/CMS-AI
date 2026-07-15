@@ -93,7 +93,8 @@ class QueryHotspotService:
                     stripped = line.strip()
                     if '.all()' not in stripped:
                         continue
-                    severity, reason = self._classify(stripped, file)
+                    context = '\n'.join(lines[max(0, index - 40):index])
+                    severity, reason = self._classify(stripped, file, context=context)
                     if severity == 'IGNORE':
                         continue
                     found.append(QueryHotspotItem(
@@ -107,11 +108,29 @@ class QueryHotspotService:
                         return found
         return found
 
-    def _classify(self, line: str, file: Path) -> tuple[str, str]:
+    def _classify(self, line: str, file: Path, *, context: str = '') -> tuple[str, str]:
         if 'query_hotspot.py' in str(file):
             return 'IGNORE', 'self scan'
         if any(hint in line for hint in self.SAFE_HINTS):
             return 'INFO', 'bounded_or_aggregate_pattern'
+        bounded_context_patterns = (
+            ('AcademicClassStudent', '.class_id =='),
+            ('GenerationBatch', '.job_id =='),
+            ('PublishBatchItem', '.batch_id =='),
+            ('BankReleaseQuestion', '.bank_release_id =='),
+            ('QuestionBankVersion', '.chapter_id.in_(chapter_ids)'),
+            ('AnalyticsTrackingEvent', 'username.in_(target_usernames)'),
+        )
+        if any(model in context and scope in context for model, scope in bounded_context_patterns):
+            return 'INFO', 'bounded_by_parent_or_roster_scope'
+        if 'AcademicClassCourseMapping' in context and '.in_(class_ids)' in context:
+            return 'WARNING', 'background_report_bounded_by_selected_class_ids'
+        if 'AcademicClass.id' in context and 'or_(*filters)' in context:
+            return 'WARNING', 'rbac_access_scope_ids_materialized'
+        if 'ContentChunk' in context and '.course_id ==' in context:
+            return 'WARNING', 'course_scoped_content_query_review_size'
+        if 'Question' in context and '.course_id ==' in context:
+            return 'WARNING', 'course_scoped_question_query_review_size'
         if any(token in line for token in self.HIGH_RISK_TOKENS):
             return 'BLOCKER', 'potential_unbounded_large_table_all'
         if 'db.query(' in line or '.query(' in line:

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.7.2.64.16.5.3'
+    app_version: str = '25.9.16.7.2.64.16.5.6'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -30,7 +30,10 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = True
     auth_cookie_samesite: str = 'lax'
     auth_cookie_domain: str | None = None
-    auth_session_token_ttl_seconds: int = 8 * 60 * 60
+    auth_session_token_ttl_seconds: int = 2 * 60 * 60
+    openedx_session_bridge_max_age_seconds: int = 60
+    auth_exchange_rate_limit_per_minute: int = 20
+    auth_exchange_ticket_rate_limit_per_minute: int = 3
     openedx_session_bridge_secret: str | None = None
     openedx_session_bridge_audience: str = 'ai-learning-server'
     openedx_session_bridge_issuer: str = 'openedx-ai-connector'
@@ -314,6 +317,18 @@ class Settings(BaseSettings):
     task_always_eager: bool = False
     generation_batch_size: int = 50
     bank_operation_job_ttl_days: int = 30
+    celery_task_acks_late: bool = True
+    celery_task_reject_on_worker_lost: bool = True
+    celery_worker_prefetch_multiplier: int = 1
+    celery_worker_max_tasks_per_child: int = 25
+    celery_worker_max_memory_per_child_kb: int = 600000
+    celery_result_expires_seconds: int = 86400
+    celery_broker_visibility_timeout_seconds: int = 7200
+    celery_default_soft_time_limit_seconds: int = 1500
+    celery_default_time_limit_seconds: int = 1800
+    academic_teacher_report_sync_export_max_teachers: int = 20
+    academic_teacher_report_sync_export_max_students: int = 1000
+    academic_teacher_report_file_retention_hours: int = 48
     # Material upload extraction is heavy and must run as a background job by
     # default. Keep the inline switch only as an emergency fallback for local
     # debugging; production should leave it false and watch the operation job.
@@ -394,6 +409,20 @@ def validate_security_settings() -> None:
         errors.append('AUTH_MODE must be jwt or openedx_sso in production')
     if settings.allow_demo_role_header:
         errors.append('ALLOW_DEMO_ROLE_HEADER=false is required in production')
+    if not settings.auth_cookie_secure:
+        errors.append('AUTH_COOKIE_SECURE=true is required in production')
+    if (settings.auth_cookie_samesite or '').lower().strip() not in {'lax', 'strict'}:
+        errors.append('AUTH_COOKIE_SAMESITE must be lax or strict in production')
+    if settings.auth_session_token_ttl_seconds < 900 or settings.auth_session_token_ttl_seconds > 7200:
+        errors.append('AUTH_SESSION_TOKEN_TTL_SECONDS must be between 900 and 7200 seconds in production')
+    if settings.openedx_session_bridge_max_age_seconds < 30 or settings.openedx_session_bridge_max_age_seconds > 60:
+        errors.append('OPENEDX_SESSION_BRIDGE_MAX_AGE_SECONDS must be between 30 and 60 seconds in production')
+    if settings.auth_exchange_rate_limit_per_minute < 1:
+        errors.append('AUTH_EXCHANGE_RATE_LIMIT_PER_MINUTE must be at least 1 in production')
+    if settings.auth_exchange_ticket_rate_limit_per_minute < 1:
+        errors.append('AUTH_EXCHANGE_TICKET_RATE_LIMIT_PER_MINUTE must be at least 1 in production')
+    if not (settings.redis_url or '').strip() or 'CHANGE_ME' in settings.redis_url:
+        errors.append('REDIS_URL is required for one-time SSO tickets and session revocation in production')
     if not settings.jwt_secret or settings.jwt_secret == 'dev_secret_change_me' or settings.jwt_secret.startswith('CHANGE_ME') or len(settings.jwt_secret) < 32:
         errors.append('JWT_SECRET must be a real strong secret with at least 32 characters in production')
     if not settings.jwt_issuer:
@@ -439,6 +468,21 @@ def validate_security_settings() -> None:
         bridge_secret = settings.openedx_session_bridge_secret or settings.openedx_connector_hmac_secret
         if not bridge_secret or str(bridge_secret).startswith('CHANGE_ME') or len(str(bridge_secret)) < 32:
             errors.append('OPENEDX_SESSION_BRIDGE_SECRET or OPENEDX_CONNECTOR_HMAC_SECRET is required for AUTH_MODE=openedx_sso')
+
+    if settings.celery_worker_prefetch_multiplier < 1 or settings.celery_worker_prefetch_multiplier > 4:
+        errors.append('CELERY_WORKER_PREFETCH_MULTIPLIER must be between 1 and 4 in production')
+    if settings.celery_worker_max_tasks_per_child < 1:
+        errors.append('CELERY_WORKER_MAX_TASKS_PER_CHILD must be at least 1 in production')
+    if settings.celery_default_soft_time_limit_seconds < 60:
+        errors.append('CELERY_DEFAULT_SOFT_TIME_LIMIT_SECONDS must be at least 60 seconds')
+    if settings.celery_default_time_limit_seconds <= settings.celery_default_soft_time_limit_seconds:
+        errors.append('CELERY_DEFAULT_TIME_LIMIT_SECONDS must be greater than soft time limit')
+    if settings.celery_broker_visibility_timeout_seconds <= settings.celery_default_time_limit_seconds:
+        errors.append('CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS must be greater than task hard time limit')
+    if settings.academic_teacher_report_sync_export_max_teachers < 1:
+        errors.append('ACADEMIC_TEACHER_REPORT_SYNC_EXPORT_MAX_TEACHERS must be at least 1')
+    if settings.academic_teacher_report_sync_export_max_students < 1:
+        errors.append('ACADEMIC_TEACHER_REPORT_SYNC_EXPORT_MAX_STUDENTS must be at least 1')
 
     if settings.academic_ap_sync_enabled:
         if not settings.academic_ap_api_base_url or 'CHANGE_ME' in settings.academic_ap_api_base_url:

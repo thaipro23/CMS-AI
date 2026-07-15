@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -21,8 +22,14 @@ def error_payload(*, code: str, message: str, status_code: int, details: Any = N
     }
 
 
+def public_http_exception(*, status_code: int, code: str, message: str, logger_name: str | None = None) -> HTTPException:
+    # Call only inside an except block. The active exception is logged server-side.
+    logging.getLogger(logger_name or 'app.api').exception('%s: %s', code, message)
+    return HTTPException(status_code=status_code, detail={'code': code, 'message': message})
+
+
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    request_id = request.headers.get('x-request-id')
+    request_id = getattr(request.state, 'request_id', None) or request.headers.get('x-request-id')
     detail = exc.detail
     code = 'HTTP_ERROR'
     message = str(detail)
@@ -39,7 +46,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    request_id = request.headers.get('x-request-id')
+    request_id = getattr(request.state, 'request_id', None) or request.headers.get('x-request-id')
     return JSONResponse(
         status_code=422,
         content=error_payload(

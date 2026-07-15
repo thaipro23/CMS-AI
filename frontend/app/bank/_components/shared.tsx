@@ -6,6 +6,7 @@ import type { ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
+import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
 import {
   BankRelease,
   BankDashboardOverview,
@@ -265,25 +266,16 @@ export function BankTableToolbar({
 }
 
 export function Modal({ open, title, children, onClose, wide = false }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
-  useEffect(() => {
-    if (!open) return undefined
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => { document.removeEventListener('keydown', onKeyDown) }
-  }, [open, onClose])
-
-  if (!open) return null
-  return <div className="modal-backdrop bank-popup-backdrop" onMouseDown={onClose}>
-    <div className={`modal-card bank-modal${wide ? ' bank-modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
-      <div className="section-head bank-modal-head">
-        <div><h2>{title}</h2></div>
-        <button className="btn small secondary" type="button" onClick={onClose}>Đóng</button>
-      </div>
-      <div className="bank-modal-body">{children}</div>
-    </div>
-  </div>
+  return <AccessibleDialog
+    open={open}
+    title={title}
+    onClose={onClose}
+    size={wide ? 'xlarge' : 'medium'}
+    className={`bank-modal${wide ? ' bank-modal-wide' : ''}`}
+    bodyClassName="bank-modal-body"
+  >
+    {children}
+  </AccessibleDialog>
 }
 
 

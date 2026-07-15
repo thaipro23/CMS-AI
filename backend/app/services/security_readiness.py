@@ -157,15 +157,36 @@ class SecurityReadinessService:
             'Cookie AI session phải bật Secure khi chạy qua HTTPS.',
             'Set AUTH_COOKIE_SECURE=true.', actual=settings.auth_cookie_secure, target='true'
         ))
+        allowed_samesite = {'lax', 'strict'} if self.production else {'lax', 'strict', 'none'}
         checks.append(self._check(
-            'auth', 'COOKIE_SAMESITE_VALID', cookie_samesite in {'lax', 'strict', 'none'},
-            'AUTH_COOKIE_SAMESITE phải là lax/strict/none.',
-            'Set AUTH_COOKIE_SAMESITE=lax hoặc strict; chỉ dùng none nếu bắt buộc cross-site và Secure=true.', actual=settings.auth_cookie_samesite
+            'auth', 'COOKIE_SAMESITE_VALID', cookie_samesite in allowed_samesite,
+            'AUTH_COOKIE_SAMESITE production phải là lax hoặc strict.',
+            'Set AUTH_COOKIE_SAMESITE=lax hoặc strict.', actual=settings.auth_cookie_samesite
         ))
         checks.append(self._check(
             'auth', 'COOKIE_NONE_REQUIRES_SECURE', not (cookie_samesite == 'none' and not settings.auth_cookie_secure),
             'SameSite=None bắt buộc cookie Secure.',
             'Bật AUTH_COOKIE_SECURE=true hoặc đổi AUTH_COOKIE_SAMESITE=lax.', actual={'same_site': settings.auth_cookie_samesite, 'secure': settings.auth_cookie_secure}
+        ))
+        checks.append(self._check(
+            'auth', 'SESSION_TTL_BOUNDED', 900 <= int(settings.auth_session_token_ttl_seconds or 0) <= 7200,
+            'Phiên AI Server phải ngắn hạn để giảm rủi ro khi cookie bị đánh cắp.',
+            'Set AUTH_SESSION_TOKEN_TTL_SECONDS trong khoảng 900..7200.', actual=settings.auth_session_token_ttl_seconds, target='900..7200 seconds'
+        ))
+        checks.append(self._check(
+            'auth', 'SSO_TICKET_MAX_AGE_BOUNDED', 30 <= int(settings.openedx_session_bridge_max_age_seconds or 0) <= 60,
+            'CMS bridge ticket chỉ nên tồn tại 30–60 giây.',
+            'Set OPENEDX_SESSION_BRIDGE_MAX_AGE_SECONDS trong khoảng 30..60.', actual=settings.openedx_session_bridge_max_age_seconds, target='30..60 seconds'
+        ))
+        checks.append(self._check(
+            'auth', 'SSO_EXCHANGE_RATE_LIMITED', int(settings.auth_exchange_rate_limit_per_minute or 0) >= 1 and int(settings.auth_exchange_ticket_rate_limit_per_minute or 0) >= 1,
+            'Endpoint exchange phải giới hạn theo IP và fingerprint ticket.',
+            'Set AUTH_EXCHANGE_RATE_LIMIT_PER_MINUTE và AUTH_EXCHANGE_TICKET_RATE_LIMIT_PER_MINUTE >=1.', actual={'ip': settings.auth_exchange_rate_limit_per_minute, 'ticket': settings.auth_exchange_ticket_rate_limit_per_minute}
+        ))
+        checks.append(self._check(
+            'auth', 'SSO_REPLAY_STORE_CONFIGURED', bool(str(settings.redis_url or '').strip()) and 'CHANGE_ME' not in str(settings.redis_url),
+            'Redis được dùng để claim ticket một lần và thu hồi session JWT theo jti.',
+            'Set REDIS_URL tới Redis production có persistence/availability phù hợp.', actual=self._redact_url(settings.redis_url), target='redis://...'
         ))
 
         explicit_origins = bool(origins) and '*' not in origins

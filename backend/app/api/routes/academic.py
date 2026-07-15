@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from pathlib import Path
+import hashlib
+import json
 from typing import Any
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -92,6 +94,7 @@ from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
 from app.core.json_safe import json_safe_value
 from app.core.config import settings
+from app.core.errors import public_http_exception
 
 
 def _safe_error_message(message: str = 'academic_operation_failed') -> dict[str, str]:
@@ -181,7 +184,7 @@ def _append_row(ws, values: list[Any]) -> None:
     ws.append([_excel_value(value) for value in values])
 
 
-def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
+def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook:
     wb = Workbook()
     ws = wb.active
     ws.title = 'TongQuanGV'
@@ -322,10 +325,19 @@ def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
         if sheet.max_row > 1:
             sheet.auto_filter.ref = sheet.dimensions
 
+    return wb
+
+
+def _build_training_teacher_report_xlsx(report: dict[str, Any]) -> bytes:
     raw = BytesIO()
-    wb.save(raw)
+    _create_training_teacher_report_workbook(report).save(raw)
     return raw.getvalue()
 
+
+def _write_training_teacher_report_xlsx(report: dict[str, Any], path: Path) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _create_training_teacher_report_workbook(report).save(path)
+    return path.stat().st_size
 
 
 def _requester_context_json(user: UserContext) -> dict[str, Any]:
@@ -372,6 +384,19 @@ def _enqueue_class_sync_job(
     if not class_row:
         raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
     clean_limit = max(1, min(500, int(limit or 500)))
+    request_key_payload = {
+        'class_id': class_id,
+        'job_type': job_type,
+        'force': bool(force),
+        'limit': clean_limit,
+        'mode': mode,
+        'auto_map_course': auto_map_course,
+        'sync_learning': sync_learning,
+        'requested_by': user.user_id,
+    }
+    request_key = hashlib.sha256(
+        json.dumps(request_key_payload, sort_keys=True, ensure_ascii=True).encode('utf-8')
+    ).hexdigest()
 
     _advisory_xact_lock_for_key(db, f'academic-class-sync:{class_id}')
 
@@ -412,6 +437,7 @@ def _enqueue_class_sync_job(
             'approved_campus_codes': [str(class_row.campus or '').strip().lower()] if class_row.campus else [],
             'approved_branch': str(class_row.branch or '').strip().lower() or None,
             'scope_enforced_by_backend': True,
+            'request_key': request_key,
         }),
         result_json={},
     )
@@ -524,23 +550,38 @@ def _enqueue_teacher_report_job(
         action='tạo báo cáo giáo viên',
     )
     campus_scope = rbac.campus_scope_for_user(user)
-    # Cache rebuild is idempotent by scope; export jobs are allowed to differ by search/status.
-    if job_type == 'rebuild_cache':
-        active = db.query(AcademicTeacherReportJob).filter(
-            AcademicTeacherReportJob.job_type == job_type,
-            AcademicTeacherReportJob.term_id == term_id,
-            AcademicTeacherReportJob.branch == (branch.strip().lower() if branch else None),
-            AcademicTeacherReportJob.campus == (campus.strip().lower() if campus else None),
-            AcademicTeacherReportJob.status.in_(['queued', 'running']),
-        ).order_by(AcademicTeacherReportJob.created_at.desc()).first()
-        if active:
+    normalized_branch = branch.strip().lower() if branch else None
+    normalized_campus = campus.strip().lower() if campus else None
+    request_key_payload = {
+        'job_type': job_type,
+        'term_id': term_id,
+        'branch': normalized_branch,
+        'campus': normalized_campus,
+        'search': (search or '').strip(),
+        'learning_status': (learning_status or '').strip(),
+        'teacher_id': (teacher_id or '').strip(),
+        'requested_by': user.user_id,
+    }
+    request_key = hashlib.sha256(json.dumps(request_key_payload, sort_keys=True, ensure_ascii=True).encode('utf-8')).hexdigest()
+    active_query = db.query(AcademicTeacherReportJob).filter(
+        AcademicTeacherReportJob.job_type == job_type,
+        AcademicTeacherReportJob.term_id == term_id,
+        AcademicTeacherReportJob.branch == normalized_branch,
+        AcademicTeacherReportJob.campus == normalized_campus,
+        AcademicTeacherReportJob.status.in_(['queued', 'running']),
+    )
+    if job_type == 'export_excel':
+        active_query = active_query.filter(AcademicTeacherReportJob.requested_by == user.user_id)
+    for active in active_query.order_by(AcademicTeacherReportJob.created_at.desc()).limit(20).all():
+        active_request = active.request_json if isinstance(active.request_json, dict) else {}
+        if job_type == 'rebuild_cache' or active_request.get('request_key') == request_key:
             return active
     job = AcademicTeacherReportJob(
         job_type=job_type,
         status='queued',
         term_id=term_id,
-        branch=branch.strip().lower() if branch else None,
-        campus=campus.strip().lower() if campus else None,
+        branch=normalized_branch,
+        campus=normalized_campus,
         requested_by=user.user_id,
         progress_current=0,
         progress_total=100,
@@ -556,6 +597,7 @@ def _enqueue_teacher_report_job(
             'approved_campus_codes': campus_scope.get('campus_codes') or ([] if campus_scope.get('unrestricted') else []),
             'campus_scope_unrestricted': bool(campus_scope.get('unrestricted')),
             'scope_enforced_by_backend': True,
+            'request_key': request_key,
         }),
         result_json={},
     )
@@ -729,7 +771,8 @@ def export_training_teacher_report(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
-    report = AcademicService(db).training_teacher_report(
+    service = AcademicService(db)
+    preview = service.training_teacher_report(
         user,
         term_id=term_id,
         branch=branch,
@@ -738,9 +781,37 @@ def export_training_teacher_report(
         learning_status=learning_status,
         teacher_id=teacher_id,
         page=1,
-        page_size=200,
+        page_size=1,
+        include_classes=False,
+        include_students=False,
+        use_cache=True,
+    )
+    summary = preview.get('summary') or {}
+    teacher_total = int(preview.get('total') or 0)
+    student_total = int(summary.get('unique_student_count') or summary.get('student_count') or 0)
+    if (
+        teacher_total > int(settings.academic_teacher_report_sync_export_max_teachers)
+        or student_total > int(settings.academic_teacher_report_sync_export_max_students)
+    ):
+        raise public_http_exception(
+            status_code=409,
+            code='TEACHER_EXPORT_REQUIRES_BACKGROUND_JOB',
+            message='Báo cáo vượt giới hạn xuất trực tiếp. Hãy dùng tác vụ Xuất Excel nền.',
+            logger_name=__name__,
+        )
+    report = service.training_teacher_report(
+        user,
+        term_id=term_id,
+        branch=branch,
+        campus=campus,
+        search=search,
+        learning_status=learning_status,
+        teacher_id=teacher_id,
+        page=1,
+        page_size=max(1, min(200, int(settings.academic_teacher_report_sync_export_max_teachers))),
         include_all=True,
         include_students=True,
+        use_cache=False,
     )
     content = _build_training_teacher_report_xlsx(report)
     return StreamingResponse(
@@ -1186,7 +1257,7 @@ def create_academic_course_mapping(
         raise
     except Exception as exc:
         db.rollback()
-        log_audit(db, action='academic.course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='academic_course_mapping')
+        log_audit(db, action='academic.course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác vận hành đào tạo.', user=user, target_type='academic_course_mapping')
         raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
 
 
@@ -1240,7 +1311,7 @@ def save_class_course_mapping(
         raise
     except Exception as exc:
         db.rollback()
-        log_audit(db, action='academic.class_course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, target_type='academic_class', target_id=class_id)
+        log_audit(db, action='academic.class_course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác vận hành đào tạo.', user=user, target_type='academic_class', target_id=class_id)
         raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
 
 
@@ -1525,7 +1596,7 @@ def sync_class_full_cms_flow(
         raise
     except Exception as exc:
         db.rollback()
-        log_audit(db, action='academic.full_cms_sync.class', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, target_type='academic_class', target_id=class_id)
+        log_audit(db, action='academic.full_cms_sync.class', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác vận hành đào tạo.', user=user, target_type='academic_class', target_id=class_id)
         raise HTTPException(status_code=502, detail=_safe_error_message('academic_external_sync_failed')) from exc
 
 
@@ -1559,7 +1630,7 @@ def sync_class_cms_enrollment(
             action='academic.cms_enrollment_sync.class',
             status='failed',
             error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
-            message=str(exc),
+            message='Không thể hoàn tất thao tác vận hành đào tạo.',
             user=user,
             target_type='academic_class',
             target_id=class_id,
@@ -1596,7 +1667,7 @@ def sync_class_learning_insight(
             action='academic.learning_sync.class',
             status='failed',
             error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
-            message=str(exc),
+            message='Không thể hoàn tất thao tác vận hành đào tạo.',
             user=user,
             target_type='academic_class',
             target_id=class_id,
@@ -1628,7 +1699,7 @@ def _run_class_cms_sync_check(class_id: str, payload: AcademicResolveClassUsersI
             action='academic.cms_sync_check.class',
             status='failed',
             error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
-            message=str(exc),
+            message='Không thể hoàn tất thao tác vận hành đào tạo.',
             user=user,
             target_type='academic_class',
             target_id=class_id,

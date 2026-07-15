@@ -574,7 +574,11 @@ class BankQuestionDetailOut(BankVersionQuestionOut):
 
 class BankVersionDiffPreviewRequest(BaseModel):
     base_bank_version_id: str | None = None
-    persist: bool = True
+    persist: bool = False  # compatibility only; preview endpoints never persist
+
+
+class BankVersionDiffCreateRequest(BaseModel):
+    base_bank_version_id: str | None = None
 
 
 class BankVersionDiffSummaryOut(BaseModel):

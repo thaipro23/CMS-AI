@@ -6,6 +6,7 @@ import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, 
 import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { AccessibleDialog } from '../../components/ui/AccessibleDialog'
 import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult, AcademicSyncRun } from '../../types'
 
 type BranchCode = 'poly' | 'ptcd'
@@ -303,6 +304,16 @@ export default function ApSyncPage() {
       </WorkspaceSection>
     </div>
 
-    {syncConfirm ? <div className="modal-backdrop bank-popup-backdrop" onMouseDown={() => !running && setSyncConfirm(null)}><div className="card bank-modal academic-confirm-modal" onMouseDown={(event) => event.stopPropagation()}><div className="bank-modal-head"><div><div className="eyebrow">Xác nhận phạm vi</div><h2>{dryRun ? 'Kiểm tra kế hoạch AP' : 'Chạy đồng bộ AP'}</h2></div><button className="btn small secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Đóng</button></div><div className="bank-modal-body academic-confirm-body"><p>{dryRun ? 'Hệ thống chỉ kiểm tra kế hoạch và không ghi dữ liệu.' : 'Hệ thống sẽ gọi AP và ghi dữ liệu lớp, giảng viên, sinh viên vào AI Server.'}</p><div className="academic-confirm-summary"><span>Học kỳ</span><b>{termName}</b><span>Phạm vi</span><b>{syncConfirm.label}</b><span>Số hệ</span><b>{syncConfirm.runnable.length}</b><span>Số cơ sở</span><b>{syncConfirm.campusCount}</b></div><div className="modal-actions"><button className="btn" disabled={running} onClick={executeConfirmedSync}>{dryRun ? 'Xác nhận kiểm tra' : 'Xác nhận đồng bộ'}</button><button className="btn secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Hủy</button></div></div></div></div> : null}
+    <AccessibleDialog
+      open={Boolean(syncConfirm)}
+      title={dryRun ? 'Kiểm tra kế hoạch AP' : 'Chạy đồng bộ AP'}
+      description={dryRun ? 'Hệ thống chỉ kiểm tra kế hoạch và không ghi dữ liệu.' : 'Hệ thống sẽ gọi AP và ghi dữ liệu lớp, giảng viên, sinh viên vào AI Server.'}
+      onClose={() => !running && setSyncConfirm(null)}
+      busy={running}
+      size="small"
+      footer={<div className="dialog-action-row"><button className="btn secondary" disabled={running} onClick={() => setSyncConfirm(null)}>Hủy</button><button className="btn" data-dialog-autofocus disabled={running} onClick={executeConfirmedSync}>{dryRun ? 'Xác nhận kiểm tra' : 'Xác nhận đồng bộ'}</button></div>}
+    >
+      {syncConfirm ? <div className="academic-confirm-summary"><span>Học kỳ</span><b>{termName}</b><span>Phạm vi</span><b>{syncConfirm.label}</b><span>Số hệ</span><b>{syncConfirm.runnable.length}</b><span>Số cơ sở</span><b>{syncConfirm.campusCount}</b></div> : null}
+    </AccessibleDialog>
   </PageRoot>
 }

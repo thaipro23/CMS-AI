@@ -4,12 +4,13 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
-import { buildCmsSessionBridgeUrl } from '../../lib/api'
+import { logoutAuthSession, buildCmsSessionBridgeUrl } from '../../lib/api'
 import { SHOW_DIAGNOSTICS_UI } from '../../lib/runtime'
 import { ROLE_LABELS } from '../../types'
 import { AppIcon, type AppIconName } from '../icons/AppIcon'
 import { PageShellProvider, type PageChrome } from './PageShellContext'
 import { VisualIcon } from '../ui/VisualIcon'
+import { useFeedback } from '../ui/FeedbackProvider'
 
 type NavGroupKey = 'overview' | 'bank' | 'training' | 'operations' | 'catalog' | 'admin'
 
@@ -125,7 +126,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
   const [pageChrome, setPageChrome] = useState<PageChrome | null>(null)
   const [pageLayoutClass, setPageLayoutClass] = useState(() => fallbackPageLayoutClass(pathname))
-  const { courseId, role, userId, can, isAuthenticated, authReady } = useAppContext()
+  const { courseId, role, userId, can, isAuthenticated, authReady, clearAuthSession } = useAppContext()
+  const { notify } = useFeedback()
 
   const registerChrome = useCallback((value: PageChrome) => {
     setPageChrome(value)
@@ -251,7 +253,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [authReady, fallbackHref, pathname, routeAllowed, router])
 
   useEffect(() => {
-    if (!authReady || isAuthenticated || pathname.startsWith('/auth/cms-callback')) return
+    if (!authReady || isAuthenticated || pathname.startsWith('/auth/')) return
     const enabled = (process.env.NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN || 'true').toLowerCase() !== 'false'
     if (!enabled) return
     const startedAt = Number(window.sessionStorage.getItem('ai_openedx_cms_bridge_started_at') || 0)
@@ -287,11 +289,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     })
   }
 
+  const signOut = async () => {
+    try {
+      await logoutAuthSession()
+    } catch (error) {
+      console.error('Không thể thu hồi phiên đăng nhập', error)
+    } finally {
+      clearAuthSession()
+      if (userMenuRef.current) userMenuRef.current.open = false
+      window.location.assign('/auth/logged-out')
+    }
+  }
+
   const reconnectCms = () => {
     try {
       window.location.href = buildCmsSessionBridgeUrl(courseId)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Không tạo được liên kết CMS')
+      notify({ tone: 'danger', title: 'Không kết nối lại được CMS', message: error instanceof Error ? error.message : 'Không tạo được liên kết CMS.' })
     }
   }
 
@@ -370,6 +384,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="enterprise-user-popover">
               <div className="enterprise-user-popover-head"><AppIcon name="user"/><span><b>{userId || 'Người dùng'}</b><small>{ROLE_LABELS[role]}</small></span></div>
               <button type="button" onClick={reconnectCms}><AppIcon name="sync"/> Kết nối lại CMS</button>
+              <button type="button" onClick={signOut}><AppIcon name="logout"/> Đăng xuất</button>
             </div>
           </details>
         </div>

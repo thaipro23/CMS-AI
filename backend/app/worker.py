@@ -7,6 +7,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.core.json_safe import json_safe_value
+from app.core.rbac import UserContext
 from app.models.job import GenerationJob
 from app.models.generation_batch import GenerationBatch
 from app.models.course import ContentChunk
@@ -21,7 +22,61 @@ from app.services.audit_log import AuditErrorType, log_audit
 
 apply_runtime_settings()
 celery_app = Celery('ai_openedx_worker', broker=settings.redis_url, backend=settings.redis_url)
-celery_app.conf.broker_connection_retry_on_startup = True
+celery_app.conf.update(
+    broker_connection_retry_on_startup=True,
+    broker_transport_options={
+        'visibility_timeout': int(settings.celery_broker_visibility_timeout_seconds),
+        'socket_timeout': 10,
+        'socket_connect_timeout': 10,
+        'retry_on_timeout': True,
+    },
+    result_expires=int(settings.celery_result_expires_seconds),
+    result_backend_transport_options={'retry_policy': {'timeout': 5.0}},
+    task_serializer='json',
+    result_serializer='json',
+    accept_content=['json'],
+    timezone='UTC',
+    enable_utc=True,
+    task_track_started=True,
+    task_acks_late=bool(settings.celery_task_acks_late),
+    task_reject_on_worker_lost=bool(settings.celery_task_reject_on_worker_lost),
+    worker_cancel_long_running_tasks_on_connection_loss=True,
+    worker_prefetch_multiplier=int(settings.celery_worker_prefetch_multiplier),
+    worker_max_tasks_per_child=int(settings.celery_worker_max_tasks_per_child),
+    worker_max_memory_per_child=int(settings.celery_worker_max_memory_per_child_kb),
+    task_default_queue='interactive',
+    task_create_missing_queues=True,
+    task_routes={
+        'generate_questions_task': {'queue': 'generation'},
+        'bank_material_extract_task': {'queue': 'generation'},
+        'bank_generate_questions_task': {'queue': 'generation'},
+        'bank_question_import_task': {'queue': 'generation'},
+        'bank_material_cleanup_task': {'queue': 'generation'},
+        'bank_release_publish_task': {'queue': 'sync'},
+        'bank_quiz_create_task': {'queue': 'sync'},
+        'academic_ap_sync_task': {'queue': 'sync'},
+        'academic_class_sync_task': {'queue': 'sync'},
+        'academic_subject_auto_map_all_sync_task': {'queue': 'sync'},
+        'academic_teacher_report_job_task': {'queue': 'exports'},
+        'analytics_ingest_task': {'queue': 'analytics'},
+        'analytics_class_recalculate_task': {'queue': 'analytics'},
+    },
+    task_annotations={
+        'generate_questions_task': {'soft_time_limit': 3300, 'time_limit': 3600},
+        'bank_material_extract_task': {'soft_time_limit': 3300, 'time_limit': 3600},
+        'bank_generate_questions_task': {'soft_time_limit': 3300, 'time_limit': 3600},
+        'bank_question_import_task': {'soft_time_limit': 1800, 'time_limit': 2100},
+        'bank_material_cleanup_task': {'soft_time_limit': 900, 'time_limit': 1200},
+        'bank_release_publish_task': {'soft_time_limit': 1500, 'time_limit': 1800},
+        'bank_quiz_create_task': {'soft_time_limit': 1500, 'time_limit': 1800},
+        'academic_ap_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
+        'academic_class_sync_task': {'soft_time_limit': 1500, 'time_limit': 1800},
+        'academic_subject_auto_map_all_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
+        'academic_teacher_report_job_task': {'soft_time_limit': 1800, 'time_limit': 2100},
+        'analytics_ingest_task': {'soft_time_limit': 540, 'time_limit': 600},
+        'analytics_class_recalculate_task': {'soft_time_limit': 1500, 'time_limit': 1800},
+    },
+)
 if getattr(settings, 'analytics_ingest_scheduler_enabled', False):
     celery_app.conf.beat_schedule = {
         **getattr(celery_app.conf, 'beat_schedule', {}),
@@ -1106,7 +1161,6 @@ def _worker_user_from_request_json(request_json: dict | None, *, fallback_user_i
     using user_id/username; legacy permissions are only the ones captured at
     enqueue time, never broader than the requester.
     """
-    from app.core.rbac import UserContext
 
     data = (request_json or {}).get('requester_context') if isinstance(request_json, dict) else None
     data = data if isinstance(data, dict) else {}
@@ -1134,7 +1188,6 @@ def _advisory_xact_lock_for_key(db, key: str) -> None:
 @celery_app.task(name='academic_class_sync_task')
 def academic_class_sync_task(job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
-    from app.core.rbac import UserContext
     from app.models.academic import AcademicClassSyncJob
     from app.services.academic_service import AcademicService
     from app.services.audit_log import AuditErrorType, log_audit
@@ -1325,7 +1378,6 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
     subject Course CMS auto-mapping, then enqueues child full_cms_sync jobs for
     mapped classes so every user can see progress in /jobs and F5 is safe.
     """
-    from app.core.rbac import UserContext
     from app.models.academic import AcademicBulkOperationJob
     from app.services.academic_service import AcademicService
     from app.services.audit_log import AuditErrorType, log_audit
@@ -1503,11 +1555,10 @@ def academic_teacher_report_job_task(job_id: str):
     from pathlib import Path
     from app.core.config import settings
     from app.core.json_safe import json_safe_value
-    from app.core.rbac import UserContext
     from app.models.academic import AcademicTeacherReportJob
     from app.services.academic_service import AcademicService
     from app.services.audit_log import AuditErrorType, log_audit
-    from app.api.routes.academic import _build_training_teacher_report_xlsx
+    from app.api.routes.academic import _write_training_teacher_report_xlsx
 
     db = SessionLocal()
     try:
@@ -1525,16 +1576,13 @@ def academic_teacher_report_job_task(job_id: str):
         job.progress_label = 'Đang tính lại báo cáo giáo viên' if job.job_type == 'rebuild_cache' else 'Đang dựng file Excel báo cáo giáo viên'
         db.commit()
 
-        worker_user = UserContext(
-            user_id=job.requested_by or 'teacher-report-worker',
-            username=job.requested_by or 'teacher-report-worker',
-            email=None,
-            role='admin',
-            permissions={'view_questions', 'manage_settings', 'sync_course'},
-            course_ids=None,
-            raw_claims={'source': 'celery_teacher_report_job', 'job_id': job.id},
-        )
         request = job.request_json if isinstance(job.request_json, dict) else {}
+        worker_user = _worker_user_from_request_json(
+            request,
+            fallback_user_id=job.requested_by,
+            source='celery_teacher_report_job',
+            job_id=job.id,
+        )
         service = AcademicService(db)
         term_id = job.term_id or request.get('term_id')
         branch = job.branch or request.get('branch')
@@ -1564,18 +1612,25 @@ def academic_teacher_report_job_task(job_id: str):
             job.progress_current = 70
             job.progress_label = 'Đang ghi file Excel báo cáo giáo viên'
             db.commit()
-            content = _build_training_teacher_report_xlsx(report)
             root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
             out_dir = root / 'teacher-reports'
             out_dir.mkdir(parents=True, exist_ok=True)
+            retention_seconds = max(3600, int(settings.academic_teacher_report_file_retention_hours) * 3600)
+            cutoff = datetime.utcnow().timestamp() - retention_seconds
+            for old_file in out_dir.glob('teacher-management-report-*.xlsx'):
+                try:
+                    if old_file.is_file() and old_file.stat().st_mtime < cutoff:
+                        old_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
             safe_branch = str(branch or 'all').replace('/', '-').replace(' ', '-')
             safe_campus = str(campus or 'all').replace('/', '-').replace(' ', '-')
             filename = f'teacher-management-report-{safe_branch}-{safe_campus}-{job.id[:8]}.xlsx'
             path = out_dir / filename
-            path.write_bytes(content)
+            bytes_written = _write_training_teacher_report_xlsx(report, path)
             job.file_path = str(path)
             job.file_name = filename
-            result = {'ok': True, 'file_name': filename, 'bytes': len(content), 'summary': report.get('summary') or {}}
+            result = {'ok': True, 'file_name': filename, 'bytes': bytes_written, 'summary': report.get('summary') or {}}
             action = 'academic.teacher_report.export_excel.async'
         else:
             raise ValueError(f'Unsupported teacher report job_type: {job.job_type}')
@@ -1601,8 +1656,9 @@ def academic_teacher_report_job_task(job_id: str):
             job.status = 'failed'
             job.progress_total = 100
             job.progress_label = 'Báo cáo giáo viên thất bại'
-            job.error_message = str(exc)[:4000] or 'Không thể hoàn tất báo cáo giáo viên.'
-            job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
+            public_message = 'Không thể hoàn tất báo cáo giáo viên. Vui lòng thử lại hoặc kiểm tra Nhật ký hoạt động.'
+            job.error_message = public_message
+            job.result_json = json_safe_value({'ok': False, 'code': 'ACADEMIC_TEACHER_REPORT_FAILED', 'message': public_message})
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
             db.add(job)
@@ -1611,7 +1667,7 @@ def academic_teacher_report_job_task(job_id: str):
                 log_audit(db, action='academic.teacher_report.async', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_teacher_report_job', target_id=job.id, metadata=json_safe_value({'job_type': job.job_type}))
             except Exception:
                 pass
-        return json_safe_value({'ok': False, 'error': 'academic_teacher_report_failed', 'message': str(exc)})
+        return json_safe_value({'ok': False, 'error': 'academic_teacher_report_failed', 'code': 'ACADEMIC_TEACHER_REPORT_FAILED', 'message': 'Không thể hoàn tất báo cáo giáo viên. Vui lòng thử lại hoặc kiểm tra Nhật ký hoạt động.'})
     finally:
         db.close()
 
@@ -1690,7 +1746,7 @@ def analytics_class_recalculate_task(job_id: str):
         db.commit()
 
         service = LearningAnalyticsCoreService(db)
-        video_result = service.recalculate_course_video_progress(course_id=course_id, username=username)
+        video_result = service.recalculate_course_video_progress(course_id=course_id, username=username, class_id=job.class_id)
         job.progress_current = 45
         job.progress_label = 'Đang tổng hợp theo Bài/Deadline'
         db.add(job)

@@ -136,6 +136,12 @@ class PerformanceReadinessService:
         add('OPENEDX_CONNECTOR_MAX_BATCH_SIZE', int(settings.openedx_connector_max_batch_size) <= 200, 'WARNING', settings.openedx_connector_max_batch_size, '<= 200', 'Giữ batch connector nhỏ để tránh timeout CMS/Open edX.')
         add('ANALYTICS_POST_INGEST_MAX_JOBS_PER_RUN', int(settings.analytics_post_ingest_recalculate_max_jobs_per_run) <= 20, 'BLOCKER', settings.analytics_post_ingest_recalculate_max_jobs_per_run, '<= 20', 'Giảm số job tạo sau mỗi ingest để tránh worker/DB bị dồn.')
         add('ANALYTICS_BACKFILL_MAX_ACTIVE_JOBS', int(settings.analytics_backfill_max_active_jobs) <= 50, 'WARNING', settings.analytics_backfill_max_active_jobs, '<= 50', 'Giảm active backfill jobs nếu DB/worker có độ trễ cao.')
+        add('CELERY_WORKER_PREFETCH_MULTIPLIER', int(settings.celery_worker_prefetch_multiplier) == 1, 'WARNING', settings.celery_worker_prefetch_multiplier, '= 1', 'Đặt prefetch=1 để job dài không chiếm trước nhiều task.')
+        add('CELERY_TASK_ACKS_LATE', bool(settings.celery_task_acks_late), 'BLOCKER', settings.celery_task_acks_late, '= true', 'Bật late acknowledgement để task được phục hồi khi worker mất.')
+        add('CELERY_REJECT_ON_WORKER_LOST', bool(settings.celery_task_reject_on_worker_lost), 'BLOCKER', settings.celery_task_reject_on_worker_lost, '= true', 'Bật reject_on_worker_lost để broker phát lại task khi process chết.')
+        add('CELERY_VISIBILITY_TIMEOUT', int(settings.celery_broker_visibility_timeout_seconds) > int(settings.celery_default_time_limit_seconds), 'BLOCKER', settings.celery_broker_visibility_timeout_seconds, f'> {settings.celery_default_time_limit_seconds}', 'Đặt visibility timeout lớn hơn hard time limit của task.')
+        add('CELERY_MAX_TASKS_PER_CHILD', int(settings.celery_worker_max_tasks_per_child) <= 100, 'WARNING', settings.celery_worker_max_tasks_per_child, '1..100', 'Giới hạn task/process để thu hồi memory sau OCR/Excel/AI workload.')
+        add('TEACHER_SYNC_EXPORT_LIMIT', int(settings.academic_teacher_report_sync_export_max_teachers) <= 50, 'WARNING', settings.academic_teacher_report_sync_export_max_teachers, '<= 50', 'Giữ export đồng bộ nhỏ; dataset lớn phải qua Celery export job.')
         return checks
 
     def _index_contract_checks(self) -> list[dict[str, Any]]:
@@ -298,6 +304,13 @@ class PerformanceReadinessService:
             'analytics_backfill_max_active_jobs': settings.analytics_backfill_max_active_jobs,
             'bank_search_max_results': settings.bank_search_max_results,
             'openedx_connector_max_batch_size': settings.openedx_connector_max_batch_size,
+            'celery_worker_prefetch_multiplier': settings.celery_worker_prefetch_multiplier,
+            'celery_worker_max_tasks_per_child': settings.celery_worker_max_tasks_per_child,
+            'celery_worker_max_memory_per_child_kb': settings.celery_worker_max_memory_per_child_kb,
+            'celery_broker_visibility_timeout_seconds': settings.celery_broker_visibility_timeout_seconds,
+            'celery_default_time_limit_seconds': settings.celery_default_time_limit_seconds,
+            'academic_teacher_report_sync_export_max_teachers': settings.academic_teacher_report_sync_export_max_teachers,
+            'academic_teacher_report_sync_export_max_students': settings.academic_teacher_report_sync_export_max_students,
         }
 
     def _sections_from_checks(self, checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
