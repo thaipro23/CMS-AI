@@ -1,7 +1,6 @@
 'use client'
 
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
-import { ContextBackLink } from '../../../../components/navigation/ContextBackLink'
 import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
 
 import { formatVNDateTime } from '../../../../lib/time'
@@ -11,7 +10,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import {
   BankRelease,
-  BankReleasePublishAudit,
   BankReleasePreview,
   BankDashboardOverview,
   BankSearchResult,
@@ -63,7 +61,6 @@ import {
   getBankMaterialChunks,
   getBankReleaseReadiness,
   getBankReleases,
-  getBankReleasePublishAudit,
   getBankReleasePreview,
   getBankVersionQuestion,
   getBankVersionQuestionPage,
@@ -331,7 +328,6 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const [previewQuestion, setPreviewQuestion] = useState<BankVersionQuestion | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [readiness, setReadiness] = useState<BankReleaseReadiness | null>(null)
-  const [releaseAudit, setReleaseAudit] = useState<BankReleasePublishAudit | null>(null)
   const [releasePreview, setReleasePreview] = useState<BankReleasePreview | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [generateCount, setGenerateCount] = useState('10')
@@ -384,7 +380,6 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setQuestionTotal(0)
       setQuestionTotalPages(1)
       setReadiness(null)
-      setReleaseAudit(null)
       return
     }
     setQuestionLoading(true)
@@ -536,22 +531,6 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const publishedRelease = releases.find((item) => item.status === 'published')
   const latestRelease = releases[0]
 
-  const refreshReleaseAudit = async (releaseId?: string | null) => {
-    if (!releaseId) {
-      setReleaseAudit(null)
-      return
-    }
-    try {
-      const audit = await getBankReleasePublishAudit(headers, releaseId)
-      setReleaseAudit(audit)
-    } catch {
-      setReleaseAudit(null)
-    }
-  }
-
-  useEffect(() => {
-    refreshReleaseAudit(latestRelease?.id).catch(() => null)
-  }, [latestRelease?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const chapterPublished = Boolean(
     publishedRelease
     || selectedBankVersion?.status === 'published'
@@ -885,50 +864,26 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 ${chunk.content}`).join('\n\n')
 
   return <PageRoot className="page-stack bank-multipage chapter-workspace-page">
-    <PageHeader eyebrow="Ngân hàng đề" title={chapterDisplayName(chapter)} />
-    <ContextBackLink href={offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments'} label="Quay lại danh sách bài" />
+    <PageHeader eyebrow="Ngân hàng đề" title={chapterDisplayName(chapter)} breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments' }, { label: chapterDisplayName(chapter) }]} />
     {message ? <div className="alert info">{message}</div> : null}
     {activeOperation ? <ChapterOperationStatus operation={activeOperation} /> : null}
     {chapterPublished ? <div className="alert success"><b>Bài đã publish.</b> Các thao tác sửa tài liệu, tạo câu hỏi, duyệt/bỏ câu, kiểm tra thay đổi và chốt lại đã được khóa. Muốn thay đổi, hãy clone/tạo version mới.</div> : null}
     {!chapterPublished && diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
 
     <section className="card chapter-command-bar compact-command-bar" aria-label="Thao tác bài học">
-      <div className="chapter-command-summary">
-        <span><b>{usedQuestionCount}/{chapterQuestionLimit}</b> câu</span>
-        <span><b>{stats.approved}</b> đã duyệt</span>
-        <span><b>{stats.families}</b> nhóm kiến thức</span>
-      </div>
       <div className="button-row no-margin chapter-primary-actions">
         <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>
-        {!chapterPublished && canGenerateQuestions ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : `Tạo câu hỏi (còn ${remainingQuota})`}</button> : null}
-        <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? `Xem câu hỏi (${usedQuestionCount})` : `Duyệt câu hỏi (${stats.pending} chờ)`}</button>
+        {!chapterPublished && canGenerateQuestions ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : `Tạo câu hỏi (${usedQuestionCount}/${chapterQuestionLimit})`}</button> : null}
+        <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? `Xem câu hỏi (${usedQuestionCount})` : `Duyệt câu hỏi (${stats.pending} câu chờ duyệt)`}</button>
         {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={isActionBusy('diff_check') || longOperationBusy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => runAction('diff_check', async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
         }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : `Kiểm tra thay đổi${diffRequired ? ' (cần xử lý)' : ''}`}</button> : null}
-        {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_audit')} onClick={() => runAction('release_audit', async () => { await refreshReleaseAudit(latestRelease.id) }, 'Đã kiểm tra trạng thái bộ đề.', undefined, 'Không kiểm tra được trạng thái bộ đề.')}>{isActionBusy('release_audit') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra bộ đề'}</button> : null}
         {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_preview')} onClick={() => runAction('release_preview', async () => { setReleasePreview(await getBankReleasePreview(headers, latestRelease.id)) }, 'Đã tải snapshot Release.', undefined, 'Không tải được snapshot Release.')}>{isActionBusy('release_preview') ? <BusyLabel text="Đang tải" /> : 'Xem trước Release'}</button> : null}
         {canPublishQuestions ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => setConfirmation('release_create')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : `Chốt bộ đề (${stats.approved} câu)`}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => setConfirmation('release_publish')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
       </div>
       {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
-
-    {latestRelease && releaseAudit ? <section className={`card bank-release-audit-panel status-${String(releaseAudit.audit_status || '').toLowerCase()}`}>
-      <div className="section-head"><div><div className="eyebrow">QA publish/rollback</div><h3>Độ tin cậy bộ đề</h3><p className="helper">Kiểm tra nhanh Release trước khi đưa lên CMS, tạo Quiz/Final test hoặc rollback. Báo cáo này chỉ đọc dữ liệu AI Server, không gọi Open edX và không thay đổi dữ liệu.</p></div><span className={`status-badge ${releaseAudit.ok ? 'success' : 'danger'}`}>{releaseAudit.audit_status}</span></div>
-      <div className="chapter-inline-stats bank-release-audit-stats" aria-label="Tóm tắt QA bộ đề">
-        <span>Release <b>{releaseAudit.release_code || latestRelease.release_code}</b><small>{releaseAudit.release_status || latestRelease.status}</small></span>
-        <span>Câu trong bộ <b>{releaseAudit.counts?.release_question_count ?? 0}</b><small>Component {releaseAudit.counts?.component_count ?? 0}</small></span>
-        <span>Quiz/Final test <b>{releaseAudit.counts?.active_course_quiz_instance_count ?? 0}</b><small>Tổng {releaseAudit.counts?.course_quiz_instance_count ?? 0}</small></span>
-        <span>Blocker <b>{releaseAudit.blockers?.length || 0}</b></span>
-        <span>Cảnh báo <b>{releaseAudit.warnings?.length || 0}</b></span>
-      </div>
-      {releaseAudit.message ? <div className={releaseAudit.ok ? 'alert success' : 'alert warning'}><b>{releaseAudit.message}</b></div> : null}
-      {(releaseAudit.blockers?.length || releaseAudit.warnings?.length) ? <div className="bank-release-audit-grid">
-        {(releaseAudit.blockers || []).slice(0, 4).map((item) => <div className="bank-release-audit-item danger" key={`blocker-${item.code}`}><b>{item.code}</b><span>{item.message}</span></div>)}
-        {(releaseAudit.warnings || []).slice(0, 4).map((item) => <div className="bank-release-audit-item warning" key={`warning-${item.code}`}><b>{item.code}</b><span>{item.message}</span></div>)}
-      </div> : null}
-      {releaseAudit.next_actions?.length ? <div className="bank-release-next-actions"><b>Việc cần làm tiếp theo</b><ul>{releaseAudit.next_actions.slice(0, 5).map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
-    </section> : null}
 
     {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
       <div className="workspace-panel full" id="bank-question-list">

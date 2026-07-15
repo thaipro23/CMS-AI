@@ -4,12 +4,15 @@ import { createContext, useContext, useId, useLayoutEffect, type ReactNode } fro
 import type { AppIconName } from '../icons/AppIcon'
 import type { VisualTone } from '../ui/VisualIcon'
 
+export type PageBreadcrumb = { label: string; href?: string }
+
 export type PageChrome = {
   registrationId: string
   eyebrow?: string
   title: string
   icon?: AppIconName
   tone?: VisualTone
+  breadcrumbs?: PageBreadcrumb[]
 }
 
 type PageShellRegistration = {

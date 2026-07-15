@@ -366,10 +366,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </button>
           <div className="enterprise-topbar-page-heading" aria-live="polite">
             {pageChrome?.icon ? <VisualIcon label={pageChrome.title} icon={pageChrome.icon} tone={pageChrome.tone} size={17} className="enterprise-topbar-page-icon" /> : null}
-            <span className="enterprise-topbar-page-copy">
-              {pageChrome?.eyebrow ? <small>{pageChrome.eyebrow}</small> : null}
+            <div className="enterprise-topbar-page-copy">
+              {pageChrome?.breadcrumbs?.length ? <nav className="enterprise-topbar-breadcrumbs" aria-label="Đường dẫn trang"><ol>{pageChrome.breadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={item.href}>{item.label}</Link> : <span aria-current={index === pageChrome.breadcrumbs!.length - 1 ? 'page' : undefined}>{item.label}</span>}</li>)}</ol></nav> : pageChrome?.eyebrow ? <small>{pageChrome.eyebrow}</small> : null}
               <h1>{pageChrome?.title || pageLabel(pathname)}</h1>
-            </span>
+            </div>
           </div>
         </div>
         <div className="enterprise-topbar-end">

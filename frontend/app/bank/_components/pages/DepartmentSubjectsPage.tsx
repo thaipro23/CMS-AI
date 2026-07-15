@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
-import { ContextBackLink } from '../../../../components/navigation/ContextBackLink'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, Subject, SubjectSummary } from '../../../../types'
 import { createSubject, deleteSubject, getDepartment, getSubjectSummaries, updateSubject } from '../../../../lib/api'
@@ -76,8 +75,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
   return <PageRoot className="page-stack bank-multipage">
-    <PageHeader eyebrow="Ngân hàng đề" title="Môn học" />
-    <ContextBackLink href={'/bank/departments'} label="Quay lại danh sách bộ môn" />
+    <PageHeader eyebrow="Ngân hàng đề" title="Môn học" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Môn học' }]} />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm mã môn hoặc tên môn" action={canCreateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />

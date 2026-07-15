@@ -2,7 +2,6 @@
 
 import { formatVNDateTime } from '../../../lib/time'
 import { inlineMessageFromBackend } from '../../../lib/backendNotice'
-import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
@@ -459,7 +458,7 @@ export default function BankQuizPage() {
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Tạo Quiz trên Open edX"
-      secondaryActions={<><Link className="btn secondary" href="/bank/departments">Ngân hàng đề</Link><Link className="btn secondary" href="/bank/history">Lịch sử Quiz</Link></>}
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Tạo Quiz' }]}
     />
 
     {message ? <div className={classNames('alert quiz-inline-message', messageClass(message))}>{message.text}</div> : null}

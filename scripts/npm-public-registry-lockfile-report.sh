@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-VERSION="25.9.16.7.2.64.16.5.7.2.2"
+VERSION="25.9.16.7.2.64.16.5.7.2.3"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/.runtime/npm-public-registry}"
 mkdir -p "$OUT_DIR"

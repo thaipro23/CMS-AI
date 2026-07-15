@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[3]
-CURRENT_VERSION = '25.9.16.7.2.64.16.5.7.2.2'
+CURRENT_VERSION = '25.9.16.7.2.64.16.5.7.2.3'
 
 
 def test_public_registry_contract_survives_current_release():
@@ -57,4 +57,4 @@ def test_ci_fails_fast_before_npm_install():
 
 
 def test_handoff_document_exists():
-    assert (ROOT / 'AI_SERVER_PROJECT_HANDOFF_V25_9_16_7_2_64_16_5_7_2_2.md').exists()
+    assert (ROOT / 'AI_SERVER_PROJECT_HANDOFF_V25_9_16_7_2_64_16_5_7_2_3.md').exists()

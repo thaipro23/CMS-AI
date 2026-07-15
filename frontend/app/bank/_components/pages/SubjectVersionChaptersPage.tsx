@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
-import { ContextBackLink } from '../../../../components/navigation/ContextBackLink'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { ChapterSummary, Department, Subject, SubjectChapter, SubjectOffering } from '../../../../types'
 import { createSubjectChapter, deleteSubjectChapter, getChapterSummaries, getDepartment, getSubject, getSubjectOffering, updateSubjectChapter } from '../../../../lib/api'
@@ -54,8 +53,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   ], [canUpdateOffering, safePage, tableState.pageSize])
 
   return <PageRoot className="page-stack bank-multipage">
-    <PageHeader eyebrow="Ngân hàng đề" title="Bài học" />
-    <ContextBackLink href={subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments'} label="Quay lại danh sách phiên bản môn" />
+    <PageHeader eyebrow="Ngân hàng đề" title="Bài học" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học' }]} />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm bài, Final test hoặc Assignment" action={canUpdateOffering ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />

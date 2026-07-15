@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.16.5.7.2.2'
+VERSION = '25.9.16.7.2.64.16.5.7.2.3'
 ORIGIN = 'http://ai.cms-test.poly.edu.vn'
 
 
