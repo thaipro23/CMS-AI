@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
+import { FilterToolbar } from '../../../components/ui/FilterToolbar'
 import {
   BankRelease,
   BankDashboardOverview,
@@ -136,25 +137,29 @@ export function useBankData() {
 
 export function useAsyncMessage() {
   const [message, setMessage] = useState('')
+  const [messageTone, setMessageTone] = useState<'success' | 'error'>('success')
   const [busy, setBusy] = useState(false)
   const [busyLabel, setBusyLabel] = useState('Đang xử lý, vui lòng chờ...')
   const run = async (work: () => Promise<unknown>, ok: string, after?: () => Promise<void>, loadingText = 'Đang xử lý, vui lòng chờ...') => {
     setBusy(true)
     setBusyLabel(loadingText)
     setMessage('')
+    setMessageTone('success')
     try {
       const result = await work()
       if (after) await after()
       const record = result && typeof result === 'object' ? result as Record<string, unknown> : null
       const userMessage = typeof record?.user_message === 'string' ? record.user_message : typeof record?.message === 'string' ? record.message : ''
+      setMessageTone('success')
       setMessage(userMessage || ok)
     } catch (error) {
+      setMessageTone('error')
       setMessage(error instanceof Error ? error.message : 'Thao tác thất bại')
     } finally {
       setBusy(false)
     }
   }
-  return { message, setMessage, busy, busyLabel, run }
+  return { message, setMessage, messageTone, busy, busyLabel, run }
 }
 
 export function Breadcrumb({ items }: { items: Array<{ label: string; href?: string }> }) {
@@ -240,36 +245,58 @@ export function BankTableToolbar({
   action?: React.ReactNode
 }) {
   const hasFilter = Boolean(search.trim()) || statusFilter !== 'all'
-  return <div className="bank-table-toolbar" aria-label="Bộ lọc bảng ngân hàng đề">
-    <div className="bank-table-toolbar-fields">
-      <label className="bank-table-filter-field bank-table-search-field">
-        <span>Tìm kiếm</span>
-        <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
-      </label>
-      <label className="bank-table-filter-field bank-table-status-field">
-        <span>Trạng thái</span>
-        <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as BankTableStatusFilter)} aria-label="Lọc trạng thái ngân hàng đề">
-          <option value="all">Tất cả</option>
-          <option value="published">Đã đưa lên CMS</option>
-          <option value="ready">Sẵn sàng chốt</option>
-          <option value="needs_work">Cần xử lý</option>
-          <option value="empty">Chưa có dữ liệu</option>
-        </select>
-      </label>
-    </div>
-    <div className="bank-table-toolbar-actions">
-      <span className="bank-table-result-count">Hiện <b>{resultCount}</b>/<b>{totalCount}</b></span>
+  return <FilterToolbar
+    className="bank-table-toolbar"
+    ariaLabel="Bộ lọc bảng ngân hàng đề"
+    actions={<>
+      <span className="bank-table-result-count" aria-live="polite">Hiện <b>{resultCount}</b>/<b>{totalCount}</b></span>
       {hasFilter ? <button className="btn small secondary" type="button" onClick={() => { setSearch(''); setStatusFilter('all') }}>Xóa lọc</button> : null}
       {action}
-    </div>
-  </div>
+    </>}
+  >
+    <label className="bank-table-filter-field bank-table-search-field">
+      <span>Tìm kiếm</span>
+      <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
+    </label>
+    <label className="bank-table-filter-field bank-table-status-field">
+      <span>Trạng thái</span>
+      <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as BankTableStatusFilter)} aria-label="Lọc trạng thái ngân hàng đề">
+        <option value="all">Tất cả</option>
+        <option value="published">Đã đưa lên CMS</option>
+        <option value="ready">Sẵn sàng chốt</option>
+        <option value="needs_work">Cần xử lý</option>
+        <option value="empty">Chưa có dữ liệu</option>
+      </select>
+    </label>
+  </FilterToolbar>
 }
 
-export function Modal({ open, title, children, onClose, wide = false }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
+export function Modal({
+  open,
+  title,
+  description,
+  children,
+  footer,
+  onClose,
+  wide = false,
+  busy = false,
+}: {
+  open: boolean
+  title: string
+  description?: ReactNode
+  children: ReactNode
+  footer?: ReactNode
+  onClose: () => void
+  wide?: boolean
+  busy?: boolean
+}) {
   return <AccessibleDialog
     open={open}
     title={title}
+    description={description}
+    footer={footer}
     onClose={onClose}
+    busy={busy}
     size={wide ? 'xlarge' : 'medium'}
     className={`bank-modal${wide ? ' bank-modal-wide' : ''}`}
     bodyClassName="bank-modal-body"
@@ -290,14 +317,18 @@ export function ConfirmDialog({ open, title, description, confirmLabel = 'Xác n
   onClose: () => void
   onConfirm: () => void
 }) {
-  return <Modal open={open} title={title} onClose={onClose}>
-    <div className="mini-form">
-      {description ? <div className="helper">{description}</div> : null}
-      <div className="modal-actions">
-        <button className="btn secondary" type="button" disabled={busy} onClick={onClose}>{cancelLabel}</button>
-        <button className={`btn${danger ? ' danger' : ''}`} type="button" disabled={busy} onClick={onConfirm}>{busy ? 'Đang xử lý...' : confirmLabel}</button>
-      </div>
-    </div>
+  return <Modal
+    open={open}
+    title={title}
+    description={description}
+    busy={busy}
+    onClose={onClose}
+    footer={<div className="modal-actions">
+      <button className="btn secondary" type="button" disabled={busy} onClick={onClose}>{cancelLabel}</button>
+      <button className={`btn${danger ? ' danger' : ''}`} type="button" disabled={busy} onClick={onConfirm}>{busy ? 'Đang xử lý...' : confirmLabel}</button>
+    </div>}
+  >
+    <div className={`confirmation-impact${danger ? ' is-danger' : ''}`} aria-hidden="true" />
   </Modal>
 }
 

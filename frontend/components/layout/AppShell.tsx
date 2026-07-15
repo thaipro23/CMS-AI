@@ -21,10 +21,13 @@ type NavItem = {
   group: NavGroupKey
   permission?: string
   diagnostic?: boolean
+  exact?: boolean
+  matchPrefixes?: string[]
 }
 
 const SIDEBAR_STORAGE_KEY = 'ai-shell-sidebar'
 const GROUP_STORAGE_KEY = 'ai-shell-nav-groups'
+const SHELL_MOBILE_QUERY = '(max-width: 1023px)'
 
 const navGroups: Array<{ key: NavGroupKey; label: string }> = [
   { key: 'overview', label: 'Tổng quan' },
@@ -36,8 +39,15 @@ const navGroups: Array<{ key: NavGroupKey; label: string }> = [
 ]
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', icon: 'dashboard', group: 'overview', permission: 'view_questions' },
-  { href: '/bank/departments', label: 'Ngân hàng đề', icon: 'bank', group: 'bank', permission: 'view_questions' },
+  { href: '/bank', label: 'Tổng quan', icon: 'dashboard', group: 'overview', permission: 'view_questions', exact: true, matchPrefixes: ['/bank/search'] },
+  {
+    href: '/bank/departments',
+    label: 'Ngân hàng đề',
+    icon: 'bank',
+    group: 'bank',
+    permission: 'view_questions',
+    matchPrefixes: ['/bank/departments', '/bank/subjects', '/bank/subject-versions', '/bank/chapters'],
+  },
   { href: '/bank/quiz', label: 'Tạo Quiz', icon: 'quiz', group: 'bank', permission: 'publish_questions' },
   { href: '/bank/history', label: 'Lịch sử Quiz', icon: 'release', group: 'bank', permission: 'publish_questions' },
   { href: '/student-management', label: 'Quản lý sinh viên', icon: 'students', group: 'training', permission: 'view_training_reports' },
@@ -53,8 +63,18 @@ const navItems: NavItem[] = [
   { href: '/settings', label: 'Cài đặt', icon: 'settings', group: 'admin', permission: 'manage_settings' },
 ]
 
-function isPathActive(pathname: string, href: string) {
-  return pathname === href || pathname.startsWith(`${href}/`)
+function navMatchScore(pathname: string, item: NavItem) {
+  if (item.exact && pathname === item.href) return 10_000 + item.href.length
+  const prefixes = item.matchPrefixes?.length ? item.matchPrefixes : item.exact ? [] : [item.href]
+  const matches = prefixes.filter((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+  return matches.reduce((score, prefix) => Math.max(score, prefix.length), -1)
+}
+
+function bestNavItem(pathname: string, items: NavItem[]) {
+  return items
+    .map((item) => ({ item, score: navMatchScore(pathname, item) }))
+    .filter(({ score }) => score >= 0)
+    .sort((a, b) => b.score - a.score)[0]?.item
 }
 
 function requiredPermissionForPath(pathname: string): string | null {
@@ -76,11 +96,7 @@ function requiredPermissionForPath(pathname: string): string | null {
 }
 
 function pageLabel(pathname: string) {
-  const exact = navItems.find((item) => pathname === item.href)
-  if (exact) return exact.label
-  return navItems
-    .filter((item) => isPathActive(pathname, item.href))
-    .sort((a, b) => b.href.length - a.href.length)[0]?.label || 'AI Server'
+  return bestNavItem(pathname, navItems)?.label || 'AI Server'
 }
 
 function fallbackPageLayoutClass(pathname: string) {
@@ -119,7 +135,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   const userMenuRef = useRef<HTMLDetailsElement>(null)
   const layoutRegistrationRef = useRef<string | null>(null)
-  const [collapsed, setCollapsed] = useState(true)
+  const [collapsed, setCollapsed] = useState(false)
   const [mobile, setMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
@@ -147,20 +163,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const availableItems = useMemo(() => navItems.filter((item) => !item.diagnostic || SHOW_DIAGNOSTICS_UI), [])
   const visibleItems = useMemo(() => authReady ? availableItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, availableItems, can])
-  const currentGroup = useMemo(() => availableItems.find((item) => isPathActive(pathname, item.href))?.group, [availableItems, pathname])
+  const activeNavItem = useMemo(() => bestNavItem(pathname, availableItems), [availableItems, pathname])
+  const currentGroup = activeNavItem?.group
   const routePermission = requiredPermissionForPath(pathname)
   const diagnosticsRouteBlocked = pathname.startsWith('/ops/readiness') && !SHOW_DIAGNOSTICS_UI
   const routeAllowed = !diagnosticsRouteBlocked && (!routePermission || (authReady && can(routePermission)))
   const fallbackHref = visibleItems[0]?.href || '/bank'
 
   useEffect(() => {
-    const media = window.matchMedia('(max-width: 767px)')
+    const media = window.matchMedia(SHELL_MOBILE_QUERY)
     const updateMobile = () => setMobile(media.matches)
     updateMobile()
     if (typeof media.addEventListener === 'function') media.addEventListener('change', updateMobile)
     else media.addListener(updateMobile)
     const sidebarPreference = window.localStorage.getItem(SIDEBAR_STORAGE_KEY)
-    const nextCollapsed = sidebarPreference ? sidebarPreference !== 'expanded' : true
+    const nextCollapsed = sidebarPreference ? sidebarPreference !== 'expanded' : false
     setCollapsed(nextCollapsed)
     document.documentElement.dataset.sidebar = nextCollapsed ? 'collapsed' : 'expanded'
     setOpenGroups(loadGroupPreference())
@@ -308,6 +325,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const topbarBreadcrumbs = useMemo(() => {
+    const items = pageChrome?.breadcrumbs || []
+    if (!items.length) return []
+    const last = items[items.length - 1]
+    if (last.label.trim().localeCompare(pageChrome?.title.trim() || '', 'vi', { sensitivity: 'base' }) === 0) {
+      return items.slice(0, -1)
+    }
+    return items
+  }, [pageChrome])
+
   const guardedChildren = routeAllowed ? children : <section className="card empty-state permission-hidden-state">
     <h2>{authReady ? 'Bạn không có quyền truy cập chức năng này' : 'Đang kiểm tra quyền truy cập'}</h2>
     <p>{authReady ? 'Hệ thống đang chuyển về màn hình phù hợp với phạm vi được phân công.' : 'Vui lòng chờ trong khi hệ thống xác định quyền từ phiên CMS.'}</p>
@@ -339,7 +366,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
             {expanded && <div className="enterprise-nav-items">
               {items.map((item) => {
-                const active = isPathActive(pathname, item.href)
+                const active = activeNavItem?.href === item.href
                 return <Link
                   key={item.href}
                   href={item.href}
@@ -367,7 +394,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="enterprise-topbar-page-heading" aria-live="polite">
             {pageChrome?.icon ? <VisualIcon label={pageChrome.title} icon={pageChrome.icon} tone={pageChrome.tone} size={17} className="enterprise-topbar-page-icon" /> : null}
             <div className="enterprise-topbar-page-copy">
-              {pageChrome?.breadcrumbs?.length ? <nav className="enterprise-topbar-breadcrumbs" aria-label="Đường dẫn trang"><ol>{pageChrome.breadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={item.href}>{item.label}</Link> : <span aria-current={index === pageChrome.breadcrumbs!.length - 1 ? 'page' : undefined}>{item.label}</span>}</li>)}</ol></nav> : pageChrome?.eyebrow ? <small>{pageChrome.eyebrow}</small> : null}
+              {topbarBreadcrumbs.length ? <nav className="enterprise-topbar-breadcrumbs" aria-label="Đường dẫn trang"><ol>{topbarBreadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={item.href}>{item.label}</Link> : <span>{item.label}</span>}</li>)}</ol></nav> : pageChrome?.eyebrow ? <small>{pageChrome.eyebrow}</small> : null}
               <h1>{pageChrome?.title || pageLabel(pathname)}</h1>
             </div>
           </div>

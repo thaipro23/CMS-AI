@@ -1,180 +1,312 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAppContext } from '../../../../context/AppContext'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { SectionHeader } from '../../../../components/layout/SectionHeader'
+import { InlineNotice, type InlineNoticeData } from '../../../../components/ui/InlineNotice'
+import { LoadingButton } from '../../../../components/ui/LoadingButton'
+import { StatusBadge } from '../../../../components/ui/StatusBadge'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
+import type { Department, DepartmentSummary } from '../../../../types'
+import { createDepartment, deleteDepartment, getDepartmentSummaries, updateDepartment } from '../../../../lib/api'
 import {
-  BankRelease,
-  BankDashboardOverview,
-  BankSearchResult,
-  DepartmentSummary,
-  SubjectSummary,
-  SubjectVersionSummary,
-  ChapterSummary,
-  BankGeneratePreview,
-  BankReleaseReadiness,
-  BankVersion,
-  BankVersionDiffPreview,
-  BankVersionQuestion,
-  CourseQuizInstance,
-  AuditLogRow,
-  Job,
-  Department,
-  MaterialChunk,
-  MaterialVersion,
-  Subject,
-  SubjectChapter,
-  SubjectOffering,
-} from '../../../../types'
-import {
-  bulkReviewBankQuestions,
-  createBankRelease,
-  createBankVersion,
-  createDepartment,
-  createSubject,
-  createSubjectChapter,
-  createSubjectOffering,
-  deleteDepartment,
-  deleteSubject,
-  deleteSubjectChapter,
-  deleteSubjectOffering,
-  deleteMaterialVersion,
-  generateFromBankVersion,
-  getBankDashboardOverview,
-  getAuditLogs,
-  getJobs,
-  searchBankDashboard,
-  getDepartmentSummaries,
-  getSubjectSummaries,
-  getSubjectVersionSummaries,
-  getChapterSummaries,
-  getBankMaterialChunks,
-  getBankReleaseReadiness,
-  getBankReleases,
-  getBankVersionQuestion,
-  getBankVersionQuestionPage,
-  getBankVersions,
-  getCourseQuizInstances,
-  getDepartments,
-  getMaterialVersions,
-  getSubjectChapters,
-  getSubjectOfferings,
-  getSubjects,
-  markBankDiffResolved,
-  previewBankVersionDiff,
-  previewGenerateFromBankVersion,
-  publishBankRelease,
-  reviewBankQuestion,
-  rollbackCourseQuizInstance,
-  uploadBankMaterial,
-  updateBankQuestion,
-  updateDepartment,
-  updateSubject,
-  updateSubjectChapter,
-  updateSubjectOffering,
-} from '../../../../lib/api'
-import {
-  TERMS,
-  chapterDisplayName,
-  normalizeLessonInput,
-  buildChapterTitle,
-  statusLabel,
-  statusClass,
-  useBankData,
-  useAsyncMessage,
-  Breadcrumb,
-  Toolbar,
-  SearchActionBar,
-  BankTableToolbar,
   BankTableStatusFilter,
-  bankStatusMatches,
-  Modal,
+  BankTableToolbar,
   ConfirmDialog,
   EntityActions,
+  Modal,
+  bankStatusMatches,
+  emptyReviewStats,
   matchesSearch,
   reviewStatusText,
-  reviewStatusClass,
-  emptyReviewStats,
-  StatLine,
-  questionStats,
-  nextReleaseText,
-  bankAnswerRows,
-  bankQuestionErrorMessage,
-  isQuestionWaitingForReview,
-  BankQuestionEditForm,
-  BankChartRow,
-  toBankQuestionEditForm,
-  BankBarChart,
-  BankStackedChart,
-  countRows,
-  auditActionText,
+  useAsyncMessage,
+  useBankData,
 } from '../shared'
+
+type DepartmentFormValue = {
+  code: string
+  name: string
+}
+
+function DepartmentFormDialog({
+  open,
+  mode,
+  value,
+  busy,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  mode: 'create' | 'edit'
+  value: DepartmentFormValue
+  busy: boolean
+  onChange: (value: DepartmentFormValue) => void
+  onClose: () => void
+  onSubmit: () => void
+}) {
+  const formId = useId()
+  const codeId = `${formId}-code`
+  const nameId = `${formId}-name`
+  const valid = Boolean(value.code.trim() && value.name.trim())
+  const isCreate = mode === 'create'
+
+  return <Modal
+    open={open}
+    title={isCreate ? 'Thêm bộ môn' : 'Sửa bộ môn'}
+    description={isCreate
+      ? 'Bộ môn là cấp cao nhất của Ngân hàng đề. Mã bộ môn nên ngắn, ổn định và không trùng.'
+      : 'Thay đổi tên hoặc mã hiển thị. Các môn học và dữ liệu bên trong không bị di chuyển.'}
+    busy={busy}
+    onClose={onClose}
+    footer={<div className="modal-actions">
+      <button className="btn secondary" type="button" disabled={busy} onClick={onClose}>Hủy</button>
+      <LoadingButton
+        className="btn"
+        type="submit"
+        form={formId}
+        loading={busy}
+        loadingLabel="Đang lưu..."
+        disabled={!valid}
+      >
+        {isCreate ? 'Thêm bộ môn' : 'Lưu thay đổi'}
+      </LoadingButton>
+    </div>}
+  >
+    <form id={formId} className="enterprise-entity-form" onSubmit={(event) => { event.preventDefault(); if (valid && !busy) onSubmit() }}>
+      <label htmlFor={codeId}>
+        <span>Mã bộ môn <b aria-hidden="true">*</b></span>
+        <input
+          id={codeId}
+          className="input"
+          value={value.code}
+          onChange={(event) => onChange({ ...value, code: event.target.value })}
+          placeholder="Ví dụ: CNTT"
+          autoComplete="off"
+          required
+          data-dialog-autofocus
+        />
+        <small>Dùng để nhận diện nhanh trong bảng và khi phân quyền phạm vi.</small>
+      </label>
+      <label htmlFor={nameId}>
+        <span>Tên bộ môn <b aria-hidden="true">*</b></span>
+        <input
+          id={nameId}
+          className="input"
+          value={value.name}
+          onChange={(event) => onChange({ ...value, name: event.target.value })}
+          placeholder="Ví dụ: Công nghệ thông tin"
+          autoComplete="off"
+          required
+        />
+      </label>
+    </form>
+  </Modal>
+}
 
 export function DepartmentsPage() {
   const { headers, can, canScope } = useBankData()
-  const { message, busy, busyLabel, run } = useAsyncMessage()
-  const [summaries, setSummaries] = useState<DepartmentSummary[]>([])
+  const { message, messageTone, busy, busyLabel, run } = useAsyncMessage()
   const { state: tableState, update: updateTableState } = useUrlTableState({ status: 'all', pageSize: 20, density: 'compact' })
-  const search = tableState.q
-  const statusFilter = tableState.status as BankTableStatusFilter
+  const [summaries, setSummaries] = useState<DepartmentSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
-  const [code, setCode] = useState('')
-  const [name, setName] = useState('')
+  const [createValue, setCreateValue] = useState<DepartmentFormValue>({ code: '', name: '' })
   const [editing, setEditing] = useState<Department | null>(null)
-  const [editCode, setEditCode] = useState('')
-  const [editName, setEditName] = useState('')
+  const [editValue, setEditValue] = useState<DepartmentFormValue>({ code: '', name: '' })
   const [deleteTarget, setDeleteTarget] = useState<Department | null>(null)
 
-  const load = async () => { setSummaries(await getDepartmentSummaries(headers)) }
-  useEffect(() => { load().catch(() => null) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const canCreateDepartment = can('department.manage_all')
+  const search = tableState.q
+  const statusFilter = tableState.status as BankTableStatusFilter
 
-  const visible = summaries.filter(({ department, stats }) => matchesSearch(`${department.code} ${department.name}`, search) && bankStatusMatches(stats, statusFilter))
+  const load = useCallback(async () => {
+    setLoading(true)
+    setLoadError('')
+    try {
+      setSummaries(await getDepartmentSummaries(headers))
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Không thể tải danh sách bộ môn.')
+      throw error
+    } finally {
+      setLoading(false)
+    }
+  }, [headers])
+
+  useEffect(() => {
+    load().catch(() => null)
+  }, [load])
+
+  const visible = useMemo(() => summaries.filter(({ department, stats }) => (
+    matchesSearch(`${department.code} ${department.name}`, search) && bankStatusMatches(stats, statusFilter)
+  )), [search, statusFilter, summaries])
+
   const totalPages = Math.max(1, Math.ceil(visible.length / tableState.pageSize))
   const safePage = Math.min(tableState.page, totalPages)
   const pageRows = visible.slice((safePage - 1) * tableState.pageSize, safePage * tableState.pageSize)
 
   const openEditDepartment = (department: Department) => {
     setEditing(department)
-    setEditCode(department.code || '')
-    setEditName(department.name || '')
+    setEditValue({ code: department.code || '', name: department.name || '' })
   }
+
   const saveEditDepartment = () => {
     if (!editing) return
+    const payload = { code: editValue.code.trim(), name: editValue.name.trim() }
     run(async () => {
-      await updateDepartment(headers, editing.id, { code: editCode, name: editName })
+      await updateDepartment(headers, editing.id, payload)
       setEditing(null)
-    }, 'Đã sửa bộ môn', load)
+    }, 'Đã cập nhật bộ môn.', load)
   }
+
+  const createNewDepartment = () => {
+    const payload = { code: createValue.code.trim(), name: createValue.name.trim() }
+    run(async () => {
+      await createDepartment(headers, payload)
+      setCreateValue({ code: '', name: '' })
+      setCreateOpen(false)
+    }, 'Đã thêm bộ môn.', load)
+  }
+
   const confirmDeleteDepartment = () => {
     if (!deleteTarget) return
     run(async () => {
       await deleteDepartment(headers, deleteTarget.id)
       setDeleteTarget(null)
-    }, 'Đã xóa bộ môn', load)
+    }, 'Đã xóa bộ môn.', load)
   }
 
   const columns = useMemo<EnterpriseTableColumn<DepartmentSummary>[]>(() => [
-    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
-    { key: 'department', header: 'Bộ môn', kind: 'identity', minWidth: 280, sticky: 'left', hideable: false, render: ({ department }) => <Link className="bank-table-link" href={`/bank/departments/${department.id}/subjects`}><b>{department.name}</b><small>{department.code}</small></Link> },
-    { key: 'status', header: 'Trạng thái', kind: 'status', width: 132, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); return <span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span> } },
-    { key: 'subjects', header: 'Môn', kind: 'number', width: 72, priority: 'important', hideable: true, render: ({ stats }) => stats?.subject_count || 0 },
-    { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_done_subject_count || 0 },
-    { key: 'pending', header: 'Chờ duyệt', kind: 'number', width: 86, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_not_done_subject_count || 0 },
-    { key: 'unresolved', header: 'Cần xử lý', kind: 'number', width: 86, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.unresolved_count || 0 },
-    { key: 'ready', header: 'Sẵn sàng', kind: 'number', width: 82, priority: 'optional', hideable: true, defaultVisible: false, render: ({ stats }) => stats?.ready_to_release_chapter_count || 0 },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ department }) => <EntityActions canManage={canScope('manage_department', { scopeType: 'DEPARTMENT', scopeId: department.id, departmentId: department.id })} lockedLabel="Không có quyền" onEdit={() => openEditDepartment(department)} onDelete={() => setDeleteTarget(department)} /> },
+    {
+      key: 'stt',
+      header: 'STT',
+      kind: 'index',
+      width: 52,
+      sticky: 'left',
+      hideable: false,
+      render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1,
+    },
+    {
+      key: 'department',
+      header: 'Bộ môn',
+      kind: 'identity',
+      minWidth: 320,
+      sticky: 'left',
+      hideable: false,
+      render: ({ department }) => <Link className="bank-table-link" href={`/bank/departments/${department.id}/subjects`}>
+        <b>{department.name}</b>
+        <small>{department.code}</small>
+      </Link>,
+    },
+    {
+      key: 'status',
+      header: 'Trạng thái',
+      kind: 'status',
+      width: 146,
+      priority: 'important',
+      hideable: true,
+      render: ({ stats: rawStats }) => {
+        const stats = rawStats || emptyReviewStats()
+        return <StatusBadge status={stats.status || 'empty'} label={reviewStatusText(stats.status)} />
+      },
+    },
+    {
+      key: 'subjects',
+      header: 'Môn học',
+      kind: 'number',
+      width: 84,
+      priority: 'important',
+      hideable: true,
+      render: ({ stats }) => stats?.subject_count || 0,
+    },
+    {
+      key: 'approved',
+      header: 'Đã hoàn tất',
+      kind: 'number',
+      width: 102,
+      priority: 'important',
+      hideable: true,
+      render: ({ stats }) => stats?.review_done_subject_count || 0,
+    },
+    {
+      key: 'pending',
+      header: 'Cần xử lý',
+      kind: 'number',
+      width: 92,
+      priority: 'important',
+      hideable: true,
+      render: ({ stats }) => stats?.review_not_done_subject_count || 0,
+    },
+    {
+      key: 'unresolved',
+      header: 'Thay đổi chưa xử lý',
+      kind: 'number',
+      width: 138,
+      priority: 'optional',
+      hideable: true,
+      defaultVisible: false,
+      render: ({ stats }) => stats?.unresolved_count || 0,
+    },
+    {
+      key: 'ready',
+      header: 'Bài sẵn sàng chốt',
+      kind: 'number',
+      width: 126,
+      priority: 'optional',
+      hideable: true,
+      defaultVisible: false,
+      render: ({ stats }) => stats?.ready_to_release_chapter_count || 0,
+    },
+    {
+      key: 'actions',
+      header: 'Thao tác',
+      kind: 'actions',
+      width: 148,
+      sticky: 'right',
+      hideable: false,
+      render: ({ department }) => <EntityActions
+        canManage={canScope('department.update', { scopeType: 'DEPARTMENT', scopeId: department.id, departmentId: department.id })}
+        lockedLabel="Chỉ xem"
+        onEdit={() => openEditDepartment(department)}
+        onDelete={() => setDeleteTarget(department)}
+      />,
+    },
   ], [canScope, safePage, tableState.pageSize])
 
-  return <PageRoot className="page-stack bank-multipage">
-    <PageHeader eyebrow="Ngân hàng đề" title="Bộ môn" />
-    {message ? <div className="alert info">{message}</div> : null}
-    {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel || 'Hệ thống đang xử lý. Bạn có thể tiếp tục xem dữ liệu hiện có.'}</div> : null}
-    <section className="card">
-      <BankTableToolbar search={search} setSearch={(value) => updateTableState({ q: value })} statusFilter={statusFilter} setStatusFilter={(value) => updateTableState({ status: value })} resultCount={visible.length} totalCount={summaries.length} placeholder="Tìm bộ môn" action={can('manage_settings') ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined} />
+  const operationNotice: InlineNoticeData | null = message ? {
+    type: messageTone,
+    title: messageTone === 'error' ? 'Không thể hoàn tất thao tác' : 'Đã cập nhật dữ liệu',
+    body: message,
+  } : null
+
+  return <PageRoot className="page-stack bank-multipage bank-departments-page">
+    <PageHeader eyebrow="Ngân hàng đề" title="Bộ môn" icon="bank" tone="blue" />
+
+    <InlineNotice notice={operationNotice} />
+    {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel}</div> : null}
+
+    <section className="bank-list-section" aria-label="Danh sách bộ môn">
+      <SectionHeader
+        title="Danh sách bộ môn"
+        description="Chọn một bộ môn để quản lý môn học, phiên bản môn và tiến độ duyệt trong phạm vi được phân quyền."
+        icon="bank"
+        actions={canCreateDepartment ? <button className="btn" type="button" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : null}
+      />
+
+      <BankTableToolbar
+        search={search}
+        setSearch={(value) => updateTableState({ q: value })}
+        statusFilter={statusFilter}
+        setStatusFilter={(value) => updateTableState({ status: value })}
+        resultCount={visible.length}
+        totalCount={summaries.length}
+        placeholder="Tìm theo mã hoặc tên bộ môn"
+        action={<button className="btn small secondary" type="button" disabled={loading} onClick={() => load().catch(() => null)}>{loading ? 'Đang tải...' : 'Làm mới'}</button>}
+      />
+
       <EnterpriseDataTable
         tableId="bank-departments"
         caption="Danh sách bộ môn"
@@ -183,6 +315,9 @@ export function DepartmentsPage() {
         rowKey={({ department }) => department.id}
         density={tableState.density}
         onDensityChange={(density) => updateTableState({ density }, { resetPage: false })}
+        loading={loading}
+        error={loadError}
+        onRetry={() => load().catch(() => null)}
         page={safePage}
         pageSize={tableState.pageSize}
         total={visible.length}
@@ -191,49 +326,44 @@ export function DepartmentsPage() {
         onPageSizeChange={(pageSize) => updateTableState({ pageSize, page: 1 }, { resetPage: false })}
         label="bộ môn"
         emptyTitle={search || statusFilter !== 'all' ? 'Không có kết quả phù hợp' : 'Chưa có bộ môn'}
-        emptyDescription={search || statusFilter !== 'all' ? 'Xóa bộ lọc hoặc thử từ khóa khác.' : 'Thêm bộ môn đầu tiên để bắt đầu cấu trúc Ngân hàng câu hỏi.'}
+        emptyDescription={search || statusFilter !== 'all'
+          ? 'Xóa bộ lọc hoặc thử từ khóa khác.'
+          : 'Thêm bộ môn đầu tiên để bắt đầu cấu trúc Ngân hàng đề.'}
+        emptyAction={!search && statusFilter === 'all' && canCreateDepartment
+          ? <button className="btn" type="button" onClick={() => setCreateOpen(true)}>Thêm bộ môn</button>
+          : undefined}
       />
     </section>
 
-    <Modal open={Boolean(editing)} title="Sửa bộ môn" onClose={() => setEditing(null)}>
-      <div className="mini-form">
-        <label className="field-label">Mã bộ môn</label>
-        <input className="input" value={editCode} onChange={(event) => setEditCode(event.target.value)} placeholder="Mã bộ môn" />
-        <label className="field-label">Tên bộ môn</label>
-        <input className="input" value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Tên bộ môn" />
-        <div className="modal-actions">
-          <button className="btn secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>Hủy</button>
-          <button className="btn" type="button" disabled={busy || !editCode.trim() || !editName.trim()} onClick={saveEditDepartment}>{busy ? <span className="inline-busy-label"><span className="spinner tiny" aria-hidden="true" />Đang lưu</span> : 'Lưu thay đổi'}</button>
-        </div>
-      </div>
-    </Modal>
+    <DepartmentFormDialog
+      open={createOpen}
+      mode="create"
+      value={createValue}
+      busy={busy}
+      onChange={setCreateValue}
+      onClose={() => setCreateOpen(false)}
+      onSubmit={createNewDepartment}
+    />
+
+    <DepartmentFormDialog
+      open={Boolean(editing)}
+      mode="edit"
+      value={editValue}
+      busy={busy}
+      onChange={setEditValue}
+      onClose={() => setEditing(null)}
+      onSubmit={saveEditDepartment}
+    />
+
     <ConfirmDialog
       open={Boolean(deleteTarget)}
-      title={`Xóa bộ môn ${deleteTarget?.name || ''}?`}
-      description={<p>Chỉ xóa được khi bộ môn chưa có môn bên trong. Thao tác này dùng popup xác nhận của hệ thống, không dùng confirm của trình duyệt.</p>}
-      confirmLabel="Xác nhận xóa"
+      title={`Xóa bộ môn ${deleteTarget?.code || ''}?`}
+      description={<p>Bộ môn <b>{deleteTarget?.name || ''}</b> chỉ có thể xóa khi chưa có môn học bên trong. Thao tác xóa không thể hoàn tác.</p>}
+      confirmLabel="Xóa bộ môn"
       danger
       busy={busy}
       onClose={() => setDeleteTarget(null)}
       onConfirm={confirmDeleteDepartment}
     />
-
-    <Modal open={createOpen} title="Thêm bộ môn" onClose={() => setCreateOpen(false)}>
-      <div className="mini-form">
-        <input className="input" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Mã bộ môn, ví dụ CNTT" />
-        <input className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Tên bộ môn, ví dụ Công nghệ thông tin" />
-        <button className="btn" type="button" disabled={busy || !code.trim() || !name.trim()} onClick={() => run(async () => {
-          const created = await createDepartment(headers, { code, name })
-          setSummaries((current) => {
-            const withoutDuplicate = current.filter((item) => item.department.id !== created.id)
-            return [...withoutDuplicate, { department: created, stats: emptyReviewStats({ subject_count: 0, review_done_subject_count: 0, review_not_done_subject_count: 0 }) }].sort((a, b) => String(a.department.code || '').localeCompare(String(b.department.code || '')))
-          })
-          setCode(''); setName(''); setCreateOpen(false)
-          await load()
-          window.setTimeout(() => { load().catch(() => null) }, 500)
-        }, 'Đã thêm bộ môn')}>{busy ? <span className="inline-busy-label"><span className="spinner tiny" aria-hidden="true" />Đang lưu</span> : 'Lưu bộ môn'}</button>
-      </div>
-    </Modal>
   </PageRoot>
 }
-

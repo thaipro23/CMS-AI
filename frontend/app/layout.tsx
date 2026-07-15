@@ -11,6 +11,7 @@ import '../styles/layout-integrity.css'
 import '../styles/frontend-runtime-contracts.css'
 import '../styles/full-frontend-design-contract.css'
 import '../styles/frontend-visual-ergonomics-hotfix.css'
+import '../styles/bank-redesign-batch-one.css'
 import type { Metadata, Viewport } from 'next'
 import { AppProvider } from '../context/AppContext'
 import { AppShell } from '../components/layout/AppShell'
@@ -27,7 +28,7 @@ export const viewport: Viewport = {
   viewportFit: 'cover'
 }
 
-const shellBootstrap = `(function(){try{var d=document.documentElement;d.dataset.theme='light';d.dataset.aiTheme='light';var s=localStorage.getItem('ai-shell-sidebar');d.dataset.sidebar=s==='expanded'?'expanded':'collapsed';d.dataset.mobileNav='closed'}catch(e){}})();`
+const shellBootstrap = `(function(){try{var d=document.documentElement;d.dataset.theme='light';d.dataset.aiTheme='light';var s=localStorage.getItem('ai-shell-sidebar');d.dataset.sidebar=s==='collapsed'?'collapsed':'expanded';d.dataset.mobileNav='closed'}catch(e){}})();`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return <html lang="vi-VN" suppressHydrationWarning>

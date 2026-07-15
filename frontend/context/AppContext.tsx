@@ -121,11 +121,6 @@ function getStoredSession(): StoredSession | null {
   }
 }
 
-function getStoredString(key: string, fallback: string) {
-  if (IS_PRODUCTION || typeof window === 'undefined') return fallback
-  return window.localStorage.getItem(key) || fallback
-}
-
 type StoredSession = {
   access_token: string
   user_id?: string
@@ -135,20 +130,19 @@ type StoredSession = {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [courseId, setCourseIdState] = useState(() => getStoredString(STORAGE_KEYS.courseId, ''))
-  const [role, setRoleState] = useState<Role>(() => {
-    if (IS_PRODUCTION) return 'viewer'
-    const saved = getStoredString(STORAGE_KEYS.role, 'teacher') as Role
-    return ROLE_PERMISSIONS[saved] ? saved : 'teacher'
-  })
-  const [userId, setUserIdState] = useState(() => getStoredSession()?.user_id || getStoredString(STORAGE_KEYS.userId, ''))
-  const [accessToken, setAccessTokenState] = useState(() => getStoredSession()?.access_token || '')
+  // Keep the first client render identical to SSR. Browser-backed session and
+  // preferences are hydrated in the effect below, preventing AppShell/nav
+  // hydration errors when a local session already exists.
+  const [courseId, setCourseIdState] = useState('')
+  const [role, setRoleState] = useState<Role>(IS_PRODUCTION ? 'viewer' : 'teacher')
+  const [userId, setUserIdState] = useState('')
+  const [accessToken, setAccessTokenState] = useState('')
   const [businessPermissions, setBusinessPermissions] = useState<string[]>([])
   const [isSystemAdmin, setIsSystemAdmin] = useState(false)
   const [assignments, setAssignments] = useState<EffectiveAssignment[]>([])
   const [cookieAuthenticated, setCookieAuthenticated] = useState(false)
-  const [clientReady, setClientReady] = useState(() => typeof window !== 'undefined')
-  const [authReady, setAuthReady] = useState(() => !IS_PRODUCTION && typeof window !== 'undefined')
+  const [clientReady, setClientReady] = useState(false)
+  const [authReady, setAuthReady] = useState(false)
 
   useEffect(() => {
     const savedCourseId = window.localStorage.getItem(STORAGE_KEYS.courseId)
