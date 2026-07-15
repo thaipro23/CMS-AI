@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION = '25.9.16.7.2.64.16.5.7.1'
+VERSION = '25.9.16.7.2.64.16.5.7.1.1'
 
 
 def test_ci_has_real_database_browser_and_container_jobs() -> None:

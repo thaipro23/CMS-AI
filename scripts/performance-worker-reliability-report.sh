@@ -49,7 +49,7 @@ checks = [
 blockers = [item for item in checks if not item['ok'] and item['severity'] == 'BLOCKER']
 warnings = [item for item in checks if not item['ok'] and item['severity'] == 'WARNING']
 payload = {
-    'version': '25.9.16.7.2.64.16.5.7.1',
+    'version': '25.9.16.7.2.64.16.5.7.1.1',
     'report_type': 'performance_worker_reliability',
     'status': 'READY' if not blockers and not warnings else ('BLOCKED' if blockers else 'READY_WITH_WARNINGS'),
     'checks': checks,

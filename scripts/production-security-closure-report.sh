@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/.runtime/production-security-closure}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1.1}"
 mkdir -p "$OUT_DIR"
 python - "$ROOT" "$OUT_DIR/production-security-closure.json" "$EXPECTED_VERSION" <<'PY'
 import json, sys

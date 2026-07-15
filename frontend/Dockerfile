@@ -1,11 +1,42 @@
 # syntax=docker/dockerfile:1.7
 FROM node:20-bookworm-slim AS deps
+ARG NPM_VERSION=10.9.2
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1 NODE_ENV=development
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=development \
+    NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=300000 \
+    NPM_CONFIG_MAXSOCKETS=4
 COPY package.json package-lock.json ./
-RUN npm ci --include=dev --no-audit --no-fund \
-    && test -x node_modules/.bin/tsc \
-    && test -x node_modules/.bin/next
+RUN --mount=type=cache,id=ai-server-frontend-npm,target=/root/.npm,sharing=locked \
+    set -eux; \
+    pin_attempt=1; \
+    while ! npm install --global "npm@${NPM_VERSION}" --no-audit --no-fund; do \
+      if [ "$pin_attempt" -ge 3 ]; then \
+        echo "Unable to pin npm after ${pin_attempt} attempts" >&2; \
+        exit 1; \
+      fi; \
+      sleep $((pin_attempt * 10)); \
+      pin_attempt=$((pin_attempt + 1)); \
+    done; \
+    npm --version; \
+    install_attempt=1; \
+    while ! npm ci --include=dev --no-audit --no-fund --prefer-offline; do \
+      find /root/.npm/_logs -maxdepth 1 -type f -name '*.log' -print -exec tail -n 80 {} \; 2>/dev/null || true; \
+      if [ "$install_attempt" -ge 3 ]; then \
+        echo "npm ci failed after ${install_attempt} attempts" >&2; \
+        exit 1; \
+      fi; \
+      rm -rf node_modules; \
+      npm cache verify || true; \
+      sleep $((install_attempt * 15)); \
+      install_attempt=$((install_attempt + 1)); \
+    done; \
+    test -x node_modules/.bin/tsc; \
+    test -x node_modules/.bin/next
 
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
@@ -15,7 +46,7 @@ ARG NEXT_PUBLIC_OPENEDX_CMS_BASE_URL=http://studio.local.openedx.io
 ARG NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN=true
 ARG NEXT_PUBLIC_APP_ENV=production
 ARG NEXT_PUBLIC_ENABLE_DIAGNOSTICS_UI=false
-ARG NEXT_PUBLIC_APP_VERSION=25.9.16.7.2.64.16.5.7.1
+ARG NEXT_PUBLIC_APP_VERSION=25.9.16.7.2.64.16.5.7.1.1
 ARG NEXT_PUBLIC_API_GET_TIMEOUT_MS=45000
 ARG NEXT_PUBLIC_API_WRITE_TIMEOUT_MS=120000
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL} \

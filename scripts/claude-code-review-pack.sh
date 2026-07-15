@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/claude-code-review-pack-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1.1}"
 INCLUDE_BUILD_GATE="${INCLUDE_BUILD_GATE:-0}"
 STRICT_BUILD_GATE="${STRICT_BUILD_GATE:-0}"
 mkdir -p "$OUT_DIR"
@@ -196,7 +196,7 @@ Run before UAT sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.1 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.1.1 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
@@ -263,6 +263,13 @@ else
   record_status FAIL UAT_HTTP_ENV_COMPATIBILITY "UAT HTTP/env compatibility gate failed; see uat-http-env-compatibility.log"
 fi
 
+# 10c) UAT build/backend health hotfix gate.
+if ./scripts/uat-build-backend-health-hotfix-report.sh > "$OUT_DIR/uat-build-backend-health-hotfix.log" 2>&1; then
+  record_status PASS UAT_BUILD_BACKEND_HEALTH "UAT frontend build/backend health hotfix gate passed"
+else
+  record_status FAIL UAT_BUILD_BACKEND_HEALTH "UAT frontend build/backend health hotfix gate failed; see uat-build-backend-health-hotfix.log"
+fi
+
 # 11) Summarize APIs and tests for reviewer navigation.
 find backend/app/api/routes -maxdepth 1 -type f -name '*.py' | sort > "$OUT_DIR/backend-routes.txt"
 find backend/app/tests -maxdepth 1 -type f -name 'test_v25_9_16_7_2_*.py' | sort > "$OUT_DIR/versioned-tests.txt"
@@ -290,7 +297,7 @@ PY
 cat > "$OUT_DIR/CLAUDE_REVIEW_BRIEF.md" <<'MD'
 # Claude Code Review Brief
 
-Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.7.1 — UAT HTTP Environment Compatibility Hotfix.
+Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.7.1.1 — UAT HTTP Environment Compatibility Hotfix.
 
 Static review services to inspect: SecurityReadinessService, SecurityAttackSimulationService, PerformanceReadinessService, QueryHotspotService, ReleaseCandidateService, PilotOperationsService, QuestionBankReleasePublishWorkflowService, QuestionBankQuizCreationWorkflowService, QuestionBankGenerationReviewWorkflowService, AcademicSyncEnrollmentWorkflowService.
 

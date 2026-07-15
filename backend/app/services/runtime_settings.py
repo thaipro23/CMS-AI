@@ -1,11 +1,13 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
-from app.core.config import settings, is_production, validate_security_settings
+from app.core.config import settings, is_hardened_deployment, validate_security_settings
 
 RUNTIME_CONFIG_PATH = Path(os.getenv('RUNTIME_CONFIG_PATH', '/app/.runtime/runtime-settings.json'))
+logger = logging.getLogger(__name__)
 
 MANAGED_FIELDS: dict[str, type] = {
     'openai_model': str,
@@ -78,7 +80,8 @@ def _read_runtime_file() -> dict[str, Any]:
         return {}
     try:
         data = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding='utf-8'))
-    except json.JSONDecodeError:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        logger.warning('Ignoring unreadable runtime settings file %s: %s', RUNTIME_CONFIG_PATH, exc.__class__.__name__)
         return {}
     if not isinstance(data, dict):
         return {}
@@ -91,13 +94,26 @@ def _write_runtime_file(data: dict[str, Any]) -> None:
 
 
 def apply_runtime_settings() -> None:
-    """Apply persisted runtime settings over .env values.
+    """Apply safe persisted runtime settings over environment values.
 
-    Runtime settings are intentionally limited to non-secret knobs. Secrets such
-    as API keys, OAuth client secrets and JWT secrets are environment-only.
+    In hardened deployments (UAT/production), security and integration identity
+    fields are environment-owned. Older runtime volumes may still contain values
+    written by pre-hardening releases; those fields must be ignored rather than
+    overriding the current deployment env and preventing the service from booting.
+    Invalid optional values are also ignored so a damaged runtime file cannot turn
+    a healthy deployment into a restart loop.
     """
-    for key, value in _read_runtime_file().items():
-        setattr(settings, key, _coerce_value(key, value))
+    hardened = is_hardened_deployment()
+    for key, raw_value in _read_runtime_file().items():
+        if hardened and key in PRODUCTION_LOCKED_FIELDS:
+            logger.warning('Ignoring locked runtime setting %s in hardened deployment', key)
+            continue
+        try:
+            value = _coerce_value(key, raw_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning('Ignoring invalid runtime setting %s: %s', key, exc.__class__.__name__)
+            continue
+        setattr(settings, key, value)
 
 
 def _mask_secret(value: str | None) -> str:
@@ -203,10 +219,10 @@ def update_runtime_settings(payload: dict[str, Any]) -> dict[str, Any]:
     if supplied_secrets:
         raise ValueError('Secrets are environment-only and were not saved to runtime-settings.json: ' + ', '.join(sorted(set(supplied_secrets))))
 
-    if is_production():
+    if is_hardened_deployment():
         locked = sorted(key for key in updates if key in PRODUCTION_LOCKED_FIELDS)
         if locked:
-            raise ValueError('Production không cho phép đổi runtime security settings: ' + ', '.join(locked))
+            raise ValueError('Production không cho phép đổi runtime security settings; UAT hardened áp dụng cùng quy tắc: ' + ', '.join(locked))
 
     old_values = {key: getattr(settings, key, None) for key in updates if key in MANAGED_FIELDS}
     staged_current = dict(current)
