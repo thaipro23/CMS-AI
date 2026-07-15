@@ -1,16 +1,38 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1.7
+FROM python:3.12-slim AS wheels
+WORKDIR /build
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+COPY backend/requirements-runtime.txt ./requirements-runtime.txt
+RUN python -m pip wheel --wheel-dir /wheels -r requirements-runtime.txt
+
+FROM python:3.12-slim AS runtime
+ARG APP_UID=10001
+ARG APP_GID=10001
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    SOURCE_CONTRACT_ROOT=/source-contract
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl tesseract-ocr tesseract-ocr-vie poppler-utils && rm -rf /var/lib/apt/lists/*
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    SOURCE_CONTRACT_ROOT=/source-contract \
+    HOME=/tmp
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tesseract-ocr tesseract-ocr-vie poppler-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid "${APP_GID}" aiapp \
+    && useradd --uid "${APP_UID}" --gid "${APP_GID}" --no-create-home --shell /usr/sbin/nologin aiapp \
+    && mkdir -p /app/.runtime /source-contract \
+    && chown -R "${APP_UID}:${APP_GID}" /app/.runtime
+COPY --from=wheels /wheels /wheels
+COPY backend/requirements-runtime.txt ./requirements-runtime.txt
+RUN python -m pip install --no-index --find-links=/wheels -r requirements-runtime.txt \
+    && rm -rf /wheels
 COPY backend/ .
 
-# Runtime readiness endpoints perform read-only static source checks. Package a
-# bounded, secret-free source snapshot so the checks do not incorrectly report
-# every frontend/plugin module as missing inside the backend container.
+# Runtime readiness endpoints perform bounded, secret-free source checks. The
+# snapshot is read-only and does not include env files, build output or secrets.
 COPY backend/ /source-contract/backend/
 COPY frontend/app/ /source-contract/frontend/app/
 COPY frontend/components/ /source-contract/frontend/components/
@@ -22,4 +44,8 @@ COPY frontend/types/ /source-contract/frontend/types/
 COPY scripts/ /source-contract/scripts/
 COPY openedx-connector-plugin/ /source-contract/openedx-connector-plugin/
 COPY openedx-unit-reset-plugin/ /source-contract/openedx-unit-reset-plugin/
+RUN chmod -R a-w /app /source-contract \
+    && chmod 0770 /app/.runtime \
+    && chown -R "${APP_UID}:${APP_GID}" /app/.runtime
+USER ${APP_UID}:${APP_GID}
 EXPOSE 8000

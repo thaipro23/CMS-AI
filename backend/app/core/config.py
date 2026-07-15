@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.7.2.64.16.5.6'
+    app_version: str = '25.9.16.7.2.64.16.5.7.1'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # bridge ticket is signed by the CMS connector plugin using the shared HMAC
     # secret and exchanged by the AI backend for a short-lived AI JWT.
     auth_cookie_secure: bool = True
+    # Explicit UAT-only escape hatch for HTTP environments. Never enable in production.
+    allow_insecure_uat_http: bool = False
     auth_cookie_samesite: str = 'lax'
     auth_cookie_domain: str | None = None
     auth_session_token_ttl_seconds: int = 2 * 60 * 60
@@ -114,6 +116,8 @@ class Settings(BaseSettings):
     # Authoring MFE base URL for Studio library deep links shown in AI Server /export.
     # If omitted, AI Server derives it from OPENEDX_CMS_BASE_URL, e.g. studio.local.openedx.io -> apps.local.openedx.io/authoring.
     openedx_authoring_mfe_base_url: str | None = None
+    # Backward-compatible alias used by older deployments. Prefer OPENEDX_AUTHORING_MFE_BASE_URL.
+    openedx_mfe_base_url: str | None = None
     openedx_client_id: str | None = None
     openedx_client_secret: str | None = None
     openedx_access_token: str | None = None
@@ -379,10 +383,23 @@ class Settings(BaseSettings):
 
 
 PRODUCTION_ENVS = {'prod', 'production'}
+UAT_ENVS = {'uat', 'staging'}
+
+
+def deployment_env() -> str:
+    return (settings.app_env or '').lower().strip()
 
 
 def is_production() -> bool:
-    return (settings.app_env or '').lower().strip() in PRODUCTION_ENVS
+    return deployment_env() in PRODUCTION_ENVS
+
+
+def is_uat() -> bool:
+    return deployment_env() in UAT_ENVS
+
+
+def is_hardened_deployment() -> bool:
+    return is_production() or is_uat()
 
 
 def cors_origin_list() -> list[str]:
@@ -397,7 +414,7 @@ def validate_security_settings() -> None:
     silently fall back to demo auth, mock Open edX, mock LLM, wildcard CORS, or a
     runtime-persisted secret.
     """
-    if not is_production():
+    if not is_hardened_deployment():
         return
 
     errors: list[str] = []
@@ -410,7 +427,10 @@ def validate_security_settings() -> None:
     if settings.allow_demo_role_header:
         errors.append('ALLOW_DEMO_ROLE_HEADER=false is required in production')
     if not settings.auth_cookie_secure:
-        errors.append('AUTH_COOKIE_SECURE=true is required in production')
+        if is_production():
+            errors.append('AUTH_COOKIE_SECURE=true is required in production')
+        elif not settings.allow_insecure_uat_http:
+            errors.append('AUTH_COOKIE_SECURE=false in UAT requires ALLOW_INSECURE_UAT_HTTP=true')
     if (settings.auth_cookie_samesite or '').lower().strip() not in {'lax', 'strict'}:
         errors.append('AUTH_COOKIE_SAMESITE must be lax or strict in production')
     if settings.auth_session_token_ttl_seconds < 900 or settings.auth_session_token_ttl_seconds > 7200:

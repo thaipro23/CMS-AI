@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/claude-code-review-pack-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.6}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1}"
 INCLUDE_BUILD_GATE="${INCLUDE_BUILD_GATE:-0}"
 STRICT_BUILD_GATE="${STRICT_BUILD_GATE:-0}"
 mkdir -p "$OUT_DIR"
@@ -96,7 +96,7 @@ fi
 # Ignore apt/docker image layer cleanup and this script's own regex definition.
 if grep -RInE 'docker compose .*down +-v|rm +-rf +/|DROP DATABASE|TRUNCATE TABLE' scripts backend frontend \
     --exclude-dir='node_modules' --exclude-dir='__pycache__' \
-  | grep -Ev 'claude-code-review-pack\.sh|backend/app/tests/|rm -rf /var/lib/apt/lists/\*' > "$OUT_DIR/dangerous-commands.txt"; then
+  | grep -Ev 'claude-code-review-pack\.sh|backend/app/tests/|rm -rf /var/lib/apt/lists/\*|rm -rf /wheels' > "$OUT_DIR/dangerous-commands.txt"; then
   record_status WARN DANGEROUS_COMMANDS "Potentially destructive commands found; reviewer should inspect"
 else
   record_status PASS DANGEROUS_COMMANDS "No obvious destructive commands found in executable code/scripts"
@@ -119,7 +119,7 @@ else
 fi
 
 # 8) Shell syntax for release scripts.
-if bash -n scripts/analytics-uat-evidence-pack.sh && bash -n scripts/analytics-uat-acceptance.sh && bash -n scripts/claude-code-review-pack.sh && bash -n scripts/uat-build-gate.sh && bash -n scripts/frontend-build-verify.sh && bash -n scripts/uat-runtime-verify.sh && bash -n scripts/performance-readiness-report.sh && bash -n scripts/query-hotspot-report.sh && bash -n scripts/maintainability-contract-report.sh && bash -n scripts/security-readiness-report.sh && bash -n scripts/security-attack-simulation-report.sh && bash -n scripts/production-security-closure-report.sh && bash -n scripts/performance-worker-reliability-report.sh && bash -n scripts/frontend-runtime-contracts-report.sh && bash -n scripts/pilot-release-candidate-report.sh && bash -n scripts/pilot-operations-runbook.sh && bash -n scripts/production-pilot-final-gate.sh && bash -n scripts/load-test-hot-endpoints.sh && bash -n scripts/rollback-drill-verify.sh && bash -n scripts/openedx-publish-verify.sh && bash -n scripts/production-pilot-final-gate.sh; then
+if bash -n scripts/analytics-uat-evidence-pack.sh && bash -n scripts/analytics-uat-acceptance.sh && bash -n scripts/claude-code-review-pack.sh && bash -n scripts/uat-build-gate.sh && bash -n scripts/frontend-build-verify.sh && bash -n scripts/uat-runtime-verify.sh && bash -n scripts/performance-readiness-report.sh && bash -n scripts/query-hotspot-report.sh && bash -n scripts/maintainability-contract-report.sh && bash -n scripts/security-readiness-report.sh && bash -n scripts/security-attack-simulation-report.sh && bash -n scripts/production-security-closure-report.sh && bash -n scripts/performance-worker-reliability-report.sh && bash -n scripts/frontend-runtime-contracts-report.sh && bash -n scripts/ci-e2e-container-hardening-report.sh && bash -n scripts/ci-backend-tests.sh && bash -n scripts/pilot-release-candidate-report.sh && bash -n scripts/pilot-operations-runbook.sh && bash -n scripts/production-pilot-final-gate.sh && bash -n scripts/load-test-hot-endpoints.sh && bash -n scripts/rollback-drill-verify.sh && bash -n scripts/openedx-publish-verify.sh && bash -n scripts/production-pilot-final-gate.sh; then
   record_status PASS SHELL_SYNTAX "release helper scripts pass bash -n"
 else
   record_status FAIL SHELL_SYNTAX "one or more release helper scripts fail bash -n"
@@ -196,7 +196,7 @@ Run before UAT sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.6 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.1 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
@@ -225,6 +225,13 @@ else
   record_status FAIL FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract failed" "frontend-runtime-contracts.log"
 fi
 
+# CI, browser E2E and container hardening gate.
+if ./scripts/ci-e2e-container-hardening-report.sh "$OUT_DIR/ci-e2e-container-hardening" > "$OUT_DIR/ci-e2e-container-hardening.log" 2>&1; then
+  record_status PASS CI_E2E_CONTAINER_HARDENING "CI/E2E/container hardening contract passed" "ci-e2e-container-hardening/ci-e2e-container-hardening.json"
+else
+  record_status FAIL CI_E2E_CONTAINER_HARDENING "CI/E2E/container hardening contract failed" "ci-e2e-container-hardening.log"
+fi
+
 # Runtime import/name and frontend layout integrity gates.
 if ./scripts/backend-runtime-name-audit.sh "$OUT_DIR/backend-runtime-name-audit" > "$OUT_DIR/backend-runtime-name-audit.log" 2>&1; then
   record_status PASS BACKEND_RUNTIME_NAME_AUDIT "Backend runtime symbol audit passed" "backend-runtime-name-audit/backend-runtime-name-audit.json"
@@ -247,6 +254,13 @@ if [[ "$INCLUDE_BUILD_GATE" == "1" ]]; then
   fi
 else
   record_status PASS UAT_BUILD_GATE_INSTRUCTIONS "INCLUDE_BUILD_GATE=0; build gate script is available for UAT execution" ""
+fi
+
+# 10b) UAT HTTP/env compatibility hotfix gate.
+if ./scripts/uat-http-env-compatibility-report.sh > "$OUT_DIR/uat-http-env-compatibility.log" 2>&1; then
+  record_status PASS UAT_HTTP_ENV_COMPATIBILITY "UAT HTTP/env compatibility gate passed"
+else
+  record_status FAIL UAT_HTTP_ENV_COMPATIBILITY "UAT HTTP/env compatibility gate failed; see uat-http-env-compatibility.log"
 fi
 
 # 11) Summarize APIs and tests for reviewer navigation.
@@ -276,7 +290,7 @@ PY
 cat > "$OUT_DIR/CLAUDE_REVIEW_BRIEF.md" <<'MD'
 # Claude Code Review Brief
 
-Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.6 — Frontend Runtime Contracts + Modal/Error Boundary.
+Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.7.1 — UAT HTTP Environment Compatibility Hotfix.
 
 Static review services to inspect: SecurityReadinessService, SecurityAttackSimulationService, PerformanceReadinessService, QueryHotspotService, ReleaseCandidateService, PilotOperationsService, QuestionBankReleasePublishWorkflowService, QuestionBankQuizCreationWorkflowService, QuestionBankGenerationReviewWorkflowService, AcademicSyncEnrollmentWorkflowService.
 

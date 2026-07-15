@@ -158,7 +158,10 @@ class OpenEdXPublisher:
 
     @staticmethod
     def _authoring_mfe_base_url() -> str | None:
-        explicit = getattr(settings, 'openedx_authoring_mfe_base_url', None)
+        explicit = (
+            getattr(settings, 'openedx_authoring_mfe_base_url', None)
+            or getattr(settings, 'openedx_mfe_base_url', None)
+        )
         if explicit:
             return explicit.rstrip('/')
         base = (settings.openedx_cms_base_url or settings.openedx_base_url or '').strip().rstrip('/')

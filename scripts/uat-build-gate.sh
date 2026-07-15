@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/uat-build-gate-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.6}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1}"
 STRICT="${STRICT:-0}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-0}"
 RUN_FRONTEND_INSTALL="${RUN_FRONTEND_INSTALL:-0}"
@@ -60,6 +60,7 @@ VERSION_TARGETS=(
   "scripts/security-attack-simulation-report.sh"
   "scripts/performance-worker-reliability-report.sh"
   "scripts/frontend-runtime-contracts-report.sh"
+  "scripts/ci-e2e-container-hardening-report.sh"
   "scripts/pilot-release-candidate-report.sh"
   "scripts/pilot-operations-runbook.sh"
   "scripts/openedx-publish-verify.sh"
@@ -125,14 +126,21 @@ then
     run_and_record BACKEND_TARGETED_TESTS "pytest targeted versioned/static tests" backend-targeted-tests.log \
       env PYTHONPATH=backend python -m pytest -q \
       backend/app/tests/test_v25_9_16_7_2_64_16_5_4_production_security_closure.py \
-      backend/app/tests/test_v25_9_16_7_2_64_16_5_6_release_contract.py \
       backend/app/tests/test_v25_9_16_7_2_64_16_5_5_performance_worker_reliability.py \
+      backend/app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py \
       backend/app/tests/test_v25_9_15_3_version_diff_carry_over_retire.py
   else
     record_status WARN BACKEND_TARGETED_TESTS_SKIPPED "RUN_BACKEND_TESTS=0; backend pytest gate skipped" "python-dependency-check.json"
   fi
 else
   warn_or_fail_when_strict BACKEND_TEST_DEPS_MISSING "pytest/psycopg not available; install backend requirements before UAT sign-off" "python-dependency-check.json"
+fi
+
+# CI, browser E2E and container hardening gate.
+if ./scripts/ci-e2e-container-hardening-report.sh "$OUT_DIR/ci-e2e-container-hardening" > "$OUT_DIR/ci-e2e-container-hardening.log" 2>&1; then
+  record_status PASS CI_E2E_CONTAINER_HARDENING "CI/E2E/container hardening contract passed" "ci-e2e-container-hardening/ci-e2e-container-hardening.json"
+else
+  record_status FAIL CI_E2E_CONTAINER_HARDENING "CI/E2E/container hardening contract failed" "ci-e2e-container-hardening.log"
 fi
 
 # Runtime import/name and frontend layout integrity gates.
@@ -169,7 +177,7 @@ else
   record_status FAIL FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract failed" "frontend-runtime-contracts.log"
 fi
 
-# Frontend typecheck/build. v25.9.16.7.2.64.16.5.6 delegates the deep
+# Frontend typecheck/build. v25.9.16.7.2.64.16.5.7.1 delegates the deep
 # frontend verification to scripts/frontend-build-verify.sh so package-lock,
 # Dockerfile build args, tsc, next build and standalone output are validated
 # consistently in one report.
@@ -186,7 +194,7 @@ Run on UAT before sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.6 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.1 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
