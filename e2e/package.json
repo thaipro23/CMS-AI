@@ -1,6 +1,6 @@
 {
   "name": "ai-openedx-browser-e2e",
-  "version": "25.9.16.7.2.64.16.5.7.2.1",
+  "version": "25.9.16.7.2.64.16.5.7.2.2",
   "private": true,
   "scripts": {
     "test": "playwright test",

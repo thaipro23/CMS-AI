@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${1:-${OUT_DIR:-$ROOT_DIR/.runtime/ci-e2e-container-hardening}}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.1}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.2}"
 mkdir -p "$OUT_DIR"
 python - "$ROOT_DIR" "$OUT_DIR" "$EXPECTED_VERSION" <<'PY'
 from __future__ import annotations

@@ -21,7 +21,7 @@ validate_security_settings()
 app = FastAPI(title=settings.app_name, version=settings.app_version, debug=settings.debug)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-_base_cors_headers = ['Authorization', 'Content-Type', 'X-Requested-With', 'X-Metrics-Token', 'Idempotency-Key']
+_base_cors_headers = ['Authorization', 'Content-Type', 'X-Requested-With', 'X-Metrics-Token', 'Idempotency-Key', 'X-Request-ID']
 if (settings.app_env or '').lower() not in {'prod', 'production'} and settings.allow_demo_role_header:
     _base_cors_headers.extend(['X-User-Id', 'X-User-Role', 'X-User-Email', 'X-Course-Ids'])
 app.add_middleware(
@@ -30,6 +30,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allow_headers=_base_cors_headers,
+    expose_headers=['X-Request-ID', 'X-Process-Time-Ms'],
 )
 
 

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/production-ux-acceptance-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.1}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.2}"
 mkdir -p "$OUT_DIR"
 
 python - "$ROOT_DIR" "$EXPECTED_VERSION" "$OUT_DIR/production-ux-source-contract.json" <<'PY'
