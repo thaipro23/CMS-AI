@@ -170,7 +170,6 @@ export function DepartmentsPage() {
   ], [canScope, safePage, tableState.pageSize])
 
   return <PageRoot className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }]} />
     <PageHeader eyebrow="Ngân hàng đề" title="Bộ môn" />
     {message ? <div className="alert info">{message}</div> : null}
     {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel || 'Hệ thống đang xử lý. Bạn có thể tiếp tục xem dữ liệu hiện có.'}</div> : null}

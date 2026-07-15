@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { ContextBackLink } from '../../../../components/navigation/ContextBackLink'
 import { OperationsKpiStrip } from '../../../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
@@ -92,8 +93,8 @@ export function BankHistoryPage() {
   const failed = quizHistory.filter((item) => item.status === 'failed').length
 
   return <PageRoot className="page-stack bank-multipage history-console">
-    <Breadcrumb items={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Lịch sử Quiz' }]} />
     <PageHeader eyebrow="Ngân hàng đề" title="Lịch sử bộ đề và Quiz" primaryAction={<Link className="btn" href="/bank/quiz">Tạo Quiz trên CMS</Link>} />
+    <ContextBackLink href={'/bank'} label="Quay lại tổng quan ngân hàng đề" />
     {message ? <div className="alert info">{message}</div> : null}
 
     <OperationsKpiStrip ariaLabel="Tổng quan lịch sử bộ đề" items={[

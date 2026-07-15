@@ -38,7 +38,6 @@ const navGroups: Array<{ key: NavGroupKey; label: string }> = [
 const navItems: NavItem[] = [
   { href: '/bank', label: 'Tổng quan', icon: 'dashboard', group: 'overview', permission: 'view_questions' },
   { href: '/bank/departments', label: 'Ngân hàng đề', icon: 'bank', group: 'bank', permission: 'view_questions' },
-  { href: '/bank/search', label: 'Tìm kiếm câu hỏi', icon: 'search', group: 'bank', permission: 'view_questions' },
   { href: '/bank/quiz', label: 'Tạo Quiz', icon: 'quiz', group: 'bank', permission: 'publish_questions' },
   { href: '/bank/history', label: 'Lịch sử Quiz', icon: 'release', group: 'bank', permission: 'publish_questions' },
   { href: '/student-management', label: 'Quản lý sinh viên', icon: 'students', group: 'training', permission: 'view_training_reports' },

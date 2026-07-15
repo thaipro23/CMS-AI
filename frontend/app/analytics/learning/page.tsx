@@ -42,6 +42,7 @@ import {
   PilotOperationsReport,
   AnalyticsDataQualityIssue,
   AnalyticsStudentLearningBehaviorDetail,
+  AnalyticsStudentSessionProgress,
 } from '../../../types'
 import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
@@ -476,22 +477,22 @@ function DetailDrawer({
           </div>
         </div>
 
-        {!!sessions.length && <div className="table-wrap analytics-result-table-wrap">
-          <table className="data-table academic-data-table">
-            <thead>
-              <tr><th>STT</th><th>Bài</th><th>Video</th><th>Quiz</th><th>Deadline</th></tr>
-            </thead>
-            <tbody>
-              {sessions.slice(0, 12).map((item, index) => <tr key={`${item.session_index}-${index}`}>
-                <td className="stt-cell">{index + 1}</td>
-                <td><b>{item.session_title || `Bài ${item.session_index || index + 1}`}</b></td>
-                <td>{item.videos_completed || 0}/{item.total_videos || 0}</td>
-                <td>{item.quiz_attempted ? 'Đã làm' : 'Chưa thấy'}</td>
-                <td>{item.completed_before_deadline ? 'Đúng hạn' : item.completed_late ? 'Trễ hạn' : 'Chưa đủ dữ liệu'}</td>
-              </tr>)}
-            </tbody>
-          </table>
-        </div>}
+        {!!sessions.length && <EnterpriseDataTable<AnalyticsStudentSessionProgress>
+          tableId="analytics-student-session-detail"
+          caption="Tiến độ theo bài"
+          rows={sessions.slice(0, 12)}
+          columns={[
+            { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_item, index) => index + 1 },
+            { key: 'session', header: 'Bài', kind: 'identity', minWidth: 190, hideable: false, render: (item, index) => <b>{item.session_title || `Bài ${item.session_index || index + 1}`}</b> },
+            { key: 'video', header: 'Video', kind: 'progress', width: 110, hideable: true, render: (item) => `${item.videos_completed || 0}/${item.total_videos || 0}` },
+            { key: 'quiz', header: 'Quiz', kind: 'status', width: 108, hideable: true, render: (item) => item.quiz_attempted ? 'Đã làm' : 'Chưa thấy' },
+            { key: 'deadline', header: 'Deadline', kind: 'status', minWidth: 130, hideable: true, render: (item) => item.completed_before_deadline ? 'Đúng hạn' : item.completed_late ? 'Trễ hạn' : 'Chưa đủ dữ liệu' },
+          ]}
+          rowKey={(item) => String(item.session_index)}
+          density="compact"
+          label="bài"
+          showSummary={false}
+        />}
       </>}
   </AccessibleDialog>
 }

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/uat-build-gate-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1.1}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.1}"
 STRICT="${STRICT:-0}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-0}"
 RUN_FRONTEND_INSTALL="${RUN_FRONTEND_INSTALL:-0}"
@@ -60,6 +60,7 @@ VERSION_TARGETS=(
   "scripts/security-attack-simulation-report.sh"
   "scripts/performance-worker-reliability-report.sh"
   "scripts/frontend-runtime-contracts-report.sh"
+  "scripts/npm-public-registry-lockfile-report.sh"
   "scripts/ci-e2e-container-hardening-report.sh"
   "scripts/pilot-release-candidate-report.sh"
   "scripts/pilot-operations-runbook.sh"
@@ -170,6 +171,14 @@ else
   record_status FAIL PERFORMANCE_WORKER_RELIABILITY "Performance/API/Celery reliability contract failed" "performance-worker-reliability.log"
 fi
 
+# Public npm registry lockfile contract. Fail before npm install/build if a
+# lockfile points to a private or environment-specific registry.
+if ./scripts/npm-public-registry-lockfile-report.sh "$OUT_DIR/npm-public-registry" > "$OUT_DIR/npm-public-registry.log" 2>&1; then
+  record_status PASS NPM_PUBLIC_REGISTRY "npm lockfiles use registry.npmjs.org only" "npm-public-registry/npm-public-registry-lockfile.json"
+else
+  record_status FAIL NPM_PUBLIC_REGISTRY "npm lockfile contains non-public registry URLs" "npm-public-registry.log"
+fi
+
 # Frontend runtime, modal and route-state contracts.
 if ./scripts/frontend-runtime-contracts-report.sh "$OUT_DIR/frontend-runtime-contracts" > "$OUT_DIR/frontend-runtime-contracts.log" 2>&1; then
   record_status PASS FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract passed" "frontend-runtime-contracts/frontend-runtime-contracts.json"
@@ -177,7 +186,7 @@ else
   record_status FAIL FRONTEND_RUNTIME_CONTRACTS "Frontend modal/error/table runtime contract failed" "frontend-runtime-contracts.log"
 fi
 
-# Frontend typecheck/build. v25.9.16.7.2.64.16.5.7.1.1 delegates the deep
+# Frontend typecheck/build. v25.9.16.7.2.64.16.5.7.2.1 delegates the deep
 # frontend verification to scripts/frontend-build-verify.sh so package-lock,
 # Dockerfile build args, tsc, next build and standalone output are validated
 # consistently in one report.
@@ -194,7 +203,7 @@ Run on UAT before sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.1.1 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.2.1 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh

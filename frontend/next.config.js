@@ -10,6 +10,8 @@ const nextConfig = {
   experimental: {
     // Keep static-generation workers bounded on hosts that expose a very high CPU count.
     cpus: 2,
+    // Avoid child-process build-worker stalls on constrained UAT hosts.
+    webpackBuildWorker: false,
     // Trace only this frontend workspace; do not scan sibling artifacts under /mnt/data.
     outputFileTracingRoot: __dirname,
   },

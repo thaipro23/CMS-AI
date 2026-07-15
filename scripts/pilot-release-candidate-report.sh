@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 API_BASE_URL="${API_BASE_URL:-https://api-ai.cms-test.poly.edu.vn/api}"
 TOKEN="${TOKEN:-}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1.1}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.1}"
 CLASS_ID="${CLASS_ID:-}"
 COURSE_ID="${COURSE_ID:-}"
 BRANCH="${BRANCH:-poly}"

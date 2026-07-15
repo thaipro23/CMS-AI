@@ -62,6 +62,8 @@ export type EnterpriseDataTableProps<Row> = {
   sortKey?: string
   sortDirection?: 'asc' | 'desc'
   onSortChange?: (key: string, direction: 'asc' | 'desc') => void
+  /** Hide the duplicated table title/count toolbar when the surrounding section already provides it. */
+  showSummary?: boolean
 }
 
 type ColumnLayout<Row> = {
@@ -158,6 +160,7 @@ export function EnterpriseDataTable<Row>({
   sortKey,
   sortDirection = 'asc',
   onSortChange,
+  showSummary = false,
 }: EnterpriseDataTableProps<Row>) {
   // v2 deliberately resets the old responsive preferences that automatically hid columns.
   const storageKey = `ai-enterprise-table:${tableId}:columns:full-v2`
@@ -256,13 +259,13 @@ export function EnterpriseDataTable<Row>({
   }
 
   return <section ref={shellRef} className={`enterprise-table-shell density-${density}`} aria-busy={loading} data-column-contract="full-content">
-    <div className="enterprise-table-controls">
-      <div className="enterprise-table-summary" aria-live="polite"><VisualIcon label={caption} icon="database" tone="blue" className="enterprise-table-summary-icon" /><div className="enterprise-table-summary-copy"><b>{caption}</b><span>{(total ?? rows.length).toLocaleString('vi-VN')} {label}</span>{loading && <span className="soft-tag"><span className="spinner tiny" /> Đang cập nhật</span>}</div></div>
+    {(showSummary || onDensityChange || columns.some((column) => column.hideable)) && <div className={`enterprise-table-controls${showSummary ? '' : ' controls-only'}`}>
+      {showSummary ? <div className="enterprise-table-summary" aria-live="polite"><VisualIcon label={caption} icon="database" tone="blue" className="enterprise-table-summary-icon" /><div className="enterprise-table-summary-copy"><b>{caption}</b><span>{(total ?? rows.length).toLocaleString('vi-VN')} {label}</span>{loading && <span className="soft-tag"><span className="spinner tiny" /> Đang cập nhật</span>}</div></div> : <span />}
       <div className="enterprise-table-view-actions">
         {onDensityChange && <label className="enterprise-density-control"><span>Mật độ</span><select className="input" value={density} onChange={(event) => onDensityChange(event.target.value as TableDensity)}><option value="compact">Thu gọn</option><option value="standard">Tiêu chuẩn</option><option value="comfortable">Thoáng</option></select></label>}
-        <details className="enterprise-column-menu"><summary className="btn small secondary"><VisualIcon icon="layers" tone="slate" size={15} /> Cột hiển thị</summary><div className="enterprise-column-menu-popover"><b>Chọn cột</b>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={visibleKeys.includes(column.key)} disabled={!column.hideable} onChange={() => toggleColumn(column.key)} />{column.header}</label>)}<button className="btn small secondary" type="button" onClick={() => persistColumns(allColumnKeys)}>Hiện tất cả</button><button className="btn small ghost" type="button" onClick={() => persistColumns(defaultKeys)}>Mặc định</button></div></details>
+        {columns.some((column) => column.hideable) ? <details className="enterprise-column-menu"><summary className="btn small secondary"><VisualIcon icon="layers" tone="slate" size={15} /> Cột hiển thị</summary><div className="enterprise-column-menu-popover"><b>Chọn cột</b>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={visibleKeys.includes(column.key)} disabled={!column.hideable} onChange={() => toggleColumn(column.key)} />{column.header}</label>)}<button className="btn small secondary" type="button" onClick={() => persistColumns(allColumnKeys)}>Hiện tất cả</button><button className="btn small ghost" type="button" onClick={() => persistColumns(defaultKeys)}>Mặc định</button></div></details> : null}
       </div>
-    </div>
+    </div>}
     {!rows.length ? <TableEmptyState title={emptyTitle} description={emptyDescription} action={emptyAction} /> : <div className="enterprise-table-scroll" tabIndex={0} role="region" aria-label={`${caption}. Bảng hiển thị đầy đủ các cột; chỉ cuộn ngang khi nội dung thực sự không thể xuống dòng.`}>
       <table className="enterprise-data-table">
         <caption className="sr-only">{caption}</caption>

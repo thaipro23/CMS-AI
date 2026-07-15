@@ -6,7 +6,7 @@ import { deleteAcademicTerm, getAcademicTermWithBlocks, getAcademicTerms, saveAc
 import { AcademicBlock, AcademicTerm } from '../../types'
 import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
-import { OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
+import { WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { AccessibleDialog } from '../../components/ui/AccessibleDialog'
 import { addDaysToVNDateInput, formatVNDate, normalizeVNDateInput, vnDateInputToISODate, vnDateInputToISODateTime } from '../../lib/time'
@@ -168,7 +168,8 @@ export default function SemestersPage() {
   const columns: EnterpriseTableColumn<TermRow>[] = [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_item, index) => index + 1 },
     { key: 'term', header: 'Học kỳ', kind: 'identity', minWidth: 220, hideable: false, render: (item) => <div><b>{item.term_code}</b><small>{item.term_name} · {branchLabel(item.branch)}</small></div> },
-    { key: 'blocks', header: 'Lịch 2 block', kind: 'text', minWidth: 330, priority: 'important', hideable: true, render: (item) => <div className="term-block-summary">{(item.blocks || []).slice(0, 2).map((block, index) => <span key={block.id || index}><b>{block.block_name || `Block ${index + 1}`}</b><small>{formatDate(block.start_date)} → {formatDate(block.end_date)}</small></span>)}{!(item.blocks || []).length ? <span>Chưa cấu hình</span> : null}</div> },
+    { key: 'block1', header: 'Lịch Block 1', kind: 'date', minWidth: 210, priority: 'important', hideable: true, render: (item) => { const block = pickBlocksForTermForm(item.blocks)[0]; return block ? <div className="term-block-cell"><b>{block.block_name || 'Block 1'}</b><small>{formatDate(block.start_date)} → {formatDate(block.end_date)}</small></div> : <span className="muted">Chưa cấu hình</span> } },
+    { key: 'block2', header: 'Lịch Block 2', kind: 'date', minWidth: 210, priority: 'important', hideable: true, render: (item) => { const block = pickBlocksForTermForm(item.blocks)[1]; return block ? <div className="term-block-cell"><b>{block.block_name || 'Block 2'}</b><small>{formatDate(block.start_date)} → {formatDate(block.end_date)}</small></div> : <span className="muted">Chưa cấu hình</span> } },
     { key: 'status', header: 'Trạng thái', kind: 'status', width: 112, hideable: true, render: (item) => <StatusBadge status={item.active ? 'active' : 'inactive'} label={item.active ? 'Đang dùng' : 'Đã xóa'} /> },
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 112, sticky: 'right', hideable: false, render: (item) => <div className="row-actions"><button className="btn small secondary" type="button" onClick={() => openEdit(item)}>Sửa</button><button className="btn small danger secondary-danger" type="button" disabled={saving} onClick={() => setDeleteTarget(item)}>Xóa</button></div> },
   ]
@@ -176,15 +177,16 @@ export default function SemestersPage() {
   if (!can('manage_settings')) return <PageRoot className="page-stack"><PageHeader eyebrow="Danh mục" title="Học kỳ" /></PageRoot>
 
   return <PageRoot className="page-stack semesters-page">
-    <PageHeader eyebrow="Danh mục" title="Học kỳ & Cấu hình tuần học" secondaryActions={<button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button>} primaryAction={<button className="btn" type="button" onClick={openCreate}>Thêm học kỳ</button>} />
+    <PageHeader eyebrow="Danh mục" title="Học kỳ & Cấu hình tuần học" />
     {message ? <div className="alert">{message}</div> : null}
-    <OperationsKpiStrip items={[
-      { label: 'Tổng học kỳ', value: items.length, hint: 'Poly và PTCĐ' },
-      { label: 'Đang dùng', value: items.filter((item) => item.active).length, hint: 'Có thể chọn trong vận hành', tone: 'success' },
-      { label: 'Đã khóa/xóa', value: items.length - items.filter((item) => item.active).length, hint: 'Giữ lại dữ liệu lịch sử' },
-    ]} />
-    <WorkspaceSection title="Danh sách học kỳ" description="Mỗi học kỳ có đúng 2 block; lịch tuần học được chỉnh trong màn Sửa.">
-      <EnterpriseDataTable tableId="semesters-v2" caption="Danh sách học kỳ" rows={items} columns={columns} rowKey={(item) => item.id} density="compact" loading={loading} label="học kỳ" emptyTitle="Chưa có học kỳ" emptyDescription="Tạo học kỳ mới để cấu hình block và tuần học." />
+    <WorkspaceSection
+      title="Danh sách học kỳ"
+      description="Mỗi học kỳ có đúng 2 block; lịch tuần học được chỉnh trong màn Sửa."
+      actions={<><button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button><button className="btn" type="button" onClick={openCreate}>Thêm học kỳ</button></>}
+      icon="semester"
+      tone="blue"
+    >
+      <EnterpriseDataTable tableId="semesters-v3" caption="Học kỳ" showSummary={false} rows={items} columns={columns} rowKey={(item) => item.id} density="compact" loading={loading} label="học kỳ" emptyTitle="Chưa có học kỳ" emptyDescription="Tạo học kỳ mới để cấu hình block và tuần học." />
     </WorkspaceSection>
     <AccessibleDialog
       open={modalOpen}

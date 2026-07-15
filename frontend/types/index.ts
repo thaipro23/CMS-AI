@@ -1769,6 +1769,24 @@ export type RoleAssignmentListResponse = {
   total: number
 }
 
+export type RoleAssignmentBatchCreate = {
+  user_id: string
+  email?: string | null
+  role_code: BusinessRoleCode | string
+  scope_type: BusinessScopeType | string
+  scope_ids: string[]
+  grant_reason?: string
+  sync_openedx?: boolean
+}
+
+export type RoleAssignmentBatchResponse = {
+  items: RoleAssignment[]
+  created_count: number
+  reused_count: number
+  total: number
+}
+
+
 export type EffectiveRBAC = {
   user_id: string
   legacy_role: string

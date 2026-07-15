@@ -71,6 +71,8 @@ import {
   RBACRole,
   RBACPermission,
   RoleAssignment,
+  RoleAssignmentBatchCreate,
+  RoleAssignmentBatchResponse,
   RoleAssignmentCreate,
   RoleAssignmentImportResponse,
   RoleAssignmentListResponse,
@@ -2952,6 +2954,19 @@ export async function getRoleAssignments(
     await apiFetch(`${API}/rbac/assignments${suffix}`, {
       credentials: "include",
       headers,
+    }),
+  );
+}
+
+export async function createRoleAssignmentsBatch(
+  payload: RoleAssignmentBatchCreate,
+  headers: HeadersInit,
+): Promise<RoleAssignmentBatchResponse> {
+  return parseResponse<RoleAssignmentBatchResponse>(
+    await apiFetch(`${API}/rbac/assignments/batch`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
     }),
   );
 }

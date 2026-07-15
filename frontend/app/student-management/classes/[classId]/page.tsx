@@ -1,8 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import type { WheelEvent } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../context/AppContext'
 import {
@@ -27,8 +26,8 @@ import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState } from '../../../../components/training/TrainingWorkspace'
 import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
+import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 
-const PAGE_SIZE = 50
 
 type GradeColumn = { key: string; name: string; quizNumber?: number | null; deadlineDate?: string | null; availableFrom?: string | null; deadlineMode?: string | null; scheduleWarning?: string | null }
 
@@ -318,6 +317,7 @@ function ClassDetailContent() {
   const debouncedSearch = useDebouncedValue(search, 350)
   const [learningStatus, setLearningStatus] = useState('all')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [syncingFullFlow, setSyncingFullFlow] = useState(false)
@@ -341,11 +341,10 @@ function ClassDetailContent() {
   const [selectedBehavior, setSelectedBehavior] = useState<AnalyticsLearningBehaviorRow | null>(null)
   const [selectedBehaviorDetail, setSelectedBehaviorDetail] = useState<AnalyticsStudentLearningBehaviorDetail | null>(null)
   const [selectedBehaviorLoading, setSelectedBehaviorLoading] = useState(false)
-  const tableScrollRef = useRef<HTMLDivElement | null>(null)
   const effectiveCourseId = learningSummary?.openedx_course_id || classInfo?.openedx_course_id || ''
 
   const refreshStudentPage = async () => {
-    const studentPage = await getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE })
+    const studentPage = await getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize })
     setStudents(studentPage.items)
     setTotal(studentPage.total)
   }
@@ -419,18 +418,6 @@ function ClassDetailContent() {
     }
   }
 
-  const handleStudentTableWheel = (event: WheelEvent<HTMLDivElement>) => {
-    const shell = tableScrollRef.current
-    if (!shell || shell.scrollWidth <= shell.clientWidth) return
-    // v25.9.16.7.2.4: only horizontal wheel/trackpad or Shift+wheel scrolls
-    // the student table horizontally. Plain vertical wheel still scrolls the page.
-    const delta = Math.abs(event.deltaX) > 0 ? event.deltaX : (event.shiftKey ? event.deltaY : 0)
-    if (!delta) return
-    const before = shell.scrollLeft
-    shell.scrollLeft += delta
-    if (shell.scrollLeft !== before) event.preventDefault()
-  }
-
   const isJobActive = (job?: AcademicClassSyncJob | null) => {
     const status = String(job?.status || '').toLowerCase()
     return Boolean(job?.id) && !['completed', 'failed'].includes(status)
@@ -484,7 +471,7 @@ function ClassDetailContent() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize: PAGE_SIZE })
+    getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize })
       .then((studentPage) => {
         if (cancelled) return
         setStudents(studentPage.items)
@@ -493,7 +480,7 @@ function ClassDetailContent() {
       .catch((error) => { if (!cancelled) setErrorModal(error instanceof Error ? error.message : 'Không tải được sinh viên') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [headers, classId, debouncedSearch, learningStatus, page])
+  }, [headers, classId, debouncedSearch, learningStatus, page, pageSize])
 
 
   useEffect(() => {
@@ -692,7 +679,7 @@ function ClassDetailContent() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [selectedQuiz, selectedBehavior, assignmentModalOpen, errorModal])
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const counts = summary?.counts || {}
   const matched = counts.matched || 0
   const needsCmsAction = Math.max(0, (summary?.total || 0) - matched)
@@ -788,6 +775,25 @@ function ClassDetailContent() {
   behaviorParams.set('classification', 'all')
   const behaviorHref = `/analytics/learning?${behaviorParams.toString()}`
 
+  const studentColumns: EnterpriseTableColumn<AcademicStudent>[] = [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_student, index) => (page - 1) * pageSize + index + 1 },
+    { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 250, sticky: 'left', hideable: false, render: (student) => <div className="student-identity-cell"><b>{student.student_code || '—'} · {student.full_name || 'Chưa có họ tên'}</b><small>{student.email || 'Chưa có email'}</small><small>Học lại: {student.total_relearn || 0}</small></div> },
+    { key: 'cms', header: 'Tài khoản CMS', kind: 'status', minWidth: 180, priority: 'important', hideable: true, render: (student) => <div className="student-status-cell"><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.openedx_username || student.username || 'Chưa có username'}</small></div> },
+    { key: 'enrollment', header: 'Ghi danh', kind: 'status', minWidth: 150, priority: 'important', hideable: true, render: (student) => <span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span> },
+    { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 230, priority: 'important', hideable: true, render: (student) => <div className="learning-progress-cell compact-learning-progress-cell"><b>Hoàn thành: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{shouldSuggestFullCmsSync(student) ? <em className="cms-full-sync-hint">Cần đồng bộ full CMS</em> : null}</div> },
+    { key: 'online', header: 'Học online', kind: 'status', minWidth: 210, priority: 'important', hideable: true, render: (student) => { const behavior = studentBehavior(student); return behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}><span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span><small>Độ tin cậy: {Math.round(behavior.confidence_score || 0)}%</small><small>{recommendedActionLabel(behavior.recommended_action)}</small></button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span> } },
+    { key: 'exam', header: 'Điều kiện thi', kind: 'status', minWidth: 220, priority: 'important', hideable: true, render: (student) => <div className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Chưa đủ dữ liệu'}</small><small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small></div> },
+    ...componentColumns.map((column): EnterpriseTableColumn<AcademicStudent> => ({
+      key: `component-${column.key}`,
+      header: column.name,
+      kind: 'status',
+      minWidth: 128,
+      priority: 'optional',
+      hideable: true,
+      render: (student) => { const score = studentComponentScore(student, column); return <button className="quiz-grade-cell-button" type="button" title={componentDeadlineLabel(column)} onClick={() => setSelectedQuiz({ student, column, score })}><b>{componentScoreText(score)}</b><span className={quizStatusClass(score)}>{quizStatusLabel(score)}</span><small>{componentDeadlineLabel(column)}</small></button> },
+    })),
+  ]
+
   return <PageRoot className="page-stack student-management-page academic-flow-page class-detail-flow training-operations-page">
     <PageHeader
       eyebrow="Vận hành đào tạo"
@@ -868,58 +874,25 @@ function ClassDetailContent() {
           <input className="input compact-input" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="Tìm mã SV, username, họ tên..." />
         </div>
       </div>
-      <div className="class-student-table-shell" ref={tableScrollRef} onWheel={handleStudentTableWheel}>
-        <div className="table-wrap academic-table-wrap dynamic-grade-table-wrap class-student-table-scroll">
-        <table className="data-table academic-data-table student-grade-table two-col-sticky-table">
-          <thead><tr><th className="stt-col sticky-index-col">STT</th><th className="sticky-col student-sticky-col">Sinh viên</th><th>Tiến độ học</th><th>Học online</th><th>Điều kiện thi</th>{componentColumns.map((column) => <th key={column.key} className="component-grade-th"><span>{column.name}</span><small>{componentDeadlineLabel(column)}</small></th>)}</tr></thead>
-          <tbody>
-            {loading && <tr><td colSpan={5 + componentColumns.length}>Đang tải sinh viên...</td></tr>}
-            {!loading && !students.length && <tr><td colSpan={5 + componentColumns.length}>Không có sinh viên phù hợp.</td></tr>}
-            {students.map((student, index) => {
-              const behavior = studentBehavior(student)
-              return <tr key={student.id}>
-              <td className="stt-cell sticky-index-col">{(page - 1) * PAGE_SIZE + index + 1}</td>
-              <td className="main-entity-cell sticky-col student-sticky-col compact-student-identity-cell">
-                <b>{student.student_code || '—'}</b>
-                <small>{student.full_name}</small>
-                <small>Username: {student.username || 'N/A'}{student.openedx_username && student.openedx_username !== student.username ? ` · CMS: ${student.openedx_username}` : ''}</small>
-                <small>Email: {student.email || 'N/A'}</small>
-                <small>Học lại: {student.total_relearn || 0}</small>
-              </td>
-              <td className="learning-progress-cell compact-learning-progress-cell">
-                <b>Hoàn thành khóa học: {percentLabel(student.learning_progress_percent)}</b>
-                <small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small>
-                <span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>
-                {shouldSuggestFullCmsSync(student) ? <em className="cms-full-sync-hint">Hãy bấm Đồng bộ full CMS</em> : null}
-              </td>
-              <td className="online-behavior-cell">
-                {behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}>
-                  <span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span>
-                  <small>Độ tin cậy: {Math.round(behavior.confidence_score || 0)}%</small>
-                  <small>{recommendedActionLabel(behavior.recommended_action)}</small>
-                </button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span>}
-              </td>
-              <td className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Chưa đủ dữ liệu'}</small><small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small></td>
-              {componentColumns.map((column) => {
-                const score = studentComponentScore(student, column)
-                return <td key={`${student.id}-${column.key}`} className="component-grade-cell">
-                  <button className="quiz-grade-cell-button" type="button" onClick={() => setSelectedQuiz({ student, column, score })}>
-                    <b>{componentScoreText(score)}</b>
-                    <span className={quizStatusClass(score)}>{quizStatusLabel(score)}</span>
-                  </button>
-                </td>
-              })}
-            </tr>
-            })}
-          </tbody>
-        </table>
-        </div>
-      </div>
-      <div className="pagination-row">
-        <button className="btn secondary small" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Trang trước</button>
-        <span>{page} / {totalPages}</span>
-        <button className="btn secondary small" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>Trang sau</button>
-      </div>
+      <EnterpriseDataTable
+        tableId={`class-students-${classId}`}
+        caption="Danh sách sinh viên"
+        showSummary={false}
+        rows={students}
+        columns={studentColumns}
+        rowKey={(student) => student.id}
+        density="compact"
+        loading={loading}
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        onPageSizeChange={(value) => { setPageSize(value); setPage(1) }}
+        label="sinh viên"
+        emptyTitle="Không có sinh viên phù hợp"
+        emptyDescription="Đổi trạng thái hoặc từ khóa tìm kiếm; nếu vẫn trống, kiểm tra roster AP và đồng bộ CMS."
+      />
     </section>
 
 

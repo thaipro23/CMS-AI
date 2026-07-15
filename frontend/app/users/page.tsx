@@ -4,7 +4,7 @@ import { formatVNDateTime } from '../../lib/time'
 import { useDebouncedValue } from '../../lib/useDebouncedValue'
 import { ChangeEvent, useEffect, useMemo, useState } from 'react'
 import {
-  createRoleAssignment,
+  createRoleAssignmentsBatch,
   getAcademicCampuses,
   downloadRBACImportTemplate,
   searchDepartments,
@@ -22,6 +22,7 @@ import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { CompactFilterBar, OperationsKpiStrip, SideDrawer, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { AccessibleDialog } from '../../components/ui/AccessibleDialog'
 import {
   BusinessRoleCode,
   BusinessScopeType,
@@ -61,7 +62,7 @@ const roleSubtitles: Record<string, string> = {
   QUESTION_REVIEWER: 'Chỉ xem, sửa, duyệt hoặc từ chối câu hỏi trong phạm vi được giao.',
   CAMPUS_OWNER: 'Vận hành sinh viên/lớp/analytics trong cơ sở được phân công.',
   CAMPUS_MANAGER: 'Legacy alias của Chủ cơ sở; dùng CAMPUS_OWNER cho gán mới.',
-  TEACHER_ASSIGNED: 'Giáo viên chỉ xem lớp được AP phân công; scope CLASS/CAMPUS chỉ là ràng buộc phụ.',
+  TEACHER_ASSIGNED: 'Giáo viên chỉ xem lớp được AP phân công; phạm vi cơ sở chỉ là ràng buộc phụ; danh sách lớp lấy từ AP.',
 }
 
 const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
@@ -70,8 +71,7 @@ const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
   SUBJECT_OWNER: ['SUBJECT', 'SUBJECT_VERSION'],
   QUESTION_REVIEWER: ['SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'],
   CAMPUS_OWNER: ['CAMPUS', 'SYSTEM'],
-  CAMPUS_MANAGER: ['CAMPUS', 'SYSTEM'],
-  TEACHER_ASSIGNED: ['CLASS', 'CAMPUS', 'SYSTEM'],
+  TEACHER_ASSIGNED: ['CAMPUS', 'SYSTEM'],
 }
 
 const scopeLabel: Record<string, string> = {
@@ -116,14 +116,14 @@ export default function UsersPage() {
   const debouncedScopeSearch = useDebouncedValue(scopeSearch, 300)
   const [scopeOptionsLoading, setScopeOptionsLoading] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
-  const [scopeDropdownOpen, setScopeDropdownOpen] = useState(false)
+  const [grantOpen, setGrantOpen] = useState(false)
+  const [selectedScopeIds, setSelectedScopeIds] = useState<string[]>([])
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [form, setForm] = useState({
     user_id: '',
     email: '',
     role_code: 'DEPARTMENT_HEAD' as BusinessRoleCode,
     scope_type: 'DEPARTMENT' as BusinessScopeType,
-    scope_id: '',
     grant_reason: '',
     sync_openedx: false,
   })
@@ -134,10 +134,9 @@ export default function UsersPage() {
     { code: 'SUBJECT_OWNER', name: 'Chủ môn', description: roleSubtitles.SUBJECT_OWNER, rank: 50, status: 'active' },
     { code: 'QUESTION_REVIEWER', name: 'Người duyệt câu hỏi', description: roleSubtitles.QUESTION_REVIEWER, rank: 30, status: 'active' },
     { code: 'CAMPUS_OWNER', name: 'Chủ cơ sở', description: roleSubtitles.CAMPUS_OWNER, rank: 60, status: 'active' },
-    { code: 'CAMPUS_MANAGER', name: 'Chủ cơ sở (legacy)', description: roleSubtitles.CAMPUS_MANAGER, rank: 60, status: 'active' },
     { code: 'TEACHER_ASSIGNED', name: 'Giáo viên được phân công AP', description: roleSubtitles.TEACHER_ASSIGNED, rank: 10, status: 'active' },
   ] as RBACRole[], [])
-  const allRoles = roles.length ? roles : fallbackRoles
+  const allRoles = (roles.length ? roles : fallbackRoles).filter((role) => role.code !== 'CAMPUS_MANAGER')
   const grantableRoleCodes = useMemo(() => {
     if (isSystemAdmin) return new Set(allRoles.map((role) => role.code))
     const result = new Set<string>()
@@ -163,12 +162,16 @@ export default function UsersPage() {
     return []
   }, [campuses, canScope, chapters, departments, form.role_code, form.scope_type, isSystemAdmin, offerings, scopeSearch, subjects])
 
-  const selectedScopeOption = useMemo(() => scopeOptions.find((item) => item.id === form.scope_id), [form.scope_id, scopeOptions])
+  const selectedScopeOptions = useMemo(() => scopeOptions.filter((item) => selectedScopeIds.includes(item.id)), [scopeOptions, selectedScopeIds])
 
-  function chooseScopeOption(id: string) {
-    setForm({ ...form, scope_id: id })
-    setScopeDropdownOpen(false)
+  function toggleScopeOption(id: string) {
+    setSelectedScopeIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])
   }
+
+  function selectAllVisibleScopes() {
+    setSelectedScopeIds((current) => Array.from(new Set([...current, ...scopeOptions.map((item) => item.id)])))
+  }
+
 
   const filteredAssignments = useMemo(() => {
     const needle = filterText.trim().toLowerCase()
@@ -217,7 +220,9 @@ export default function UsersPage() {
 
   function syncScopeForRole(nextRole: BusinessRoleCode) {
     const scopes = allowedScopesByRole[nextRole] || ['SYSTEM']
-    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: scopes[0], scope_id: scopes[0] === 'SYSTEM' ? '*' : '' }))
+    setScopeSearch('')
+    setSelectedScopeIds(scopes[0] === 'SYSTEM' ? ['*'] : [])
+    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: scopes[0] }))
   }
 
   async function loadAll() {
@@ -249,7 +254,7 @@ export default function UsersPage() {
   }
 
   useEffect(() => {
-    if (!scopeDropdownOpen) return
+    if (!grantOpen) return
     if (!['DEPARTMENT', 'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'].includes(form.scope_type)) return
     const controller = new AbortController()
     const headers = authHeaders()
@@ -271,28 +276,32 @@ export default function UsersPage() {
       if (!controller.signal.aborted) setScopeOptionsLoading(false)
     })
     return () => controller.abort()
-  }, [authHeaders, debouncedScopeSearch, form.scope_type, scopeDropdownOpen])
+  }, [authHeaders, debouncedScopeSearch, form.scope_type, grantOpen])
 
   async function submitAssignment() {
     try {
-      if (!form.user_id.trim()) throw new Error('Cần nhập user_id/username/email Open edX.')
-      if (form.scope_type !== 'SYSTEM' && !form.scope_id.trim()) throw new Error('Cần chọn scope để gán quyền.')
-      await createRoleAssignment({
+      if (!form.user_id.trim()) throw new Error('Cần nhập user_id/username Open edX.')
+      const scopeIds = form.scope_type === 'SYSTEM' ? ['*'] : selectedScopeIds
+      if (!scopeIds.length) throw new Error('Cần chọn ít nhất một phạm vi để gán quyền.')
+      const result = await createRoleAssignmentsBatch({
         user_id: form.user_id.trim(),
         email: form.email.trim() || null,
         role_code: form.role_code,
         scope_type: form.scope_type,
-        scope_id: form.scope_type === 'SYSTEM' ? '*' : form.scope_id,
+        scope_ids: scopeIds,
         grant_reason: form.grant_reason.trim() || 'Gán từ màn phân quyền',
         sync_openedx: form.sync_openedx,
       }, authHeaders(true))
-      setMessage({ type: 'success', title: 'Đã gán quyền', body: 'Người dùng cần đăng nhập lại AI/CMS để nhận quyền mới.' })
-      setForm((prev) => ({ ...prev, user_id: '', email: '', grant_reason: '' }))
+      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.` })
+      setForm((prev) => ({ ...prev, user_id: '', email: '', grant_reason: '', sync_openedx: false }))
+      setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : [])
+      setGrantOpen(false)
       await loadAll()
     } catch (e) {
-      setMessage(toUserError(e, 'Không gán được quyền. Kiểm tra đúng vai trò, phạm vi và quyền người đang thao tác.'))
+      setMessage(toUserError(e, 'Không gán được quyền. Kiểm tra người dùng, vai trò, phạm vi và quyền của người đang thao tác.'))
     }
   }
+
 
   async function revokeAssignment(id: string) {
     try {
@@ -356,6 +365,7 @@ export default function UsersPage() {
     <PageHeader
       eyebrow="Quản trị"
       title="Người dùng & phân quyền"
+      primaryAction={visibleRoles.length ? <button className="btn" type="button" onClick={() => { setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : []); setGrantOpen(true) }}>Gán quyền</button> : null}
       secondaryActions={<>
         {isSystemAdmin && <button className="btn secondary" type="button" onClick={downloadTemplate}>Tải template</button>}
         {isSystemAdmin && <button className="btn secondary" type="button" onClick={() => setImportOpen(true)}>Import Excel</button>}
@@ -377,29 +387,37 @@ export default function UsersPage() {
       <label>Tìm người dùng, vai trò hoặc phạm vi<input className="input" value={filterText} onChange={(event) => setFilterText(event.target.value)} placeholder="username, email, COM1071, cơ sở..." /></label>
     </CompactFilterBar>
 
-    <section className="rbac-user-workspace">
-      <WorkspaceSection title="Người dùng đã được cấp quyền" description="Mỗi người dùng là một dòng. Mở Chi tiết để xem quyền trực tiếp, phạm vi, nguồn cấp và thu hồi.">
-        <EnterpriseDataTable tableId="rbac-users" caption="Người dùng & quyền" rows={userRows} columns={userColumns} rowKey={(item) => item.userId} density="compact" loading={loading} label="người dùng" emptyTitle="Chưa có người dùng phù hợp" emptyDescription="Thay đổi từ khóa hoặc gán quyền mới ở panel bên phải." />
-      </WorkspaceSection>
-      <aside className="card rbac-grant-panel" aria-label="Gán quyền mới">
-        <div className="section-head compact-section-head"><div><span className="eyebrow">Gán quyền</span><h2>Quyền mới</h2><p className="helper">Chọn người dùng, vai trò và đúng phạm vi cần giao.</p></div></div>
-        {!visibleRoles.length ? <div className="alert warning">Bạn không có quyền gán thêm vai trò trong phạm vi hiện tại.</div> : <>
+    <WorkspaceSection title="Người dùng đã được cấp quyền" description="Mỗi người dùng là một dòng. Mở Chi tiết để xem quyền trực tiếp, phạm vi, nguồn cấp và thu hồi.">
+      <EnterpriseDataTable tableId="rbac-users" caption="Người dùng & quyền" rows={userRows} columns={userColumns} rowKey={(item) => item.userId} density="compact" loading={loading} label="người dùng" emptyTitle="Chưa có người dùng phù hợp" emptyDescription="Thay đổi từ khóa hoặc dùng Gán quyền để thêm phạm vi mới." />
+    </WorkspaceSection>
+
+    <AccessibleDialog
+      open={grantOpen}
+      title="Gán quyền"
+      description="Chọn một người dùng, một vai trò và một hoặc nhiều phạm vi. Toàn bộ thay đổi được ghi trong một transaction."
+      size="large"
+      onClose={() => setGrantOpen(false)}
+      footer={<div className="dialog-footer-actions"><button className="btn secondary" type="button" onClick={() => setGrantOpen(false)}>Hủy</button><button className="btn" type="button" onClick={submitAssignment} disabled={!form.user_id.trim() || (form.scope_type !== 'SYSTEM' && !selectedScopeIds.length)}>Gán {form.scope_type === 'SYSTEM' ? 1 : selectedScopeIds.length} phạm vi</button></div>}
+    >
+      {!visibleRoles.length ? <div className="alert warning">Bạn không có quyền gán thêm vai trò trong phạm vi hiện tại.</div> : <div className="rbac-grant-form">
+        <div className="form-grid two-columns">
           <label>Vai trò<select className="input" value={form.role_code} onChange={(event) => syncScopeForRole(event.target.value as BusinessRoleCode)}>{visibleRoles.map((role) => <option key={role.code} value={role.code}>{roleLabels[role.code] || role.name}</option>)}</select></label>
-          <div className="permission-role-description"><b>{roleLabels[form.role_code]}</b><span>{selectedRole?.description || roleSubtitles[form.role_code]}</span></div>
+          <label>Loại phạm vi<select className="input" value={form.scope_type} onChange={(event) => { const nextScope = event.target.value as BusinessScopeType; setScopeSearch(''); setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : []); setForm({ ...form, scope_type: nextScope }) }}>{availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>
           <label>Tài khoản Open edX<input className="input" value={form.user_id} onChange={(event) => setForm({ ...form, user_id: event.target.value })} placeholder="vd: owner_web107" /></label>
           <label>Email <span className="optional-label">(không bắt buộc)</span><input className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="user@fpt.edu.vn" /></label>
-          <label>Loại phạm vi<select className="input" value={form.scope_type} onChange={(event) => { setScopeSearch(''); setForm({ ...form, scope_type: event.target.value as BusinessScopeType, scope_id: event.target.value === 'SYSTEM' ? '*' : '' }) }}>{availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>
-          <div className="searchable-scope-field"><label>Phạm vi cụ thể</label><div className={`searchable-select ${scopeDropdownOpen ? 'open' : ''} ${form.scope_type === 'SYSTEM' ? 'disabled' : ''}`}>
-            <button className="input searchable-select-trigger" type="button" disabled={form.scope_type === 'SYSTEM'} onClick={() => setScopeDropdownOpen((value) => !value)}><span>{form.scope_type === 'SYSTEM' ? 'Toàn hệ thống' : selectedScopeOption?.label || 'Chọn phạm vi'}</span><b>⌄</b></button>
-            {scopeDropdownOpen && form.scope_type !== 'SYSTEM' ? <div className="searchable-select-menu"><input className="input scope-search-input" value={scopeSearch} onChange={(event) => setScopeSearch(event.target.value)} placeholder="Gõ mã hoặc tên phạm vi..." autoFocus /><div className="searchable-select-list">{scopeOptions.map((item) => <button type="button" className={`searchable-select-option ${form.scope_id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => chooseScopeOption(item.id)}><b>{item.label}</b><small>{item.path}</small></button>)}{!scopeOptions.length ? <div className="empty-state small-empty">Không tìm thấy phạm vi phù hợp.</div> : null}</div></div> : null}
-          </div></div>
-          <label>Lý do cấp quyền<input className="input" value={form.grant_reason} onChange={(event) => setForm({ ...form, grant_reason: event.target.value })} placeholder="Ví dụ: Phụ trách COM1071 Summer 2026" /></label>
-          {form.scope_id ? <div className="permission-effect-preview"><span>Quyền sẽ có hiệu lực</span><b>{roleLabels[form.role_code]} · {scopeLabel[form.scope_type]}</b><small>{scopeOptions.find((item) => item.id === form.scope_id)?.path || form.scope_id}</small></div> : null}
-          <label className="check-row"><input type="checkbox" checked={form.sync_openedx} onChange={(event) => setForm({ ...form, sync_openedx: event.target.checked })} /> Ghi nhận yêu cầu đồng bộ Open edX</label>
-          <button className="btn full-width" type="button" onClick={submitAssignment} disabled={!form.user_id.trim() || !form.scope_id}>Gán quyền</button>
-        </>}
-      </aside>
-    </section>
+        </div>
+        <div className="permission-role-description"><b>{roleLabels[form.role_code]}</b><span>{selectedRole?.description || roleSubtitles[form.role_code]}</span></div>
+        {form.scope_type !== 'SYSTEM' ? <div className="rbac-multi-scope-picker">
+          <div className="rbac-scope-toolbar"><label className="rbac-scope-search">Tìm phạm vi<input className="input" value={scopeSearch} onChange={(event) => setScopeSearch(event.target.value)} placeholder="Gõ mã hoặc tên môn..." /></label><div className="button-row"><button className="btn small secondary" type="button" onClick={selectAllVisibleScopes} disabled={!scopeOptions.length}>Chọn kết quả đang hiển thị</button><button className="btn small secondary" type="button" onClick={() => setSelectedScopeIds([])} disabled={!selectedScopeIds.length}>Bỏ chọn</button></div></div>
+          <div className="rbac-scope-selection-summary"><b>{selectedScopeIds.length}</b><span>phạm vi đã chọn</span>{scopeOptionsLoading ? <small>Đang tải danh mục...</small> : null}</div>
+          <div className="rbac-scope-option-list">{scopeOptions.map((item) => <label className={`rbac-scope-option ${selectedScopeIds.includes(item.id) ? 'selected' : ''}`} key={item.id}><input type="checkbox" checked={selectedScopeIds.includes(item.id)} onChange={() => toggleScopeOption(item.id)} /><span><b>{item.label}</b><small>{item.path}</small></span></label>)}{!scopeOptionsLoading && !scopeOptions.length ? <div className="empty-state small-empty">Không tìm thấy phạm vi phù hợp.</div> : null}</div>
+        </div> : <div className="permission-effect-preview"><span>Quyền sẽ có hiệu lực</span><b>{roleLabels[form.role_code]} · Toàn hệ thống</b></div>}
+        {selectedScopeOptions.length ? <div className="permission-effect-preview"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}
+        <label>Lý do cấp quyền<input className="input" value={form.grant_reason} onChange={(event) => setForm({ ...form, grant_reason: event.target.value })} placeholder="Ví dụ: Phụ trách COM1071 và COM1072 Summer 2026" /></label>
+        <label className="check-row"><input type="checkbox" checked={form.sync_openedx} onChange={(event) => setForm({ ...form, sync_openedx: event.target.checked })} /> Ghi nhận yêu cầu đồng bộ Open edX</label>
+      </div>}
+    </AccessibleDialog>
+
 
     <SideDrawer open={Boolean(selectedUserId)} title={selectedUserId || 'Chi tiết người dùng'} description="Quyền trực tiếp đang được lưu; quyền kế thừa được backend áp dụng theo cây scope." onClose={() => setSelectedUserId(null)}>
       <div className="rbac-user-detail-list">{assignments.filter((item) => item.user_id === selectedUserId).map((item) => <article className="rbac-user-detail-item" key={item.id}><header><div><b>{roleLabels[item.role_code] || item.role_name || item.role_code}</b><small>{item.scope_label || `${item.scope_type}:${item.scope_id}`}</small></div><StatusBadge status={item.revoked_at ? 'revoked' : 'active'} label={item.revoked_at ? 'Đã thu hồi' : 'Đang hiệu lực'} /></header><p>{item.grant_reason || 'Không ghi lý do cấp quyền.'}</p><small>{item.granted_by ? `Cấp bởi ${item.granted_by}` : 'Không rõ người cấp'} · {formatDate(item.created_at)}</small>{!item.revoked_at ? <button className="btn small secondary danger-text" type="button" onClick={() => revokeAssignment(item.id)}>Thu hồi quyền</button> : null}</article>)}{!assignments.some((item) => item.user_id === selectedUserId) ? <div className="empty-state">Không có assignment.</div> : null}</div>

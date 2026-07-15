@@ -57,7 +57,7 @@ function DashboardEmptyState({ role }: { role?: string }) {
   return <div className="dashboard-empty-state visual-state"><VisualIcon label="Chưa có dữ liệu" icon="database" tone="slate" />
     <div><b>Chưa có dữ liệu trong phạm vi này.</b>
     <p>{role === 'QUESTION_REVIEWER' ? 'Bạn chưa được giao câu hỏi hoặc chapter nào để duyệt, hoặc chapter được giao chưa có dữ liệu.' : 'Hãy upload tài liệu hoặc tạo câu hỏi đầu tiên trong phạm vi được phân quyền.'}</p>
-    <Link className="btn secondary small" href="/bank/departments">Đi tới Ngân hàng câu hỏi</Link></div>
+    <Link className="btn secondary small" href="/bank/departments">Đi tới danh sách bộ môn</Link></div>
   </div>
 }
 
@@ -295,18 +295,15 @@ export function BankDashboardPage() {
   }
 
   return <PageRoot className="page-stack bank-multipage dashboard-analytics-page">
-    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi' }]} />
-
-    <PageHeader
-      eyebrow="Ngân hàng đề"
-      title="Tổng quan Ngân hàng câu hỏi"
-      secondaryActions={<DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />}
-    />
-    <div className="dashboard-scope-strip dashboard-scope-strip-compact">
-      <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
-      {data?.cache ? <span className="dashboard-scope-chip subtle">Dữ liệu: {data.cache.hit ? 'đã lưu tạm' : 'mới cập nhật'}</span> : null}
-      {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {formatVNDateTime(data.generated_at)}</span> : null}
-    </div>
+    <PageHeader eyebrow="Ngân hàng đề" title="Tổng quan" />
+    <section className="dashboard-control-bar" aria-label="Phạm vi thời gian và dữ liệu dashboard">
+      <DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />
+      <div className="dashboard-control-meta">
+        <span>Phạm vi <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
+        {data?.cache ? <span>Dữ liệu <b>{data.cache.hit ? 'Đã lưu tạm' : 'Mới cập nhật'}</b></span> : null}
+        {data?.generated_at ? <span>Cập nhật <b>{formatVNDateTime(data.generated_at)}</b></span> : null}
+      </div>
+    </section>
 
     {loading ? <>
       <section className="dashboard-kpi-grid"><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /></section>

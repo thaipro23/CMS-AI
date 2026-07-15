@@ -1,0 +1,332 @@
+/* v25.9.16.7.2.64.16.5.7.2.1 — final frontend design contract.
+   This file is imported last and fixes shell flow, spacing and route-specific
+   layout without hiding business content. */
+:root {
+  --acms-space-1: 4px;
+  --acms-space-2: 8px;
+  --acms-space-3: 12px;
+  --acms-space-4: 16px;
+  --acms-space-5: 20px;
+  --acms-space-6: 24px;
+  --acms-space-8: 32px;
+  --acms-control-height: 42px;
+  --acms-card-radius: 16px;
+  --acms-control-radius: 10px;
+  --acms-divider: #e2e8f0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+body { margin: 0; }
+
+.enterprise-app-shell {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.enterprise-sidebar {
+  position: relative;
+  inset: auto;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.enterprise-navigation {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.enterprise-workspace {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.enterprise-topbar {
+  position: relative;
+  z-index: 30;
+  flex: none;
+  border-bottom: 1px solid var(--acms-divider);
+}
+
+.enterprise-content {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--acms-space-6);
+}
+
+.enterprise-content.page-stack,
+.enterprise-content[class*='-page'] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--acms-space-6);
+}
+
+.enterprise-content > * { min-width: 0; }
+.enterprise-breadcrumbs { display: none !important; }
+.enterprise-page-description { display: none !important; }
+.enterprise-page-header-actions-only { margin: 0; }
+.enterprise-page-actions,
+.button-row,
+.workspace-section-actions,
+.dialog-footer-actions,
+.table-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--acms-space-2);
+}
+
+.card,
+.workspace-section,
+.visual-section-card {
+  min-width: 0;
+  border-radius: var(--acms-card-radius);
+}
+
+.workspace-section-head,
+.section-head,
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--acms-space-4);
+  padding: var(--acms-space-5);
+  border-bottom: 1px solid var(--acms-divider);
+}
+
+.workspace-section-head > :first-child,
+.visual-section-heading,
+.visual-section-heading > div { min-width: 0; }
+.workspace-section-head h2,
+.workspace-section-head p { margin: 0; }
+.workspace-section-head p { margin-top: var(--acms-space-1); line-height: 1.5; }
+.workspace-section-body { min-width: 0; padding: var(--acms-space-5); }
+.workspace-section-body > :first-child { margin-top: 0; }
+.workspace-section-body > :last-child { margin-bottom: 0; }
+
+.context-back-link {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 36px;
+  align-items: center;
+  gap: var(--acms-space-2);
+  padding: 7px 10px;
+  color: #334155;
+  border: 1px solid var(--acms-divider);
+  border-radius: var(--acms-control-radius);
+  background: #fff;
+  font-weight: 650;
+  text-decoration: none;
+}
+.context-back-link:hover { background: #f8fafc; border-color: #cbd5e1; }
+.context-back-link:focus-visible { outline: 3px solid rgba(37, 99, 235, .24); outline-offset: 2px; }
+.context-back-link-icon { transform: rotate(180deg); }
+
+.input,
+select.input,
+button.btn,
+a.btn { min-height: var(--acms-control-height); }
+label { min-width: 0; }
+label > .input,
+label > select,
+label > textarea { margin-top: var(--acms-space-2); }
+.form-grid { display: grid; gap: var(--acms-space-4); min-width: 0; }
+.form-grid.two-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* Table shell: full content remains available; only the table viewport scrolls. */
+.enterprise-table-shell,
+.enterprise-table-scroll,
+.enterprise-data-table-container { min-width: 0; max-width: 100%; }
+.enterprise-table-scroll,
+.enterprise-data-table-container { overflow-x: auto; overflow-y: visible; overscroll-behavior-inline: contain; }
+.enterprise-data-table { width: 100%; min-width: 100%; table-layout: auto; }
+.enterprise-data-table th,
+.enterprise-data-table td { white-space: normal; overflow-wrap: anywhere; word-break: normal; vertical-align: top; }
+.enterprise-data-table .enterprise-kind-number,
+.enterprise-data-table .enterprise-kind-index { white-space: nowrap; overflow-wrap: normal; }
+.enterprise-data-table .enterprise-kind-actions { white-space: normal; }
+.enterprise-data-table .enterprise-kind-actions .button-row { justify-content: flex-start; }
+.enterprise-table-controls.controls-only { justify-content: flex-end; }
+.enterprise-table-controls.controls-only > span:empty { display: none; }
+
+/* Semesters */
+.semesters-page .workspace-section-body { padding: 0; }
+.semesters-page .enterprise-table-controls { padding-inline: var(--acms-space-5); }
+.term-block-cell { display: grid; gap: var(--acms-space-1); min-width: 150px; }
+.term-block-cell b { font-size: 13px; }
+.term-block-cell small { color: #64748b; line-height: 1.45; }
+.semester-form { min-width: 0; overflow-x: hidden; }
+.semester-form .term-block-editor { min-width: 0; }
+.semester-form .week-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.semester-form input,
+.semester-form select { max-width: 100%; }
+
+/* Bank dashboard single control row. */
+.dashboard-control-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--acms-space-3) var(--acms-space-5);
+  padding: var(--acms-space-4) var(--acms-space-5);
+  border: 1px solid var(--acms-divider);
+  border-radius: var(--acms-card-radius);
+  background: #fff;
+}
+.dashboard-control-bar .dashboard-filter-row { display: flex; flex: 1 1 720px; min-width: 0; margin: 0; align-items: center; flex-wrap: wrap; gap: var(--acms-space-2); }
+.dashboard-control-meta {
+  display: flex;
+  flex: 1 1 360px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--acms-space-2) var(--acms-space-3);
+  color: #475569;
+  font-size: 12px;
+}
+.dashboard-control-meta > span + span { padding-left: var(--acms-space-3); border-left: 1px solid var(--acms-divider); }
+
+/* Chapter command bar replaces the redundant KPI strip. */
+.compact-command-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--acms-space-3) var(--acms-space-5);
+  padding: var(--acms-space-4) var(--acms-space-5);
+}
+.chapter-command-summary { display: flex; align-items: center; flex-wrap: wrap; gap: var(--acms-space-2) var(--acms-space-4); color: #475569; }
+.chapter-command-summary span { display: inline-flex; align-items: baseline; gap: var(--acms-space-1); }
+.chapter-primary-actions { flex: 1 1 auto; }
+.chapter-primary-actions .btn { flex: 0 0 auto; }
+
+/* Student management */
+.student-management-page .academic-filter-panel { padding: var(--acms-space-5); }
+.student-class-detail-page .workspace-section-body,
+.student-class-detail .workspace-section-body { min-width: 0; }
+.student-class-detail-page .enterprise-data-table td,
+.student-class-detail .enterprise-data-table td { line-height: 1.45; }
+
+/* RBAC is list-first; granting is a focused modal with multi-scope selection. */
+.rbac-user-workspace { display: block; }
+.rbac-grant-panel { display: none !important; }
+.rbac-grant-form { display: grid; gap: var(--acms-space-4); min-width: 0; }
+.rbac-multi-scope-picker {
+  display: grid;
+  gap: var(--acms-space-3);
+  min-width: 0;
+  padding: var(--acms-space-4);
+  border: 1px solid var(--acms-divider);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.rbac-scope-toolbar { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--acms-space-3); }
+.rbac-scope-search { flex: 1 1 300px; }
+.rbac-scope-selection-summary { display: flex; align-items: baseline; gap: var(--acms-space-2); color: #475569; }
+.rbac-scope-selection-summary b { color: #0f172a; font-size: 20px; }
+.rbac-scope-selection-summary small { margin-left: auto; }
+.rbac-scope-option-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--acms-space-2);
+  max-height: min(42vh, 420px);
+  overflow-y: auto;
+  padding-right: var(--acms-space-1);
+}
+.rbac-scope-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--acms-space-2);
+  min-width: 0;
+  padding: var(--acms-space-3);
+  border: 1px solid var(--acms-divider);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+.rbac-scope-option.selected { border-color: #93c5fd; background: #eff6ff; }
+.rbac-scope-option input { margin-top: 3px; flex: none; }
+.rbac-scope-option span { display: grid; gap: 2px; min-width: 0; }
+.rbac-scope-option b,
+.rbac-scope-option small { overflow-wrap: anywhere; }
+.rbac-scope-option small { color: #64748b; }
+
+/* Dialogs never create page-level horizontal scrolling. */
+.accessible-dialog-surface { max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); min-width: 0; }
+.accessible-dialog-body { min-width: 0; overflow-x: hidden; overflow-y: auto; }
+.accessible-dialog-footer { border-top: 1px solid var(--acms-divider); }
+
+@media (max-width: 1199px) {
+  .semester-form .term-block-grid,
+  .semester-form .form-grid.two-columns { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-control-meta { justify-content: flex-start; }
+}
+
+@media (max-width: 899px) {
+  .enterprise-content { padding: var(--acms-space-4); }
+  .enterprise-content.page-stack,
+  .enterprise-content[class*='-page'] { gap: var(--acms-space-4); }
+  .workspace-section-head { padding: var(--acms-space-4); }
+  .workspace-section-body { padding: var(--acms-space-4); }
+  .form-grid.two-columns,
+  .rbac-scope-option-list { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-control-bar,
+  .compact-command-bar { align-items: stretch; }
+  .dashboard-control-meta { justify-content: flex-start; }
+  .chapter-primary-actions { justify-content: flex-start; }
+}
+
+@media (max-width: 767px) {
+  .enterprise-sidebar {
+    position: fixed;
+    height: 100dvh;
+  }
+  .enterprise-content { padding: var(--acms-space-3); }
+  .workspace-section-head,
+  .rbac-scope-toolbar { align-items: stretch; flex-direction: column; }
+  .workspace-section-actions,
+  .workspace-section-actions .btn,
+  .dialog-footer-actions,
+  .dialog-footer-actions .btn { width: 100%; }
+  .dashboard-control-meta > span + span { padding-left: 0; border-left: 0; }
+  .semester-form .week-grid { grid-template-columns: minmax(0, 1fr); }
+  .accessible-dialog-surface { max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+}
+
+/* Semester editor prioritizes readable vertical flow over two compressed cards. */
+.semester-dialog-body .term-block-editor { grid-template-columns: minmax(0, 1fr); }
+.semester-dialog-body .term-block-card { overflow: visible; }
+.semester-dialog-body .settings-form-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.semester-dialog-body .learning-weeks-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 999px) {
+  .semester-dialog-body .settings-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .semester-dialog-body .learning-weeks-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 639px) {
+  .semester-dialog-body .settings-form-grid,
+  .semester-dialog-body .learning-weeks-grid { grid-template-columns: minmax(0, 1fr); }
+}

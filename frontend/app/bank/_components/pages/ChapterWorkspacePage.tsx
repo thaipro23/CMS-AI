@@ -1,6 +1,7 @@
 'use client'
 
-import { PageRoot } from '../../../../components/layout/PageHeader'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { ContextBackLink } from '../../../../components/navigation/ContextBackLink'
 import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
 
 import { formatVNDateTime } from '../../../../lib/time'
@@ -883,39 +884,31 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const materialPreviewText = materialPreviewChunks.map((chunk, index) => `Đoạn ${index + 1}
 ${chunk.content}`).join('\n\n')
 
-  return <PageRoot className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }]} />
+  return <PageRoot className="page-stack bank-multipage chapter-workspace-page">
+    <PageHeader eyebrow="Ngân hàng đề" title={chapterDisplayName(chapter)} />
+    <ContextBackLink href={offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments'} label="Quay lại danh sách bài" />
     {message ? <div className="alert info">{message}</div> : null}
     {activeOperation ? <ChapterOperationStatus operation={activeOperation} /> : null}
     {chapterPublished ? <div className="alert success"><b>Bài đã publish.</b> Các thao tác sửa tài liệu, tạo câu hỏi, duyệt/bỏ câu, kiểm tra thay đổi và chốt lại đã được khóa. Muốn thay đổi, hãy clone/tạo version mới.</div> : null}
     {!chapterPublished && diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
 
-    <section className="card chapter-command-bar">
-      <div>
-        <div className="eyebrow">Bài học</div>
-        <h2>{chapterDisplayName(chapter)}</h2>
-        <p className="helper">Quản lý tài liệu, tạo câu hỏi, duyệt câu và chốt bộ đề cho bài này.</p>
-        <div className="chapter-inline-stats" aria-label="Tóm tắt bài học">
-          <span className={materialOperationBusy ? 'is-busy' : ''}>Tài liệu <b>{materials.length}</b>{materialOperationBusy ? <em><BusyLabel text="Đang up" /></em> : null}</span>
-          <span>Tổng câu <b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Còn {remainingQuota}</small></span>
-          <span>Đã duyệt <b>{stats.approved}</b></span>
-          <span>Chờ duyệt <b>{stats.pending}</b></span>
-          <span>Bị loại <b>{stats.rejected}</b></span>
-          <span>Nhóm KT <b>{stats.families}</b></span>
-          <span>Bộ đề <b>{publishedRelease ? 'Đã đưa lên CMS' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b></span>
-        </div>
+    <section className="card chapter-command-bar compact-command-bar" aria-label="Thao tác bài học">
+      <div className="chapter-command-summary">
+        <span><b>{usedQuestionCount}/{chapterQuestionLimit}</b> câu</span>
+        <span><b>{stats.approved}</b> đã duyệt</span>
+        <span><b>{stats.families}</b> nhóm kiến thức</span>
       </div>
-      <div className="button-row no-margin">
+      <div className="button-row no-margin chapter-primary-actions">
         <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>
-        {!chapterPublished && canGenerateQuestions ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : 'Tạo câu hỏi'}</button> : null}
-        <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? 'Xem câu hỏi' : 'Duyệt câu hỏi'}</button>
+        {!chapterPublished && canGenerateQuestions ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : `Tạo câu hỏi (còn ${remainingQuota})`}</button> : null}
+        <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? `Xem câu hỏi (${usedQuestionCount})` : `Duyệt câu hỏi (${stats.pending} chờ)`}</button>
         {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={isActionBusy('diff_check') || longOperationBusy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => runAction('diff_check', async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
-        }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra thay đổi'}</button> : null}
+        }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : `Kiểm tra thay đổi${diffRequired ? ' (cần xử lý)' : ''}`}</button> : null}
         {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_audit')} onClick={() => runAction('release_audit', async () => { await refreshReleaseAudit(latestRelease.id) }, 'Đã kiểm tra trạng thái bộ đề.', undefined, 'Không kiểm tra được trạng thái bộ đề.')}>{isActionBusy('release_audit') ? <BusyLabel text="Đang kiểm tra" /> : 'Kiểm tra bộ đề'}</button> : null}
         {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_preview')} onClick={() => runAction('release_preview', async () => { setReleasePreview(await getBankReleasePreview(headers, latestRelease.id)) }, 'Đã tải snapshot Release.', undefined, 'Không tải được snapshot Release.')}>{isActionBusy('release_preview') ? <BusyLabel text="Đang tải" /> : 'Xem trước Release'}</button> : null}
-        {canPublishQuestions ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => setConfirmation('release_create')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : 'Chốt bộ đề'}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => setConfirmation('release_publish')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
+        {canPublishQuestions ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => setConfirmation('release_create')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : `Chốt bộ đề (${stats.approved} câu)`}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => setConfirmation('release_publish')}>{isActionBusy('release_publish') ? <BusyLabel text="Đang public" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
       </div>
       {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>

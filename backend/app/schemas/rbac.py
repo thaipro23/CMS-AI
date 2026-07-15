@@ -58,6 +58,53 @@ class RoleAssignmentCreate(BaseModel):
         return (value or '*').strip() or '*'
 
 
+class RoleAssignmentBatchCreate(BaseModel):
+    user_id: str = Field(min_length=1, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
+    role_code: str
+    scope_type: str
+    scope_ids: list[str] = Field(min_length=1, max_length=200)
+    grant_reason: str = ''
+    sync_openedx: bool = False
+
+    @field_validator('role_code')
+    @classmethod
+    def validate_role_code(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value not in VALID_ROLE_CODES or value == 'CAMPUS_MANAGER':
+            raise ValueError(f'role_code không hợp lệ để gán mới: {value}')
+        return value
+
+    @field_validator('scope_type')
+    @classmethod
+    def validate_scope_type(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value not in VALID_SCOPE_TYPES:
+            raise ValueError(f'scope_type không hợp lệ: {value}')
+        return value
+
+    @field_validator('scope_ids')
+    @classmethod
+    def normalize_scope_ids(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            value = (raw or '*').strip() or '*'
+            if value not in seen:
+                normalized.append(value)
+                seen.add(value)
+        if not normalized:
+            raise ValueError('Cần chọn ít nhất một phạm vi')
+        return normalized
+
+
+class RoleAssignmentBatchOut(BaseModel):
+    items: list['RoleAssignmentOut']
+    created_count: int
+    reused_count: int
+    total: int
+
+
 class RoleAssignmentRevoke(BaseModel):
     revoke_reason: str = ''
 

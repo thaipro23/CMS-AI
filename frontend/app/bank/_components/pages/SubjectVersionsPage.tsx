@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { ContextBackLink } from '../../../../components/navigation/ContextBackLink'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, Subject, SubjectOffering, SubjectVersionSummary } from '../../../../types'
 import { createSubjectOffering, deleteSubjectOffering, getDepartment, getSubject, getSubjectVersionSummaries, updateSubjectOffering } from '../../../../lib/api'
@@ -57,8 +58,8 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
   return <PageRoot className="page-stack bank-multipage">
-    <Breadcrumb items={[{ label: 'Ngân hàng câu hỏi', href: '/bank' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn' }]} />
     <PageHeader eyebrow="Ngân hàng đề" title="Phiên bản môn" />
+    <ContextBackLink href={department ? `/bank/departments/${department.id}/subjects` : '/bank/departments'} label="Quay lại danh sách môn" />
     {message ? <div className="alert info">{message}</div> : null}
     <section className="card">
       <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm phiên bản, mã môn hoặc học kỳ" action={canUpdateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined} />

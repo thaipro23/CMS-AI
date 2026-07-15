@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="25.9.16.7.2.64.16.5.7.1.1"
+VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.1}"
 pass=0
 fail=0
 check() {

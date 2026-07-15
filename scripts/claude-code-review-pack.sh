@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.runtime/claude-code-review-pack-$(date +%Y%m%d-%H%M%S)}"
-EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.1.1}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-25.9.16.7.2.64.16.5.7.2.1}"
 INCLUDE_BUILD_GATE="${INCLUDE_BUILD_GATE:-0}"
 STRICT_BUILD_GATE="${STRICT_BUILD_GATE:-0}"
 mkdir -p "$OUT_DIR"
@@ -56,6 +56,7 @@ VERSION_TARGETS=(
   "frontend/Dockerfile"
   "frontend/package-lock.json"
   "scripts/frontend-build-verify.sh"
+  "scripts/npm-public-registry-lockfile-report.sh"
   "scripts/uat-runtime-verify.sh"
   "README.md"
   "RUN_CURRENT.md"
@@ -119,7 +120,7 @@ else
 fi
 
 # 8) Shell syntax for release scripts.
-if bash -n scripts/analytics-uat-evidence-pack.sh && bash -n scripts/analytics-uat-acceptance.sh && bash -n scripts/claude-code-review-pack.sh && bash -n scripts/uat-build-gate.sh && bash -n scripts/frontend-build-verify.sh && bash -n scripts/uat-runtime-verify.sh && bash -n scripts/performance-readiness-report.sh && bash -n scripts/query-hotspot-report.sh && bash -n scripts/maintainability-contract-report.sh && bash -n scripts/security-readiness-report.sh && bash -n scripts/security-attack-simulation-report.sh && bash -n scripts/production-security-closure-report.sh && bash -n scripts/performance-worker-reliability-report.sh && bash -n scripts/frontend-runtime-contracts-report.sh && bash -n scripts/ci-e2e-container-hardening-report.sh && bash -n scripts/ci-backend-tests.sh && bash -n scripts/pilot-release-candidate-report.sh && bash -n scripts/pilot-operations-runbook.sh && bash -n scripts/production-pilot-final-gate.sh && bash -n scripts/load-test-hot-endpoints.sh && bash -n scripts/rollback-drill-verify.sh && bash -n scripts/openedx-publish-verify.sh && bash -n scripts/production-pilot-final-gate.sh; then
+if bash -n scripts/analytics-uat-evidence-pack.sh && bash -n scripts/analytics-uat-acceptance.sh && bash -n scripts/claude-code-review-pack.sh && bash -n scripts/uat-build-gate.sh && bash -n scripts/frontend-build-verify.sh && bash -n scripts/uat-runtime-verify.sh && bash -n scripts/performance-readiness-report.sh && bash -n scripts/query-hotspot-report.sh && bash -n scripts/maintainability-contract-report.sh && bash -n scripts/security-readiness-report.sh && bash -n scripts/security-attack-simulation-report.sh && bash -n scripts/production-security-closure-report.sh && bash -n scripts/performance-worker-reliability-report.sh && bash -n scripts/frontend-runtime-contracts-report.sh && bash -n scripts/ci-e2e-container-hardening-report.sh && bash -n scripts/npm-public-registry-lockfile-report.sh && bash -n scripts/ci-backend-tests.sh && bash -n scripts/pilot-release-candidate-report.sh && bash -n scripts/pilot-operations-runbook.sh && bash -n scripts/production-pilot-final-gate.sh && bash -n scripts/load-test-hot-endpoints.sh && bash -n scripts/rollback-drill-verify.sh && bash -n scripts/openedx-publish-verify.sh && bash -n scripts/production-pilot-final-gate.sh; then
   record_status PASS SHELL_SYNTAX "release helper scripts pass bash -n"
 else
   record_status FAIL SHELL_SYNTAX "one or more release helper scripts fail bash -n"
@@ -196,7 +197,7 @@ Run before UAT sign-off:
 
 cd /opt/ai-server
 OUT_DIR=/tmp/ai-frontend-build-$(date +%Y%m%d-%H%M%S) \
-EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.1.1 \
+EXPECTED_VERSION=25.9.16.7.2.64.16.5.7.2.1 \
 RUN_NPM_CI=1 \
 RUN_FRONTEND_BUILD=1 \
 ./scripts/frontend-build-verify.sh
@@ -216,6 +217,14 @@ if ./scripts/performance-worker-reliability-report.sh "$OUT_DIR/performance-work
   record_status PASS PERFORMANCE_WORKER_RELIABILITY "Performance/API/Celery reliability contract passed" "performance-worker-reliability/performance-worker-reliability.json"
 else
   record_status FAIL PERFORMANCE_WORKER_RELIABILITY "Performance/API/Celery reliability contract failed" "performance-worker-reliability.log"
+fi
+
+# Public npm registry lockfile contract. Fail before npm install/build if a
+# lockfile points to a private or environment-specific registry.
+if ./scripts/npm-public-registry-lockfile-report.sh "$OUT_DIR/npm-public-registry" > "$OUT_DIR/npm-public-registry.log" 2>&1; then
+  record_status PASS NPM_PUBLIC_REGISTRY "npm lockfiles use registry.npmjs.org only"
+else
+  record_status FAIL NPM_PUBLIC_REGISTRY "npm lockfile contains non-public registry URLs; see npm-public-registry.log"
 fi
 
 # Frontend runtime, modal and route-state contracts.
@@ -297,7 +306,7 @@ PY
 cat > "$OUT_DIR/CLAUDE_REVIEW_BRIEF.md" <<'MD'
 # Claude Code Review Brief
 
-Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.7.1.1 — UAT HTTP Environment Compatibility Hotfix.
+Review target: AI Server / Open edX CMS v25.9.16.7.2.64.16.5.7.2.1 — Public npm Lockfile & Project Handoff Hotfix.
 
 Static review services to inspect: SecurityReadinessService, SecurityAttackSimulationService, PerformanceReadinessService, QueryHotspotService, ReleaseCandidateService, PilotOperationsService, QuestionBankReleasePublishWorkflowService, QuestionBankQuizCreationWorkflowService, QuestionBankGenerationReviewWorkflowService, AcademicSyncEnrollmentWorkflowService.
 

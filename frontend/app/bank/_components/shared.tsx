@@ -164,7 +164,7 @@ export function Breadcrumb({ items }: { items: Array<{ label: string; href?: str
 export function Toolbar({ title, helper, action }: { title: string; helper?: string; action?: React.ReactNode }) {
   return <div className="page-header compact-page-header">
     <div>
-      <div className="eyebrow">Ngân hàng câu hỏi</div>
+      <div className="eyebrow">Ngân hàng đề</div>
       <h1>{title}</h1>
       {helper ? <p>{helper}</p> : null}
     </div>

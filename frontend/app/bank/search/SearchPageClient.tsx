@@ -9,6 +9,7 @@ import { getBankDashboardDrilldown, searchBankDashboard } from '../../../lib/api
 import type { BankSearchResult } from '../../../types'
 import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
 import { VisualIcon } from '../../../components/ui/VisualIcon'
+import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 
 function labelStatus(value?: string | null) {
   const labels: Record<string, string> = {
@@ -64,56 +65,20 @@ function Chip({ children }: { children: React.ReactNode }) {
 }
 
 function SearchResultTable({ items }: { items: BankSearchResult[] }) {
-  return <div className="responsive-table-wrap drilldown-table-wrap">
-    <table className="ops-data-table drilldown-question-table">
-      <thead>
-        <tr>
-          <th>STT</th>
-          <th>Câu hỏi</th>
-          <th>Trạng thái</th>
-          <th>Độ khó</th>
-          <th>Người xử lý</th>
-          <th>Lý do / ghi chú</th>
-          <th>Phạm vi</th>
-          <th>Thời điểm</th>
-          <th>Thao tác</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((item, index) => {
-          const actionName = item.action_by_name || item.reviewer_name || item.reviewed_by || item.action_by || '—'
-          const isRejected = item.status === 'rejected'
-          const note = isRejected ? (item.reject_reason || item.review_note) : item.review_note
-          return <tr key={`${item.type}-${item.id || item.question_id || index}`} className={`row-${item.status || 'draft'}`}>
-            <td className="stt-cell">{index + 1}</td>
-            <td className="question-cell">
-              <b>{truncate(item.title, 220)}</b>
-              <small>ID: {item.question_id || item.id || '—'}</small>
-            </td>
-            <td><span className={`status ${statusClass(item.status)}`}>{labelStatus(item.status)}</span></td>
-            <td><span className="pill-soft">{labelDifficulty(item.difficulty)}</span></td>
-            <td>
-              <b>{actionName}</b>
-              <small>{isRejected ? 'Người từ chối' : item.status === 'approved' ? 'Người duyệt' : 'Người xử lý gần nhất'}</small>
-            </td>
-            <td className="note-cell">
-              {note ? <span>{truncate(note, 180)}</span> : <span className="muted-text">Không có ghi chú</span>}
-            </td>
-            <td>
-              <b>{item.subject_label || item.subtitle?.split(' · ')[2] || '—'}</b>
-              <small>{item.chapter_title || (item.chapter_id ? `Chapter: ${item.chapter_id}` : '—')}</small>
-            </td>
-            <td>
-              <b>{formatDate(item.reviewed_at)}</b>
-              <small>Tạo: {formatDate(item.created_at)}</small>
-            </td>
-            <td><Link className="btn secondary small" href={item.href || '/bank'}>Mở</Link></td>
-          </tr>
-        })}
-      </tbody>
-    </table>
-  </div>
+  const columns: EnterpriseTableColumn<BankSearchResult>[] = [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_item, index) => index + 1 },
+    { key: 'question', header: 'Câu hỏi', kind: 'identity', minWidth: 300, hideable: false, render: (item) => <div className="question-cell"><b>{truncate(item.title, 220)}</b><small>ID: {item.question_id || item.id || '—'}</small></div> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 126, hideable: true, render: (item) => <span className={`status ${statusClass(item.status)}`}>{labelStatus(item.status)}</span> },
+    { key: 'difficulty', header: 'Độ khó', kind: 'status', width: 112, hideable: true, render: (item) => <span className="pill-soft">{labelDifficulty(item.difficulty)}</span> },
+    { key: 'actor', header: 'Người xử lý', kind: 'identity', minWidth: 180, hideable: true, render: (item) => { const actionName = item.action_by_name || item.reviewer_name || item.reviewed_by || item.action_by || '—'; return <div><b>{actionName}</b><small>{item.status === 'rejected' ? 'Người từ chối' : item.status === 'approved' ? 'Người duyệt' : 'Người xử lý gần nhất'}</small></div> } },
+    { key: 'note', header: 'Lý do / ghi chú', kind: 'text', minWidth: 220, hideable: true, defaultVisible: false, render: (item) => { const note = item.status === 'rejected' ? (item.reject_reason || item.review_note) : item.review_note; return note ? truncate(note, 180) : <span className="muted-text">Không có ghi chú</span> } },
+    { key: 'scope', header: 'Phạm vi', kind: 'text', minWidth: 180, hideable: true, render: (item) => <div><b>{item.subject_label || item.subtitle?.split(' · ')[2] || '—'}</b><small>{item.chapter_title || (item.chapter_id ? `Chapter: ${item.chapter_id}` : '—')}</small></div> },
+    { key: 'date', header: 'Thời điểm', kind: 'date', minWidth: 160, hideable: true, defaultVisible: false, render: (item) => <div><b>{formatDate(item.reviewed_at)}</b><small>Tạo: {formatDate(item.created_at)}</small></div> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 84, hideable: false, render: (item) => <Link className="btn secondary small" href={item.href || '/bank'}>Mở</Link> },
+  ]
+  return <EnterpriseDataTable tableId="bank-search-results" caption="Kết quả tìm kiếm câu hỏi" rows={items} columns={columns} rowKey={(item) => `${item.type}-${item.id || item.question_id || item.href}`} density="compact" label="kết quả" showSummary={false} />
 }
+
 
 function SearchResultCards({ items }: { items: BankSearchResult[] }) {
   return <div className="dashboard-search-list">

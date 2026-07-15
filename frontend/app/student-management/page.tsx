@@ -22,6 +22,7 @@ import {
 } from "../../types";
 import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
 import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
+import { WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -365,12 +366,8 @@ function StudentManagementSubjectsContent() {
 
   return (
     <PageRoot className="page-stack student-management-page academic-flow-page ux-enterprise-page">
-      <PageHeader
-        eyebrow="Vận hành đào tạo"
-        title="Quản lý sinh viên"
-        primaryAction={<button className="btn" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}</button>}
-      />
-      <section className="card academic-unified-card">
+      <PageHeader eyebrow="Vận hành đào tạo" title="Quản lý sinh viên" />
+      <section className="card academic-filter-panel" aria-label="Bộ lọc danh sách môn">
         <div className="academic-filter-bar">
           <label>
             Hệ
@@ -449,15 +446,23 @@ function StudentManagementSubjectsContent() {
             />
           </label>
         </div>
+      </section>
 
-        <TrainingKpiStrip compact items={[
+      <TrainingKpiStrip compact items={[
           { key: 'subjects', label: 'Môn', value: countLabel(summary.subject_count), hint: counterText(total, page, pageSize) },
           { key: 'classes', label: 'Lớp', value: countLabel(summary.class_count), hint: 'Theo bộ lọc hiện tại' },
           { key: 'students', label: 'Sinh viên', value: countLabel(summary.student_count), hint: 'Không đếm theo trang' },
           { key: 'course', label: 'Course CMS', value: `${countLabel(summary.course_mapped_count)}/${countLabel(summary.subject_count)}`, hint: `${countLabel(summary.course_missing_count)} môn chưa ghép`, tone: summary.course_missing_count > 0 ? 'warning' : 'success' },
           { key: 'alerts', label: 'Cần kiểm tra', value: countLabel(summary.alert_subject_count), hint: 'Môn có cảnh báo học tập', tone: summary.alert_subject_count > 0 ? 'warning' : 'success' },
-        ]} />
+      ]} />
 
+      <WorkspaceSection
+        title="Danh sách môn"
+        description={`${countLabel(summary.course_missing_count)} môn chưa ghép Course CMS trong phạm vi hiện tại.`}
+        actions={<button className="btn" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}</button>}
+        icon="book"
+        tone={summary.course_missing_count > 0 ? "amber" : "green"}
+      >
         {bulkJobs.length ? (
           <InlineNotice
             notice={{
@@ -504,9 +509,9 @@ function StudentManagementSubjectsContent() {
           onPageChange={(value) => update({ page: value }, { resetPage: false })}
           onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })}
           label="môn"
+          showSummary={false}
         />
-
-      </section>
+      </WorkspaceSection>
     </PageRoot>
   );
 }

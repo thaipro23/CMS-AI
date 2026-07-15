@@ -20,6 +20,8 @@ from app.schemas.rbac import (
     RBACBootstrapOut,
     RBACPermissionOut,
     RBACRoleOut,
+    RoleAssignmentBatchCreate,
+    RoleAssignmentBatchOut,
     RoleAssignmentCreate,
     RoleAssignmentImportOut,
     RoleAssignmentListOut,
@@ -275,6 +277,44 @@ def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends
     except Exception as exc:
         log_audit(db, action='rbac.assignment.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác phân quyền.', user=user, target_type='rbac_assignment')
         raise public_http_exception(status_code=400, code='RBAC_OPERATION_FAILED', message='Không thể hoàn tất thao tác phân quyền.', logger_name=__name__) from exc
+
+
+@router.post('/assignments/batch', response_model=RoleAssignmentBatchOut)
+def create_assignments_batch(payload: RoleAssignmentBatchCreate, user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
+    service = BusinessRBACService(db)
+    try:
+        service.ensure_default_catalog()
+        items, created_count, reused_count = service.create_assignments_batch(actor=user, **payload.model_dump())
+        log_audit(
+            db,
+            action='rbac.assignment.batch_create',
+            status='success',
+            message='Gán nhiều phạm vi nghiệp vụ thành công',
+            user=user,
+            target_type='rbac_assignment_batch',
+            target_id=payload.user_id,
+            metadata={
+                'assignee': payload.user_id,
+                'role_code': payload.role_code,
+                'scope_type': payload.scope_type,
+                'scope_ids': payload.scope_ids,
+                'created_count': created_count,
+                'reused_count': reused_count,
+            },
+        )
+        return {
+            'items': [service.serialize_assignment(item) for item in items],
+            'created_count': created_count,
+            'reused_count': reused_count,
+            'total': len(items),
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        log_audit(db, action='rbac.assignment.batch_create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác phân quyền hàng loạt.', user=user, target_type='rbac_assignment_batch', target_id=payload.user_id)
+        raise public_http_exception(status_code=400, code='RBAC_BATCH_OPERATION_FAILED', message='Không thể hoàn tất thao tác phân quyền hàng loạt.', logger_name=__name__) from exc
 
 
 @router.delete('/assignments/{assignment_id}', response_model=RoleAssignmentOut)

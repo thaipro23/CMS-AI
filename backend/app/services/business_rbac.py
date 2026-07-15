@@ -509,6 +509,75 @@ class BusinessRBACService:
         self.db.refresh(item)
         return item
 
+    def create_assignments_batch(
+        self,
+        *,
+        actor: Any,
+        user_id: str,
+        email: str | None,
+        role_code: str,
+        scope_type: str,
+        scope_ids: list[str],
+        grant_reason: str = '',
+        sync_openedx: bool = False,
+    ) -> tuple[list[UserRoleAssignment], int, int]:
+        role_code = role_code.strip().upper()
+        scope_type = scope_type.strip().upper()
+        normalized_ids = list(dict.fromkeys(((value or '*').strip() or '*') for value in scope_ids))
+        if not normalized_ids:
+            raise HTTPException(status_code=400, detail='Cần chọn ít nhất một phạm vi')
+        if len(normalized_ids) > 200:
+            raise HTTPException(status_code=400, detail='Mỗi lần chỉ được gán tối đa 200 phạm vi')
+
+        # Validate the whole request before adding anything so the operation is atomic.
+        for scope_id in normalized_ids:
+            self._validate_assignment_scope(role_code, scope_type, scope_id)
+            if not self.can_grant(actor, role_code, scope_type, scope_id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f'Bạn không được gán role này trong scope {scope_id}')
+
+        existing_rows = self.active_assignments_query().filter(
+            UserRoleAssignment.user_id == user_id,
+            UserRoleAssignment.role_code == role_code,
+            UserRoleAssignment.scope_type == scope_type,
+            UserRoleAssignment.scope_id.in_(normalized_ids),
+        ).all()
+        existing_by_scope = {item.scope_id: item for item in existing_rows}
+        items: list[UserRoleAssignment] = []
+        created_count = 0
+        reused_count = 0
+        for scope_id in normalized_ids:
+            item = existing_by_scope.get(scope_id)
+            if item is not None:
+                if email and not item.email:
+                    item.email = email
+                if grant_reason:
+                    item.grant_reason = grant_reason
+                item.metadata_json = {**(item.metadata_json or {}), 'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True}
+                reused_count += 1
+            else:
+                item = UserRoleAssignment(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    email=email,
+                    role_code=role_code,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                    granted_by=getattr(actor, 'user_id', None),
+                    grant_reason=grant_reason or '',
+                    metadata_json={'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True},
+                )
+                created_count += 1
+            self.db.add(item)
+            items.append(item)
+        try:
+            self.db.commit()
+            for item in items:
+                self.db.refresh(item)
+        except Exception:
+            self.db.rollback()
+            raise
+        return items, created_count, reused_count
+
     def revoke_assignment(self, assignment_id: str, actor: Any, revoke_reason: str = '') -> UserRoleAssignment:
         item = self.db.get(UserRoleAssignment, assignment_id)
         if not item or item.revoked_at is not None:
