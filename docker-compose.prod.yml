@@ -100,7 +100,104 @@ services:
     environment:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     restart: unless-stopped
-    command: celery -A app.worker.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-4}
+    command: >
+      celery -A app.worker.celery_app worker
+      --loglevel=INFO
+      --queues=interactive,sync
+      --concurrency=${CELERY_CONCURRENCY:-2}
+      --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}
+      --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime_data:/app/.runtime
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping -d celery@$$(hostname) --timeout=5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks:
+      - ai_internal
+      - openedx_shared
+    extra_hosts:
+      - "cms-test.poly.edu.vn:host-gateway"
+      - "scms-test.poly.edu.vn:host-gateway"
+      - "app.cms-test.poly.edu.vn:host-gateway"
+      - "ai.cms-test.poly.edu.vn:host-gateway"
+      - "api-ai.cms-test.poly.edu.vn:host-gateway"
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+      - "api_v2.poly.edu.vn:10.2.1.35"
+      - "apitest.poly.edu.vn:10.2.5.8"
+
+  worker-heavy:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.prod
+    container_name: ai-worker-heavy
+    env_file: .env.production
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
+    restart: unless-stopped
+    command: >
+      celery -A app.worker.celery_app worker
+      --loglevel=INFO
+      --queues=generation,exports
+      --concurrency=${CELERY_HEAVY_CONCURRENCY:-1}
+      --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}
+      --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime_data:/app/.runtime
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping -d celery@$$(hostname) --timeout=5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks:
+      - ai_internal
+      - openedx_shared
+    extra_hosts:
+      - "cms-test.poly.edu.vn:host-gateway"
+      - "scms-test.poly.edu.vn:host-gateway"
+      - "app.cms-test.poly.edu.vn:host-gateway"
+      - "ai.cms-test.poly.edu.vn:host-gateway"
+      - "api-ai.cms-test.poly.edu.vn:host-gateway"
+      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
+      - "api_v2.poly.edu.vn:10.2.1.35"
+      - "apitest.poly.edu.vn:10.2.5.8"
+
+  worker-analytics:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.prod
+    container_name: ai-worker-analytics
+    env_file: .env.production
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
+    restart: unless-stopped
+    command: >
+      celery -A app.worker.celery_app worker
+      --loglevel=INFO
+      --queues=analytics
+      --concurrency=${CELERY_ANALYTICS_CONCURRENCY:-1}
+      --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}
+      --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
     depends_on:
       backend:
         condition: service_healthy
@@ -120,15 +217,6 @@ services:
     networks:
       - ai_internal
       - openedx_shared
-    extra_hosts:
-      - "cms-test.poly.edu.vn:host-gateway"
-      - "scms-test.poly.edu.vn:host-gateway"
-      - "app.cms-test.poly.edu.vn:host-gateway"
-      - "ai.cms-test.poly.edu.vn:host-gateway"
-      - "api-ai.cms-test.poly.edu.vn:host-gateway"
-      - "meilisearch.cms-test.poly.edu.vn:host-gateway"
-      - "api_v2.poly.edu.vn:10.2.1.35"
-      - "apitest.poly.edu.vn:10.2.5.8"
 
   beat:
     build:
@@ -178,7 +266,9 @@ services:
         NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN: ${NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN:-true}
         NEXT_PUBLIC_APP_ENV: ${NEXT_PUBLIC_APP_ENV:-production}
         NEXT_PUBLIC_ENABLE_DIAGNOSTICS_UI: ${NEXT_PUBLIC_ENABLE_DIAGNOSTICS_UI:-false}
-        NEXT_PUBLIC_APP_VERSION: ${APP_VERSION:-25.9.16.7.2.64.16}
+        NEXT_PUBLIC_APP_VERSION: ${APP_VERSION:-25.9.16.7.2.64.16.5.6}
+        NEXT_PUBLIC_API_GET_TIMEOUT_MS: ${NEXT_PUBLIC_API_GET_TIMEOUT_MS:-45000}
+        NEXT_PUBLIC_API_WRITE_TIMEOUT_MS: ${NEXT_PUBLIC_API_WRITE_TIMEOUT_MS:-120000}
     container_name: ai-frontend
     env_file: .env.production
     restart: unless-stopped
