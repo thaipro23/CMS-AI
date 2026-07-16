@@ -1729,3 +1729,744 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell {
     min-height: 40px !important;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Batch 6 — Chapter workspace, question review and generation dialogs
+   Align the chapter route with the approved Bank hierarchy visual contract.
+   -------------------------------------------------------------------------- */
+
+.enterprise-unified-shell .enterprise-content.bank-hierarchy-detail-page {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 22px 18px 28px !important;
+  gap: 16px !important;
+  background:
+    radial-gradient(circle at 52% 1%, rgba(69, 125, 234, .06), transparent 30%),
+    var(--bank-hierarchy-page, #f5f7fb) !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-detail-page .bank-hierarchy-page-intro {
+  margin-bottom: 6px !important;
+}
+
+.enterprise-unified-shell .chapter-workflow-panel {
+  overflow: visible !important;
+  padding: 12px 14px !important;
+}
+
+.enterprise-unified-shell .chapter-workflow-panel .chapter-primary-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+
+.enterprise-unified-shell .chapter-workflow-panel .chapter-action-button,
+.enterprise-unified-shell .chapter-workflow-panel > .chapter-primary-actions > .btn {
+  min-height: 38px !important;
+  height: 38px !important;
+  padding: 0 13px !important;
+  font-size: 12px !important;
+}
+
+.enterprise-unified-shell .chapter-workflow-panel > .alert.full-row {
+  margin: 10px 0 0 !important;
+}
+
+.enterprise-unified-shell .chapter-review-section {
+  min-width: 0;
+  overflow: hidden !important;
+  outline: none;
+  scroll-margin-top: 14px;
+}
+
+.enterprise-unified-shell .chapter-review-section:focus-visible {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .14), 0 8px 24px rgba(25, 44, 78, .07) !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .question-list-head {
+  margin: 0 !important;
+  padding: 14px 16px 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 14px !important;
+  border-bottom: 1px solid #e8edf4;
+  background: #fff;
+}
+
+.enterprise-unified-shell .chapter-review-section .question-list-head h3 {
+  margin: 0 0 3px !important;
+  color: #0f172a;
+  font-size: 15px !important;
+  line-height: 1.25 !important;
+  font-weight: 650 !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .question-list-head .helper {
+  margin: 0 !important;
+  color: #64748b;
+  font-size: 11.5px !important;
+  line-height: 1.4 !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .question-list-head .btn {
+  min-height: 36px !important;
+  height: 36px !important;
+  padding: 0 12px !important;
+  font-size: 11.5px !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .question-filter-bar {
+  margin: 0 !important;
+  padding: 11px 16px !important;
+  display: grid !important;
+  grid-template-columns: minmax(240px, 1.35fr) repeat(3, minmax(140px, .72fr)) auto auto !important;
+  align-items: end !important;
+  gap: 9px !important;
+  border: 0 !important;
+  border-bottom: 1px solid #e8edf4 !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .question-filter-bar label {
+  min-width: 0;
+  gap: 4px !important;
+  color: #526078 !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .question-filter-bar .input,
+.enterprise-unified-shell .chapter-review-section .question-filter-bar > .btn,
+.enterprise-unified-shell .chapter-review-section .filter-result-count {
+  min-height: 36px !important;
+  height: 36px !important;
+  border-radius: 8px !important;
+  font-size: 11.5px !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .filter-result-count {
+  padding: 0 11px !important;
+  font-weight: 600 !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .bank-batch-action-bar {
+  margin: 0 !important;
+  border-width: 0 0 1px !important;
+  border-radius: 0 !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .enterprise-table-shell {
+  gap: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.enterprise-unified-shell .chapter-review-section .enterprise-table-scroll {
+  border-radius: 0 !important;
+}
+
+/* Review popup — desktop layout follows the approved 2 x 2 answer design. */
+.question-review-dialog {
+  width: min(1000px, calc(100vw - 52px)) !important;
+  max-height: min(90dvh, 860px) !important;
+  border-radius: 14px !important;
+}
+
+.question-review-dialog > .accessible-dialog-header {
+  padding: 15px 18px 13px !important;
+}
+
+.question-review-dialog .accessible-dialog-heading h2 {
+  color: #0f172a;
+  font-size: 18px !important;
+  line-height: 1.25 !important;
+  font-weight: 650 !important;
+}
+
+.question-review-dialog .accessible-dialog-description {
+  margin-top: 3px !important;
+  color: #64748b !important;
+  font-size: 11.5px !important;
+  line-height: 1.4 !important;
+}
+
+.question-review-dialog > .accessible-dialog-body,
+.question-review-dialog-body {
+  display: block !important;
+  padding: 0 !important;
+  overflow-x: hidden !important;
+}
+
+.question-review-dialog .question-review-dialog-meta {
+  min-height: 58px;
+  margin: 0 !important;
+  padding: 16px 18px 13px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  border-bottom: 1px solid #dbe3ee !important;
+  background: linear-gradient(180deg, #fbfcfe, #f7f9fc) !important;
+}
+
+.question-review-dialog .question-review-dialog-meta .status,
+.question-review-dialog .question-review-dialog-meta .soft-tag {
+  min-height: 24px !important;
+  padding: 4px 8px !important;
+  border-radius: 999px !important;
+  font-size: 10px !important;
+  line-height: 1 !important;
+}
+
+.question-review-dialog .question-review-dialog-content {
+  min-height: 0 !important;
+  overflow: visible !important;
+  padding: 22px 18px 24px !important;
+  display: grid !important;
+  align-content: start !important;
+  gap: 17px !important;
+}
+
+.question-review-dialog .question-review-block {
+  display: grid;
+  gap: 8px;
+}
+
+.question-review-dialog .question-review-label {
+  color: #0967e8 !important;
+  font-size: 10.5px !important;
+  line-height: 1.2 !important;
+  font-weight: 650 !important;
+  letter-spacing: .04em !important;
+  text-transform: uppercase;
+}
+
+.question-review-dialog .question-prompt {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #172033 !important;
+  font-size: 14px !important;
+  font-weight: 520 !important;
+  line-height: 1.6 !important;
+}
+
+.question-review-dialog .review-answer-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+
+.question-review-dialog .review-answer-grid .answer-option {
+  min-width: 0;
+  min-height: 74px !important;
+  padding: 12px 14px !important;
+  display: grid !important;
+  grid-template-columns: 28px minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: 10px !important;
+  border: 1px solid #d7e0ec !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  color: #334155 !important;
+  box-shadow: none !important;
+}
+
+.question-review-dialog .review-answer-grid .answer-option.correct {
+  border-color: #52c98a !important;
+  background: linear-gradient(135deg, #effcf5, #f8fffb) !important;
+  color: #08683c !important;
+}
+
+.question-review-dialog .answer-letter {
+  width: 27px !important;
+  height: 27px !important;
+  min-width: 27px !important;
+  display: grid !important;
+  place-items: center !important;
+  border-radius: 999px !important;
+  background: #eef2f7 !important;
+  color: #172033 !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
+}
+
+.question-review-dialog .answer-option.correct .answer-letter {
+  background: #20ad63 !important;
+  color: #fff !important;
+}
+
+.question-review-dialog .review-answer-grid .answer-option > span:last-child {
+  min-width: 0;
+  padding-top: 2px;
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+  overflow-wrap: anywhere;
+}
+
+.question-review-dialog .question-review-block > p {
+  margin: 0 !important;
+  color: #334155;
+  font-size: 12px !important;
+  line-height: 1.6 !important;
+}
+
+.question-review-dialog .question-review-metadata {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 9px !important;
+}
+
+.question-review-dialog .question-review-metadata > div {
+  min-width: 0;
+  padding: 10px 11px !important;
+  display: grid !important;
+  gap: 4px !important;
+  border: 1px solid #dce4ef !important;
+  border-radius: 8px !important;
+  background: #fafbfd !important;
+}
+
+.question-review-dialog .question-review-metadata span {
+  color: #728097 !important;
+  font-size: 9px !important;
+  line-height: 1.2 !important;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.question-review-dialog .question-review-metadata b {
+  min-width: 0;
+  color: #253247 !important;
+  font-size: 10.5px !important;
+  line-height: 1.4 !important;
+  font-weight: 520 !important;
+  overflow-wrap: anywhere;
+}
+
+.question-review-dialog > .accessible-dialog-footer {
+  padding: 12px 18px 10px !important;
+  background: #fff !important;
+}
+
+.question-review-dialog .question-review-dialog-footer {
+  width: 100%;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 9px 14px !important;
+}
+
+.question-review-dialog .question-review-navigation,
+.question-review-dialog .question-review-primary-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.question-review-dialog .question-review-primary-actions {
+  justify-content: flex-end !important;
+}
+
+.question-review-dialog .question-review-navigation .btn,
+.question-review-dialog .question-review-primary-actions .btn {
+  min-height: 34px !important;
+  height: 34px !important;
+  min-width: 82px;
+  padding: 0 12px !important;
+  font-size: 11px !important;
+}
+
+.question-review-dialog .question-review-shortcuts {
+  grid-column: 1 / -1 !important;
+  margin: 0 !important;
+  color: #64748b !important;
+  font-size: 10px !important;
+  line-height: 1.35 !important;
+  text-align: center !important;
+}
+
+/* Generation popup — one clear planning panel and one clear form panel. */
+.chapter-generate-dialog {
+  width: min(960px, calc(100vw - 52px)) !important;
+  max-height: min(88dvh, 720px) !important;
+  border-radius: 14px !important;
+}
+
+.chapter-generate-dialog > .accessible-dialog-header {
+  padding: 20px 22px 17px !important;
+}
+
+.chapter-generate-dialog .accessible-dialog-heading h2 {
+  color: #0f172a;
+  font-size: 21px !important;
+  line-height: 1.25 !important;
+  font-weight: 650 !important;
+}
+
+.chapter-generate-dialog > .accessible-dialog-body,
+.chapter-generate-dialog-body {
+  padding: 0 !important;
+  overflow-x: hidden !important;
+}
+
+.chapter-generate-layout {
+  min-height: 430px;
+  display: grid;
+  grid-template-columns: minmax(300px, 37%) minmax(0, 1fr);
+  background: #fff;
+}
+
+.chapter-generate-plan,
+.chapter-generate-form {
+  min-width: 0;
+  padding: 24px 22px;
+}
+
+.chapter-generate-plan {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  border-right: 1px solid #dde5ef;
+}
+
+.chapter-generate-plan-heading {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.chapter-generate-plan-icon,
+.chapter-generate-summary-icon {
+  display: grid;
+  place-items: center;
+  color: #1769e8;
+  background: #eaf2ff;
+}
+
+.chapter-generate-plan-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+}
+
+.chapter-generate-plan-heading h3 {
+  margin: 1px 0 5px;
+  color: #172033;
+  font-size: 15px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.chapter-generate-plan-heading p {
+  margin: 0;
+  color: #59687e;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.chapter-generate-quota-card {
+  min-width: 0;
+  padding: 12px 13px;
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  align-items: center;
+  gap: 13px;
+  border: 1px solid #dce4ef;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fbfdff, #f7faff);
+}
+
+.chapter-generate-quota-ring {
+  width: 62px;
+  height: 62px;
+  padding: 8px;
+  border-radius: 999px;
+}
+
+.chapter-generate-quota-ring > span {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #e5eaf1;
+}
+
+.chapter-generate-quota-card > div:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.chapter-generate-quota-card > div:last-child > b {
+  color: #172033;
+  font-size: 20px;
+  line-height: 1.1;
+  font-weight: 650;
+}
+
+.chapter-generate-quota-card > div:last-child > span,
+.chapter-generate-quota-card > div:last-child > small {
+  color: #65748a;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.chapter-generate-summary-card {
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid #dce4ef;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.chapter-generate-summary-row {
+  min-width: 0;
+  padding: 11px 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.chapter-generate-summary-row + .chapter-generate-summary-row {
+  border-top: 1px solid #e8edf4;
+}
+
+.chapter-generate-summary-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.chapter-generate-summary-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.chapter-generate-summary-row b {
+  color: #202c40;
+  font-size: 11.5px;
+  line-height: 1.35;
+  font-weight: 620;
+}
+
+.chapter-generate-summary-row span:not(.chapter-generate-summary-icon) {
+  color: #68778d;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.chapter-generate-form {
+  display: grid;
+  align-content: start;
+  gap: 22px;
+  padding: 29px 30px;
+}
+
+.chapter-generate-form label {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.chapter-generate-form label > span {
+  color: #59687e;
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.chapter-generate-count-field .input {
+  min-height: 46px !important;
+  height: 46px !important;
+  padding-inline: 14px !important;
+  border-radius: 9px !important;
+  font-size: 13px !important;
+}
+
+.chapter-generate-difficulty-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.chapter-percent-input {
+  min-width: 0;
+  height: 46px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  overflow: hidden;
+  border: 1px solid #ccd7e5;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.chapter-percent-input:focus-within {
+  border-color: #6ba2f8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .1);
+}
+
+.chapter-percent-input .input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px !important;
+  height: 44px !important;
+  padding: 0 12px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  font-size: 13px !important;
+}
+
+.chapter-percent-input > b {
+  display: grid;
+  place-items: center;
+  border-left: 1px solid #d8e1ec;
+  background: #f7f9fc;
+  color: #526078;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chapter-generate-validation {
+  min-height: 42px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  background: #eff5ff;
+  color: #2361b8;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.chapter-generate-validation.is-invalid {
+  background: #fff7ed;
+  color: #a65305;
+}
+
+.chapter-generate-dialog > .accessible-dialog-footer {
+  padding: 14px 22px !important;
+  background: #fff !important;
+}
+
+.chapter-generate-dialog-footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.chapter-generate-dialog-footer .btn {
+  min-height: 40px !important;
+  height: 40px !important;
+  padding: 0 18px !important;
+  font-size: 12px !important;
+}
+
+@media (max-width: 1050px) {
+  .enterprise-unified-shell .chapter-review-section .question-filter-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .enterprise-unified-shell .chapter-review-section .question-filter-bar > .btn,
+  .enterprise-unified-shell .chapter-review-section .filter-result-count {
+    justify-self: stretch;
+  }
+}
+
+@media (max-width: 760px) {
+  .enterprise-unified-shell .enterprise-content.bank-hierarchy-detail-page {
+    padding: 18px 12px 24px !important;
+  }
+
+  .enterprise-unified-shell .chapter-review-section .question-list-head {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
+  .enterprise-unified-shell .chapter-review-section .question-list-head .button-row {
+    width: 100%;
+  }
+
+  .enterprise-unified-shell .chapter-review-section .question-list-head .button-row .btn {
+    flex: 1 1 0;
+  }
+
+  .enterprise-unified-shell .chapter-review-section .question-filter-bar {
+    grid-template-columns: 1fr !important;
+    padding: 12px !important;
+  }
+
+  .question-review-dialog,
+  .chapter-generate-dialog {
+    width: 100% !important;
+    max-height: calc(100dvh - 24px) !important;
+  }
+
+  .question-review-dialog .review-answer-grid,
+  .question-review-dialog .question-review-metadata {
+    grid-template-columns: 1fr !important;
+  }
+
+  .question-review-dialog .question-review-dialog-footer {
+    grid-template-columns: 1fr !important;
+  }
+
+  .question-review-dialog .question-review-navigation,
+  .question-review-dialog .question-review-primary-actions {
+    width: 100%;
+  }
+
+  .question-review-dialog .question-review-navigation .btn,
+  .question-review-dialog .question-review-primary-actions .btn {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .chapter-generate-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .chapter-generate-plan {
+    border-right: 0;
+    border-bottom: 1px solid #dde5ef;
+  }
+
+  .chapter-generate-difficulty-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .chapter-generate-dialog-footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .enterprise-unified-shell .chapter-workflow-panel .chapter-primary-actions > .btn {
+    flex: 1 1 calc(50% - 8px);
+  }
+
+  .question-review-dialog .question-review-dialog-content,
+  .chapter-generate-plan,
+  .chapter-generate-form {
+    padding-inline: 14px !important;
+  }
+
+  .chapter-generate-dialog-footer {
+    grid-template-columns: 1fr;
+  }
+}
