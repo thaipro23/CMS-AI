@@ -6,7 +6,7 @@ export type AppIconName =
   | 'users' | 'settings' | 'menu' | 'panel-left-close' | 'panel-left-open'
   | 'sun' | 'moon' | 'chevron-down' | 'chevron-right' | 'user' | 'logout' | 'close' | 'check'
   | 'book' | 'layers' | 'link' | 'alert' | 'clock' | 'calendar' | 'filter' | 'info'
-  | 'database' | 'server' | 'shield' | 'upload' | 'download' | 'file' | 'money' | 'sparkles' | 'eye' | 'edit'
+  | 'database' | 'server' | 'shield' | 'upload' | 'download' | 'file' | 'money' | 'sparkles' | 'eye' | 'edit' | 'trash'
 
 const paths: Record<AppIconName, ReactNode> = {
   dashboard: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
@@ -54,6 +54,7 @@ const paths: Record<AppIconName, ReactNode> = {
   sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2z"/><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/><path d="m5 14 .8 1.7L8 16.5l-2.2.8L5 19l-.8-1.7L2 16.5l2.2-.8z"/></>,
   eye: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></>,
   edit: <><path d="M4 20h4l11-11-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></>,
+  trash: <><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></>,
 }
 
 export function AppIcon({ name, size = 18, ...props }: SVGProps<SVGSVGElement> & { name: AppIconName; size?: number }) {

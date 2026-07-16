@@ -3,8 +3,10 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { StatusBadge } from '../../../../components/ui/StatusBadge'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
+import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
 import type { Department, Subject, SubjectSummary } from '../../../../types'
 import { createSubject, deleteSubject, getDepartment, getSubjectSummaries, updateSubject } from '../../../../lib/api'
 import {
@@ -64,7 +66,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
   const columns = useMemo<EnterpriseTableColumn<SubjectSummary>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
     { key: 'subject', header: 'Môn học', kind: 'identity', minWidth: 300, sticky: 'left', hideable: false, render: ({ subject }) => <Link className="bank-table-link" href={`/bank/subjects/${subject.id}/versions`}><b>{subject.code}</b><small>{subject.name}</small></Link> },
-    { key: 'status', header: 'Trạng thái', kind: 'status', width: 132, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); return <span className={`bank-row-status status-${stats.status || 'empty'}`}>{reviewStatusText(stats.status)}</span> } },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 132, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); return <StatusBadge status={stats.status || 'empty'} label={reviewStatusText(stats.status)} /> } },
     { key: 'versions', header: 'Phiên bản', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.subject_version_count || 0 },
     { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_done_version_count || 0 },
     { key: 'pending', header: 'Chờ duyệt', kind: 'number', width: 86, priority: 'important', hideable: true, render: ({ stats }) => stats?.review_not_done_version_count || 0 },
@@ -74,11 +76,33 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject }) => <EntityActions canManage={canUpdateSubject} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
-  return <PageRoot className="page-stack bank-multipage">
-    <PageHeader eyebrow="Ngân hàng đề" title="Môn học" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Môn học' }]} />
+  return <PageRoot className="page-stack bank-multipage bank-hierarchy-list-page bank-subjects-page">
+    <PageHeader
+      eyebrow="Ngân hàng đề"
+      title="Môn học"
+      icon="bank"
+      tone="blue"
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Môn học' }]}
+    />
+    <BankHierarchyPageIntro
+      title="Môn học"
+      description={department?.name
+        ? `Quản lý danh sách môn học, phiên bản môn và tiến độ duyệt thuộc bộ môn ${department.name}.`
+        : 'Quản lý danh sách môn học, phiên bản môn và tiến độ duyệt trong phạm vi được phân quyền.'}
+      icon="book"
+    />
     {message ? <div className="alert info">{message}</div> : null}
-    <section className="card">
-      <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm mã môn hoặc tên môn" action={canCreateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined} />
+    <section className="bank-hierarchy-panel">
+      <BankTableToolbar
+        search={tableState.q}
+        setSearch={(q) => updateTableState({ q })}
+        statusFilter={statusFilter}
+        setStatusFilter={(status) => updateTableState({ status })}
+        resultCount={filtered.length}
+        totalCount={summaries.length}
+        placeholder="Tìm mã môn hoặc tên môn"
+        action={canCreateSubject ? <button className="btn bank-hierarchy-create-button" type="button" onClick={() => setCreateOpen(true)}>+ Thêm môn</button> : undefined}
+      />
       <EnterpriseDataTable
         tableId={`bank-subjects-${departmentId}`}
         caption="Danh sách môn học"

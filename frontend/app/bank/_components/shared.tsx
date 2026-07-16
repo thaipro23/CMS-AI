@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { Breadcrumbs } from '../../../components/navigation/Breadcrumbs'
+import { AppIcon } from '../../../components/icons/AppIcon'
 import type { ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -348,8 +349,8 @@ export function EntityActions({
   }
 
   return <div className="entity-actions-inline" aria-label="Thao tác dòng">
-    <button type="button" className="btn small secondary" onClick={onEdit}>Sửa</button>
-    <button type="button" className="btn small danger-soft" onClick={onDelete}>Xóa</button>
+    <button type="button" className="btn small secondary" onClick={onEdit}><AppIcon name="edit" size={17} /> Sửa</button>
+    <button type="button" className="btn small danger-soft" onClick={onDelete}><AppIcon name="trash" size={17} /> Xóa</button>
   </div>
 }
 

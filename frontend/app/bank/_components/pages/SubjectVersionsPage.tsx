@@ -4,8 +4,10 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { StatusBadge } from '../../../../components/ui/StatusBadge'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
+import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
 import type { Department, Subject, SubjectOffering, SubjectVersionSummary } from '../../../../types'
 import { createSubjectOffering, deleteSubjectOffering, getDepartment, getSubject, getSubjectVersionSummaries, updateSubjectOffering } from '../../../../lib/api'
 import { BankTableStatusFilter, BankTableToolbar, Breadcrumb, ConfirmDialog, EntityActions, Modal, TERMS, bankStatusMatches, emptyReviewStats, matchesSearch, reviewStatusText, useAsyncMessage, useBankData } from '../shared'
@@ -47,7 +49,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
     { key: 'version', header: 'Phiên bản môn', kind: 'identity', minWidth: 300, sticky: 'left', hideable: false, render: ({ subject_version }) => <Link className="bank-table-link" href={`/bank/subject-versions/${subject_version.id}/chapters`}><b>{subject_version.code}</b><small>{subject_version.name || subject_version.term || 'Phiên bản môn'}</small></Link> },
     { key: 'term', header: 'Học kỳ', kind: 'status', width: 96, priority: 'important', hideable: true, render: ({ subject_version }) => subject_version.term || '—' },
-    { key: 'status', header: 'Trạng thái', kind: 'status', width: 136, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); const published = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published'); return <span className={`bank-row-status status-${published ? 'published' : (stats.status || 'empty')}`}>{published ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span> } },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 136, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); const published = Boolean(stats.is_published || (stats.published_release_count || 0) > 0 || stats.status === 'published'); return <StatusBadge status={published ? 'published' : (stats.status || 'empty')} label={published ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)} /> } },
     { key: 'chapters', header: 'Bài', kind: 'number', width: 68, priority: 'important', hideable: true, render: ({ stats }) => stats?.chapter_count || 0 },
     { key: 'questions', header: 'Tổng câu', kind: 'number', width: 92, priority: 'important', hideable: true, render: ({ stats }) => { const capacity = stats?.question_capacity || ((stats?.chapter_count || 0) * (stats?.chapter_question_limit || 100)); return `${stats?.total_questions || 0}/${capacity}` } },
     { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.approved_count || 0 },
@@ -56,11 +58,33 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject_version, stats }) => { const published = Boolean(stats?.is_published || (stats?.published_release_count || 0) > 0 || stats?.status === 'published'); return <EntityActions canManage={canUpdateSubject && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(subject_version); setEditCode(subject_version.code || ''); setEditName(subject_version.name || '') }} onDelete={() => setDeleteTarget(subject_version)} /> } },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
-  return <PageRoot className="page-stack bank-multipage">
-    <PageHeader eyebrow="Ngân hàng đề" title="Phiên bản môn" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Môn học', href: department ? `/bank/departments/${department.id}/subjects` : '/bank/departments' }, { label: 'Phiên bản môn' }]} />
+  return <PageRoot className="page-stack bank-multipage bank-hierarchy-list-page bank-subject-versions-page">
+    <PageHeader
+      eyebrow="Ngân hàng đề"
+      title="Phiên bản môn"
+      icon="bank"
+      tone="blue"
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn' }]}
+    />
+    <BankHierarchyPageIntro
+      title="Phiên bản môn"
+      description={subject
+        ? `Quản lý phiên bản theo học kỳ, bài học và tiến độ duyệt của môn ${subject.code} — ${subject.name}.`
+        : 'Quản lý phiên bản môn theo học kỳ, bài học và tiến độ duyệt trong phạm vi được phân quyền.'}
+      icon="layers"
+    />
     {message ? <div className="alert info">{message}</div> : null}
-    <section className="card">
-      <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm phiên bản, mã môn hoặc học kỳ" action={canUpdateSubject ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined} />
+    <section className="bank-hierarchy-panel">
+      <BankTableToolbar
+        search={tableState.q}
+        setSearch={(q) => updateTableState({ q })}
+        statusFilter={statusFilter}
+        setStatusFilter={(status) => updateTableState({ status })}
+        resultCount={filtered.length}
+        totalCount={summaries.length}
+        placeholder="Tìm phiên bản, mã môn hoặc học kỳ"
+        action={canUpdateSubject ? <button className="btn bank-hierarchy-create-button" type="button" onClick={() => setCreateOpen(true)}>+ Tạo phiên bản môn</button> : undefined}
+      />
       <EnterpriseDataTable tableId={`bank-versions-${subjectId}`} caption="Danh sách phiên bản môn" rows={pageRows} columns={columns} rowKey={({ subject_version }) => subject_version.id} density={tableState.density} onDensityChange={(density) => updateTableState({ density }, { resetPage: false })} page={safePage} pageSize={tableState.pageSize} total={filtered.length} totalPages={totalPages} onPageChange={(page) => updateTableState({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => updateTableState({ pageSize, page: 1 }, { resetPage: false })} label="phiên bản môn" emptyTitle={tableState.q || statusFilter !== 'all' ? 'Không có phiên bản phù hợp' : 'Chưa có phiên bản môn'} emptyDescription="Tạo phiên bản môn cuối cho học kỳ cần biên soạn." />
     </section>
 

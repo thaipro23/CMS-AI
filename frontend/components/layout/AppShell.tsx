@@ -169,6 +169,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const diagnosticsRouteBlocked = pathname.startsWith('/ops/readiness') && !SHOW_DIAGNOSTICS_UI
   const routeAllowed = !diagnosticsRouteBlocked && (!routePermission || (authReady && can(routePermission)))
   const fallbackHref = visibleItems[0]?.href || '/bank'
+  const isBankHierarchyRoute = pathname === '/bank/departments' || pathname.startsWith('/bank/departments/') || pathname.startsWith('/bank/subjects/') || pathname.startsWith('/bank/subject-versions/')
 
   useEffect(() => {
     const media = window.matchMedia(SHELL_MOBILE_QUERY)
@@ -328,19 +329,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const topbarBreadcrumbs = useMemo(() => {
     const items = pageChrome?.breadcrumbs || []
     if (!items.length) return []
+    if (isBankHierarchyRoute) return items
     const last = items[items.length - 1]
     if (last.label.trim().localeCompare(pageChrome?.title.trim() || '', 'vi', { sensitivity: 'base' }) === 0) {
       return items.slice(0, -1)
     }
     return items
-  }, [pageChrome])
+  }, [isBankHierarchyRoute, pageChrome])
 
   const guardedChildren = routeAllowed ? children : <section className="card empty-state permission-hidden-state">
     <h2>{authReady ? 'Bạn không có quyền truy cập chức năng này' : 'Đang kiểm tra quyền truy cập'}</h2>
     <p>{authReady ? 'Hệ thống đang chuyển về màn hình phù hợp với phạm vi được phân công.' : 'Vui lòng chờ trong khi hệ thống xác định quyền từ phiên CMS.'}</p>
   </section>
 
-  return <PageShellProvider value={pageShellRegistration}><div className="enterprise-app-shell">
+  return <PageShellProvider value={pageShellRegistration}><div className={`enterprise-app-shell${isBankHierarchyRoute ? ' bank-hierarchy-shell' : ''}`}>
     <a className="skip-link" href="#main-content">Bỏ qua điều hướng</a>
     {drawerOpen && mobile && <button className="enterprise-sidebar-overlay" aria-label="Đóng menu" type="button" onClick={() => setDrawerOpen(false)} />}
 
@@ -382,6 +384,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </section>
         })}
       </nav>
+      {isBankHierarchyRoute && !mobile ? <button
+        className="enterprise-sidebar-collapse-button"
+        type="button"
+        aria-label={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+        title={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+        onClick={toggleSidebar}
+      ><AppIcon name={collapsed ? 'chevron-right' : 'panel-left-close'} size={19} /></button> : null}
 
     </aside>
 

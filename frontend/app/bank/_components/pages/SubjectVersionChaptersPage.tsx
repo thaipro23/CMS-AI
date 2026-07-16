@@ -3,8 +3,10 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { StatusBadge } from '../../../../components/ui/StatusBadge'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
+import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
 import type { ChapterSummary, Department, Subject, SubjectChapter, SubjectOffering } from '../../../../types'
 import { createSubjectChapter, deleteSubjectChapter, getChapterSummaries, getDepartment, getSubject, getSubjectOffering, updateSubjectChapter } from '../../../../lib/api'
 import { BankTableStatusFilter, BankTableToolbar, Breadcrumb, ConfirmDialog, EntityActions, Modal, bankStatusMatches, buildChapterTitle, chapterDisplayName, emptyReviewStats, matchesSearch, normalizeLessonInput, reviewStatusText, useAsyncMessage, useBankData } from '../shared'
@@ -43,7 +45,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
   const columns = useMemo<EnterpriseTableColumn<ChapterSummary>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * tableState.pageSize + index + 1 },
     { key: 'chapter', header: 'Bài/Chapter', kind: 'identity', minWidth: 300, sticky: 'left', hideable: false, render: ({ chapter }) => <Link className="bank-table-link" href={`/bank/chapters/${chapter.id}`}><b>{chapterDisplayName(chapter)}</b><small>{chapter.title || chapterDisplayName(chapter)}</small></Link> },
-    { key: 'status', header: 'Trạng thái', kind: 'status', width: 136, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); const published = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0); return <span className={`bank-row-status status-${published ? 'published' : (stats.status || 'empty')}`}>{published ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)}</span> } },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 136, priority: 'important', hideable: true, render: ({ stats: rawStats }) => { const stats = rawStats || emptyReviewStats(); const published = Boolean(stats.is_published || stats.release_status === 'published' || (stats.published_release_count || 0) > 0); return <StatusBadge status={published ? 'published' : (stats.status || 'empty')} label={published ? 'Đã đưa lên CMS' : reviewStatusText(stats.status)} /> } },
     { key: 'materials', header: 'Tài liệu', kind: 'number', width: 76, priority: 'important', hideable: true, render: ({ stats }) => stats?.material_count || 0 },
     { key: 'questions', header: 'Tổng câu', kind: 'number', width: 92, priority: 'important', hideable: true, render: ({ stats }) => `${stats?.total_questions || 0}/${stats?.question_limit || 100}` },
     { key: 'approved', header: 'Đã duyệt', kind: 'number', width: 82, priority: 'important', hideable: true, render: ({ stats }) => stats?.approved_count || 0 },
@@ -52,11 +54,33 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ chapter, stats }) => { const published = Boolean(stats?.is_published || stats?.release_status === 'published' || (stats?.published_release_count || 0) > 0); return <EntityActions canManage={canUpdateOffering && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(chapter); setEditLesson(normalizeLessonInput(chapterDisplayName(chapter))) }} onDelete={() => setDeleteTarget(chapter)} /> } },
   ], [canUpdateOffering, safePage, tableState.pageSize])
 
-  return <PageRoot className="page-stack bank-multipage">
-    <PageHeader eyebrow="Ngân hàng đề" title="Bài học" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học' }]} />
+  return <PageRoot className="page-stack bank-multipage bank-hierarchy-list-page bank-chapters-page">
+    <PageHeader
+      eyebrow="Ngân hàng đề"
+      title="Bài học"
+      icon="bank"
+      tone="blue"
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bài học' }]}
+    />
+    <BankHierarchyPageIntro
+      title="Bài học"
+      description={subject && offering
+        ? `Quản lý bài học, tài liệu, câu hỏi và trạng thái bộ đề của ${subject.code} — ${offering.code}.`
+        : 'Quản lý bài học, tài liệu, câu hỏi và trạng thái bộ đề của phiên bản môn.'}
+      icon="file"
+    />
     {message ? <div className="alert info">{message}</div> : null}
-    <section className="card">
-      <BankTableToolbar search={tableState.q} setSearch={(q) => updateTableState({ q })} statusFilter={statusFilter} setStatusFilter={(status) => updateTableState({ status })} resultCount={filtered.length} totalCount={summaries.length} placeholder="Tìm bài, Final test hoặc Assignment" action={canUpdateOffering ? <button className="btn" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined} />
+    <section className="bank-hierarchy-panel">
+      <BankTableToolbar
+        search={tableState.q}
+        setSearch={(q) => updateTableState({ q })}
+        statusFilter={statusFilter}
+        setStatusFilter={(status) => updateTableState({ status })}
+        resultCount={filtered.length}
+        totalCount={summaries.length}
+        placeholder="Tìm bài, Final test hoặc Assignment"
+        action={canUpdateOffering ? <button className="btn bank-hierarchy-create-button" type="button" onClick={() => setCreateOpen(true)}>+ Thêm bài</button> : undefined}
+      />
       <EnterpriseDataTable tableId={`bank-chapters-${versionId}`} caption="Danh sách bài/Chapter" rows={pageRows} columns={columns} rowKey={({ chapter }) => chapter.id} density={tableState.density} onDensityChange={(density) => updateTableState({ density }, { resetPage: false })} page={safePage} pageSize={tableState.pageSize} total={filtered.length} totalPages={totalPages} onPageChange={(page) => updateTableState({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => updateTableState({ pageSize, page: 1 }, { resetPage: false })} label="bài" emptyTitle={tableState.q || statusFilter !== 'all' ? 'Không có bài phù hợp' : 'Chưa có bài/Chapter'} emptyDescription="Thêm bài đầu tiên cho phiên bản môn này." />
     </section>
 

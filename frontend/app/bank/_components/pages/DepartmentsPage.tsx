@@ -4,10 +4,10 @@ import Link from 'next/link'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
-import { SectionHeader } from '../../../../components/layout/SectionHeader'
 import { InlineNotice, type InlineNoticeData } from '../../../../components/ui/InlineNotice'
 import { LoadingButton } from '../../../../components/ui/LoadingButton'
 import { StatusBadge } from '../../../../components/ui/StatusBadge'
+import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, DepartmentSummary } from '../../../../types'
 import { createDepartment, deleteDepartment, getDepartmentSummaries, updateDepartment } from '../../../../lib/api'
@@ -215,7 +215,7 @@ export function DepartmentsPage() {
     },
     {
       key: 'subjects',
-      header: 'Môn học',
+      header: 'Môn',
       kind: 'number',
       width: 84,
       priority: 'important',
@@ -224,7 +224,7 @@ export function DepartmentsPage() {
     },
     {
       key: 'approved',
-      header: 'Đã hoàn tất',
+      header: 'Đã duyệt',
       kind: 'number',
       width: 102,
       priority: 'important',
@@ -233,7 +233,7 @@ export function DepartmentsPage() {
     },
     {
       key: 'pending',
-      header: 'Cần xử lý',
+      header: 'Chờ duyệt',
       kind: 'number',
       width: 92,
       priority: 'important',
@@ -282,20 +282,25 @@ export function DepartmentsPage() {
     body: message,
   } : null
 
-  return <PageRoot className="page-stack bank-multipage bank-departments-page">
-    <PageHeader eyebrow="Ngân hàng đề" title="Bộ môn" icon="bank" tone="blue" />
+  return <PageRoot className="page-stack bank-multipage bank-departments-page bank-hierarchy-list-page">
+    <PageHeader
+      eyebrow="Ngân hàng đề"
+      title="Bộ môn"
+      icon="bank"
+      tone="blue"
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]}
+    />
+
+    <BankHierarchyPageIntro
+      title="Bộ môn"
+      description="Quản lý danh sách bộ môn, môn học và tiến độ duyệt trong phạm vi được phân quyền."
+      icon="campus"
+    />
 
     <InlineNotice notice={operationNotice} />
     {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel}</div> : null}
 
-    <section className="bank-list-section" aria-label="Danh sách bộ môn">
-      <SectionHeader
-        title="Danh sách bộ môn"
-        description="Chọn một bộ môn để quản lý môn học, phiên bản môn và tiến độ duyệt trong phạm vi được phân quyền."
-        icon="bank"
-        actions={canCreateDepartment ? <button className="btn" type="button" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : null}
-      />
-
+    <section className="bank-hierarchy-panel" aria-label="Danh sách bộ môn">
       <BankTableToolbar
         search={search}
         setSearch={(value) => updateTableState({ q: value })}
@@ -303,8 +308,8 @@ export function DepartmentsPage() {
         setStatusFilter={(value) => updateTableState({ status: value })}
         resultCount={visible.length}
         totalCount={summaries.length}
-        placeholder="Tìm theo mã hoặc tên bộ môn"
-        action={<button className="btn small secondary" type="button" disabled={loading} onClick={() => load().catch(() => null)}>{loading ? 'Đang tải...' : 'Làm mới'}</button>}
+        placeholder="Tìm bộ môn..."
+        action={canCreateDepartment ? <button className="btn bank-hierarchy-create-button" type="button" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined}
       />
 
       <EnterpriseDataTable
