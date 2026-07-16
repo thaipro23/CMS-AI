@@ -391,7 +391,12 @@ async def upload_file_to_node(
     except ValueError as exc:
         raise public_http_exception(status_code=status.HTTP_400_BAD_REQUEST, code='COURSE_OPERATION_FAILED', message='Không thể hoàn tất thao tác khóa học.', logger_name=__name__) from exc
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'Không đọc được file {filename}: {exc}')
+        raise public_http_exception(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code='COURSE_FILE_EXTRACT_FAILED',
+            message=f'Không đọc được file {filename}.',
+            logger_name=__name__,
+        ) from exc
 
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'File {filename} không tách được text. Nếu là ảnh scan, cần OCR/transcript riêng trước khi đưa vào AI.')

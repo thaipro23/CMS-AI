@@ -1,0 +1,6 @@
+frontend/app/layout.tsx
+frontend/styles/global-project-responsive-contract.css
+frontend/components/ui/AccessibleDialog.tsx
+frontend/app/bank/_components/pages/ChapterWorkspacePage.tsx
+docs/GLOBAL_PROJECT_RESPONSIVE_DIALOG_CONTRACT_BATCH_8.md
+docs/CHANGED_FILES_GLOBAL_PROJECT_RESPONSIVE_BATCH_8.txt

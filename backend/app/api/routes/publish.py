@@ -188,7 +188,12 @@ async def preview_family_bank_plan(course_id: str, payload: FamilyBankPlanPrevie
         return result
     except Exception as exc:
         log_audit(db, action='openedx.family_bank_plan.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=f'{type(exc).__name__}: {exc}', user=user, course_id=course_id, target_type='course', target_id=course_id)
-        raise HTTPException(status_code=400, detail=f'{type(exc).__name__}: {exc}') from exc
+        raise public_http_exception(
+            status_code=400,
+            code='PUBLISH_PLAN_PREVIEW_FAILED',
+            message='Không thể tính kế hoạch bộ câu hỏi để xuất bản.',
+            logger_name=__name__,
+        ) from exc
 
 
 @router.post('/courses/{course_id}/family-bank-plan/publish')

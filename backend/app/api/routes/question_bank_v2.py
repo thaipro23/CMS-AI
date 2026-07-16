@@ -248,7 +248,12 @@ def _preflight_bank_material_upload(*, raw: bytes, filename: str, content_type: 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f'Không thể đọc tài liệu ngay lúc upload: {exc}') from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f'Không thể đọc tài liệu ngay lúc upload: {exc}') from exc
+        raise public_http_exception(
+            status_code=400,
+            code='BANK_MATERIAL_PREFLIGHT_FAILED',
+            message='Không thể đọc tài liệu ngay lúc upload.',
+            logger_name=__name__,
+        ) from exc
 
     total_chars = sum(len(item.content or '') for item in items)
     if not items or total_chars < 30:
@@ -1493,8 +1498,11 @@ def _load_owned_question_import_preview(*, bank_version_id: str, preview_token: 
         raise HTTPException(status_code=410, detail='Preview import đã hết hạn sau 2 giờ. Hãy upload lại file.')
     try:
         preview = json.loads(preview_path.read_text(encoding='utf-8'))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail='Preview import không hợp lệ. Hãy upload lại file.') from exc
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail={
+            'code': 'BANK_IMPORT_PREVIEW_INVALID',
+            'message': 'Preview import không hợp lệ. Hãy upload lại file.',
+        }) from exc
     if str(preview.get('bank_version_id')) != bank_version_id or str(preview.get('requested_by')) != str(user.user_id):
         raise HTTPException(status_code=403, detail='Preview import không thuộc người dùng hiện tại.')
     return preview_path, preview
@@ -1711,7 +1719,12 @@ def preview_bank_version_diff(bank_version_id: str, payload: BankVersionDiffPrev
         return result
     except Exception as exc:
         log_audit(db, action='question_bank.version.diff.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể xem trước so sánh phiên bản.', user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail={'code': 'BANK_VERSION_DIFF_PREVIEW_FAILED', 'message': 'Không thể xem trước thay đổi giữa các phiên bản bộ đề.'}) from exc
+        raise public_http_exception(
+            status_code=400,
+            code='BANK_VERSION_DIFF_PREVIEW_FAILED',
+            message='Không thể xem trước thay đổi giữa các phiên bản bộ đề.',
+            logger_name=__name__,
+        ) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/diffs', response_model=BankVersionDiffPreviewOut)
@@ -1734,7 +1747,12 @@ def create_bank_version_diff(bank_version_id: str, payload: BankVersionDiffCreat
         return result
     except Exception as exc:
         log_audit(db, action='question_bank.version.diff.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể lưu bản so sánh phiên bản.', user=user, target_type='bank_version', target_id=bank_version_id)
-        raise HTTPException(status_code=400, detail={'code': 'BANK_VERSION_DIFF_CREATE_FAILED', 'message': 'Không thể lưu bản so sánh phiên bản bộ đề.'}) from exc
+        raise public_http_exception(
+            status_code=400,
+            code='BANK_VERSION_DIFF_CREATE_FAILED',
+            message='Không thể lưu bản so sánh phiên bản bộ đề.',
+            logger_name=__name__,
+        ) from exc
 
 
 @router.post('/bank-versions/{bank_version_id}/carry-over', response_model=BankCarryOverOut)

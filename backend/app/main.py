@@ -9,7 +9,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.router import api_router
 from app.core.config import cors_origin_list, settings, validate_security_settings
-from app.core.errors import http_exception_handler, validation_exception_handler
+from app.core.errors import http_exception_handler, unhandled_exception_handler, validation_exception_handler
 from app.core.origin_guard import enforce_mutating_origin_guard
 from app.core.security_headers import apply_security_headers
 from app.db.init_db import init_db
@@ -21,6 +21,7 @@ validate_security_settings()
 app = FastAPI(title=settings.app_name, version=settings.app_version, debug=settings.debug)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, unhandled_exception_handler)
 _base_cors_headers = ['Authorization', 'Content-Type', 'X-Requested-With', 'X-Metrics-Token', 'Idempotency-Key', 'X-Request-ID']
 if (settings.app_env or '').lower() not in {'prod', 'production'} and settings.allow_demo_role_header:
     _base_cors_headers.extend(['X-User-Id', 'X-User-Role', 'X-User-Email', 'X-Course-Ids'])

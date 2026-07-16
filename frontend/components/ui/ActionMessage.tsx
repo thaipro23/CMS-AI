@@ -20,7 +20,7 @@ function compactError(raw: string, fallback: string) {
     return "Bạn không có quyền thực hiện thao tác này.";
   if (/404|not found|không tìm thấy/i.test(text))
     return "Không tìm thấy dữ liệu cần xử lý.";
-  if (/422|validation|invalid/i.test(text))
+  if (/422|validation|invalid/i.test(text) && !text.includes(":") && text.length < 100)
     return "Dữ liệu chưa hợp lệ. Kiểm tra lại thông tin nhập.";
   if (/timeout|timed out/i.test(text))
     return "Hệ thống xử lý quá lâu. Thử lại sau.";

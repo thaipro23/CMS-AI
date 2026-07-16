@@ -1,0 +1,12 @@
+{
+  "backend_paths": 248,
+  "backend_operations": 282,
+  "frontend_apiFetch_calls": 224,
+  "frontend_static_calls_checked": 221,
+  "frontend_generic_helper_calls": 2,
+  "frontend_dynamic_action_calls_manually_expanded": 1,
+  "missing_method_or_path": [],
+  "required_body_mismatch": [],
+  "frontend_calls_with_explicit_body": 76,
+  "result": "PASS"
+}

@@ -153,13 +153,24 @@ export class ApiRequestError extends Error {
   code: string;
   status?: number;
   requestId?: string;
+  details?: unknown;
 
-  constructor(message: string, options: { code: string; status?: number; requestId?: string; cause?: unknown }) {
+  constructor(
+    message: string,
+    options: {
+      code: string;
+      status?: number;
+      requestId?: string;
+      details?: unknown;
+      cause?: unknown;
+    },
+  ) {
     super(message, { cause: options.cause });
     this.name = "ApiRequestError";
     this.code = options.code;
     this.status = options.status;
     this.requestId = options.requestId;
+    this.details = options.details;
   }
 }
 
@@ -193,6 +204,21 @@ function dispatchAuthExpired(input: RequestInfo | URL, skip: boolean): void {
   const url = String(input);
   if (/\/auth\/(exchange|session|logout|cms-callback)/.test(url)) return;
   window.dispatchEvent(new CustomEvent("ai:auth-expired"));
+}
+
+function isLikelyJsonRequestBody(body: BodyInit | null | undefined): body is string {
+  if (typeof body !== "string") return false;
+  const trimmed = body.trim();
+  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed === "null";
+}
+
+function prepareRequestHeaders(init: RequestInit): Headers {
+  const headers = new Headers(init.headers);
+  if (!headers.has("Content-Type") && isLikelyJsonRequestBody(init.body)) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (!headers.has("X-Request-ID")) headers.set("X-Request-ID", requestIdValue());
+  return headers;
 }
 
 function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
@@ -229,8 +255,7 @@ export async function apiFetch(
   const safeToRetry = method === "GET" || method === "HEAD";
   const maxRetries = Math.max(0, retries ?? (safeToRetry ? 1 : 0));
   const effectiveTimeout = Math.max(1_000, timeoutMs ?? (safeToRetry ? DEFAULT_GET_TIMEOUT_MS : DEFAULT_WRITE_TIMEOUT_MS));
-  const headers = new Headers(requestInit.headers);
-  if (!headers.has("X-Request-ID")) headers.set("X-Request-ID", requestIdValue());
+  const headers = prepareRequestHeaders(requestInit);
   const requestId = headers.get("X-Request-ID") || undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -299,10 +324,50 @@ function stringFromJson(value: JsonValue | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function apiErrorEnvelope(data: unknown): JsonObject {
+  const root = isJsonObject(data) ? data : {};
+  return isJsonObject(root.error) ? root.error : root;
+}
+
+function apiErrorCode(data: unknown, fallback: string): string {
+  const root = isJsonObject(data) ? data : {};
+  const detail = isJsonObject(root.detail) ? root.detail : undefined;
+  const envelope = apiErrorEnvelope(data);
+  return (
+    stringFromJson(envelope.code) ||
+    stringFromJson(detail?.code) ||
+    stringFromJson(root.code) ||
+    fallback
+  );
+}
+
+function apiErrorDetails(data: unknown): unknown {
+  const root = isJsonObject(data) ? data : {};
+  const detail = isJsonObject(root.detail) ? root.detail : undefined;
+  const envelope = apiErrorEnvelope(data);
+  return envelope.details ?? detail?.details ?? root.details;
+}
+
+function validationDetailsMessage(details: unknown): string {
+  if (!Array.isArray(details)) return "";
+  const messages = details
+    .map((entry) => {
+      if (!isJsonObject(entry)) return "";
+      const loc = Array.isArray(entry.loc)
+        ? entry.loc.filter((part) => part !== "body" && part !== "query").map(String).join(".")
+        : "";
+      const msg = stringFromJson(entry.msg) || stringFromJson(entry.message) || "Dữ liệu không hợp lệ";
+      return loc ? `${loc}: ${msg}` : msg;
+    })
+    .filter(Boolean);
+  return messages.join("; ");
+}
+
 function normalizeApiErrorMessage(response: Response, data: unknown): string {
   const root = isJsonObject(data) ? data : {};
   const detail = isJsonObject(root.detail) ? root.detail : undefined;
   const errorEnvelope = isJsonObject(root.error) ? root.error : undefined;
+  const details = errorEnvelope?.details ?? detail?.details ?? root.details;
   const rawMessage =
     detail?.message ||
     errorEnvelope?.message ||
@@ -332,6 +397,13 @@ function normalizeApiErrorMessage(response: Response, data: unknown): string {
     message = rawMessage.map((item) => mapOne(item)).join("; ");
   else if (isJsonObject(rawMessage)) message = mapOne(rawMessage);
   else message = "Có lỗi xảy ra từ máy chủ. Vui lòng thử lại.";
+
+  const validationMessage = validationDetailsMessage(details);
+  if (validationMessage && (response.status === 400 || response.status === 422)) {
+    message = message && message !== "Request validation failed"
+      ? `${message}: ${validationMessage}`
+      : validationMessage;
+  }
 
   const lower = message.toLowerCase();
   if (response.status === 413 || lower.includes("file quá lớn")) {
@@ -374,9 +446,10 @@ export async function parseResponse<T>(response: Response): Promise<T> {
   }
   if (!response.ok) {
     throw new ApiRequestError(normalizeApiErrorMessage(response, data), {
-      code: `HTTP_${response.status}`,
+      code: apiErrorCode(data, `HTTP_${response.status}`),
       status: response.status,
       requestId,
+      details: apiErrorDetails(data),
     });
   }
   return data as T;

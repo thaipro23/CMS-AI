@@ -96,6 +96,12 @@ def log_audit(
     Older calls using user/system/external are still accepted and normalized.
     """
     try:
+        # A failed flush/commit leaves SQLAlchemy's Session inactive. Route
+        # handlers still record a best-effort failure audit, so recover the
+        # transaction before adding the audit row instead of producing a second
+        # PendingRollbackError that hides the original API failure.
+        if not db.is_active:
+            db.rollback()
         row = AuditLog(
             course_id=course_id,
             actor_id=user.user_id if user else 'system',

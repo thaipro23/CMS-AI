@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.errors import public_http_exception
 from app.core.json_safe import json_safe_value
 from app.core.rbac import UserContext
 from app.models.academic import AcademicSyncRun
@@ -108,7 +109,12 @@ class AcademicAPSyncWorkflowService:
                 target_type='academic_sync_run',
                 target_id=run.id,
             )
-            raise HTTPException(status_code=400, detail={'code': 'academic_validation_failed', 'message': 'Không thể hoàn tất thao tác học vụ. Vui lòng thử lại hoặc liên hệ quản trị.'}) from exc
+            raise public_http_exception(
+                status_code=400,
+                code='ACADEMIC_IMPORT_FAILED',
+                message='Không thể hoàn tất import dữ liệu học vụ.',
+                logger_name=__name__,
+            ) from exc
 
     def enqueue_sync_from_ap_job(self, payload: AcademicAPSyncIn, *, user: UserContext) -> dict[str, Any]:
         branch = (payload.branch or 'poly').strip().lower() or 'poly'

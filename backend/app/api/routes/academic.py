@@ -1258,7 +1258,12 @@ def create_academic_course_mapping(
     except Exception as exc:
         db.rollback()
         log_audit(db, action='academic.course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác vận hành đào tạo.', user=user, target_type='academic_course_mapping')
-        raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
+        raise public_http_exception(
+            status_code=400,
+            code='ACADEMIC_MAPPING_FAILED',
+            message='Không thể lưu mapping học vụ.',
+            logger_name=__name__,
+        ) from exc
 
 
 @router.delete('/course-mappings/{mapping_id}', response_model=AcademicCourseMappingOut)
@@ -1312,7 +1317,12 @@ def save_class_course_mapping(
     except Exception as exc:
         db.rollback()
         log_audit(db, action='academic.class_course_mapping.save', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác vận hành đào tạo.', user=user, target_type='academic_class', target_id=class_id)
-        raise HTTPException(status_code=400, detail=_safe_error_message('academic_validation_failed')) from exc
+        raise public_http_exception(
+            status_code=400,
+            code='ACADEMIC_MAPPING_FAILED',
+            message='Không thể lưu mapping học vụ.',
+            logger_name=__name__,
+        ) from exc
 
 
 @router.delete('/classes/{class_id}/course-mapping', response_model=AcademicClassCourseMappingOut)

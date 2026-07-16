@@ -1,0 +1,16 @@
+backend/app/api/routes/academic.py
+backend/app/api/routes/courses.py
+backend/app/api/routes/publish.py
+backend/app/api/routes/question_bank_v2.py
+backend/app/core/errors.py
+backend/app/main.py
+backend/app/services/academic/ap_sync.py
+backend/app/services/audit_log.py
+backend/app/services/question_bank_service.py
+backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_4_frontend_backend_contract.py
+frontend/components/ui/ActionMessage.tsx
+frontend/lib/api.ts
+docs/FRONTEND_BACKEND_API_CONTRACT_FIX_BATCH_9.md
+docs/FRONTEND_BACKEND_API_CONTRACT_AUDIT_BATCH_9.json
+docs/FRONTEND_BACKEND_HTTP_E2E_EVIDENCE_BATCH_9.json
+docs/CHANGED_FILES_FRONTEND_BACKEND_API_CONTRACT_BATCH_9.txt

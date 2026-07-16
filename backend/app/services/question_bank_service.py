@@ -333,7 +333,21 @@ class VersionedQuestionBankService:
         return list(result.get('items') or [])
 
     def create_department(self, *, code: str, name: str, description: str = '') -> Department:
-        item = Department(id=str(uuid.uuid4()), code=code.strip().upper(), name=name.strip(), description=description or '')
+        clean_code = (code or '').strip().upper()
+        clean_name = (name or '').strip()
+        if not clean_code:
+            raise ValueError('Mã bộ môn không được để trống')
+        if not clean_name:
+            raise ValueError('Tên bộ môn không được để trống')
+        if self.db.query(Department.id).filter(Department.code == clean_code).first():
+            raise ValueError('Mã bộ môn đã tồn tại')
+
+        item = Department(
+            id=str(uuid.uuid4()),
+            code=clean_code,
+            name=clean_name,
+            description=(description or '').strip(),
+        )
         self.db.add(item)
         self.db.commit()
         self.db.refresh(item)
@@ -341,7 +355,29 @@ class VersionedQuestionBankService:
         return item
 
     def create_subject(self, *, department_id: str, code: str, name: str, description: str = '') -> Subject:
-        item = Subject(id=str(uuid.uuid4()), department_id=department_id, code=code.strip().upper(), name=name.strip(), description=description or '')
+        department = self.db.get(Department, department_id)
+        if not department:
+            raise ValueError('Không tìm thấy bộ môn')
+
+        clean_code = (code or '').strip().upper()
+        clean_name = (name or '').strip()
+        if not clean_code:
+            raise ValueError('Mã môn không được để trống')
+        if not clean_name:
+            raise ValueError('Tên môn không được để trống')
+        if self.db.query(Subject.id).filter(
+            Subject.department_id == department_id,
+            Subject.code == clean_code,
+        ).first():
+            raise ValueError('Mã môn đã tồn tại trong bộ môn này')
+
+        item = Subject(
+            id=str(uuid.uuid4()),
+            department_id=department_id,
+            code=clean_code,
+            name=clean_name,
+            description=(description or '').strip(),
+        )
         self.db.add(item)
         self.db.commit()
         self.db.refresh(item)
@@ -720,16 +756,37 @@ class VersionedQuestionBankService:
         return int(value or 0) + 1
 
     def create_chapter(self, *, subject_id: str, title: str, chapter_no: int | None = None, description: str = '', sort_order: int | None = None, subject_offering_id: str | None = None) -> SubjectChapter:
+        subject = self.db.get(Subject, subject_id)
+        if not subject:
+            raise ValueError('Không tìm thấy môn học')
+
         if subject_offering_id:
             offering = self.db.get(SubjectOffering, subject_offering_id)
             if not offering or offering.subject_id != subject_id:
                 raise ValueError('Phiên bản môn không thuộc môn đã chọn')
+
         clean_title = (title or '').strip()
         if not clean_title:
             raise ValueError('Vui lòng nhập bài')
         next_order = sort_order or self._next_chapter_order(subject_id=subject_id, subject_offering_id=subject_offering_id)
         internal_no = chapter_no or next_order
-        item = SubjectChapter(id=str(uuid.uuid4()), subject_id=subject_id, subject_offering_id=subject_offering_id, chapter_no=internal_no, title=clean_title, description=description or '', sort_order=next_order)
+        duplicate = self.db.query(SubjectChapter.id).filter(
+            SubjectChapter.subject_id == subject_id,
+            SubjectChapter.subject_offering_id == subject_offering_id,
+            SubjectChapter.chapter_no == internal_no,
+        ).first()
+        if duplicate:
+            raise ValueError(f'Bài số {internal_no} đã tồn tại trong phiên bản môn này')
+
+        item = SubjectChapter(
+            id=str(uuid.uuid4()),
+            subject_id=subject_id,
+            subject_offering_id=subject_offering_id,
+            chapter_no=internal_no,
+            title=clean_title,
+            description=(description or '').strip(),
+            sort_order=next_order,
+        )
         self.db.add(item)
         self.db.commit()
         self.db.refresh(item)
