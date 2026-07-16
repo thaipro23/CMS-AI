@@ -50,6 +50,7 @@ import { SHOW_DIAGNOSTICS_UI } from '../../../lib/runtime'
 import { PageRoot } from '../../../components/layout/PageHeader'
 import { EnterpriseScreenHeader } from '../../../components/layout/EnterpriseDesignContract'
 import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
+import { InlineNotice } from '../../../components/ui/InlineNotice'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState, TrainingWorkflowSteps } from '../../../components/training/TrainingWorkspace'
 
@@ -1320,7 +1321,7 @@ export default function AnalyticsLearningPage() {
       </div>}
       </>}
       <div className="alert info compact-alert">{permissionText}</div>
-      {message && <div className="academic-inline-error"><b>Cần kiểm tra</b><span>{message}</span></div>}
+      <InlineNotice notice={message ? { type: 'warning', title: 'Cần kiểm tra', body: message } : null} />
     </section>
 
     {step === 'subjects' && <section className="card academic-unified-card analytics-subject-picker-card analytics-workspace-section">

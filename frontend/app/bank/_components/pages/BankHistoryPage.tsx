@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
-import { VisualIcon } from '../../../../components/ui/VisualIcon'
+import { InlineNotice } from '../../../../components/ui/InlineNotice'
 import { OperationsKpiStrip } from '../../../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
@@ -103,7 +103,7 @@ export function BankHistoryPage() {
       actions={<button className="btn secondary" type="button" disabled={loading} onClick={() => load()}>{loading ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
     />
 
-    {message ? <div className="academic-inline-notice info" role="status" aria-live="polite"><VisualIcon icon="info" tone="blue" label="Thông báo" size={18} className="notice-visual-icon" /><div className="notice-copy"><b>Thông báo thao tác</b><span>{message}</span></div></div> : null}
+    <InlineNotice notice={message ? { type: 'info', title: 'Thông báo thao tác', body: message } : null} />
 
     <OperationsKpiStrip ariaLabel="Tổng quan lịch sử bộ đề" items={[
       { label: 'Bộ đề đã chốt', value: releases.length, icon: 'release', tone: 'info' },

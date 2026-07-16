@@ -18,7 +18,7 @@ export function InlineNotice({ notice }: { notice: InlineNoticeData | null }) {
   if (!notice) return null;
   return (
     <div
-      className={`academic-inline-notice ${notice.type}`}
+      className={`academic-inline-notice enterprise-inline-notice ${notice.type}`}
       role={notice.type === "error" ? "alert" : "status"}
       aria-live="polite"
     >

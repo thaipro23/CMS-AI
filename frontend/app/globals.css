@@ -7658,7 +7658,8 @@ body.ai-theme-dark .analytics-three-step-flow-page .analytics-stepper button.act
   background: #eff6ff;
   color: #1d4ed8;
 }
-.academic-inline-notice span { flex: 1; min-width: 180px; }
+.academic-inline-notice > .notice-copy { min-width: 0; }
+.academic-inline-notice > .notice-copy > span { min-width: 0; }
 .notice-action-btn { min-width: 112px; }
 .subject-table .row-actions,
 .teacher-row-actions-stack,

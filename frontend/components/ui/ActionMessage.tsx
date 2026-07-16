@@ -53,7 +53,7 @@ export function ActionMessage({
   if (!message) return null;
   return (
     <section
-      className={`notice notice-${message.type}`}
+      className={`notice enterprise-action-message notice-${message.type}`}
       role={message.type === "error" ? "alert" : "status"}
       aria-live="polite"
     >

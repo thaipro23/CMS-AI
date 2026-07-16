@@ -101,6 +101,7 @@ function pageLabel(pathname: string) {
 
 function fallbackPageLayoutClass(pathname: string) {
   const classes = ['page-stack']
+  if (/^\/(?:student-management|teacher-management|analytics|jobs|audit|ap-sync|premises|semesters|users)(?:\/|$)/.test(pathname)) classes.push('enterprise-standard-page')
   if (pathname.startsWith('/bank')) classes.push('bank-multipage', 'bank-contract-page')
   if (pathname === '/bank') classes.push('dashboard-modern-page')
   if (pathname.startsWith('/bank/quiz')) classes.push('bank-quiz-page', 'quiz-creation-workbench')
@@ -135,6 +136,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const drawerRef = useRef<HTMLElement>(null)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   const userMenuRef = useRef<HTMLDetailsElement>(null)
+  const mainContentRef = useRef<HTMLElement>(null)
   const layoutRegistrationRef = useRef<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [mobile, setMobile] = useState(false)
@@ -198,6 +200,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setDrawerOpen(false)
+
+    // Route changes must never inherit a stale dialog/body scroll lock. This can
+    // happen when a page is replaced while a modal is closing or when an older
+    // route leaves inline overflow styles behind. The AppShell owns the scroll
+    // container, so recover it whenever no dialog is actually mounted.
+    const main = mainContentRef.current
+    const dialogMounted = Boolean(document.querySelector('[data-dialog-backdrop]'))
+    if (!dialogMounted) {
+      delete document.documentElement.dataset.dialogOpen
+      main?.style.removeProperty('overflow')
+      main?.style.removeProperty('overflow-x')
+      main?.style.removeProperty('overflow-y')
+      main?.style.removeProperty('overscroll-behavior')
+      document.body.style.removeProperty('overflow')
+      document.body.style.removeProperty('padding-right')
+    }
+    window.requestAnimationFrame(() => main?.scrollTo({ top: 0, left: 0, behavior: 'auto' }))
   }, [pathname])
 
   useEffect(() => {
@@ -417,7 +436,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main id="main-content" className={`enterprise-content ${pageLayoutClass}`.trim()} tabIndex={-1}>{guardedChildren}</main>
+      <main ref={mainContentRef} id="main-content" data-scroll-owner="workspace" className={`enterprise-content ${pageLayoutClass}`.trim()} tabIndex={-1}>{guardedChildren}</main>
     </div>
   </div></PageShellProvider>
 }
