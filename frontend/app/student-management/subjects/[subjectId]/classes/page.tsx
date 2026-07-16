@@ -134,13 +134,12 @@ function SubjectClassesContent() {
     { key: 'class', header: 'Lớp', kind: 'identity', minWidth: 190, sticky: 'left', priority: 'required', hideable: false, render: (item) => <><b>{item.class_code}</b><small>{item.class_name || item.subject_name}</small></> },
     { key: 'scope', header: 'Phạm vi', kind: 'text', minWidth: 120, priority: 'important', hideable: true, render: (item) => <><b>{item.campus?.toUpperCase() || '—'}</b><small>{item.block_name || 'Chưa có block'}</small></> },
     { key: 'teacher', header: 'Giảng viên', kind: 'identity', minWidth: 155, priority: 'important', hideable: true, render: (item) => <><b>{item.teacher_name || item.teacher_username || 'Chưa phân công'}</b>{item.teacher_name && item.teacher_username ? <small>{item.teacher_username}</small> : null}</> },
-    { key: 'students', header: 'Sinh viên', kind: 'number', width: 116, priority: 'important', hideable: true, render: (item) => <><b>{item.student_count} SV</b><small>CMS {item.cms_synced_count || 0}/{item.student_count}</small></> },
-    { key: 'course', header: 'Course CMS', kind: 'status', minWidth: 145, priority: 'important', hideable: true, render: (item) => <><span className={mappingClass(item.openedx_mapping_source)}>{mappingSourceLabel(item.openedx_mapping_source)}</span><small className="enterprise-clamp-1">{item.openedx_course_id || 'Chưa có Course ID'}</small></> },
-    { key: 'learning', header: 'Học tập', kind: 'progress', minWidth: 165, priority: 'optional', defaultVisible: false, hideable: true, render: (item) => <><b>{item.learning_enrolled_count || 0}/{item.student_count} ghi danh</b><small>{item.learning_active_count || 0} đã học · TB {percentLabel(item.learning_avg_progress_percent)}</small></> },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: (item) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết</Link><Link className="btn small secondary" href={learningBehaviorHref(item)}>Phân tích</Link></div> },
+        { key: 'course', header: 'Course CMS', kind: 'status', minWidth: 145, priority: 'important', hideable: true, render: (item) => <><span className={mappingClass(item.openedx_mapping_source)}>{mappingSourceLabel(item.openedx_mapping_source)}</span><small className="enterprise-clamp-1">{item.openedx_course_id || 'Chưa có Course ID'}</small></> },
+    { key: 'learning', header: 'Học tập', kind: 'progress', minWidth: 230, priority: 'important', hideable: true, render: (item) => <><b>{item.learning_enrolled_count || 0}/{item.student_count} ghi danh</b><small>{item.learning_active_count || 0} đã học · TB {percentLabel(item.learning_avg_progress_percent)}</small><small>CMS {item.cms_synced_count || 0}/{item.student_count}</small></> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 132, sticky: 'right', hideable: false, render: (item) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết</Link><Link className="btn small secondary" href={learningBehaviorHref(item)}>Phân tích</Link></div> },
   ], [branch, campus, page, pageSize, subjectId, termId])
 
-  return <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page training-operations-page">
+  return <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page training-operations-page student-subject-classes-page">
     <EnterpriseScreenHeader
       eyebrow="Vận hành đào tạo"
       title={`Lớp của môn ${subjectCode || subjectName || ''}`.trim()}
@@ -151,7 +150,7 @@ function SubjectClassesContent() {
       secondaryActions={<Link className="btn secondary" href={listHref}>Quay lại danh sách môn</Link>}
     />
 
-    <section className="card academic-unified-card training-workspace-section">
+    <section className="card academic-unified-card training-workspace-section subject-classes-workspace">
       <TrainingContextChips items={[branch.toUpperCase(), termName || termId || 'Chưa rõ kỳ', campus ? campus.toUpperCase() : 'Tất cả cơ sở', subjectName || subjectCode]} />
 
       <div className="training-compact-filter">

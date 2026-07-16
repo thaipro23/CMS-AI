@@ -28,6 +28,8 @@ import { EnterpriseScreenHeader } from '../../../../components/layout/Enterprise
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState } from '../../../../components/training/TrainingWorkspace'
 import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { VisualIcon } from '../../../../components/ui/VisualIcon'
+import { AppIcon } from '../../../../components/icons/AppIcon'
 
 
 type GradeColumn = { key: string; name: string; quizNumber?: number | null; deadlineDate?: string | null; availableFrom?: string | null; deadlineMode?: string | null; scheduleWarning?: string | null }
@@ -809,12 +811,12 @@ function ClassDetailContent() {
       primaryAction={<Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
     />
     <section className="card academic-unified-card training-workspace-section">
-      <div className="class-action-row compact-sync-action-strip clean-sync-action-strip">
+      <div className="class-action-row compact-sync-action-strip clean-sync-action-strip class-primary-actions">
         <div className="toolbar-actions">
-          {canRunFullCmsSync && <button className="btn secondary" type="button" disabled={actionBusy} onClick={runFullCmsSync}>{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>}
-          {canRunFullCmsSync && <button className="btn secondary" type="button" disabled={actionBusy} onClick={runScoreUpdate}>{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>}
-          {can('manage_settings') && <Link className="btn secondary" href="/semesters">Cấu hình tuần học</Link>}
-          <span className="status-pill neutral" title="Điểm Assignment do hệ thống khác xử lý">Assignment: đọc từ hệ thống ngoài</span>
+          {canRunFullCmsSync && <button className="btn primary class-action-button action-full-sync" type="button" disabled={actionBusy} onClick={runFullCmsSync}><AppIcon name="sync" size={16} />{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>}
+          {canRunFullCmsSync && <button className="btn secondary class-action-button action-score-update" type="button" disabled={actionBusy} onClick={runScoreUpdate}><AppIcon name="analytics" size={16} />{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>}
+          {can('manage_settings') && <Link className="btn secondary class-action-button action-week-settings" href="/semesters"><AppIcon name="calendar" size={16} />Cấu hình tuần học</Link>}
+          <span className="status-pill neutral assignment-readonly-status" title="Điểm Assignment do hệ thống khác xử lý">Assignment: đọc từ hệ thống ngoài</span>
         </div>
       </div>
       {activeJob && <div className="sync-job-status persistent-sync-job-status">
@@ -844,10 +846,13 @@ function ClassDetailContent() {
     </section>
 
     <section className="card academic-unified-card online-learning-card">
-      <div className="section-head compact-section-head">
-        <div>
-          <h2>Học online</h2>
-          <p>Nhận định dựa trên log hệ thống, chỉ là tín hiệu hỗ trợ giáo viên xác minh.</p>
+      <div className="section-head compact-section-head enterprise-content-section-head">
+        <div className="enterprise-section-heading-identity">
+          <VisualIcon label="Học online" icon="analytics" tone="blue" className="enterprise-section-heading-icon" />
+          <div className="enterprise-section-heading-copy">
+            <h2>Học online</h2>
+            <p>Nhận định dựa trên log hệ thống, chỉ là tín hiệu hỗ trợ giáo viên xác minh.</p>
+          </div>
         </div>
         <div className="toolbar-actions">
           {SHOW_DIAGNOSTICS_UI && canRunFullCmsSync && <button className="btn secondary small" type="button" disabled={onlineRecalculating || !effectiveCourseId} onClick={recalculateOnlineAnalytics}>{onlineRecalculating ? 'Đang tính...' : 'Tính lại học online'}</button>}
@@ -866,8 +871,11 @@ function ClassDetailContent() {
     </section>
 
     <section className="card academic-unified-card student-list-card">
-      <div className="section-head">
-        <div><h2>Danh sách sinh viên</h2><p>{studentListUpdatedAt ? `Cập nhật: ${formatVNTimeDate(studentListUpdatedAt)}` : 'Cập nhật: chưa có dữ liệu đồng bộ học tập'}</p></div>
+      <div className="section-head enterprise-content-section-head student-list-section-head">
+        <div className="enterprise-section-heading-identity">
+          <VisualIcon label="Danh sách sinh viên" icon="students" tone="blue" className="enterprise-section-heading-icon" />
+          <div className="enterprise-section-heading-copy"><h2>Danh sách sinh viên</h2><p>{studentListUpdatedAt ? `Cập nhật: ${formatVNTimeDate(studentListUpdatedAt)}` : 'Cập nhật: chưa có dữ liệu đồng bộ học tập'}</p></div>
+        </div>
         <div className="toolbar-actions">
           <select className="input compact-input" value={learningStatus} onChange={(event) => { setLearningStatus(event.target.value); setPage(1) }}>
             <option value="all">Tất cả trạng thái</option>
@@ -885,6 +893,7 @@ function ClassDetailContent() {
         tableId={`class-students-${classId}`}
         caption="Danh sách sinh viên"
         showSummary={false}
+        stickyHorizontalScroll
         rows={students}
         columns={studentColumns}
         rowKey={(student) => student.id}

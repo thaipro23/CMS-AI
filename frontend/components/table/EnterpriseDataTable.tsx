@@ -64,6 +64,8 @@ export type EnterpriseDataTableProps<Row> = {
   onSortChange?: (key: string, direction: 'asc' | 'desc') => void
   /** Hide the duplicated table title/count toolbar when the surrounding section already provides it. */
   showSummary?: boolean
+  /** Keep a synchronized horizontal scrollbar visible at the bottom of the workspace while this table is in view. */
+  stickyHorizontalScroll?: boolean
 }
 
 type ColumnLayout<Row> = {
@@ -161,10 +163,16 @@ export function EnterpriseDataTable<Row>({
   sortDirection = 'asc',
   onSortChange,
   showSummary = false,
+  stickyHorizontalScroll = false,
 }: EnterpriseDataTableProps<Row>) {
   // v2 deliberately resets the old responsive preferences that automatically hid columns.
   const storageKey = `ai-enterprise-table:${tableId}:columns:full-v2`
   const shellRef = useRef<HTMLElement | null>(null)
+  const tableScrollRef = useRef<HTMLDivElement | null>(null)
+  const stickyScrollRef = useRef<HTMLDivElement | null>(null)
+  const syncingScrollRef = useRef(false)
+  const [stickyScrollWidth, setStickyScrollWidth] = useState(0)
+  const [hasHorizontalOverflow, setHasHorizontalOverflow] = useState(false)
   const headerCheckboxRef = useRef<HTMLInputElement | null>(null)
   const defaultKeys = useMemo(() => columns.filter((column) => column.defaultVisible !== false).map((column) => column.key), [columns])
   const allColumnKeys = useMemo(() => columns.map((column) => column.key), [columns])
@@ -227,6 +235,51 @@ export function EnterpriseDataTable<Row>({
     if (headerCheckboxRef.current) headerCheckboxRef.current.indeterminate = somePageSelected
   }, [somePageSelected])
 
+
+  useEffect(() => {
+    if (!stickyHorizontalScroll) return
+    const scroller = tableScrollRef.current
+    if (!scroller) return
+
+    const updateRail = () => {
+      const nextWidth = scroller.scrollWidth
+      setStickyScrollWidth(nextWidth)
+      setHasHorizontalOverflow(nextWidth > scroller.clientWidth + 1)
+      if (stickyScrollRef.current) stickyScrollRef.current.scrollLeft = scroller.scrollLeft
+    }
+
+    updateRail()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateRail) : null
+    observer?.observe(scroller)
+    const table = scroller.querySelector('table')
+    if (table) observer?.observe(table)
+    window.addEventListener('resize', updateRail)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', updateRail)
+    }
+  }, [stickyHorizontalScroll, rows, visibleColumns, density])
+
+  const syncTableScroll = () => {
+    if (!stickyHorizontalScroll || syncingScrollRef.current) return
+    const source = tableScrollRef.current
+    const target = stickyScrollRef.current
+    if (!source || !target) return
+    syncingScrollRef.current = true
+    target.scrollLeft = source.scrollLeft
+    requestAnimationFrame(() => { syncingScrollRef.current = false })
+  }
+
+  const syncStickyScroll = () => {
+    if (!stickyHorizontalScroll || syncingScrollRef.current) return
+    const source = stickyScrollRef.current
+    const target = tableScrollRef.current
+    if (!source || !target) return
+    syncingScrollRef.current = true
+    target.scrollLeft = source.scrollLeft
+    requestAnimationFrame(() => { syncingScrollRef.current = false })
+  }
+
   const persistColumns = (keys: string[]) => {
     setVisibleKeys(keys)
     try { window.localStorage.setItem(storageKey, JSON.stringify(keys)) } catch { /* storage may be unavailable */ }
@@ -267,7 +320,7 @@ export function EnterpriseDataTable<Row>({
         {columns.some((column) => column.hideable) ? <details className="enterprise-column-menu"><summary className="btn small secondary"><VisualIcon icon="layers" tone="slate" size={15} /> Cột hiển thị</summary><div className="enterprise-column-menu-popover"><b>Chọn cột</b>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={visibleKeys.includes(column.key)} disabled={!column.hideable} onChange={() => toggleColumn(column.key)} />{column.header}</label>)}<button className="btn small secondary" type="button" onClick={() => persistColumns(allColumnKeys)}>Hiện tất cả</button><button className="btn small ghost" type="button" onClick={() => persistColumns(defaultKeys)}>Mặc định</button></div></details> : null}
       </div>
     </div>}
-    {!rows.length ? <TableEmptyState title={emptyTitle} description={emptyDescription} action={emptyAction} /> : <div className="enterprise-table-scroll" tabIndex={0} role="region" aria-label={`${caption}. Bảng hiển thị đầy đủ các cột; chỉ cuộn ngang khi nội dung thực sự không thể xuống dòng.`}>
+    {!rows.length ? <TableEmptyState title={emptyTitle} description={emptyDescription} action={emptyAction} /> : <div ref={tableScrollRef} className="enterprise-table-scroll" onScroll={syncTableScroll} tabIndex={0} role="region" aria-label={`${caption}. Bảng hiển thị đầy đủ các cột; chỉ cuộn ngang khi nội dung thực sự không thể xuống dòng.`}>
       <table className="enterprise-data-table">
         <caption className="sr-only">{caption}</caption>
         <colgroup>
@@ -298,6 +351,7 @@ export function EnterpriseDataTable<Row>({
         })}</tbody>
       </table>
     </div>}
+    {stickyHorizontalScroll && hasHorizontalOverflow ? <div ref={stickyScrollRef} className="enterprise-sticky-horizontal-scroll" onScroll={syncStickyScroll} aria-label={`Thanh cuộn ngang cố định của ${caption}`}><div style={{ width: `${stickyScrollWidth}px` }} /></div> : null}
     {hasPagination && <PaginationControls page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} loading={loading} label={label} />}
   </section>
 }

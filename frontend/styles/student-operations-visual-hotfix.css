@@ -1,0 +1,220 @@
+/* Batch 13 — Student Operations density, section identity, sticky table scroll and global sidebar consistency. */
+
+/* The collapse control belongs to AppShell, so its complete visual contract must not be scoped to Bank routes. */
+.enterprise-app-shell.enterprise-unified-shell .enterprise-sidebar-collapse-button {
+  appearance: none !important;
+  position: absolute !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+  display: grid !important;
+  place-items: center !important;
+  padding: 0 !important;
+  border: 1px solid rgba(255, 255, 255, .10) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, .10) !important;
+  color: #dce8f7 !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .16) !important;
+  cursor: pointer !important;
+  z-index: 3 !important;
+}
+.enterprise-app-shell.enterprise-unified-shell .enterprise-sidebar-collapse-button:hover {
+  background: rgba(255, 255, 255, .16) !important;
+  border-color: rgba(255, 255, 255, .18) !important;
+}
+.enterprise-app-shell.enterprise-unified-shell .enterprise-sidebar-collapse-button svg {
+  width: 18px !important;
+  height: 18px !important;
+  display: block !important;
+}
+html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell .enterprise-sidebar-collapse-button {
+  right: 50% !important;
+  transform: translateX(50%) !important;
+}
+
+/* Subject class list: the KPI strip and table are distinct layers, never visually glued. */
+.student-subject-classes-page .subject-classes-workspace {
+  display: grid !important;
+  gap: 14px !important;
+}
+.student-subject-classes-page .subject-classes-workspace > :is(.training-context-chips, .training-compact-filter, .training-kpi-strip, .academic-inline-notice, .enterprise-table-shell) {
+  min-width: 0;
+  margin: 0 !important;
+}
+.student-subject-classes-page .subject-classes-workspace > .enterprise-table-shell {
+  margin-top: 2px !important;
+}
+.student-subject-classes-page .training-row-actions {
+  width: 100%;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: stretch !important;
+  gap: 6px !important;
+}
+.student-subject-classes-page .training-row-actions .btn {
+  width: 100% !important;
+  min-width: 88px !important;
+  min-height: 34px !important;
+  justify-content: center !important;
+  padding-inline: 10px !important;
+}
+.student-subject-classes-page .enterprise-kind-progress {
+  min-width: 230px !important;
+}
+
+/* Class detail action hierarchy: primary workflow commands are visible and equally usable. */
+.class-detail-flow .class-primary-actions {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.class-detail-flow .class-primary-actions .toolbar-actions {
+  width: 100%;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+.class-detail-flow .class-action-button {
+  min-height: 40px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  font-weight: 600 !important;
+  white-space: nowrap;
+}
+.class-detail-flow .action-score-update {
+  border-color: #8fb4f4 !important;
+  background: #f4f8ff !important;
+  color: #174c9d !important;
+}
+.class-detail-flow .action-week-settings {
+  border-color: #cbd5e1 !important;
+  background: #fff !important;
+  color: #334155 !important;
+}
+.class-detail-flow .assignment-readonly-status {
+  margin-left: auto;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Every content section uses an explicit icon/copy grid; no absolute icon can cover text. */
+.class-detail-flow .enterprise-content-section-head {
+  min-width: 0;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 14px !important;
+  margin: 0 !important;
+  padding: 14px 16px !important;
+  border-bottom: 1px solid #dbe4f0;
+}
+.class-detail-flow .enterprise-section-heading-identity {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.class-detail-flow .enterprise-section-heading-icon {
+  position: static !important;
+  inset: auto !important;
+  width: 40px !important;
+  height: 40px !important;
+  min-width: 40px !important;
+  margin: 0 !important;
+  transform: none !important;
+}
+.class-detail-flow .enterprise-section-heading-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.class-detail-flow .enterprise-section-heading-copy h2,
+.class-detail-flow .enterprise-section-heading-copy h3,
+.class-detail-flow .enterprise-section-heading-copy p {
+  margin: 0 !important;
+}
+.class-detail-flow .enterprise-section-heading-copy p {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.class-detail-flow .online-learning-card,
+.class-detail-flow .student-list-card {
+  padding: 0 !important;
+}
+.class-detail-flow .online-learning-card { overflow: clip; }
+.class-detail-flow .student-list-card { overflow: visible !important; }
+.class-detail-flow .online-learning-card > :not(.enterprise-content-section-head),
+.class-detail-flow .student-list-card > :not(.enterprise-content-section-head) {
+  margin-inline: 16px;
+}
+.class-detail-flow .online-learning-card > .online-learning-summary-strip { margin-top: 14px; }
+.class-detail-flow .online-learning-card > :last-child { margin-bottom: 16px; }
+.class-detail-flow .student-list-card > .enterprise-table-shell {
+  margin: 12px 16px 16px !important;
+  width: calc(100% - 32px) !important;
+  overflow: visible !important;
+}
+
+/* Synchronized scrollbar stays reachable while the student table occupies the viewport. */
+.enterprise-sticky-horizontal-scroll {
+  position: sticky;
+  bottom: 0;
+  z-index: 18;
+  width: 100%;
+  height: 17px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid #dbe4f0;
+  border-bottom: 1px solid #dbe4f0;
+  background: rgba(248, 250, 252, .98);
+  box-shadow: 0 -4px 12px rgba(15, 23, 42, .06);
+  scrollbar-width: auto;
+}
+.enterprise-sticky-horizontal-scroll > div { height: 1px; }
+
+@media (max-width: 1023px) {
+  .class-detail-flow .class-primary-actions .toolbar-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .class-detail-flow .class-action-button { width: 100% !important; }
+  .class-detail-flow .assignment-readonly-status { margin-left: 0; }
+}
+
+@media (max-width: 767px) {
+  .student-subject-classes-page .subject-classes-workspace { gap: 12px !important; }
+  .class-detail-flow .class-primary-actions .toolbar-actions { grid-template-columns: minmax(0, 1fr); }
+  .class-detail-flow .enterprise-content-section-head {
+    align-items: stretch !important;
+    flex-direction: column !important;
+    padding: 12px !important;
+  }
+  .class-detail-flow .enterprise-section-heading-identity {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .class-detail-flow .enterprise-section-heading-icon {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+  }
+  .class-detail-flow .enterprise-content-section-head .toolbar-actions {
+    width: 100%;
+  }
+  .class-detail-flow .enterprise-content-section-head .toolbar-actions > * {
+    width: 100%;
+  }
+  .class-detail-flow .student-list-card > .enterprise-table-shell {
+    margin: 10px !important;
+    width: calc(100% - 20px) !important;
+  }
+}
