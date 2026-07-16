@@ -872,8 +872,17 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         const target = questionReviewSectionRef.current
-        target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        target?.focus({ preventScroll: true })
+        if (!target) return
+        const scrollContainer = target.closest<HTMLElement>('.enterprise-content')
+        if (scrollContainer) {
+          const targetRect = target.getBoundingClientRect()
+          const containerRect = scrollContainer.getBoundingClientRect()
+          const nextTop = Math.max(0, scrollContainer.scrollTop + targetRect.top - containerRect.top - 10)
+          scrollContainer.scrollTo({ top: nextTop, behavior: 'smooth' })
+        } else {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+        window.setTimeout(() => target.focus({ preventScroll: true }), 260)
       })
     })
   }

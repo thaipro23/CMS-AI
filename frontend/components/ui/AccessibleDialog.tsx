@@ -18,6 +18,9 @@ const dialogStack: symbol[] = []
 let bodyLockCount = 0
 let originalBodyOverflow = ''
 let originalBodyPaddingRight = ''
+let lockedAppScrollElement: HTMLElement | null = null
+let originalAppOverflow = ''
+let originalAppOverscrollBehavior = ''
 
 function lockBodyScroll() {
   if (bodyLockCount === 0) {
@@ -26,6 +29,18 @@ function lockBodyScroll() {
     const scrollbarWidth = Math.max(0, window.innerWidth - document.documentElement.clientWidth)
     document.body.style.overflow = 'hidden'
     if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`
+
+    // AppShell uses .enterprise-content as its actual scroll container. Locking
+    // only document.body allowed the page to keep moving behind a dialog and
+    // could make the top or bottom of a popup appear clipped after navigation.
+    lockedAppScrollElement = document.querySelector<HTMLElement>('.enterprise-content')
+    if (lockedAppScrollElement) {
+      originalAppOverflow = lockedAppScrollElement.style.overflow
+      originalAppOverscrollBehavior = lockedAppScrollElement.style.overscrollBehavior
+      lockedAppScrollElement.style.overflow = 'hidden'
+      lockedAppScrollElement.style.overscrollBehavior = 'none'
+    }
+    document.documentElement.dataset.dialogOpen = 'true'
   }
   bodyLockCount += 1
 }
@@ -35,6 +50,14 @@ function unlockBodyScroll() {
   if (bodyLockCount === 0) {
     document.body.style.overflow = originalBodyOverflow
     document.body.style.paddingRight = originalBodyPaddingRight
+    if (lockedAppScrollElement) {
+      lockedAppScrollElement.style.overflow = originalAppOverflow
+      lockedAppScrollElement.style.overscrollBehavior = originalAppOverscrollBehavior
+    }
+    lockedAppScrollElement = null
+    originalAppOverflow = ''
+    originalAppOverscrollBehavior = ''
+    delete document.documentElement.dataset.dialogOpen
   }
 }
 

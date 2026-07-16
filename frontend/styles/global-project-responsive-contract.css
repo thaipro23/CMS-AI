@@ -1,0 +1,649 @@
+/*
+ * Global project shell, scrolling, responsive and dialog contract.
+ * Applied after all legacy/page-specific styles so every route uses one viewport model.
+ */
+
+:root {
+  --acms-shell-topbar-height: 64px;
+  --acms-content-inline: 18px;
+  --acms-content-block: 20px;
+  --acms-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --acms-safe-top: env(safe-area-inset-top, 0px);
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+body {
+  min-height: 100dvh;
+}
+
+#__next {
+  min-width: 0;
+  min-height: 100%;
+}
+
+/* One viewport, one vertical scroll container for the whole application. */
+.enterprise-app-shell,
+.enterprise-app-shell.enterprise-unified-shell {
+  width: 100%;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh;
+  overflow: hidden !important;
+}
+
+.enterprise-app-shell .enterprise-sidebar {
+  min-height: 0;
+  height: 100dvh !important;
+  max-height: 100dvh;
+  overflow: hidden !important;
+}
+
+.enterprise-app-shell .enterprise-navigation {
+  min-height: 0;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.enterprise-app-shell .enterprise-workspace {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100dvh !important;
+  max-height: 100dvh;
+  overflow: hidden !important;
+  grid-template-rows: var(--acms-shell-topbar-height) minmax(0, 1fr) !important;
+}
+
+.enterprise-app-shell .enterprise-topbar {
+  position: relative !important;
+  top: auto !important;
+  z-index: 70;
+  min-width: 0;
+  height: var(--acms-shell-topbar-height) !important;
+  min-height: var(--acms-shell-topbar-height) !important;
+}
+
+.enterprise-app-shell .enterprise-topbar-start,
+.enterprise-app-shell .enterprise-topbar-page-heading,
+.enterprise-app-shell .enterprise-topbar-page-copy,
+.enterprise-app-shell .enterprise-topbar-breadcrumbs {
+  min-width: 0;
+}
+
+.enterprise-app-shell .enterprise-topbar-start {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.enterprise-app-shell .enterprise-topbar-page-heading,
+.enterprise-app-shell .enterprise-topbar-page-copy {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.enterprise-app-shell .enterprise-topbar-breadcrumbs {
+  width: 100%;
+  max-width: none !important;
+}
+
+.enterprise-app-shell .enterprise-content {
+  width: 100%;
+  min-width: 0;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+  padding-inline: var(--acms-content-inline);
+  padding-block: var(--acms-content-block) calc(var(--acms-content-block) + var(--acms-safe-bottom));
+  scroll-padding-top: 12px;
+}
+
+html[data-dialog-open='true'] .enterprise-content {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+.enterprise-content,
+.enterprise-content > *,
+.page-stack,
+.page-stack > *,
+.workspace-section,
+.workspace-section-body,
+.bank-hierarchy-panel,
+.enterprise-table-shell,
+.enterprise-table-scroll,
+.enterprise-filter-toolbar,
+.enterprise-filter-fields,
+.enterprise-filter-actions,
+.button-row,
+.chapter-primary-actions {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Shared section/filter/table structure across all modules. */
+.workspace-section,
+.bank-hierarchy-panel,
+.enterprise-table-shell {
+  width: 100%;
+}
+
+.enterprise-table-shell {
+  overflow: hidden;
+}
+
+.enterprise-table-scroll,
+.table-wrap,
+.data-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto !important;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.enterprise-data-table,
+.table {
+  max-width: none;
+}
+
+.enterprise-filter-toolbar,
+.workspace-section-head,
+.question-list-head,
+.enterprise-table-controls {
+  flex-wrap: wrap;
+}
+
+.enterprise-filter-fields,
+.enterprise-filter-actions,
+.workspace-section-actions,
+.question-list-head .button-row {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* Never let a fixed-width control force body-level horizontal scrolling. */
+.enterprise-filter-fields > *,
+.enterprise-filter-actions > *,
+.workspace-section-actions > *,
+.question-filter-bar > *,
+.form-grid > *,
+.grid > * {
+  min-width: 0;
+}
+
+/* Dialogs lock the app scroll container, keep header/footer visible and scroll only body. */
+.accessible-dialog-backdrop {
+  padding:
+    max(16px, var(--acms-safe-top))
+    max(16px, env(safe-area-inset-right, 0px))
+    max(16px, var(--acms-safe-bottom))
+    max(16px, env(safe-area-inset-left, 0px));
+  overflow: hidden !important;
+  overscroll-behavior: contain;
+}
+
+.accessible-dialog-surface {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: calc(100vw - 32px) !important;
+  max-height: calc(100dvh - 32px) !important;
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+  overflow: hidden !important;
+}
+
+.accessible-dialog-header,
+.accessible-dialog-footer {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.accessible-dialog-heading {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.accessible-dialog-body {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.accessible-dialog-footer {
+  padding-bottom: max(14px, var(--acms-safe-bottom));
+}
+
+.accessible-dialog-footer > *,
+.dialog-action-row,
+.modal-actions,
+.dialog-footer-actions {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Review dialog: no clipped question content at any viewport height. */
+.question-review-dialog {
+  width: min(1080px, calc(100vw - 32px)) !important;
+  height: min(820px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px) !important;
+}
+
+.question-review-dialog > .accessible-dialog-body,
+.question-review-dialog-body {
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  padding-bottom: 20px !important;
+}
+
+.question-review-dialog .question-review-dialog-content,
+.question-review-dialog .question-review-block,
+.question-review-dialog .answer-option,
+.question-review-dialog .question-review-metadata > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.question-review-dialog .question-prompt,
+.question-review-dialog .answer-option > span:last-child,
+.question-review-dialog .question-review-block > p,
+.question-review-dialog .question-review-metadata b {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.question-review-dialog > .accessible-dialog-footer {
+  min-height: 0;
+}
+
+/* Tablet / iPad: sidebar becomes a drawer, content remains full width. */
+@media (max-width: 1023px) {
+  :root {
+    --acms-shell-topbar-height: 60px;
+    --acms-content-inline: 16px;
+    --acms-content-block: 16px;
+  }
+
+  .enterprise-app-shell,
+  .enterprise-app-shell.enterprise-unified-shell,
+  html[data-sidebar='collapsed'] .enterprise-app-shell,
+  html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .enterprise-app-shell .enterprise-sidebar {
+    position: fixed !important;
+    inset: 0 auto 0 0;
+    z-index: 1000;
+    width: min(292px, calc(100vw - 48px)) !important;
+    max-width: 292px;
+    transform: translateX(-104%);
+    transition: transform .18s ease;
+    box-shadow: 18px 0 44px rgb(15 23 42 / 24%) !important;
+  }
+
+  .enterprise-app-shell .enterprise-sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .enterprise-app-shell .enterprise-workspace {
+    grid-column: 1;
+  }
+
+  .enterprise-app-shell .enterprise-topbar {
+    padding-inline: 12px !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-end {
+    gap: 8px !important;
+  }
+
+  .enterprise-app-shell .enterprise-user-summary {
+    display: none !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-breadcrumbs ol {
+    gap: 7px !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-breadcrumbs li {
+    gap: 7px !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-breadcrumbs a,
+  .enterprise-app-shell .enterprise-topbar-breadcrumbs span {
+    font-size: 12px !important;
+  }
+
+  .enterprise-app-shell .enterprise-content {
+    scrollbar-gutter: auto;
+  }
+
+  .enterprise-filter-toolbar,
+  .workspace-section-head,
+  .question-list-head {
+    gap: 12px !important;
+  }
+
+  .enterprise-filter-fields,
+  .enterprise-filter-actions {
+    flex: 1 1 100%;
+  }
+
+  .enterprise-filter-fields > label,
+  .enterprise-filter-fields > .input,
+  .question-filter-bar > label {
+    flex: 1 1 min(280px, 100%);
+  }
+
+  .chapter-primary-actions {
+    justify-content: flex-start !important;
+  }
+
+  .chapter-primary-actions > .btn {
+    flex: 0 1 auto;
+  }
+
+  .accessible-dialog-surface.size-large,
+  .accessible-dialog-surface.size-xlarge,
+  .accessible-dialog-surface.size-viewport,
+  .question-review-dialog,
+  .chapter-generate-dialog {
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px) !important;
+    max-height: calc(100dvh - 32px) !important;
+  }
+
+  .question-review-dialog {
+    height: calc(100dvh - 32px);
+  }
+
+  .question-review-dialog .review-answer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Phones and narrow portrait tablets. */
+@media (max-width: 767px) {
+  :root {
+    --acms-shell-topbar-height: 56px;
+    --acms-content-inline: 12px;
+    --acms-content-block: 12px;
+  }
+
+  .enterprise-app-shell .enterprise-topbar {
+    padding-inline: 8px !important;
+    gap: 8px !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-start {
+    gap: 8px !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-page-heading {
+    gap: 8px !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-page-icon {
+    display: none !important;
+  }
+
+  .enterprise-app-shell .enterprise-cms-pill {
+    width: 34px !important;
+    min-width: 34px !important;
+    padding: 0 !important;
+    justify-content: center;
+    overflow: hidden;
+    color: transparent !important;
+    font-size: 0 !important;
+  }
+
+  .enterprise-app-shell .enterprise-cms-pill > span {
+    margin: 0 !important;
+  }
+
+  .enterprise-app-shell .enterprise-avatar {
+    width: 34px !important;
+    height: 34px !important;
+  }
+
+  .enterprise-app-shell .enterprise-user-menu summary > svg {
+    display: none !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-breadcrumbs {
+    mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent 100%);
+  }
+
+  .enterprise-app-shell .enterprise-content {
+    gap: 12px !important;
+  }
+
+  .bank-hierarchy-page-intro,
+  .page-intro,
+  .workspace-page-intro {
+    align-items: flex-start !important;
+    gap: 10px !important;
+    margin-inline: 0 !important;
+  }
+
+  .bank-hierarchy-page-icon,
+  .page-intro-icon,
+  .workspace-page-intro-icon {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    flex-basis: 40px !important;
+  }
+
+  .bank-hierarchy-page-copy h2,
+  .page-intro h1,
+  .workspace-page-intro h1 {
+    font-size: 20px !important;
+  }
+
+  .bank-hierarchy-page-copy p,
+  .page-intro p,
+  .workspace-page-intro p {
+    font-size: 12px !important;
+    line-height: 1.45 !important;
+  }
+
+  .workspace-section-head,
+  .question-list-head,
+  .enterprise-section-header {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  .workspace-section-actions,
+  .question-list-head .button-row,
+  .enterprise-section-actions {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-section-actions .btn,
+  .question-list-head .button-row .btn,
+  .enterprise-section-actions .btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .chapter-workflow-panel {
+    padding: 10px !important;
+    overflow: visible !important;
+  }
+
+  .chapter-primary-actions {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px !important;
+  }
+
+  .chapter-primary-actions > .btn {
+    width: 100%;
+    min-width: 0;
+    margin: 0 !important;
+    white-space: normal;
+    line-height: 1.3;
+  }
+
+  .question-filter-bar,
+  .enterprise-filter-fields,
+  .enterprise-filter-actions {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .question-filter-bar > *,
+  .enterprise-filter-fields > *,
+  .enterprise-filter-actions > * {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+
+  .enterprise-table-controls,
+  .enterprise-table-toolbar,
+  .density-controls,
+  .table-display-controls {
+    width: 100%;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+  }
+
+  .enterprise-table-controls > *,
+  .density-controls > * {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .accessible-dialog-backdrop,
+  .accessible-dialog-backdrop.placement-right {
+    padding: 0 !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+  }
+
+  .accessible-dialog-surface,
+  .accessible-dialog-surface.size-small,
+  .accessible-dialog-surface.size-medium,
+  .accessible-dialog-surface.size-large,
+  .accessible-dialog-surface.size-xlarge,
+  .accessible-dialog-surface.size-viewport,
+  .accessible-dialog-surface.placement-right,
+  .question-review-dialog,
+  .chapter-generate-dialog {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-width: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  .accessible-dialog-header {
+    padding: max(12px, var(--acms-safe-top)) 14px 12px !important;
+  }
+
+  .accessible-dialog-body {
+    padding: 14px !important;
+  }
+
+  .accessible-dialog-footer {
+    padding: 12px 14px max(12px, var(--acms-safe-bottom)) !important;
+  }
+
+  .accessible-dialog-heading h2 {
+    font-size: 18px !important;
+  }
+
+  .question-review-dialog .review-answer-grid,
+  .question-review-dialog .question-review-metadata {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .question-review-dialog .question-review-dialog-footer {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 8px !important;
+  }
+
+  .question-review-dialog .question-review-navigation,
+  .question-review-dialog .question-review-primary-actions {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px !important;
+  }
+
+  .question-review-dialog .question-review-primary-actions .btn:last-child:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  .question-review-dialog .question-review-navigation .btn,
+  .question-review-dialog .question-review-primary-actions .btn {
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .question-review-dialog .question-review-shortcuts {
+    display: none !important;
+  }
+
+  .chapter-generate-layout,
+  .chapter-popup-grid,
+  .form-grid.two-columns,
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 479px) {
+  .workspace-section-actions,
+  .question-list-head .button-row,
+  .enterprise-section-actions,
+  .chapter-primary-actions,
+  .question-review-dialog .question-review-navigation,
+  .question-review-dialog .question-review-primary-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .enterprise-app-shell .enterprise-topbar-breadcrumbs a,
+  .enterprise-app-shell .enterprise-topbar-breadcrumbs span {
+    font-size: 11.5px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enterprise-app-shell .enterprise-sidebar {
+    transition: none;
+  }
+}
