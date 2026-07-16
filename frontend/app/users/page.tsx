@@ -18,7 +18,8 @@ import {
 } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { CompactFilterBar, OperationsKpiStrip, SideDrawer, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
@@ -361,10 +362,14 @@ export default function UsersPage() {
 
   const selectedRole = allRoles.find((role) => role.code === form.role_code)
 
-  return <PageRoot className="page-stack access-console access-console-v2">
-    <PageHeader
+  return <PageRoot className="page-stack enterprise-standard-page access-console access-console-v2">
+    <EnterpriseScreenHeader
       eyebrow="Quản trị"
       title="Người dùng & phân quyền"
+      description="Quản lý vai trò, phạm vi truy cập và trạng thái quyền của người dùng theo RBAC nghiệp vụ."
+      icon="users"
+      tone="blue"
+      breadcrumbs={[{ label: 'Quản trị' }, { label: 'Người dùng & phân quyền' }]}
       primaryAction={visibleRoles.length ? <button className="btn" type="button" onClick={() => { setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : []); setGrantOpen(true) }}>Gán quyền</button> : null}
       secondaryActions={<>
         {isSystemAdmin && <button className="btn secondary" type="button" onClick={downloadTemplate}>Tải template</button>}

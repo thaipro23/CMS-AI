@@ -101,9 +101,10 @@ function pageLabel(pathname: string) {
 
 function fallbackPageLayoutClass(pathname: string) {
   const classes = ['page-stack']
-  if (pathname.startsWith('/bank')) classes.push('bank-multipage')
+  if (pathname.startsWith('/bank')) classes.push('bank-multipage', 'bank-contract-page')
   if (pathname === '/bank') classes.push('dashboard-modern-page')
   if (pathname.startsWith('/bank/quiz')) classes.push('bank-quiz-page', 'quiz-creation-workbench')
+  if (pathname.startsWith('/bank/history')) classes.push('bank-history-page', 'history-console')
   if (pathname.startsWith('/bank/search')) classes.push('dashboard-search-page')
   if (pathname.startsWith('/student-management')) classes.push('student-management-page', 'academic-flow-page', 'training-operations-page')
   if (pathname.startsWith('/teacher-management')) classes.push('training-management-page', 'teacher-management-page', 'training-operations-page')

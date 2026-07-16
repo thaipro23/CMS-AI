@@ -23,7 +23,8 @@ import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, Ac
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
-import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { PageRoot } from '../../../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../../../components/layout/EnterpriseDesignContract'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState } from '../../../../components/training/TrainingWorkspace'
 import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
@@ -794,10 +795,16 @@ function ClassDetailContent() {
     })),
   ]
 
-  return <PageRoot className="page-stack student-management-page academic-flow-page class-detail-flow training-operations-page">
-    <PageHeader
+  return <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page class-detail-flow training-operations-page">
+    <EnterpriseScreenHeader
       eyebrow="Vận hành đào tạo"
       title={`Chi tiết lớp ${classInfo?.class_code || ''}`.trim()}
+      description="Theo dõi sinh viên, đồng bộ CMS, ghi danh, tiến độ học, đầu điểm và các tín hiệu cần giáo viên xác minh."
+      icon="students"
+      tone="blue"
+      breadcrumbs={teacherIdForBack
+        ? [{ label: 'Vận hành đào tạo' }, { label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Lớp giảng viên', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]
+        : [{ label: 'Vận hành đào tạo' }, { label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Danh sách lớp', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]}
       secondaryActions={<Link className="btn secondary" href={operationalBackHref}>Quay lại danh sách lớp</Link>}
       primaryAction={<Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
     />

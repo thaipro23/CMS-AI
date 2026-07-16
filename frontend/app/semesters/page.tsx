@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { deleteAcademicTerm, getAcademicTermWithBlocks, getAcademicTerms, saveAcademicTerm } from '../../lib/api'
 import { AcademicBlock, AcademicTerm } from '../../types'
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
@@ -174,10 +175,10 @@ export default function SemestersPage() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 112, sticky: 'right', hideable: false, render: (item) => <div className="row-actions"><button className="btn small secondary" type="button" onClick={() => openEdit(item)}>Sửa</button><button className="btn small danger secondary-danger" type="button" disabled={saving} onClick={() => setDeleteTarget(item)}>Xóa</button></div> },
   ]
 
-  if (!can('manage_settings')) return <PageRoot className="page-stack"><PageHeader eyebrow="Danh mục" title="Học kỳ" /></PageRoot>
+  if (!can('manage_settings')) return <PageRoot className="page-stack enterprise-standard-page semesters-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Học kỳ" description="Quản lý học kỳ, block đào tạo và cấu hình tuần học dùng cho đồng bộ và phân tích tiến độ." icon="semester" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Học kỳ' }]} /><section className="card empty-state">Bạn không có quyền quản lý cấu hình học kỳ.</section></PageRoot>
 
-  return <PageRoot className="page-stack semesters-page">
-    <PageHeader eyebrow="Danh mục" title="Học kỳ & Cấu hình tuần học" />
+  return <PageRoot className="page-stack enterprise-standard-page semesters-page">
+    <EnterpriseScreenHeader eyebrow="Danh mục" title="Học kỳ & Cấu hình tuần học" description="Quản lý học kỳ, hai block đào tạo và cấu hình tuần học dùng cho đồng bộ và phân tích tiến độ." icon="semester" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Học kỳ' }]} />
     {message ? <div className="alert">{message}</div> : null}
     <WorkspaceSection
       title="Danh sách học kỳ"

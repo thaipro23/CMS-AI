@@ -54,7 +54,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ chapter, stats }) => { const published = Boolean(stats?.is_published || stats?.release_status === 'published' || (stats?.published_release_count || 0) > 0); return <EntityActions canManage={canUpdateOffering && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(chapter); setEditLesson(normalizeLessonInput(chapterDisplayName(chapter))) }} onDelete={() => setDeleteTarget(chapter)} /> } },
   ], [canUpdateOffering, safePage, tableState.pageSize])
 
-  return <PageRoot className="page-stack bank-multipage bank-hierarchy-list-page bank-chapters-page">
+  return <PageRoot className="page-stack bank-multipage bank-contract-page bank-hierarchy-list-page bank-chapters-page">
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Bài học"

@@ -282,7 +282,7 @@ export function DepartmentsPage() {
     body: message,
   } : null
 
-  return <PageRoot className="page-stack bank-multipage bank-departments-page bank-hierarchy-list-page">
+  return <PageRoot className="page-stack bank-multipage bank-contract-page bank-departments-page bank-hierarchy-list-page">
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Bộ môn"

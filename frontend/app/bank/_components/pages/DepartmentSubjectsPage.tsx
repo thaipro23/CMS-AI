@@ -76,7 +76,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject }) => <EntityActions canManage={canUpdateSubject} lockedLabel="Không có quyền" onEdit={() => openEdit(subject)} onDelete={() => setDeleteTarget(subject)} /> },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
-  return <PageRoot className="page-stack bank-multipage bank-hierarchy-list-page bank-subjects-page">
+  return <PageRoot className="page-stack bank-multipage bank-contract-page bank-hierarchy-list-page bank-subjects-page">
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Môn học"

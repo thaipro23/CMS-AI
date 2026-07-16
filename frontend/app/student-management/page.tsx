@@ -20,7 +20,8 @@ import {
   AcademicSubjectManagementSummary,
   AcademicTerm,
 } from "../../types";
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
 import { WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
@@ -365,8 +366,15 @@ function StudentManagementSubjectsContent() {
   ], [branch, campus, mappingSubjectId, page, pageSize, selectedTerm?.term_name, termId]);
 
   return (
-    <PageRoot className="page-stack student-management-page academic-flow-page ux-enterprise-page">
-      <PageHeader eyebrow="Vận hành đào tạo" title="Quản lý sinh viên" />
+    <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page ux-enterprise-page">
+      <EnterpriseScreenHeader
+        eyebrow="Vận hành đào tạo"
+        title="Quản lý sinh viên"
+        description="Quản lý danh sách môn, lớp, sinh viên, trạng thái CMS và tiến độ học trong phạm vi được phân quyền."
+        icon="students"
+        tone="blue"
+        breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: 'Quản lý sinh viên' }]}
+      />
       <section className="card academic-filter-panel" aria-label="Bộ lọc danh sách môn">
         <div className="academic-filter-bar">
           <label>

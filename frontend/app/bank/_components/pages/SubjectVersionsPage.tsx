@@ -58,7 +58,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: ({ subject_version, stats }) => { const published = Boolean(stats?.is_published || (stats?.published_release_count || 0) > 0 || stats?.status === 'published'); return <EntityActions canManage={canUpdateSubject && !published} lockedLabel={published ? 'Đã khóa' : 'Không có quyền'} onEdit={() => { setEditing(subject_version); setEditCode(subject_version.code || ''); setEditName(subject_version.name || '') }} onDelete={() => setDeleteTarget(subject_version)} /> } },
   ], [canUpdateSubject, safePage, tableState.pageSize])
 
-  return <PageRoot className="page-stack bank-multipage bank-hierarchy-list-page bank-subject-versions-page">
+  return <PageRoot className="page-stack bank-multipage bank-contract-page bank-hierarchy-list-page bank-subject-versions-page">
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Phiên bản môn"

@@ -1,0 +1,603 @@
+/* Bank design contract — shared page structure, quiz/history workspaces and responsive behavior. */
+
+.enterprise-content.bank-multipage,
+.enterprise-content.bank-contract-page {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  align-content: start;
+  gap: 14px !important;
+  padding: 18px 20px 28px !important;
+}
+
+.bank-page-identity,
+.bank-hierarchy-page-intro.bank-page-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 4px 4px 6px;
+  background: transparent;
+  border: 0;
+}
+
+.bank-page-identity__main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.bank-page-identity__icon,
+.bank-hierarchy-page-intro .bank-page-identity__icon {
+  width: 46px !important;
+  height: 46px !important;
+  min-width: 46px !important;
+  flex: 0 0 46px !important;
+  margin: 0 !important;
+  border-radius: 13px !important;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: none;
+}
+
+.bank-page-identity__copy,
+.bank-hierarchy-page-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.bank-page-identity__title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bank-page-identity h1,
+.bank-hierarchy-page-copy h1 {
+  margin: 0;
+  color: #0f172a;
+  font-size: clamp(22px, 1.65vw, 28px);
+  line-height: 1.16;
+  font-weight: 650;
+  letter-spacing: -.025em;
+}
+
+.bank-page-identity p,
+.bank-hierarchy-page-copy p {
+  max-width: 980px;
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.bank-page-identity__meta,
+.bank-page-identity__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bank-page-identity__actions .btn { min-height: 40px; }
+
+.bank-section {
+  min-width: 0;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .045);
+}
+
+.bank-section > .enterprise-section-header,
+.bank-section__header {
+  min-height: 68px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.bank-section .enterprise-section-heading { align-items: center; }
+.bank-section .enterprise-section-icon {
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  flex-basis: 36px !important;
+  margin: 0 !important;
+  border-radius: 10px !important;
+}
+
+.bank-section .enterprise-section-title-row h2 {
+  font-size: 15px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.bank-section .enterprise-section-description {
+  max-width: 900px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.bank-section__body { min-width: 0; }
+
+.bank-workflow-stepper {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
+}
+
+.bank-workflow-step {
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 28px 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.bank-workflow-step.is-active {
+  border-color: #93c5fd;
+  background: #f8fbff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .08);
+}
+
+.bank-workflow-step.is-done {
+  border-color: #bbf7d0;
+  background: #f7fef9;
+}
+
+.bank-workflow-step__marker {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bank-workflow-step.is-active .bank-workflow-step__marker {
+  background: #2563eb;
+  color: #fff;
+}
+
+.bank-workflow-step.is-done .bank-workflow-step__marker {
+  background: #16a34a;
+  color: #fff;
+}
+
+.bank-workflow-step__icon {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  flex-basis: 32px !important;
+  border-radius: 9px !important;
+}
+
+.bank-workflow-step__copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.bank-workflow-step__copy b {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bank-workflow-step__copy small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bank-quiz-main-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.85fr) minmax(300px, .95fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.bank-quiz-result-section,
+.bank-quiz-config-section { min-width: 0; }
+
+.bank-quiz-result-body {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.bank-quiz-config-section { align-self: start; }
+
+.bank-quiz-config-body { padding: 14px; }
+
+.bank-quiz-config-form {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.bank-quiz-config-form label,
+.bank-contract-filter-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.bank-quiz-config-form .input,
+.bank-contract-filter-toolbar .input {
+  min-height: 40px;
+  border-radius: 10px;
+}
+
+.bank-quiz-config-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.bank-quiz-config-actions .btn,
+.bank-quiz-config-secondary {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+}
+
+.bank-quiz-config-hint {
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #475569;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.bank-quiz-config-rules {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.bank-quiz-config-rules > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.bank-quiz-config-rules .visual-icon {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  flex-basis: 28px !important;
+  border-radius: 8px !important;
+}
+
+.bank-quiz-empty-map {
+  min-height: 390px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: 28px 18px;
+  text-align: center;
+}
+
+.bank-quiz-empty-map__icon {
+  width: 64px !important;
+  height: 64px !important;
+  min-width: 64px !important;
+  flex-basis: 64px !important;
+  border-radius: 999px !important;
+}
+
+.bank-quiz-empty-map h3 { margin: 0 0 5px; font-size: 16px; font-weight: 650; }
+.bank-quiz-empty-map p { max-width: 560px; margin: 0; color: #64748b; font-size: 12px; line-height: 1.55; }
+
+.bank-quiz-empty-metrics,
+.bank-quiz-summary-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bank-quiz-empty-metrics > div,
+.bank-quiz-summary-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  text-align: left;
+}
+
+.bank-quiz-empty-metrics span,
+.bank-quiz-summary-grid span { color: #64748b; font-size: 10px; font-weight: 600; }
+.bank-quiz-empty-metrics b,
+.bank-quiz-summary-grid b { overflow: hidden; color: #0f172a; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+
+.bank-quiz-action-summary { margin: 0; }
+.bank-quiz-result-actions { margin: 0; border-radius: 10px; }
+
+.bank-quiz-history-section .bank-section__body { min-width: 0; }
+
+.bank-contract-empty-state {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: #64748b;
+  text-align: left;
+}
+
+.bank-contract-empty-state > div { display: grid; gap: 4px; }
+.bank-contract-empty-state b { color: #0f172a; font-size: 14px; }
+.bank-contract-empty-state p { margin: 0; font-size: 12px; }
+
+.bank-history-section__body { min-width: 0; }
+
+.bank-history-section .history-view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 46px;
+  padding: 0 14px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.bank-history-section .history-view-tabs button {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.bank-history-section .history-view-tabs button b {
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 10px;
+}
+
+.bank-history-section .history-view-tabs button.is-active {
+  border-bottom-color: #2563eb;
+  color: #1d4ed8;
+}
+
+.bank-contract-filter-toolbar,
+.bank-history-section .history-filter-bar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(190px, 260px) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.bank-contract-filter-field > span { color: #475569; font-size: 11px; font-weight: 600; }
+.bank-contract-filter-toolbar > .btn { min-height: 40px; }
+
+.bank-history-page .operations-kpi-strip,
+.history-console .operations-kpi-strip { margin: 0; }
+
+.bank-contract-page .academic-inline-notice,
+.bank-multipage .academic-inline-notice {
+  margin: 0;
+}
+
+/* Make the older Bank sections follow the same visual contract without changing business logic. */
+.bank-multipage .bank-hierarchy-panel,
+.bank-multipage .visual-section-card,
+.bank-multipage .dashboard-control-bar,
+.bank-multipage .dashboard-error-state,
+.bank-multipage .dashboard-empty-state {
+  border-color: #dbe4f0;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
+}
+
+.bank-multipage .bank-hierarchy-panel > .section-head,
+.bank-multipage .visual-section-heading {
+  min-height: 62px;
+  align-items: center;
+}
+
+.bank-multipage .enterprise-table-shell { border-radius: 0; }
+.bank-section .enterprise-table-shell { border-left: 0; border-right: 0; border-bottom: 0; }
+
+@media (max-width: 1180px) {
+  .bank-quiz-main-grid { grid-template-columns: minmax(0, 1fr); }
+  .bank-quiz-config-section { order: -1; }
+  .bank-quiz-config-form {
+    grid-template-columns: minmax(0, 1.35fr) minmax(220px, .85fr);
+    align-items: end;
+  }
+  .bank-quiz-config-actions { grid-column: 1 / -1; }
+  .bank-quiz-config-hint,
+  .bank-quiz-config-rules,
+  .bank-quiz-config-secondary { grid-column: 1 / -1; }
+}
+
+@media (max-width: 900px) {
+  .enterprise-content.bank-multipage,
+  .enterprise-content.bank-contract-page { padding: 14px 12px 22px !important; }
+
+  .bank-page-identity { align-items: flex-start; }
+  .bank-page-identity__actions { width: 100%; }
+  .bank-page-identity__actions .btn { width: 100%; }
+
+  .bank-workflow-stepper { grid-template-columns: 1fr; }
+  .bank-workflow-step { grid-template-columns: 28px 32px minmax(0, 1fr); }
+  .bank-workflow-step__copy b,
+  .bank-workflow-step__copy small { white-space: normal; }
+
+  .bank-quiz-config-form { grid-template-columns: 1fr; }
+  .bank-quiz-config-actions,
+  .bank-quiz-config-hint,
+  .bank-quiz-config-rules,
+  .bank-quiz-config-secondary { grid-column: auto; }
+
+  .bank-quiz-empty-metrics,
+  .bank-quiz-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .bank-contract-filter-toolbar,
+  .bank-history-section .history-filter-bar {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, .55fr) auto;
+  }
+}
+
+@media (max-width: 680px) {
+  .enterprise-content.bank-multipage,
+  .enterprise-content.bank-contract-page { gap: 10px !important; padding: 10px 8px 18px !important; }
+
+  .bank-page-identity,
+  .bank-hierarchy-page-intro.bank-page-identity {
+    display: grid;
+    gap: 10px;
+    padding-inline: 2px;
+  }
+
+  .bank-page-identity__main { align-items: flex-start; gap: 10px; }
+  .bank-page-identity__icon,
+  .bank-hierarchy-page-intro .bank-page-identity__icon {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    flex-basis: 40px !important;
+    border-radius: 11px !important;
+  }
+
+  .bank-page-identity h1,
+  .bank-hierarchy-page-copy h1 { font-size: 20px; }
+  .bank-page-identity p,
+  .bank-hierarchy-page-copy p { font-size: 11px; line-height: 1.45; }
+
+  .bank-section { border-radius: 12px; }
+  .bank-section > .enterprise-section-header,
+  .bank-section__header {
+    min-height: 0;
+    align-items: stretch !important;
+    padding: 12px;
+  }
+
+  .bank-section .enterprise-section-actions {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bank-workflow-stepper { padding: 8px; }
+  .bank-workflow-step { min-height: 52px; padding: 7px 8px; }
+
+  .bank-quiz-result-body,
+  .bank-quiz-config-body { padding: 10px; }
+
+  .bank-quiz-config-actions { grid-template-columns: 1fr; }
+  .bank-quiz-empty-map { min-height: 300px; padding: 20px 8px; }
+  .bank-quiz-empty-metrics,
+  .bank-quiz-summary-grid { grid-template-columns: 1fr 1fr; }
+
+  .bank-history-section .history-view-tabs {
+    overflow-x: auto;
+    padding: 0 8px;
+    scrollbar-width: thin;
+  }
+  .bank-history-section .history-view-tabs button { flex: 0 0 auto; }
+
+  .bank-contract-filter-toolbar,
+  .bank-history-section .history-filter-bar { grid-template-columns: 1fr; padding: 10px; }
+  .bank-contract-filter-toolbar > .btn { width: 100%; }
+
+  .bank-contract-empty-state { min-height: 130px; padding: 18px 12px; }
+}
+
+@media (max-width: 420px) {
+  .bank-quiz-empty-metrics,
+  .bank-quiz-summary-grid { grid-template-columns: 1fr; }
+  .bank-section .enterprise-section-actions { grid-template-columns: 1fr; }
+}
+
+.bank-contract-page .academic-inline-notice.danger,
+.bank-contract-page .academic-inline-notice.error {
+  border-color: #fecaca;
+  background: #fff7f7;
+  color: #b91c1c;
+}
+.bank-contract-page .academic-inline-notice.warning {
+  border-color: #fed7aa;
+  background: #fffaf5;
+  color: #c2410c;
+}
+.bank-contract-page .academic-inline-notice.success {
+  border-color: #bbf7d0;
+  background: #f7fef9;
+  color: #047857;
+}
+.bank-contract-page .academic-inline-notice.info {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+  color: #1d4ed8;
+}

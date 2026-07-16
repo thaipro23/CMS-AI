@@ -6,7 +6,8 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../../context/AppContext'
 import { getAcademicTrainingTeacherReport } from '../../../../../lib/api'
 import { AcademicLearningComponentScore, AcademicTrainingClassReport, AcademicTrainingTeacherReport } from '../../../../../types'
-import { PageHeader, PageRoot } from '../../../../../components/layout/PageHeader'
+import { PageRoot } from '../../../../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../../../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../../../components/table/EnterpriseDataTable'
 import { InlineNotice, InlineNoticeData, noticeError } from '../../../../../components/ui/InlineNotice'
 import { TrainingContextChips, TrainingKpiStrip } from '../../../../../components/training/TrainingWorkspace'
@@ -150,10 +151,14 @@ export default function TeacherClassesPage() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: (cls) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(cls, teacher, filters)}>Chi tiết</Link><Link className="btn small secondary" href={learningBehaviorHref(cls, filters)}>Phân tích</Link></div> },
   ], [teacher, termId, branch, campus, termName])
 
-  return <PageRoot className="page-stack training-management-page teacher-management-page teacher-classes-page training-operations-page">
-    <PageHeader
+  return <PageRoot className="page-stack enterprise-standard-page training-management-page teacher-management-page teacher-classes-page training-operations-page">
+    <EnterpriseScreenHeader
       eyebrow="Vận hành đào tạo"
       title={`Lớp của ${teacherTitle}`}
+      description="Danh sách lớp được phân công, tình trạng Course CMS, tiến độ học và các cảnh báo cần giảng viên theo dõi."
+      icon="teachers"
+      tone="blue"
+      breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: teacherTitle }, { label: 'Danh sách lớp' }]}
       secondaryActions={<><Link className="btn secondary" href={backHref}>Quay lại giảng viên</Link><button className="btn secondary" type="button" onClick={() => load()} disabled={loading}>Tải lại</button></>}
     />
 

@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions, syncAcademicCampusesFromAp } from '../../lib/api'
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { AccessibleDialog } from '../../components/ui/AccessibleDialog'
@@ -259,10 +260,14 @@ export default function ApSyncPage() {
     }
   }
 
-  return <PageRoot className="page-stack ap-sync-page">
-    <PageHeader
+  return <PageRoot className="page-stack enterprise-standard-page ap-sync-page">
+    <EnterpriseScreenHeader
       eyebrow="Vận hành hệ thống"
       title="Đồng bộ AP"
+      description="Lập kế hoạch và theo dõi đồng bộ học kỳ, cơ sở, môn, lớp, giảng viên và sinh viên từ hệ thống AP."
+      icon="sync"
+      tone="blue"
+      breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Đồng bộ AP' }]}
       secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running || syncingCampuses} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
       primaryAction={canManageAcademicOps ? <button className="btn" type="button" disabled={loadingOptions || running || syncingCampuses || Boolean(activeRuns.length)} onClick={syncCampusesFromAp}>{syncingCampuses ? 'Đang cập nhật...' : 'Cập nhật danh mục cơ sở'}</button> : undefined}
     />

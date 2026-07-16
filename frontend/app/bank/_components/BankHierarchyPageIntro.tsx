@@ -1,5 +1,5 @@
 import type { AppIconName } from '../../../components/icons/AppIcon'
-import { AppIcon } from '../../../components/icons/AppIcon'
+import { VisualIcon } from '../../../components/ui/VisualIcon'
 
 export function BankHierarchyPageIntro({
   title,
@@ -10,11 +10,13 @@ export function BankHierarchyPageIntro({
   description: string
   icon?: AppIconName
 }) {
-  return <section className="bank-hierarchy-page-intro" aria-labelledby="bank-hierarchy-page-title">
-    <span className="bank-hierarchy-page-icon" aria-hidden="true"><AppIcon name={icon} size={34} /></span>
-    <div className="bank-hierarchy-page-copy">
-      <h2 id="bank-hierarchy-page-title">{title}</h2>
-      <p>{description}</p>
+  return <header className="bank-hierarchy-page-intro bank-page-identity" aria-labelledby="bank-hierarchy-page-title">
+    <div className="bank-page-identity__main">
+      <VisualIcon icon={icon} tone="blue" label={title} size={22} className="bank-page-identity__icon bank-hierarchy-page-icon" />
+      <div className="bank-page-identity__copy bank-hierarchy-page-copy">
+        <h1 id="bank-hierarchy-page-title">{title}</h1>
+        <p>{description}</p>
+      </div>
     </div>
-  </section>
+  </header>
 }

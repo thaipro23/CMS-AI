@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { deleteAcademicCampus, getAcademicCampuses, saveAcademicCampus } from '../../lib/api'
 import { AcademicCampus } from '../../types'
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { CompactFilterBar, OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
 import { StatusBadge } from '../../components/ui/StatusBadge'
@@ -86,10 +87,10 @@ export default function PremisesPage() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 112, sticky: 'right', hideable: false, render: (item) => <div className="row-actions"><button className="btn small secondary" type="button" onClick={() => edit(item)}>Sửa</button><button className="btn small danger secondary-danger" type="button" disabled={saving} onClick={() => setDeleteTarget(item)}>Xóa</button></div> },
   ]
 
-  if (!(can('manage_training_deadlines') || can('manage_settings'))) return null
+  if (!(can('manage_training_deadlines') || can('manage_settings'))) return <PageRoot className="page-stack enterprise-standard-page premises-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Cơ sở" description="Quản lý danh mục cơ sở dùng cho đồng bộ AP và phạm vi vận hành đào tạo." icon="campus" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Cơ sở' }]} /><section className="card empty-state">Bạn không có quyền quản lý danh mục cơ sở.</section></PageRoot>
 
-  return <PageRoot className="page-stack premises-page">
-    <PageHeader eyebrow="Danh mục" title="Cơ sở" secondaryActions={<button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button>} primaryAction={<button className="btn" type="button" onClick={openCreate}>Thêm cơ sở</button>} />
+  return <PageRoot className="page-stack enterprise-standard-page premises-page">
+    <EnterpriseScreenHeader eyebrow="Danh mục" title="Cơ sở" description="Quản lý danh mục cơ sở dùng cho đồng bộ AP và phạm vi vận hành đào tạo." icon="campus" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Cơ sở' }]} secondaryActions={<button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button>} primaryAction={<button className="btn" type="button" onClick={openCreate}>Thêm cơ sở</button>} />
     {message ? <div className="alert">{message}</div> : null}
     <OperationsKpiStrip items={[
       { label: 'Đang hiển thị', value: filtered.length, hint: `${items.length} cơ sở đã tải` },

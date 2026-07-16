@@ -6,7 +6,8 @@ import { useAppContext } from '../../context/AppContext'
 import { AuditLogRow } from '../../types'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { StatusBadge } from '../../components/ui/StatusBadge'
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { useDebouncedValue } from '../../lib/useDebouncedValue'
@@ -113,15 +114,19 @@ function AuditContent() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 92, sticky: 'right', hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => setSelectedLog(row)}>Chi tiết</button> },
   ], [debugMode, page, pageSize])
 
-  if (!can('view_jobs')) return <div className="card empty-state">Bạn không có quyền xem nhật ký hoạt động.</div>
+  if (!can('view_jobs')) return <PageRoot className="page-stack enterprise-standard-page ops-console audit-console"><EnterpriseScreenHeader eyebrow="Vận hành hệ thống" title="Nhật ký hoạt động" description="Tra cứu thao tác, kết quả, nguồn lỗi và người thực hiện để phục vụ audit và xử lý sự cố." icon="audit" tone="blue" breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Nhật ký hoạt động' }]} /><section className="card empty-state">Bạn không có quyền xem nhật ký hoạt động.</section></PageRoot>
   const failedCount = rows.filter((row) => row.status === 'failed').length
   const successCount = rows.filter((row) => row.status === 'success').length
   const resetFilters = () => update({ q: '', status: 'all', errorType: 'all', actorId: '', page: 1 }, { resetPage: false })
 
-  return <PageRoot className="page-stack ops-console audit-console ux-enterprise-page">
-    <PageHeader
+  return <PageRoot className="page-stack enterprise-standard-page ops-console audit-console ux-enterprise-page">
+    <EnterpriseScreenHeader
       eyebrow="Vận hành hệ thống"
       title="Nhật ký hoạt động"
+      description="Tra cứu thao tác, kết quả, nguồn lỗi và người thực hiện để phục vụ audit và xử lý sự cố."
+      icon="audit"
+      tone="blue"
+      breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Nhật ký hoạt động' }]}
       secondaryActions={<button className="btn secondary" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>}
       primaryAction={<button className="btn" type="button" onClick={exportCurrentFilter} disabled={exporting || loading}>{exporting ? 'Đang xuất...' : 'Xuất CSV'}</button>}
     />

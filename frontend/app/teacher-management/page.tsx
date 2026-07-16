@@ -20,7 +20,8 @@ import {
   AcademicTrainingTeacherReport,
 } from "../../types";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
@@ -449,10 +450,14 @@ function TeacherManagementContent() {
   ], [branch, campus, page, pageSize, selectedTerm?.term_name, termId]);
 
   return (
-    <PageRoot className="page-stack student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
-      <PageHeader
+    <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
+      <EnterpriseScreenHeader
         eyebrow="Vận hành đào tạo"
         title="Quản lý giảng viên"
+        description="Theo dõi giảng viên, lớp phụ trách, trạng thái CMS, tiến độ học và các trường hợp cần hỗ trợ theo phạm vi được phân quyền."
+        icon="teachers"
+        tone="blue"
+        breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: 'Quản lý giảng viên' }]}
         primaryAction={<button className="btn" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === "queued" || exportJob?.status === "running"}>{exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel"}</button>}
         secondaryActions={exportJob?.status === "completed" ? <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button> : undefined}
       />

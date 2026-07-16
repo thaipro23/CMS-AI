@@ -2,13 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { VisualIcon } from '../../../../components/ui/VisualIcon'
 import { OperationsKpiStrip } from '../../../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import { formatVNDateTime } from '../../../../lib/time'
 import { getBankReleases, getCourseQuizInstances, rollbackCourseQuizInstance } from '../../../../lib/api'
 import type { BankRelease, CourseQuizInstance } from '../../../../types'
-import { useBankData, useAsyncMessage, Breadcrumb, statusClass, statusLabel } from '../shared'
+import { useBankData, useAsyncMessage, statusClass, statusLabel } from '../shared'
+import { BankPageIdentity, BankSection } from '../BankDesignContract'
 
 function dateText(value?: string | null) {
   try { return value ? formatVNDateTime(value) : '—' } catch { return value || '—' }
@@ -90,9 +92,18 @@ export function BankHistoryPage() {
   const rolledBack = quizHistory.filter((item) => item.status === 'rolled_back').length
   const failed = quizHistory.filter((item) => item.status === 'failed').length
 
-  return <PageRoot className="page-stack bank-multipage history-console">
-    <PageHeader eyebrow="Ngân hàng đề" title="Lịch sử bộ đề và Quiz" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Lịch sử Quiz' }]} />
-    {message ? <div className="alert info">{message}</div> : null}
+  return <PageRoot className="page-stack bank-multipage bank-contract-page history-console bank-history-page">
+    <PageHeader eyebrow="Ngân hàng đề" title="Lịch sử bộ đề và Quiz" icon="audit" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Lịch sử Quiz' }]} />
+
+    <BankPageIdentity
+      title="Lịch sử bộ đề và Quiz"
+      description="Theo dõi Release đã chốt, Quiz đã tạo trên CMS, trạng thái khôi phục và các lỗi cần kiểm tra."
+      icon="audit"
+      tone="slate"
+      actions={<button className="btn secondary" type="button" disabled={loading} onClick={() => load()}>{loading ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
+    />
+
+    {message ? <div className="academic-inline-notice info" role="status" aria-live="polite"><VisualIcon icon="info" tone="blue" label="Thông báo" size={18} className="notice-visual-icon" /><div className="notice-copy"><b>Thông báo thao tác</b><span>{message}</span></div></div> : null}
 
     <OperationsKpiStrip ariaLabel="Tổng quan lịch sử bộ đề" items={[
       { label: 'Bộ đề đã chốt', value: releases.length, icon: 'release', tone: 'info' },
@@ -101,17 +112,25 @@ export function BankHistoryPage() {
       { label: 'Lỗi cần kiểm tra', value: failed, icon: 'alert', tone: failed ? 'danger' : 'success' },
     ]} />
 
-    <section className="card history-workspace">
+    <BankSection
+      title="Danh sách lịch sử"
+      description="Chuyển giữa Quiz trên CMS và snapshot Release đã chốt; bộ lọc được giữ trong URL."
+      icon="audit"
+      tone="slate"
+      meta={<span className="status pending">{activeView === 'quiz' ? `${filteredQuiz.length} Quiz` : `${filteredReleases.length} bộ đề`}</span>}
+      className="history-workspace bank-history-section"
+      bodyClassName="bank-history-section__body"
+    >
       <div className="history-view-tabs" role="tablist" aria-label="Loại lịch sử">
-        <button role="tab" aria-selected={activeView === 'quiz'} className={activeView === 'quiz' ? 'is-active' : ''} onClick={() => update({ sort: 'quiz', page: 1 }, { resetPage: false })}>Quiz trên CMS <span>{quizHistory.length}</span></button>
-        <button role="tab" aria-selected={activeView === 'release'} className={activeView === 'release' ? 'is-active' : ''} onClick={() => update({ sort: 'release', page: 1 }, { resetPage: false })}>Bộ đề đã chốt <span>{releases.length}</span></button>
+        <button role="tab" aria-selected={activeView === 'quiz'} className={activeView === 'quiz' ? 'is-active' : ''} onClick={() => update({ sort: 'quiz', page: 1 }, { resetPage: false })}><span>Quiz trên CMS</span><b>{quizHistory.length}</b></button>
+        <button role="tab" aria-selected={activeView === 'release'} className={activeView === 'release' ? 'is-active' : ''} onClick={() => update({ sort: 'release', page: 1 }, { resetPage: false })}><span>Bộ đề đã chốt</span><b>{releases.length}</b></button>
       </div>
-      <div className="history-filter-bar">
-        <label>Tìm kiếm<input className="input" value={state.q} onChange={(event) => update({ q: event.target.value })} placeholder={activeView === 'quiz' ? 'Course ID, tên Quiz, Release...' : 'Mã Release, Library CMS...'} /></label>
-        <label>Trạng thái<select className="input" value={state.status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="created">Đã tạo</option><option value="published">Đã đưa lên CMS</option><option value="rolled_back">Đã khôi phục</option><option value="failed">Thất bại</option></select></label>
+      <div className="history-filter-bar bank-contract-filter-toolbar">
+        <label className="bank-contract-filter-field"><span>Tìm kiếm</span><input className="input" value={state.q} onChange={(event) => update({ q: event.target.value })} placeholder={activeView === 'quiz' ? 'Course ID, tên Quiz, Release...' : 'Mã Release, Library CMS...'} /></label>
+        <label className="bank-contract-filter-field"><span>Trạng thái</span><select className="input" value={state.status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="created">Đã tạo</option><option value="published">Đã đưa lên CMS</option><option value="rolled_back">Đã khôi phục</option><option value="failed">Thất bại</option></select></label>
         <button className="btn secondary" type="button" disabled={loading} onClick={() => load()}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
       </div>
       {activeView === 'quiz' ? <EnterpriseDataTable tableId="bank-history-quizzes" caption="Quiz trên CMS" rows={quizRows} columns={quizColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredQuiz.length} totalPages={quizTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="Quiz" emptyTitle="Chưa có Quiz phù hợp" emptyDescription="Thử xóa bộ lọc hoặc tạo Quiz từ Release đã chốt." /> : <EnterpriseDataTable tableId="bank-history-releases" caption="Bộ đề đã chốt" rows={releaseRows} columns={releaseColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredReleases.length} totalPages={releaseTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="bộ đề" emptyTitle="Chưa có bộ đề phù hợp" emptyDescription="Thử xóa bộ lọc hoặc chốt Release từ workspace của bài." />}
-    </section>
+    </BankSection>
   </PageRoot>
 }

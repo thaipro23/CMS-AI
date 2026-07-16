@@ -4,10 +4,11 @@ import { daysAgoVNISODate, formatVNDateTime, todayVNISODate } from '../../../../
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { useBankData, Breadcrumb, QuickSearchBox, Modal } from '../shared'
+import { useBankData, QuickSearchBox, Modal } from '../shared'
 import { getBankDashboardAnalytics } from '../../../../lib/api'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { VisualIcon } from '../../../../components/ui/VisualIcon'
+import { BankPageIdentity } from '../BankDesignContract'
 import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -294,8 +295,9 @@ export function BankDashboardPage() {
     updateUrl('custom', from, to)
   }
 
-  return <PageRoot className="page-stack bank-multipage dashboard-analytics-page">
-    <PageHeader eyebrow="Ngân hàng đề" title="Tổng quan" />
+  return <PageRoot className="page-stack bank-multipage bank-contract-page dashboard-analytics-page">
+    <PageHeader eyebrow="Ngân hàng đề" title="Tổng quan" icon="dashboard" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Tổng quan' }]} />
+    <BankPageIdentity title="Tổng quan ngân hàng đề" description="Theo dõi khối lượng câu hỏi, trạng thái duyệt, xu hướng phát sinh và các việc cần xử lý trong phạm vi được phân quyền." icon="dashboard" tone="blue" />
     <section className="dashboard-control-bar" aria-label="Phạm vi thời gian và dữ liệu dashboard">
       <DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />
       <div className="dashboard-control-meta">

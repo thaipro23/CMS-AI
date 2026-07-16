@@ -15,7 +15,8 @@ import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { AcademicBulkOperationJob, AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
-import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
+import { PageRoot } from '../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { formatVNDateTime } from '../../lib/time'
@@ -296,11 +297,15 @@ function JobsContent() {
     { key: 'created', header: 'Ngày tạo', kind: 'date', width: 138, priority: 'important', hideable: true, render: (item) => <small>{dateText(item.created_at)}</small> },
   ], [])
 
-  if (!can('view_jobs')) return <div className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</div>
-  return <PageRoot className="page-stack ops-console jobs-console ux-enterprise-page">
-    <PageHeader
+  if (!can('view_jobs')) return <PageRoot className="page-stack enterprise-standard-page ops-console jobs-console"><EnterpriseScreenHeader eyebrow="Vận hành hệ thống" title="Tác vụ nền" description="Theo dõi các job đồng bộ, sinh câu hỏi, xuất báo cáo, publish Release và tạo Quiz đang chạy trong hệ thống." icon="jobs" tone="blue" breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Tác vụ nền' }]} /><section className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</section></PageRoot>
+  return <PageRoot className="page-stack enterprise-standard-page ops-console jobs-console ux-enterprise-page">
+    <EnterpriseScreenHeader
       eyebrow="Vận hành hệ thống"
       title="Tác vụ nền"
+      description="Theo dõi các job đồng bộ, sinh câu hỏi, xuất báo cáo, publish Release và tạo Quiz đang chạy trong hệ thống."
+      icon="jobs"
+      tone="blue"
+      breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Tác vụ nền' }]}
       secondaryActions={<button className="btn secondary" type="button" onClick={() => setQuizOpen(true)}>Quiz gần đây</button>}
       primaryAction={<button className="btn" type="button" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : 'Tải lại'}</button>}
     />

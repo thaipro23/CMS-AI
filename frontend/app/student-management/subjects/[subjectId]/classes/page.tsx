@@ -6,7 +6,8 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../../context/AppContext'
 import { getAcademicBlocks, getAcademicSubjectClasses } from '../../../../../lib/api'
 import { AcademicBlock, AcademicClass } from '../../../../../types'
-import { PageHeader, PageRoot } from '../../../../../components/layout/PageHeader'
+import { PageRoot } from '../../../../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../../../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../../../components/table/EnterpriseDataTable'
 import { InlineNotice, InlineNoticeData, noticeError } from '../../../../../components/ui/InlineNotice'
 import { TrainingContextChips, TrainingKpiStrip } from '../../../../../components/training/TrainingWorkspace'
@@ -139,10 +140,14 @@ function SubjectClassesContent() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 118, sticky: 'right', hideable: false, render: (item) => <div className="training-row-actions"><Link className="btn small primary" href={classDetailHref(item)}>Chi tiết</Link><Link className="btn small secondary" href={learningBehaviorHref(item)}>Phân tích</Link></div> },
   ], [branch, campus, page, pageSize, subjectId, termId])
 
-  return <PageRoot className="page-stack student-management-page academic-flow-page training-operations-page">
-    <PageHeader
+  return <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page training-operations-page">
+    <EnterpriseScreenHeader
       eyebrow="Vận hành đào tạo"
       title={`Lớp của môn ${subjectCode || subjectName || ''}`.trim()}
+      description={`Theo dõi lớp, Course CMS, số lượng sinh viên và tiến độ học của ${subjectName || subjectCode || 'môn học đã chọn'}.`}
+      icon="students"
+      tone="blue"
+      breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Môn học' }, { label: subjectCode || subjectName || 'Danh sách lớp' }]}
       secondaryActions={<Link className="btn secondary" href={listHref}>Quay lại danh sách môn</Link>}
     />
 

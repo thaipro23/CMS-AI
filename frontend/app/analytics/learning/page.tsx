@@ -47,7 +47,8 @@ import {
 import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../lib/runtime'
-import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
+import { PageRoot } from '../../../components/layout/PageHeader'
+import { EnterpriseScreenHeader } from '../../../components/layout/EnterpriseDesignContract'
 import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState, TrainingWorkflowSteps } from '../../../components/training/TrainingWorkspace'
@@ -950,10 +951,14 @@ export default function AnalyticsLearningPage() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 106, hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => openReason(row)}>Chi tiết</button> },
   ], [effectiveCourseId])
 
-  return <PageRoot className="page-stack analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
-    <PageHeader
+  return <PageRoot className="page-stack enterprise-standard-page analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
+    <EnterpriseScreenHeader
       eyebrow="Vận hành đào tạo"
       title="Phân tích học tập"
+      description="Phân tích tiến độ, video, quiz và tín hiệu hành vi học theo lớp; dữ liệu chỉ hỗ trợ xác minh, không tự kết luận vi phạm."
+      icon="analytics"
+      tone="blue"
+      breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: 'Phân tích học tập' }]}
       secondaryActions={SHOW_DIAGNOSTICS_UI && can('view_ops_readiness') ? <button className="btn secondary" type="button" aria-expanded={showOperations} onClick={() => setShowOperations((value) => !value)}>{showOperations ? 'Ẩn kiểm tra vận hành' : 'Mở kiểm tra vận hành'}</button> : undefined}
     />
     <section className="card academic-unified-card">

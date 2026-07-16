@@ -3,7 +3,7 @@ import { Suspense } from 'react'
 import SearchPageClient from './SearchPageClient'
 
 function BankSearchFallback() {
-  return <PageRoot className="page-stack bank-multipage dashboard-search-page">
+  return <PageRoot className="page-stack bank-multipage bank-contract-page dashboard-search-page">
     <div className="dashboard-search-hero card">
       <div>
         <span className="eyebrow">Drill-down</span>

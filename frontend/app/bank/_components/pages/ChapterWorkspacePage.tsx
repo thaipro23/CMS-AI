@@ -891,7 +891,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const materialPreviewText = materialPreviewChunks.map((chunk, index) => `Đoạn ${index + 1}
 ${chunk.content}`).join('\n\n')
 
-  return <PageRoot className="page-stack bank-multipage bank-hierarchy-detail-page chapter-workspace-page">
+  return <PageRoot className="page-stack bank-multipage bank-contract-page bank-hierarchy-detail-page chapter-workspace-page">
     <PageHeader eyebrow="Ngân hàng đề" title={chapterDisplayName(chapter)} breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: 'Môn học', href: subject ? `/bank/departments/${subject.department_id}/subjects` : '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments' }, { label: chapterDisplayName(chapter) }]} />
     <BankHierarchyPageIntro
       title={chapterDisplayName(chapter)}
