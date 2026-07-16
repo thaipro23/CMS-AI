@@ -1494,3 +1494,186 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell {
     display: inline !important;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Batch 4 — table control spacing and inline notice collision hotfix
+   Fixes the visual gap before the table header, restores safe control sizes,
+   and prevents notice icons/text from overlapping across the unified shell.
+   -------------------------------------------------------------------------- */
+
+/* EnterpriseDataTable uses CSS grid. Its inherited 10px gap created a blank
+   strip between the controls divider and the actual table header. */
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-shell {
+  gap: 0 !important;
+  row-gap: 0 !important;
+}
+
+/* Keep the utility row compact, but never smaller than its icon/select content. */
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-controls.controls-only {
+  min-height: 54px !important;
+  padding: 7px 18px !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-view-actions {
+  min-height: 40px !important;
+  align-items: center !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-density-control {
+  min-height: 40px !important;
+  align-items: center !important;
+  gap: 9px !important;
+  white-space: nowrap;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-density-control > span {
+  flex: 0 0 auto;
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-density-control .input {
+  width: 132px !important;
+  min-width: 132px !important;
+  height: 40px !important;
+  min-height: 40px !important;
+  padding: 0 34px 0 12px !important;
+  line-height: 40px !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu {
+  min-width: 150px !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu > summary {
+  min-width: 150px !important;
+  min-height: 40px !important;
+  height: 40px !important;
+  padding: 0 13px 0 8px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 8px !important;
+  line-height: 1 !important;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* VisualIcon defaults to 38px, which was larger than the old 36px summary. */
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu > summary .visual-icon {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  flex: 0 0 28px !important;
+  border-radius: 7px !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu > summary .visual-icon svg {
+  width: 15px !important;
+  height: 15px !important;
+}
+
+/* Inline notices: legacy `.academic-inline-notice span { min-width: 180px; }`
+   also targeted the icon because VisualIcon renders a span. Reset direct
+   children explicitly and reserve a stable grid column for the icon. */
+.enterprise-unified-shell .academic-inline-notice {
+  width: 100%;
+  min-width: 0;
+  display: grid !important;
+  grid-template-columns: 32px minmax(0, 1fr) auto !important;
+  align-items: start !important;
+  column-gap: 10px !important;
+  row-gap: 4px !important;
+  padding: 10px 12px !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+}
+
+.enterprise-unified-shell .academic-inline-notice > .notice-visual-icon {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  flex: 0 0 32px !important;
+  align-self: start !important;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  border-radius: 8px !important;
+}
+
+.enterprise-unified-shell .academic-inline-notice > .notice-visual-icon svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+.enterprise-unified-shell .academic-inline-notice > .notice-copy {
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 3px !important;
+  grid-column: 2;
+  align-self: center;
+}
+
+.enterprise-unified-shell .academic-inline-notice > .notice-copy > b,
+.enterprise-unified-shell .academic-inline-notice > .notice-copy > span {
+  display: block;
+  min-width: 0 !important;
+  margin: 0 !important;
+  line-height: 1.35 !important;
+  overflow-wrap: anywhere;
+}
+
+.enterprise-unified-shell .academic-inline-notice > .notice-copy > b {
+  font-size: 12px !important;
+  font-weight: 650 !important;
+}
+
+.enterprise-unified-shell .academic-inline-notice > .notice-copy > span {
+  font-size: 11.5px !important;
+  font-weight: 400 !important;
+}
+
+.enterprise-unified-shell .academic-inline-notice > .notice-action-btn {
+  grid-column: 3;
+  align-self: center;
+}
+
+/* A notice is a separate feedback block, not part of the page intro or table. */
+.enterprise-unified-shell .bank-hierarchy-list-page > .academic-inline-notice,
+.enterprise-unified-shell .bank-hierarchy-list-page > .inline-system-status {
+  margin: 0 0 14px !important;
+}
+
+@media (max-width: 640px) {
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-controls.controls-only {
+    min-height: 52px !important;
+    padding: 6px 12px !important;
+  }
+
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-density-control .input {
+    width: 118px !important;
+    min-width: 118px !important;
+  }
+
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu,
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu > summary {
+    min-width: 140px !important;
+  }
+
+  .enterprise-unified-shell .academic-inline-notice {
+    grid-template-columns: 30px minmax(0, 1fr) !important;
+  }
+
+  .enterprise-unified-shell .academic-inline-notice > .notice-visual-icon {
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    max-width: 30px !important;
+    flex-basis: 30px !important;
+  }
+
+  .enterprise-unified-shell .academic-inline-notice > .notice-action-btn {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
