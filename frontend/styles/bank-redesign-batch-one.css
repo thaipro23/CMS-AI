@@ -1677,3 +1677,55 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell {
     width: 100%;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Bank hierarchy table alignment hotfix
+   Keep header labels and row actions vertically centered at every density.
+   -------------------------------------------------------------------------- */
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table thead tr {
+  height: 42px !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table thead th {
+  height: 42px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  vertical-align: middle !important;
+  line-height: 1.2 !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table thead th > * {
+  vertical-align: middle !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table .enterprise-sort-button {
+  min-height: 42px !important;
+  height: 100% !important;
+  align-items: center !important;
+  line-height: 1.2 !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table tbody td {
+  vertical-align: middle !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table td.enterprise-kind-actions,
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table th.enterprise-kind-actions {
+  vertical-align: middle !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .entity-actions-inline {
+  min-height: 34px !important;
+  align-items: center !important;
+}
+
+@media (max-width: 640px) {
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table thead tr,
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table thead th {
+    height: 40px !important;
+  }
+
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table .enterprise-sort-button {
+    min-height: 40px !important;
+  }
+}
