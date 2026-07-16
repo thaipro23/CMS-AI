@@ -864,7 +864,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 ${chunk.content}`).join('\n\n')
 
   return <PageRoot className="page-stack bank-multipage chapter-workspace-page">
-    <PageHeader eyebrow="Ngân hàng đề" title={chapterDisplayName(chapter)} breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments' }, { label: chapterDisplayName(chapter) }]} />
+    <PageHeader eyebrow="Ngân hàng đề" title={chapterDisplayName(chapter)} breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: 'Môn học', href: subject ? `/bank/departments/${subject.department_id}/subjects` : '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments' }, { label: chapterDisplayName(chapter) }]} />
     {message ? <div className="alert info">{message}</div> : null}
     {activeOperation ? <ChapterOperationStatus operation={activeOperation} /> : null}
     {chapterPublished ? <div className="alert success"><b>Bài đã publish.</b> Các thao tác sửa tài liệu, tạo câu hỏi, duyệt/bỏ câu, kiểm tra thay đổi và chốt lại đã được khóa. Muốn thay đổi, hãy clone/tạo version mới.</div> : null}

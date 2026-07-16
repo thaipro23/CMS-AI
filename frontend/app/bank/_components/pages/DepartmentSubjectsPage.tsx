@@ -82,7 +82,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
       title="Môn học"
       icon="bank"
       tone="blue"
-      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Môn học' }]}
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: 'Môn học' }]}
     />
     <BankHierarchyPageIntro
       title="Môn học"

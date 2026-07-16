@@ -60,7 +60,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       title="Bài học"
       icon="bank"
       tone="blue"
-      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bài học' }]}
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: 'Môn học', href: subject ? `/bank/departments/${subject.department_id}/subjects` : '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học' }]}
     />
     <BankHierarchyPageIntro
       title="Bài học"

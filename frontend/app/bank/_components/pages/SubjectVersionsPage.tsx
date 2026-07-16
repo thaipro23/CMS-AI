@@ -64,7 +64,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
       title="Phiên bản môn"
       icon="bank"
       tone="blue"
-      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Phiên bản môn' }]}
+      breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: 'Môn học', href: subject ? `/bank/departments/${subject.department_id}/subjects` : '/bank/departments' }, { label: 'Phiên bản môn' }]}
     />
     <BankHierarchyPageIntro
       title="Phiên bản môn"

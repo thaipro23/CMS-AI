@@ -1027,3 +1027,470 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.bank-hierarchy-shell {
   .bank-hierarchy-panel .enterprise-column-menu > summary { width: 100% !important; min-width: 0 !important; }
   .bank-hierarchy-panel .enterprise-column-menu { flex: 1 1 0 !important; }
 }
+
+/* --------------------------------------------------------------------------
+   Batch 3 — unified compact AppShell + complete Bank hierarchy breadcrumbs
+   The desktop rhythm is intentionally ~75–80% of the previous oversized UI.
+   Sidebar and topbar apply to every authenticated route.
+   -------------------------------------------------------------------------- */
+.enterprise-app-shell.enterprise-unified-shell {
+  --shell-sidebar-width: 236px;
+  --shell-sidebar-collapsed-width: 66px;
+  --shell-topbar-height: 64px;
+  grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr) !important;
+}
+
+html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell {
+  grid-template-columns: var(--shell-sidebar-collapsed-width) minmax(0, 1fr) !important;
+}
+
+.enterprise-unified-shell .enterprise-sidebar {
+  background:
+    radial-gradient(circle at 12% 9%, rgba(34, 110, 224, .14), transparent 34%),
+    linear-gradient(180deg, #071a33 0%, #092440 100%) !important;
+  border-right: 1px solid rgba(255, 255, 255, .06) !important;
+  box-shadow: none !important;
+}
+
+.enterprise-unified-shell .enterprise-sidebar-header {
+  min-height: 64px !important;
+  height: 64px !important;
+  padding: 0 14px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, .08) !important;
+}
+
+.enterprise-unified-shell .enterprise-brand { gap: 12px !important; }
+.enterprise-unified-shell .enterprise-brand-mark {
+  width: 40px !important;
+  height: 40px !important;
+  flex-basis: 40px !important;
+  border-radius: 8px !important;
+  font-size: 18px !important;
+  box-shadow: 0 6px 16px rgba(22, 93, 245, .26) !important;
+}
+.enterprise-unified-shell .enterprise-brand-copy b {
+  font-size: 16px !important;
+  font-weight: 650 !important;
+  letter-spacing: -.15px !important;
+}
+
+.enterprise-unified-shell .enterprise-navigation {
+  padding: 12px 8px 62px !important;
+  scrollbar-width: none;
+}
+.enterprise-unified-shell .enterprise-navigation::-webkit-scrollbar { display: none; }
+.enterprise-unified-shell .enterprise-nav-group + .enterprise-nav-group { margin-top: 13px !important; }
+.enterprise-unified-shell .enterprise-nav-group-toggle {
+  min-height: 20px !important;
+  padding: 0 8px 6px !important;
+  color: #8fa3bf !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: .08em !important;
+}
+.enterprise-unified-shell .enterprise-nav-group-toggle svg { display: none !important; }
+.enterprise-unified-shell .enterprise-nav-items { gap: 2px !important; }
+.enterprise-unified-shell .enterprise-nav-link {
+  min-height: 40px !important;
+  height: 40px !important;
+  padding: 0 11px !important;
+  gap: 11px !important;
+  border-radius: 7px !important;
+  color: #edf5ff !important;
+}
+.enterprise-unified-shell .enterprise-nav-link:hover { background: rgba(255, 255, 255, .06) !important; }
+.enterprise-unified-shell .enterprise-nav-link.active {
+  background: linear-gradient(100deg, #174b99 0%, #1b58c2 54%, #1e64e7 100%) !important;
+  box-shadow: 0 6px 17px rgba(17, 82, 201, .22) !important;
+}
+.enterprise-unified-shell .enterprise-nav-link.active::before {
+  display: block !important;
+  width: 3px !important;
+  border-radius: 7px 0 0 7px !important;
+}
+.enterprise-unified-shell .enterprise-nav-icon,
+.enterprise-unified-shell .enterprise-nav-icon svg {
+  width: 18px !important;
+  height: 18px !important;
+  flex: 0 0 18px !important;
+}
+.enterprise-unified-shell .enterprise-nav-copy b {
+  font-size: 13px !important;
+  font-weight: 520 !important;
+}
+.enterprise-unified-shell .enterprise-sidebar-collapse-button {
+  right: 16px !important;
+  bottom: 16px !important;
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 999px !important;
+}
+
+.enterprise-unified-shell .enterprise-workspace {
+  grid-template-rows: 64px minmax(0, 1fr) !important;
+}
+.enterprise-unified-shell .enterprise-topbar {
+  height: 64px !important;
+  min-height: 64px !important;
+  padding: 0 16px !important;
+  gap: 14px !important;
+  background: rgba(255, 255, 255, .97) !important;
+  border-bottom: 1px solid #dde4ee !important;
+  box-shadow: none !important;
+}
+.enterprise-unified-shell .enterprise-topbar-start {
+  min-width: 0 !important;
+  gap: 12px !important;
+}
+.enterprise-unified-shell .enterprise-icon-button {
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  border-radius: 8px !important;
+}
+.enterprise-unified-shell .enterprise-topbar-page-heading {
+  min-width: 0 !important;
+  gap: 12px !important;
+}
+.enterprise-unified-shell .enterprise-topbar-page-icon {
+  width: 36px !important;
+  height: 36px !important;
+  flex: 0 0 36px !important;
+  border-radius: 8px !important;
+}
+.enterprise-unified-shell .enterprise-topbar-page-copy {
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+}
+.enterprise-unified-shell .enterprise-topbar-page-copy h1 {
+  margin: 0 !important;
+  color: #111827 !important;
+  font-size: 15px !important;
+  font-weight: 650 !important;
+  line-height: 1.2 !important;
+}
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs {
+  min-width: 0 !important;
+  max-width: min(860px, 60vw) !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+}
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs::-webkit-scrollbar { display: none; }
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs ol {
+  display: flex !important;
+  align-items: center !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  gap: 9px !important;
+}
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs li {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  white-space: nowrap !important;
+}
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs li + li::before {
+  content: '›' !important;
+  color: #93a0b3 !important;
+  font-size: 20px !important;
+  font-weight: 300 !important;
+  line-height: 1 !important;
+}
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs a,
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs span {
+  color: #53627a !important;
+  font-size: 13px !important;
+  font-weight: 520 !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs li:last-child a,
+.enterprise-unified-shell .enterprise-topbar-breadcrumbs li:last-child span {
+  color: #111827 !important;
+  font-weight: 650 !important;
+}
+.enterprise-unified-shell .enterprise-topbar-end {
+  flex: 0 0 auto !important;
+  gap: 12px !important;
+}
+.enterprise-unified-shell .enterprise-cms-pill {
+  min-height: 34px !important;
+  height: 34px !important;
+  padding: 0 13px !important;
+  gap: 7px !important;
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .enterprise-user-menu summary {
+  min-height: 36px !important;
+  gap: 9px !important;
+}
+.enterprise-unified-shell .enterprise-avatar {
+  width: 36px !important;
+  height: 36px !important;
+  font-size: 11px !important;
+}
+.enterprise-unified-shell .enterprise-user-summary b {
+  font-size: 12px !important;
+  font-weight: 520 !important;
+}
+
+/* Compact the approved Bank hierarchy list sample without browser zoom. */
+.enterprise-unified-shell .enterprise-content.bank-hierarchy-list-page {
+  padding: 22px 18px 28px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-page-intro {
+  gap: 16px !important;
+  margin: 0 4px 22px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-page-icon {
+  width: 46px !important;
+  height: 46px !important;
+  flex-basis: 46px !important;
+  border-radius: 11px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-page-icon svg {
+  width: 25px !important;
+  height: 25px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-page-copy h2 {
+  margin-bottom: 2px !important;
+  font-size: 23px !important;
+  line-height: 1.18 !important;
+  letter-spacing: -.35px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-page-copy p {
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel {
+  border-radius: 12px !important;
+  box-shadow: 0 8px 24px rgba(25, 44, 78, .07) !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-filter-toolbar.bank-table-toolbar {
+  min-height: 72px !important;
+  padding: 18px 18px 10px !important;
+  gap: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-filter-fields,
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-filter-actions {
+  gap: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-search-field {
+  width: min(330px, 34vw) !important;
+  min-width: 230px !important;
+  max-width: 330px !important;
+  flex-basis: 330px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-search-field::before {
+  left: 13px !important;
+  width: 17px !important;
+  height: 17px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-search-field .input {
+  padding-left: 40px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-status-field {
+  width: 170px !important;
+  flex-basis: 170px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-filter-field .input,
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-result-count,
+.enterprise-unified-shell .bank-hierarchy-panel .bank-hierarchy-create-button {
+  min-height: 40px !important;
+  height: 40px !important;
+  border-radius: 8px !important;
+  font-size: 13px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-result-count {
+  padding: 0 13px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-hierarchy-create-button {
+  padding: 0 16px !important;
+}
+
+/* Remove the oversized blank strip above the table header. */
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-controls.controls-only {
+  min-height: 50px !important;
+  height: auto !important;
+  padding: 7px 18px !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  gap: 10px !important;
+  border-top: 0 !important;
+  border-bottom: 1px solid #dde4ee !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-controls.controls-only > span:first-child {
+  display: none !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-view-actions {
+  width: auto !important;
+  margin-left: auto !important;
+  gap: 10px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-density-control {
+  gap: 8px !important;
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-density-control .input,
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu > summary {
+  min-height: 36px !important;
+  height: 36px !important;
+  border-radius: 7px !important;
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-density-control .input {
+  min-width: 120px !important;
+  padding: 0 32px 0 11px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-column-menu > summary {
+  padding: 0 12px !important;
+}
+
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table {
+  min-width: 900px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table th {
+  height: 42px !important;
+  padding: 0 12px !important;
+  font-size: 11px !important;
+  letter-spacing: .025em !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-data-table td {
+  height: 64px !important;
+  padding: 13px 12px !important;
+  font-size: 13px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-kind-index {
+  width: 58px !important;
+  min-width: 58px !important;
+  max-width: 58px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-kind-identity {
+  min-width: 260px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .enterprise-kind-actions {
+  width: 150px !important;
+  min-width: 150px !important;
+  max-width: 150px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-link {
+  gap: 2px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-link b {
+  font-size: 13px !important;
+  font-weight: 650 !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .bank-table-link small {
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .status {
+  min-height: 28px !important;
+  padding: 0 10px !important;
+  gap: 6px !important;
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .entity-actions-inline {
+  gap: 7px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .entity-actions-inline .btn {
+  min-width: 58px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 10px !important;
+  gap: 6px !important;
+  border-radius: 7px !important;
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .pagination-bar {
+  min-height: 60px !important;
+  padding: 11px 18px !important;
+  gap: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .pagination-summary {
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .pagination-actions {
+  gap: 8px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .pagination-actions .btn,
+.enterprise-unified-shell .bank-hierarchy-panel .page-number,
+.enterprise-unified-shell .bank-hierarchy-panel .page-size-select {
+  height: 36px !important;
+  min-height: 36px !important;
+  border-radius: 7px !important;
+  font-size: 12px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .pagination-actions .btn {
+  min-width: 46px !important;
+  padding: 0 10px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .page-number {
+  min-width: 36px !important;
+  padding: 0 9px !important;
+}
+.enterprise-unified-shell .bank-hierarchy-panel .page-size-select {
+  min-width: 108px !important;
+  padding: 0 12px !important;
+}
+
+@media (max-width: 1180px) {
+  .enterprise-app-shell.enterprise-unified-shell { --shell-sidebar-width: 218px; }
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs { max-width: 52vw !important; }
+  .enterprise-unified-shell .enterprise-user-summary { display: none !important; }
+}
+
+@media (max-width: 1023px) {
+  .enterprise-app-shell.enterprise-unified-shell { grid-template-columns: minmax(0, 1fr) !important; }
+  .enterprise-unified-shell .enterprise-sidebar { width: min(268px, 88vw) !important; }
+  .enterprise-unified-shell .enterprise-topbar { padding: 0 12px !important; }
+  .enterprise-unified-shell .enterprise-topbar-page-icon { display: none !important; }
+  .enterprise-unified-shell .enterprise-topbar-page-heading { gap: 0 !important; }
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs { max-width: min(62vw, 560px) !important; }
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs a,
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs span { font-size: 12px !important; }
+  .enterprise-unified-shell .enterprise-content.bank-hierarchy-list-page { padding: 18px 12px 24px !important; }
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-filter-toolbar.bank-table-toolbar {
+    padding: 14px 12px 8px !important;
+  }
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-controls.controls-only {
+    min-height: 48px !important;
+    padding: 6px 12px !important;
+  }
+  .enterprise-unified-shell .bank-hierarchy-panel .pagination-bar {
+    padding: 10px 12px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .enterprise-unified-shell .enterprise-cms-pill { display: none !important; }
+  .enterprise-unified-shell .enterprise-topbar-end { gap: 6px !important; }
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs { max-width: calc(100vw - 112px) !important; }
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs ol { gap: 7px !important; }
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs li { gap: 7px !important; }
+  .enterprise-unified-shell .enterprise-topbar-breadcrumbs li + li::before { font-size: 17px !important; }
+  .enterprise-unified-shell .bank-hierarchy-page-intro {
+    gap: 12px !important;
+    margin-bottom: 16px !important;
+  }
+  .enterprise-unified-shell .bank-hierarchy-page-icon {
+    width: 40px !important;
+    height: 40px !important;
+    flex-basis: 40px !important;
+  }
+  .enterprise-unified-shell .bank-hierarchy-page-copy h2 { font-size: 20px !important; }
+  .enterprise-unified-shell .bank-hierarchy-panel .enterprise-table-view-actions {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  .enterprise-unified-shell.bank-hierarchy-shell .enterprise-topbar-breadcrumbs li:first-child {
+    display: inline-flex !important;
+  }
+  .enterprise-unified-shell.bank-hierarchy-shell .enterprise-topbar-breadcrumbs li + li::before {
+    display: inline !important;
+  }
+}
