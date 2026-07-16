@@ -247,10 +247,11 @@ export function EnterpriseDataTable<Row>({
   const cellStyle = (layout: ColumnLayout<Row>): CSSProperties => {
     const compact = isCompactKind(layout.kind)
     const stickyIdentity = layout.column.sticky && layout.kind === 'identity'
-    const stableWidth = compact || stickyIdentity
+    const explicitWidth = layout.column.width !== undefined
+    const stableWidth = compact || stickyIdentity || explicitWidth
     return {
       width: stableWidth ? `${layout.size}px` : undefined,
-      minWidth: compact ? `${layout.size}px` : stickyIdentity ? `${Math.min(layout.size, 260)}px` : undefined,
+      minWidth: compact || explicitWidth ? `${layout.size}px` : stickyIdentity ? `${Math.min(layout.size, 260)}px` : layout.column.minWidth ? `${layout.column.minWidth}px` : undefined,
       maxWidth: compact ? `${layout.size}px` : stickyIdentity ? `${Math.min(layout.size, 320)}px` : undefined,
       textAlign: layout.kind === 'index' || layout.kind === 'number' ? 'center' : layout.column.align,
       boxSizing: 'border-box',
@@ -271,7 +272,7 @@ export function EnterpriseDataTable<Row>({
         <caption className="sr-only">{caption}</caption>
         <colgroup>
           {selection && <col className="enterprise-select-column" style={{ width: `${SELECTION_COLUMN_WIDTH}px` }} />}
-          {columnLayouts.map((layout) => <col key={layout.column.key} className={`enterprise-kind-${layout.kind} enterprise-priority-${layout.priority}`} style={isCompactKind(layout.kind) || (layout.column.sticky && layout.kind === 'identity') ? { width: `${layout.size}px` } : undefined} />)}
+          {columnLayouts.map((layout) => <col key={layout.column.key} className={`enterprise-kind-${layout.kind} enterprise-priority-${layout.priority}`} style={isCompactKind(layout.kind) || (layout.column.sticky && layout.kind === 'identity') || layout.column.width !== undefined ? { width: `${layout.size}px` } : undefined} />)}
         </colgroup>
         <thead><tr>
           {selection && <th className="enterprise-select-column sticky-left" style={{ width: `${SELECTION_COLUMN_WIDTH}px`, minWidth: `${SELECTION_COLUMN_WIDTH}px`, '--sticky-offset': '0px' } as CSSProperties}><input ref={headerCheckboxRef} type="checkbox" aria-label="Chọn tất cả bản ghi trên trang" checked={allPageSelected} onChange={(event) => selection.onTogglePage(selectableRows, event.target.checked)} /></th>}

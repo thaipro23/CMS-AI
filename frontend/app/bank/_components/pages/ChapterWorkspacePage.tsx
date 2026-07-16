@@ -912,7 +912,7 @@ ${chunk.content}`).join('\n\n')
     </section>
 
     {!selectedBankVersion ? <section className="bank-hierarchy-panel"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section ref={questionReviewSectionRef} className="bank-hierarchy-panel chapter-question-workspace chapter-review-section" id="bank-question-list" tabIndex={-1} aria-labelledby="chapter-review-heading">
-        <div className="section-head question-list-head"><div><h3 id="chapter-review-heading">Danh sách câu hỏi</h3><p className="helper">Chọn một câu để mở popup duyệt, xem đầy đủ đáp án, giải thích và bằng chứng nguồn.</p></div><div className="button-row no-margin">
+        <div className="section-head question-list-head chapter-question-list-head"><div className="chapter-question-list-heading"><span className="chapter-question-list-icon" aria-hidden="true"><AppIcon name="layers" size={18} /></span><div><h3 id="chapter-review-heading">Danh sách câu hỏi</h3><p className="helper">Chọn một câu để mở popup duyệt, xem đầy đủ đáp án, giải thích và bằng chứng nguồn.</p></div></div><div className="button-row no-margin">
           {!chapterPublished && canEditQuestions ? <button className="btn secondary" onClick={() => setImportOpen(true)}>Import Excel</button> : null}
           <button className="btn secondary" disabled={isActionBusy('question_export')} onClick={saveQuestionExport}>{isActionBusy('question_export') ? <BusyLabel text="Đang xuất" /> : 'Xuất CSV'}</button>
         </div></div>

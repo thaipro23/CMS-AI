@@ -86,7 +86,7 @@ export function BankQuestionEnterpriseTable({
       render: (row) => <span className={statusClass(row.status)}>{statusLabel(row.status)}</span>,
     },
     {
-      key: 'difficulty', header: 'Độ khó', kind: 'status', width: 90, priority: 'important', hideable: true,
+      key: 'difficulty', header: 'Độ khó', kind: 'status', width: 118, minWidth: 118, className: 'bank-question-difficulty-column', priority: 'important', hideable: true,
       render: (row) => difficultyLabel(row.difficulty),
     },
     {

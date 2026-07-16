@@ -2470,3 +2470,104 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell {
     grid-template-columns: 1fr;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Batch 7 — Chapter scroll, section header, dialog focus and column sizing
+   -------------------------------------------------------------------------- */
+
+/* Keep the workspace as the only vertical scroll container on every route. */
+.enterprise-unified-shell .enterprise-workspace > .enterprise-content {
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+.enterprise-unified-shell .enterprise-content.bank-hierarchy-list-page,
+.enterprise-unified-shell .enterprise-content.bank-hierarchy-detail-page {
+  align-content: start !important;
+  overflow-y: auto !important;
+}
+
+/* The generic legacy section marker was absolutely positioned over this title. */
+.enterprise-unified-shell .chapter-review-section .chapter-question-list-head {
+  padding-left: 16px !important;
+}
+.enterprise-unified-shell .chapter-review-section .chapter-question-list-head::before {
+  content: none !important;
+  display: none !important;
+}
+.enterprise-unified-shell .chapter-question-list-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.enterprise-unified-shell .chapter-question-list-heading > div {
+  min-width: 0;
+}
+.enterprise-unified-shell .chapter-question-list-icon {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #cfe0ff;
+  border-radius: 9px;
+  color: #1769e8;
+  background: #f1f6ff;
+}
+
+/* Let the document grow naturally; only the table wrapper scrolls horizontally. */
+.enterprise-unified-shell .chapter-review-section {
+  overflow: visible !important;
+}
+.enterprise-unified-shell .chapter-review-section .enterprise-table-shell {
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+.enterprise-unified-shell .chapter-review-section .enterprise-table-scroll {
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+}
+.enterprise-unified-shell .chapter-review-section .enterprise-data-table {
+  height: auto !important;
+}
+
+/* Explicit width is now honored by EnterpriseDataTable; keep this label unbroken. */
+.enterprise-unified-shell .bank-question-difficulty-column {
+  width: 118px !important;
+  min-width: 118px !important;
+  white-space: nowrap !important;
+}
+.enterprise-unified-shell th.bank-question-difficulty-column {
+  line-height: 1.2 !important;
+}
+
+/* Shared dialog structure: content scrolls, footer remains visible, fields stay stable. */
+.accessible-dialog-surface {
+  min-height: 0;
+}
+.accessible-dialog-body {
+  min-height: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+.accessible-dialog-footer {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 760px) {
+  .enterprise-unified-shell .chapter-review-section .chapter-question-list-head {
+    padding-left: 12px !important;
+  }
+  .enterprise-unified-shell .chapter-question-list-heading {
+    align-items: flex-start;
+  }
+}

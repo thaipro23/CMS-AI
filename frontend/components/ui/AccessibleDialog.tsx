@@ -85,7 +85,17 @@ export function AccessibleDialog({
   const panelRef = useRef<HTMLDivElement | null>(null)
   const closeRef = useRef<HTMLButtonElement | null>(null)
   const token = useMemo(() => Symbol('accessible-dialog'), [])
+  const onCloseRef = useRef(onClose)
+  const busyRef = useRef(busy)
+  const initialFocusPropRef = useRef(initialFocusRef)
   const [mounted, setMounted] = useState(false)
+
+  // Keep volatile dialog props outside the focus/scroll-lock effect. Many callers
+  // pass inline callbacks; depending on them caused the effect to tear down and
+  // autofocus again on every controlled-input keystroke.
+  onCloseRef.current = onClose
+  busyRef.current = busy
+  initialFocusPropRef.current = initialFocusRef
 
   useEffect(() => setMounted(true), [])
 
@@ -97,7 +107,7 @@ export function AccessibleDialog({
 
     const isTopmost = () => dialogStack[dialogStack.length - 1] === token
     const focusInitial = () => {
-      const explicit = initialFocusRef?.current
+      const explicit = initialFocusPropRef.current?.current
       const autofocus = panelRef.current?.querySelector<HTMLElement>('[data-dialog-autofocus]')
       const first = visibleFocusable(panelRef.current)[0]
       ;(explicit || autofocus || first || panelRef.current)?.focus({ preventScroll: true })
@@ -107,9 +117,9 @@ export function AccessibleDialog({
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isTopmost()) return
       if (event.key === 'Escape') {
-        if (busy) return
+        if (busyRef.current) return
         event.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab') return
@@ -140,7 +150,7 @@ export function AccessibleDialog({
       unlockBodyScroll()
       window.requestAnimationFrame(() => previousActive?.focus?.({ preventScroll: true }))
     }
-  }, [busy, initialFocusRef, mounted, onClose, open, token])
+  }, [mounted, open, token])
 
   if (!open || !mounted) return null
 
