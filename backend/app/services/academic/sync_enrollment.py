@@ -180,12 +180,54 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
             results = client.resolve_users(payload, create_missing=effective_create_missing)
             result_by_username = {normalize_username(item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('username') or item.get('openedx_username'))}
             result_by_code = {normalize_username(item.get('student_code') or item.get('roll_number')): item for item in results if normalize_username(item.get('student_code') or item.get('roll_number'))}
-            for student, _mapping in chunk:
+            for (student, _mapping), payload_item in zip(chunk, payload):
                 cms_username = self._student_cms_username(student)
                 lookup_username = normalize_username(cms_username)
                 result = result_by_username.get(lookup_username)
                 if result is None:
                     result = result_by_code.get(lookup_username)
+
+                # Some Open edX deployments can successfully create one user but
+                # return `missing` for a larger batch because a record-specific
+                # create/profile error is swallowed inside the connector. Retry
+                # only the failed item once so Full CMS remains self-healing and
+                # the persisted mapping keeps the connector's exact failure note.
+                result_status = str((result or {}).get('match_status') or '').strip().lower()
+                result_missing = result is None or result_status == 'missing' or (result or {}).get('exists') is False
+                if effective_create_missing and result_missing:
+                    counts['single_retry_attempted'] = counts.get('single_retry_attempted', 0) + 1
+                    try:
+                        single_results = client.resolve_users([payload_item], create_missing=True)
+                        single_by_username = {
+                            normalize_username(item.get('username') or item.get('openedx_username')): item
+                            for item in single_results
+                            if normalize_username(item.get('username') or item.get('openedx_username'))
+                        }
+                        single_by_code = {
+                            normalize_username(item.get('student_code') or item.get('roll_number')): item
+                            for item in single_results
+                            if normalize_username(item.get('student_code') or item.get('roll_number'))
+                        }
+                        single_result = single_by_username.get(lookup_username) or single_by_code.get(lookup_username)
+                        if single_result is not None:
+                            result = single_result
+                            single_status = str(single_result.get('match_status') or '').strip().lower()
+                            if single_status == 'matched' and single_result.get('exists') is not False:
+                                counts['single_retry_recovered'] = counts.get('single_retry_recovered', 0) + 1
+                    except Exception as exc:
+                        result = {
+                            'student_code': student.student_code,
+                            'roll_number': student.student_code,
+                            'ap_username': normalize_username(student.username),
+                            'username': cms_username,
+                            'openedx_username': None,
+                            'exists': False,
+                            'created': False,
+                            'match_status': 'missing',
+                            'match_method': 'single_retry_failed',
+                            'note': f'Gọi connector riêng cho RollNumber thất bại: {exc}',
+                        }
+
                 if result is None:
                     result = {
                         'student_code': student.student_code,
@@ -397,12 +439,29 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
             if matched_student_count == 0:
                 retry_counts = retry_result.get('counts') or {}
                 missing_hint = f' Có {int(missing_rollnumber_count)} sinh viên thiếu RollNumber/student_code và đã bị chặn tạo user/enroll.' if missing_rollnumber_count else ''
+                failed_samples = self.db.query(
+                    AcademicStudent.student_code,
+                    OpenEdXUserMapping.note,
+                ).join(
+                    AcademicClassStudent,
+                    AcademicClassStudent.student_id == AcademicStudent.id,
+                ).outerjoin(
+                    OpenEdXUserMapping,
+                    OpenEdXUserMapping.student_id == AcademicStudent.id,
+                ).filter(
+                    AcademicClassStudent.class_id == class_id,
+                ).order_by(AcademicStudent.student_code.asc()).limit(5).all()
+                sample_text = '; '.join(
+                    f'{str(code or "(thiếu RollNumber)")}: {str(note or "connector không trả chi tiết")[:240]}'
+                    for code, note in failed_samples
+                )
+                sample_hint = f' Mẫu lỗi: {sample_text}.' if sample_text else ''
                 raise HTTPException(
                     status_code=400,
                     detail=(
                         'Đồng bộ full đã tự chạy bước tạo/kiểm tra user CMS nhưng vẫn không có mapping RollNumber hợp lệ. '
-                        f'Kết quả tạo user: {retry_counts}.' + missing_hint +
-                        ' Hãy kiểm tra openedx-connector-plugin, HMAC và quyền tạo auth_user/UserProfile.'
+                        f'Kết quả tạo user: {retry_counts}.' + missing_hint + sample_hint +
+                        ' Connector/HMAC đang reachable nếu giảng viên vẫn matched; hãy đọc mẫu lỗi tạo user ở trên.'
                     ),
                 )
 
