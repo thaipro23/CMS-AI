@@ -1,0 +1,2 @@
+backend/app/services/question_bank_service.py
+docs/QUIZ_CREATE_SERVICE_FACADE_HOTFIX_BATCH_17.md

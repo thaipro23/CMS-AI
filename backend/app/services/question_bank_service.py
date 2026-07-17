@@ -2649,8 +2649,52 @@ class VersionedQuestionBankService:
     def preview_quiz_from_release(self, *, release_id: str, openedx_course_id: str, parent_node_id: str | None = None, total_questions: int = 15, difficulty_easy: int = 50, difficulty_medium: int = 30, difficulty_hard: int = 20, max_families_per_bank: int = 2) -> dict:
         return self._quiz_creation_workflow().preview_quiz_from_release(release_id=release_id, openedx_course_id=openedx_course_id, parent_node_id=parent_node_id, total_questions=total_questions, difficulty_easy=difficulty_easy, difficulty_medium=difficulty_medium, difficulty_hard=difficulty_hard, max_families_per_bank=max_families_per_bank)
 
-    async def create_quiz_from_release(self, *, release_id: str, openedx_course_id: str, parent_node_id: str | None = None, quiz_title: str, unit_title: str | None = None, total_questions: int = 15, difficulty_easy: int = 50, difficulty_medium: int = 30, difficulty_hard: int = 20, max_families_per_bank: int = 2, actor: str | None = None, custom_timer_enabled: bool = True, time_limit_minutes: int = 15, retake_cooldown_minutes: int = 0, native_timed_exam: bool = False, assessment_type: str = 'quiz') -> dict:
-        return await self._quiz_creation_workflow().create_quiz_from_release(release_id=release_id, openedx_course_id=openedx_course_id, parent_node_id=parent_node_id, quiz_title=quiz_title, unit_title=unit_title, total_questions=total_questions, difficulty_easy=difficulty_easy, difficulty_medium=difficulty_medium, difficulty_hard=difficulty_hard, max_families_per_bank=max_families_per_bank, actor=actor, custom_timer_enabled=custom_timer_enabled, time_limit_minutes=time_limit_minutes, retake_cooldown_minutes=retake_cooldown_minutes, native_timed_exam=native_timed_exam, assessment_type=assessment_type)
+    async def create_quiz_from_release(
+        self,
+        *,
+        course_chapter_mapping_id: str,
+        quiz_title: str,
+        unit_title: str = 'Quiz tự luyện',
+        total_questions: int = 15,
+        difficulty_easy: int = 50,
+        difficulty_medium: int = 30,
+        difficulty_hard: int = 20,
+        max_families_per_bank: int = 2,
+        custom_timer_enabled: bool = True,
+        time_limit_minutes: int = 15,
+        retake_cooldown_minutes: int = 5,
+        auto_submit_on_timeout: bool = True,
+        lock_after_timeout: bool = True,
+        native_timed_exam: bool = False,
+        assessment_type: str = 'quiz',
+        actor: str | None = None,
+        expected_bank_release_id: str | None = None,
+    ) -> dict:
+        """Create a Quiz from the exact persisted course/chapter mapping.
+
+        The public service facade must mirror ``QuizCreationWorkflow`` exactly.
+        Keeping the mapping id at this boundary prevents the route and Celery
+        worker from reconstructing course/parent-node state independently.
+        """
+        return await self._quiz_creation_workflow().create_quiz_from_release(
+            course_chapter_mapping_id=course_chapter_mapping_id,
+            quiz_title=quiz_title,
+            unit_title=unit_title,
+            total_questions=total_questions,
+            difficulty_easy=difficulty_easy,
+            difficulty_medium=difficulty_medium,
+            difficulty_hard=difficulty_hard,
+            max_families_per_bank=max_families_per_bank,
+            custom_timer_enabled=custom_timer_enabled,
+            time_limit_minutes=time_limit_minutes,
+            retake_cooldown_minutes=retake_cooldown_minutes,
+            auto_submit_on_timeout=auto_submit_on_timeout,
+            lock_after_timeout=lock_after_timeout,
+            native_timed_exam=native_timed_exam,
+            assessment_type=assessment_type,
+            actor=actor,
+            expected_bank_release_id=expected_bank_release_id,
+        )
 
 
     def create_quiz_blueprint(self, *, subject_id: str, chapter_id: str, title: str, total_questions: int, difficulty_easy: int, difficulty_medium: int, difficulty_hard: int, max_families_per_bank: int = 2, pick_count_per_slot: int = 1) -> QuizBlueprint:
