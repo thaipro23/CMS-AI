@@ -1,0 +1,3 @@
+frontend/styles/operations-catalog-rbac-ux.css
+docs/AP_SYNC_WORKSPACE_ALIGNMENT_HOTFIX_BATCH_21.md
+docs/CHANGED_FILES_AP_SYNC_ALIGNMENT_BATCH_21.txt

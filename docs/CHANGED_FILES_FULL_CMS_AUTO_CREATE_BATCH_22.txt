@@ -1,0 +1,4 @@
+backend/app/services/academic/sync_enrollment.py
+backend/app/services/academic_service.py
+docs/FULL_CMS_AUTO_CREATE_USERS_HOTFIX_BATCH_22.md
+docs/CHANGED_FILES_FULL_CMS_AUTO_CREATE_BATCH_22.txt

@@ -3148,8 +3148,15 @@ class AcademicService:
     def _upsert_teacher_cms_metadata(self, teacher: AcademicTeacher, result: dict[str, Any] | None) -> str:
         return self._academic_sync_enrollment_workflow()._upsert_teacher_cms_metadata(teacher, result)
 
-    def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, auto_enroll: bool = True) -> dict[str, Any]:
-        return self._academic_sync_enrollment_workflow().resolve_class_openedx_users(user, class_id, force=force, limit=limit, auto_enroll=auto_enroll)
+    def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, auto_enroll: bool = True, create_missing: bool | None = None) -> dict[str, Any]:
+        return self._academic_sync_enrollment_workflow().resolve_class_openedx_users(
+            user,
+            class_id,
+            force=force,
+            limit=limit,
+            auto_enroll=auto_enroll,
+            create_missing=create_missing,
+        )
 
     @staticmethod
     def _float_or_none(value: Any) -> float | None:

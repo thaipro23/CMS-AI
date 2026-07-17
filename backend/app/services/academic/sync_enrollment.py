@@ -108,7 +108,7 @@ def _upsert_teacher_cms_metadata(self, teacher: AcademicTeacher, result: dict[st
         self.db.add(teacher)
         return status_value
 
-def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, auto_enroll: bool = True) -> dict[str, Any]:
+def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, auto_enroll: bool = True, create_missing: bool | None = None) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
         limit = max(1, min(500, int(limit or 500)))
         query = self.db.query(AcademicStudent, OpenEdXUserMapping).join(
@@ -141,7 +141,11 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
         batch_size = max(1, min(getattr(settings, 'openedx_connector_max_batch_size', settings.openedx_student_insight_max_batch_size), 100))
         updated = 0
         counts: dict[str, int] = {}
-        create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
+        effective_create_missing = (
+            bool(getattr(settings, 'academic_auto_create_cms_users', True))
+            if create_missing is None
+            else bool(create_missing)
+        )
 
         # Students: RollNumber/student_code is the only canonical CMS username.
         # Missing RollNumber is a blocking data error: do not call the connector,
@@ -172,8 +176,8 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
 
         for start in range(0, len(valid_rows), batch_size):
             chunk = valid_rows[start:start + batch_size]
-            payload = [self._student_cms_payload(student, create_missing=create_missing) for student, _mapping in chunk]
-            results = client.resolve_users(payload, create_missing=create_missing)
+            payload = [self._student_cms_payload(student, create_missing=effective_create_missing) for student, _mapping in chunk]
+            results = client.resolve_users(payload, create_missing=effective_create_missing)
             result_by_username = {normalize_username(item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('username') or item.get('openedx_username'))}
             result_by_code = {normalize_username(item.get('student_code') or item.get('roll_number')): item for item in results if normalize_username(item.get('student_code') or item.get('roll_number'))}
             for student, _mapping in chunk:
@@ -208,7 +212,7 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
         if teacher_payload:
             for start in range(0, len(teacher_payload), batch_size):
                 chunk = teacher_payload[start:start + batch_size]
-                results = client.resolve_users([payload for _teacher, payload in chunk], create_missing=create_missing)
+                results = client.resolve_users([payload for _teacher, payload in chunk], create_missing=effective_create_missing)
                 result_by_username = {normalize_username(item.get('username') or item.get('openedx_username') or item.get('ap_username')): item for item in results if normalize_username(item.get('username') or item.get('openedx_username') or item.get('ap_username'))}
                 for teacher, payload in chunk:
                     username = normalize_username(payload.get('username'))
@@ -315,40 +319,50 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
         cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
         limit = max(1, min(500, int(limit or 500)))
 
-        # Full production behavior: enrollment must not silently skip learners just
-        # because they have not been mapped yet. First resolve/create CMS users by
-        # RollNumber/student_code, then enroll matched/created users. The nested call disables
-        # auto-enroll to avoid recursion.
-        if getattr(settings, 'academic_auto_create_cms_users', True):
-            try:
-                self.resolve_class_openedx_users(user, class_id, force=force, limit=limit, auto_enroll=False)
-            except HTTPException:
-                raise
-            except Exception as exc:
-                raise RuntimeError(f'Không tạo/kiểm tra được tài khoản CMS trước khi enrollment: {exc}') from exc
+        # Enrollment is self-healing: always resolve/create CMS users by the
+        # authoritative RollNumber before querying mappings.  Full CMS sync must
+        # not depend on a separate operator action or on the optional env flag.
+        try:
+            self.resolve_class_openedx_users(
+                user,
+                class_id,
+                force=force,
+                limit=limit,
+                auto_enroll=False,
+                create_missing=True,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f'Không tạo/kiểm tra được tài khoản CMS trước khi enrollment: {exc}') from exc
 
-        query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
-            AcademicClassStudent,
-            AcademicClassStudent.student_id == AcademicStudent.id,
-        ).join(OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicStudent.id).outerjoin(
-            AcademicStudentLearningSnapshot,
-            and_(
-                AcademicStudentLearningSnapshot.class_id == class_id,
-                AcademicStudentLearningSnapshot.student_id == AcademicStudent.id,
-                AcademicStudentLearningSnapshot.openedx_course_id == course_id,
-            ),
-        ).filter(
-            AcademicClassStudent.class_id == class_id,
-            OpenEdXUserMapping.match_status == 'matched',
-            or_(OpenEdXUserMapping.openedx_is_active.is_(None), OpenEdXUserMapping.openedx_is_active.is_(True)),
-            or_(OpenEdXUserMapping.openedx_username.isnot(None), OpenEdXUserMapping.openedx_user_id.isnot(None)),
-        ).order_by(AcademicStudent.username.asc()).limit(limit)
-        rows = [
-            (student, mapping_row, snapshot)
-            for student, mapping_row, snapshot in query.all()
-            if self._student_rollnumber(student)
-            and normalize_username(mapping_row.openedx_username or '') == normalize_username(self._student_rollnumber(student))
-        ]
+        self.db.expire_all()
+
+        def matched_rows() -> list[tuple[AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot | None]]:
+            query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
+                AcademicClassStudent,
+                AcademicClassStudent.student_id == AcademicStudent.id,
+            ).join(OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicStudent.id).outerjoin(
+                AcademicStudentLearningSnapshot,
+                and_(
+                    AcademicStudentLearningSnapshot.class_id == class_id,
+                    AcademicStudentLearningSnapshot.student_id == AcademicStudent.id,
+                    AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+                ),
+            ).filter(
+                AcademicClassStudent.class_id == class_id,
+                OpenEdXUserMapping.match_status == 'matched',
+                or_(OpenEdXUserMapping.openedx_is_active.is_(None), OpenEdXUserMapping.openedx_is_active.is_(True)),
+                or_(OpenEdXUserMapping.openedx_username.isnot(None), OpenEdXUserMapping.openedx_user_id.isnot(None)),
+            ).order_by(AcademicStudent.username.asc()).limit(limit)
+            return [
+                (student, mapping_row, snapshot)
+                for student, mapping_row, snapshot in query.all()
+                if self._student_rollnumber(student)
+                and normalize_username(mapping_row.openedx_username or '') == normalize_username(self._student_rollnumber(student))
+            ]
+
+        rows = matched_rows()
         matched_student_count = len(rows)
         if not force:
             rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not snapshot or snapshot.enrollment_status not in {'enrolled'}]
@@ -361,11 +375,36 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
             or_(AcademicStudent.student_code.is_(None), func.trim(AcademicStudent.student_code) == ''),
         ).scalar() or 0
         if int(class_student_count) > 0 and matched_student_count == 0:
-            missing_hint = f' Có {int(missing_rollnumber_count)} sinh viên thiếu RollNumber/student_code và đã bị chặn tạo user/enroll.' if missing_rollnumber_count else ''
-            raise HTTPException(
-                status_code=400,
-                detail='Chưa có sinh viên nào được map user CMS/Open edX chính xác theo RollNumber. Hãy chạy Tạo/kiểm tra user CMS trước rồi mới Enrollment Course CMS.' + missing_hint,
+            # One forced retry covers stale legacy mappings and partial connector
+            # responses without asking the operator to run a separate action.
+            retry_result = self.resolve_class_openedx_users(
+                user,
+                class_id,
+                force=True,
+                limit=limit,
+                auto_enroll=False,
+                create_missing=True,
             )
+            self.db.expire_all()
+            rows = matched_rows()
+            matched_student_count = len(rows)
+            if not force:
+                rows = [
+                    (student, mapping_row, snapshot)
+                    for student, mapping_row, snapshot in rows
+                    if not snapshot or snapshot.enrollment_status not in {'enrolled'}
+                ]
+            if matched_student_count == 0:
+                retry_counts = retry_result.get('counts') or {}
+                missing_hint = f' Có {int(missing_rollnumber_count)} sinh viên thiếu RollNumber/student_code và đã bị chặn tạo user/enroll.' if missing_rollnumber_count else ''
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        'Đồng bộ full đã tự chạy bước tạo/kiểm tra user CMS nhưng vẫn không có mapping RollNumber hợp lệ. '
+                        f'Kết quả tạo user: {retry_counts}.' + missing_hint +
+                        ' Hãy kiểm tra openedx-connector-plugin, HMAC và quyền tạo auth_user/UserProfile.'
+                    ),
+                )
 
         teacher_payload = self._teacher_payload_for_class(class_id) if getattr(settings, 'academic_auto_add_teachers_to_course', True) else []
         if not rows and not teacher_payload:
@@ -383,7 +422,10 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
         teacher_updated = 0
         teacher_verified = 0
         enrollment_mode = (mode or getattr(settings, 'openedx_connector_default_enrollment_mode', getattr(settings, 'openedx_student_insight_default_enrollment_mode', 'audit')) or 'audit').strip() or 'audit'
-        create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
+        # Enrollment keeps create_missing enabled as a final safety net. The
+        # resolve step above should already have created users, but the connector
+        # can recover a single missing user atomically during enrollment.
+        create_missing = True
 
         for start in range(0, len(rows), batch_size):
             chunk = rows[start:start + batch_size]
@@ -719,7 +761,7 @@ def sync_class_full_cms_flow(
         Order is intentionally strict and map-first:
           1. Resolve or safely auto-map Course CMS.
           2. If Course CMS is still missing, stop without creating CMS accounts.
-          3. Resolve/create CMS accounts from AP usernames only after mapping exists.
+          3. Resolve/create CMS accounts from RollNumber only after mapping exists.
           4. Enroll learners and add teachers as Course Staff.
           5. Pull progress, total grade and component/quiz grades.
         """
@@ -748,7 +790,14 @@ def sync_class_full_cms_flow(
                 'learning_summary': self._learning_summary_for_class_course(class_id, None),
             }
 
-        cms_result = self.resolve_class_openedx_users(user, class_id, force=True if force else False, limit=limit, auto_enroll=False)
+        cms_result = self.resolve_class_openedx_users(
+            user,
+            class_id,
+            force=True if force else False,
+            limit=limit,
+            auto_enroll=False,
+            create_missing=True,
+        )
         for key, value in (cms_result.get('counts') or {}).items():
             counts[f'cms_{key}'] = int(value or 0)
         teacher_counts = ((cms_result.get('teachers') or {}).get('counts') or {}) if isinstance(cms_result.get('teachers'), dict) else {}
