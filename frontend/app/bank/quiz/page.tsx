@@ -2,6 +2,7 @@
 
 import { formatVNDateTime } from '../../../lib/time'
 import { inlineMessageFromBackend } from '../../../lib/backendNotice'
+import { normalizeOpenEdxCourseId } from '../../../lib/openedx'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
@@ -98,6 +99,7 @@ function productionStatusClass(item: EffectiveQuizMapping) {
 function missingRequirementLabel(code: string) {
   if (code === 'SECTION') return 'Thiếu Section'
   if (code === 'RELEASE') return 'Thiếu Release'
+  if (code === 'COURSE_TREE') return 'Chưa đọc được cây course'
   return code
 }
 
@@ -174,7 +176,8 @@ export default function BankQuizPage() {
   const productionGate = autoMap?.summary?.production_gate || {}
   const regularQuizCount = effectiveMappings.filter((item) => item.action === 'quiz').length
   const finalTestCount = effectiveMappings.filter((item) => item.action === 'final_test').length
-  const missingSectionCount = effectiveMappings.filter((item: any) => item.effectiveRequiresQuiz && (!item.openedx_section_id || (item.missing_requirements || []).includes('SECTION'))).length
+  const courseTreeUnavailable = autoMap?.course_tree?.source === 'unavailable'
+  const missingSectionCount = courseTreeUnavailable ? 0 : effectiveMappings.filter((item: any) => item.effectiveRequiresQuiz && (!item.openedx_section_id || (item.missing_requirements || []).includes('SECTION'))).length
   const missingReleaseCount = effectiveMappings.filter((item: any) => item.effectiveRequiresQuiz && (!item.release_id || (item.missing_requirements || []).includes('RELEASE'))).length
   const quizDifficultyTotal = quizConfig.easy + quizConfig.medium + quizConfig.hard
   const finalDifficultyTotal = finalConfig.easy + finalConfig.medium + finalConfig.hard
@@ -190,27 +193,36 @@ export default function BankQuizPage() {
   }
 
   async function loadHistory(targetCourseId = courseId) {
-    const normalizedCourseId = String(targetCourseId || '').trim()
+    const normalizedCourseId = normalizeOpenEdxCourseId(targetCourseId)
     if (!normalizedCourseId) {
       setHistory([])
       return
     }
     setHistoryBusy(true)
     try {
-      const data = await getCourseQuizInstances(headers, { openedx_course_id: normalizedCourseId, limit: 100 }).catch(() => [])
-      setHistory(data.filter((item) => item.openedx_course_id === normalizedCourseId))
+      const data = await getCourseQuizInstances(headers, { openedx_course_id: normalizedCourseId, limit: 100 })
+      setHistory(data.filter((item) => normalizeOpenEdxCourseId(item.openedx_course_id) === normalizedCourseId))
+    } catch (error) {
+      setHistory([])
+      setMessage({ tone: 'warning', text: error instanceof Error ? `Không tải được lịch sử Quiz: ${error.message}` : 'Không tải được lịch sử Quiz' })
     } finally {
       setHistoryBusy(false)
     }
   }
 
   async function runPreview(offeringId = selectedOfferingId, keepPlan = false) {
+    const normalizedCourseId = normalizeOpenEdxCourseId(courseId)
+    if (!normalizedCourseId) {
+      setMessage({ tone: 'danger', text: 'Course ID phải có dạng course-v1:ORG+COURSE+RUN.' })
+      return
+    }
+    setCourseId(normalizedCourseId)
     setBusy(true)
     setMessage(null)
     setAutoMap(null)
     try {
       const result = await previewQuizAutoMap(headers, {
-        openedx_course_id: courseId.trim(),
+        openedx_course_id: normalizedCourseId,
         selected_subject_offering_id: offeringId || null,
         total_questions: quizConfig.totalQuestions,
         difficulty_easy: quizConfig.easy,
@@ -223,7 +235,7 @@ export default function BankQuizPage() {
       hydrateActionDefaults(result)
       const picked = result.summary?.selected_subject_offering_id || result.offering?.id || ''
       if (picked) setSelectedOfferingId(picked)
-      await loadHistory(courseId.trim())
+      await loadHistory(normalizedCourseId)
     } catch (error) {
       setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Không tự kiểm tra được course Open edX' })
     } finally {
@@ -232,11 +244,17 @@ export default function BankQuizPage() {
   }
 
   async function runApply() {
+    const normalizedCourseId = normalizeOpenEdxCourseId(courseId)
+    if (!normalizedCourseId) {
+      setMessage({ tone: 'danger', text: 'Course ID phải có dạng course-v1:ORG+COURSE+RUN.' })
+      return
+    }
+    setCourseId(normalizedCourseId)
     setBusy(true)
     setMessage(null)
     try {
       const result = await applyQuizAutoMap(headers, {
-        openedx_course_id: courseId.trim(),
+        openedx_course_id: normalizedCourseId,
         selected_subject_offering_id: selectedOfferingId || autoMap?.offering?.id || null,
         total_questions: quizConfig.totalQuestions,
         difficulty_easy: quizConfig.easy,
@@ -250,7 +268,7 @@ export default function BankQuizPage() {
       const picked = result.summary?.selected_subject_offering_id || result.offering?.id || ''
       if (picked) setSelectedOfferingId(picked)
       setMessage(inlineMessageFromBackend(result, result.message || 'Đã lưu cấu hình map Khóa học ID.', result.ok ? 'success' : 'warning'))
-      await loadHistory(courseId.trim())
+      await loadHistory(normalizedCourseId)
     } catch (error) {
       setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Lưu cấu hình tự động thất bại' })
     } finally {
@@ -293,7 +311,7 @@ export default function BankQuizPage() {
       })
       const timerText = config.timerEnabled ? ` · Timer ${config.timeLimitMinutes} phút · làm lại sau ${config.retakeCooldownMinutes} phút` : ''
       setMessage(inlineMessageFromBackend(result, (result.message || `Đã tạo ${actionLabel(item.action)} cho ${item.chapter_title}`) + timerText, result.ok ? 'success' : 'warning'))
-      if (refreshHistory) await loadHistory(courseId.trim())
+      if (refreshHistory) await loadHistory(normalizeOpenEdxCourseId(courseId))
     } catch (error) {
       setMessage({ tone: 'danger', text: error instanceof Error ? error.message : `Tạo bài kiểm tra cho ${item.chapter_title} thất bại` })
     } finally {
@@ -320,7 +338,7 @@ export default function BankQuizPage() {
         await executeCreateOneQuiz(item, false)
       }
       setMessage({ tone: 'success', text: `Đã gửi tạo ${readyRows.length} bài kiểm tra.` })
-      await loadHistory(courseId.trim())
+      await loadHistory(normalizeOpenEdxCourseId(courseId))
     } finally {
       setBusy(false)
       setCreatingKey('')
@@ -373,8 +391,8 @@ export default function BankQuizPage() {
   }
 
   useEffect(() => {
-    const normalizedCourseId = courseId.trim()
-    if (!normalizedCourseId) {
+    const normalizedCourseId = normalizeOpenEdxCourseId(courseId)
+    if (!courseId.trim()) {
       setAutoMap(null)
       setSelectedOfferingId('')
       setHistory([])
@@ -382,6 +400,7 @@ export default function BankQuizPage() {
       setChapterActions({})
       return undefined
     }
+    if (!normalizedCourseId) return undefined
     const timer = window.setTimeout(() => {
       runPreview('', false).catch(() => undefined)
     }, 750)
@@ -401,7 +420,7 @@ export default function BankQuizPage() {
     {
       key: 'cms_mapping', header: 'Map Course CMS', kind: 'identity', minWidth: 290, priority: 'required', hideable: false, truncateLines: 2,
       render: (item) => <div className="quiz-map-target">
-        {item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small>{item.openedx_section_id}</small></> : <span className={classNames('status', item.effectiveRequiresQuiz ? 'danger' : 'pending')}>Chưa tìm thấy Section</span>}
+        {item.openedx_section_title ? <><b>{item.openedx_section_title}</b><small>{item.openedx_section_id}</small></> : <span className={classNames('status', item.effectiveRequiresQuiz ? 'danger' : 'pending')}>{courseTreeUnavailable ? 'Chưa đọc được cây Course CMS' : 'Chưa tìm thấy Section'}</span>}
         {item.release_code ? <small><strong>Release:</strong> {item.release_code}{item.openedx_library_key ? ` · ${item.openedx_library_key}` : ''}</small> : <small>{item.effectiveRequiresQuiz ? 'Chưa có Release published' : 'Không yêu cầu Release'}</small>}
       </div>,
     },
@@ -428,7 +447,7 @@ export default function BankQuizPage() {
       key: 'actions', header: 'Thao tác', kind: 'actions', width: 126, sticky: 'right', hideable: false,
       render: (item) => item.effectiveRequiresQuiz ? <button className="btn small" disabled={!item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final' : 'Tạo Quiz'}</button> : <span className="muted">Bỏ qua</span>,
     },
-  ], [busy, creatingKey, titleForItem])
+  ], [busy, courseTreeUnavailable, creatingKey, titleForItem])
 
   const historyColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_row, index) => index + 1 },
@@ -442,7 +461,7 @@ export default function BankQuizPage() {
       try {
         const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử bài kiểm tra' })
         setMessage(inlineMessageFromBackend(result, result.message || 'Đã khôi phục bài kiểm tra.', result.ok ? 'success' : 'warning'))
-        await loadHistory(courseId.trim())
+        await loadHistory(normalizeOpenEdxCourseId(courseId))
       } catch (error) {
         setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Khôi phục thất bại' })
       } finally {
@@ -507,7 +526,7 @@ export default function BankQuizPage() {
           </div>
         </div> : <>
           <div className="bank-quiz-summary-grid" aria-label="Tóm tắt kết quả map">
-            <div><span>Khóa học</span><b>{courseId.trim() || '—'}</b></div>
+            <div><span>Khóa học</span><b>{autoMap.openedx_course_id || normalizeOpenEdxCourseId(courseId) || '—'}</b></div>
             <div><span>Version môn</span><b>{autoMap.offering?.code || autoMap.offering?.id || selectedOfferingId || '—'}</b></div>
             <div><span>Bài đã map</span><b>{matchedCount}/{chapterCount || 0}</b></div>
             <div><span>Sẵn sàng tạo</span><b>{readyRows.length}</b></div>
@@ -521,6 +540,7 @@ export default function BankQuizPage() {
             <div className={missingReleaseCount ? 'is-warning' : ''}><span>Thiếu Release</span><b>{missingReleaseCount}</b><small>Bank published</small></div>
           </div>
 
+          {autoMap.course_tree ? <div className={`alert ${autoMap.course_tree.source === 'unavailable' ? 'danger' : autoMap.course_tree.source === 'cached' ? 'warning' : 'info'}`}><b>Nguồn cây Course CMS:</b> {autoMap.course_tree.source === 'direct' ? 'Open edX trực tiếp' : autoMap.course_tree.source === 'cached' ? `Dữ liệu sync cũ (${autoMap.course_tree.cached_block_count || 0} block)` : `Không khả dụng${autoMap.course_tree.error_code ? ` · ${autoMap.course_tree.error_code}` : ''}`}</div> : null}
           {autoMap.blocking_errors?.length ? <div className="alert danger"><b>Chưa thể lưu hoặc tạo</b><ul>{autoMap.blocking_errors.slice(0, 5).map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
           {autoMap.warnings?.length ? <details className="quiz-warning-details"><summary>Có {autoMap.warnings.length} cảnh báo cần xem</summary><ul>{autoMap.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
 
@@ -552,14 +572,14 @@ export default function BankQuizPage() {
         bodyClassName="bank-quiz-config-body"
       >
         <div className="bank-quiz-config-form">
-          <label>Khóa học ID<input className="input" value={courseId} onChange={(event) => { setCourseId(event.target.value); setSelectedOfferingId(''); setAutoMap(null); setChapterActions({}) }} placeholder="course-v1:FPT+WEB107+SU26" /></label>
+          <label>Khóa học ID<input className="input" value={courseId} onBlur={() => { const normalized = normalizeOpenEdxCourseId(courseId); if (normalized) setCourseId(normalized) }} onChange={(event) => { setCourseId(event.target.value); setSelectedOfferingId(''); setAutoMap(null); setChapterActions({}) }} placeholder="course-v1:FPT+WEB107+SU26" /></label>
           <label>Version môn<select className="input" value={selectedOfferingId || autoMap?.offering?.id || ''} disabled={busy || !candidates.length} onChange={async (event) => {
             const next = event.target.value
             setSelectedOfferingId(next)
             if (next) await runPreview(next, false)
           }}><option value="">{candidates.length ? 'Chọn version môn...' : 'Hệ thống tự xác định'}</option>{candidates.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.offering_code}{item.course_run_match ? ' · khớp Course ID' : ''} · {item.ready_chapter_count}/{item.chapter_count} bài có Release</option>)}</select></label>
           <div className="bank-quiz-config-actions">
-            <button className="btn secondary" type="button" disabled={busy || !courseId.trim()} onClick={() => runPreview(selectedOfferingId, true)}>{busy ? 'Đang kiểm tra...' : autoMap ? 'Kiểm tra lại' : 'Kiểm tra map'}</button>
+            <button className="btn secondary" type="button" disabled={busy || !normalizeOpenEdxCourseId(courseId)} onClick={() => runPreview(selectedOfferingId, true)}>{busy ? 'Đang kiểm tra...' : autoMap ? 'Kiểm tra lại' : 'Kiểm tra map'}</button>
             <button className="btn" type="button" disabled={busy || !autoMap} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
           </div>
           <div className="course-auto-hint bank-quiz-config-hint" role="status">{busy ? 'Đang tìm version môn và Section phù hợp...' : autoMap ? `Đã khớp ${matchedCount}/${chapterCount || 0} bài. ${selectedQuizCount} bài sẽ tạo, ${skippedCount} bài bỏ qua.` : 'Nhập Khóa học ID để bắt đầu. Hệ thống chỉ dùng Release đã publish.'}</div>
@@ -581,7 +601,7 @@ export default function BankQuizPage() {
       meta={historyBusy ? <span className="status pending">Đang tải</span> : <span className="status pending">{history.length} bản ghi</span>}
       className="bank-quiz-history-section"
     >
-      {!courseId.trim() ? <div className="bank-contract-empty-state"><VisualIcon icon="audit" tone="slate" label="Chưa có Course ID" size={24} /><div><b>Chưa có Course ID</b><p>Nhập Course ID để xem lịch sử đúng khóa học.</p></div></div> : <EnterpriseDataTable tableId="bank-quiz-course-history" caption="Lịch sử bài kiểm tra" rows={history} columns={historyColumns} rowKey={(item) => item.id} density="compact" loading={historyBusy} label="bản ghi" emptyTitle="Chưa có bài kiểm tra" emptyDescription="Khóa học này chưa có Quiz hoặc Final test được tạo từ AI Server." />}
+      {!normalizeOpenEdxCourseId(courseId) ? <div className="bank-contract-empty-state"><VisualIcon icon="audit" tone="slate" label="Chưa có Course ID" size={24} /><div><b>Chưa có Course ID</b><p>Nhập Course ID để xem lịch sử đúng khóa học.</p></div></div> : <EnterpriseDataTable tableId="bank-quiz-course-history" caption="Lịch sử bài kiểm tra" rows={history} columns={historyColumns} rowKey={(item) => item.id} density="compact" loading={historyBusy} label="bản ghi" emptyTitle="Chưa có bài kiểm tra" emptyDescription="Khóa học này chưa có Quiz hoặc Final test được tạo từ AI Server." />}
     </BankSection>
 
     <AccessibleDialog
@@ -595,7 +615,7 @@ export default function BankQuizPage() {
     >
       {createModal ? <>
           <div className="quiz-modal-grid">{(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} /> : null}{(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} /> : null}</div>
-          <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {courseId.trim() || '—'} · Quiz {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
+          <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {normalizeOpenEdxCourseId(courseId) || '—'} · Quiz {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
           {(quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100) ? <div className="alert warning">Tổng tỷ lệ Easy/Medium/Hard của mỗi loại phải bằng 100%.</div> : null}
           <div className="modal-actions"><button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button><button className="btn" type="button" disabled={busy || Boolean(creatingKey) || quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100 || (createModal.kind === 'all' && !readyRows.length)} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button></div>
       </> : null}

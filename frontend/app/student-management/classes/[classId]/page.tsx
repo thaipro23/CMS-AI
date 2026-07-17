@@ -783,7 +783,7 @@ function ClassDetailContent() {
     { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 250, sticky: 'left', hideable: false, render: (student) => <div className="student-identity-cell"><b>{student.student_code || '—'} · {student.full_name || 'Chưa có họ tên'}</b><small>{student.email || 'Chưa có email'}</small><small>Học lại: {student.total_relearn || 0}</small></div> },
     { key: 'cms', header: 'Tài khoản CMS', kind: 'status', minWidth: 180, priority: 'important', hideable: true, render: (student) => <div className="student-status-cell"><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.openedx_username || student.username || 'Chưa có username'}</small></div> },
     { key: 'enrollment', header: 'Ghi danh', kind: 'status', minWidth: 150, priority: 'important', hideable: true, render: (student) => <span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span> },
-    { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 230, priority: 'important', hideable: true, render: (student) => <div className="learning-progress-cell compact-learning-progress-cell"><b>Hoàn thành: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{shouldSuggestFullCmsSync(student) ? <em className="cms-full-sync-hint">Cần đồng bộ full CMS</em> : null}</div> },
+    { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 240, priority: 'important', hideable: true, render: (student) => <div className="learning-progress-cell compact-learning-progress-cell"><b>Hoàn thành: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><div className="student-learning-status-stack"><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{shouldSuggestFullCmsSync(student) ? <span className="cms-full-sync-hint">Cần đồng bộ full CMS</span> : null}</div></div> },
     { key: 'online', header: 'Học online', kind: 'status', minWidth: 210, priority: 'important', hideable: true, render: (student) => { const behavior = studentBehavior(student); return behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}><span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span><small>Độ tin cậy: {Math.round(behavior.confidence_score || 0)}%</small><small>{recommendedActionLabel(behavior.recommended_action)}</small></button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span> } },
     { key: 'exam', header: 'Điều kiện thi', kind: 'status', minWidth: 220, priority: 'important', hideable: true, render: (student) => <div className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Chưa đủ dữ liệu'}</small><small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small></div> },
     ...componentColumns.map((column): EnterpriseTableColumn<AcademicStudent> => ({
@@ -816,7 +816,6 @@ function ClassDetailContent() {
           {canRunFullCmsSync && <button className="btn primary class-action-button action-full-sync" type="button" disabled={actionBusy} onClick={runFullCmsSync}><AppIcon name="sync" size={16} />{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>}
           {canRunFullCmsSync && <button className="btn secondary class-action-button action-score-update" type="button" disabled={actionBusy} onClick={runScoreUpdate}><AppIcon name="analytics" size={16} />{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>}
           {can('manage_settings') && <Link className="btn secondary class-action-button action-week-settings" href="/semesters"><AppIcon name="calendar" size={16} />Cấu hình tuần học</Link>}
-          <span className="status-pill neutral assignment-readonly-status" title="Điểm Assignment do hệ thống khác xử lý">Assignment: đọc từ hệ thống ngoài</span>
         </div>
       </div>
       {activeJob && <div className="sync-job-status persistent-sync-job-status">
@@ -846,7 +845,7 @@ function ClassDetailContent() {
     </section>
 
     <section className="card academic-unified-card online-learning-card">
-      <div className="section-head compact-section-head enterprise-content-section-head">
+      <div className="enterprise-content-section-head">
         <div className="enterprise-section-heading-identity">
           <VisualIcon label="Học online" icon="analytics" tone="blue" className="enterprise-section-heading-icon" />
           <div className="enterprise-section-heading-copy">
@@ -871,7 +870,7 @@ function ClassDetailContent() {
     </section>
 
     <section className="card academic-unified-card student-list-card">
-      <div className="section-head enterprise-content-section-head student-list-section-head">
+      <div className="enterprise-content-section-head student-list-section-head">
         <div className="enterprise-section-heading-identity">
           <VisualIcon label="Danh sách sinh viên" icon="students" tone="blue" className="enterprise-section-heading-icon" />
           <div className="enterprise-section-heading-copy"><h2>Danh sách sinh viên</h2><p>{studentListUpdatedAt ? `Cập nhật: ${formatVNTimeDate(studentListUpdatedAt)}` : 'Cập nhật: chưa có dữ liệu đồng bộ học tập'}</p></div>

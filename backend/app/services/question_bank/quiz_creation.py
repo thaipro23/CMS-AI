@@ -8,6 +8,7 @@ import uuid
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.openedx_ids import normalize_openedx_course_id, openedx_course_id_candidates
 from app.models.course import CourseSyncState
 from app.models.question import Question
 from app.models.question_bank import (
@@ -188,30 +189,62 @@ class QuestionBankQuizCreationWorkflowService:
             'recommended_action': 'Đổi dòng sang Không tạo nếu không cần bài kiểm tra, hoặc xử lý Section/Release trước khi lưu cấu hình.',
         }
 
-    async def _load_openedx_sections_for_quiz(self, course_id: str) -> tuple[list[dict], list[str]]:
+    @staticmethod
+    def _course_tree_error_summary(exc: Exception) -> tuple[str, str]:
+        text = str(exc or '').strip()
+        status_match = re.search(r'HTTP\s+(\d{3})', text, flags=re.IGNORECASE)
+        code = f'OPENEDX_COURSE_TREE_HTTP_{status_match.group(1)}' if status_match else 'OPENEDX_COURSE_TREE_UNAVAILABLE'
+        if status_match:
+            message = f'Open edX trả HTTP {status_match.group(1)} khi đọc cây course.'
+        else:
+            message = 'Không kết nối được dịch vụ đọc cây course của Open edX.'
+        return code, message
+
+    async def _load_openedx_sections_for_quiz_detailed(self, course_id: str) -> tuple[list[dict], list[str], dict]:
+        canonical_course_id = normalize_openedx_course_id(course_id, required=True)
         warnings: list[str] = []
         blocks: list[dict] = []
+        diagnostics = {
+            'source': 'direct',
+            'course_id': canonical_course_id,
+            'error_code': None,
+            'direct_error': None,
+            'cached_block_count': 0,
+        }
         try:
-            blocks = await get_openedx_connector().get_course_blocks(course_id)
+            blocks = await get_openedx_connector().get_course_blocks(canonical_course_id)
         except Exception as exc:
-            warnings.append(f'Không đọc được cây course trực tiếp từ Open edX: {exc}. Thử dùng dữ liệu sync cũ trong AI Server.')
+            error_code, safe_message = self._course_tree_error_summary(exc)
+            diagnostics.update({'source': 'unavailable', 'error_code': error_code, 'direct_error': safe_message})
+            warnings.append(f'{safe_message} Hệ thống đã kiểm tra dữ liệu course sync gần nhất trong AI Server. [{error_code}]')
         if not blocks:
-            rows = self.db.query(CourseSyncState).filter(CourseSyncState.course_id == course_id).all()
-            blocks = [
-                {
-                    'block_id': row.block_id,
-                    'type': row.block_type,
-                    'display_name': row.display_name,
-                    'parent_block_id': row.parent_block_id,
-                    'children': row.children or [],
-                }
-                for row in rows
-            ]
+            candidates = openedx_course_id_candidates(canonical_course_id)
+            rows = self.db.query(CourseSyncState).filter(CourseSyncState.course_id.in_(candidates)).all() if candidates else []
+            diagnostics['cached_block_count'] = len(rows)
+            if rows:
+                diagnostics['source'] = 'cached'
+                blocks = [
+                    {
+                        'block_id': row.block_id,
+                        'type': row.block_type,
+                        'display_name': row.display_name,
+                        'parent_block_id': row.parent_block_id,
+                        'children': row.children or [],
+                    }
+                    for row in rows
+                ]
+                warnings.append('Đang dùng cây course đã sync trong AI Server vì không đọc được dữ liệu trực tiếp từ Open edX.')
         sections = [block for block in blocks if str(block.get('type') or '').lower() == 'chapter']
         if not sections:
             sections = [block for block in blocks if str(block.get('type') or '').lower() == 'sequential']
             if sections:
                 warnings.append('Course chưa trả về Section/chapter rõ ràng; hệ thống tạm dùng Subsection để map. Nên sync lại course nếu tên chưa đúng.')
+        if not blocks:
+            diagnostics['source'] = 'unavailable'
+        return sections, warnings, diagnostics
+
+    async def _load_openedx_sections_for_quiz(self, course_id: str) -> tuple[list[dict], list[str]]:
+        sections, warnings, _diagnostics = await self._load_openedx_sections_for_quiz_detailed(course_id)
         return sections, warnings
 
     def _match_chapter_to_section(self, chapter: SubjectChapter, sections: list[dict], used_section_ids: set[str]) -> tuple[dict | None, float, str]:
@@ -312,8 +345,8 @@ class QuestionBankQuizCreationWorkflowService:
         return selected, candidates, warnings
 
     async def preview_quiz_auto_map(self, *, openedx_course_id: str, selected_subject_offering_id: str | None = None, chapter_plan: list[dict] | None = None) -> dict:
-        course_id = (openedx_course_id or '').strip()
-        parsed = parse_openedx_course_id(course_id)
+        parsed = parse_openedx_course_id(openedx_course_id)
+        course_id = str(parsed.get('normalized_course_id') or (openedx_course_id or '').strip())
         blocking_errors: list[str] = []
         warnings: list[str] = []
         plan_by_chapter = self._normalize_quiz_chapter_plan(chapter_plan)
@@ -348,10 +381,27 @@ class QuestionBankQuizCreationWorkflowService:
                 **_ui_notice('warning', 'Chưa chọn được version môn để map course.'),
             }
         release_status = self._offering_published_release_status(offering)
-        sections, section_warnings = await self._load_openedx_sections_for_quiz(course_id)
+        sections, section_warnings, course_tree = await self._load_openedx_sections_for_quiz_detailed(course_id)
         warnings.extend(section_warnings)
-        if not sections:
-            blocking_errors.append('Không đọc được Section từ Open edX course. Hãy kiểm tra connector/sync course trước.')
+        tree_unavailable = course_tree.get('source') == 'unavailable'
+        if tree_unavailable:
+            blocking_errors.append('Không đọc được cây Course CMS/Open edX và chưa có dữ liệu sync cũ. Hãy đồng bộ course hoặc kiểm tra connector trước khi lưu cấu hình.')
+        elif not sections:
+            blocking_errors.append('Course chưa có Section/Chapter có thể map. Hãy kiểm tra cấu trúc Course CMS/Open edX.')
+        course_id_candidates = openedx_course_id_candidates(course_id)
+        existing = self.db.query(EdxCourseMapping).filter(
+            EdxCourseMapping.openedx_course_id.in_(course_id_candidates)
+        ).order_by(EdxCourseMapping.openedx_course_id.asc()).first() if course_id_candidates else None
+        saved_sections: dict[str, str] = {}
+        if existing:
+            saved_sections = {
+                str(item.subject_chapter_id): str(item.openedx_parent_node_id or '')
+                for item in self.db.query(EdxCourseChapterMapping).filter(
+                    EdxCourseChapterMapping.course_mapping_id == existing.id
+                ).all()
+                if item.openedx_parent_node_id
+            }
+        section_by_id = {str(item.get('block_id') or ''): item for item in sections}
         used_sections: set[str] = set()
         mappings: list[dict] = []
         release_by_chapter = {item['chapter_id']: item for item in release_status['details']}
@@ -363,17 +413,35 @@ class QuestionBankQuizCreationWorkflowService:
             chapter_title = self._chapter_display_name(chapter)
             action = plan_by_chapter.get(chapter.id) or self._quiz_action_for_chapter_title(chapter_title)
             requires_release = self._quiz_action_requires_release(action)
-            section, score, reason = self._match_chapter_to_section(chapter, sections, used_sections)
+            saved_section_id = saved_sections.get(chapter.id)
+            section = section_by_id.get(saved_section_id or '') if saved_section_id not in used_sections else None
+            if section:
+                score, reason = 1.0, 'Dùng mapping Course CMS đã lưu'
+            else:
+                section, score, reason = self._match_chapter_to_section(chapter, sections, used_sections)
             if section:
                 used_sections.add(str(section.get('block_id') or ''))
             release_info = release_by_chapter.get(chapter.id) or {}
             ready = bool(requires_release and section and release_info.get('ready'))
             production_status = self._quiz_production_status_for_mapping(action=action, section=section, release_info=release_info)
-            if requires_release and not section:
+            if tree_unavailable and requires_release:
+                missing_requirements = ['COURSE_TREE']
+                if not release_info.get('ready'):
+                    missing_requirements.append('RELEASE')
+                production_status = {
+                    'status_code': 'COURSE_TREE_UNAVAILABLE',
+                    'status_label': 'Chưa đọc được cây Course CMS',
+                    'severity': 'danger',
+                    'missing_requirements': missing_requirements,
+                    'production_ready': False,
+                    'can_save_configuration': False,
+                    'recommended_action': 'Đồng bộ lại course hoặc kiểm tra Open edX connector trước khi lưu cấu hình.',
+                }
+            if requires_release and not section and not tree_unavailable:
                 blocking_errors.append(f'{chapter_title} đang chọn {self._quiz_action_label(action)} nhưng chưa tìm thấy Section cùng tên trong course.')
             if requires_release and not release_info.get('ready'):
                 blocking_errors.append(f'{chapter_title} đang chọn {self._quiz_action_label(action)} nhưng chưa có Release published đủ component.')
-            if not requires_release and not section:
+            if not requires_release and not section and not tree_unavailable:
                 warnings.append(f'{chapter_title} đang để Không tạo; chưa tìm thấy Section cùng tên nên chỉ lưu course/version, không lưu mapping tạo bài kiểm tra.')
             mappings.append({
                 'chapter_id': chapter.id,
@@ -404,7 +472,6 @@ class QuestionBankQuizCreationWorkflowService:
                 'recommended_quiz_title': 'Final test' if action == 'final_test' else f'Quiz {self._chapter_quiz_suffix(chapter)}'.strip(),
                 'recommended_unit_title': 'Final test' if action == 'final_test' else 'Quiz',
             })
-        existing = self.db.query(EdxCourseMapping).filter(EdxCourseMapping.openedx_course_id == course_id).first()
         if existing and existing.subject_id != subject.id:
             blocking_errors.append('Course này đã được map sang môn khác. Không tự ghi đè để tránh gắn nhầm đề.')
         selected_quiz_count = len([item for item in mappings if item.get('requires_quiz')])
@@ -431,6 +498,8 @@ class QuestionBankQuizCreationWorkflowService:
             'next_action': 'Lưu cấu hình rồi tạo bài kiểm tra.' if can_apply else 'Sửa dòng bị chặn hoặc đổi sang Không tạo trước khi lưu.',
         }
         ui_message = f'Đã tự tìm được version môn. Có thể lưu cấu hình: {ready_quiz_count}/{selected_quiz_count} bài kiểm tra sẵn sàng, {skipped_chapter_count} bài Không tạo.' if can_apply else 'Chưa thể lưu cấu hình. Hãy xử lý các lỗi bên dưới hoặc đổi trạng thái dòng sang Không tạo.'
+        if tree_unavailable:
+            ui_message = 'Chưa thể lưu cấu hình vì không đọc được cây Course CMS/Open edX và chưa có dữ liệu sync cũ.'
         if can_apply and selected_quiz_count == 0:
             ui_message = 'Đã tự tìm được version môn. Tất cả dòng đang Không tạo; có thể lưu course/version mà không tạo bài kiểm tra.'
         ui_status = 'success' if can_apply else 'warning'
@@ -458,7 +527,9 @@ class QuestionBankQuizCreationWorkflowService:
                 'matched_count': len([item for item in mappings if item.get('openedx_section_id')]),
                 'candidates': [self._format_offering_candidate(item) for item in candidates],
                 'selected_subject_offering_id': offering.id if offering else None,
+                'course_tree': course_tree,
             },
+            'course_tree': course_tree,
             'sections': [{'openedx_section_id': str(item.get('block_id') or ''), 'title': str(item.get('display_name') or ''), 'type': str(item.get('type') or '')} for item in sections],
             'mappings': mappings,
             'warnings': list(dict.fromkeys(warnings)),
@@ -476,8 +547,19 @@ class QuestionBankQuizCreationWorkflowService:
         offering = preview.get('offering') or {}
         course_id = preview['openedx_course_id']
         parsed = parse_openedx_course_id(course_id)
-        mapping = self.db.query(EdxCourseMapping).filter(EdxCourseMapping.openedx_course_id == course_id).first()
+        mapping_candidates = openedx_course_id_candidates(course_id)
+        mapping = self.db.query(EdxCourseMapping).filter(
+            EdxCourseMapping.openedx_course_id.in_(mapping_candidates)
+        ).first() if mapping_candidates else None
         if mapping:
+            if mapping.openedx_course_id != course_id:
+                canonical_conflict = self.db.query(EdxCourseMapping).filter(
+                    EdxCourseMapping.openedx_course_id == course_id,
+                    EdxCourseMapping.id != mapping.id,
+                ).first()
+                if canonical_conflict:
+                    raise ValueError('Course có nhiều mapping legacy. Hãy xử lý mapping trùng trước khi lưu.')
+                mapping.openedx_course_id = course_id
             if mapping.subject_id != subject.get('id'):
                 raise ValueError('Course này đã map sang môn khác. Không ghi đè mapping cũ.')
             mapping.subject_offering_id = offering.get('id')
@@ -1007,7 +1089,11 @@ class QuestionBankQuizCreationWorkflowService:
         subject = self.db.get(Subject, release.subject_id)
         chapter = self.db.get(SubjectChapter, release.chapter_id)
         connector = get_openedx_connector()
-        course_id = course_mapping.openedx_course_id
+        course_id = normalize_openedx_course_id(course_mapping.openedx_course_id, required=True)
+        if course_mapping.openedx_course_id != course_id:
+            course_mapping.openedx_course_id = course_id
+            course_mapping.updated_at = datetime.utcnow()
+            self.db.add(course_mapping)
         assessment_type = 'final_test' if str(assessment_type or '').lower() == 'final_test' else 'quiz'
         quiz_suffix = self._chapter_quiz_suffix(chapter)
         default_quiz_title = 'Final test' if assessment_type == 'final_test' else f'Quiz {quiz_suffix}'.strip()
@@ -1036,10 +1122,22 @@ class QuestionBankQuizCreationWorkflowService:
             bank_release_id=release.id,
             quiz_blueprint_id=None,
             status='creating',
-            metadata_json={'plan': plan, 'validation': validation, 'actor': actor, 'created_from': 'bank_release', 'assessment_type': assessment_type, 'timer_config': timer_config},
+            metadata_json={
+                'plan': plan,
+                'validation': validation,
+                'actor': actor,
+                'created_from': 'bank_release',
+                'course_chapter_mapping_id': chapter_mapping.id,
+                'assessment_type': assessment_type,
+                'timer_config': timer_config,
+            },
         )
         self.db.add(instance)
         self.db.commit()
+        quiz_result: dict = {}
+        created_node_id = ''
+        rollback_result: dict = {}
+        rollback_error = ''
         try:
             quiz_result = await connector.create_quiz_node(
                 course_id=course_id,
@@ -1067,6 +1165,11 @@ class QuestionBankQuizCreationWorkflowService:
             if not unit_node_id:
                 raise RuntimeError('Open edX không trả leaf_unit_node_id sau khi tạo Quiz')
             created_nodes = quiz_result.get('created_nodes') if isinstance(quiz_result.get('created_nodes'), list) else []
+            created_node_id = str(
+                quiz_result.get('quiz_node_id')
+                or (created_nodes[0].get('usage_key') if created_nodes else '')
+                or unit_node_id
+            )
             sequence_usage_key = ''
             for node in reversed(created_nodes):
                 if str(node.get('block_type') or '').lower() == 'sequential':
@@ -1156,12 +1259,37 @@ class QuestionBankQuizCreationWorkflowService:
                 **_ui_notice('success', 'Đã tạo Final test và native Problem Bank từ Bank Release trên Open edX.' if assessment_type == 'final_test' else 'Đã tạo Quiz và native Problem Bank từ Bank Release trên Open edX.'),
             }
         except Exception as exc:
-            instance.status = 'failed'
+            # Compensate a partially-created Studio node. A failed timer or
+            # ItemBank insert must not leave an invisible orphan Quiz behind.
+            if created_node_id:
+                try:
+                    rollback_result = await connector.delete_quiz_node(
+                        course_id=course_id,
+                        node_id=created_node_id,
+                        metadata={
+                            'course_quiz_instance_id': instance.id,
+                            'bank_release_id': release.id,
+                            'rollback_source': 'create_quiz_compensation',
+                        },
+                    )
+                except Exception as rollback_exc:
+                    rollback_error = f'{type(rollback_exc).__name__}: {str(rollback_exc) or repr(rollback_exc)}'
+            rollback_confirmed = bool(rollback_result.get('ok') and rollback_result.get('deleted')) if rollback_result else False
+            instance.status = 'failed' if not created_node_id or rollback_confirmed else 'rollback_manual_required'
+            instance.openedx_quiz_node_id = created_node_id or instance.openedx_quiz_node_id
             instance.metadata_json = {
                 **(instance.metadata_json or {}),
                 'failed_at': datetime.utcnow().isoformat(),
                 'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}',
-                'manual_cleanup_note': 'Nếu Quiz node đã được tạo trước khi lỗi insert Problem Bank, hãy kiểm tra/xóa thủ công trong Studio. AI Server không báo thành công một phần.',
+                'remote_node_created_before_failure': bool(created_node_id),
+                'compensating_rollback_result': rollback_result,
+                'compensating_rollback_error': rollback_error or None,
+                'manual_cleanup_required': bool(created_node_id and not rollback_confirmed),
+                'manual_cleanup_note': (
+                    'Rollback tự động chưa được Open edX xác nhận. Hãy kiểm tra node trong Studio.'
+                    if created_node_id and not rollback_confirmed
+                    else 'Không còn node Quiz mồ côi theo kết quả rollback tự động.'
+                ),
             }
             self.db.commit()
             raise

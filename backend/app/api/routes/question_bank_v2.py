@@ -11,6 +11,7 @@ from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.errors import public_http_exception
+from app.core.openedx_ids import openedx_course_id_candidates
 from app.core.rbac import UserContext, get_user_context, require_permission
 from app.core.config import settings
 from app.db.session import get_db
@@ -112,6 +113,7 @@ from app.services.question_bank.import_export import build_import_error_workbook
 from app.services.business_rbac import BusinessRBACService
 from app.services.bank_dashboard_stats import BankDashboardStatsService
 from app.services.dashboard_analytics import DashboardAnalyticsService
+from app.services.bank_cost_analytics import BankCostAnalyticsService
 from app.services.bank_search import BankSearchService
 from app.services.bank_operation_jobs import BankOperationJobService, operation_pending_dir, serialize_job
 from app.services.content_extractor import ContentExtractor
@@ -627,6 +629,32 @@ def summary(db: Session = Depends(get_db), user: UserContext = Depends(require_p
     return _scoped_bank_summary(db, user)
 
 
+
+
+@router.get('/dashboard/cost-analytics')
+def dashboard_cost_analytics(
+    date_range: str = Query('30d'),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+    q: str = Query(''),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=10, le=100),
+    sort_by: str = Query('cost_vnd'),
+    sort_dir: str = Query('desc'),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_questions')),
+):
+    return BankCostAnalyticsService(db).get_analytics(
+        user,
+        date_range=date_range,
+        from_date=from_date,
+        to_date=to_date,
+        q=q,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+    )
 
 
 @router.get('/dashboard/analytics')
@@ -2209,7 +2237,10 @@ def list_course_quiz_instances(openedx_course_id: str | None = None, bank_releas
         page_size = limit
     query = _biz(db).apply_hierarchy_filter(db.query(CourseQuizInstance), CourseQuizInstance, user)
     if openedx_course_id:
-        query = query.filter(CourseQuizInstance.openedx_course_id == openedx_course_id)
+        course_id_candidates = openedx_course_id_candidates(openedx_course_id)
+        if not course_id_candidates:
+            raise HTTPException(status_code=422, detail='Course ID phải có dạng course-v1:ORG+COURSE+RUN.')
+        query = query.filter(CourseQuizInstance.openedx_course_id.in_(course_id_candidates))
     if bank_release_id:
         _require_release(db, user, 'bank.view', bank_release_id)
         query = query.filter(CourseQuizInstance.bank_release_id == bank_release_id)

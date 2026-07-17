@@ -39,7 +39,7 @@ const navGroups: Array<{ key: NavGroupKey; label: string }> = [
 ]
 
 const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', icon: 'dashboard', group: 'overview', permission: 'view_questions', exact: true, matchPrefixes: ['/bank/search'] },
+  { href: '/bank', label: 'Chi phí AI', icon: 'money', group: 'overview', permission: 'view_questions', exact: true, matchPrefixes: ['/bank/search'] },
   {
     href: '/bank/departments',
     label: 'Ngân hàng đề',
@@ -55,9 +55,9 @@ const navItems: NavItem[] = [
   { href: '/analytics/learning', label: 'Phân tích học tập', icon: 'analytics', group: 'training', permission: 'view_training_reports' },
   { href: '/jobs', label: 'Tác vụ nền', icon: 'jobs', group: 'operations', permission: 'view_jobs' },
   { href: '/audit', label: 'Nhật ký hoạt động', icon: 'audit', group: 'operations', permission: 'view_jobs' },
-  { href: '/ap-sync', label: 'Đồng bộ AP', icon: 'sync', group: 'operations', permission: 'manage_training_deadlines' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', icon: 'sync', group: 'operations', permission: 'manage_settings' },
   { href: '/ops/readiness', label: 'Kiểm tra vận hành', icon: 'readiness', group: 'operations', permission: 'view_ops_readiness', diagnostic: true },
-  { href: '/premises', label: 'Cơ sở', icon: 'campus', group: 'catalog', permission: 'manage_training_deadlines' },
+  { href: '/premises', label: 'Cơ sở', icon: 'campus', group: 'catalog', permission: 'manage_settings' },
   { href: '/semesters', label: 'Học kỳ', icon: 'semester', group: 'catalog', permission: 'manage_settings' },
   { href: '/users', label: 'Người dùng & phân quyền', icon: 'users', group: 'admin', permission: 'view_rbac' },
   { href: '/settings', label: 'Cài đặt', icon: 'settings', group: 'admin', permission: 'manage_settings' },
@@ -84,9 +84,9 @@ function requiredPermissionForPath(pathname: string): string | null {
     [/^\/(?:question-bank|review|generate|workflow)(?:\/|$)/, 'view_questions'],
     [/^\/export(?:\/|$)/, 'publish_questions'],
     [/^\/(?:student-management|teacher-management|training-management|analytics)(?:\/|$)/, 'view_training_reports'],
-    [/^\/premises(?:\/|$)/, 'manage_training_deadlines'],
+    [/^\/premises(?:\/|$)/, 'manage_settings'],
     [/^\/semesters(?:\/|$)/, 'manage_settings'],
-    [/^\/ap-sync(?:\/|$)/, 'manage_training_deadlines'],
+    [/^\/ap-sync(?:\/|$)/, 'manage_settings'],
     [/^\/ops\/readiness(?:\/|$)/, 'view_ops_readiness'],
     [/^\/(?:jobs|audit)(?:\/|$)/, 'view_jobs'],
     [/^\/users(?:\/|$)/, 'view_rbac'],

@@ -1008,6 +1008,8 @@ export type BankReleasePublishResult = {
   question_count: number
   imported_now_count: number
   skipped_existing_count: number
+  verified_existing_count?: number
+  verification_warnings?: Array<Record<string, any>>
   library_result?: Record<string, any> | null
   imported?: any[]
   errors?: any[]
@@ -1489,6 +1491,7 @@ export type QuizAutoMapResult = BackendUiNotice & {
   offering?: { id: string; code: string; name?: string | null; term?: string | null; version_code?: string | null } | null
   course_mapping?: { id: string; openedx_course_id: string; status?: string } | null
   summary: Record<string, any> & { candidates?: QuizAutoMapCandidate[]; selected_subject_offering_id?: string | null }
+  course_tree?: { source: 'direct' | 'cached' | 'unavailable' | string; course_id?: string; error_code?: string | null; direct_error?: string | null; cached_block_count?: number }
   sections: Array<{ openedx_section_id: string; title: string; type: string }>
   mappings: Array<{
     chapter_id: string
@@ -3339,4 +3342,99 @@ export type PerformanceReadinessReport = {
   safe_policy?: string
   read_only_guarantees?: string[]
   disclaimer?: string
+}
+
+export type BankCostAnalyticsRow = {
+  bank_version_id: string
+  version_code: string
+  version_status: string
+  chapter_id: string
+  chapter_title: string
+  chapter_no: number
+  subject_id: string
+  subject_code: string
+  subject_name: string
+  subject_offering_id?: string | null
+  subject_offering_code?: string
+  term?: string
+  department_id?: string | null
+  department_code?: string
+  department_name?: string
+  cost_usd: number
+  cost_vnd: number
+  input_tokens: number
+  cached_input_tokens: number
+  uncached_input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  calls: number
+  questions_generated: number
+  avg_cost_per_question_vnd: number
+  cache_ratio_percent: number
+  latest_at?: string | null
+  href: string
+}
+
+export type BankCostAnalytics = {
+  scope: { role: string; label: string; scope_type: string; scope_id: string }
+  filters: { date_range: string; from_date: string; to_date: string }
+  totals: {
+    cost_usd: number
+    cost_vnd: number
+    input_tokens: number
+    cached_input_tokens: number
+    uncached_input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    calls: number
+    questions_generated: number
+    avg_cost_per_question_vnd: number
+    cache_ratio_percent: number
+  }
+  previous: Record<string, number>
+  deltas: { cost_percent?: number | null; tokens_percent?: number | null; calls_percent?: number | null }
+  daily: Array<{
+    date: string
+    label: string
+    cost_usd: number
+    cost_vnd: number
+    input_tokens: number
+    cached_input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    calls: number
+  }>
+  models: Array<{
+    provider: string
+    model: string
+    cost_usd: number
+    cost_vnd: number
+    input_tokens: number
+    output_tokens: number
+    calls: number
+  }>
+  subjects: Array<{
+    subject_id: string
+    subject_code: string
+    subject_name: string
+    cost_usd: number
+    cost_vnd: number
+    total_tokens: number
+    calls: number
+    questions_generated: number
+  }>
+  rows: {
+    items: BankCostAnalyticsRow[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }
+  meta: {
+    visible_bank_versions: number
+    usd_to_vnd: number
+    data_source: string
+    actual_usage_only: boolean
+  }
+  generated_at?: string
 }

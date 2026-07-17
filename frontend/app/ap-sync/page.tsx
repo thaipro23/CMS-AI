@@ -108,7 +108,7 @@ export default function ApSyncPage() {
   const termOptions = useMemo(() => uniqueTermOptions(optionsByBranch), [optionsByBranch])
   const currentBranchOptions = optionsByBranch[selectedBranch] || EMPTY_OPTIONS
   const totalCampuses = BRANCHES.reduce((sum, branch) => sum + (optionsByBranch[branch.value].campuses?.length || 0), 0)
-  const canManageAcademicOps = can('manage_training_deadlines') || can('manage_settings')
+  const canManageAcademicOps = can('manage_settings')
 
   const loadOptions = async () => {
     setLoadingOptions(true)
@@ -164,13 +164,14 @@ export default function ApSyncPage() {
   }
 
   useEffect(() => {
+    if (!canManageAcademicOps) return
     loadOptions()
     refreshActiveRuns().catch(() => null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [headers, termName])
+  }, [canManageAcademicOps, headers, termName])
 
   useEffect(() => {
-    if (!activeRuns.length) return
+    if (!canManageAcademicOps || !activeRuns.length) return
     let canceled = false
     let timer: ReturnType<typeof setTimeout> | null = null
     const poll = async () => {
@@ -188,7 +189,8 @@ export default function ApSyncPage() {
           if (finished.some((item) => item.run.status === 'failed')) {
             setMessage('Có job đồng bộ AP thất bại. Xem chi tiết trong bảng kết quả gần nhất.')
           } else {
-            setMessage(dryRun ? 'Đã kiểm tra kế hoạch đồng bộ AP.' : 'Đã chạy xong đồng bộ AP.')
+            const onlyDryRun = finished.every((item) => String(item.run.mode || '').includes('dry_run'))
+            setMessage(onlyDryRun ? 'Đã kiểm tra kế hoạch đồng bộ AP.' : 'Đã chạy xong đồng bộ AP.')
             await loadOptions()
           }
         }
@@ -203,7 +205,7 @@ export default function ApSyncPage() {
     timer = setTimeout(poll, 1000)
     return () => { canceled = true; if (timer) clearTimeout(timer) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRuns.map((item) => item.run.id).join(','), headers])
+  }, [activeRuns.map((item) => item.run.id).join(','), canManageAcademicOps, headers])
 
   const requestRunForBranches = (branches: BranchCode[]) => {
     if (!canManageAcademicOps) {

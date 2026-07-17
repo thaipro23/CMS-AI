@@ -216,6 +216,8 @@ class BankReleasePublishOut(BaseModel):
     question_count: int
     imported_now_count: int
     skipped_existing_count: int
+    verified_existing_count: int = 0
+    verification_warnings: list[dict] = Field(default_factory=list)
     library_result: dict | None = None
     imported: list[dict] = Field(default_factory=list)
     errors: list[dict] = Field(default_factory=list)

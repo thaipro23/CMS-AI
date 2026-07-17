@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import json
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.errors import public_http_exception
@@ -116,12 +119,65 @@ class AcademicAPSyncWorkflowService:
                 logger_name=__name__,
             ) from exc
 
-    def enqueue_sync_from_ap_job(self, payload: AcademicAPSyncIn, *, user: UserContext) -> dict[str, Any]:
+    @staticmethod
+    def _normalized_ap_request(payload: AcademicAPSyncIn, *, require_explicit_targets: bool = True) -> dict[str, Any]:
         branch = (payload.branch or 'poly').strip().lower() or 'poly'
+        if branch not in {'poly', 'ptcd'}:
+            raise HTTPException(status_code=422, detail='Hệ AP chỉ hỗ trợ poly hoặc ptcd.')
         term_name = (payload.term_name or '').strip()
         if not term_name:
-            raise HTTPException(status_code=400, detail='Vui lòng chọn kỳ trước khi đồng bộ AP.')
+            raise HTTPException(status_code=422, detail='Vui lòng chọn kỳ trước khi đồng bộ AP.')
         scope = (payload.sync_scope or 'all').strip().lower() or 'all'
+        if scope not in {'all', 'campus', 'subject'}:
+            raise HTTPException(status_code=422, detail='Phạm vi đồng bộ AP không hợp lệ.')
+        campuses = sorted({str(item).strip().lower() for item in (payload.campuses or []) if str(item).strip()})
+        campus = str(payload.campus or '').strip().lower() or None
+        if campus and campus not in campuses:
+            campuses.append(campus)
+            campuses.sort()
+        subject_codes = sorted({str(item).strip().upper() for item in (payload.subject_codes or []) if str(item).strip()})
+        if require_explicit_targets and scope in {'all', 'campus'} and not campuses:
+            raise HTTPException(status_code=422, detail='Phạm vi đồng bộ chưa có cơ sở.')
+        if require_explicit_targets and scope == 'subject' and (not campuses or not subject_codes):
+            raise HTTPException(status_code=422, detail='Đồng bộ theo môn cần ít nhất một cơ sở và một mã môn.')
+        return {
+            'term_name': term_name,
+            'sync_scope': scope,
+            'campus': campus,
+            'campuses': campuses,
+            'branch': branch,
+            'subject_codes': subject_codes,
+            'max_subjects': int(payload.max_subjects or 0),
+            'dry_run': bool(payload.dry_run),
+        }
+
+    @staticmethod
+    def _ap_request_fingerprint(request_json: dict[str, Any]) -> str:
+        raw = json.dumps(request_json, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+        return hashlib.sha256(raw).hexdigest()
+
+    def _acquire_enqueue_scope_lock(self, *, term_name: str, branch: str) -> None:
+        """Serialize AP job creation for one term/branch on PostgreSQL.
+
+        Without this lock, two operators clicking at nearly the same moment can
+        both observe no active row and enqueue overlapping imports. The advisory
+        transaction lock is released by the commit performed when the run row is
+        created. Non-PostgreSQL test/development databases safely skip it.
+        """
+        bind = self.db.get_bind()
+        if not bind or bind.dialect.name != 'postgresql':
+            return
+        digest = hashlib.sha256(f'ap-sync:{branch}:{term_name}'.encode('utf-8')).digest()
+        lock_key = int.from_bytes(digest[:8], byteorder='big', signed=True)
+        self.db.execute(text('SELECT pg_advisory_xact_lock(:lock_key)'), {'lock_key': lock_key})
+
+    def enqueue_sync_from_ap_job(self, payload: AcademicAPSyncIn, *, user: UserContext) -> dict[str, Any]:
+        request_json = json_safe_value(self._normalized_ap_request(payload))
+        request_fingerprint = self._ap_request_fingerprint(request_json)
+        branch = str(request_json['branch'])
+        term_name = str(request_json['term_name'])
+        scope = str(request_json['sync_scope'])
+        self._acquire_enqueue_scope_lock(term_name=term_name, branch=branch)
         active = (
             self.db.query(AcademicSyncRun)
             .filter(
@@ -134,28 +190,43 @@ class AcademicAPSyncWorkflowService:
             .first()
         )
         if active:
-            return {'ok': True, 'message': 'Hệ thống đang có job đồng bộ AP đang chạy. Trạng thái sẽ tự cập nhật.', 'sync_run': active, 'counters': AcademicSyncCounters()}
+            active_data = active.counters_json if isinstance(active.counters_json, dict) else {}
+            active_request = active_data.get('request') if isinstance(active_data.get('request'), dict) else {}
+            active_fingerprint = str(active_data.get('request_fingerprint') or '')
+            if not active_fingerprint and active_request:
+                try:
+                    active_request = self._normalized_ap_request(
+                        AcademicAPSyncIn(**active_request),
+                        require_explicit_targets=False,
+                    )
+                except Exception:
+                    # Keep old malformed payload visible as a conflicting job; do
+                    # not silently reuse it for a new normalized request.
+                    pass
+                active_fingerprint = self._ap_request_fingerprint(active_request)
+            if active_fingerprint == request_fingerprint:
+                return {
+                    'ok': True,
+                    'message': 'Job đồng bộ AP cùng phạm vi đang chạy. Hệ thống tiếp tục theo dõi job hiện tại.',
+                    'sync_run': active,
+                    'counters': AcademicSyncCounters(),
+                }
+            raise HTTPException(
+                status_code=409,
+                detail='Đang có job AP khác phạm vi chạy trong cùng kỳ và hệ. Hãy chờ job hiện tại hoàn tất để tránh dữ liệu giao nhau.',
+            )
 
-        request_json = json_safe_value({
-            'term_name': term_name,
-            'sync_scope': scope,
-            'campus': payload.campus,
-            'campuses': payload.campuses or [],
-            'branch': branch,
-            'subject_codes': payload.subject_codes or [],
-            'max_subjects': int(payload.max_subjects or 0),
-            'dry_run': bool(payload.dry_run),
-        })
         run = self.importer.create_run(
             source='ap',
-            mode=f'api_{scope}_job_dry_run' if payload.dry_run else f'api_{scope}_job',
+            mode=f'api_{scope}_job_dry_run' if request_json['dry_run'] else f'api_{scope}_job',
             requested_by=user.user_id,
             term_name=term_name,
-            campus=','.join((payload.campuses or [])[:10]) if payload.campuses else payload.campus,
+            campus=','.join(request_json['campuses'][:10]) if request_json['campuses'] else request_json['campus'],
             branch=branch,
             status='queued',
             counters_json={
                 'request': request_json,
+                'request_fingerprint': request_fingerprint,
                 'progress': {'current': 0, 'total': 1, 'label': 'Đã đưa job đồng bộ AP vào hàng đợi', 'updated_at': None},
             },
         )
@@ -184,7 +255,7 @@ class AcademicAPSyncWorkflowService:
             user=user,
             target_type='academic_sync_run',
             target_id=run.id,
-            metadata=request_json,
+            metadata={**request_json, 'request_fingerprint': request_fingerprint},
         )
         return {'ok': True, 'message': 'Đã đưa job đồng bộ AP vào hàng đợi. Trạng thái sẽ tự cập nhật.', 'sync_run': run, 'counters': AcademicSyncCounters()}
 

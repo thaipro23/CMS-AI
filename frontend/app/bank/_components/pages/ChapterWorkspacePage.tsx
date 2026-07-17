@@ -787,7 +787,15 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       return
     }
     if (pending === 'release_publish' && latestRelease) {
-      await runAction('release_publish', async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Hệ thống đã đưa bộ đề lên CMS.', refreshCurrent, 'Không đưa được thư viện lên CMS. Vui lòng thử lại.')
+      await runAction('release_publish', async () => {
+        const result = await publishBankRelease(headers, latestRelease.id, {})
+        if (result.verification_warnings?.length) {
+          setPopupMessage({
+            type: 'warning',
+            text: `Đã đưa bộ đề lên CMS, nhưng có ${result.verification_warnings.length} component cần kiểm tra thủ công trong Library.`,
+          })
+        }
+      }, 'Hệ thống đã đưa bộ đề lên CMS.', refreshCurrent, 'Không đưa được thư viện lên CMS. Vui lòng thử lại.')
     }
   }
 

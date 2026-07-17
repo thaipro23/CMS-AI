@@ -5,6 +5,7 @@ from datetime import datetime
 import hashlib
 import uuid
 from app.core.errors import public_http_exception
+from app.core.openedx_ids import normalize_openedx_course_id, openedx_course_id_candidates
 from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.models.course import ContentChunk, CourseSyncState, Topic
@@ -209,16 +210,17 @@ def list_synced_courses(
 
 @router.post('/sync', response_model=SyncCourseResponse)
 async def sync_course(payload: SyncCourseRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('sync_course'))):
-    ensure_course_access(user, payload.course_id)
+    course_id = normalize_openedx_course_id(payload.course_id, required=True)
+    ensure_course_access(user, course_id)
     client = OpenEdxClient()
     try:
-        blocks = await client.get_course_blocks(payload.course_id)
-        seen, changed = CourseSyncService(db).sync_blocks(payload.course_id, blocks, payload.force)
-        log_audit(db, action='course.sync', status='success', message='Đồng bộ học liệu thành công', user=user, course_id=payload.course_id, target_type='course', metadata={'blocks_seen': seen, 'changed_blocks': changed, 'force': payload.force})
-    except Exception as exc:
-        log_audit(db, action='course.sync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=payload.course_id, target_type='course', metadata={'force': payload.force})
+        blocks = await client.get_course_blocks(course_id)
+        seen, changed = CourseSyncService(db).sync_blocks(course_id, blocks, payload.force)
+        log_audit(db, action='course.sync', status='success', message='Đồng bộ học liệu thành công', user=user, course_id=course_id, target_type='course', metadata={'blocks_seen': seen, 'changed_blocks': changed, 'force': payload.force, 'submitted_course_id': payload.course_id})
+    except Exception:
+        log_audit(db, action='course.sync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=course_id, target_type='course', metadata={'force': payload.force, 'submitted_course_id': payload.course_id})
         raise
-    return SyncCourseResponse(course_id=payload.course_id, blocks_seen=seen, changed_blocks=changed, status='completed')
+    return SyncCourseResponse(course_id=course_id, blocks_seen=seen, changed_blocks=changed, status='completed')
 
 
 @router.post('/{course_id}/clean-resync', response_model=CourseCleanResyncResponse)
@@ -234,26 +236,28 @@ async def clean_resync_course(
     states, content chunks and deprecated topics. It does not delete the question
     bank, generated jobs, approved questions, or Open edX Studio content.
     """
-    ensure_course_access(user, course_id)
+    canonical_course_id = normalize_openedx_course_id(course_id, required=True)
+    ensure_course_access(user, canonical_course_id)
+    course_id_candidates = openedx_course_id_candidates(canonical_course_id)
     if confirm != _CLEAN_RESYNC_CONFIRM_TEXT:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Thiếu xác nhận. Vui lòng nhập RESET_COURSE_SYNC để xóa dữ liệu đồng bộ cũ và đồng bộ lại.')
 
     try:
-        deleted_chunks = db.query(ContentChunk).filter(ContentChunk.course_id == course_id).delete(synchronize_session=False)
-        deleted_nodes = db.query(CourseSyncState).filter(CourseSyncState.course_id == course_id).delete(synchronize_session=False)
-        deleted_topics = db.query(Topic).filter(Topic.course_id == course_id).delete(synchronize_session=False)
+        deleted_chunks = db.query(ContentChunk).filter(ContentChunk.course_id.in_(course_id_candidates)).delete(synchronize_session=False)
+        deleted_nodes = db.query(CourseSyncState).filter(CourseSyncState.course_id.in_(course_id_candidates)).delete(synchronize_session=False)
+        deleted_topics = db.query(Topic).filter(Topic.course_id.in_(course_id_candidates)).delete(synchronize_session=False)
         db.commit()
 
         client = OpenEdxClient()
-        blocks = await client.get_course_blocks(course_id)
-        seen, changed = CourseSyncService(db).sync_blocks(course_id, blocks, True)
+        blocks = await client.get_course_blocks(canonical_course_id)
+        seen, changed = CourseSyncService(db).sync_blocks(canonical_course_id, blocks, True)
         log_audit(
             db,
             action='course.clean_resync',
             status='success',
             message='Xóa dữ liệu học liệu cũ trong AI Server và đồng bộ lại từ CMS thành công',
             user=user,
-            course_id=course_id,
+            course_id=canonical_course_id,
             target_type='course',
             metadata={
                 'deleted_chunks': deleted_chunks,
@@ -266,11 +270,11 @@ async def clean_resync_course(
         )
     except Exception as exc:
         db.rollback()
-        log_audit(db, action='course.clean_resync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=course_id, target_type='course', metadata={'confirm': confirm})
+        log_audit(db, action='course.clean_resync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=canonical_course_id, target_type='course', metadata={'confirm': confirm})
         raise
 
     return CourseCleanResyncResponse(
-        course_id=course_id,
+        course_id=canonical_course_id,
         deleted_chunks=deleted_chunks,
         deleted_nodes=deleted_nodes,
         deleted_topics=deleted_topics,

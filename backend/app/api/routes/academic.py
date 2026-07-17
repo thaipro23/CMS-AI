@@ -10,6 +10,7 @@ from typing import Any
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_, text
+from sqlalchemy.exc import IntegrityError
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -31,11 +32,13 @@ from app.models.academic import (
     AcademicTeacherAssignment,
     AcademicTerm,
 )
+from app.models.rbac import UserRoleAssignment
 from app.schemas.academic import (
     AcademicAPSyncIn,
     AcademicAPSyncOptionsOut,
     AcademicCampusOut,
     AcademicCampusUpsertIn,
+    AcademicCampusUpdateIn,
     AcademicBlockOut,
     AcademicClassListOut,
     AcademicClassSyncJobOut,
@@ -475,6 +478,22 @@ def _require_academic_sync_permission(
         detail='Bạn không có quyền đồng bộ/thao tác học vụ CMS/Open edX.',
     )
 
+
+
+def _require_academic_catalog_admin(
+    user: UserContext = Depends(get_user_context),
+    db: Session = Depends(get_db),
+) -> UserContext:
+    """Restrict global AP imports and campus catalog mutations to system administrators.
+
+    CAMPUS_OWNER is intentionally excluded: that role is scoped to class operations
+    inside assigned campuses and must not mutate the global campus catalog or enqueue
+    cross-campus AP import jobs.
+    """
+    if 'manage_settings' in set(user.permissions or []):
+        return user
+    BusinessRBACService(db).require_system_admin(user)
+    return user
 
 
 def _require_academic_view_permission(
@@ -1876,10 +1895,9 @@ def list_academic_campuses(
 @router.post('/campuses', response_model=AcademicCampusOut)
 def upsert_academic_campus(
     payload: AcademicCampusUpsertIn,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     code = (payload.campus_code or '').strip().lower()
     branch = (payload.branch or 'poly').strip().lower()
     if not code:
@@ -1891,20 +1909,108 @@ def upsert_academic_campus(
     campus.campus_name = payload.campus_name.strip() or code.upper()
     campus.active = payload.active
     campus.sort_order = payload.sort_order
-    campus.metadata_json = {'source': 'manual_ui'}
-    db.commit()
+    campus.metadata_json = {**(campus.metadata_json or {}), 'source': 'manual_ui', 'updated_from_ui': True}
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={'code': 'ACADEMIC_CAMPUS_CONFLICT', 'message': 'Mã cơ sở đã tồn tại trong hệ này.'},
+        ) from exc
     db.refresh(campus)
     log_audit(db, action='academic.campus.upsert', status='success', message='Lưu cơ sở AP thành công', user=user, target_type='academic_campus', target_id=campus.id, metadata={'campus_code': code, 'branch': branch})
+    return campus
+
+
+@router.patch('/campuses/{campus_id}', response_model=AcademicCampusOut)
+def update_academic_campus(
+    campus_id: str,
+    payload: AcademicCampusUpdateIn,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    campus = db.query(AcademicCampus).filter(AcademicCampus.id == campus_id).first()
+    if not campus:
+        raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
+    old_code = str(campus.campus_code or '')
+    old_branch = str(campus.branch or '')
+    code = (payload.campus_code if payload.campus_code is not None else campus.campus_code or '').strip().lower()
+    branch = (payload.branch if payload.branch is not None else campus.branch or 'poly').strip().lower()
+    if not code:
+        raise HTTPException(status_code=422, detail='Thiếu mã cơ sở AP')
+    conflict = db.query(AcademicCampus).filter(
+        AcademicCampus.campus_code == code,
+        AcademicCampus.branch == branch,
+        AcademicCampus.id != campus.id,
+    ).first()
+    if conflict:
+        raise HTTPException(
+            status_code=409,
+            detail={'code': 'ACADEMIC_CAMPUS_CONFLICT', 'message': 'Mã cơ sở đã tồn tại trong hệ này.'},
+        )
+    identity_changed = code != old_code.lower() or branch != old_branch.lower()
+    if identity_changed:
+        linked_classes = int(db.query(func.count(AcademicClass.id)).filter(
+            func.lower(AcademicClass.campus) == old_code.lower(),
+            func.lower(func.coalesce(AcademicClass.branch, 'poly')) == (old_branch or 'poly').lower(),
+        ).scalar() or 0)
+        linked_roles = int(db.query(func.count(UserRoleAssignment.id)).filter(
+            UserRoleAssignment.scope_type == 'CAMPUS',
+            func.lower(UserRoleAssignment.scope_id) == old_code.lower(),
+            UserRoleAssignment.revoked_at.is_(None),
+        ).scalar() or 0)
+        if linked_classes or linked_roles:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    'code': 'ACADEMIC_CAMPUS_IDENTITY_IN_USE',
+                    'message': 'Không đổi mã hoặc hệ của cơ sở đang được sử dụng. Bạn vẫn có thể sửa tên, trạng thái và thứ tự.',
+                    'details': {'linked_classes': linked_classes, 'active_role_assignments': linked_roles},
+                },
+            )
+    campus.campus_code = code
+    campus.branch = branch
+    if payload.campus_name is not None:
+        campus.campus_name = payload.campus_name.strip() or code.upper()
+    if payload.active is not None:
+        campus.active = payload.active
+    if payload.sort_order is not None:
+        campus.sort_order = payload.sort_order
+    campus.metadata_json = {
+        **(campus.metadata_json or {}),
+        'source': 'manual_ui',
+        'updated_from_ui': True,
+        'previous_identity': {'campus_code': old_code, 'branch': old_branch},
+    }
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={'code': 'ACADEMIC_CAMPUS_CONFLICT', 'message': 'Mã cơ sở đã tồn tại trong hệ này.'},
+        ) from exc
+    db.refresh(campus)
+    log_audit(
+        db,
+        action='academic.campus.update',
+        status='success',
+        message='Cập nhật cơ sở AP thành công',
+        user=user,
+        target_type='academic_campus',
+        target_id=campus.id,
+        metadata={'campus_code': campus.campus_code, 'branch': campus.branch, 'previous_code': old_code, 'previous_branch': old_branch},
+    )
     return campus
 
 
 @router.post('/campuses/seed-from-env', response_model=list[AcademicCampusOut])
 def seed_academic_campuses_from_env(
     branch: str = Query('poly'),
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     items = AcademicImportService(db).seed_campuses_from_settings(branch=branch)
     log_audit(db, action='academic.campus.seed_from_env', status='success', message='Seed cơ sở AP từ env thành công', user=user, target_type='academic_campus', target_id='bulk', metadata={'branch': branch, 'count': len(items)})
     return items
@@ -1913,20 +2019,18 @@ def seed_academic_campuses_from_env(
 @router.post('/campuses/sync-from-ap', response_model=list[AcademicCampusOut])
 def sync_academic_campuses_from_ap(
     branch: str = Query('poly'),
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     return AcademicAPSyncWorkflowService(db).sync_campuses_from_ap(branch=branch, user=user)
 
 
 @router.delete('/campuses/{campus_id}', response_model=AcademicCampusOut)
 def delete_academic_campus(
     campus_id: str,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     campus = db.query(AcademicCampus).filter(AcademicCampus.id == campus_id).first()
     if not campus:
         raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
@@ -1946,7 +2050,7 @@ def get_ap_sync_options(
     branch: str = Query('poly'),
     campus: str | None = Query(None, description='Giữ tương thích UI cũ; danh sách môn lấy từ AP CMS /api/cms/get-subject-cms. Nếu có term_name thì backend gửi thêm term_name; nếu AP CMS cần campus_code tạm thời, cấu hình static trong env ACADEMIC_AP_CMS_GET_SUBJECT_ENDPOINT.'),
     include_subjects: bool = Query(True),
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
     return AcademicAPSyncWorkflowService(db).get_sync_options(term_name=term_name or None, branch=branch, campus=campus, include_subjects=include_subjects)
@@ -1967,10 +2071,9 @@ def sync_from_json(
 @router.post('/sync/ap/jobs', response_model=AcademicImportResultOut)
 def enqueue_sync_from_ap_job(
     payload: AcademicAPSyncIn,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     return AcademicAPSyncWorkflowService(db).enqueue_sync_from_ap_job(payload, user=user)
 
 
@@ -1981,10 +2084,9 @@ def list_ap_sync_jobs(
     branch: str = Query(''),
     status_filter: str = Query('active', alias='status'),
     limit: int = Query(10, ge=1, le=50),
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     return AcademicAPSyncWorkflowService(db).list_sync_jobs(term_name=term_name, branch=branch, status_filter=status_filter, limit=limit)
 
 
@@ -1992,10 +2094,9 @@ def list_ap_sync_jobs(
 @router.get('/sync/ap/jobs/{run_id}', response_model=AcademicSyncRunOut)
 def get_ap_sync_job(
     run_id: str,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
     return AcademicAPSyncWorkflowService(db).get_sync_job(run_id)
 
 

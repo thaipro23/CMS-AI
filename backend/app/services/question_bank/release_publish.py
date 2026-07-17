@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 import re
 import uuid
 
@@ -8,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.openedx_ids import normalize_openedx_course_id, openedx_course_id_candidates
 from app.models.question import Question
 from app.models.question_bank import (
     BankReleaseQuestion,
@@ -122,7 +124,10 @@ class QuestionBankReleasePublishWorkflowService:
     def list_course_quiz_instances(self, *, openedx_course_id: str | None = None, bank_release_id: str | None = None, limit: int = 100) -> list[CourseQuizInstance]:
         query = self.db.query(CourseQuizInstance)
         if openedx_course_id:
-            query = query.filter(CourseQuizInstance.openedx_course_id == openedx_course_id)
+            candidates = openedx_course_id_candidates(openedx_course_id)
+            if not candidates:
+                return []
+            query = query.filter(CourseQuizInstance.openedx_course_id.in_(candidates))
         if bank_release_id:
             query = query.filter(CourseQuizInstance.bank_release_id == bank_release_id)
         return query.order_by(CourseQuizInstance.created_at.desc()).limit(max(1, min(int(limit or 100), 300))).all()
@@ -142,7 +147,7 @@ class QuestionBankReleasePublishWorkflowService:
             if callable(delete_func):
                 try:
                     delete_result = await delete_func(
-                        course_id=instance.openedx_course_id,
+                        course_id=normalize_openedx_course_id(instance.openedx_course_id, required=True),
                         node_id=instance.openedx_unit_node_id,
                         metadata={'course_quiz_instance_id': instance.id, 'actor': actor, 'note': note, 'rollback_source': 'ai_server_course_quiz_history'},
                     )
@@ -327,6 +332,43 @@ class QuestionBankReleasePublishWorkflowService:
             Question.status.in_(['approved', 'published']),
         ).order_by(Question.difficulty.asc(), Question.question_family_id.asc().nullslast(), Question.created_at.asc()).all()
 
+    @staticmethod
+    def _release_membership_hash(question_ids: list[str]) -> str:
+        payload = '\n'.join(sorted(str(item) for item in question_ids)).encode('utf-8')
+        return hashlib.sha256(payload).hexdigest()
+
+    def _load_frozen_release_snapshot(self, release: QuestionBankRelease) -> tuple[list[BankReleaseQuestion], list[Question]]:
+        rows = self.db.query(BankReleaseQuestion).filter(
+            BankReleaseQuestion.bank_release_id == release.id
+        ).order_by(BankReleaseQuestion.id.asc()).all()
+        if not rows:
+            raise ValueError('Release chưa có snapshot câu hỏi. Hãy hủy Release lỗi và chốt lại.')
+        question_ids = [str(item.question_id) for item in rows]
+        if len(question_ids) != len(set(question_ids)):
+            raise ValueError('Snapshot Release có câu hỏi trùng. Không publish để tránh tạo component lặp.')
+        questions_by_id = {
+            str(item.id): item
+            for item in self.db.query(Question).filter(Question.id.in_(question_ids)).all()
+        }
+        missing = [item for item in question_ids if item not in questions_by_id]
+        if missing:
+            raise ValueError(f'Snapshot Release thiếu {len(missing)} câu hỏi trong database.')
+        questions = [questions_by_id[item] for item in question_ids]
+        invalid = [
+            item.id for item in questions
+            if item.status not in {'approved', 'published'} or bool(item.is_retired) or bool(item.is_duplicate)
+        ]
+        if invalid:
+            raise ValueError(
+                f'Snapshot Release có {len(invalid)} câu không còn hợp lệ. '
+                'Không tự thay membership; hãy xử lý và chốt Release mới.'
+            )
+        expected_hash = str((release.metadata_json or {}).get('membership_sha256') or '')
+        actual_hash = self._release_membership_hash(question_ids)
+        if expected_hash and expected_hash != actual_hash:
+            raise ValueError('Snapshot Release đã thay đổi sau khi chốt. Không publish để bảo vệ tính bất biến.')
+        return rows, questions
+
     def create_release(self, *, bank_version_id: str, release_code: str | None = None, title: str = '', include_approved_questions: bool = True, actor: str | None = None, force: bool = False) -> QuestionBankRelease:
         version = self.db.get(QuestionBankVersion, bank_version_id)
         if not version:
@@ -382,6 +424,9 @@ class QuestionBankReleasePublishWorkflowService:
                 'shared_across_courses': False,
                 'term_slug': term_slug,
                 'publish_wiring': 'pending_openedx_import',
+                'membership_count': len(questions),
+                'membership_sha256': self._release_membership_hash([question.id for question in questions]),
+                'membership_frozen_at': datetime.utcnow().isoformat(),
             },
         )
         self.db.add(release)
@@ -627,7 +672,7 @@ class QuestionBankReleasePublishWorkflowService:
 
     def _release_publish_course_id(self, release: QuestionBankRelease, subject: Subject, course_id_for_org: str | None = None) -> str:
         if course_id_for_org and parse_openedx_course_id(course_id_for_org).get('ok'):
-            return course_id_for_org.strip()
+            return normalize_openedx_course_id(course_id_for_org, required=True)
         # The connector endpoint needs a course-shaped id primarily to resolve
         # the org. This synthetic id is intentionally marked BANK so it cannot
         # be confused with a real semester run in audit logs.
@@ -647,26 +692,9 @@ class QuestionBankReleasePublishWorkflowService:
         if release.status in {'deprecated', 'archived'}:
             raise ValueError(f'Release đang ở trạng thái {release.status}, không publish lại.')
 
-        questions = self._release_questions_for_version(version)
-        if not questions:
-            raise ValueError('Bank Version chưa có câu hỏi approved/published để publish release.')
-        existing_items = {
-            item.question_id: item
-            for item in self.db.query(BankReleaseQuestion).filter(BankReleaseQuestion.bank_release_id == release.id).all()
-        }
-        for question in questions:
-            if question.id not in existing_items:
-                item = BankReleaseQuestion(
-                    id=str(uuid.uuid4()),
-                    bank_release_id=release.id,
-                    question_id=question.id,
-                    question_family_id=question.question_family_id,
-                    difficulty=question.difficulty,
-                    openedx_library_problem_id=None,
-                )
-                self.db.add(item)
-                existing_items[question.id] = item
-        self.db.flush()
+        release_items, questions = self._load_frozen_release_snapshot(release)
+        existing_items = {str(item.question_id): item for item in release_items}
+        membership_hash = self._release_membership_hash([str(item.question_id) for item in release_items])
 
         course_id = self._release_publish_course_id(release, subject, course_id_for_org)
         connector = get_openedx_connector()
@@ -700,6 +728,8 @@ class QuestionBankReleasePublishWorkflowService:
             'expected_openedx_library_key': expected_library_key,
             'previous_openedx_library_key': previous_library_key if previous_library_key != release.openedx_library_key else None,
             'library_key_rule': 'subject-term-chapter-release-version',
+            'membership_count': len(release_items),
+            'membership_sha256': membership_hash,
         }
         self.db.commit()
 
@@ -734,6 +764,8 @@ class QuestionBankReleasePublishWorkflowService:
             ],
         }
         imported_now: list[dict] = []
+        verified_existing: list[dict] = []
+        verification_warnings: list[dict] = []
         errors: list[dict] = []
         try:
             library_result = await connector.ensure_problem_library(
@@ -746,7 +778,6 @@ class QuestionBankReleasePublishWorkflowService:
                 raise RuntimeError('Open edX connector trả về stub khi ensure library. Không đánh dấu published.')
             actual_library_key = str(library_result.get('library_key') or library_result.get('openedx_library_id') or library_key).strip()
             if actual_library_key and actual_library_key != library_key:
-                release.openedx_library_key = actual_library_key
                 library_key = actual_library_key
                 metadata_base = {
                     **metadata_base,
@@ -754,17 +785,48 @@ class QuestionBankReleasePublishWorkflowService:
                     'requested_library_key': expected_library_key,
                     'actual_openedx_library_key': library_key,
                 }
-                release.metadata_json = {
-                    **(release.metadata_json or {}),
-                    'actual_openedx_library_key': library_key,
-                    'requested_openedx_library_key': expected_library_key,
-                    'library_key_canonicalized_by_connector': True,
-                }
-                self.db.flush()
             for question in questions:
-                item = existing_items[question.id]
+                item = existing_items[str(question.id)]
                 if item.openedx_library_problem_id and not force_reimport and not library_key_changed:
-                    continue
+                    existing_problem_id = str(item.openedx_library_problem_id)
+                    try:
+                        existing_verify = await connector.verify_library_problem(
+                            course_id,
+                            library_key,
+                            existing_problem_id,
+                            metadata={**metadata_base, 'question_id': question.id, 'verification_source': 'release_publish_idempotency'},
+                        )
+                        if existing_verify.get('ok') and existing_verify.get('problem_exists'):
+                            verified_existing.append({
+                                'question_id': str(question.id),
+                                'problem_id': existing_problem_id,
+                                'library_key': library_key,
+                                'verify': existing_verify,
+                            })
+                            continue
+                        verification_warnings.append({
+                            'question_id': str(question.id),
+                            'problem_id': existing_problem_id,
+                            'status': existing_verify.get('status'),
+                            'message': 'Component đã lưu trong AI Server nhưng Open edX không xác nhận còn tồn tại; hệ thống sẽ import lại.',
+                        })
+                    except Exception as verify_exc:
+                        # A missing/older verify endpoint must not create duplicate
+                        # components. Keep the stored id and expose a warning for
+                        # operator follow-up instead of reimporting blindly.
+                        verification_warnings.append({
+                            'question_id': str(question.id),
+                            'problem_id': existing_problem_id,
+                            'status': 'verify_unavailable',
+                            'message': f'Không verify được component hiện có: {type(verify_exc).__name__}',
+                        })
+                        verified_existing.append({
+                            'question_id': str(question.id),
+                            'problem_id': existing_problem_id,
+                            'library_key': library_key,
+                            'verify': {'verified': None, 'manual_check_required': True},
+                        })
+                        continue
                 olx = question_to_openedx_olx(question)
                 family_tag = question.question_family_id or 'unknown-family'
                 diff = (question.difficulty or 'easy').upper()
@@ -804,11 +866,11 @@ class QuestionBankReleasePublishWorkflowService:
                     )
                     retry_key = str(retry_library.get('library_key') or retry_library.get('openedx_library_id') or expected_library_key).strip()
                     if retry_key and not self._library_key_same(retry_key, library_key):
-                        release.openedx_library_key = retry_key
+                        if imported_now:
+                            raise RuntimeError('Open edX đổi Library key giữa quá trình import; đã dừng để tránh chia snapshot sang nhiều Library.')
                         library_key = retry_key
                         metadata_base = {**metadata_base, 'library_key': library_key, 'actual_openedx_library_key': library_key}
                         metadata = {**metadata, 'library_key': library_key, 'actual_openedx_library_key': library_key}
-                        self.db.flush()
                     result = await connector.import_problem_to_library(
                         course_id=course_id,
                         library_key=library_key,
@@ -826,16 +888,39 @@ class QuestionBankReleasePublishWorkflowService:
                     verify = await connector.verify_library_problem(course_id, library_key, problem_id, metadata=metadata)
                 except Exception as verify_exc:  # keep import but mark manual check
                     verify = {'verified': False, 'manual_check_required': True, 'error': str(verify_exc)}
-                item.openedx_library_problem_id = problem_id
+                imported_now.append({
+                    'question_id': str(question.id),
+                    'problem_id': str(problem_id),
+                    'library_key': library_key,
+                    'verify': verify,
+                })
+            published_at = datetime.utcnow()
+            result_by_question_id = {
+                row['question_id']: row
+                for row in [*verified_existing, *imported_now]
+            }
+            questions_by_id = {str(question.id): question for question in questions}
+            missing_component_results = [question_id for question_id in questions_by_id if question_id not in result_by_question_id]
+            if missing_component_results:
+                raise RuntimeError(f'Publish thiếu kết quả component cho {len(missing_component_results)} câu trong snapshot.')
+            for question_id, question in questions_by_id.items():
+                row = result_by_question_id[question_id]
+                item = existing_items[question_id]
+                item.openedx_library_problem_id = row['problem_id']
                 item.difficulty = question.difficulty
                 item.question_family_id = question.question_family_id
-                question.openedx_library_problem_id = problem_id
-                question.target_library_key = library_key
+                question.openedx_library_problem_id = row['problem_id']
+                question.target_library_key = row['library_key']
                 question.status = 'published'
-                question.published_at = datetime.utcnow()
+                question.published_at = published_at
                 question.published_by = actor
-                imported_now.append({'question_id': question.id, 'problem_id': problem_id, 'verify': verify})
-                self.db.flush()
+            release.openedx_library_key = library_key
+            release.metadata_json = {
+                **(release.metadata_json or {}),
+                'actual_openedx_library_key': library_key,
+                'requested_openedx_library_key': expected_library_key,
+                'library_key_canonicalized_by_connector': not self._library_key_same(library_key, expected_library_key),
+            }
             counts = {'easy': 0, 'medium': 0, 'hard': 0}
             families = set()
             for question in questions:
@@ -849,7 +934,7 @@ class QuestionBankReleasePublishWorkflowService:
             release.medium_count = counts['medium']
             release.hard_count = counts['hard']
             release.family_count = len(families)
-            release.published_at = datetime.utcnow()
+            release.published_at = published_at
             release.published_by = actor
             release.metadata_json = {
                 **(release.metadata_json or {}),
@@ -857,6 +942,8 @@ class QuestionBankReleasePublishWorkflowService:
                 'library_result': library_result,
                 'published_question_count': len(questions),
                 'imported_now_count': len(imported_now),
+                'verified_existing_count': len(verified_existing),
+                'verification_warnings': verification_warnings,
                 'publish_wiring': 'openedx_library_verified_or_imported',
                 'library_key_changed': library_key_changed,
             }
@@ -873,7 +960,9 @@ class QuestionBankReleasePublishWorkflowService:
                 'openedx_library_key': release.openedx_library_key,
                 'question_count': len(questions),
                 'imported_now_count': len(imported_now),
-                'skipped_existing_count': len(questions) - len(imported_now),
+                'skipped_existing_count': len(verified_existing),
+                'verified_existing_count': len(verified_existing),
+                'verification_warnings': verification_warnings,
                 'library_result': library_result,
                 'imported': imported_now,
                 'errors': [],
@@ -882,17 +971,26 @@ class QuestionBankReleasePublishWorkflowService:
             # Best-effort rollback for components imported in this failed request.
             for row in imported_now:
                 try:
-                    await connector.delete_library_problem(course_id, library_key, row['problem_id'], metadata={'bank_release_id': release.id, 'rollback': True})
+                    await connector.delete_library_problem(course_id, row.get('library_key') or library_key, row['problem_id'], metadata={'bank_release_id': release.id, 'rollback': True})
                 except Exception as delete_exc:
                     errors.append({'question_id': row.get('question_id'), 'problem_id': row.get('problem_id'), 'rollback_error': str(delete_exc)})
-            release.status = 'publish_failed'
-            release.metadata_json = {
-                **(release.metadata_json or {}),
-                'publish_failed_at': datetime.utcnow().isoformat(),
-                'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}',
-                'rollback_errors': errors,
-            }
-            self.db.commit()
-            self._safe_refresh_chapter_stats(version.chapter_id)
-            raise RuntimeError(release.metadata_json['error']) from exc
+            error_text = f'{type(exc).__name__}: {str(exc) or repr(exc)}'
+            self.db.rollback()
+            failed_release = self.db.get(QuestionBankRelease, release_id)
+            failed_version = self.db.get(QuestionBankVersion, release.bank_version_id)
+            if failed_release:
+                failed_release.status = 'publish_failed'
+                failed_release.metadata_json = {
+                    **(failed_release.metadata_json or {}),
+                    'publish_failed_at': datetime.utcnow().isoformat(),
+                    'error': error_text,
+                    'rollback_errors': errors,
+                    'manual_cleanup_required': bool(errors),
+                    'remote_imported_before_failure': len(imported_now),
+                }
+                self.db.add(failed_release)
+                self.db.commit()
+            if failed_version:
+                self._safe_refresh_chapter_stats(failed_version.chapter_id)
+            raise RuntimeError(error_text) from exc
 

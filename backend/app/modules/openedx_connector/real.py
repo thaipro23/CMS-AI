@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 from app.core.config import settings
+from app.core.openedx_ids import normalize_openedx_course_id
 from app.modules.openedx_connector.base import OpenEdXConnector
 
 
@@ -246,25 +247,30 @@ class RealOpenEdXConnector(OpenEdXConnector):
         raise RuntimeError(f'Open edX connector {step} failed HTTP {response.status_code}: {detail}')
 
     async def get_course_blocks(self, course_id: str) -> list[dict]:
-        """Load course content for AI sync.
-
-        Preferred path: the Studio connector plugin installed inside CMS.  It can
-        read draft modulestore content, old problem XML and linked assets.
-        Fallback path: learner-facing Course Blocks API.
-        """
+        """Load one canonical course tree from Studio, then LMS as fallback."""
+        canonical_course_id = normalize_openedx_course_id(course_id, required=True)
+        studio_error: Exception | None = None
         if settings.openedx_prefer_studio_content and settings.openedx_studio_content_endpoint:
             try:
-                studio_blocks = await self._get_studio_content(course_id)
+                studio_blocks = await self._get_studio_content(canonical_course_id)
                 if studio_blocks:
                     return studio_blocks
-            except Exception:
-                # Keep fallback so a missing/not-yet-installed plugin does not break local sync.
-                pass
+            except Exception as exc:
+                studio_error = exc
 
-        return await self._get_course_blocks_api(course_id)
+        try:
+            return await self._get_course_blocks_api(canonical_course_id)
+        except Exception as api_exc:
+            if studio_error:
+                raise RuntimeError(
+                    'Không đọc được cây course từ Studio connector hoặc Course Blocks API. '
+                    f'Studio={type(studio_error).__name__}; CourseBlocks={api_exc}'
+                ) from api_exc
+            raise
 
     async def _get_studio_content(self, course_id: str) -> list[dict]:
-        endpoint = settings.openedx_studio_content_endpoint.format(course_id=course_id)
+        canonical_course_id = normalize_openedx_course_id(course_id, required=True)
+        endpoint = settings.openedx_studio_content_endpoint.format(course_id=canonical_course_id)
         url = f'{self.cms_base_url}{endpoint}'
         params = {
             'include_drafts': 'true',
@@ -274,7 +280,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         signed_url = f'{url}?{urlencode(params)}'
         async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
             response = await client.get(url, params=params, headers=await self._headers(method='GET', url=signed_url))
-            response.raise_for_status()
+            self._raise_for_openedx_error(response, 'read Studio course content')
             payload = response.json()
 
         blocks = payload.get('blocks') or []
@@ -287,35 +293,71 @@ class RealOpenEdXConnector(OpenEdXConnector):
             normalized.append(await self._normalize_block(block_id, block))
         return normalized
 
-    async def _get_course_blocks_api(self, course_id: str) -> list[dict]:
-        # Use repeated student_view_data parameters. A dict would collapse duplicate
-        # keys and CMS would not return html/video student view data consistently.
-        params = [
-            ('course_id', course_id),
-            ('all_blocks', 'true'),
-            ('depth', 'all'),
-            ('requested_fields', 'children,display_name,type,data,student_view_data,metadata,lms_web_url,student_view_url'),
-            ('student_view_data', 'html'),
-            ('student_view_data', 'video'),
-            ('student_view_data', 'problem'),
-        ]
-        url = f'{self.lms_base_url}{settings.openedx_course_blocks_path}'
-        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
-            response = await client.get(url, params=params, headers=await self._headers(method='GET', url=url))
-            response.raise_for_status()
+    @staticmethod
+    def _course_blocks_error_detail(response: httpx.Response) -> str:
+        try:
             payload = response.json()
+            if isinstance(payload, dict):
+                detail = payload.get('detail') or payload.get('error') or payload.get('message') or payload
+            else:
+                detail = payload
+            return str(detail)[:800]
+        except Exception:
+            return (response.text or '').strip()[:800]
+
+    async def _get_course_blocks_api(self, course_id: str) -> list[dict]:
+        canonical_course_id = normalize_openedx_course_id(course_id, required=True)
+        url = f'{self.lms_base_url}{settings.openedx_course_blocks_path}'
+        request_profiles = [
+            [
+                ('course_id', canonical_course_id),
+                ('all_blocks', 'true'),
+                ('depth', 'all'),
+                ('requested_fields', 'children,display_name,type,data,student_view_data,metadata,lms_web_url,student_view_url'),
+                ('student_view_data', 'html'),
+                ('student_view_data', 'video'),
+                ('student_view_data', 'problem'),
+            ],
+            [
+                ('course_id', canonical_course_id),
+                ('all_blocks', 'true'),
+                ('depth', 'all'),
+                ('requested_fields', 'children,display_name,type,metadata,lms_web_url,student_view_url'),
+            ],
+            [
+                ('course_id', canonical_course_id),
+                ('all_blocks', 'true'),
+                ('depth', 'all'),
+                ('requested_fields', 'children,display_name,type'),
+            ],
+        ]
+        failures: list[str] = []
+        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
+            payload: dict[str, Any] | None = None
+            for index, params in enumerate(request_profiles, start=1):
+                response = await client.get(url, params=params, headers=await self._headers(method='GET', url=url))
+                if response.status_code < 400:
+                    payload = response.json()
+                    break
+                detail = self._course_blocks_error_detail(response)
+                failures.append(f'profile={index} HTTP {response.status_code}: {detail}')
+                if response.status_code in {401, 403}:
+                    break
+            if payload is None:
+                raise RuntimeError(
+                    'Open edX Course Blocks API không đọc được course '
+                    f'{canonical_course_id}. ' + ' | '.join(failures)
+                )
 
         blocks = payload.get('blocks') or payload.get('root') or {}
         if isinstance(blocks, dict):
-            normalized = []
-            for block_id, block in blocks.items():
-                normalized.append(await self._normalize_block(block_id, block))
-            return normalized
+            return [await self._normalize_block(block_id, block) for block_id, block in blocks.items()]
         if isinstance(blocks, list):
-            normalized = []
-            for item in blocks:
-                normalized.append(await self._normalize_block(item.get('id') or item.get('block_id'), item))
-            return normalized
+            return [
+                await self._normalize_block(item.get('id') or item.get('block_id'), item)
+                for item in blocks
+                if isinstance(item, dict)
+            ]
         return []
 
     async def _download_text(self, url: str) -> str:
@@ -553,6 +595,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         }
 
     async def ensure_problem_library(self, course_id: str, chapter_node_id: str, display_name: str, metadata: dict | None = None) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         url = f'{self.cms_base_url}{settings.openedx_library_endpoint.format(course_id=course_id)}'
         metadata = metadata or {}
         payload = {
@@ -569,6 +612,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
             return response.json()
 
     async def import_problem_to_library(self, course_id: str, library_key: str, olx: str, display_name: str, metadata: dict | None = None) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         url = f'{self.cms_base_url}{settings.openedx_library_import_endpoint.format(course_id=course_id, library_key=library_key)}'
         metadata = metadata or {}
         payload = {
@@ -587,6 +631,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
 
 
     async def verify_library_problem(self, course_id: str, library_key: str, problem_id: str, metadata: dict | None = None) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         endpoint = getattr(settings, 'openedx_library_verify_endpoint', '/api/ai-connector/v1/libraries/{library_key}/problems/verify')
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id, library_key=library_key)}'
         clean_problem_id = _clean_openedx_usage_key(problem_id)
@@ -598,6 +643,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
             return response.json()
 
     async def delete_library_problem(self, course_id: str, library_key: str, problem_id: str, metadata: dict | None = None) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         endpoint = getattr(settings, 'openedx_library_delete_endpoint', '/api/ai-connector/v1/libraries/{library_key}/problems/delete')
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id, library_key=library_key)}'
         clean_problem_id = _clean_openedx_usage_key(problem_id)
@@ -616,6 +662,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         unit_title: str,
         metadata: dict | None = None,
     ) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         endpoint = getattr(settings, 'openedx_quiz_node_create_endpoint', '/api/ai-connector/v1/courses/{course_id}/quiz-nodes')
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
         payload = {
@@ -637,6 +684,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         node_id: str,
         metadata: dict | None = None,
     ) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         endpoint = getattr(settings, 'openedx_quiz_node_delete_endpoint', '/api/ai-connector/v1/courses/{course_id}/quiz-nodes/delete')
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
         payload = {
@@ -665,6 +713,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         native_timed_exam: bool = False,
         metadata: dict | None = None,
     ) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         endpoint = getattr(settings, 'openedx_quiz_timer_config_upsert_endpoint', '/api/unit-reset/v1/quiz-config/upsert')
         # Timer sessions are enforced in LMS, so write config through LMS rather than CMS.
         url = f'{self.lms_base_url}{endpoint.format(course_id=course_id)}'
@@ -694,6 +743,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
         slots: list[dict[str, Any]],
         metadata: dict | None = None,
     ) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         endpoint = getattr(settings, 'openedx_problem_bank_insert_endpoint', '/api/ai-connector/v1/courses/{course_id}/problem-banks')
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
         payload = {
@@ -709,6 +759,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
             return response.json()
 
     async def publish_problem_olx(self, course_id: str, parent_block_id: str | None, olx: str, display_name: str) -> dict:
+        course_id = normalize_openedx_course_id(course_id, required=True)
         url = f'{self.cms_base_url}{settings.openedx_publish_endpoint.format(course_id=course_id)}'
         payload = {'parent_block_id': parent_block_id, 'display_name': display_name, 'olx': olx}
         body = self._json_body(payload)

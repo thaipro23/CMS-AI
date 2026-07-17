@@ -895,6 +895,7 @@ def bank_generate_questions_task(job_id: str):
                 provider=str(payload.get('provider') or 'openai'),
                 actor=job.requested_by,
                 approve_after_generate=bool(payload.get('approve_after_generate')),
+                operation_job_id=job.id,
             )
             result_json = {
                 'ok': bool(result.get('ok')),
@@ -907,6 +908,7 @@ def bank_generate_questions_task(job_id: str):
                 'input_chunks': result.get('input_chunks'),
                 'input_tokens': result.get('input_tokens'),
                 'difficulty_counts': result.get('difficulty_counts'),
+                'usage_summary': result.get('usage_summary') or {},
                 'errors': result.get('errors') or [],
                 'message': result.get('message'),
             }
@@ -947,8 +949,10 @@ def bank_release_publish_task(job_id: str):
                 force_reimport=bool(payload.get('force_reimport')),
             )
             ops.progress(job, current=4, label='Đang verify kết quả publish')
+            if not result.get('ok'):
+                raise RuntimeError(result.get('message') or 'Open edX không xác nhận publish Release thành công.')
             result_json = {
-                'ok': bool(result.get('ok')),
+                'ok': True,
                 'release_id': result.get('release_id') or job.release_id,
                 'release_code': result.get('release_code'),
                 'status': result.get('status'),
@@ -956,6 +960,8 @@ def bank_release_publish_task(job_id: str):
                 'question_count': result.get('question_count'),
                 'imported_now_count': result.get('imported_now_count'),
                 'skipped_existing_count': result.get('skipped_existing_count'),
+                'verified_existing_count': result.get('verified_existing_count'),
+                'verification_warnings': result.get('verification_warnings') or [],
                 'errors': result.get('errors') or [],
                 'message': 'Publish Bank Release sang Open edX Library thành công' if result.get('ok') else 'Publish Bank Release hoàn tất nhưng có lỗi',
             }
@@ -1008,8 +1014,10 @@ def bank_quiz_create_task(job_id: str):
                 actor=job.requested_by,
                 expected_bank_release_id=str(job.release_id or payload.get('release_id')),
             )
+            if not result.get('ok'):
+                raise RuntimeError(result.get('message') or 'Open edX không xác nhận tạo Quiz thành công.')
             result_json = {
-                'ok': bool(result.get('ok')),
+                'ok': True,
                 'status': result.get('status'),
                 'course_quiz_instance_id': result.get('course_quiz_instance_id'),
                 'openedx_course_id': result.get('openedx_course_id'),
@@ -1106,6 +1114,21 @@ def academic_ap_sync_task(run_id: str):
 
         data = run.counters_json if isinstance(run.counters_json, dict) else {}
         request = data.get('request') if isinstance(data.get('request'), dict) else {}
+        from app.schemas.academic import AcademicAPSyncIn
+        from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
+        workflow = AcademicAPSyncWorkflowService(db)
+        expected_fingerprint = str(data.get('request_fingerprint') or '')
+        # Jobs queued by older builds did not store a fingerprint and could rely
+        # on env-configured campus targets. Keep those jobs executable during a
+        # rolling deployment, while new jobs require explicit, immutable targets.
+        normalized_request = workflow._normalized_ap_request(
+            AcademicAPSyncIn(**request),
+            require_explicit_targets=bool(expected_fingerprint),
+        )
+        actual_fingerprint = workflow._ap_request_fingerprint(normalized_request)
+        if expected_fingerprint and expected_fingerprint != actual_fingerprint:
+            raise RuntimeError('AP_SYNC_REQUEST_INTEGRITY_FAILED: request payload changed after enqueue.')
+        request = normalized_request
         service = AcademicImportService(db)
         service.update_run_progress(run, current=0, total=1, label='Hệ thống đang chuẩn bị job đồng bộ AP', counters=SyncCounters())
         result_run, counters = service.sync_from_ap(
@@ -1143,7 +1166,13 @@ def academic_ap_sync_task(run_id: str):
             run.status = 'failed'
             run.error_message = str(exc)[:4000] or 'Không thể hoàn tất đồng bộ AP.'
             data = run.counters_json if isinstance(run.counters_json, dict) else {}
+            error_code = 'AP_SYNC_REQUEST_INTEGRITY_FAILED' if 'AP_SYNC_REQUEST_INTEGRITY_FAILED' in str(exc) else 'ACADEMIC_AP_SYNC_FAILED'
             data['progress'] = {'current': 0, 'total': 1, 'label': 'Đồng bộ AP thất bại', 'updated_at': datetime.utcnow().isoformat()}
+            data['error'] = {
+                'code': error_code,
+                'message': str(exc)[:1000] or 'Không thể hoàn tất đồng bộ AP.',
+                'retryable': error_code != 'AP_SYNC_REQUEST_INTEGRITY_FAILED',
+            }
             run.counters_json = json_safe_value(data)
             run.finished_at = datetime.utcnow()
             db.add(run)

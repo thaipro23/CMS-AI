@@ -349,6 +349,14 @@ class AcademicCampusUpsertIn(BaseModel):
     sort_order: int = 0
 
 
+class AcademicCampusUpdateIn(BaseModel):
+    campus_code: str | None = Field(None, min_length=1, max_length=64)
+    campus_name: str | None = Field(None, max_length=255)
+    branch: str | None = Field(None, max_length=64)
+    active: bool | None = None
+    sort_order: int | None = None
+
+
 class AcademicAPSyncIn(BaseModel):
     term_name: str = Field(..., description='Ví dụ: Summer 2026')
     sync_scope: str = Field('campus', description='all = tất cả cơ sở/tất cả môn; campus = một hoặc nhiều cơ sở; subject = cơ sở + danh sách môn')

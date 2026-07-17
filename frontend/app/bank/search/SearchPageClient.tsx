@@ -159,7 +159,7 @@ export default function SearchPageClient() {
 
   return <PageRoot className="page-stack bank-multipage bank-contract-page dashboard-search-page">
     <PageHeader eyebrow="Ngân hàng đề" title="Tìm kiếm ngân hàng đề" icon="search" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Tìm kiếm' }]} />
-    <BankPageIdentity title="Tìm kiếm ngân hàng đề" description="Tra cứu nhanh bộ môn, môn học, phiên bản, bài và câu hỏi trong đúng phạm vi được phân quyền." icon="search" tone="blue" actions={<Link className="btn secondary" href="/bank">Về Tổng quan</Link>} />
+    <BankPageIdentity title="Tìm kiếm ngân hàng đề" description="Tra cứu nhanh bộ môn, môn học, phiên bản, bài và câu hỏi trong đúng phạm vi được phân quyền." icon="search" tone="blue" actions={<Link className="btn secondary" href="/bank">Về Chi phí & Token</Link>} />
     <section className="card visual-section-card dashboard-search-filter-card">
       <div className="visual-section-heading"><VisualIcon label="Bộ lọc đang áp dụng" icon="filter" tone="blue" /><div><h2>Bộ lọc đang áp dụng</h2><p className="helper">Các điều kiện được lấy trực tiếp từ URL hiện tại.</p></div></div>
         <div className="dashboard-filter-row">
@@ -191,7 +191,7 @@ export default function SearchPageClient() {
     </> : <div className="dashboard-empty-state visual-state"><VisualIcon label="Không có kết quả" icon="database" tone="slate" /><div>
       <b>Không có kết quả trong phạm vi của bạn.</b>
       <p>Dữ liệu có thể chưa được tạo hoặc bạn không có quyền trong phạm vi đó.</p>
-      <Link className="btn secondary small" href="/bank">Quay lại Tổng quan</Link></div>
+      <Link className="btn secondary small" href="/bank">Quay lại Chi phí & Token</Link></div>
     </div>}
   </PageRoot>
 }

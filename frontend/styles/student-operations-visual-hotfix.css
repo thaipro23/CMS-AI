@@ -218,3 +218,91 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell .e
     width: calc(100% - 20px) !important;
   }
 }
+
+/* Batch 14 — Student/Teacher detail spacing, duplicate icon removal, status readability and equal row actions. */
+.class-detail-flow .enterprise-content-section-head::before,
+.class-detail-flow .enterprise-content-section-head::after {
+  content: none !important;
+  display: none !important;
+}
+.class-detail-flow .enterprise-content-section-head {
+  padding-left: 16px !important;
+}
+.class-detail-flow .student-learning-status-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+.class-detail-flow .student-learning-status-stack > * {
+  margin: 0 !important;
+  max-width: 100%;
+}
+.class-detail-flow .cms-full-sync-hint {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+/* Teacher list and teacher-class list are layered sections, never one glued surface. */
+.teacher-management-page .teacher-workspace-card,
+.teacher-classes-page .training-workspace-section {
+  display: grid !important;
+  gap: 14px !important;
+}
+.teacher-management-page .teacher-workspace-card > *,
+.teacher-classes-page .training-workspace-section > * {
+  min-width: 0;
+  margin: 0 !important;
+}
+.teacher-management-page .teacher-workspace-card > .enterprise-table-shell,
+.teacher-classes-page .training-workspace-section > .enterprise-table-shell {
+  margin-top: 2px !important;
+}
+.teacher-classes-page .training-row-actions,
+.student-subject-classes-page .training-row-actions {
+  width: 100%;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: stretch !important;
+  gap: 6px !important;
+}
+.teacher-classes-page .training-row-actions .btn,
+.student-subject-classes-page .training-row-actions .btn {
+  width: 100% !important;
+  min-width: 88px !important;
+  min-height: 34px !important;
+  justify-content: center !important;
+  padding-inline: 10px !important;
+}
+
+/* Semester editor deliberately uses text fields so the visual value is always dd/mm/yyyy. */
+.semesters-page .semester-date-input {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+}
+.semesters-page .semester-date-input::placeholder {
+  color: #94a3b8;
+  opacity: 1;
+}
+
+@media (max-width: 767px) {
+  .class-detail-flow .enterprise-content-section-head {
+    padding-left: 12px !important;
+  }
+  .teacher-management-page .teacher-workspace-card,
+  .teacher-classes-page .training-workspace-section {
+    gap: 12px !important;
+  }
+}

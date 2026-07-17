@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.openedx_ids import normalize_openedx_course_id, openedx_course_id_candidates
 from app.models.course import CourseSyncState
 from app.models.question import Question, QuestionReviewLog
 from app.models.cost import BudgetPolicy
@@ -2437,7 +2438,8 @@ class VersionedQuestionBankService:
                     checks.append(_check('term_match', 'pass', f'Kỳ course {parsed.get("run")} khớp phiên bản môn {normalized_expected}.', blocking=False))
                 else:
                     checks.append(_check('term_match', 'warn', f'Kỳ/phiên bản môn là {normalized_expected}, nhưng course run là {parsed.get("run")}. Cần kiểm tra tránh map nhầm kỳ.', blocking=False))
-        existing = self.db.query(EdxCourseMapping).filter(EdxCourseMapping.openedx_course_id == openedx_course_id.strip()).first()
+        course_id_candidates = openedx_course_id_candidates(openedx_course_id)
+        existing = self.db.query(EdxCourseMapping).filter(EdxCourseMapping.openedx_course_id.in_(course_id_candidates)).first() if course_id_candidates else None
         if existing:
             if existing.subject_id == subject.id:
                 checks.append(_check('existing_mapping', 'warn', 'Course này đã được map vào môn này. Nếu lưu lại sẽ bị từ chối để tránh trùng mapping.', {'mapping_id': existing.id}, blocking=True))
@@ -2464,7 +2466,7 @@ class VersionedQuestionBankService:
             raise ValueError('Mapping có cảnh báo. Hãy kiểm tra lại và gửi allow_warnings=true nếu vẫn muốn lưu.')
         item = EdxCourseMapping(
             id=str(uuid.uuid4()),
-            openedx_course_id=openedx_course_id.strip(),
+            openedx_course_id=normalize_openedx_course_id(openedx_course_id, required=True),
             subject_id=subject_id,
             subject_offering_id=subject_offering_id,
             department_id=department_id,
@@ -2527,10 +2529,11 @@ class VersionedQuestionBankService:
                     checks.append(_check('openedx_node_course_match', 'pass', 'Node thuộc đúng course.'))
                 if parsed_block.get('block_type') not in {'chapter', 'sequential', 'vertical'}:
                     checks.append(_check('openedx_node_type', 'warn', f'Node type là {parsed_block.get("block_type")}; nên chọn chapter/sequential/vertical.', {'block_type': parsed_block.get('block_type')}, blocking=False))
+            mapping_course_candidates = openedx_course_id_candidates(mapping.openedx_course_id)
             synced = self.db.query(CourseSyncState).filter(
-                CourseSyncState.course_id == mapping.openedx_course_id,
+                CourseSyncState.course_id.in_(mapping_course_candidates),
                 CourseSyncState.block_id == openedx_parent_node_id,
-            ).first()
+            ).first() if mapping_course_candidates else None
             title = openedx_node_title or (synced.display_name if synced else None)
             if synced:
                 checks.append(_check('openedx_node_synced', 'pass', f'Đã tìm thấy node trong cây sync: {synced.display_name}', {'block_type': synced.block_type}, blocking=False))

@@ -2888,7 +2888,7 @@ class AcademicService:
                 created_by=user.user_id,
                 created_at=now,
             )
-        mapping.openedx_course_id = str(payload.get('openedx_course_id') or '').strip()
+        mapping.openedx_course_id = str((validation.get('parsed_course') or {}).get('raw') or '').strip()
         mapping.openedx_course_title = str(payload.get('openedx_course_title') or '').strip() or None
         mapping.validation_status = validation['risk_level']
         mapping.validation_json = validation
@@ -3054,7 +3054,7 @@ class AcademicService:
         mapping = self.db.query(AcademicClassCourseMapping).filter(AcademicClassCourseMapping.class_id == class_id).first()
         if not mapping:
             mapping = AcademicClassCourseMapping(class_id=class_id, created_by=user.user_id, created_at=now)
-        mapping.openedx_course_id = str(payload.get('openedx_course_id') or '').strip()
+        mapping.openedx_course_id = str((validation.get('parsed_course') or {}).get('raw') or '').strip()
         mapping.openedx_cohort_name = str(payload.get('openedx_cohort_name') or '').strip() or None
         mapping.openedx_course_title = str(payload.get('openedx_course_title') or '').strip() or None
         mapping.mapping_source = 'class_override'

@@ -10,7 +10,6 @@ import {
   searchDepartments,
   getRBACRoles,
   getRoleAssignments,
-  searchSubjectChapters,
   searchSubjectOfferings,
   searchSubjects,
   importRoleAssignmentsFromExcel,
@@ -32,7 +31,6 @@ import {
   RoleAssignment,
   RoleAssignmentImportResponse,
   Subject,
-  SubjectChapter,
   SubjectOffering,
   AcademicCampus,
 } from '../../types'
@@ -70,7 +68,7 @@ const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
   SYSTEM_ADMIN: ['SYSTEM'],
   DEPARTMENT_HEAD: ['DEPARTMENT'],
   SUBJECT_OWNER: ['SUBJECT', 'SUBJECT_VERSION'],
-  QUESTION_REVIEWER: ['SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'],
+  QUESTION_REVIEWER: ['SUBJECT', 'SUBJECT_VERSION'],
   CAMPUS_OWNER: ['CAMPUS', 'SYSTEM'],
   TEACHER_ASSIGNED: ['CAMPUS', 'SYSTEM'],
 }
@@ -106,7 +104,6 @@ export default function UsersPage() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [offerings, setOfferings] = useState<SubjectOffering[]>([])
-  const [chapters, setChapters] = useState<SubjectChapter[]>([])
   const [campuses, setCampuses] = useState<AcademicCampus[]>([])
   const [filterText, setFilterText] = useState('')
   const [includeRevoked, setIncludeRevoked] = useState(false)
@@ -135,9 +132,8 @@ export default function UsersPage() {
     { code: 'SUBJECT_OWNER', name: 'Chủ môn', description: roleSubtitles.SUBJECT_OWNER, rank: 50, status: 'active' },
     { code: 'QUESTION_REVIEWER', name: 'Người duyệt câu hỏi', description: roleSubtitles.QUESTION_REVIEWER, rank: 30, status: 'active' },
     { code: 'CAMPUS_OWNER', name: 'Chủ cơ sở', description: roleSubtitles.CAMPUS_OWNER, rank: 60, status: 'active' },
-    { code: 'TEACHER_ASSIGNED', name: 'Giáo viên được phân công AP', description: roleSubtitles.TEACHER_ASSIGNED, rank: 10, status: 'active' },
   ] as RBACRole[], [])
-  const allRoles = (roles.length ? roles : fallbackRoles).filter((role) => role.code !== 'CAMPUS_MANAGER')
+  const allRoles = (roles.length ? roles : fallbackRoles).filter((role) => !['CAMPUS_MANAGER', 'TEACHER_ASSIGNED'].includes(role.code))
   const grantableRoleCodes = useMemo(() => {
     if (isSystemAdmin) return new Set(allRoles.map((role) => role.code))
     const result = new Set<string>()
@@ -158,10 +154,9 @@ export default function UsersPage() {
     if (form.scope_type === 'DEPARTMENT') return filter(departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}`, target: { scopeType: 'DEPARTMENT' as const, scopeId: d.id, departmentId: d.id } })))
     if (form.scope_type === 'SUBJECT') return filter(subjects.map((subject) => ({ id: subject.id, label: `${subject.code} · ${subject.name}`, path: `Môn / ${subject.code}`, target: { scopeType: 'SUBJECT' as const, scopeId: subject.id, subjectId: subject.id, departmentId: subject.department_id } })))
     if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((offering) => ({ id: offering.id, label: `${offering.code} · ${offering.name || offering.version_code}`, path: `Version / ${offering.code}`, target: { scopeType: 'SUBJECT_VERSION' as const, scopeId: offering.id, subjectOfferingId: offering.id, subjectId: offering.subject_id, departmentId: offering.department_id || undefined } })))
-    if (form.scope_type === 'CHAPTER') return filter(chapters.map((chapter) => ({ id: chapter.id, label: chapter.title, path: `Bài / ${chapter.title}`, target: { scopeType: 'CHAPTER' as const, scopeId: chapter.id, chapterId: chapter.id, subjectOfferingId: chapter.subject_offering_id || undefined, subjectId: chapter.subject_id } })))
     if (form.scope_type === 'CAMPUS') return isSystemAdmin ? [{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }, ...campuses.map((campus) => ({ id: campus.campus_code, label: `${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${campus.campus_code.toUpperCase()}` }))] : []
     return []
-  }, [campuses, canScope, chapters, departments, form.role_code, form.scope_type, isSystemAdmin, offerings, scopeSearch, subjects])
+  }, [campuses, canScope, departments, form.role_code, form.scope_type, isSystemAdmin, offerings, scopeSearch, subjects])
 
   const selectedScopeOptions = useMemo(() => scopeOptions.filter((item) => selectedScopeIds.includes(item.id)), [scopeOptions, selectedScopeIds])
 
@@ -256,7 +251,7 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (!grantOpen) return
-    if (!['DEPARTMENT', 'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'].includes(form.scope_type)) return
+    if (!['DEPARTMENT', 'SUBJECT', 'SUBJECT_VERSION'].includes(form.scope_type)) return
     const controller = new AbortController()
     const headers = authHeaders()
     setScopeOptionsLoading(true)
@@ -267,8 +262,6 @@ export default function UsersPage() {
         setSubjects(await searchSubjects(headers, { query: debouncedScopeSearch, signal: controller.signal }))
       } else if (form.scope_type === 'SUBJECT_VERSION') {
         setOfferings(await searchSubjectOfferings(headers, { query: debouncedScopeSearch, signal: controller.signal }))
-      } else if (form.scope_type === 'CHAPTER') {
-        setChapters(await searchSubjectChapters(headers, { query: debouncedScopeSearch, signal: controller.signal }))
       }
     }
     run().catch((error) => {

@@ -60,6 +60,7 @@ import {
   CourseQuizRollbackResult,
   QuizAutoMapResult,
   BankDashboardOverview,
+  BankCostAnalytics,
   DashboardAnalytics,
   BankSearchResult,
   BankSearchGroupedResponse,
@@ -1527,6 +1528,37 @@ export async function insertCmsProblemBanks(
         body: JSON.stringify(payload),
       },
     ),
+  );
+}
+
+
+export async function getBankCostAnalytics(
+  headers: HeadersInit,
+  filters: {
+    dateRange?: string;
+    fromDate?: string;
+    toDate?: string;
+    q?: string;
+    page?: number;
+    pageSize?: number;
+    sortBy?: string;
+    sortDir?: 'asc' | 'desc';
+  } = {},
+) {
+  const params = new URLSearchParams();
+  params.set('date_range', filters.dateRange || '30d');
+  if (filters.fromDate) params.set('from_date', filters.fromDate);
+  if (filters.toDate) params.set('to_date', filters.toDate);
+  if (filters.q?.trim()) params.set('q', filters.q.trim());
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 20));
+  params.set('sort_by', filters.sortBy || 'cost_vnd');
+  params.set('sort_dir', filters.sortDir || 'desc');
+  return parseResponse<BankCostAnalytics>(
+    await apiFetch(`${API}/question-bank-v2/dashboard/cost-analytics?${params.toString()}`, {
+      credentials: 'include',
+      headers,
+    }),
   );
 }
 
@@ -4496,6 +4528,26 @@ export async function saveAcademicCampus(
   return parseResponse(
     await apiFetch(`${API}/academic/campuses`, {
       method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function updateAcademicCampus(
+  headers: HeadersInit,
+  campusId: string,
+  payload: {
+    campus_code?: string;
+    campus_name?: string;
+    branch?: string;
+    active?: boolean;
+    sort_order?: number;
+  },
+): Promise<AcademicCampus> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/campuses/${encodeURIComponent(campusId)}`, {
+      method: "PATCH",
       headers,
       body: JSON.stringify(payload),
     }),

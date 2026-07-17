@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.core.openedx_ids import normalize_openedx_course_id
 from app.core.rbac import UserContext
 from app.models.academic import AcademicTerm
 from app.services.openedx_student_insight import mask_email
@@ -62,8 +63,10 @@ def _natural_sort_key(value: Any) -> list[Any]:
 
 
 def _parse_openedx_course_id(course_id: str) -> dict[str, str] | None:
-    raw = str(course_id or '').strip()
-    match = re.match(r'^course-v1:([^+\s]+)\+([^+\s]+)\+([^+\s]+)$', raw)
+    raw = normalize_openedx_course_id(course_id)
+    if not raw:
+        return None
+    match = re.match(r'^course-v1:([^+\s]+)\+([^+\s]+)\+([^+/\s]+)$', raw)
     if not match:
         return None
     return {'org': match.group(1), 'course': match.group(2), 'run': match.group(3), 'raw': raw}

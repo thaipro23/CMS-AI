@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
-import { deleteAcademicCampus, getAcademicCampuses, saveAcademicCampus } from '../../lib/api'
+import { deleteAcademicCampus, getAcademicCampuses, saveAcademicCampus, updateAcademicCampus } from '../../lib/api'
 import { AcademicCampus } from '../../types'
 import { PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
@@ -33,6 +33,7 @@ export default function PremisesPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AcademicCampus | null>(null)
+  const canManageCampusCatalog = can('manage_settings')
 
   const load = async () => {
     setLoading(true); setMessage('')
@@ -42,7 +43,7 @@ export default function PremisesPage() {
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được danh sách cơ sở') }
     finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [headers, branch, activeFilter])
+  useEffect(() => { if (canManageCampusCatalog) load() }, [canManageCampusCatalog, headers, branch, activeFilter])
 
   const filtered = items.filter((item) => {
     const q = search.trim().toLowerCase(); if (!q) return true
@@ -60,7 +61,10 @@ export default function PremisesPage() {
     if (!name) { setMessage('Thiếu tên cơ sở'); return }
     setSaving(true); setMessage('')
     try {
-      const saved = await saveAcademicCampus(jsonHeaders, { campus_code: code, campus_name: name, branch: form.branch, active: form.active })
+      const payload = { campus_code: code, campus_name: name, branch: form.branch, active: form.active }
+      const saved = editingId
+        ? await updateAcademicCampus(jsonHeaders, editingId, payload)
+        : await saveAcademicCampus(jsonHeaders, payload)
       setMessage(`Đã lưu cơ sở ${codeLabel(saved.campus_code)} · ${saved.campus_name}`)
       setModalOpen(false); setEditingId(null); setForm({ ...EMPTY_FORM, branch: saved.branch || form.branch }); setBranch(saved.branch || form.branch)
       await load()
@@ -87,7 +91,7 @@ export default function PremisesPage() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 112, sticky: 'right', hideable: false, render: (item) => <div className="row-actions"><button className="btn small secondary" type="button" onClick={() => edit(item)}>Sửa</button><button className="btn small danger secondary-danger" type="button" disabled={saving} onClick={() => setDeleteTarget(item)}>Xóa</button></div> },
   ]
 
-  if (!(can('manage_training_deadlines') || can('manage_settings'))) return <PageRoot className="page-stack enterprise-standard-page premises-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Cơ sở" description="Quản lý danh mục cơ sở dùng cho đồng bộ AP và phạm vi vận hành đào tạo." icon="campus" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Cơ sở' }]} /><section className="card empty-state">Bạn không có quyền quản lý danh mục cơ sở.</section></PageRoot>
+  if (!canManageCampusCatalog) return <PageRoot className="page-stack enterprise-standard-page premises-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Cơ sở" description="Quản lý danh mục cơ sở dùng cho đồng bộ AP và phạm vi vận hành đào tạo." icon="campus" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Cơ sở' }]} /><section className="card empty-state">Bạn không có quyền quản lý danh mục cơ sở.</section></PageRoot>
 
   return <PageRoot className="page-stack enterprise-standard-page premises-page">
     <EnterpriseScreenHeader eyebrow="Danh mục" title="Cơ sở" description="Quản lý danh mục cơ sở dùng cho đồng bộ AP và phạm vi vận hành đào tạo." icon="campus" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Cơ sở' }]} secondaryActions={<button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button>} primaryAction={<button className="btn" type="button" onClick={openCreate}>Thêm cơ sở</button>} />

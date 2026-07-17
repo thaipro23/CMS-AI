@@ -1,0 +1,7 @@
+frontend/app/layout.tsx
+frontend/app/student-management/subjects/[subjectId]/classes/page.tsx
+frontend/app/student-management/classes/[classId]/page.tsx
+frontend/components/table/EnterpriseDataTable.tsx
+frontend/styles/student-operations-visual-hotfix.css
+docs/STUDENT_OPERATIONS_LAYOUT_SIDEBAR_HOTFIX_BATCH_13.md
+docs/CHANGED_FILES_STUDENT_OPERATIONS_BATCH_13.txt

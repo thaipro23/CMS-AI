@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -21,7 +22,7 @@ from app.models.question_bank import (
 from app.services.answer_randomizer import normalize_and_shuffle_options
 from app.services.cost_control import CostControlService
 from app.services.generation_cache import question_fingerprint, sha256_text
-from app.services.model_gateway import ModelGateway
+from app.services.model_gateway import ModelGateway, ModelResponseParseError
 from app.services.quality_checker import QualityChecker
 from app.services.question_family import build_question_family_id, normalize_difficulty
 from app.services.source_chunk_refs import join_source_chunk_ids, split_source_chunk_ids
@@ -319,6 +320,7 @@ class QuestionBankGenerationReviewWorkflowService:
         provider: str = 'openai',
         actor: str | None = None,
         approve_after_generate: bool = False,
+        operation_job_id: str | None = None,
     ) -> dict:
         version = self._require_bank_version(bank_version_id)
         self._raise_if_published_locked(version, action='không thể tạo thêm câu hỏi')
@@ -396,6 +398,21 @@ class QuestionBankGenerationReviewWorkflowService:
                         'usage': usage,
                     })
                 except Exception as exc:
+                    # OpenAI may already have billed a successful response even when
+                    # structured output parsing fails. Preserve that usage so the Bank
+                    # cost dashboard reconciles actual spend instead of silently losing it.
+                    if isinstance(exc, ModelResponseParseError):
+                        raw_usage_parts.append({
+                            'material_version_id': active_material_id,
+                            'material_title': material_title,
+                            'difficulty': difficulty,
+                            'requested': count,
+                            'input_tokens': material_tokens,
+                            'usage': dict(exc.usage or {}),
+                            'parse_error': True,
+                            'response_id': exc.response_id,
+                            'raw_usage': dict(exc.raw_usage or {}),
+                        })
                     errors.append({
                         'material_version_id': active_material_id,
                         'material_title': material_title,
@@ -526,6 +543,77 @@ class QuestionBankGenerationReviewWorkflowService:
         }
         self.db.commit()
         self._safe_refresh_chapter_stats(version.chapter_id)
+
+        usage_summary = {
+            'input_tokens': 0,
+            'cached_input_tokens': 0,
+            'uncached_input_tokens': 0,
+            'output_tokens': 0,
+            'cost_usd': 0.0,
+            'cost_vnd': 0.0,
+            'model_provider': provider,
+            'model_name': settings.openai_model,
+            'token_source': None,
+        }
+        try:
+            usage_sources: list[str] = []
+            model_provider = provider
+            model_name = settings.openai_model
+            for part in raw_usage_parts:
+                usage = dict(part.get('usage') or {})
+                usage_summary['input_tokens'] += int(usage.get('input_tokens') or part.get('input_tokens') or 0)
+                usage_summary['cached_input_tokens'] += int(usage.get('cached_input_tokens') or 0)
+                usage_summary['output_tokens'] += int(usage.get('output_tokens') or 0)
+                if usage.get('provider'):
+                    model_provider = str(usage.get('provider'))
+                if usage.get('model'):
+                    model_name = str(usage.get('model'))
+                if usage.get('token_source'):
+                    usage_sources.append(str(usage.get('token_source')))
+            usage_summary['uncached_input_tokens'] = max(
+                int(usage_summary['input_tokens']) - int(usage_summary['cached_input_tokens']),
+                0,
+            )
+            usage_summary['model_provider'] = model_provider
+            usage_summary['model_name'] = model_name
+            usage_summary['token_source'] = '+'.join(sorted(set(usage_sources))) if usage_sources else 'bank_generation_usage'
+            if int(usage_summary['input_tokens']) > 0 or int(usage_summary['output_tokens']) > 0:
+                actual_cost, _pricing = await CostControlService(self.db).calculate_cost_usd(
+                    model_name=model_name,
+                    input_tokens=int(usage_summary['input_tokens']),
+                    cached_input_tokens=int(usage_summary['cached_input_tokens']),
+                    output_tokens=int(usage_summary['output_tokens']),
+                    apply_safety_factor=False,
+                    refresh_pricing=False,
+                )
+                usage_summary['cost_usd'] = round(float(actual_cost or 0), 6)
+                usage_summary['cost_vnd'] = round(float(actual_cost or 0) * settings.usd_to_vnd, 0)
+                CostControlService(self.db).log_usage(
+                    job_id=operation_job_id,
+                    course_id=f'bank:{version.id}',
+                    user_id=actor or 'system',
+                    feature='bank_generate_questions',
+                    model_provider=model_provider,
+                    model_name=model_name,
+                    input_tokens=int(usage_summary['input_tokens']),
+                    cached_input_tokens=int(usage_summary['cached_input_tokens']),
+                    output_tokens=int(usage_summary['output_tokens']),
+                    cost_usd=float(actual_cost or 0),
+                    token_source=str(usage_summary['token_source'] or ''),
+                    raw_usage_json=json.dumps({
+                        'bank_version_id': version.id,
+                        'chapter_id': version.chapter_id,
+                        'requested_questions': question_count,
+                        'created_questions': len(questions_created),
+                        'parts': raw_usage_parts,
+                    }, ensure_ascii=False, default=str),
+                    status='completed' if questions_created else 'failed',
+                    raw_error='; '.join(str(item.get('error') or '') for item in errors if item.get('error')) or None,
+                )
+        except Exception:
+            # Cost telemetry must never invalidate questions that were already created.
+            self.db.rollback()
+
         return {
             'ok': not errors and bool(questions_created),
             'bank_version_id': version.id,
@@ -548,6 +636,7 @@ class QuestionBankGenerationReviewWorkflowService:
             ],
             'questions': [q.id for q in questions_created],
             'usage': raw_usage_parts,
+            'usage_summary': usage_summary,
             'errors': errors,
             'message': 'Đã generate câu hỏi từ Bank Version. Câu hỏi cần review trước khi tạo Release.' if questions_created else 'Không tạo được câu hỏi mới.',
         }

@@ -14,6 +14,7 @@ import json
 import re
 import secrets
 from typing import Any
+from urllib.parse import unquote
 
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
@@ -78,6 +79,17 @@ except Exception:  # pragma: no cover - defensive fallback for stripped plugin i
             return list(getattr(block, 'children', None) or [])
         except Exception:
             return []
+
+
+_COURSE_KEY_RE = re.compile(r"course-v1:([^+/\s?#]+)\+([^+/\s?#]+)\+([^+/\s?#]+)", re.IGNORECASE)
+
+
+def _normalize_course_id(value: Any) -> str:
+    raw = unquote(str(value or '')).strip()
+    match = _COURSE_KEY_RE.search(raw)
+    if not match:
+        return ''
+    return f'course-v1:{match.group(1)}+{match.group(2)}+{match.group(3)}'
 
 
 def _normalize_username_input(value: Any) -> str:
@@ -605,7 +617,7 @@ def student_insight_course_search(request):
             exact_qs = []
             try:
                 from opaque_keys.edx.keys import CourseKey  # type: ignore
-                exact_key = CourseKey.from_string(exact_course_id)
+                exact_key = CourseKey.from_string(_normalize_course_id(exact_course_id))
                 exact_qs = list(CourseOverview.objects.filter(id=exact_key).order_by('id')[:limit])
             except Exception:
                 exact_qs = []
@@ -709,7 +721,8 @@ def _student_insight_user_map(requested: list[dict[str, Any]]) -> dict[str, Any]
 def _course_key_from_string(course_id: str):
     try:
         from opaque_keys.edx.keys import CourseKey  # type: ignore
-        return CourseKey.from_string(str(course_id or '').strip())
+        normalized = _normalize_course_id(course_id)
+        return CourseKey.from_string(normalized) if normalized else None
     except Exception:
         return None
 

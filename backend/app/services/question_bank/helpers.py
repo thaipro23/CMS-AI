@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+from app.core.openedx_ids import normalize_openedx_course_id
 from app.models.question import Question
 
 def slugify(value: str, fallback: str = 'item') -> str:
@@ -44,11 +45,19 @@ def extract_chapter_number(value: str | None) -> str | None:
     return match.group(1) if match else None
 
 def parse_openedx_course_id(course_id: str) -> dict[str, str | None]:
-    text = (course_id or '').strip()
-    match = re.match(r'^course-v1:([^+]+)\+([^+]+)\+(.+)$', text)
+    normalized = normalize_openedx_course_id(course_id)
+    if not normalized:
+        return {'ok': False, 'org': None, 'course_code': None, 'run': None, 'normalized_course_id': None}
+    match = re.match(r'^course-v1:([^+]+)\+([^+]+)\+([^+/]+)$', normalized)
     if not match:
-        return {'ok': False, 'org': None, 'course_code': None, 'run': None}
-    return {'ok': True, 'org': match.group(1), 'course_code': match.group(2), 'run': match.group(3)}
+        return {'ok': False, 'org': None, 'course_code': None, 'run': None, 'normalized_course_id': None}
+    return {
+        'ok': True,
+        'org': match.group(1),
+        'course_code': match.group(2),
+        'run': match.group(3),
+        'normalized_course_id': normalized,
+    }
 
 
 TERM_SEASON_LABELS = {
