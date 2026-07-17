@@ -178,6 +178,9 @@ class Settings(BaseSettings):
     # allowing one-click production sync for already-created CMS courses.
     academic_auto_map_course_before_cms_sync: bool = True
     academic_full_sync_learning_after_enrollment: bool = True
+    # Maximum roster size processed by one class-level CMS sync. Connector calls
+    # are still chunked by OPENEDX_CONNECTOR_MAX_BATCH_SIZE.
+    academic_class_sync_max_students: int = 5000
     academic_learning_low_progress_threshold_percent: float = 50.0
     academic_learning_low_grade_threshold_percent: float = 50.0
     # v25.9.16.7.2.64.14 UAT-only destructive cleanup for wrong RollNumber identity mapping.
@@ -499,6 +502,8 @@ def validate_security_settings() -> None:
         errors.append('CELERY_DEFAULT_TIME_LIMIT_SECONDS must be greater than soft time limit')
     if settings.celery_broker_visibility_timeout_seconds <= settings.celery_default_time_limit_seconds:
         errors.append('CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS must be greater than task hard time limit')
+    if settings.academic_class_sync_max_students < 1000 or settings.academic_class_sync_max_students > 20000:
+        errors.append('ACADEMIC_CLASS_SYNC_MAX_STUDENTS must be between 1000 and 20000')
     if settings.academic_teacher_report_sync_export_max_teachers < 1:
         errors.append('ACADEMIC_TEACHER_REPORT_SYNC_EXPORT_MAX_TEACHERS must be at least 1')
     if settings.academic_teacher_report_sync_export_max_students < 1:

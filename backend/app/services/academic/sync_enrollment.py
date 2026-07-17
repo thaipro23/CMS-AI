@@ -46,6 +46,13 @@ class AcademicSyncEnrollmentWorkflowService:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.parent, name)
 
+def _normalize_class_sync_limit(self, value: int | None, *, default: int = 1000) -> int:
+        """Normalize class roster limits without the historical 500-student truncation."""
+        configured = int(getattr(settings, 'academic_class_sync_max_students', 5000) or 5000)
+        ceiling = max(1000, min(configured, 20000))
+        requested = int(value or default)
+        return max(1, min(requested, ceiling))
+
 def _student_rollnumber(self, student: AcademicStudent) -> str:
         """Return the authoritative AP RollNumber without changing its case."""
         return str(student.student_code or '').strip()
@@ -110,7 +117,7 @@ def _upsert_teacher_cms_metadata(self, teacher: AcademicTeacher, result: dict[st
 
 def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, auto_enroll: bool = True, create_missing: bool | None = None) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
-        limit = max(1, min(500, int(limit or 500)))
+        limit = self._normalize_class_sync_limit(limit)
         query = self.db.query(AcademicStudent, OpenEdXUserMapping).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
@@ -343,7 +350,7 @@ def _upsert_enrollment_snapshot(self, *, class_id: str, student: AcademicStudent
         self.db.add(snapshot)
         return snapshot
 
-def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, mode: str | None = None) -> dict[str, Any]:
+def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, mode: str | None = None, ensure_users: bool = True) -> dict[str, Any]:
         """Enroll AP students and add AP teachers to the mapped CMS/Open edX course.
 
         Students are enrolled only after exact RollNumber/student_code -> CMS user mapping.
@@ -359,24 +366,24 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
             raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS nên chưa thể tự enrollment/gán giảng viên')
         course_id = mapping.openedx_course_id
         cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
-        limit = max(1, min(500, int(limit or 500)))
+        limit = self._normalize_class_sync_limit(limit)
 
-        # Enrollment is self-healing: always resolve/create CMS users by the
-        # authoritative RollNumber before querying mappings.  Full CMS sync must
-        # not depend on a separate operator action or on the optional env flag.
-        try:
-            self.resolve_class_openedx_users(
-                user,
-                class_id,
-                force=force,
-                limit=limit,
-                auto_enroll=False,
-                create_missing=True,
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f'Không tạo/kiểm tra được tài khoản CMS trước khi enrollment: {exc}') from exc
+        # Direct enrollment is self-healing. Full CMS has already resolved the
+        # entire roster once, so it disables this duplicate pass for large classes.
+        if ensure_users:
+            try:
+                self.resolve_class_openedx_users(
+                    user,
+                    class_id,
+                    force=force,
+                    limit=limit,
+                    auto_enroll=False,
+                    create_missing=True,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f'Không tạo/kiểm tra được tài khoản CMS trước khi enrollment: {exc}') from exc
 
         self.db.expire_all()
 
@@ -603,7 +610,7 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
             raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS. Hãy map Course CMS trước khi cập nhật tiến độ/điểm.')
         course_id = mapping.openedx_course_id
         cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
-        limit = max(1, min(500, int(limit or 500)))
+        limit = self._normalize_class_sync_limit(limit)
         # v25.9.16.5.85: Cập nhật điểm is read-only against CMS/Open edX.
         # It must not create CMS accounts and must not enroll learners. Full CMS
         # sync is the only flow that creates/checks users + enrolls + then reads
@@ -828,8 +835,23 @@ def sync_class_full_cms_flow(
         cls = self.db.get(AcademicClass, class_id)
         if not cls:
             raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
-        limit = max(1, min(500, int(limit or 500)))
-        counts: dict[str, int] = {}
+        roster_size = int(
+            self.db.query(func.count(AcademicClassStudent.student_id))
+            .filter(AcademicClassStudent.class_id == class_id)
+            .scalar()
+            or 0
+        )
+        configured_max = int(getattr(settings, 'academic_class_sync_max_students', 5000) or 5000)
+        if roster_size > configured_max:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f'Lớp có {roster_size} sinh viên, vượt giới hạn đồng bộ '                     f'{configured_max}. Tăng ACADEMIC_CLASS_SYNC_MAX_STUDENTS rồi recreate backend/worker.'
+                ),
+            )
+        # Full means the whole roster, not the historical first 500 records.
+        limit = self._normalize_class_sync_limit(max(int(limit or 0), roster_size or 1))
+        counts: dict[str, int] = {'roster_total': roster_size}
 
         mapping_result = self._try_auto_map_course_for_class(user, cls) if auto_map_course else {'ok': False, 'status': 'mapping_required', 'openedx_course_id': None, 'mapping': None, 'message': 'Auto-map Course CMS bị tắt cho lần chạy này.'}
         mapping = self.effective_course_mapping_for_class(cls)
@@ -863,7 +885,7 @@ def sync_class_full_cms_flow(
         for key, value in teacher_counts.items():
             counts[f'teacher_cms_{key}'] = int(value or 0)
 
-        enrollment_result = self.sync_class_course_enrollment(user, class_id, force=force, limit=limit, mode=mode)
+        enrollment_result = self.sync_class_course_enrollment(user, class_id, force=force, limit=limit, mode=mode, ensure_users=False)
         for key, value in (enrollment_result.get('counts') or {}).items():
             counts[f'enrollment_{key}'] = int(value or 0)
         enroll_teacher_counts = ((enrollment_result.get('teachers') or {}).get('counts') or {}) if isinstance(enrollment_result.get('teachers'), dict) else {}
@@ -900,6 +922,7 @@ def sync_class_full_cms_flow(
 # Bind extracted workflow functions back to the service class.
 # The functions are kept module-level to minimize diff noise from the original
 # AcademicService extraction while preserving normal bound-method semantics.
+AcademicSyncEnrollmentWorkflowService._normalize_class_sync_limit = _normalize_class_sync_limit
 AcademicSyncEnrollmentWorkflowService._student_rollnumber = _student_rollnumber
 AcademicSyncEnrollmentWorkflowService._student_cms_username = _student_cms_username
 AcademicSyncEnrollmentWorkflowService._student_cms_email = _student_cms_email
