@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
-import { logoutAuthSession, buildCmsSessionBridgeUrl } from '../../lib/api'
+import { logoutAuthSession, buildCmsSessionBridgeUrl, clearCmsSessionBridgeAttempt, markCmsSessionBridgeStarted } from '../../lib/api'
 import { SHOW_DIAGNOSTICS_UI } from '../../lib/runtime'
 import { ROLE_LABELS } from '../../types'
 import { AppIcon, type AppIconName } from '../icons/AppIcon'
@@ -138,6 +138,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const userMenuRef = useRef<HTMLDetailsElement>(null)
   const mainContentRef = useRef<HTMLElement>(null)
   const layoutRegistrationRef = useRef<string | null>(null)
+  const cmsBridgeAttemptRef = useRef<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [mobile, setMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -293,15 +294,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (!authReady || isAuthenticated || pathname.startsWith('/auth/')) return
     const enabled = (process.env.NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN || 'true').toLowerCase() !== 'false'
     if (!enabled) return
-    const startedAt = Number(window.sessionStorage.getItem('ai_openedx_cms_bridge_started_at') || 0)
-    const now = Date.now()
-    if (startedAt && now - startedAt < 30000) {
-      return
-    }
+
+    // Do not use a sessionStorage time lock here. A stale marker from a cancelled
+    // or interrupted CMS navigation previously prevented the root route from
+    // starting SSO until the user opened another page. The ref only suppresses
+    // duplicate effects for the same client render while allowing a fresh page
+    // load or a different intended route to start the bridge immediately.
+    const returnPath = pathname === '/' ? '/bank' : `${window.location.pathname}${window.location.search}`
+    if (cmsBridgeAttemptRef.current === returnPath) return
+    cmsBridgeAttemptRef.current = returnPath
+
     try {
-      window.sessionStorage.setItem('ai_openedx_cms_bridge_started_at', String(now))
-      window.location.href = buildCmsSessionBridgeUrl(courseId)
+      clearCmsSessionBridgeAttempt()
+      markCmsSessionBridgeStarted()
+      window.location.replace(buildCmsSessionBridgeUrl(courseId, returnPath))
     } catch (error) {
+      cmsBridgeAttemptRef.current = null
+      clearCmsSessionBridgeAttempt()
       console.error('Không tạo được liên kết CMS', error)
     }
   }, [authReady, courseId, isAuthenticated, pathname])

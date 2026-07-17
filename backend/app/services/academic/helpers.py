@@ -194,7 +194,8 @@ def _derive_mapping_status(result: dict[str, Any] | None) -> tuple[str, str, flo
         method = 'ambiguous'
     else:
         method = 'manual_required'
-    confidence = 1.0 if status == 'matched' and method == 'exact_ap_username' else 0.0
+    exact_methods = {'exact_ap_username', 'exact_username', 'exact_rollnumber_username', 'created_from_rollnumber'}
+    confidence = 1.0 if status == 'matched' and method in exact_methods else 0.0
     if status == 'inactive':
         confidence = 0.9
     if status == 'ambiguous':

@@ -1,0 +1,8 @@
+backend/app/services/academic/sync_enrollment.py
+backend/app/services/academic/identity.py
+backend/app/services/academic_service.py
+backend/app/services/academic/helpers.py
+backend/app/tests/test_v25_9_16_7_2_64_20_rollnumber_case_preserving_sync.py
+openedx-connector-plugin/openedx_ai_connector/student_insight.py
+docs/CMS_ROLLNUMBER_IDENTITY_SYNC_BATCH_20.md
+docs/CHANGED_FILES_CMS_ROLLNUMBER_SYNC_BATCH_20.txt

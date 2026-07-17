@@ -46,31 +46,34 @@ class AcademicSyncEnrollmentWorkflowService:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.parent, name)
 
+def _student_rollnumber(self, student: AcademicStudent) -> str:
+        """Return the authoritative AP RollNumber without changing its case."""
+        return str(student.student_code or '').strip()
+
 def _student_cms_username(self, student: AcademicStudent) -> str:
         """Canonical CMS/Open edX username for students.
 
-        AP may provide `username` as an email/account token such as
-        `duongcvph59017@fpt.edu.vn`.  For FEID/Open edX identity consistency, the
-        CMS username for students must be the AP RollNumber/student_code, e.g.
-        `PH59017` -> `ph59017`.  Keep AP username as an alias in mapping payloads;
-        do not use it as the created CMS username.
+        RollNumber/student_code is the only allowed student username source.  Its
+        original case is preserved when a new Open edX user is created, e.g.
+        ``PH12345`` remains ``PH12345``.  AP username/email is metadata only and
+        must never be used as a fallback CMS username.
         """
-        roll_number = str(student.student_code or '').strip()
-        if roll_number:
-            return normalize_username(roll_number)
-        return normalize_username(student.username)
+        return self._student_rollnumber(student)
 
 def _student_cms_email(self, student: AcademicStudent) -> str | None:
+        synced_email = str(student.email or '').strip()
+        if synced_email:
+            return synced_email
         username = self._student_cms_username(student)
-        return student.email or (f'{username}@fpt.edu.vn' if username else None)
+        return f'{username}@fpt.edu.vn' if username else None
 
 def _student_cms_payload(self, student: AcademicStudent, *, create_missing: bool, openedx_user_id: str | None = None) -> dict[str, Any]:
         cms_username = self._student_cms_username(student)
-        ap_username = normalize_username(student.username)
         return {
             'student_code': student.student_code,
             'roll_number': student.student_code,
-            'ap_username': ap_username,
+            # AP username is retained only for diagnostics/audit correlation.
+            'ap_username': normalize_username(student.username),
             'username': cms_username,
             'openedx_username': cms_username,
             'openedx_user_id': openedx_user_id,
@@ -78,8 +81,8 @@ def _student_cms_payload(self, student: AcademicStudent, *, create_missing: bool
             'role': 'student',
             'email': self._student_cms_email(student),
             'full_name': student.full_name,
-            'create_missing': create_missing,
-            'identity_source': 'rollnumber' if student.student_code else 'ap_username_fallback',
+            'create_missing': bool(create_missing and cms_username),
+            'identity_source': 'rollnumber',
         }
 
 def _upsert_teacher_cms_metadata(self, teacher: AcademicTeacher, result: dict[str, Any] | None) -> str:
@@ -116,7 +119,19 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
         ).order_by(AcademicStudent.username.asc()).limit(limit)
         rows = query.all()
         if not force:
-            rows = [(student, mapping) for student, mapping in rows if not mapping or mapping.match_status not in {'matched'}]
+            # Re-resolve legacy AP-username mappings. Only an active matched mapping
+            # whose username equals RollNumber case-insensitively is already final.
+            rows = [
+                (student, mapping)
+                for student, mapping in rows
+                if not (
+                    mapping
+                    and mapping.match_status == 'matched'
+                    and self._student_rollnumber(student)
+                    and normalize_username(mapping.openedx_username or '') == normalize_username(self._student_rollnumber(student))
+                    and mapping.openedx_is_active is not False
+                )
+            ]
 
         teacher_payload = self._teacher_payload_for_class(class_id)
         if not rows and not teacher_payload:
@@ -128,20 +143,45 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
         counts: dict[str, int] = {}
         create_missing = bool(getattr(settings, 'academic_auto_create_cms_users', True))
 
-        # Students: RollNumber/student_code is the canonical CMS/Open edX username.
-        # AP username/email remain aliases only; they must not become the created
-        # CMS username for students.
-        for start in range(0, len(rows), batch_size):
-            chunk = rows[start:start + batch_size]
+        # Students: RollNumber/student_code is the only canonical CMS username.
+        # Missing RollNumber is a blocking data error: do not call the connector,
+        # do not create a user, and do not enroll through an AP username fallback.
+        valid_rows: list[tuple[AcademicStudent, OpenEdXUserMapping | None]] = []
+        for student, mapping in rows:
+            roll_number = self._student_rollnumber(student)
+            if roll_number:
+                valid_rows.append((student, mapping))
+                continue
+            result = {
+                'student_code': None,
+                'roll_number': None,
+                'ap_username': normalize_username(student.username),
+                'username': None,
+                'openedx_username': None,
+                'exists': False,
+                'created': False,
+                'match_status': 'missing_student_code',
+                'match_method': 'validation_failed',
+                'note': 'Thiếu RollNumber/student_code nên không tạo user CMS/Open edX và không enroll',
+            }
+            mapping_row = self._upsert_mapping(student, result, source='openedx_connector')
+            counts[mapping_row.match_status] = counts.get(mapping_row.match_status, 0) + 1
+            updated += 1
+        if rows:
+            self.db.flush()
+
+        for start in range(0, len(valid_rows), batch_size):
+            chunk = valid_rows[start:start + batch_size]
             payload = [self._student_cms_payload(student, create_missing=create_missing) for student, _mapping in chunk]
             results = client.resolve_users(payload, create_missing=create_missing)
-            result_by_username = {normalize_username(item.get('username') or item.get('openedx_username') or item.get('ap_username')): item for item in results if normalize_username(item.get('username') or item.get('openedx_username') or item.get('ap_username'))}
-            result_by_code = {str(item.get('student_code') or item.get('roll_number') or '').strip().lower(): item for item in results if str(item.get('student_code') or item.get('roll_number') or '').strip()}
+            result_by_username = {normalize_username(item.get('username') or item.get('openedx_username')): item for item in results if normalize_username(item.get('username') or item.get('openedx_username'))}
+            result_by_code = {normalize_username(item.get('student_code') or item.get('roll_number')): item for item in results if normalize_username(item.get('student_code') or item.get('roll_number'))}
             for student, _mapping in chunk:
                 cms_username = self._student_cms_username(student)
-                result = result_by_username.get(cms_username)
-                if result is None and student.student_code:
-                    result = result_by_code.get(str(student.student_code).strip().lower())
+                lookup_username = normalize_username(cms_username)
+                result = result_by_username.get(lookup_username)
+                if result is None:
+                    result = result_by_code.get(lookup_username)
                 if result is None:
                     result = {
                         'student_code': student.student_code,
@@ -204,7 +244,7 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
             except Exception as exc:
                 enrollment_result = {'ok': False, 'message': str(exc)}
                 counts['enrollment_failed'] = counts.get('enrollment_failed', 0) + 1
-        message = 'Đã kiểm tra đồng bộ CMS theo AP username; tự tạo tài khoản CMS nếu chưa có dữ liệu'
+        message = 'Đã kiểm tra đồng bộ CMS theo RollNumber/student_code; tự tạo tài khoản CMS nếu chưa tồn tại'
         if enrollment_result:
             if enrollment_result.get('ok'):
                 message += '; đã tự enroll sinh viên và gán giảng viên vào Course CMS nếu lớp đã map course'
@@ -244,7 +284,7 @@ def _upsert_enrollment_snapshot(self, *, class_id: str, student: AcademicStudent
             status_value = raw_status
         else:
             status_value = 'unknown'
-        snapshot.openedx_username = str(result.get('openedx_username') or result.get('username') or student.username or '').strip() or snapshot.openedx_username
+        snapshot.openedx_username = str(result.get('openedx_username') or result.get('username') or self._student_cms_username(student) or '').strip() or snapshot.openedx_username
         snapshot.openedx_user_id = str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or snapshot.openedx_user_id
         snapshot.enrollment_status = status_value[:50]
         snapshot.enrollment_mode = str(result.get('enrollment_mode') or enrollment.get('mode') or '').strip()[:50] or snapshot.enrollment_mode
@@ -277,7 +317,7 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
 
         # Full production behavior: enrollment must not silently skip learners just
         # because they have not been mapped yet. First resolve/create CMS users by
-        # AP username, then enroll matched/created users. The nested call disables
+        # RollNumber/student_code, then enroll matched/created users. The nested call disables
         # auto-enroll to avoid recursion.
         if getattr(settings, 'academic_auto_create_cms_users', True):
             try:
@@ -303,16 +343,28 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
             or_(OpenEdXUserMapping.openedx_is_active.is_(None), OpenEdXUserMapping.openedx_is_active.is_(True)),
             or_(OpenEdXUserMapping.openedx_username.isnot(None), OpenEdXUserMapping.openedx_user_id.isnot(None)),
         ).order_by(AcademicStudent.username.asc()).limit(limit)
-        rows = query.all()
+        rows = [
+            (student, mapping_row, snapshot)
+            for student, mapping_row, snapshot in query.all()
+            if self._student_rollnumber(student)
+            and normalize_username(mapping_row.openedx_username or '') == normalize_username(self._student_rollnumber(student))
+        ]
         matched_student_count = len(rows)
         if not force:
             rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not snapshot or snapshot.enrollment_status not in {'enrolled'}]
 
         class_student_count = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
+        missing_rollnumber_count = self.db.query(func.count(AcademicClassStudent.id)).join(
+            AcademicStudent, AcademicStudent.id == AcademicClassStudent.student_id,
+        ).filter(
+            AcademicClassStudent.class_id == class_id,
+            or_(AcademicStudent.student_code.is_(None), func.trim(AcademicStudent.student_code) == ''),
+        ).scalar() or 0
         if int(class_student_count) > 0 and matched_student_count == 0:
+            missing_hint = f' Có {int(missing_rollnumber_count)} sinh viên thiếu RollNumber/student_code và đã bị chặn tạo user/enroll.' if missing_rollnumber_count else ''
             raise HTTPException(
                 status_code=400,
-                detail='Chưa có sinh viên nào được map user CMS/Open edX chính xác. Hãy chạy Tạo/kiểm tra user CMS trước rồi mới Enrollment Course CMS.',
+                detail='Chưa có sinh viên nào được map user CMS/Open edX chính xác theo RollNumber. Hãy chạy Tạo/kiểm tra user CMS trước rồi mới Enrollment Course CMS.' + missing_hint,
             )
 
         teacher_payload = self._teacher_payload_for_class(class_id) if getattr(settings, 'academic_auto_add_teachers_to_course', True) else []
@@ -347,7 +399,8 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
             by_code = {str(item.get('student_code') or item.get('roll_number') or '').strip().lower(): item for item in results if str(item.get('student_code') or item.get('roll_number') or '').strip()}
             for student, mapping_row, _snapshot in chunk:
                 key = self._student_cms_username(student)
-                result = by_username.get(key) or by_username.get(normalize_username(mapping_row.openedx_username or '')) or by_username.get(normalize_username(student.username))
+                lookup_key = normalize_username(key)
+                result = by_username.get(lookup_key) or by_username.get(normalize_username(mapping_row.openedx_username or ''))
                 if result is None and student.student_code:
                     result = by_code.get(str(student.student_code).strip().lower())
                 if result is None:
@@ -465,7 +518,16 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                 AcademicStudentLearningSnapshot.openedx_course_id == course_id,
             ),
         ).filter(AcademicClassStudent.class_id == class_id).order_by(AcademicStudent.username.asc()).limit(limit)
-        rows = query.all()
+        rows = [
+            (student, mapping_row, snapshot)
+            for student, mapping_row, snapshot in query.all()
+            if self._student_rollnumber(student)
+            and (
+                mapping_row is None
+                or not mapping_row.openedx_username
+                or normalize_username(mapping_row.openedx_username) == normalize_username(self._student_rollnumber(student))
+            )
+        ]
         if not force:
             rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not self._snapshot_has_learning_payload(snapshot)]
         if not rows:
@@ -510,7 +572,8 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
             by_code = {str(item.get('student_code') or item.get('roll_number') or '').strip().lower(): item for item in results if str(item.get('student_code') or item.get('roll_number') or '').strip()}
             for student, mapping_row, _snapshot in chunk:
                 key = self._student_cms_username(student)
-                result = by_username.get(key) or by_username.get(normalize_username(mapping_row.openedx_username if mapping_row else '')) or by_username.get(normalize_username(student.username))
+                lookup_key = normalize_username(key)
+                result = by_username.get(lookup_key) or by_username.get(normalize_username(mapping_row.openedx_username if mapping_row else ''))
                 if result is None and student.student_code:
                     result = by_code.get(str(student.student_code).strip().lower())
                 if result is None:
@@ -729,6 +792,7 @@ def sync_class_full_cms_flow(
 # Bind extracted workflow functions back to the service class.
 # The functions are kept module-level to minimize diff noise from the original
 # AcademicService extraction while preserving normal bound-method semantics.
+AcademicSyncEnrollmentWorkflowService._student_rollnumber = _student_rollnumber
 AcademicSyncEnrollmentWorkflowService._student_cms_username = _student_cms_username
 AcademicSyncEnrollmentWorkflowService._student_cms_email = _student_cms_email
 AcademicSyncEnrollmentWorkflowService._student_cms_payload = _student_cms_payload

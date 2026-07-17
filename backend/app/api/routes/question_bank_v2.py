@@ -644,17 +644,20 @@ def dashboard_cost_analytics(
     db: Session = Depends(get_db),
     user: UserContext = Depends(require_permission('view_questions')),
 ):
-    return BankCostAnalyticsService(db).get_analytics(
-        user,
-        date_range=date_range,
-        from_date=from_date,
-        to_date=to_date,
-        q=q,
-        page=page,
-        page_size=page_size,
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-    )
+    try:
+        return BankCostAnalyticsService(db).get_analytics(
+            user,
+            date_range=date_range,
+            from_date=from_date,
+            to_date=to_date,
+            q=q,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get('/dashboard/analytics')

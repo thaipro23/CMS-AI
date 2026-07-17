@@ -1,0 +1,6 @@
+frontend/app/page.tsx
+frontend/components/layout/AppShell.tsx
+frontend/app/auth/cms-callback/page.tsx
+frontend/lib/api.ts
+docs/CMS_ROOT_SESSION_BOOTSTRAP_HOTFIX_BATCH_18.md
+docs/CHANGED_FILES_CMS_ROOT_SESSION_BATCH_18.txt

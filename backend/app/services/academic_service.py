@@ -2681,7 +2681,7 @@ class AcademicService:
             mapping.openedx_is_active = _boolish(result.get('is_active'))
         elif 'openedx_is_active' in result:
             mapping.openedx_is_active = _boolish(result.get('openedx_is_active'))
-        elif status_value == 'missing':
+        elif status_value in {'missing', 'missing_student_code', 'manual_required'}:
             mapping.openedx_is_active = None
         mapping.match_status = status_value
         mapping.match_method = method_value

@@ -1418,7 +1418,38 @@ export async function logoutAuthSession() {
   );
 }
 
-export function buildCmsSessionBridgeUrl(courseId?: string) {
+const CMS_BRIDGE_STARTED_AT_KEY = "ai_openedx_cms_bridge_started_at";
+const CMS_POST_AUTH_RETURN_TO_KEY = "ai_openedx_post_auth_return_to";
+
+export function normalizeInternalReturnPath(value?: string | null, fallback = "/bank"): string {
+  const candidate = String(value || "").trim();
+  if (!candidate.startsWith("/") || candidate.startsWith("//") || candidate.startsWith("/auth/")) return fallback;
+  return candidate;
+}
+
+export function rememberCmsPostAuthReturnPath(value?: string | null): string {
+  const target = normalizeInternalReturnPath(value);
+  if (typeof window !== "undefined") window.sessionStorage.setItem(CMS_POST_AUTH_RETURN_TO_KEY, target);
+  return target;
+}
+
+export function consumeCmsPostAuthReturnPath(fallback = "/bank"): string {
+  if (typeof window === "undefined") return fallback;
+  const target = normalizeInternalReturnPath(window.sessionStorage.getItem(CMS_POST_AUTH_RETURN_TO_KEY), fallback);
+  window.sessionStorage.removeItem(CMS_POST_AUTH_RETURN_TO_KEY);
+  return target;
+}
+
+export function markCmsSessionBridgeStarted(): void {
+  if (typeof window !== "undefined") window.sessionStorage.setItem(CMS_BRIDGE_STARTED_AT_KEY, String(Date.now()));
+}
+
+export function clearCmsSessionBridgeAttempt(): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(CMS_BRIDGE_STARTED_AT_KEY);
+}
+
+export function buildCmsSessionBridgeUrl(courseId?: string, returnPath?: string) {
   const cmsBase = (
     process.env.NEXT_PUBLIC_OPENEDX_CMS_BASE_URL ||
     process.env.NEXT_PUBLIC_CMS_BASE_URL ||
@@ -1428,9 +1459,13 @@ export function buildCmsSessionBridgeUrl(courseId?: string) {
     throw new Error(
       "NEXT_PUBLIC_OPENEDX_CMS_BASE_URL chưa được cấu hình cho frontend.",
     );
-  const returnTo = `${window.location.origin}/auth/cms-callback`;
+
+  const target = rememberCmsPostAuthReturnPath(returnPath || `${window.location.pathname}${window.location.search}`);
+  const callback = new URL("/auth/cms-callback", window.location.origin);
+  callback.searchParams.set("next", target);
+
   const params = new URLSearchParams();
-  params.set("return_to", returnTo);
+  params.set("return_to", callback.toString());
   if (courseId) params.set("course_id", courseId);
   params.set("state", Math.random().toString(36).slice(2));
   return `${cmsBase}/api/ai-connector/v1/session/bridge?${params.toString()}`;

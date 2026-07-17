@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from sqlalchemy import func
@@ -39,7 +40,9 @@ class BankCostAnalyticsService:
         self.biz = BusinessRBACService(db)
 
     def _filters(self, date_range: str = '30d', from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
-        today = date.today()
+        vn_tz = ZoneInfo('Asia/Ho_Chi_Minh')
+        utc_tz = ZoneInfo('UTC')
+        today = datetime.now(vn_tz).date()
         normalized = (date_range or '30d').strip().lower()
         if normalized == 'today':
             start = today
@@ -47,22 +50,31 @@ class BankCostAnalyticsService:
         elif normalized == '7d':
             start = today - timedelta(days=6)
             end = today
-        elif normalized == 'custom' and from_date and to_date:
-            start = date.fromisoformat(from_date)
-            end = date.fromisoformat(to_date)
+        elif normalized == 'custom':
+            if not from_date or not to_date:
+                raise ValueError('Khoảng thời gian tùy chỉnh cần đầy đủ từ ngày và đến ngày.')
+            try:
+                start = date.fromisoformat(from_date)
+                end = date.fromisoformat(to_date)
+            except ValueError as exc:
+                raise ValueError('Ngày lọc phải có định dạng YYYY-MM-DD.') from exc
             if end < start:
-                start, end = end, start
+                raise ValueError('Từ ngày không được lớn hơn đến ngày.')
         else:
             normalized = '30d'
             start = today - timedelta(days=29)
             end = today
         days = max(1, (end - start).days + 1)
+        start_local = datetime.combine(start, time.min, tzinfo=vn_tz)
+        end_local = datetime.combine(end, time.max, tzinfo=vn_tz)
         return {
             'date_range': normalized,
             'from_date': start.isoformat(),
             'to_date': end.isoformat(),
-            'start_dt': datetime.combine(start, time.min),
-            'end_dt': datetime.combine(end, time.max),
+            # UsageLog.created_at is stored as naive UTC; translate the
+            # Vietnam-facing calendar range to UTC before querying PostgreSQL.
+            'start_dt': start_local.astimezone(utc_tz).replace(tzinfo=None),
+            'end_dt': end_local.astimezone(utc_tz).replace(tzinfo=None),
             'days': days,
         }
 

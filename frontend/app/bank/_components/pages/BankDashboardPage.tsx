@@ -102,23 +102,48 @@ function CostTrendChart({ items }: { items: BankCostAnalytics['daily'] }) {
   </div>
 }
 
+function CostTrendSummary({ items }: { items: BankCostAnalytics['daily'] }) {
+  const total = items.reduce((sum, item) => sum + Number(item.cost_vnd || 0), 0)
+  const average = items.length ? total / items.length : 0
+  const peak = items.reduce((max, item) => Math.max(max, Number(item.cost_vnd || 0)), 0)
+  return <div className="bank-cost-trend-summary">
+    <div className="bank-cost-trend-legend"><i /> Chi phí thực tế (VND)</div>
+    <div className="bank-cost-trend-stats">
+      <span>Tổng kỳ hiện tại: <b>{formatVnd(total)}</b></span>
+      <span>Trung bình/ngày: <b>{formatVnd(average)}</b></span>
+      <span>Cao nhất trong kỳ: <b>{formatVnd(peak)}</b></span>
+    </div>
+  </div>
+}
+
 function TokenComposition({ totals }: { totals: BankCostAnalytics['totals'] }) {
   const input = Number(totals.uncached_input_tokens || 0)
   const cached = Number(totals.cached_input_tokens || 0)
   const output = Number(totals.output_tokens || 0)
-  const total = Math.max(1, input + cached + output)
+  const actualTotal = input + cached + output
+  const safeTotal = Math.max(1, actualTotal)
+  const inputPercent = input * 100 / safeTotal
+  const cachedPercent = cached * 100 / safeTotal
+  const outputPercent = output * 100 / safeTotal
+  const gradient = actualTotal
+    ? `conic-gradient(var(--bank-cost-blue) 0 ${inputPercent}%, var(--bank-cost-violet) ${inputPercent}% ${inputPercent + cachedPercent}%, var(--bank-cost-green) ${inputPercent + cachedPercent}% 100%)`
+    : 'conic-gradient(#dfe5ed 0 100%)'
   const parts = [
-    { label: 'Input chưa cache', value: input, percent: input * 100 / total, className: 'is-input' },
-    { label: 'Input cache', value: cached, percent: cached * 100 / total, className: 'is-cached' },
-    { label: 'Output', value: output, percent: output * 100 / total, className: 'is-output' },
+    { label: 'Input chưa cache', value: input, percent: inputPercent, className: 'is-input' },
+    { label: 'Input cache', value: cached, percent: cachedPercent, className: 'is-cached' },
+    { label: 'Output', value: output, percent: outputPercent, className: 'is-output' },
   ]
   return <div className="bank-token-composition">
-    <div className="bank-token-bar" aria-label="Cơ cấu token">
-      {parts.map((part) => <span key={part.label} className={part.className} style={{ width: `${Math.max(part.value ? 2 : 0, part.percent)}%` }} title={`${part.label}: ${formatNumber(part.value)} token`} />)}
+    <div className="bank-token-donut-area">
+      <div className="bank-token-donut" style={{ background: gradient }} aria-label={`Tổng ${formatNumber(actualTotal)} token`}>
+        <div className="bank-token-donut__center">{actualTotal ? <><b>{formatNumber(actualTotal)}</b><small>token</small></> : null}</div>
+      </div>
+      {!actualTotal ? <div className="bank-token-empty-copy"><b>Chưa có dữ liệu token trong khoảng thời gian đã chọn.</b><span>Hãy thử mở rộng khoảng thời gian để xem dữ liệu.</span></div> : null}
     </div>
     <div className="bank-token-legend">
       {parts.map((part) => <div key={part.label}><i className={part.className} /><span>{part.label}</span><b>{formatNumber(part.value)}</b><small>{part.percent.toFixed(1)}%</small></div>)}
     </div>
+    <div className="bank-token-total"><span>Tổng token</span><b>{formatNumber(actualTotal)}</b></div>
   </div>
 }
 
@@ -134,17 +159,6 @@ function SubjectCostBars({ items }: { items: BankCostAnalytics['subjects'] }) {
   </div>
 }
 
-function ModelUsage({ items }: { items: BankCostAnalytics['models'] }) {
-  if (!items.length) return <div className="bank-cost-empty">Chưa có model usage được ghi nhận.</div>
-  return <div className="bank-model-usage-list">
-    {items.map((item) => <article key={`${item.provider}:${item.model}`}>
-      <VisualIcon label="Model AI" icon="server" tone="violet" size={18} />
-      <div><b>{item.model}</b><small>{item.provider} · {formatNumber(item.calls)} lượt gọi</small></div>
-      <div><b>{formatVnd(item.cost_vnd)}</b><small>{formatNumber(item.input_tokens + item.output_tokens)} token</small></div>
-    </article>)}
-  </div>
-}
-
 export function BankDashboardPage() {
   const { headers, authReady } = useBankData()
   const router = useRouter()
@@ -153,13 +167,15 @@ export function BankDashboardPage() {
   const initialRange = searchParams.get('range') || '30d'
   const initialFrom = searchParams.get('from') || buildDateRange(30).fromDate
   const initialTo = searchParams.get('to') || todayVNISODate()
-  const [dateRange, setDateRange] = useState(initialRange)
-  const [fromDate, setFromDate] = useState(initialFrom)
-  const [toDate, setToDate] = useState(initialTo)
+  const [appliedFilter, setAppliedFilter] = useState({ dateRange: initialRange, fromDate: initialFrom, toDate: initialTo })
+  const [draftFromDate, setDraftFromDate] = useState(initialFrom)
+  const [draftToDate, setDraftToDate] = useState(initialTo)
   const [searchDraft, setSearchDraft] = useState(tableState.q)
   const [data, setData] = useState<BankCostAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [filterError, setFilterError] = useState('')
+  const [showUsageNotice, setShowUsageNotice] = useState(true)
 
   const [sortKey, sortDirection] = useMemo(() => {
     const [key, direction] = (tableState.sort || 'cost_vnd:desc').split(':')
@@ -181,9 +197,9 @@ export function BankDashboardPage() {
     setError('')
     try {
       const payload = await getBankCostAnalytics(headers, {
-        dateRange,
-        fromDate,
-        toDate,
+        dateRange: appliedFilter.dateRange,
+        fromDate: appliedFilter.fromDate,
+        toDate: appliedFilter.toDate,
         q: tableState.q,
         page: tableState.page,
         pageSize: tableState.pageSize,
@@ -198,20 +214,30 @@ export function BankDashboardPage() {
     }
   }
 
-  useEffect(() => { load() }, [authReady, headers, dateRange, fromDate, toDate, tableState.q, tableState.page, tableState.pageSize, sortKey, sortDirection]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [authReady, headers, appliedFilter.dateRange, appliedFilter.fromDate, appliedFilter.toDate, tableState.q, tableState.page, tableState.pageSize, sortKey, sortDirection]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setSearchDraft(tableState.q) }, [tableState.q])
 
   const applyPreset = (preset: string) => {
     const range = preset === 'today' ? { fromDate: todayVNISODate(), toDate: todayVNISODate() } : preset === '7d' ? buildDateRange(7) : buildDateRange(30)
-    setDateRange(preset)
-    setFromDate(range.fromDate)
-    setToDate(range.toDate)
+    setDraftFromDate(range.fromDate)
+    setDraftToDate(range.toDate)
+    setAppliedFilter({ dateRange: preset, fromDate: range.fromDate, toDate: range.toDate })
+    setFilterError('')
     updateDateUrl(preset, range.fromDate, range.toDate)
   }
 
   const applyCustom = () => {
-    setDateRange('custom')
-    updateDateUrl('custom', fromDate, toDate)
+    if (!draftFromDate || !draftToDate) {
+      setFilterError('Vui lòng chọn đầy đủ Từ ngày và Đến ngày.')
+      return
+    }
+    if (draftFromDate > draftToDate) {
+      setFilterError('Từ ngày không được lớn hơn Đến ngày.')
+      return
+    }
+    setFilterError('')
+    setAppliedFilter({ dateRange: 'custom', fromDate: draftFromDate, toDate: draftToDate })
+    updateDateUrl('custom', draftFromDate, draftToDate)
   }
 
   const emptyTotals = useMemo<BankCostAnalytics['totals']>(() => ({
@@ -254,18 +280,26 @@ export function BankDashboardPage() {
 
     <section className="bank-cost-filter-bar" aria-label="Bộ lọc thời gian">
       <div className="bank-cost-presets">
-        {['today', '7d', '30d'].map((preset) => <button key={preset} type="button" className={`btn small ${dateRange === preset ? '' : 'secondary'}`} onClick={() => applyPreset(preset)}>{preset === 'today' ? 'Hôm nay' : preset === '7d' ? '7 ngày' : '30 ngày'}</button>)}
+        {['today', '7d', '30d'].map((preset) => <button key={preset} type="button" className={`btn small ${appliedFilter.dateRange === preset ? '' : 'secondary'}`} onClick={() => applyPreset(preset)}>{preset === 'today' ? 'Hôm nay' : preset === '7d' ? '7 ngày' : '30 ngày'}</button>)}
       </div>
-      <label><span>Từ ngày</span><input className="input" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label>
-      <label><span>Đến ngày</span><input className="input" type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label>
+      <label><span>Từ ngày</span><input className="input" type="date" value={draftFromDate} onChange={(event) => { setDraftFromDate(event.target.value); setFilterError('') }} /></label>
+      <label><span>Đến ngày</span><input className="input" type="date" value={draftToDate} onChange={(event) => { setDraftToDate(event.target.value); setFilterError('') }} /></label>
       <button className="btn small" type="button" onClick={applyCustom}>Áp dụng</button>
       <div className="bank-cost-filter-meta">
         <span>Nguồn <b>Usage thực tế</b></span>
         {data?.generated_at ? <span>Cập nhật <b>{formatVNDateTime(data.generated_at)}</b></span> : null}
+        <button type="button" className="bank-cost-refresh-button" onClick={load} aria-label="Tải lại thống kê" disabled={loading}>
+          <VisualIcon icon="sync" tone="blue" label="Tải lại thống kê" size={15} />
+        </button>
       </div>
     </section>
 
-    <InlineNotice notice={noticeInfo('Các lượt tạo câu hỏi cũ chưa có UsageLog sẽ không được suy đoán hoặc cộng giả vào KPI. Dữ liệu mới được ghi nhận theo từng Bank Version sau mỗi lần gọi model.', 'Chỉ hiển thị chi phí thực tế đã ghi nhận')} />
+    {filterError ? <InlineNotice notice={noticeError(filterError, 'Khoảng thời gian chưa hợp lệ')} /> : null}
+
+    {showUsageNotice ? <div className="bank-cost-notice-wrap">
+      <InlineNotice notice={noticeInfo('Các lượt tạo câu hỏi cũ chưa có UsageLog sẽ không được suy đoán hoặc cộng giả vào KPI. Dữ liệu mới được ghi nhận theo từng Bank Version sau mỗi lần gọi model.', 'Chỉ hiển thị chi phí thực tế đã ghi nhận')} />
+      <button type="button" className="bank-cost-notice-close" aria-label="Đóng thông báo" onClick={() => setShowUsageNotice(false)}>×</button>
+    </div> : null}
 
     {error ? <InlineNotice notice={{ ...noticeError(error, 'Không tải được thống kê chi phí và token.'), title: 'Không tải được thống kê', onRetry: load }} /> : null}
 
@@ -277,12 +311,18 @@ export function BankDashboardPage() {
     </section>
 
     <section className="bank-cost-insight-grid">
-      <BankSection title="Chi phí theo ngày" description="Chi phí VND thực tế phát sinh từ các lượt tạo câu hỏi AI." icon="analytics" tone="blue" className="bank-cost-trend-section">
-        {loading ? <div className="bank-cost-loading" /> : <CostTrendChart items={data?.daily || []} />}
+      <BankSection
+        title="Chi phí theo ngày"
+        description="Chi phí VND thực tế phát sinh từ các lượt tạo câu hỏi AI."
+        icon="analytics"
+        tone="blue"
+        className="bank-cost-trend-section"
+        actions={<select className="bank-cost-currency-select" aria-label="Đơn vị chi phí" defaultValue="VND"><option>VND</option></select>}
+      >
+        {loading ? <div className="bank-cost-loading" /> : <><CostTrendChart items={data?.daily || []} /><CostTrendSummary items={data?.daily || []} /></>}
       </BankSection>
-      <BankSection title="Cơ cấu token" description="Tách input chưa cache, input cache và output token." icon="database" tone="violet">
+      <BankSection title="Cơ cấu token" description="Tách input chưa cache, input cache và output token." icon="database" tone="blue">
         {loading ? <div className="bank-cost-loading" /> : <TokenComposition totals={data?.totals || emptyTotals} />}
-        <ModelUsage items={data?.models || []} />
       </BankSection>
     </section>
 

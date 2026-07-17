@@ -52,6 +52,7 @@ class AcademicIdentityReconciliationWorkflowService:
             create/enroll flows.
             """
             canonical_username = self._student_cms_username(student)
+            canonical_lookup = normalize_username(canonical_username)
             ap_username = normalize_username(student.username)
             student_code = str(student.student_code or '').strip()
             openedx_username = normalize_username(mapping.openedx_username if mapping else '')
@@ -79,22 +80,22 @@ class AcademicIdentityReconciliationWorkflowService:
                 severity = 'blocker'
                 blockers.append('Nhiều mapping nội bộ đang trỏ tới cùng username CMS canonical; cần kiểm tra trước khi chạy enrollment.')
                 action = 'review_duplicate_cms_mapping'
-            elif mapping and openedx_username == canonical_username and match_status == 'matched' and openedx_is_active is not False:
+            elif mapping and openedx_username == canonical_lookup and match_status == 'matched' and openedx_is_active is not False:
                 status_value = 'OK'
                 severity = 'info'
                 can_enroll = True
                 action = 'none'
-            elif mapping and openedx_username == canonical_username and openedx_is_active is False:
+            elif mapping and openedx_username == canonical_lookup and openedx_is_active is False:
                 status_value = 'CANONICAL_INACTIVE'
                 severity = 'warning'
                 warnings.append('Mapping đã đúng RollNumber nhưng user CMS đang inactive hoặc connector trả inactive.')
                 action = 'review_cms_user_active_status'
-            elif mapping and openedx_username and openedx_username == ap_username and canonical_username != ap_username:
+            elif mapping and openedx_username and openedx_username == ap_username and canonical_lookup != ap_username:
                 status_value = 'LEGACY_AP_USERNAME'
                 severity = 'blocker'
                 blockers.append('Mapping hiện tại dùng AP username/email cũ thay vì RollNumber. Nếu chạy tạo mới ngay có thể sinh user CMS trùng người học.')
                 action = 'review_legacy_user_before_rollnumber_sync'
-            elif mapping and openedx_username and openedx_username != canonical_username:
+            elif mapping and openedx_username and openedx_username != canonical_lookup:
                 status_value = 'CMS_USERNAME_MISMATCH'
                 severity = 'blocker'
                 blockers.append('Mapping CMS hiện tại không khớp RollNumber cũng không khớp AP username; cần kiểm tra tay.')
@@ -624,7 +625,7 @@ class AcademicIdentityReconciliationWorkflowService:
                     status_value = 'inactive'
                 result = {
                     'openedx_user_id': openedx_user_id or None,
-                    'openedx_username': openedx_username or normalize_username(student.username),
+                    'openedx_username': openedx_username or self._student_cms_username(student) or None,
                     'openedx_email': record.get('openedx_email') or record.get('email'),
                     'is_active': True if is_active is None else is_active,
                     'match_status': status_value,
