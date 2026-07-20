@@ -2397,8 +2397,32 @@ class VersionedQuestionBankService:
     def _release_questions_for_version(self, version: QuestionBankVersion) -> list[Question]:
         return self._release_publish_workflow()._release_questions_for_version(version)
 
-    def create_release(self, *, bank_version_id: str, title: str | None = None, actor: str | None = None) -> QuestionBankRelease:
-        return self._release_publish_workflow().create_release(bank_version_id=bank_version_id, title=title, actor=actor)
+    def create_release(
+        self,
+        *,
+        bank_version_id: str,
+        release_code: str | None = None,
+        title: str = '',
+        include_approved_questions: bool = True,
+        actor: str | None = None,
+        force: bool = False,
+    ) -> QuestionBankRelease:
+        """Create a frozen Bank Release through the extracted workflow.
+
+        Keep this facade signature synchronized with ``BankReleaseCreate`` and
+        ``QuestionBankReleasePublishWorkflowService.create_release``.  The API
+        route forwards ``payload.model_dump()``; omitting any request field here
+        turns a valid user action into a TypeError/HTTP 500 before the workflow
+        is reached.
+        """
+        return self._release_publish_workflow().create_release(
+            bank_version_id=bank_version_id,
+            release_code=release_code,
+            title=title,
+            include_approved_questions=include_approved_questions,
+            actor=actor,
+            force=force,
+        )
 
     def cancel_failed_release(self, *, release_id: str, actor: str | None = None, note: str = '') -> QuestionBankRelease:
         return self._release_publish_workflow().cancel_failed_release(release_id=release_id, actor=actor, note=note)

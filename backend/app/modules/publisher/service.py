@@ -914,6 +914,11 @@ class OpenEdXPublisher:
             'family_bank_plan': plan or {},
             'family_bank_slots': (plan or {}).get('slots') or [],
             'family_bank_coverage': (plan or {}).get('coverage') or [],
+            'course_quiz_policy': {
+                'scope': 'course',
+                'max_attempts': 1,
+                'showanswer': 'never',
+            },
         }
         connector = get_openedx_connector()
         result = await connector.create_quiz_node(
@@ -926,6 +931,18 @@ class OpenEdXPublisher:
         self._real_publish_guard(result, 'create_quiz_node')
         if not self._looks_like_real_created_quiz_node(result):
             raise RuntimeError(f'CMS connector không trả về usage_key thật cho Quiz node: {result}')
+        course_policy_result = result.get('course_quiz_policy_result') if isinstance(result.get('course_quiz_policy_result'), dict) else {}
+        course_policy_after = course_policy_result.get('after') if isinstance(course_policy_result.get('after'), dict) else {}
+        if not (
+            course_policy_result.get('ok') is True
+            and course_policy_result.get('verified') is True
+            and course_policy_after.get('max_attempts') == 1
+            and str(course_policy_after.get('showanswer') or '').lower() == 'never'
+        ):
+            raise RuntimeError(
+                'CMS connector chưa xác minh Course Advanced Settings bắt buộc '
+                f'(Maximum Attempts = 1, Show Answer = Never): {course_policy_result}'
+            )
         self._sync_created_quiz_nodes(course_id, result)
         self.db.commit()
         return {

@@ -1157,10 +1157,27 @@ class QuestionBankQuizCreationWorkflowService:
                     'grade_as': grade_as,
                     'format': grade_as,
                     'graded': True,
+                    'course_quiz_policy': {
+                        'scope': 'course',
+                        'max_attempts': 1,
+                        'showanswer': 'never',
+                    },
                 },
             )
             if quiz_result.get('ok') is not True:
                 raise RuntimeError(f'Open edX không tạo Quiz node thành công: {quiz_result}')
+            course_policy_result = quiz_result.get('course_quiz_policy_result') if isinstance(quiz_result.get('course_quiz_policy_result'), dict) else {}
+            course_policy_after = course_policy_result.get('after') if isinstance(course_policy_result.get('after'), dict) else {}
+            if not (
+                course_policy_result.get('ok') is True
+                and course_policy_result.get('verified') is True
+                and course_policy_after.get('max_attempts') == 1
+                and str(course_policy_after.get('showanswer') or '').lower() == 'never'
+            ):
+                raise RuntimeError(
+                    'Open edX chưa xác minh Course Advanced Settings bắt buộc '
+                    f'(Maximum Attempts = 1, Show Answer = Never): {course_policy_result}'
+                )
             unit_node_id = quiz_result.get('leaf_unit_node_id') or quiz_result.get('unit_node_id')
             if not unit_node_id:
                 raise RuntimeError('Open edX không trả leaf_unit_node_id sau khi tạo Quiz')
@@ -1253,6 +1270,7 @@ class QuestionBankQuizCreationWorkflowService:
                 'release_code': release.release_code,
                 'plan': plan,
                 'quiz_result': quiz_result,
+                'course_quiz_policy_result': quiz_result.get('course_quiz_policy_result'),
                 'problem_bank_result': insert_result,
                 'timer_config': instance.metadata_json.get('timer_config') or timer_config,
                 'message': 'Đã tạo Final test và native Problem Bank từ Bank Release trên Open edX.' if assessment_type == 'final_test' else 'Đã tạo Quiz và native Problem Bank từ Bank Release trên Open edX.',

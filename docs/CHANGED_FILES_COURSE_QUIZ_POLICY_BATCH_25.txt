@@ -1,0 +1,11 @@
+Batch 25 — Course-wide Quiz Advanced Settings
+
+Modified:
+- openedx-connector-plugin/openedx_ai_connector/studio.py
+- backend/app/services/question_bank/quiz_creation.py
+- backend/app/modules/publisher/service.py
+
+Added:
+- backend/app/tests/test_v25_9_16_7_2_64_25_course_quiz_advanced_settings.py
+- docs/COURSE_WIDE_QUIZ_ADVANCED_SETTINGS_BATCH_25.md
+- docs/CHANGED_FILES_COURSE_QUIZ_POLICY_BATCH_25.txt
