@@ -1113,6 +1113,34 @@ class QuestionBankQuizCreationWorkflowService:
         }
         if timer_config['native_timed_exam']:
             raise ValueError('Quiz tự luyện không dùng native Timed Exam. Hãy dùng custom timer.')
+
+        # One active AI-managed assessment per Course + chapter mapping + type.
+        # Without this guard, pressing Create repeatedly appends another Quiz
+        # subsection to the same lesson, so 5 questions can become 10, 15, ...
+        # The existing instance must be rolled back from Quiz History first.
+        active_instances = (
+            self.db.query(CourseQuizInstance)
+            .filter(
+                CourseQuizInstance.openedx_course_id == course_id,
+                CourseQuizInstance.chapter_id == release.chapter_id,
+                CourseQuizInstance.status.in_(['creating', 'created', 'published', 'rollback_manual_required']),
+            )
+            .order_by(CourseQuizInstance.created_at.desc())
+            .limit(100)
+            .all()
+        )
+        duplicate_instance = next((
+            row for row in active_instances
+            if str((row.metadata_json or {}).get('assessment_type') or 'quiz') == assessment_type
+        ), None)
+        if duplicate_instance is not None:
+            assessment_label = 'Final test' if assessment_type == 'final_test' else 'Quiz'
+            raise ValueError(
+                f'{assessment_label} đang tồn tại trên Course cho bài này '
+                f'(instance={duplicate_instance.id}). Hãy vào Lịch sử Quiz và bấm Khôi phục '
+                'trước khi tạo lại để tránh cộng dồn số câu.'
+            )
+
         instance = CourseQuizInstance(
             id=str(uuid.uuid4()),
             openedx_course_id=course_id,

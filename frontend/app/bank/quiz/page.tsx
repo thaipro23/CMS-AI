@@ -76,6 +76,11 @@ function requiresQuiz(action: QuizChapterAction) {
   return action === 'quiz' || action === 'final_test'
 }
 
+function activeQuizKey(chapterId: string, action: QuizChapterAction | string) {
+  const assessmentType = action === 'final_test' ? 'final_test' : 'quiz'
+  return `${chapterId}:${assessmentType}`
+}
+
 function actionStatusClass(item: EffectiveQuizMapping) {
   if (!item.effectiveRequiresQuiz) return 'pending'
   return item.effectiveReady ? 'success' : 'danger'
@@ -165,8 +170,19 @@ export default function BankQuizPage() {
   }, [autoMap, chapterActions])
 
   const actionPlan = useMemo(() => buildPlan(effectiveMappings), [effectiveMappings])
+  const activeQuizInstances = useMemo(() => {
+    const activeStatuses = new Set(['creating', 'created', 'published', 'rollback_manual_required'])
+    const result = new Map<string, CourseQuizInstance>()
+    for (const instance of history) {
+      if (!activeStatuses.has(String(instance.status || '').toLowerCase())) continue
+      const assessmentType = instance.metadata_json?.assessment_type === 'final_test' ? 'final_test' : 'quiz'
+      const key = `${instance.chapter_id}:${assessmentType}`
+      if (!result.has(key)) result.set(key, instance)
+    }
+    return result
+  }, [history])
   const applied = autoMap?.mode === 'applied'
-  const readyRows = effectiveMappings.filter((item) => item.effectiveRequiresQuiz && item.effectiveReady && item.course_chapter_mapping_id)
+  const readyRows = effectiveMappings.filter((item) => item.effectiveRequiresQuiz && item.effectiveReady && item.course_chapter_mapping_id && !activeQuizInstances.has(activeQuizKey(item.chapter_id, item.action)))
   const selectedQuizCount = effectiveMappings.filter((item) => item.effectiveRequiresQuiz).length
   const skippedCount = effectiveMappings.filter((item) => !item.effectiveRequiresQuiz).length
   const candidates = autoMap?.summary?.candidates || []
@@ -288,6 +304,14 @@ export default function BankQuizPage() {
 
   async function executeCreateOneQuiz(item: EffectiveQuizMapping, refreshHistory = true) {
     if (!item.release_id || !item.course_chapter_mapping_id || !item.effectiveRequiresQuiz) return
+    const existing = activeQuizInstances.get(activeQuizKey(item.chapter_id, item.action))
+    if (existing) {
+      setMessage({
+        tone: 'warning',
+        text: `Bài này đã có ${item.action === 'final_test' ? 'Final test' : 'Quiz'} đang hiệu lực. Hãy bấm Khôi phục ở Lịch sử bài kiểm tra trước khi tạo lại để không cộng dồn số câu.`,
+      })
+      return
+    }
     const config = configForAction(item.action)
     setCreatingKey(item.chapter_id)
     setMessage(null)
@@ -437,7 +461,11 @@ export default function BankQuizPage() {
     },
     {
       key: 'readiness', header: 'Điều kiện', kind: 'status', width: 168, priority: 'important', hideable: true,
-      render: (item) => <div className="quiz-requirement-stack"><span className={classNames('status', productionStatusClass(item))}>{item.effectiveRequiresQuiz ? ((item as any).status_label || actionStatusText(item)) : 'Không tạo'}</span>{item.effectiveRequiresQuiz && ((item as any).missing_requirements || []).length ? <small>{((item as any).missing_requirements || []).map(missingRequirementLabel).join(' · ')}</small> : <small>{item.effectiveRequiresQuiz ? 'Đủ Section + Release' : 'Không yêu cầu'}</small>}</div>,
+      render: (item) => {
+        const existing = activeQuizInstances.get(activeQuizKey(item.chapter_id, item.action))
+        if (existing) return <div className="quiz-requirement-stack"><span className="status warning">Đã có {item.action === 'final_test' ? 'Final test' : 'Quiz'}</span><small>Khôi phục bản đang có trước khi tạo lại</small></div>
+        return <div className="quiz-requirement-stack"><span className={classNames('status', productionStatusClass(item))}>{item.effectiveRequiresQuiz ? ((item as any).status_label || actionStatusText(item)) : 'Không tạo'}</span>{item.effectiveRequiresQuiz && ((item as any).missing_requirements || []).length ? <small>{((item as any).missing_requirements || []).map(missingRequirementLabel).join(' · ')}</small> : <small>{item.effectiveRequiresQuiz ? 'Đủ Section + Release' : 'Không yêu cầu'}</small>}</div>
+      },
     },
     {
       key: 'match', header: 'Khớp', kind: 'number', width: 86, priority: 'optional', hideable: true, defaultVisible: false,
@@ -445,9 +473,13 @@ export default function BankQuizPage() {
     },
     {
       key: 'actions', header: 'Thao tác', kind: 'actions', width: 126, sticky: 'right', hideable: false,
-      render: (item) => item.effectiveRequiresQuiz ? <button className="btn small" disabled={!item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final' : 'Tạo Quiz'}</button> : <span className="muted">Bỏ qua</span>,
+      render: (item) => {
+        if (!item.effectiveRequiresQuiz) return <span className="muted">Bỏ qua</span>
+        const existing = activeQuizInstances.get(activeQuizKey(item.chapter_id, item.action))
+        return <button className="btn small" disabled={Boolean(existing) || !item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{existing ? 'Đã có Quiz' : creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final' : 'Tạo Quiz'}</button>
+      },
     },
-  ], [busy, courseTreeUnavailable, creatingKey, titleForItem])
+  ], [activeQuizInstances, busy, courseTreeUnavailable, creatingKey, titleForItem])
 
   const historyColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_row, index) => index + 1 },

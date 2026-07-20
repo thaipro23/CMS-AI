@@ -1,0 +1,10 @@
+backend/app/services/question_bank/quiz_creation.py
+backend/app/tests/test_v25_9_16_7_2_64_27_quiz_duplicate_iframe_contract.py
+frontend/app/bank/quiz/page.tsx
+frontend-app-learning-patch/src/courseware/course/sequence/unit-reset/UnitResetButton.jsx
+openedx-connector-plugin/openedx_ai_connector/studio.py
+openedx-connector-plugin/setup.py
+openedx-unit-reset-plugin/openedx_unit_reset/views.py
+openedx-unit-reset-plugin/setup.py
+docs/QUIZ_DUPLICATE_IFRAME_THEME_RESIZE_HOTFIX_BATCH_27.md
+docs/CHANGED_FILES_QUIZ_IFRAME_BATCH_27.txt
