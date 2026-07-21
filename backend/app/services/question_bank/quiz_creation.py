@@ -1114,6 +1114,8 @@ class QuestionBankQuizCreationWorkflowService:
         if timer_config['native_timed_exam']:
             raise ValueError('Quiz tự luyện không dùng native Timed Exam. Hãy dùng custom timer.')
 
+        quiz_idempotency_key = f'course_quiz:{chapter_mapping.id}:{assessment_type}'
+
         # One active AI-managed assessment per Course + chapter mapping + type.
         # Without this guard, pressing Create repeatedly appends another Quiz
         # subsection to the same lesson, so 5 questions can become 10, 15, ...
@@ -1158,6 +1160,7 @@ class QuestionBankQuizCreationWorkflowService:
                 'course_chapter_mapping_id': chapter_mapping.id,
                 'assessment_type': assessment_type,
                 'timer_config': timer_config,
+                'quiz_idempotency_key': quiz_idempotency_key,
             },
         )
         self.db.add(instance)
@@ -1175,6 +1178,10 @@ class QuestionBankQuizCreationWorkflowService:
                 metadata={
                     'bank_release_id': release.id,
                     'bank_release_code': release.release_code,
+                    'course_quiz_instance_id': instance.id,
+                    'idempotency_key': quiz_idempotency_key,
+                    'quiz_idempotency_key': quiz_idempotency_key,
+                    'recover_empty_legacy_partial': True,
                     'subject_code': getattr(subject, 'code', None),
                     'chapter_id': release.chapter_id,
                     'source': 'ai_question_bank_release',
