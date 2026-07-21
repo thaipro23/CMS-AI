@@ -1,0 +1,6 @@
+openedx-connector-plugin/openedx_ai_connector/student_insight.py
+openedx-connector-plugin/setup.py
+backend/app/services/academic/sync_enrollment.py
+backend/app/tests/test_v25_9_16_7_2_64_29_ap_teacher_limited_staff.py
+docs/AP_TEACHER_LIMITED_STAFF_POLICY_BATCH_29.md
+docs/CHANGED_FILES_AP_TEACHER_LIMITED_STAFF_BATCH_29.txt

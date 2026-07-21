@@ -287,7 +287,7 @@ def resolve_class_openedx_users(self, user: UserContext, class_id: str, *, force
         enrollment_result = None
         if auto_enroll and getattr(settings, 'academic_auto_enroll_after_cms_sync', True):
             try:
-                # Auto-enroll mapped students and add mapped/created teachers to Course Staff.
+                # Auto-enroll mapped students and add mapped/created AP teachers as Limited Staff.
                 enrollment_result = self.sync_class_course_enrollment(user, class_id, force=False, limit=limit)
                 for key, value in (enrollment_result.get('counts') or {}).items():
                     counts[f'enrollment_{key}'] = int(value or 0)
@@ -537,7 +537,7 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
                         failed_messages.append(f"{student.username}: {message}")
             self.db.flush()
 
-        # Add teachers to Course Staff. Teachers are not stored in student learning
+        # Add AP teachers as Limited Staff. Teachers are not stored in student learning
         # snapshots; their status is kept in academic_teachers.metadata_json.
         if teacher_payload:
             for start in range(0, len(teacher_payload), batch_size):
@@ -558,6 +558,8 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
                             'openedx_username': str(result.get('openedx_username') or result.get('username') or '').strip() or None,
                             'openedx_email': str(result.get('openedx_email') or result.get('email') or '').strip() or None,
                             'created_user': _boolish(result.get('created_user', result.get('created'))),
+                            'course_role': str(result.get('course_role') or 'limited_staff').strip().lower(),
+                            'removed_course_staff': _boolish(result.get('removed_course_staff')),
                             'message': str(result.get('message') or '')[:1000],
                             'last_synced_at': datetime.utcnow().isoformat(),
                         }
@@ -565,7 +567,7 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
                     teacher.updated_at = datetime.utcnow()
                     self.db.add(teacher)
                     status_value = str(result.get('status') or result.get('enrollment_status') or 'unknown')
-                    teacher_success = status_value in {'already_course_staff', 'course_staff_added'} or str(result.get('course_role') or '').strip().lower() == 'staff'
+                    teacher_success = status_value in {'already_course_limited_staff', 'course_limited_staff_added', 'course_limited_staff_migrated'} or (str(result.get('course_role') or '').strip().lower() == 'limited_staff' and result.get('verified_after_write') is True)
                     teacher_counts[status_value] = teacher_counts.get(status_value, 0) + 1
                     counts[f'teacher_{status_value}'] = counts.get(f'teacher_{status_value}', 0) + 1
                     teacher_processed += 1
@@ -595,7 +597,7 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
             'updated': updated,
             'verified': verified,
             'counts': counts,
-            'message': f'Enrollment Course CMS hoàn tất: {updated}/{len(rows)} sinh viên được Open edX xác nhận enrolled; {teacher_updated}/{len(teacher_payload)} giảng viên được gán Course Staff.',
+            'message': f'Enrollment Course CMS hoàn tất: {updated}/{len(rows)} sinh viên được Open edX xác nhận enrolled; {teacher_updated}/{len(teacher_payload)} giảng viên AP được gán Limited Staff.',
             'learning_summary': summary,
             'teachers': {'total': len(teacher_payload), 'processed': teacher_processed, 'updated': teacher_updated, 'verified': teacher_verified, 'counts': teacher_counts},
         }
@@ -828,7 +830,7 @@ def sync_class_full_cms_flow(
           1. Resolve or safely auto-map Course CMS.
           2. If Course CMS is still missing, stop without creating CMS accounts.
           3. Resolve/create CMS accounts from RollNumber only after mapping exists.
-          4. Enroll learners and add teachers as Course Staff.
+          4. Enroll learners and add AP teachers as Limited Staff.
           5. Pull progress, total grade and component/quiz grades.
         """
         self.assert_can_access_class(user, class_id)

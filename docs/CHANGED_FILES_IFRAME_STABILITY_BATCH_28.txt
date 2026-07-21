@@ -1,0 +1,6 @@
+frontend-app-learning-patch/src/courseware/course/sequence/unit-reset/UnitResetButton.jsx
+openedx-unit-reset-plugin/openedx_unit_reset/views.py
+openedx-unit-reset-plugin/setup.py
+backend/app/tests/test_v25_9_16_7_2_64_28_iframe_theme_resize_stability.py
+docs/IFRAME_INITIAL_THEME_RESIZE_STABILITY_HOTFIX_BATCH_28.md
+docs/CHANGED_FILES_IFRAME_STABILITY_BATCH_28.txt
