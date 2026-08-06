@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useAppContext } from "../../context/AppContext";
 import {
+  createAcademicTrainingTeacherCacheJob,
   createAcademicTrainingTeacherExportJob,
   downloadAcademicTrainingTeacherReportJob,
   getAcademicCampuses,
@@ -42,7 +43,14 @@ type TrainingSummary = {
   unique_student_count: number;
   relearn_student_count: number;
   total_relearn_count: number;
+  cms_class_count: number;
+  udemy_class_count: number;
+  cms_student_count: number;
+  udemy_student_count: number;
   cms_synced_count: number;
+  udemy_progress_student_count: number;
+  udemy_progress_late_count: number;
+  udemy_progress_average_percent: number | null;
   learning_enrolled_count: number;
   learning_active_count: number;
   risk_student_count: number;
@@ -64,7 +72,14 @@ const EMPTY_SUMMARY: TrainingSummary = {
   unique_student_count: 0,
   relearn_student_count: 0,
   total_relearn_count: 0,
+  cms_class_count: 0,
+  udemy_class_count: 0,
+  cms_student_count: 0,
+  udemy_student_count: 0,
   cms_synced_count: 0,
+  udemy_progress_student_count: 0,
+  udemy_progress_late_count: 0,
+  udemy_progress_average_percent: null,
   learning_enrolled_count: 0,
   learning_active_count: 0,
   risk_student_count: 0,
@@ -86,6 +101,16 @@ function normalizeSummary(
     ...(value || {}),
     relearn_student_count: Number(value?.relearn_student_count || 0),
     total_relearn_count: Number(value?.total_relearn_count || 0),
+    cms_class_count: Number(value?.cms_class_count || 0),
+    udemy_class_count: Number(value?.udemy_class_count || 0),
+    cms_student_count: Number(value?.cms_student_count || 0),
+    udemy_student_count: Number(value?.udemy_student_count || 0),
+    udemy_progress_student_count: Number(value?.udemy_progress_student_count || 0),
+    udemy_progress_late_count: Number(value?.udemy_progress_late_count || 0),
+    udemy_progress_average_percent:
+      typeof value?.udemy_progress_average_percent === "number"
+        ? value.udemy_progress_average_percent
+        : null,
     deadline_late_student_count: Number(
       value?.deadline_late_student_count || 0,
     ),
@@ -205,8 +230,14 @@ function counterText(total: number, page: number, pageSize: number) {
 function riskTone(item: AcademicTrainingTeacherReport) {
   if (item.classes_without_course_count || item.status_counts?.sync_error)
     return "status-pill danger";
-  if (item.risk_student_count) return "status-pill warning";
+  if (item.risk_student_count || Number(item.udemy_progress_late_count || 0) > 0)
+    return "status-pill warning";
   return "status-pill success";
+}
+
+function platformStudentTotal(item: AcademicTrainingTeacherReport, platform: "cms" | "udemy") {
+  if (platform === "cms") return Number(item.cms_student_count ?? item.student_count ?? 0);
+  return Number(item.udemy_student_count || 0);
 }
 
 function jobPercent(job?: AcademicTeacherReportJob | null) {
@@ -246,6 +277,9 @@ function TeacherManagementContent() {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportJob, setExportJob] = useState<AcademicTeacherReportJob | null>(
+    null,
+  );
+  const [cacheJob, setCacheJob] = useState<AcademicTeacherReportJob | null>(
     null,
   );
   const [message, setMessage] = useState<InlineNoticeData | null>(null);
@@ -289,7 +323,7 @@ function TeacherManagementContent() {
     setTotal(0);
   };
 
-  const loadReport = async (cancelledRef?: { cancelled: boolean }) => {
+  const loadReport = async (cancelledRef?: { cancelled: boolean }, fresh = false) => {
     if (!termId) {
       resetReportState();
       setLoading(false);
@@ -307,6 +341,7 @@ function TeacherManagementContent() {
         page,
         pageSize,
         includeClasses: false,
+        fresh,
       });
       if (cancelledRef?.cancelled) return;
       setItems(result.items || []);
@@ -367,6 +402,23 @@ function TeacherManagementContent() {
     return () => controller.abort();
   }, [headers, exportJob?.id, exportJob?.status]);
 
+
+  useEffect(() => {
+    if (!cacheJob || !["queued", "running"].includes(cacheJob.status)) return;
+    const controller = new AbortController();
+    waitForAcademicTrainingTeacherReportJob(headers, cacheJob.id, { signal: controller.signal })
+      .then(async (latest) => {
+        setCacheJob(latest);
+        setMessage(noticeSuccess("Đã tính lại báo cáo giảng viên, gồm số liệu CMS và Udemy."));
+        await loadReport(undefined, true);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setMessage(noticeError(error, "Không tính lại được báo cáo giảng viên."));
+      });
+    return () => controller.abort();
+  }, [headers, cacheJob?.id, cacheJob?.status]);
+
   const selectedTerm = terms.find((item) => item.id === termId);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -400,6 +452,25 @@ function TeacherManagementContent() {
           componentKey(score) === column.key || score.name === column.name,
       ) || null
     );
+  };
+
+  const rebuildTeacherCache = async () => {
+    if (!termId) {
+      setMessage(noticeWarning("Chọn học kỳ trước khi làm mới số liệu."));
+      return;
+    }
+    setMessage(null);
+    try {
+      const job = await createAcademicTrainingTeacherCacheJob(headers, {
+        termId,
+        branch,
+        campus,
+      });
+      setCacheJob(job);
+      setMessage(noticeInfo("Đã đưa yêu cầu tính lại báo cáo CMS/Udemy vào hàng đợi."));
+    } catch (error) {
+      setMessage(noticeError(error, "Không tạo được tác vụ làm mới số liệu."));
+    }
   };
 
   const exportExcelBackground = async () => {
@@ -442,10 +513,10 @@ function TeacherManagementContent() {
   const columns = useMemo<EnterpriseTableColumn<AcademicTrainingTeacherReport>[]>(() => [
     { key: "stt", header: "STT", kind: "index", width: 52, sticky: "left", hideable: false, render: (_item, index) => (page - 1) * pageSize + index + 1 },
     { key: "teacher", header: "Giảng viên", kind: "identity", minWidth: 225, sticky: "left", priority: "required", hideable: false, render: (item) => <div className="teacher-identity teacher-identity-text-only"><b>{item.teacher_name || item.teacher_username}</b><small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ""}</small><small>{item.branch?.toUpperCase() || "N/A"}{item.campus ? ` · ${item.campus.toUpperCase()}` : ""}</small></div> },
-    { key: "scale", header: "Quy mô", kind: "number", minWidth: 150, priority: "important", hideable: true, render: (item) => <><b>{item.class_count} lớp · {item.subject_count} môn</b><small>{item.student_count} lượt SV · {item.unique_student_count} SV</small></> },
-    { key: "cms", header: "Đồng bộ CMS", kind: "status", minWidth: 165, priority: "important", hideable: true, render: (item) => <><span className={syncTone(item.cms_synced_count, item.student_count)}>CMS {ratioLabel(item.cms_synced_count, item.student_count)}</span><small>Enroll {ratioLabel(item.learning_enrolled_count, item.student_count)}</small>{item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa ghép course</small> : null}</> },
-    { key: "progress", header: "Tiến độ", kind: "progress", minWidth: 155, priority: "optional", hideable: true, render: (item) => <><b>Completion {percentLabel(item.learning_avg_progress_percent)}</b><small>{ratioLabel(item.learning_active_count, item.student_count)} có hoạt động</small></> },
-    { key: "risk", header: "Cảnh báo", kind: "status", minWidth: 170, priority: "important", hideable: true, render: (item) => { const statuses = item.status_counts || {}; return <><span className={riskTone(item)}>{item.risk_student_count ? `${item.risk_student_count} SV cần xem` : "Ổn"}</span><small>Trễ {countLabel(statuses.deadline_late)} · Không đủ thi {countLabel(statuses.exam_not_eligible)}</small></> } },
+    { key: "scale", header: "Quy mô", kind: "number", minWidth: 175, priority: "important", hideable: true, render: (item) => <><b>{item.class_count} lớp · {item.subject_count} môn</b><small>CMS {countLabel(item.cms_class_count)} · Udemy {countLabel(item.udemy_class_count)}</small><small>{item.student_count} lượt SV · {item.unique_student_count} SV</small></> },
+    { key: "cms", header: "CMS / Open edX", kind: "status", minWidth: 175, priority: "important", hideable: true, render: (item) => { const cmsTotal = platformStudentTotal(item, "cms"); return <><span className={syncTone(item.cms_synced_count, cmsTotal)}>CMS {ratioLabel(item.cms_synced_count, cmsTotal)}</span><small>Enroll {ratioLabel(item.learning_enrolled_count, cmsTotal)}</small><small>Completion {percentLabel(item.learning_avg_progress_percent)}</small>{item.classes_without_course_count ? <small className="danger-text">{item.classes_without_course_count} lớp chưa ghép course</small> : null}</> } },
+    { key: "udemy", header: "Udemy", kind: "progress", minWidth: 180, priority: "important", hideable: true, render: (item) => { const udemyTotal = platformStudentTotal(item, "udemy"); const imported = Number(item.udemy_progress_student_count || 0); const late = Number(item.udemy_progress_late_count || 0); return <><span className={syncTone(imported, udemyTotal)}>Đã import {ratioLabel(imported, udemyTotal)}</span><small>Tiến độ TB {percentLabel(item.udemy_progress_average_percent)}</small><small className={late > 0 ? "danger-text" : undefined}>{late > 0 ? `${late} SV chậm tiến độ` : udemyTotal > 0 ? "Không có SV chậm" : "Không phụ trách môn Udemy"}</small></> } },
+    { key: "risk", header: "Cảnh báo", kind: "status", minWidth: 190, priority: "important", hideable: true, render: (item) => { const statuses = item.status_counts || {}; const udemyLate = Number(item.udemy_progress_late_count || 0); const riskTotal = Number(item.risk_student_count || 0); return <><span className={riskTone(item)}>{riskTotal || udemyLate ? `${Math.max(riskTotal, udemyLate)} SV cần xem` : "Ổn"}</span><small>CMS trễ {countLabel(statuses.deadline_late)} · Udemy chậm {countLabel(udemyLate)}</small><small>Không đủ thi {countLabel(statuses.exam_not_eligible)}</small></> } },
     { key: "actions", header: "Thao tác", kind: "actions", width: 106, sticky: "right", hideable: false, render: (item) => { const params = new URLSearchParams(); if (termId) params.set("term_id", termId); if (branch) params.set("branch", branch); if (campus) params.set("campus", campus); params.set("list_campus", campus || "all"); if (selectedTerm?.term_name) params.set("term_name", selectedTerm.term_name); params.set("teacher_name", item.teacher_name || item.teacher_username); return <Link className="btn secondary small teacher-row-action" href={`/teacher-management/teachers/${encodeURIComponent(item.teacher_id)}/classes?${params.toString()}`}>Xem lớp</Link> } },
   ], [branch, campus, page, pageSize, selectedTerm?.term_name, termId]);
 
@@ -454,12 +525,17 @@ function TeacherManagementContent() {
       <EnterpriseScreenHeader
         eyebrow="Vận hành đào tạo"
         title="Quản lý giảng viên"
-        description="Theo dõi giảng viên, lớp phụ trách, trạng thái CMS, tiến độ học và các trường hợp cần hỗ trợ theo phạm vi được phân quyền."
+        description="Theo dõi giảng viên, lớp CMS/Open edX, lớp Udemy, tiến độ học và các trường hợp cần hỗ trợ theo phạm vi được phân quyền."
         icon="teachers"
         tone="blue"
         breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: 'Quản lý giảng viên' }]}
         primaryAction={<button className="btn" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === "queued" || exportJob?.status === "running"}>{exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel"}</button>}
-        secondaryActions={exportJob?.status === "completed" ? <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button> : undefined}
+        secondaryActions={<>
+          <button className="btn secondary" type="button" onClick={rebuildTeacherCache} disabled={!termId || cacheJob?.status === "queued" || cacheJob?.status === "running"}>
+            {cacheJob && ["queued", "running"].includes(cacheJob.status) ? `Đang làm mới ${jobPercent(cacheJob)}%` : "Làm mới số liệu"}
+          </button>
+          {exportJob?.status === "completed" ? <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button> : null}
+        </>}
       />
       <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
         <div className="academic-filter-bar ux-filter-grid teacher-filter-bar">
@@ -529,6 +605,7 @@ function TeacherManagementContent() {
               <option value="low_progress">Có SV tiến độ thấp</option>
               <option value="low_grade">Có SV điểm thấp</option>
               <option value="deadline_late">Có SV trễ deadline quiz</option>
+              <option value="udemy_late">Có SV Udemy chậm tiến độ</option>
               <option value="exam_not_eligible">Có SV không được thi</option>
               <option value="exam_insufficient_data">
                 Có SV thiếu dữ liệu xét thi
@@ -551,12 +628,23 @@ function TeacherManagementContent() {
 
         <TrainingKpiStrip compact items={[
           { key: 'teachers', label: 'Giảng viên', value: countLabel(summary.teacher_count), hint: 'Theo bộ lọc hiện tại' },
-          { key: 'classes', label: 'Lớp', value: countLabel(summary.class_count), hint: 'Không đếm theo trang' },
-          { key: 'students', label: 'Sinh viên', value: countLabel(summary.student_count), hint: 'Theo hệ · kỳ · cơ sở' },
-          { key: 'cms', label: 'CMS match', value: countLabel(summary.cms_synced_count), hint: `${countLabel(summary.learning_enrolled_count)} đã ghi danh` },
-          { key: 'risk', label: 'Cần theo dõi', value: countLabel(summary.risk_student_count), hint: `${countLabel(summary.deadline_late_student_count)} trễ · ${countLabel(summary.exam_not_eligible_student_count)} chưa đủ thi`, tone: summary.risk_student_count > 0 ? 'warning' : 'success' },
-          { key: 'data', label: 'Thiếu dữ liệu xét thi', value: countLabel(summary.exam_insufficient_data_student_count), hint: 'Cần hoàn tất đồng bộ học tập', tone: summary.exam_insufficient_data_student_count > 0 ? 'warning' : 'neutral' },
+          { key: 'platforms', label: 'Lớp theo nền tảng', value: `${countLabel(summary.cms_class_count)} CMS`, hint: `${countLabel(summary.udemy_class_count)} lớp Udemy` },
+          { key: 'cms', label: 'CMS match', value: ratioLabel(summary.cms_synced_count, summary.cms_student_count), hint: `${countLabel(summary.learning_enrolled_count)} đã ghi danh` },
+          { key: 'udemy', label: 'Tiến độ Udemy', value: percentLabel(summary.udemy_progress_average_percent), hint: `${countLabel(summary.udemy_progress_student_count)}/${countLabel(summary.udemy_student_count)} SV đã import`, tone: summary.udemy_progress_late_count > 0 ? 'warning' : 'neutral' },
+          { key: 'udemy-late', label: 'Udemy chậm tiến độ', value: countLabel(summary.udemy_progress_late_count), hint: 'Theo mốc kế hoạch đang đến hạn', tone: summary.udemy_progress_late_count > 0 ? 'warning' : 'success' },
+          { key: 'risk', label: 'Cần theo dõi', value: countLabel(summary.risk_student_count), hint: `${countLabel(summary.deadline_late_student_count)} CMS trễ · ${countLabel(summary.exam_not_eligible_student_count)} chưa đủ thi`, tone: summary.risk_student_count > 0 ? 'warning' : 'success' },
         ]} />
+
+        {cacheJob &&
+          ["queued", "running", "failed"].includes(cacheJob.status) && (
+            <InlineNotice
+              notice={{
+                type: cacheJob.status === "failed" ? "error" : "info",
+                title: "Làm mới báo cáo CMS/Udemy",
+                body: `${cacheJob.progress_label} · ${jobPercent(cacheJob)}%${cacheJob.status === "failed" ? ` · ${cacheJob.error_message || "Thất bại"}` : ""}`,
+              }}
+            />
+          )}
 
         {exportJob &&
           ["queued", "running", "failed"].includes(exportJob.status) && (

@@ -1,0 +1,57 @@
+Batch 34 — Udemy progress dashboard, alerts, export and training integration
+Base: Batch 33
+Migration: none
+
+MODIFIED
+backend/app/api/routes/academic.py
+  - Udemy dashboard/students/export endpoints and RBAC scope.
+  - Teacher report workbook now includes CMS/Udemy metrics and UdemyChamTienDo.
+
+backend/app/schemas/academic.py
+  - Dashboard, student list and expanded summary response schemas.
+
+backend/app/services/academic/teacher_report.py
+  - Resolves subject delivery/platform for teacher classes.
+  - Recalculates current Udemy milestone status.
+  - Prevents Udemy classes from being counted as CMS mapping/sync failures.
+  - Adds CMS/Udemy class, student, progress and alert metrics.
+
+backend/app/services/academic/udemy_progress.py
+  - Dashboard, scoped student list and Excel export.
+  - Dynamic current-milestone status calculation.
+  - Class/teacher enrichment and scope-safe history behavior.
+
+backend/app/services/academic_service.py
+  - Class detail Udemy metrics and platform routing.
+  - udemy_late learning-list filter support.
+
+frontend/app/student-management/classes/[classId]/page.tsx
+  - Udemy-specific KPI/action workspace.
+  - Hides Open edX operations for Udemy classes.
+
+frontend/app/subject-management/page.tsx
+  - Xem tiến độ action for Udemy subjects.
+
+frontend/app/teacher-management/page.tsx
+  - CMS/Udemy KPIs, table column and warning filter.
+  - Rebuild teacher-report cache job action.
+
+frontend/lib/api.ts
+  - Udemy dashboard, student list and export clients.
+
+frontend/styles/subject-management-udemy.css
+  - Dashboard, filters, progress cells, alerts and responsive layout.
+
+frontend/types/index.ts
+  - Udemy dashboard/student/class/teacher report type contracts.
+
+ADDED
+backend/app/tests/test_v25_9_16_7_2_64_34_udemy_dashboard_export.py
+  - Dashboard/scope/filter/export/class-detail/teacher-report regressions.
+
+frontend/app/subject-management/[deliveryId]/udemy/page.tsx
+  - End-user Udemy operations workspace.
+
+docs/UDEMY_PROGRESS_DASHBOARD_BATCH_34.md
+
+docs/CHANGED_FILES_UDEMY_PROGRESS_DASHBOARD_BATCH_34.txt

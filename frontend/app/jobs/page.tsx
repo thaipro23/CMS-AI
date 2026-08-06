@@ -28,7 +28,7 @@ function statusText(v: string) { return ({ queued: 'Đang chờ', running: 'Đan
 function jobLabel(v: string) { return ({ material_extract: 'Tách tài liệu', bank_generate: 'Tạo câu hỏi', release_publish: 'Đưa bộ đề lên CMS', quiz_create: 'Tạo Quiz' } as Record<string,string>)[v] || v }
 function academicJobLabel(v: string) { return ({ cms_sync_check: 'Kiểm tra CMS', cms_enrollment_sync: 'Ghi danh CMS', learning_sync: 'Cập nhật điểm', full_cms_sync: 'Đồng bộ full CMS', learning_analytics_recalculate: 'Tính lại học online' } as Record<string,string>)[v] || v }
 function reportJobLabel(v: string) { return ({ rebuild_cache: 'Tính lại báo cáo GV', export_excel: 'Xuất Excel GV' } as Record<string,string>)[v] || v }
-function bulkJobLabel(v: string) { return ({ subject_auto_map_all_sync: 'Tự động ghép Course CMS + đồng bộ CMS' } as Record<string,string>)[v] || v }
+function bulkJobLabel(v: string) { return ({ subject_auto_map_all_sync: 'Tự động ghép Course CMS + đồng bộ CMS', subject_catalog_refresh: 'Lấy danh sách môn từ AP' } as Record<string,string>)[v] || v }
 function safeNumber(v: unknown) { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 function progressPercent(current?: number, total?: number, explicit?: number) {
   if (typeof explicit === 'number' && Number.isFinite(explicit)) return Math.max(0, Math.min(100, explicit))

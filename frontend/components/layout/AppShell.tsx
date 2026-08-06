@@ -59,6 +59,7 @@ const navItems: NavItem[] = [
   { href: '/ops/readiness', label: 'Kiểm tra vận hành', icon: 'readiness', group: 'operations', permission: 'view_ops_readiness', diagnostic: true },
   { href: '/premises', label: 'Cơ sở', icon: 'campus', group: 'catalog', permission: 'manage_settings' },
   { href: '/semesters', label: 'Học kỳ', icon: 'semester', group: 'catalog', permission: 'manage_settings' },
+  { href: '/subject-management', label: 'Quản lý môn học', icon: 'book', group: 'catalog', permission: 'manage_settings' },
   { href: '/users', label: 'Người dùng & phân quyền', icon: 'users', group: 'admin', permission: 'view_rbac' },
   { href: '/settings', label: 'Cài đặt', icon: 'settings', group: 'admin', permission: 'manage_settings' },
 ]
@@ -86,6 +87,7 @@ function requiredPermissionForPath(pathname: string): string | null {
     [/^\/(?:student-management|teacher-management|training-management|analytics)(?:\/|$)/, 'view_training_reports'],
     [/^\/premises(?:\/|$)/, 'manage_settings'],
     [/^\/semesters(?:\/|$)/, 'manage_settings'],
+    [/^\/subject-management(?:\/|$)/, 'manage_settings'],
     [/^\/ap-sync(?:\/|$)/, 'manage_settings'],
     [/^\/ops\/readiness(?:\/|$)/, 'view_ops_readiness'],
     [/^\/(?:jobs|audit)(?:\/|$)/, 'view_jobs'],
@@ -101,7 +103,7 @@ function pageLabel(pathname: string) {
 
 function fallbackPageLayoutClass(pathname: string) {
   const classes = ['page-stack']
-  if (/^\/(?:student-management|teacher-management|analytics|jobs|audit|ap-sync|premises|semesters|users)(?:\/|$)/.test(pathname)) classes.push('enterprise-standard-page')
+  if (/^\/(?:student-management|teacher-management|analytics|jobs|audit|ap-sync|premises|semesters|subject-management|users)(?:\/|$)/.test(pathname)) classes.push('enterprise-standard-page')
   if (pathname.startsWith('/bank')) classes.push('bank-multipage', 'bank-contract-page')
   if (pathname === '/bank') classes.push('dashboard-modern-page')
   if (pathname.startsWith('/bank/quiz')) classes.push('bank-quiz-page', 'quiz-creation-workbench')
@@ -115,6 +117,7 @@ function fallbackPageLayoutClass(pathname: string) {
   if (pathname.startsWith('/ap-sync')) classes.push('ap-sync-page')
   if (pathname.startsWith('/premises')) classes.push('premises-page')
   if (pathname.startsWith('/semesters')) classes.push('semesters-page')
+  if (pathname.startsWith('/subject-management')) classes.push('subject-management-page')
   if (pathname.startsWith('/settings')) classes.push('settings-page')
   if (pathname.startsWith('/users')) classes.push('access-console', 'access-console-v2')
   return classes.join(' ')

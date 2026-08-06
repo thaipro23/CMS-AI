@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
+from datetime import date, datetime
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -94,6 +94,193 @@ class AcademicSubject(Base):
     __table_args__ = (
         UniqueConstraint('subject_code', 'branch', name='uq_academic_subjects_code_branch'),
         Index('ix_academic_subjects_branch_active_code', 'branch', 'active', 'subject_code'),
+    )
+
+
+class AcademicSubjectDelivery(Base):
+    """Learning platform assignment for one subject in one term/block/branch.
+
+    Keep this separate from ``academic_subjects`` because the same subject may
+    run on CMS in one semester/block and on Udemy in another. Switching the
+    platform never deletes historical CMS mappings or future Udemy data.
+    """
+
+    __tablename__ = 'academic_subject_deliveries'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    subject_id: Mapped[str] = mapped_column(String, ForeignKey('academic_subjects.id'), index=True)
+    term_id: Mapped[str] = mapped_column(String, ForeignKey('academic_terms.id'), index=True)
+    block_id: Mapped[str] = mapped_column(String, ForeignKey('academic_blocks.id'), index=True)
+    branch: Mapped[str] = mapped_column(String(64), index=True)
+    learning_platform: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)  # cms | udemy | NULL
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    configuration_source: Mapped[str] = mapped_column(String(50), default='manual', index=True)
+    configured_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    configured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    catalog_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('subject_id', 'term_id', 'block_id', 'branch', name='uq_academic_subject_delivery_scope'),
+        CheckConstraint("learning_platform IS NULL OR learning_platform IN ('cms', 'udemy')", name='ck_academic_subject_delivery_platform'),
+        Index('ix_academic_subject_delivery_scope_active', 'term_id', 'block_id', 'branch', 'active'),
+        Index('ix_academic_subject_delivery_platform_scope', 'learning_platform', 'term_id', 'block_id', 'branch'),
+    )
+
+
+class UdemySubjectPlan(Base):
+    """Versioned Udemy study plan for one term/block subject delivery."""
+
+    __tablename__ = 'udemy_subject_plans'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    subject_delivery_id: Mapped[str] = mapped_column(String, ForeignKey('academic_subject_deliveries.id'), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    item_count: Mapped[int] = mapped_column(Integer)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    source: Mapped[str] = mapped_column(String(50), default='manual', index=True)
+    source_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    imported_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('subject_delivery_id', 'version', name='uq_udemy_subject_plan_delivery_version'),
+        CheckConstraint('version >= 1', name='ck_udemy_subject_plan_version'),
+        CheckConstraint('item_count > 0', name='ck_udemy_subject_plan_item_count'),
+        Index('ix_udemy_subject_plan_delivery_active', 'subject_delivery_id', 'active'),
+        Index('ix_udemy_subject_plan_delivery_imported', 'subject_delivery_id', 'imported_at'),
+    )
+
+
+class UdemySubjectPlanMilestone(Base):
+    __tablename__ = 'udemy_subject_plan_milestones'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    plan_id: Mapped[str] = mapped_column(String, ForeignKey('udemy_subject_plans.id', ondelete='CASCADE'), index=True)
+    week_number: Mapped[int] = mapped_column(Integer)
+    deadline_date: Mapped[date] = mapped_column(Date, index=True)
+    required_progress_percent: Mapped[float] = mapped_column(Float)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('plan_id', 'week_number', name='uq_udemy_plan_milestone_week'),
+        CheckConstraint('week_number >= 1 AND week_number <= 52', name='ck_udemy_plan_milestone_week'),
+        CheckConstraint('required_progress_percent >= 0 AND required_progress_percent <= 100', name='ck_udemy_plan_milestone_progress'),
+        Index('ix_udemy_plan_milestone_plan_order', 'plan_id', 'sort_order'),
+    )
+
+
+class UdemyProgressImportBatch(Base):
+    """One uploaded Udemy progress workbook processed by a durable Celery job."""
+
+    __tablename__ = 'udemy_progress_import_batches'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    parent_job_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_bulk_operation_jobs.id'), nullable=True, index=True)
+    subject_delivery_id: Mapped[str] = mapped_column(String, ForeignKey('academic_subject_deliveries.id'), index=True)
+    duplicate_of_batch_id: Mapped[str | None] = mapped_column(String, ForeignKey('udemy_progress_import_batches.id'), nullable=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_hash: Mapped[str] = mapped_column(String(64), index=True)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_report_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parser_format: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), default='queued', index=True)
+    force_reimport: Mapped[bool] = mapped_column(Boolean, default=False)
+    total_rows: Mapped[int] = mapped_column(Integer, default=0)
+    processed_rows: Mapped[int] = mapped_column(Integer, default=0)
+    matched_rows: Mapped[int] = mapped_column(Integer, default=0)
+    outside_roster_rows: Mapped[int] = mapped_column(Integer, default=0)
+    unmatched_rows: Mapped[int] = mapped_column(Integer, default=0)
+    ambiguous_rows: Mapped[int] = mapped_column(Integer, default=0)
+    failed_rows: Mapped[int] = mapped_column(Integer, default=0)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    request_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('queued', 'running', 'completed', 'failed', 'skipped')", name='ck_udemy_progress_batch_status'),
+        Index('ix_udemy_progress_batch_delivery_created', 'subject_delivery_id', 'created_at'),
+        Index('ix_udemy_progress_batch_job_status', 'parent_job_id', 'status'),
+        Index('ix_udemy_progress_batch_delivery_hash', 'subject_delivery_id', 'file_hash'),
+    )
+
+
+class UdemyStudentProgress(Base):
+    """Current Udemy progress snapshot per subject delivery and normalized email."""
+
+    __tablename__ = 'udemy_student_progress'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    subject_delivery_id: Mapped[str] = mapped_column(String, ForeignKey('academic_subject_deliveries.id'), index=True)
+    class_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_classes.id'), nullable=True, index=True)
+    student_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_students.id'), nullable=True, index=True)
+    email: Mapped[str] = mapped_column(String(320))
+    normalized_email: Mapped[str] = mapped_column(String(320), index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    progress_percent: Mapped[float] = mapped_column(Float, default=0)
+    is_late: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    current_plan_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    required_progress_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_deadline_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    match_status: Mapped[str] = mapped_column(String(50), default='unmatched', index=True)
+    source_format: Mapped[str] = mapped_column(String(50), default='unknown', index=True)
+    last_import_batch_id: Mapped[str] = mapped_column(String, ForeignKey('udemy_progress_import_batches.id'), index=True)
+    last_imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('subject_delivery_id', 'normalized_email', name='uq_udemy_student_progress_delivery_email'),
+        CheckConstraint('progress_percent >= 0 AND progress_percent <= 100', name='ck_udemy_student_progress_percent'),
+        CheckConstraint("match_status IN ('matched_roster', 'matched_student_outside_roster', 'ambiguous', 'unmatched')", name='ck_udemy_student_progress_match_status'),
+        Index('ix_udemy_student_progress_delivery_late', 'subject_delivery_id', 'is_late'),
+        Index('ix_udemy_student_progress_delivery_match', 'subject_delivery_id', 'match_status'),
+        Index('ix_udemy_student_progress_class_student', 'class_id', 'student_id'),
+        Index('ix_udemy_student_progress_delivery_class', 'subject_delivery_id', 'class_id'),
+        Index('ix_udemy_student_progress_delivery_match_progress', 'subject_delivery_id', 'match_status', 'progress_percent'),
+        Index('ix_udemy_student_progress_delivery_imported', 'subject_delivery_id', 'last_imported_at'),
+    )
+
+
+class UdemyProgressUnmatchedRow(Base):
+    """Row-level diagnostics retained for failed, unmatched, or ambiguous imports."""
+
+    __tablename__ = 'udemy_progress_unmatched_rows'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    batch_id: Mapped[str] = mapped_column(String, ForeignKey('udemy_progress_import_batches.id', ondelete='CASCADE'), index=True)
+    subject_delivery_id: Mapped[str] = mapped_column(String, ForeignKey('academic_subject_deliveries.id'), index=True)
+    row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    raw_progress: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    normalized_progress: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason_code: Mapped[str] = mapped_column(String(80), index=True)
+    reason_message: Mapped[str] = mapped_column(Text)
+    raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index('ix_udemy_progress_unmatched_batch_reason', 'batch_id', 'reason_code'),
+        Index('ix_udemy_progress_unmatched_delivery_email', 'subject_delivery_id', 'email'),
     )
 
 

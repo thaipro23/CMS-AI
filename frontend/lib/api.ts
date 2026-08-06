@@ -83,6 +83,20 @@ import {
   AcademicTerm,
   AcademicBlock,
   AcademicSubject,
+  AcademicLearningPlatform,
+  AcademicSubjectDeliveryListResponse,
+  AcademicSubjectCatalogRefreshResult,
+  AcademicSubjectPlatformMutationResult,
+  UdemyPlanDetail,
+  UdemyPlanImportPreview,
+  UdemyPlanMutationResult,
+  UdemyPlanMilestone,
+  UdemySubjectPlan,
+  UdemyProgressImportBatch,
+  UdemyProgressImportJobResult,
+  UdemyProgressSummary,
+  UdemyProgressDashboard,
+  UdemyProgressStudentList,
   AcademicSubjectManagementListResponse,
   AcademicSubjectCourseAutoMapResult,
   AcademicSubjectAutoMapAllSyncResult,
@@ -3260,6 +3274,258 @@ export async function getAcademicBlocks(
     ),
   );
 }
+
+export async function getAcademicSubjectDeliveries(
+  headers: HeadersInit,
+  filters: {
+    termId?: string
+    blockId?: string
+    branch?: string
+    platform?: AcademicLearningPlatform | 'all'
+    search?: string
+    page?: number
+    pageSize?: number
+  } = {},
+): Promise<AcademicSubjectDeliveryListResponse> {
+  const params = new URLSearchParams()
+  if (filters.termId) params.set('term_id', filters.termId)
+  if (filters.blockId) params.set('block_id', filters.blockId)
+  if (filters.branch) params.set('branch', filters.branch)
+  if (filters.platform && filters.platform !== 'all') params.set('platform', filters.platform)
+  if (filters.platform === null) params.set('platform', 'unassigned')
+  if (filters.search?.trim()) params.set('search', filters.search.trim())
+  params.set('page', String(Math.max(1, filters.page || 1)))
+  params.set('page_size', String(Math.max(1, Math.min(200, filters.pageSize || 50))))
+  return parseResponse(
+    await apiFetch(`${API}/academic/subject-deliveries?${params.toString()}`, {
+      credentials: 'include',
+      headers,
+    }),
+  )
+}
+
+export async function createAcademicSubjectCatalogRefreshJob(
+  headers: HeadersInit,
+  payload: { termId: string; blockId?: string | null; branch: string },
+): Promise<AcademicSubjectCatalogRefreshResult> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/subject-deliveries/catalog-refresh/jobs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ term_id: payload.termId, block_id: payload.blockId || null, branch: payload.branch }),
+    }),
+  )
+}
+
+export async function updateAcademicSubjectDeliveryPlatform(
+  headers: HeadersInit,
+  deliveryId: string,
+  learningPlatform: AcademicLearningPlatform,
+): Promise<AcademicSubjectPlatformMutationResult> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/platform`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ learning_platform: learningPlatform }),
+    }),
+  )
+}
+
+export async function bulkUpdateAcademicSubjectDeliveryPlatform(
+  headers: HeadersInit,
+  deliveryIds: string[],
+  learningPlatform: AcademicLearningPlatform,
+): Promise<AcademicSubjectPlatformMutationResult> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/subject-deliveries/platform/bulk`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ delivery_ids: deliveryIds, learning_platform: learningPlatform }),
+    }),
+  )
+}
+
+export async function downloadUdemyPlanImportTemplate(headers: HeadersInit): Promise<Blob> {
+  const response = await apiFetch(`${API}/academic/udemy/plans/import-template.xlsx`, { credentials: 'include', headers })
+  if (!response.ok) throw new Error((await response.text()) || response.statusText)
+  return response.blob()
+}
+
+export async function previewUdemyPlanImport(headers: HeadersInit, file: File, branch: string): Promise<UdemyPlanImportPreview> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('branch', branch)
+  return parseResponse(
+    await apiFetch(`${API}/academic/udemy/plans/import/preview`, {
+      method: 'POST',
+      headers: withoutContentType(headers),
+      body: form,
+    }),
+  )
+}
+
+export async function downloadUdemyPlanImportErrors(headers: HeadersInit, previewToken: string): Promise<Blob> {
+  const response = await apiFetch(`${API}/academic/udemy/plans/import/errors/${encodeURIComponent(previewToken)}.xlsx`, { credentials: 'include', headers })
+  if (!response.ok) throw new Error((await response.text()) || response.statusText)
+  return response.blob()
+}
+
+export async function commitUdemyPlanImport(headers: HeadersInit, previewToken: string): Promise<UdemyPlanMutationResult> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/udemy/plans/import/commit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ preview_token: previewToken }),
+    }),
+  )
+}
+
+export async function getUdemyPlanDetail(headers: HeadersInit, deliveryId: string): Promise<UdemyPlanDetail> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-plan`, { credentials: 'include', headers }),
+  )
+}
+
+export async function getUdemyPlanHistory(headers: HeadersInit, deliveryId: string): Promise<UdemySubjectPlan[]> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-plan/history`, { credentials: 'include', headers }),
+  )
+}
+
+export async function createUdemyPlanVersion(
+  headers: HeadersInit,
+  deliveryId: string,
+  payload: { item_count: number; milestones: UdemyPlanMilestone[]; note?: string | null },
+): Promise<UdemyPlanMutationResult> {
+  return parseResponse(
+    await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-plan`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    }),
+  )
+}
+
+export async function createUdemyProgressImportJob(
+  headers: HeadersInit,
+  payload: {
+    files: File[]
+    termId: string
+    blockId: string
+    branch: string
+    deliveryId?: string | null
+    forceReimport?: boolean
+  },
+): Promise<UdemyProgressImportJobResult> {
+  const form = new FormData()
+  payload.files.forEach((file) => form.append('files', file))
+  form.append('term_id', payload.termId)
+  form.append('block_id', payload.blockId)
+  form.append('branch', payload.branch)
+  if (payload.deliveryId) form.append('delivery_id', payload.deliveryId)
+  form.append('force_reimport', String(Boolean(payload.forceReimport)))
+  return parseResponse(
+    await apiFetch(`${API}/academic/udemy/progress/import/jobs`, {
+      method: 'POST',
+      headers: withoutContentType(headers),
+      body: form,
+    }),
+  )
+}
+
+export async function retryUdemyProgressImportBatch(
+  headers: HeadersInit,
+  batchId: string,
+): Promise<UdemyProgressImportJobResult> {
+  return parseResponse(await apiFetch(`${API}/academic/udemy/progress/import-batches/${encodeURIComponent(batchId)}/retry`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+  }))
+}
+
+export async function getUdemyProgressImportBatches(
+  headers: HeadersInit,
+  filters: { deliveryId?: string; parentJobId?: string; status?: string; limit?: number } = {},
+): Promise<UdemyProgressImportBatch[]> {
+  const params = new URLSearchParams()
+  if (filters.deliveryId) params.set('delivery_id', filters.deliveryId)
+  if (filters.parentJobId) params.set('parent_job_id', filters.parentJobId)
+  if (filters.status) params.set('status', filters.status)
+  params.set('limit', String(Math.max(1, Math.min(200, filters.limit || 50))))
+  return parseResponse(await apiFetch(`${API}/academic/udemy/progress/import-batches?${params.toString()}`, { credentials: 'include', headers }))
+}
+
+export async function downloadUdemyProgressImportErrors(headers: HeadersInit, batchId: string): Promise<Blob> {
+  const response = await apiFetch(`${API}/academic/udemy/progress/import-batches/${encodeURIComponent(batchId)}/errors.xlsx`, { credentials: 'include', headers })
+  if (!response.ok) throw new Error((await response.text()) || response.statusText)
+  return response.blob()
+}
+
+export async function getUdemyProgressSummary(headers: HeadersInit, deliveryId: string): Promise<UdemyProgressSummary> {
+  return parseResponse(await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-progress/summary`, { credentials: 'include', headers }))
+}
+
+export async function getUdemyProgressDashboard(headers: HeadersInit, deliveryId: string): Promise<UdemyProgressDashboard> {
+  return parseResponse(await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-progress/dashboard`, { credentials: 'include', headers, cache: 'no-store' }))
+}
+
+export async function getUdemyProgressStudents(
+  headers: HeadersInit,
+  deliveryId: string,
+  filters: { q?: string; classId?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: 'asc' | 'desc' } = {},
+): Promise<UdemyProgressStudentList> {
+  const params = new URLSearchParams()
+  if (filters.q?.trim()) params.set('q', filters.q.trim())
+  if (filters.classId) params.set('class_id', filters.classId)
+  if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+  params.set('page', String(filters.page || 1))
+  params.set('page_size', String(filters.pageSize || 50))
+  params.set('sort_by', filters.sortBy || 'student')
+  params.set('sort_dir', filters.sortDir || 'asc')
+  return parseResponse(await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-progress/students?${params.toString()}`, { credentials: 'include', headers, cache: 'no-store' }))
+}
+
+export async function createUdemyProgressExportJob(
+  headers: HeadersInit,
+  deliveryId: string,
+  filters: { q?: string; classId?: string; status?: string } = {},
+): Promise<AcademicBulkOperationJob> {
+  const params = new URLSearchParams()
+  if (filters.q?.trim()) params.set('q', filters.q.trim())
+  if (filters.classId) params.set('class_id', filters.classId)
+  if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return parseResponse(await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-progress/export-jobs${suffix}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+  }))
+}
+
+export async function downloadUdemyProgressExportJob(
+  headers: HeadersInit,
+  jobId: string,
+): Promise<Blob> {
+  const response = await apiFetch(`${API}/academic/udemy/progress/export-jobs/${encodeURIComponent(jobId)}/download`, { credentials: 'include', headers })
+  if (!response.ok) return parseResponse(response)
+  return response.blob()
+}
+
+export async function downloadUdemyProgressExport(
+  headers: HeadersInit,
+  deliveryId: string,
+  filters: { q?: string; classId?: string; status?: string } = {},
+): Promise<Blob> {
+  const params = new URLSearchParams()
+  if (filters.q?.trim()) params.set('q', filters.q.trim())
+  if (filters.classId) params.set('class_id', filters.classId)
+  if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+  const response = await apiFetch(`${API}/academic/subject-deliveries/${encodeURIComponent(deliveryId)}/udemy-progress/export.xlsx?${params.toString()}`, { credentials: 'include', headers })
+  if (!response.ok) throw new Error((await response.text()) || response.statusText)
+  return response.blob()
+}
+
 
 export async function getAcademicSubjects(
   headers: HeadersInit,

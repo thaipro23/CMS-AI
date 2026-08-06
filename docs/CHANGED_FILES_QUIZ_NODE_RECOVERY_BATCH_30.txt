@@ -1,0 +1,6 @@
+backend/app/services/question_bank/quiz_creation.py
+backend/app/tests/test_v25_9_16_7_2_64_30_quiz_node_orphan_recovery.py
+openedx-connector-plugin/openedx_ai_connector/studio.py
+openedx-connector-plugin/setup.py
+docs/QUIZ_NODE_ORPHAN_RECOVERY_DIAGNOSTICS_BATCH_30.md
+docs/CHANGED_FILES_QUIZ_NODE_RECOVERY_BATCH_30.txt

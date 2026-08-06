@@ -1860,6 +1860,282 @@ export type AcademicSubject = {
   active: boolean
 }
 
+export type AcademicLearningPlatform = 'cms' | 'udemy' | null
+
+export type AcademicSubjectDelivery = {
+  id: string
+  subject_id: string
+  ap_subject_id?: string | null
+  subject_code: string
+  subject_name: string
+  subject_name_en?: string | null
+  skill_code?: string | null
+  term_id: string
+  term_name: string
+  block_id: string
+  block_name: string
+  branch: string
+  learning_platform: AcademicLearningPlatform
+  active: boolean
+  configuration_source: string
+  configured_by?: string | null
+  configured_at?: string | null
+  catalog_refreshed_at?: string | null
+  class_count: number
+  campus_count: number
+  has_udemy_plan: boolean
+  udemy_plan_id?: string | null
+  udemy_plan_version?: number | null
+  udemy_item_count?: number | null
+  udemy_milestone_count?: number
+  udemy_plan_updated_at?: string | null
+  last_udemy_import_at?: string | null
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  metadata_json?: Record<string, any> | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicSubjectDeliveryListResponse = {
+  items: AcademicSubjectDelivery[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  has_next: boolean
+  summary: {
+    total: number
+    cms_count: number
+    udemy_count: number
+    unassigned_count: number
+    class_count: number
+    scope_label: string
+  }
+}
+
+export type AcademicSubjectCatalogRefreshResult = {
+  ok: boolean
+  message: string
+  job_id: string
+  status: string
+  term_id: string
+  block_id?: string | null
+  branch: string
+}
+
+export type AcademicSubjectPlatformMutationResult = {
+  ok: boolean
+  message: string
+  updated: number
+  items: AcademicSubjectDelivery[]
+}
+
+export type UdemyPlanMilestone = {
+  id?: string | null
+  week_number: number
+  deadline_date: string
+  required_progress_percent: number
+  metadata_json?: Record<string, any> | null
+}
+
+export type UdemySubjectPlan = {
+  id: string
+  subject_delivery_id: string
+  version: number
+  item_count: number
+  active: boolean
+  source: string
+  source_file_name?: string | null
+  source_file_hash?: string | null
+  imported_by?: string | null
+  imported_at?: string | null
+  note?: string | null
+  metadata_json?: Record<string, any> | null
+  created_at?: string | null
+  updated_at?: string | null
+  milestones: UdemyPlanMilestone[]
+}
+
+export type UdemyPlanDelivery = {
+  id: string
+  subject_id: string
+  subject_code: string
+  subject_name: string
+  term_id: string
+  term_name: string
+  block_id: string
+  block_name: string
+  branch: string
+  learning_platform: AcademicLearningPlatform
+}
+
+export type UdemyPlanDetail = {
+  delivery: UdemyPlanDelivery
+  active_plan?: UdemySubjectPlan | null
+}
+
+export type UdemyPlanImportIssue = {
+  row?: number | null
+  subject_code?: string | null
+  code: string
+  message: string
+}
+
+export type UdemyPlanImportPreviewRow = {
+  row_no: number
+  delivery_id?: string | null
+  term_name: string
+  block_name: string
+  branch: string
+  subject_code: string
+  subject_name?: string | null
+  item_count: number
+  current_version?: number | null
+  next_version: number
+  action: string
+  milestones: UdemyPlanMilestone[]
+  errors: string[]
+  warnings: string[]
+}
+
+export type UdemyPlanImportPreview = {
+  ok: boolean
+  preview_token: string
+  filename: string
+  file_sha256: string
+  branch: string
+  total_rows: number
+  valid_count: number
+  error_count: number
+  warning_count: number
+  can_commit: boolean
+  rows: UdemyPlanImportPreviewRow[]
+  errors: UdemyPlanImportIssue[]
+  warnings: UdemyPlanImportIssue[]
+  message: string
+}
+
+export type UdemyPlanMutationResult = {
+  ok: boolean
+  message: string
+  created_count: number
+  plans: UdemySubjectPlan[]
+}
+
+
+export type UdemyProgressImportBatch = {
+  id: string
+  parent_job_id?: string | null
+  subject_delivery_id: string
+  subject_code?: string | null
+  subject_name?: string | null
+  duplicate_of_batch_id?: string | null
+  file_name: string
+  file_hash: string
+  file_size_bytes: number
+  parser_format?: string | null
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | string
+  force_reimport: boolean
+  total_rows: number
+  processed_rows: number
+  matched_rows: number
+  outside_roster_rows: number
+  unmatched_rows: number
+  ambiguous_rows: number
+  failed_rows: number
+  requested_by?: string | null
+  result_json?: Record<string, any> | null
+  error_message?: string | null
+  error_report_available: boolean
+  started_at?: string | null
+  finished_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type UdemyProgressImportJobResult = {
+  ok: boolean
+  message: string
+  job_id: string
+  status: string
+  queued_count: number
+  duplicate_count: number
+  batches: UdemyProgressImportBatch[]
+}
+
+export type UdemyProgressSummary = {
+  subject_delivery_id: string
+  total_students: number
+  matched_students: number
+  outside_roster_students: number
+  ambiguous_students: number
+  unmatched_students: number
+  late_students: number
+  on_track_students: number
+  no_plan_students: number
+  average_progress_percent?: number | null
+  required_progress_percent?: number | null
+  current_plan_week?: number | null
+  current_deadline_date?: string | null
+  last_imported_at?: string | null
+  class_count: number
+  scope_label: string
+}
+
+export type UdemyProgressClassOption = {
+  id: string
+  class_code: string
+  class_name?: string | null
+  campus?: string | null
+}
+
+export type UdemyProgressStudent = {
+  id: string
+  student_id?: string | null
+  student_code?: string | null
+  student_username?: string | null
+  display_name: string
+  email: string
+  class_id?: string | null
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  teacher_names: string[]
+  progress_percent: number
+  required_progress_percent?: number | null
+  variance_percent?: number | null
+  is_late?: boolean | null
+  status: 'on_track' | 'late' | 'no_plan' | 'unmatched' | 'ambiguous' | 'outside_roster' | string
+  status_label: string
+  match_status: string
+  current_plan_week?: number | null
+  current_deadline_date?: string | null
+  last_import_batch_id: string
+  source_format: string
+  last_imported_at: string
+  diagnostic?: string | null
+}
+
+export type UdemyProgressStudentList = {
+  items: UdemyProgressStudent[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  has_next: boolean
+}
+
+export type UdemyProgressDashboard = {
+  delivery: UdemyPlanDelivery
+  summary: UdemyProgressSummary
+  active_plan?: { id: string; version: number; item_count: number; source: string; imported_at?: string | null } | null
+  classes: UdemyProgressClassOption[]
+  recent_imports: UdemyProgressImportBatch[]
+}
+
+
 export type AcademicLearningComponentScore = {
   key?: string | null
   name: string
@@ -1944,7 +2220,11 @@ export type AcademicSubjectManagement = AcademicSubject & {
 export type AcademicSubjectManagementSummary = {
   subject_count: number
   class_count: number
+  cms_class_count?: number
+  udemy_class_count?: number
   student_count: number
+  cms_student_count?: number
+  udemy_student_count?: number
   teacher_count: number
   cms_synced_count: number
   cms_unsynced_count: number
@@ -1993,6 +2273,12 @@ export type AcademicClass = {
   learning_last_synced_at?: string | null
   learning_component_summaries?: AcademicLearningComponentScore[]
   learning_alerts?: string[]
+  learning_platform?: AcademicLearningPlatform
+  subject_delivery_id?: string | null
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
 }
 
 
@@ -2226,6 +2512,8 @@ export type AcademicTrainingClassReport = {
   subject_name?: string | null
   campus?: string | null
   branch?: string | null
+  learning_platform?: 'cms' | 'udemy' | string | null
+  subject_delivery_id?: string | null
   student_count: number
   relearn_student_count?: number
   total_relearn_count?: number
@@ -2261,6 +2549,13 @@ export type AcademicTrainingClassReport = {
   quiz_not_attempted_count?: number | null
   quiz_missing_deadline_count?: number | null
   assignment_not_graded_count?: number | null
+  udemy_progress_student_count?: number | null
+  udemy_progress_late_count?: number | null
+  udemy_progress_average_percent?: number | null
+  udemy_progress_required_percent?: number | null
+  udemy_progress_current_week?: number | null
+  udemy_progress_deadline_date?: string | null
+  udemy_progress_last_imported_at?: string | null
 }
 
 export type AcademicTrainingTeacherReport = {
@@ -2274,7 +2569,11 @@ export type AcademicTrainingTeacherReport = {
   subject_count: number
   subject_codes: string[]
   class_count: number
+  cms_class_count?: number
+  udemy_class_count?: number
   student_count: number
+  cms_student_count?: number
+  udemy_student_count?: number
   unique_student_count: number
   relearn_student_count?: number
   total_relearn_count?: number
@@ -2292,6 +2591,10 @@ export type AcademicTrainingTeacherReport = {
   exam_insufficient_data_student_count?: number | null
   quiz_failed_count?: number | null
   assignment_not_graded_count?: number | null
+  udemy_progress_student_count?: number | null
+  udemy_progress_late_count?: number | null
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
   learning_avg_progress_percent?: number | null
   learning_avg_grade_percent?: number | null
   learning_avg_grade_10?: number | null
@@ -2313,7 +2616,14 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
     unique_student_count: number
     relearn_student_count: number
     total_relearn_count: number
+    cms_class_count?: number
+    udemy_class_count?: number
+    cms_student_count?: number
+    udemy_student_count?: number
     cms_synced_count: number
+    udemy_progress_student_count?: number
+    udemy_progress_late_count?: number
+    udemy_progress_average_percent?: number | null
     learning_enrolled_count: number
     learning_active_count: number
     risk_student_count: number

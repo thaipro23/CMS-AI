@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from io import BytesIO
 from pathlib import Path
 import hashlib
@@ -19,6 +19,7 @@ from app.core.rbac import UserContext, get_user_context, require_permission
 from app.db.session import get_db
 from app.models.academic import (
     AcademicCampus,
+    AcademicBlock,
     AcademicClass,
     AcademicClassStudent,
     AcademicClassSyncJob,
@@ -31,6 +32,8 @@ from app.models.academic import (
     AcademicSyncRun,
     AcademicTeacherAssignment,
     AcademicTerm,
+    AcademicSubjectDelivery,
+    UdemyProgressImportBatch,
 )
 from app.models.rbac import UserRoleAssignment
 from app.schemas.academic import (
@@ -75,6 +78,23 @@ from app.schemas.academic import (
     AcademicResolveClassUsersIn,
     AcademicStudentListOut,
     AcademicSubjectOut,
+    AcademicSubjectDeliveryListOut,
+    AcademicSubjectCatalogRefreshIn,
+    AcademicSubjectCatalogRefreshOut,
+    AcademicSubjectPlatformUpdateIn,
+    AcademicSubjectPlatformBulkIn,
+    AcademicSubjectPlatformMutationOut,
+    UdemyPlanDetailOut,
+    UdemyPlanVersionCreateIn,
+    UdemyPlanImportPreviewOut,
+    UdemyPlanImportCommitIn,
+    UdemyPlanMutationOut,
+    UdemySubjectPlanOut,
+    UdemyProgressImportBatchOut,
+    UdemyProgressImportJobOut,
+    UdemyProgressSummaryOut,
+    UdemyProgressDashboardOut,
+    UdemyProgressStudentListOut,
     AcademicSubjectManagementListOut,
     AcademicSubjectAutoMapAllSyncIn,
     AcademicSubjectAutoMapAllSyncOut,
@@ -90,14 +110,19 @@ from app.schemas.academic import (
     AcademicAssignmentDefenseScoreOut,
 )
 from app.services.academic_service import AcademicService
+from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
+from app.services.academic.udemy_plan import UdemyPlanService
+from app.services.academic.udemy_progress import UdemyProgressService
 from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
 from app.services.academic.assignment_external import AcademicAssignmentExternalWorkflowService
 from app.services.ap_academic_sync import AcademicImportService
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
 from app.core.json_safe import json_safe_value
+from app.core.operation_rate_limit import enforce_operation_rate_limit
 from app.core.config import settings
 from app.core.errors import public_http_exception
+from app.services.question_bank.helpers import safe_upload_filename
 
 
 def _safe_error_message(message: str = 'academic_operation_failed') -> dict[str, str]:
@@ -192,51 +217,103 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
     ws = wb.active
     ws.title = 'TongQuanGV'
     overview_headers = [
-        'Hệ', 'Cơ sở', 'Giảng viên', 'Username', 'Email', 'Số môn', 'Môn', 'Số lớp',
-        'SV lượt lớp', 'SV riêng biệt', 'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động',
-        'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'Lớp chưa map Course',
-        'SV rủi ro', 'SV trễ deadline', 'Lượt quiz trễ', 'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm', 'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp',
-        'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
+        'Hệ', 'Cơ sở', 'Giảng viên', 'Username', 'Email', 'Số môn', 'Môn', 'Tổng lớp',
+        'Lớp CMS', 'Lớp Udemy', 'SV lượt lớp', 'SV CMS', 'SV Udemy', 'SV riêng biệt',
+        'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động CMS',
+        'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'SV Udemy đã import',
+        'Tiến độ Udemy TB (%)', 'SV Udemy chậm tiến độ', 'Lần import Udemy gần nhất',
+        'Lớp CMS chưa map Course', 'SV rủi ro', 'SV trễ deadline', 'Lượt quiz trễ',
+        'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm',
+        'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp',
+        'Lỗi đồng bộ', 'Cập nhật CMS gần nhất', 'Cảnh báo'
     ]
-    _setup_sheet(ws, overview_headers, [12, 12, 28, 24, 30, 10, 28, 10, 12, 14, 16, 12, 12, 20, 18, 18, 12, 16, 14, 18, 12, 12, 14, 12, 12, 22, 48])
+    overview_widths = [
+        12, 12, 28, 24, 30, 10, 28, 10, 10, 12, 12, 12, 12, 14, 16, 12,
+        16, 12, 16, 20, 18, 18, 20, 22, 22, 22, 14, 18, 12, 18, 20, 14, 20,
+        20, 14, 12, 14, 12, 14, 22, 52,
+    ]
+    _setup_sheet(ws, overview_headers, overview_widths)
     for item in report.get('items') or []:
         statuses = item.get('status_counts') or {}
         _append_row(ws, [
             item.get('branch'), item.get('campus'), item.get('teacher_name'), item.get('teacher_username'), item.get('teacher_email'),
-            item.get('subject_count'), item.get('subject_codes'), item.get('class_count'), item.get('student_count'), item.get('unique_student_count'),
+            item.get('subject_count'), item.get('subject_codes'), item.get('class_count'), item.get('cms_class_count'), item.get('udemy_class_count'),
+            item.get('student_count'), item.get('cms_student_count'), item.get('udemy_student_count'), item.get('unique_student_count'),
             item.get('relearn_student_count'), item.get('total_relearn_count'), item.get('cms_synced_count'), item.get('learning_enrolled_count'), item.get('learning_active_count'),
-            item.get('learning_avg_progress_percent'), item.get('learning_avg_grade_10'), item.get('classes_without_course_count'),
-            item.get('risk_student_count'), item.get('deadline_late_student_count'), item.get('deadline_late_quiz_count'), item.get('exam_not_eligible_student_count'), item.get('exam_insufficient_data_student_count'), item.get('quiz_failed_count'), item.get('assignment_not_graded_count'), statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'),
-            statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), item.get('last_synced_at'), item.get('learning_alerts'),
+            item.get('learning_avg_progress_percent'), item.get('learning_avg_grade_10'), item.get('udemy_progress_student_count'),
+            item.get('udemy_progress_average_percent'), item.get('udemy_progress_late_count'), item.get('udemy_progress_last_imported_at'),
+            item.get('classes_without_course_count'), item.get('risk_student_count'), item.get('deadline_late_student_count'), item.get('deadline_late_quiz_count'),
+            item.get('exam_not_eligible_student_count'), item.get('exam_insufficient_data_student_count'), item.get('quiz_failed_count'), item.get('assignment_not_graded_count'),
+            statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'),
+            item.get('last_synced_at'), item.get('learning_alerts'),
         ])
 
     class_ws = wb.create_sheet('ChiTietLop')
     component_columns = _training_component_columns(report)
     class_headers = [
         'Giảng viên', 'Username GV', 'Hệ', 'Cơ sở', 'Học kỳ', 'Block', 'Môn', 'Tên môn',
-        'Lớp', 'Tên lớp', 'Course CMS', 'Nguồn mapping', 'SV', 'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll',
-        'Có hoạt động', 'Course completion TB (%)', 'Điểm tổng TB (hệ 10)',
+        'Lớp', 'Tên lớp', 'Nền tảng', 'Subject delivery ID', 'Course CMS', 'Nguồn mapping',
+        'SV', 'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động CMS',
+        'Course completion TB (%)', 'Điểm tổng TB (hệ 10)',
+        'SV Udemy đã import', 'Tiến độ Udemy TB (%)', 'SV Udemy chậm', 'Mốc Udemy hiện tại',
+        'Tuần Udemy hiện tại', 'Deadline Udemy hiện tại', 'Lần import Udemy gần nhất',
         *[column['name'] for column in component_columns],
-        'Số Quiz', 'Quiz đã đến hạn',
-        'SV trễ deadline', 'Lượt quiz trễ', 'SV được thi', 'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm', 'Đợt quiz kế tiếp', 'Ngày làm quiz kế tiếp', 'Deadline kế tiếp',
-        'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp', 'Lỗi đồng bộ', 'Cập nhật gần nhất', 'Cảnh báo'
+        'Số Quiz', 'Quiz đã đến hạn', 'SV trễ deadline', 'Lượt quiz trễ', 'SV được thi',
+        'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm',
+        'Đợt quiz kế tiếp', 'Ngày làm quiz kế tiếp', 'Deadline kế tiếp', 'Chưa đồng bộ CMS',
+        'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp', 'Lỗi đồng bộ',
+        'Cập nhật CMS gần nhất', 'Cảnh báo'
     ]
-    _setup_sheet(class_ws, class_headers, [28, 22, 10, 12, 18, 16, 12, 30, 16, 26, 38, 20, 8, 16, 12, 12, 20, 18, *([12] * len(component_columns)), 10, 14, 16, 14, 18, 18, 18, 18, 12, 12, 14, 12, 12, 22, 48])
+    class_widths = [
+        28, 22, 10, 12, 18, 16, 12, 30, 16, 26, 12, 38, 38, 20, 8, 16, 12,
+        16, 12, 18, 20, 18, 18, 20, 16, 18, 16, 22, 22,
+        *([12] * len(component_columns)),
+        10, 14, 16, 14, 18, 18, 20, 16, 20, 18, 22, 22, 20, 14, 12, 14, 12,
+        14, 22, 52,
+    ]
+    _setup_sheet(class_ws, class_headers, class_widths)
     for item in report.get('items') or []:
         for cls in item.get('classes') or []:
             statuses = cls.get('status_counts') or {}
+            platform = str(cls.get('learning_platform') or 'cms').strip().lower()
             _append_row(class_ws, [
                 item.get('teacher_name'), item.get('teacher_username'), cls.get('branch'), cls.get('campus'), cls.get('term_name'), cls.get('block_name'),
-                cls.get('subject_code'), cls.get('subject_name'), cls.get('class_code'), cls.get('class_name'), cls.get('openedx_course_id'), cls.get('openedx_mapping_source'),
+                cls.get('subject_code'), cls.get('subject_name'), cls.get('class_code'), cls.get('class_name'), platform.upper(), cls.get('subject_delivery_id'),
+                cls.get('openedx_course_id') if platform != 'udemy' else None, cls.get('openedx_mapping_source') if platform != 'udemy' else None,
                 cls.get('student_count'), cls.get('relearn_student_count'), cls.get('total_relearn_count'), cls.get('cms_synced_count'), cls.get('learning_enrolled_count'), cls.get('learning_active_count'),
-                cls.get('learning_avg_progress_percent'), cls.get('learning_avg_grade_10'),
+                cls.get('learning_avg_progress_percent'), cls.get('learning_avg_grade_10'), cls.get('udemy_progress_student_count'), cls.get('udemy_progress_average_percent'),
+                cls.get('udemy_progress_late_count'), cls.get('udemy_progress_required_percent'), cls.get('udemy_progress_current_week'), cls.get('udemy_progress_deadline_date'), cls.get('udemy_progress_last_imported_at'),
                 *[
                     _component_score_text(next((score for score in (cls.get('learning_component_summaries') or []) if isinstance(score, dict) and (_component_key(score) == column['key'] or _component_name(score) == column['name'])), None))
                     for column in component_columns
                 ],
-                cls.get('deadline_quiz_count'), cls.get('deadline_due_quiz_count'),
-                cls.get('deadline_late_student_count'), cls.get('deadline_late_quiz_count'), cls.get('exam_eligible_student_count'), cls.get('exam_not_eligible_student_count'), cls.get('exam_insufficient_data_student_count'), cls.get('quiz_failed_count'), cls.get('assignment_not_graded_count'), cls.get('deadline_next_quiz_label'), cls.get('deadline_next_quiz_from_date'), cls.get('deadline_next_quiz_due_date'),
-                statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'), cls.get('learning_last_synced_at'), cls.get('learning_alerts'),
+                cls.get('deadline_quiz_count'), cls.get('deadline_due_quiz_count'), cls.get('deadline_late_student_count'), cls.get('deadline_late_quiz_count'),
+                cls.get('exam_eligible_student_count'), cls.get('exam_not_eligible_student_count'), cls.get('exam_insufficient_data_student_count'), cls.get('quiz_failed_count'), cls.get('assignment_not_graded_count'),
+                cls.get('deadline_next_quiz_label'), cls.get('deadline_next_quiz_from_date'), cls.get('deadline_next_quiz_due_date'),
+                statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'),
+                cls.get('learning_last_synced_at'), cls.get('learning_alerts'),
+            ])
+
+    udemy_alert_ws = wb.create_sheet('UdemyChamTienDo')
+    udemy_alert_headers = [
+        'Giảng viên', 'Username GV', 'Hệ', 'Cơ sở', 'Học kỳ', 'Block', 'Môn', 'Tên môn',
+        'Lớp', 'SV lớp', 'SV đã import', 'Tiến độ TB (%)', 'SV chậm tiến độ',
+        'Mốc yêu cầu (%)', 'Tuần kế hoạch', 'Deadline', 'Lần import gần nhất', 'Mở dashboard'
+    ]
+    _setup_sheet(udemy_alert_ws, udemy_alert_headers, [28, 22, 10, 12, 18, 16, 12, 30, 16, 10, 14, 18, 18, 18, 16, 18, 22, 58])
+    for item in report.get('items') or []:
+        for cls in item.get('classes') or []:
+            if str(cls.get('learning_platform') or '').strip().lower() != 'udemy':
+                continue
+            if int(cls.get('udemy_progress_late_count') or 0) <= 0:
+                continue
+            delivery_id = cls.get('subject_delivery_id')
+            _append_row(udemy_alert_ws, [
+                item.get('teacher_name'), item.get('teacher_username'), cls.get('branch'), cls.get('campus'), cls.get('term_name'), cls.get('block_name'),
+                cls.get('subject_code'), cls.get('subject_name'), cls.get('class_code'), cls.get('student_count'), cls.get('udemy_progress_student_count'),
+                cls.get('udemy_progress_average_percent'), cls.get('udemy_progress_late_count'), cls.get('udemy_progress_required_percent'), cls.get('udemy_progress_current_week'),
+                cls.get('udemy_progress_deadline_date'), cls.get('udemy_progress_last_imported_at'),
+                f'/subject-management/{delivery_id}/udemy' if delivery_id else None,
             ])
 
     watch_ws = wb.create_sheet('SinhVienCanTheoDoi')
@@ -315,6 +392,9 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
         'Deadline quiz được tính theo quy tắc: mỗi block 7 tuần, 6 tuần đầu dành deadline quiz từ Thứ 2 đến Thứ 7, tuần 7 Ôn+Thi; số quiz được chia đều vào 6 tuần và phần dư dồn vào các tuần đầu.',
         'Rule mới: tất cả Quiz phải đạt 100% và hoàn thành trước hoặc đúng deadline. Quiz chưa làm, dưới 100%, làm sau deadline hoặc làm trước thời gian học đều không đạt điều kiện.',
         'Assignment là điểm bảo vệ do giáo viên nhập thủ công; điểm Assignment từ CMS nếu có chỉ là tham khảo.',
+        'Lớp Udemy không bị tính là thiếu Course CMS, chưa enroll hoặc chưa đồng bộ CMS.',
+        'Tiến độ Udemy được tính từ snapshot import mới nhất và đối chiếu lại với mốc kế hoạch đã đến hạn tại thời điểm mở báo cáo.',
+        'Sheet UdemyChamTienDo chỉ liệt kê lớp Udemy còn sinh viên chậm theo mốc hiện hành; xem dashboard môn để tải danh sách sinh viên chi tiết.',
         'Final test chưa áp dụng rule chính thức trong bản này.',
     ]
     for idx, note in enumerate(notes, 3):
@@ -386,6 +466,7 @@ def _enqueue_class_sync_job(
     class_row = db.get(AcademicClass, class_id)
     if not class_row:
         raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
+    AcademicSubjectDeliveryService(db).assert_cms_workflow_allowed_for_class(class_id, job_type=job_type)
     clean_limit = max(1, min(500, int(limit or 500)))
     request_key_payload = {
         'class_id': class_id,
@@ -919,6 +1000,965 @@ def list_blocks(
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_blocks(term_id=term_id, active=active)
+
+
+@router.get('/subject-deliveries', response_model=AcademicSubjectDeliveryListOut)
+def list_academic_subject_deliveries(
+    term_id: str | None = None,
+    block_id: str | None = None,
+    branch: str | None = None,
+    learning_platform: str | None = Query(None, alias='platform'),
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    del user
+    return AcademicSubjectDeliveryService(db).list_deliveries(
+        term_id=term_id,
+        block_id=block_id,
+        branch=branch,
+        learning_platform=learning_platform,
+        search=search,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.post('/subject-deliveries/catalog-refresh/jobs', response_model=AcademicSubjectCatalogRefreshOut)
+def enqueue_academic_subject_catalog_refresh(
+    payload: AcademicSubjectCatalogRefreshIn,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    term = db.get(AcademicTerm, payload.term_id)
+    if not term:
+        raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ.')
+    if payload.block_id:
+        block = db.get(AcademicBlock, payload.block_id)
+        if not block or block.term_id != term.id:
+            raise HTTPException(status_code=422, detail='Block không thuộc học kỳ đã chọn.')
+
+    branch_value = AcademicSubjectDeliveryService.normalize_branch(payload.branch or term.branch)
+    active_candidates = (
+        db.query(AcademicBulkOperationJob)
+        .filter(
+            AcademicBulkOperationJob.job_type == 'subject_catalog_refresh',
+            AcademicBulkOperationJob.term_id == payload.term_id,
+            AcademicBulkOperationJob.branch == branch_value,
+            AcademicBulkOperationJob.status.in_(['queued', 'running']),
+        )
+        .order_by(AcademicBulkOperationJob.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    for active in active_candidates:
+        request_json = active.request_json if isinstance(active.request_json, dict) else {}
+        if (request_json.get('block_id') or None) == (payload.block_id or None):
+            return {
+                'ok': True,
+                'message': 'Đang có tác vụ lấy danh sách môn cho phạm vi này. Hệ thống dùng lại tác vụ hiện có; F5 không làm mất tiến trình.',
+                'job_id': active.id,
+                'status': active.status,
+                'term_id': payload.term_id,
+                'block_id': payload.block_id,
+                'branch': branch_value,
+            }
+
+    request_json = {
+        'term_id': payload.term_id,
+        'block_id': payload.block_id,
+        'branch': branch_value,
+        'requester_context': _requester_context_json(user),
+        'policy_version': 'udemy-subject-management/batch31',
+    }
+    job = AcademicBulkOperationJob(
+        job_type='subject_catalog_refresh',
+        status='queued',
+        term_id=payload.term_id,
+        branch=branch_value,
+        campus=None,
+        requested_by=user.user_id,
+        progress_current=0,
+        progress_total=100,
+        progress_label='Đã đưa yêu cầu lấy danh sách môn từ AP vào hàng đợi',
+        request_json=json_safe_value(request_json),
+        result_json={},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    from app.worker import academic_subject_catalog_refresh_task
+    academic_subject_catalog_refresh_task.delay(job.id)
+    message = 'Đã tạo tác vụ lấy danh sách môn từ AP. Bạn có thể F5 hoặc chuyển màn hình; tác vụ vẫn tiếp tục chạy.'
+    log_audit(
+        db,
+        action='academic.subject_delivery.catalog_refresh.enqueue',
+        status='queued',
+        message=message,
+        user=user,
+        target_type='academic_bulk_operation_job',
+        target_id=job.id,
+        metadata=json_safe_value(request_json),
+    )
+    return {
+        'ok': True,
+        'message': message,
+        'job_id': job.id,
+        'status': job.status,
+        'term_id': payload.term_id,
+        'block_id': payload.block_id,
+        'branch': branch_value,
+    }
+
+
+@router.patch('/subject-deliveries/{delivery_id}/platform', response_model=AcademicSubjectPlatformMutationOut)
+def update_academic_subject_delivery_platform(
+    delivery_id: str,
+    payload: AcademicSubjectPlatformUpdateIn,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    service = AcademicSubjectDeliveryService(db)
+    delivery = service.set_platform(delivery_id, payload.learning_platform, actor=user.user_id or user.username)
+    platform_label = {'cms': 'CMS', 'udemy': 'Udemy'}.get(delivery.learning_platform, 'Chưa chọn')
+    message = f'Đã đặt nền tảng môn thành {platform_label}. Dữ liệu lịch sử không bị xóa.'
+    log_audit(
+        db,
+        action='academic.subject_delivery.platform.update',
+        status='success',
+        message=message,
+        user=user,
+        target_type='academic_subject_delivery',
+        target_id=delivery.id,
+        metadata={'learning_platform': delivery.learning_platform, 'term_id': delivery.term_id, 'block_id': delivery.block_id, 'subject_id': delivery.subject_id, 'branch': delivery.branch},
+    )
+    return {'ok': True, 'message': message, 'updated': 1, 'items': []}
+
+
+@router.post('/subject-deliveries/platform/bulk', response_model=AcademicSubjectPlatformMutationOut)
+def bulk_update_academic_subject_delivery_platform(
+    payload: AcademicSubjectPlatformBulkIn,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    service = AcademicSubjectDeliveryService(db)
+    rows = service.bulk_set_platform(payload.delivery_ids, payload.learning_platform, actor=user.user_id or user.username)
+    platform_label = {'cms': 'CMS', 'udemy': 'Udemy'}.get(payload.learning_platform, 'Chưa chọn')
+    message = f'Đã cập nhật {len(rows)} môn sang {platform_label}. Dữ liệu lịch sử không bị xóa.'
+    log_audit(
+        db,
+        action='academic.subject_delivery.platform.bulk_update',
+        status='success',
+        message=message,
+        user=user,
+        target_type='academic_subject_delivery',
+        target_id=rows[0].id if rows else None,
+        metadata={'learning_platform': payload.learning_platform, 'delivery_ids': [row.id for row in rows], 'updated': len(rows)},
+    )
+    return {'ok': True, 'message': message, 'updated': len(rows), 'items': []}
+
+
+@router.get('/udemy/plans/import-template.xlsx')
+def download_udemy_plan_import_template(
+    user: UserContext = Depends(_require_academic_catalog_admin),
+):
+    del user
+    return Response(
+        content=UdemyPlanService.build_template(),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="udemy-plan-import-template.xlsx"'},
+    )
+
+
+@router.post('/udemy/plans/import/preview', response_model=UdemyPlanImportPreviewOut)
+async def preview_udemy_plan_import(
+    file: UploadFile = File(...),
+    branch: str = Form('poly'),
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    filename = safe_upload_filename(file.filename or 'udemy-plan.xlsx')
+    if not filename.lower().endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail='Chỉ hỗ trợ file .xlsx cho kế hoạch Udemy.')
+    raw = await file.read()
+    service = UdemyPlanService(db)
+    try:
+        parsed = service.parse_workbook(raw, filename=filename, branch=branch, requested_by=user.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    token = service.persist_preview(parsed)
+    message = 'File hợp lệ, có thể xác nhận import.' if parsed['can_commit'] else 'File còn lỗi. Hãy sửa các dòng lỗi rồi upload lại.'
+    log_audit(
+        db,
+        action='academic.udemy_plan.import.preview',
+        status='success' if parsed['can_commit'] else 'warning',
+        message='Đã kiểm tra file kế hoạch Udemy',
+        user=user,
+        target_type='udemy_plan_import_preview',
+        target_id=token,
+        metadata={
+            'filename': filename,
+            'file_sha256': parsed['file_sha256'],
+            'branch': parsed['branch'],
+            'total_rows': parsed['total_rows'],
+            'valid_count': parsed['valid_count'],
+            'error_count': parsed['error_count'],
+            'warning_count': parsed['warning_count'],
+        },
+    )
+    return {
+        'ok': True,
+        'preview_token': token,
+        'filename': filename,
+        'file_sha256': parsed['file_sha256'],
+        'branch': parsed['branch'],
+        'total_rows': parsed['total_rows'],
+        'valid_count': parsed['valid_count'],
+        'error_count': parsed['error_count'],
+        'warning_count': parsed['warning_count'],
+        'can_commit': parsed['can_commit'],
+        'rows': parsed['rows'][:200],
+        'errors': parsed['errors'][:200],
+        'warnings': parsed['warnings'][:200],
+        'message': message,
+    }
+
+
+@router.get('/udemy/plans/import/errors/{preview_token}.xlsx')
+def download_udemy_plan_import_errors(
+    preview_token: str,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    _path, preview = UdemyPlanService(db).load_preview(preview_token, requested_by=user.user_id)
+    return Response(
+        content=UdemyPlanService.build_error_workbook(preview),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="udemy-plan-import-errors.xlsx"'},
+    )
+
+
+@router.post('/udemy/plans/import/commit', response_model=UdemyPlanMutationOut)
+def commit_udemy_plan_import(
+    payload: UdemyPlanImportCommitIn,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    service = UdemyPlanService(db)
+    preview_path, preview = service.load_preview(payload.preview_token, requested_by=user.user_id)
+    plans = service.commit_preview(preview, actor=user.user_id or user.username)
+    preview_path.unlink(missing_ok=True)
+    message = f'Đã import {len(plans)} kế hoạch Udemy. Mỗi môn được tạo phiên bản mới và giữ nguyên lịch sử cũ.'
+    log_audit(
+        db,
+        action='academic.udemy_plan.import.commit',
+        status='success',
+        message=message,
+        user=user,
+        target_type='udemy_subject_plan',
+        target_id=plans[0].id if plans else None,
+        metadata={
+            'filename': preview.get('filename'),
+            'file_sha256': preview.get('file_sha256'),
+            'created_count': len(plans),
+            'plan_ids': [item.id for item in plans],
+        },
+    )
+    return {'ok': True, 'message': message, 'created_count': len(plans), 'plans': [service.serialize_plan(item) for item in plans]}
+
+
+@router.post('/udemy/progress/import/jobs', response_model=UdemyProgressImportJobOut)
+async def create_udemy_progress_import_job(
+    files: list[UploadFile] = File(...),
+    term_id: str = Form(...),
+    block_id: str = Form(...),
+    branch: str = Form('poly'),
+    delivery_id: str | None = Form(None),
+    force_reimport: bool = Form(False),
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    enforce_operation_rate_limit(
+        namespace='udemy-progress-upload',
+        actor_id=str(user.user_id or user.username or 'unknown'),
+        limit=int(settings.academic_udemy_upload_rate_limit_per_minute),
+        code='UDEMY_UPLOAD_RATE_LIMITED',
+        message='Bạn thao tác import Udemy quá nhanh. Vui lòng đợi rồi thử lại.',
+    )
+    try:
+        active_import_job_ids = {
+            str(row[0])
+            for row in db.query(AcademicBulkOperationJob.id).filter(
+                AcademicBulkOperationJob.job_type == 'udemy_progress_import',
+                AcademicBulkOperationJob.status.in_(['queued', 'running']),
+            ).all()
+        }
+        UdemyProgressService.cleanup_expired_artifacts(protected_import_job_ids=active_import_job_ids)
+    except Exception:
+        # Periodic cleanup task is authoritative; enqueue must remain available
+        # when a stale artifact cannot be removed because of filesystem races.
+        pass
+    if not files:
+        raise HTTPException(status_code=400, detail='Hãy chọn ít nhất một file Udemy .xlsx.')
+    if len(files) > UdemyProgressService.MAX_FILES:
+        raise HTTPException(status_code=400, detail=f'Mỗi lần tối đa {UdemyProgressService.MAX_FILES} file.')
+    if delivery_id and len(files) != 1:
+        raise HTTPException(status_code=400, detail='Import tại một môn chỉ nhận một file. Hãy bỏ chọn môn để import nhiều file theo tên mã môn.')
+
+    branch_value = str(branch or 'poly').strip().lower()
+    service = UdemyProgressService(db)
+    prepared: list[dict[str, Any]] = []
+    total_bytes = 0
+    for upload in files:
+        filename = safe_upload_filename(upload.filename or 'udemy-progress.xlsx')
+        try:
+            UdemyProgressService.validate_upload_metadata(filename=filename, content_type=upload.content_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f'{filename}: {exc}') from exc
+        raw = await upload.read(UdemyProgressService.MAX_FILE_BYTES + 1)
+        total_bytes += len(raw)
+        if len(raw) > UdemyProgressService.MAX_FILE_BYTES:
+            raise HTTPException(status_code=400, detail=f'File {filename} vượt giới hạn {max(1, UdemyProgressService.MAX_FILE_BYTES // (1024 * 1024))} MB.')
+        if total_bytes > UdemyProgressService.MAX_TOTAL_UPLOAD_BYTES:
+            raise HTTPException(status_code=400, detail=f'Tổng dung lượng upload vượt giới hạn {max(1, UdemyProgressService.MAX_TOTAL_UPLOAD_BYTES // (1024 * 1024))} MB.')
+        try:
+            service._validate_xlsx(raw)
+            delivery, subject = service.resolve_delivery(
+                term_id=term_id,
+                block_id=block_id,
+                branch=branch_value,
+                filename=filename,
+                delivery_id=delivery_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f'{filename}: {exc}') from exc
+        prepared.append({
+            'filename': filename,
+            'raw': raw,
+            'hash': hashlib.sha256(raw).hexdigest(),
+            'delivery': delivery,
+            'subject': subject,
+        })
+
+    parent = AcademicBulkOperationJob(
+        job_type='udemy_progress_import',
+        status='queued',
+        term_id=term_id,
+        branch=branch_value,
+        campus=None,
+        requested_by=user.user_id,
+        progress_current=0,
+        progress_total=100,
+        progress_label='Đã đưa file tiến độ Udemy vào hàng đợi',
+        request_json={},
+        result_json={},
+    )
+    db.add(parent)
+    db.flush()
+    root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+    upload_dir = root / 'udemy-progress-imports' / parent.id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    batches: list[UdemyProgressImportBatch] = []
+    queued_ids: list[str] = []
+    duplicate_count = 0
+    try:
+        for item in prepared:
+            try:
+                bind = db.get_bind()
+                if bind is not None and bind.dialect.name == 'postgresql':
+                    db.execute(
+                        text('SELECT pg_advisory_xact_lock(hashtext(:key))'),
+                        {'key': f'udemy-progress:{item["delivery"].id}:{item["hash"]}'},
+                    )
+            except Exception:
+                # The unique idempotency key remains the final protection when the
+                # database user cannot acquire advisory locks.
+                pass
+            prior = db.query(UdemyProgressImportBatch).filter(
+                UdemyProgressImportBatch.subject_delivery_id == item['delivery'].id,
+                UdemyProgressImportBatch.file_hash == item['hash'],
+                UdemyProgressImportBatch.status.in_(['queued', 'running', 'completed']),
+            ).order_by(UdemyProgressImportBatch.created_at.desc()).first()
+            is_duplicate = bool(prior and not force_reimport)
+            batch = UdemyProgressImportBatch(
+                parent_job_id=parent.id,
+                subject_delivery_id=item['delivery'].id,
+                duplicate_of_batch_id=prior.id if is_duplicate else None,
+                idempotency_key=(
+                    f'duplicate:{item["delivery"].id}:{item["hash"]}:{parent.id}'
+                    if is_duplicate else
+                    (f'force:{item["delivery"].id}:{item["hash"]}:{parent.id}' if force_reimport else f'{item["delivery"].id}:{item["hash"]}')
+                ),
+                file_name=item['filename'],
+                file_hash=item['hash'],
+                file_size_bytes=len(item['raw']),
+                status='skipped' if is_duplicate else 'queued',
+                force_reimport=bool(force_reimport),
+                requested_by=user.user_id,
+                request_json=json_safe_value({
+                    'term_id': term_id,
+                    'block_id': block_id,
+                    'branch': branch_value,
+                    'subject_code': item['subject'].subject_code,
+                    'requester_context': _requester_context_json(user),
+                    'policy_version': 'udemy-progress-import/batch35',
+                }),
+                result_json=(
+                    {'ok': True, 'skipped': True, 'message': 'File trùng đã được import trước đó.', 'duplicate_of_batch_id': prior.id}
+                    if is_duplicate else {}
+                ),
+                finished_at=datetime.utcnow() if is_duplicate else None,
+            )
+            db.add(batch)
+            db.flush()
+            if is_duplicate:
+                duplicate_count += 1
+            else:
+                path = upload_dir / f'{batch.id}-{item["filename"]}'
+                path.write_bytes(item['raw'])
+                batch.file_path = str(path)
+                db.add(batch)
+                queued_ids.append(batch.id)
+            batches.append(batch)
+
+        parent.request_json = json_safe_value({
+            'term_id': term_id,
+            'block_id': block_id,
+            'branch': branch_value,
+            'delivery_id': delivery_id,
+            'force_reimport': bool(force_reimport),
+            'batch_ids': [item.id for item in batches],
+            'queued_batch_ids': queued_ids,
+            'requester_context': _requester_context_json(user),
+            'policy_version': 'udemy-progress-import/batch35',
+        })
+        if not queued_ids:
+            parent.status = 'completed'
+            parent.progress_current = 100
+            parent.progress_label = 'Tất cả file đã được import trước đó; không tạo dữ liệu trùng'
+            parent.result_json = {'ok': True, 'queued_count': 0, 'duplicate_count': duplicate_count}
+            parent.finished_at = datetime.utcnow()
+        db.add(parent)
+        db.commit()
+    except Exception:
+        db.rollback()
+        for item in upload_dir.glob('*'):
+            if item.is_file():
+                item.unlink(missing_ok=True)
+        raise
+
+    if queued_ids:
+        from app.worker import academic_udemy_progress_import_task
+        academic_udemy_progress_import_task.delay(parent.id)
+    message = (
+        f'Đã xếp hàng {len(queued_ids)} file Udemy; bỏ qua {duplicate_count} file trùng.'
+        if queued_ids else
+        f'Không xếp hàng file mới; {duplicate_count} file đã được import trước đó.'
+    )
+    log_audit(
+        db,
+        action='academic.udemy_progress.import.enqueue',
+        status='queued' if queued_ids else 'success',
+        message=message,
+        user=user,
+        target_type='academic_bulk_operation_job',
+        target_id=parent.id,
+        metadata=json_safe_value({'batch_ids': [item.id for item in batches], 'queued_count': len(queued_ids), 'duplicate_count': duplicate_count}),
+    )
+    return {
+        'ok': True,
+        'message': message,
+        'job_id': parent.id,
+        'status': parent.status,
+        'queued_count': len(queued_ids),
+        'duplicate_count': duplicate_count,
+        'batches': [service.batch_to_dict(item) for item in batches],
+    }
+
+
+@router.post('/udemy/progress/import-batches/{batch_id}/retry', response_model=UdemyProgressImportJobOut)
+def retry_udemy_progress_import_batch(
+    batch_id: str,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    enforce_operation_rate_limit(
+        namespace='udemy-progress-retry',
+        actor_id=str(user.user_id or user.username or 'unknown'),
+        limit=int(settings.academic_udemy_upload_rate_limit_per_minute),
+        code='UDEMY_RETRY_RATE_LIMITED',
+        message='Bạn thao tác thử lại import quá nhanh. Vui lòng đợi rồi thử lại.',
+    )
+    source = db.get(UdemyProgressImportBatch, batch_id)
+    if not source:
+        raise HTTPException(status_code=404, detail='Không tìm thấy batch Udemy cần thử lại.')
+    if source.status != 'failed':
+        raise HTTPException(status_code=409, detail='Chỉ batch thất bại mới được thử lại. File trùng có thể dùng tùy chọn “Import lại có chủ đích”.')
+    delivery = db.get(AcademicSubjectDelivery, source.subject_delivery_id)
+    subject = db.get(AcademicSubject, delivery.subject_id) if delivery else None
+    if not delivery or not delivery.active or not subject:
+        raise HTTPException(status_code=409, detail='Môn Udemy của batch không còn tồn tại.')
+    if delivery.learning_platform != 'udemy':
+        raise HTTPException(status_code=409, detail='Môn đã được chuyển khỏi Udemy nên không thể thử lại file này.')
+
+    root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+    source_path = Path(str(source.file_path or '')).expanduser().resolve()
+    try:
+        source_path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail='Đường dẫn file import cũ không hợp lệ.') from exc
+    if not source_path.is_file():
+        raise HTTPException(status_code=410, detail='File import gốc đã hết thời gian lưu. Hãy tải file lên lại.')
+    raw = source_path.read_bytes()
+    try:
+        UdemyProgressService._validate_xlsx(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f'File import cũ không còn hợp lệ: {exc}') from exc
+    if hashlib.sha256(raw).hexdigest() != source.file_hash:
+        raise HTTPException(status_code=409, detail='Checksum file import cũ đã thay đổi. Hãy tải file gốc lên lại.')
+
+    parent = AcademicBulkOperationJob(
+        job_type='udemy_progress_import',
+        status='queued',
+        term_id=delivery.term_id,
+        branch=str(delivery.branch or 'poly').lower(),
+        campus=None,
+        requested_by=user.user_id,
+        progress_current=0,
+        progress_total=100,
+        progress_label=f'Đã xếp hàng thử lại file {source.file_name}'[:255],
+        request_json={},
+        result_json={},
+    )
+    db.add(parent)
+    db.flush()
+    upload_dir = root / 'udemy-progress-imports' / parent.id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    retry_batch = UdemyProgressImportBatch(
+        parent_job_id=parent.id,
+        subject_delivery_id=delivery.id,
+        duplicate_of_batch_id=source.id,
+        idempotency_key=f'retry:{source.id}:{parent.id}',
+        file_name=source.file_name,
+        file_hash=source.file_hash,
+        file_size_bytes=len(raw),
+        parser_format=source.parser_format,
+        status='queued',
+        force_reimport=True,
+        requested_by=user.user_id,
+        request_json=json_safe_value({
+            'term_id': delivery.term_id,
+            'block_id': delivery.block_id,
+            'branch': str(delivery.branch or 'poly').lower(),
+            'subject_code': subject.subject_code,
+            'retry_of_batch_id': source.id,
+            'requester_context': _requester_context_json(user),
+            'policy_version': 'udemy-progress-import/batch35.1',
+        }),
+        result_json={},
+    )
+    db.add(retry_batch)
+    db.flush()
+    retry_path = upload_dir / f'{retry_batch.id}-{safe_upload_filename(source.file_name)}'
+    try:
+        retry_path.write_bytes(raw)
+        retry_batch.file_path = str(retry_path)
+        parent.request_json = json_safe_value({
+            'term_id': delivery.term_id,
+            'block_id': delivery.block_id,
+            'branch': str(delivery.branch or 'poly').lower(),
+            'delivery_id': delivery.id,
+            'force_reimport': True,
+            'retry_of_batch_id': source.id,
+            'batch_ids': [retry_batch.id],
+            'queued_batch_ids': [retry_batch.id],
+            'requester_context': _requester_context_json(user),
+            'policy_version': 'udemy-progress-import/batch35.1',
+        })
+        db.add(retry_batch)
+        db.add(parent)
+        db.commit()
+    except Exception:
+        db.rollback()
+        retry_path.unlink(missing_ok=True)
+        raise
+
+    from app.worker import academic_udemy_progress_import_task
+    academic_udemy_progress_import_task.delay(parent.id)
+    message = f'Đã xếp hàng thử lại file {source.file_name}.'
+    log_audit(
+        db,
+        action='academic.udemy_progress.import.retry',
+        status='queued',
+        message=message,
+        user=user,
+        target_type='udemy_progress_import_batch',
+        target_id=retry_batch.id,
+        metadata=json_safe_value({'retry_of_batch_id': source.id, 'parent_job_id': parent.id, 'file_hash': source.file_hash}),
+    )
+    return {
+        'ok': True,
+        'message': message,
+        'job_id': parent.id,
+        'status': parent.status,
+        'queued_count': 1,
+        'duplicate_count': 0,
+        'batches': [UdemyProgressService(db).batch_to_dict(retry_batch)],
+    }
+
+
+@router.get('/udemy/progress/import-batches', response_model=list[UdemyProgressImportBatchOut])
+def list_udemy_progress_import_batches(
+    delivery_id: str | None = None,
+    parent_job_id: str | None = None,
+    status_filter: str | None = Query(None, alias='status'),
+    limit: int = Query(50, ge=1, le=200),
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    del user
+    query = db.query(UdemyProgressImportBatch)
+    if delivery_id:
+        query = query.filter(UdemyProgressImportBatch.subject_delivery_id == delivery_id)
+    if parent_job_id:
+        query = query.filter(UdemyProgressImportBatch.parent_job_id == parent_job_id)
+    if status_filter:
+        query = query.filter(UdemyProgressImportBatch.status == status_filter)
+    rows = query.order_by(UdemyProgressImportBatch.created_at.desc()).limit(limit).all()
+    service = UdemyProgressService(db)
+    return [service.batch_to_dict(item) for item in rows]
+
+
+@router.get('/udemy/progress/import-batches/{batch_id}/errors.xlsx')
+def download_udemy_progress_import_errors(
+    batch_id: str,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    del user
+    batch = db.get(UdemyProgressImportBatch, batch_id)
+    if not batch or not batch.error_report_path:
+        raise HTTPException(status_code=404, detail='Batch chưa có file lỗi để tải.')
+    root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+    path = Path(batch.error_report_path).expanduser().resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail='Đường dẫn file lỗi không hợp lệ.') from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail='File lỗi đã hết hạn hoặc không còn tồn tại.')
+    return FileResponse(
+        path,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        filename=f'udemy-progress-errors-{batch.id[:8]}.xlsx',
+    )
+
+
+
+
+def _udemy_delivery_access_scope(
+    db: Session,
+    user: UserContext,
+    delivery_id: str,
+) -> tuple[AcademicSubjectDelivery, set[str] | None, str]:
+    delivery = db.get(AcademicSubjectDelivery, delivery_id)
+    if not delivery or not delivery.active:
+        raise HTTPException(status_code=404, detail='Không tìm thấy môn Udemy.')
+    subject = db.get(AcademicSubject, delivery.subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail='Không tìm thấy môn học.')
+    if delivery.learning_platform != 'udemy':
+        raise HTTPException(status_code=409, detail='Môn này không được cấu hình trên nền tảng Udemy.')
+    decision = AcademicService(db).access_decision(user)
+    if decision.unrestricted:
+        return delivery, None, 'Toàn bộ môn'
+
+    class_query = db.query(AcademicClass.id).filter(
+        AcademicClass.subject_id == delivery.subject_id,
+        AcademicClass.term_id == delivery.term_id,
+        AcademicClass.block_id == delivery.block_id,
+        func.lower(func.coalesce(AcademicClass.branch, delivery.branch)) == str(delivery.branch).lower(),
+        AcademicClass.active.is_(True),
+    )
+    predicates = []
+    if decision.campus_codes:
+        predicates.append(func.lower(func.coalesce(AcademicClass.campus, '')).in_(sorted(decision.campus_codes)))
+    if decision.teacher_ids:
+        teacher_class_ids = db.query(AcademicTeacherAssignment.class_id).filter(
+            AcademicTeacherAssignment.teacher_id.in_(sorted(decision.teacher_ids)),
+        )
+        predicates.append(AcademicClass.id.in_(teacher_class_ids))
+    if subject.subject_code and subject.subject_code.strip().lower() in decision.subject_codes:
+        predicates.append(AcademicClass.subject_id == subject.id)
+    if not predicates:
+        raise HTTPException(status_code=403, detail='Bạn chưa được phân quyền xem lớp Udemy nào trong môn này.')
+    class_ids = {row[0] for row in class_query.filter(or_(*predicates)).all()}
+    if not class_ids:
+        raise HTTPException(status_code=403, detail='Bạn không được phân công hoặc phân quyền xem lớp Udemy trong môn này.')
+    scope_bits = []
+    if decision.teacher_ids:
+        scope_bits.append('lớp được AP phân công')
+    if decision.campus_codes:
+        scope_bits.append('cơ sở được phân quyền')
+    return delivery, class_ids, ' và '.join(scope_bits) or 'Phạm vi được phân quyền'
+
+
+@router.get('/subject-deliveries/{delivery_id}/udemy-progress/summary', response_model=UdemyProgressSummaryOut)
+def get_udemy_progress_summary(
+    delivery_id: str,
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    _delivery, allowed_class_ids, scope_label = _udemy_delivery_access_scope(db, user, delivery_id)
+    return UdemyProgressService(db).dashboard(
+        delivery_id, allowed_class_ids=allowed_class_ids, scope_label=scope_label,
+    )['summary']
+
+
+@router.get('/subject-deliveries/{delivery_id}/udemy-progress/dashboard', response_model=UdemyProgressDashboardOut)
+def get_udemy_progress_dashboard(
+    delivery_id: str,
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    _delivery, allowed_class_ids, scope_label = _udemy_delivery_access_scope(db, user, delivery_id)
+    return UdemyProgressService(db).dashboard(
+        delivery_id, allowed_class_ids=allowed_class_ids, scope_label=scope_label,
+    )
+
+
+@router.get('/subject-deliveries/{delivery_id}/udemy-progress/students', response_model=UdemyProgressStudentListOut)
+def list_udemy_progress_students(
+    delivery_id: str,
+    q: str | None = None,
+    class_id: str | None = None,
+    status_filter: str | None = Query(None, alias='status'),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    sort_by: str = Query('student'),
+    sort_dir: str = Query('asc'),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    _delivery, allowed_class_ids, _scope_label = _udemy_delivery_access_scope(db, user, delivery_id)
+    return UdemyProgressService(db).list_students(
+        delivery_id,
+        allowed_class_ids=allowed_class_ids,
+        q=q, class_id=class_id, status_filter=status_filter,
+        page=page, page_size=page_size, sort_by=sort_by, sort_dir=sort_dir,
+    )
+
+
+@router.get('/subject-deliveries/{delivery_id}/udemy-progress/export.xlsx')
+def export_udemy_progress(
+    delivery_id: str,
+    q: str | None = None,
+    class_id: str | None = None,
+    status_filter: str | None = Query(None, alias='status'),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    delivery, allowed_class_ids, scope_label = _udemy_delivery_access_scope(db, user, delivery_id)
+    service = UdemyProgressService(db)
+    count = service.list_students(
+        delivery_id, allowed_class_ids=allowed_class_ids, q=q, class_id=class_id,
+        status_filter=status_filter, page=1, page_size=1,
+    )['total']
+    if count > int(settings.academic_udemy_sync_export_max_rows):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'UDEMY_EXPORT_REQUIRES_BACKGROUND_JOB',
+                'message': 'Báo cáo lớn phải chạy bằng job export nền.',
+                'row_count': count,
+                'sync_limit': int(settings.academic_udemy_sync_export_max_rows),
+            },
+        )
+    subject = db.get(AcademicSubject, delivery.subject_id)
+    raw = service.export_workbook(
+        delivery_id, allowed_class_ids=allowed_class_ids, scope_label=scope_label,
+        q=q, class_id=class_id, status_filter=status_filter,
+        max_rows=int(settings.academic_udemy_sync_export_max_rows),
+    )
+    code = safe_upload_filename((subject.subject_code if subject else 'udemy') or 'udemy')
+    return StreamingResponse(
+        BytesIO(raw),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="udemy-progress-{code}.xlsx"'},
+    )
+
+
+@router.post('/subject-deliveries/{delivery_id}/udemy-progress/export-jobs', response_model=AcademicBulkOperationJobOut)
+def create_udemy_progress_export_job(
+    delivery_id: str,
+    q: str | None = None,
+    class_id: str | None = None,
+    status_filter: str | None = Query(None, alias='status'),
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    enforce_operation_rate_limit(
+        namespace='udemy-progress-export',
+        actor_id=str(user.user_id or user.username or 'unknown'),
+        limit=max(2, int(settings.academic_udemy_upload_rate_limit_per_minute)),
+        code='UDEMY_EXPORT_RATE_LIMITED',
+        message='Bạn yêu cầu xuất báo cáo quá nhanh. Vui lòng đợi rồi thử lại.',
+    )
+    actor_id = str(user.user_id or user.username or '')
+    delivery, allowed_class_ids, scope_label = _udemy_delivery_access_scope(db, user, delivery_id)
+    service = UdemyProgressService(db)
+    count = int(service.list_students(
+        delivery_id, allowed_class_ids=allowed_class_ids, q=q, class_id=class_id,
+        status_filter=status_filter, page=1, page_size=1,
+    )['total'])
+    filter_payload = json_safe_value({
+        'delivery_id': delivery_id,
+        'q': str(q or '').strip() or None,
+        'class_id': class_id,
+        'status': status_filter,
+        'allowed_class_ids': sorted(allowed_class_ids) if allowed_class_ids is not None else None,
+        'scope_label': scope_label,
+        'row_count': count,
+    })
+    signature = hashlib.sha256(json.dumps(filter_payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+    active_candidates = db.query(AcademicBulkOperationJob).filter(
+        AcademicBulkOperationJob.job_type == 'udemy_progress_export',
+        AcademicBulkOperationJob.requested_by == actor_id,
+        AcademicBulkOperationJob.status.in_(['queued', 'running']),
+    ).order_by(AcademicBulkOperationJob.created_at.desc()).limit(20).all()
+    for existing in active_candidates:
+        request = existing.request_json if isinstance(existing.request_json, dict) else {}
+        if request.get('export_signature') == signature:
+            return existing
+    job = AcademicBulkOperationJob(
+        job_type='udemy_progress_export',
+        status='queued',
+        term_id=delivery.term_id,
+        branch=str(delivery.branch or 'poly').lower(),
+        campus=None,
+        requested_by=actor_id,
+        progress_current=0,
+        progress_total=100,
+        progress_label=f'Đã xếp hàng export Udemy ({count} dòng)',
+        request_json=json_safe_value({
+            **filter_payload,
+            'export_signature': signature,
+            'requester_context': _requester_context_json(user),
+            'policy_version': 'udemy-progress-export/batch35',
+        }),
+        result_json={},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    from app.worker import academic_udemy_progress_export_task
+    academic_udemy_progress_export_task.delay(job.id)
+    log_audit(
+        db,
+        action='academic.udemy_progress.export.enqueue',
+        status='queued',
+        message=f'Đã xếp hàng export Udemy {count} dòng.',
+        user=user,
+        target_type='academic_bulk_operation_job',
+        target_id=job.id,
+        metadata=json_safe_value({'delivery_id': delivery_id, 'row_count': count, 'export_signature': signature}),
+    )
+    return job
+
+
+@router.get('/udemy/progress/export-jobs/{job_id}/download')
+def download_udemy_progress_export_job(
+    job_id: str,
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    job = db.get(AcademicBulkOperationJob, job_id)
+    if not job or job.job_type != 'udemy_progress_export':
+        raise HTTPException(status_code=404, detail='Không tìm thấy job export Udemy.')
+    request = job.request_json if isinstance(job.request_json, dict) else {}
+    delivery_id = str(request.get('delivery_id') or '')
+    _delivery, current_allowed_ids, _scope_label = _udemy_delivery_access_scope(db, user, delivery_id)
+    requested_ids = request.get('allowed_class_ids')
+    if current_allowed_ids is not None and str(job.requested_by or '') != str(user.user_id or user.username or ''):
+        raise HTTPException(status_code=403, detail='Báo cáo này thuộc job của người dùng khác trong cùng phạm vi.')
+    if requested_ids is None:
+        if current_allowed_ids is not None:
+            raise HTTPException(status_code=403, detail='Quyền hiện tại không còn cho phép tải báo cáo toàn môn.')
+    elif current_allowed_ids is not None and not set(str(item) for item in requested_ids).issubset(current_allowed_ids):
+        raise HTTPException(status_code=403, detail='Phạm vi quyền hiện tại không còn bao phủ báo cáo này.')
+    if job.status != 'completed':
+        raise HTTPException(status_code=409, detail='Job export chưa hoàn tất.')
+    result = job.result_json if isinstance(job.result_json, dict) else {}
+    root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+    filename = safe_upload_filename(str(result.get('file_name') or ''))
+    if not filename or not filename.lower().endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail='Tên file export không hợp lệ.')
+    path = (root / 'udemy-progress-exports' / filename).resolve()
+    try:
+        path.relative_to(root / 'udemy-progress-exports')
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail='Đường dẫn file export không hợp lệ.') from exc
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail='File export đã hết thời gian lưu. Hãy tạo lại báo cáo.')
+    return FileResponse(
+        path,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        filename=filename,
+    )
+
+
+@router.get('/subject-deliveries/{delivery_id}/udemy-plan', response_model=UdemyPlanDetailOut)
+def get_udemy_plan_detail(
+    delivery_id: str,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    del user
+    return UdemyPlanService(db).get_plan_detail(delivery_id)
+
+
+@router.get('/subject-deliveries/{delivery_id}/udemy-plan/history', response_model=list[UdemySubjectPlanOut])
+def get_udemy_plan_history(
+    delivery_id: str,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    del user
+    return UdemyPlanService(db).list_plan_history(delivery_id)
+
+
+@router.post('/subject-deliveries/{delivery_id}/udemy-plan', response_model=UdemyPlanMutationOut)
+def create_manual_udemy_plan_version(
+    delivery_id: str,
+    payload: UdemyPlanVersionCreateIn,
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    service = UdemyPlanService(db)
+    plan = service.create_version(
+        delivery_id=delivery_id,
+        item_count=payload.item_count,
+        milestones=[item.model_dump(mode='json') for item in payload.milestones],
+        actor=user.user_id or user.username,
+        source='manual',
+        note=payload.note,
+        metadata={'policy_version': 'udemy-plan-management/batch32'},
+    )
+    message = f'Đã lưu phiên bản kế hoạch Udemy v{plan.version}. Phiên bản cũ vẫn được giữ trong lịch sử.'
+    log_audit(
+        db,
+        action='academic.udemy_plan.version.create',
+        status='success',
+        message=message,
+        user=user,
+        target_type='udemy_subject_plan',
+        target_id=plan.id,
+        metadata={'delivery_id': delivery_id, 'version': plan.version, 'item_count': plan.item_count},
+    )
+    return {'ok': True, 'message': message, 'created_count': 1, 'plans': [service.serialize_plan(plan)]}
 
 
 @router.get('/subjects', response_model=list[AcademicSubjectOut])

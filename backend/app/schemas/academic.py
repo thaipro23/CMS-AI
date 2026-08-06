@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
@@ -120,6 +120,325 @@ class AcademicSubjectManagementOut(AcademicSubjectOut):
     learning_alerts: list[str] = Field(default_factory=list)
 
 
+class AcademicSubjectDeliveryOut(BaseModel):
+    id: str
+    subject_id: str
+    ap_subject_id: str | None = None
+    subject_code: str
+    subject_name: str
+    subject_name_en: str | None = None
+    skill_code: str | None = None
+    term_id: str
+    term_name: str
+    block_id: str
+    block_name: str
+    branch: str
+    learning_platform: str | None = None
+    active: bool = True
+    configuration_source: str = 'manual'
+    configured_by: str | None = None
+    configured_at: datetime | None = None
+    catalog_refreshed_at: datetime | None = None
+    class_count: int = 0
+    campus_count: int = 0
+    has_udemy_plan: bool = False
+    udemy_plan_id: str | None = None
+    udemy_plan_version: int | None = None
+    udemy_item_count: int | None = None
+    udemy_milestone_count: int = 0
+    udemy_plan_updated_at: datetime | None = None
+    last_udemy_import_at: datetime | None = None
+    udemy_progress_student_count: int = 0
+    udemy_progress_late_count: int = 0
+    udemy_progress_unmatched_count: int = 0
+    metadata_json: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AcademicSubjectDeliverySummaryOut(BaseModel):
+    total: int = 0
+    cms_count: int = 0
+    udemy_count: int = 0
+    unassigned_count: int = 0
+    class_count: int = 0
+    scope_label: str = 'Toàn bộ bộ lọc'
+
+
+class AcademicSubjectDeliveryListOut(BaseModel):
+    items: list[AcademicSubjectDeliveryOut] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
+    total_pages: int = 0
+    has_next: bool = False
+    summary: AcademicSubjectDeliverySummaryOut = Field(default_factory=AcademicSubjectDeliverySummaryOut)
+
+
+class AcademicSubjectCatalogRefreshIn(BaseModel):
+    term_id: str = Field(..., min_length=1)
+    block_id: str | None = None
+    branch: str = Field('poly', min_length=1, max_length=64)
+
+    @field_validator('branch')
+    @classmethod
+    def _normalize_branch(cls, value: str) -> str:
+        normalized = str(value or 'poly').strip().lower()
+        if normalized not in {'poly', 'ptcd'}:
+            raise ValueError('Hệ chỉ nhận poly hoặc ptcd')
+        return normalized
+
+
+class AcademicSubjectCatalogRefreshOut(BaseModel):
+    ok: bool
+    message: str
+    job_id: str
+    status: str
+    term_id: str
+    block_id: str | None = None
+    branch: str
+
+
+class AcademicSubjectPlatformUpdateIn(BaseModel):
+    learning_platform: str | None = None
+
+    @field_validator('learning_platform')
+    @classmethod
+    def _validate_platform(cls, value: str | None) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        normalized = str(value).strip().lower()
+        if normalized not in {'cms', 'udemy'}:
+            raise ValueError('Nền tảng chỉ nhận cms, udemy hoặc null')
+        return normalized
+
+
+class AcademicSubjectPlatformBulkIn(AcademicSubjectPlatformUpdateIn):
+    delivery_ids: list[str] = Field(default_factory=list, min_length=1, max_length=2000)
+
+
+class AcademicSubjectPlatformMutationOut(BaseModel):
+    ok: bool
+    message: str
+    updated: int = 0
+    items: list[AcademicSubjectDeliveryOut] = Field(default_factory=list)
+
+
+
+class UdemyPlanMilestoneIn(BaseModel):
+    week_number: int = Field(..., ge=1, le=52)
+    deadline_date: date
+    required_progress_percent: float = Field(..., ge=0, le=100)
+
+
+class UdemyPlanMilestoneOut(UdemyPlanMilestoneIn):
+    id: str | None = None
+    metadata_json: dict[str, Any] | None = None
+
+
+class UdemySubjectPlanOut(BaseModel):
+    id: str
+    subject_delivery_id: str
+    version: int
+    item_count: int
+    active: bool
+    source: str
+    source_file_name: str | None = None
+    source_file_hash: str | None = None
+    imported_by: str | None = None
+    imported_at: datetime | None = None
+    note: str | None = None
+    metadata_json: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    milestones: list[UdemyPlanMilestoneOut] = Field(default_factory=list)
+
+
+class UdemyPlanDeliveryOut(BaseModel):
+    id: str
+    subject_id: str
+    subject_code: str
+    subject_name: str
+    term_id: str
+    term_name: str
+    block_id: str
+    block_name: str
+    branch: str
+    learning_platform: str | None = None
+
+
+class UdemyPlanDetailOut(BaseModel):
+    delivery: UdemyPlanDeliveryOut
+    active_plan: UdemySubjectPlanOut | None = None
+
+
+class UdemyPlanVersionCreateIn(BaseModel):
+    item_count: int = Field(..., ge=1, le=100000)
+    milestones: list[UdemyPlanMilestoneIn] = Field(default_factory=list, min_length=1, max_length=52)
+    note: str | None = Field(None, max_length=2000)
+
+
+class UdemyPlanImportPreviewIssueOut(BaseModel):
+    row: int | None = None
+    subject_code: str | None = None
+    code: str
+    message: str
+
+
+class UdemyPlanImportPreviewRowOut(BaseModel):
+    row_no: int
+    delivery_id: str | None = None
+    term_name: str
+    block_name: str
+    branch: str
+    subject_code: str
+    subject_name: str | None = None
+    item_count: int
+    current_version: int | None = None
+    next_version: int
+    action: str
+    milestones: list[UdemyPlanMilestoneIn] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class UdemyPlanImportPreviewOut(BaseModel):
+    ok: bool = True
+    preview_token: str
+    filename: str
+    file_sha256: str
+    branch: str
+    total_rows: int
+    valid_count: int
+    error_count: int
+    warning_count: int
+    can_commit: bool
+    rows: list[UdemyPlanImportPreviewRowOut] = Field(default_factory=list)
+    errors: list[UdemyPlanImportPreviewIssueOut] = Field(default_factory=list)
+    warnings: list[UdemyPlanImportPreviewIssueOut] = Field(default_factory=list)
+    message: str
+
+
+class UdemyPlanImportCommitIn(BaseModel):
+    preview_token: str = Field(..., min_length=32, max_length=32)
+
+
+class UdemyPlanMutationOut(BaseModel):
+    ok: bool
+    message: str
+    created_count: int = 0
+    plans: list[UdemySubjectPlanOut] = Field(default_factory=list)
+
+
+class UdemyProgressImportBatchOut(BaseModel):
+    id: str
+    parent_job_id: str | None = None
+    subject_delivery_id: str
+    subject_code: str | None = None
+    subject_name: str | None = None
+    duplicate_of_batch_id: str | None = None
+    file_name: str
+    file_hash: str
+    file_size_bytes: int = 0
+    parser_format: str | None = None
+    status: str
+    force_reimport: bool = False
+    total_rows: int = 0
+    processed_rows: int = 0
+    matched_rows: int = 0
+    outside_roster_rows: int = 0
+    unmatched_rows: int = 0
+    ambiguous_rows: int = 0
+    failed_rows: int = 0
+    requested_by: str | None = None
+    result_json: dict[str, Any] | None = None
+    error_message: str | None = None
+    error_report_available: bool = False
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class UdemyProgressImportJobOut(BaseModel):
+    ok: bool
+    message: str
+    job_id: str
+    status: str
+    queued_count: int = 0
+    duplicate_count: int = 0
+    batches: list[UdemyProgressImportBatchOut] = Field(default_factory=list)
+
+
+class UdemyProgressSummaryOut(BaseModel):
+    subject_delivery_id: str
+    total_students: int = 0
+    matched_students: int = 0
+    outside_roster_students: int = 0
+    ambiguous_students: int = 0
+    unmatched_students: int = 0
+    late_students: int = 0
+    on_track_students: int = 0
+    no_plan_students: int = 0
+    average_progress_percent: float | None = None
+    required_progress_percent: float | None = None
+    current_plan_week: int | None = None
+    current_deadline_date: date | None = None
+    last_imported_at: datetime | None = None
+    class_count: int = 0
+    scope_label: str = 'Toàn bộ môn'
+
+
+class UdemyProgressClassOptionOut(BaseModel):
+    id: str
+    class_code: str
+    class_name: str | None = None
+    campus: str | None = None
+
+
+class UdemyProgressStudentOut(BaseModel):
+    id: str
+    student_id: str | None = None
+    student_code: str | None = None
+    student_username: str | None = None
+    display_name: str
+    email: str
+    class_id: str | None = None
+    class_code: str | None = None
+    class_name: str | None = None
+    campus: str | None = None
+    teacher_names: list[str] = Field(default_factory=list)
+    progress_percent: float = 0
+    required_progress_percent: float | None = None
+    variance_percent: float | None = None
+    is_late: bool | None = None
+    status: str
+    status_label: str
+    match_status: str
+    current_plan_week: int | None = None
+    current_deadline_date: date | None = None
+    last_import_batch_id: str
+    source_format: str
+    last_imported_at: datetime
+    diagnostic: str | None = None
+
+
+class UdemyProgressStudentListOut(BaseModel):
+    items: list[UdemyProgressStudentOut] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
+    total_pages: int = 0
+    has_next: bool = False
+
+
+class UdemyProgressDashboardOut(BaseModel):
+    delivery: UdemyPlanDeliveryOut
+    summary: UdemyProgressSummaryOut
+    active_plan: dict[str, Any] | None = None
+    classes: list[UdemyProgressClassOptionOut] = Field(default_factory=list)
+    recent_imports: list[UdemyProgressImportBatchOut] = Field(default_factory=list)
+
 
 class AcademicSubjectManagementSummaryOut(BaseModel):
     subject_count: int = 0
@@ -182,6 +501,12 @@ class AcademicClassOut(BaseModel):
     learning_last_synced_at: datetime | None = None
     learning_component_summaries: list[dict[str, Any]] = Field(default_factory=list)
     learning_alerts: list[str] = Field(default_factory=list)
+    learning_platform: str | None = None
+    subject_delivery_id: str | None = None
+    udemy_progress_student_count: int = 0
+    udemy_progress_late_count: int = 0
+    udemy_progress_average_percent: float | None = None
+    udemy_progress_last_imported_at: datetime | None = None
 
 
 

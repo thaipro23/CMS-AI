@@ -1,0 +1,154 @@
+.subject-management-page .compact-filter-bar { align-items: end; }
+.subject-management-page .compact-filter-bar > label { min-width: 150px; }
+.subject-management-page .compact-filter-bar > label:last-of-type { min-width: min(280px, 100%); flex: 1 1 240px; }
+.subject-filter-actions,
+.subject-bulk-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.subject-bulk-actions > span { color: var(--text-muted, #64748b); font-size: .85rem; margin-right: 2px; }
+.subject-delivery-identity { display: grid; gap: 2px; min-width: 0; }
+.subject-delivery-identity b { color: var(--text-strong, #0f172a); letter-spacing: .02em; }
+.subject-delivery-identity span,
+.subject-delivery-identity small { overflow: hidden; text-overflow: ellipsis; }
+.subject-delivery-identity small { color: var(--text-muted, #64748b); }
+.subject-platform-segment { display: inline-grid; grid-template-columns: repeat(3, minmax(74px, 1fr)); gap: 3px; width: min(100%, 282px); padding: 3px; border: 1px solid var(--color-border, #dbe3ee); border-radius: 10px; background: var(--color-bg-subtle, #f8fafc); }
+.subject-platform-option { min-height: 30px; border: 0; border-radius: 7px; padding: 4px 8px; background: transparent; color: var(--color-text-secondary, #475569); font: inherit; font-size: .78rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.subject-platform-option:hover:not(:disabled) { background: var(--color-bg-hover, #eaf1f8); color: var(--text-strong, #0f172a); }
+.subject-platform-option.is-active { background: var(--color-surface, #fff); color: var(--text-strong, #0f172a); box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+.subject-platform-option.cms.is-active { color: var(--color-info-strong, #075985); background: var(--color-info-soft, #e0f2fe); }
+.subject-platform-option.udemy.is-active { color: var(--color-success-strong, #166534); background: var(--color-success-soft, #dcfce7); }
+.subject-platform-option.unassigned.is-active { color: var(--color-warning-strong, #92400e); background: var(--color-warning-soft, #fef3c7); }
+.subject-platform-option:disabled { cursor: wait; opacity: .62; }
+.subject-management-page .enterprise-kind-date > div { display: grid; gap: 2px; }
+.subject-management-page .enterprise-kind-date small { color: var(--text-muted, #64748b); }
+@media (max-width: 760px) {
+  .subject-bulk-actions { width: 100%; }
+  .subject-platform-segment { min-width: 250px; }
+}
+.subject-header-actions,
+.udemy-plan-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.udemy-plan-cell { min-width: 180px; }
+.udemy-plan-import-body { display: grid; gap: 14px; }
+.udemy-plan-import-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.udemy-plan-import-steps span { padding: 8px 10px; border-radius: 9px; background: var(--color-bg-muted, #f1f5f9); color: var(--text-muted, #64748b); font-size: .78rem; font-weight: 800; text-align: center; }
+.udemy-plan-import-steps span.active { background: var(--color-info-soft, #dbeafe); color: var(--color-primary-strong, #1d4ed8); }
+.udemy-plan-import-steps span.done { background: var(--color-success-soft, #dcfce7); color: var(--color-success-strong, #166534); }
+.udemy-plan-upload-panel { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.5fr) auto; gap: 12px; align-items: end; padding: 14px; border: 1px solid var(--color-border, #dbe3ee); border-radius: 12px; background: var(--color-bg-subtle, #f8fafc); }
+.udemy-plan-upload-panel > div { display: grid; gap: 3px; }
+.udemy-plan-upload-panel small { color: var(--text-muted, #64748b); }
+.udemy-plan-selected-file { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 9px; background: var(--color-info-subtle, #eff6ff); color: var(--color-info-strong, #1e3a8a); }
+.udemy-plan-preview-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.udemy-plan-preview-section { display: grid; gap: 9px; }
+.udemy-plan-preview-section h3 { margin: 0; }
+.udemy-plan-preview-section .workspace-section-heading { margin: 0; }
+.udemy-plan-preview-section td small,
+.udemy-plan-preview-section td b { display: block; }
+.udemy-plan-preview-section tr.row-invalid { background: var(--color-warning-subtle, #fff7ed); }
+.udemy-plan-page .operations-kpi-strip { margin-top: 0; }
+.udemy-plan-editor { display: grid; gap: 16px; }
+.udemy-plan-editor-meta { display: grid; grid-template-columns: minmax(180px, .35fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
+.udemy-plan-editor-meta label { display: grid; gap: 6px; font-size: .82rem; font-weight: 800; color: var(--color-text-secondary, #334155); }
+.udemy-plan-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.udemy-plan-editor-heading h3,
+.udemy-plan-editor-heading p { margin: 0; }
+.udemy-plan-editor-heading p { color: var(--text-muted, #64748b); font-size: .85rem; margin-top: 3px; }
+.udemy-plan-milestone-table { min-width: 680px; }
+.udemy-plan-milestone-table .compact-input { max-width: 110px; }
+.udemy-progress-input { display: flex; align-items: center; gap: 6px; }
+.udemy-progress-input .input { max-width: 160px; }
+.udemy-progress-input span { color: var(--color-text-secondary, #475569); font-weight: 800; }
+.udemy-history-milestones { display: grid; gap: 3px; min-width: 210px; }
+.udemy-history-milestones span { font-size: .78rem; color: var(--color-text-secondary, #475569); }
+.udemy-plan-page td small { display: block; color: var(--text-muted, #64748b); margin-top: 2px; }
+@media (max-width: 900px) {
+  .udemy-plan-upload-panel,
+  .udemy-plan-editor-meta { grid-template-columns: 1fr; }
+  .udemy-plan-preview-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .subject-header-actions { width: 100%; }
+  .subject-header-actions .btn { flex: 1 1 180px; }
+  .udemy-plan-import-steps { grid-template-columns: 1fr; }
+  .udemy-plan-preview-summary { grid-template-columns: 1fr 1fr; }
+  .udemy-plan-editor-heading { align-items: flex-start; flex-direction: column; }
+}
+
+
+/* Batch 33: durable Udemy progress import */
+.udemy-progress-cell { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 210px; }
+.udemy-progress-cell > div { display: grid; gap: 2px; }
+.udemy-progress-cell small { display: block; color: var(--color-text-secondary, #667085); }
+.udemy-progress-upload-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 16px; border: 1px solid var(--color-border, #d9e1ea); border-radius: 12px; background: var(--color-bg-subtle, #f8fafc); }
+.udemy-progress-upload-panel label { display: grid; gap: 7px; }
+.udemy-progress-upload-panel small { display: block; color: var(--color-text-secondary, #667085); font-weight: 400; }
+.udemy-progress-force { grid-template-columns: auto minmax(0, 1fr) !important; align-items: start; }
+.udemy-progress-force input { margin-top: 4px; }
+.udemy-progress-file-list { display: grid; gap: 8px; max-height: 180px; overflow: auto; }
+.udemy-progress-file-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid var(--color-border, #d9e1ea); border-radius: 9px; }
+@media (max-width: 760px) { .udemy-progress-cell { align-items: flex-start; flex-direction: column; } }
+
+.udemy-progress-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+
+/* Batch 34: Udemy progress dashboard, warnings and export */
+.udemy-progress-page .workspace-tabs { margin-top: 0; }
+.udemy-progress-page .operations-filter-fields > label:first-child { flex: 1 1 320px; }
+.udemy-progress-page .operations-filter-fields > label { min-width: 190px; }
+.udemy-student-identity { display: grid; gap: 2px; min-width: 0; }
+.udemy-student-identity b { color: var(--text-strong, #0f172a); }
+.udemy-student-identity span,
+.udemy-student-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.udemy-student-identity small { color: var(--text-muted, #64748b); }
+.udemy-progress-meter { display: grid; grid-template-columns: minmax(100px, 1fr) auto; align-items: center; gap: 9px; min-width: 155px; }
+.udemy-progress-meter > div { height: 8px; overflow: hidden; border-radius: 999px; background: var(--color-border-subtle, #e2e8f0); }
+.udemy-progress-meter > div > span { display: block; height: 100%; border-radius: inherit; background: var(--color-success, #16a34a); }
+.udemy-progress-meter b { white-space: nowrap; font-size: .82rem; }
+.udemy-negative { color: var(--color-danger, #b91c1c); font-weight: 800; }
+.udemy-positive { color: var(--color-success-strong, #166534); font-weight: 800; }
+.udemy-progress-page td small { display: block; color: var(--text-muted, #64748b); margin-top: 2px; }
+.udemy-plan-summary-card { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.udemy-plan-summary-card > div { display: grid; gap: 5px; padding: 14px; border: 1px solid var(--color-border, #dbe3ee); border-radius: 12px; background: var(--color-bg-subtle, #f8fafc); }
+.udemy-plan-summary-card span { color: var(--text-muted, #64748b); font-size: .8rem; font-weight: 700; }
+.udemy-plan-summary-card b { color: var(--text-strong, #0f172a); }
+.udemy-plan-actions { justify-content: flex-start; margin-top: 14px; }
+@media (max-width: 900px) {
+  .udemy-plan-summary-card { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .udemy-plan-summary-card { grid-template-columns: 1fr; }
+  .udemy-progress-page .operations-filter-fields > label { min-width: 100%; }
+}
+
+
+
+/* Batch 35.1: unified notices, durable job feedback and distinct overview. */
+.persistent-job-notice { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; }
+.persistent-job-copy { min-width: 0; }
+.persistent-job-progress-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto; align-items: center; gap: 10px; margin-top: 8px; }
+.persistent-job-progress-row progress { width: 100%; height: 9px; accent-color: var(--color-primary, #2563eb); }
+.persistent-job-progress-row small { min-width: 38px; color: var(--text-muted, #64748b); font-weight: 800; text-align: right; }
+.persistent-job-action { display: flex; align-items: center; justify-content: flex-end; }
+.udemy-progress-page [role="tabpanel"]:focus-visible { outline: 2px solid var(--color-primary, #2563eb); outline-offset: 4px; border-radius: 12px; }
+.udemy-overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.udemy-overview-card { display: grid; gap: 6px; min-width: 0; padding: 15px; border: 1px solid var(--color-border, #d9e1ea); border-radius: 12px; background: var(--color-bg-subtle, #f8fafc); }
+.udemy-overview-card > span { color: var(--text-muted, #64748b); font-size: .8rem; font-weight: 800; }
+.udemy-overview-card > b { color: var(--text-strong, #0f172a); font-size: 1.35rem; overflow-wrap: anywhere; }
+.udemy-overview-card > small { color: var(--text-muted, #64748b); line-height: 1.45; overflow-wrap: anywhere; }
+.udemy-overview-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.udemy-plan-milestone-table th:first-child,
+.udemy-plan-milestone-table td:first-child { width: 54px; min-width: 54px; text-align: center; }
+
+@media (max-width: 1024px) {
+  .udemy-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .persistent-job-notice { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .persistent-job-action { grid-column: 1 / -1; width: 100%; justify-content: flex-start; }
+  .persistent-job-action .btn { width: 100%; }
+  .udemy-overview-grid { grid-template-columns: 1fr; }
+  .udemy-overview-actions .btn { flex: 1 1 100%; }
+}

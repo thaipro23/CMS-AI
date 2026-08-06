@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_env: str = 'dev'
     app_name: str = 'AI Learning Server for Open edX'
-    app_version: str = '25.9.16.7.2.64.16.5.7.2.3'
+    app_version: str = '25.9.16.7.2.64.16.5.7.2.5'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
@@ -336,6 +336,22 @@ class Settings(BaseSettings):
     academic_teacher_report_sync_export_max_teachers: int = 20
     academic_teacher_report_sync_export_max_students: int = 1000
     academic_teacher_report_file_retention_hours: int = 48
+
+    # Batch 35 — Udemy production hardening. These limits are deployment knobs,
+    # not user input, and are validated for hardened environments below.
+    academic_udemy_import_max_files: int = 50
+    academic_udemy_import_max_file_bytes: int = 20 * 1024 * 1024
+    academic_udemy_import_max_total_bytes: int = 200 * 1024 * 1024
+    academic_udemy_import_max_rows: int = 300_000
+    academic_udemy_xlsx_max_entries: int = 10_000
+    academic_udemy_xlsx_max_uncompressed_bytes: int = 400 * 1024 * 1024
+    academic_udemy_xlsx_max_compression_ratio: int = 200
+    academic_udemy_upload_rate_limit_per_minute: int = 6
+    academic_udemy_file_retention_hours: int = 72
+    academic_udemy_export_file_retention_hours: int = 48
+    academic_udemy_sync_export_max_rows: int = 5_000
+    academic_udemy_worker_max_retries: int = 3
+    academic_udemy_cleanup_interval_seconds: int = 6 * 60 * 60
     # Material upload extraction is heavy and must run as a background job by
     # default. Keep the inline switch only as an emergency fallback for local
     # debugging; production should leave it false and watch the operation job.
@@ -508,6 +524,30 @@ def validate_security_settings() -> None:
         errors.append('ACADEMIC_TEACHER_REPORT_SYNC_EXPORT_MAX_TEACHERS must be at least 1')
     if settings.academic_teacher_report_sync_export_max_students < 1:
         errors.append('ACADEMIC_TEACHER_REPORT_SYNC_EXPORT_MAX_STUDENTS must be at least 1')
+    if settings.academic_udemy_import_max_files < 1 or settings.academic_udemy_import_max_files > 100:
+        errors.append('ACADEMIC_UDEMY_IMPORT_MAX_FILES must be between 1 and 100')
+    if settings.academic_udemy_import_max_file_bytes < 1024 * 1024 or settings.academic_udemy_import_max_file_bytes > 100 * 1024 * 1024:
+        errors.append('ACADEMIC_UDEMY_IMPORT_MAX_FILE_BYTES must be between 1 MB and 100 MB')
+    if settings.academic_udemy_import_max_total_bytes < settings.academic_udemy_import_max_file_bytes:
+        errors.append('ACADEMIC_UDEMY_IMPORT_MAX_TOTAL_BYTES must be >= max file bytes')
+    if settings.academic_udemy_import_max_rows < 1_000 or settings.academic_udemy_import_max_rows > 1_000_000:
+        errors.append('ACADEMIC_UDEMY_IMPORT_MAX_ROWS must be between 1000 and 1000000')
+    if settings.academic_udemy_xlsx_max_entries < 100 or settings.academic_udemy_xlsx_max_entries > 50_000:
+        errors.append('ACADEMIC_UDEMY_XLSX_MAX_ENTRIES must be between 100 and 50000')
+    if settings.academic_udemy_xlsx_max_uncompressed_bytes < settings.academic_udemy_import_max_file_bytes:
+        errors.append('ACADEMIC_UDEMY_XLSX_MAX_UNCOMPRESSED_BYTES must be >= max file bytes')
+    if settings.academic_udemy_xlsx_max_compression_ratio < 10 or settings.academic_udemy_xlsx_max_compression_ratio > 1000:
+        errors.append('ACADEMIC_UDEMY_XLSX_MAX_COMPRESSION_RATIO must be between 10 and 1000')
+    if settings.academic_udemy_upload_rate_limit_per_minute < 1:
+        errors.append('ACADEMIC_UDEMY_UPLOAD_RATE_LIMIT_PER_MINUTE must be at least 1')
+    if settings.academic_udemy_file_retention_hours < 1 or settings.academic_udemy_export_file_retention_hours < 1:
+        errors.append('Udemy artifact retention must be at least 1 hour')
+    if settings.academic_udemy_sync_export_max_rows < 100 or settings.academic_udemy_sync_export_max_rows > 50_000:
+        errors.append('ACADEMIC_UDEMY_SYNC_EXPORT_MAX_ROWS must be between 100 and 50000')
+    if settings.academic_udemy_worker_max_retries < 0 or settings.academic_udemy_worker_max_retries > 10:
+        errors.append('ACADEMIC_UDEMY_WORKER_MAX_RETRIES must be between 0 and 10')
+    if settings.academic_udemy_cleanup_interval_seconds < 3600:
+        errors.append('ACADEMIC_UDEMY_CLEANUP_INTERVAL_SECONDS must be at least 3600')
 
     if settings.academic_ap_sync_enabled:
         if not settings.academic_ap_api_base_url or 'CHANGE_ME' in settings.academic_ap_api_base_url:

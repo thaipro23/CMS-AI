@@ -17,14 +17,17 @@ from app.models.academic import (
     AcademicStudent,
     AcademicStudentLearningSnapshot,
     AcademicSubject,
+    AcademicSubjectDelivery,
     AcademicTeacher,
     AcademicTeacherAssignment,
     AcademicTeacherReportSummary,
     AcademicTerm,
     OpenEdXUserMapping,
+    UdemyStudentProgress,
 )
 from app.services.academic.helpers import AccessDecision, _json_safe_value as json_safe_value, _page
 from app.services.training_policy_service import TrainingPolicyService
+from app.services.academic.udemy_progress import UdemyProgressService
 
 
 class AcademicTeacherReportWorkflowService:
@@ -76,6 +79,8 @@ class AcademicTeacherReportWorkflowService:
             return int(status_counts.get('not_enrolled', 0) or 0) > 0 or int(item.get('learning_enrolled_count') or 0) < int(item.get('student_count') or 0)
         if status_filter == 'no_learning_data':
             return int(item.get('learning_synced_count') or 0) == 0 and int(item.get('student_count') or 0) > 0
+        if status_filter == 'udemy_late':
+            return int(item.get('udemy_progress_late_count') or 0) > 0
         if status_filter in {'no_activity', 'low_progress', 'low_grade', 'sync_error', 'deadline_late', 'exam_not_eligible', 'exam_insufficient_data'}:
             return int(status_counts.get(status_filter, 0) or 0) > 0
         if status_filter == 'has_alert':
@@ -123,6 +128,11 @@ class AcademicTeacherReportWorkflowService:
 
     def _teacher_report_summary_from_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         total_students = sum(int(item.get('student_count') or 0) for item in items)
+        udemy_progress_students = sum(int(item.get('udemy_progress_student_count') or 0) for item in items)
+        udemy_weighted_progress = sum(
+            float(item.get('udemy_progress_average_percent') or 0) * int(item.get('udemy_progress_student_count') or 0)
+            for item in items
+        )
         return {
             'teacher_count': len(items),
             'class_count': sum(int(item.get('class_count') or 0) for item in items),
@@ -131,7 +141,14 @@ class AcademicTeacherReportWorkflowService:
             'unique_student_count': sum(int(item.get('unique_student_count') or 0) for item in items),
             'relearn_student_count': sum(int(item.get('relearn_student_count') or 0) for item in items),
             'total_relearn_count': sum(int(item.get('total_relearn_count') or 0) for item in items),
-            'cms_synced_count': min(sum(int(item.get('cms_synced_count') or 0) for item in items), total_students),
+            'cms_class_count': sum(int(item.get('cms_class_count') or 0) for item in items),
+            'udemy_class_count': sum(int(item.get('udemy_class_count') or 0) for item in items),
+            'cms_student_count': sum(int(item.get('cms_student_count') or 0) for item in items),
+            'udemy_student_count': sum(int(item.get('udemy_student_count') or 0) for item in items),
+            'cms_synced_count': min(sum(int(item.get('cms_synced_count') or 0) for item in items), sum(int(item.get('cms_student_count') or 0) for item in items)),
+            'udemy_progress_student_count': udemy_progress_students,
+            'udemy_progress_late_count': sum(int(item.get('udemy_progress_late_count') or 0) for item in items),
+            'udemy_progress_average_percent': round(udemy_weighted_progress / udemy_progress_students, 2) if udemy_progress_students else None,
             'learning_enrolled_count': min(sum(int(item.get('learning_enrolled_count') or 0) for item in items), total_students),
             'learning_active_count': min(sum(int(item.get('learning_active_count') or 0) for item in items), total_students),
             'risk_student_count': min(sum(int(item.get('risk_student_count') or 0) for item in items), total_students),
@@ -145,6 +162,97 @@ class AcademicTeacherReportWorkflowService:
             'assignment_not_graded_count': sum(int(item.get('assignment_not_graded_count') or 0) for item in items),
         }
 
+
+    def _teacher_udemy_context(self, classes: list[AcademicClass]) -> dict[str, dict[str, Any]]:
+        """Resolve the learning platform and live Udemy metrics for many classes.
+
+        The report must not treat Udemy classes as "missing Course CMS" or count
+        every Udemy learner as CMS-unsynced. Metrics are recalculated against the
+        current due Udemy milestone, while the progress value itself remains the
+        latest imported snapshot.
+        """
+        valid_classes = [item for item in classes if item and item.id and item.subject_id and item.term_id]
+        if not valid_classes:
+            return {}
+        subject_ids = {item.subject_id for item in valid_classes}
+        term_ids = {item.term_id for item in valid_classes}
+        deliveries = self.db.query(AcademicSubjectDelivery).filter(
+            AcademicSubjectDelivery.subject_id.in_(subject_ids),
+            AcademicSubjectDelivery.term_id.in_(term_ids),
+            AcademicSubjectDelivery.active.is_(True),
+        ).all()
+
+        def delivery_key(subject_id: str, term_id: str, block_id: str | None, branch: str | None) -> tuple[str, str, str | None, str]:
+            return (str(subject_id), str(term_id), str(block_id) if block_id is not None else None, str(branch or 'poly').strip().lower())
+
+        delivery_by_key = {
+            delivery_key(item.subject_id, item.term_id, item.block_id, item.branch): item
+            for item in deliveries
+        }
+        result: dict[str, dict[str, Any]] = {}
+        udemy_class_ids: set[str] = set()
+        udemy_delivery_ids: set[str] = set()
+        for cls in valid_classes:
+            delivery = delivery_by_key.get(delivery_key(cls.subject_id, cls.term_id, cls.block_id, cls.branch))
+            platform = str(delivery.learning_platform or '').strip().lower() if delivery else None
+            result[str(cls.id)] = {
+                'learning_platform': platform,
+                'subject_delivery_id': delivery.id if delivery else None,
+                'progress_student_count': 0,
+                'late_student_count': 0,
+                'progress_sum': 0.0,
+                'progress_count': 0,
+                'average_progress_percent': None,
+                'last_imported_at': None,
+                'required_progress_percent': None,
+                'current_plan_week': None,
+                'current_deadline_date': None,
+                'late_student_ids': set(),
+            }
+            if delivery and platform == 'udemy':
+                udemy_class_ids.add(str(cls.id))
+                udemy_delivery_ids.add(str(delivery.id))
+        if not udemy_class_ids:
+            return result
+
+        milestone_by_delivery: dict[str, dict[str, Any] | None] = {}
+        progress_service = UdemyProgressService(self.db)
+        for delivery_id in udemy_delivery_ids:
+            _plan, milestone = progress_service._current_dashboard_milestone(delivery_id)
+            milestone_by_delivery[delivery_id] = milestone
+
+        snapshots = self.db.query(UdemyStudentProgress).filter(
+            UdemyStudentProgress.class_id.in_(sorted(udemy_class_ids)),
+            UdemyStudentProgress.subject_delivery_id.in_(sorted(udemy_delivery_ids)),
+        ).all()
+        for snapshot in snapshots:
+            class_id = str(snapshot.class_id or '')
+            context = result.get(class_id)
+            if not context or context.get('learning_platform') != 'udemy':
+                continue
+            delivery_id = str(context.get('subject_delivery_id') or '')
+            milestone = milestone_by_delivery.get(delivery_id)
+            required = float(milestone['required_progress_percent']) if milestone else None
+            progress = float(snapshot.progress_percent or 0)
+            context['progress_student_count'] += 1
+            context['progress_sum'] += progress
+            context['progress_count'] += 1
+            context['required_progress_percent'] = required
+            context['current_plan_week'] = milestone.get('week_number') if milestone else None
+            context['current_deadline_date'] = milestone.get('deadline_date') if milestone else None
+            if snapshot.last_imported_at and (
+                context['last_imported_at'] is None or snapshot.last_imported_at > context['last_imported_at']
+            ):
+                context['last_imported_at'] = snapshot.last_imported_at
+            if snapshot.match_status == 'matched_roster' and required is not None and progress < required:
+                context['late_student_count'] += 1
+                if snapshot.student_id:
+                    context['late_student_ids'].add(str(snapshot.student_id))
+        for context in result.values():
+            count = int(context.get('progress_count') or 0)
+            if count:
+                context['average_progress_percent'] = round(float(context.get('progress_sum') or 0) / count, 2)
+        return result
 
     def _training_teacher_report_lite_fast(
         self,
@@ -175,6 +283,7 @@ class AcademicTeacherReportWorkflowService:
             AcademicTeacher,
             AcademicClass,
             AcademicSubject,
+    AcademicSubjectDelivery,
         ).join(
             AcademicTeacherAssignment,
             AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
@@ -183,6 +292,7 @@ class AcademicTeacherReportWorkflowService:
             AcademicClass.id == AcademicTeacherAssignment.class_id,
         ).join(
             AcademicSubject,
+    AcademicSubjectDelivery,
             AcademicSubject.id == AcademicClass.subject_id,
         ).filter(
             AcademicTeacher.active.is_(True),
@@ -231,6 +341,7 @@ class AcademicTeacherReportWorkflowService:
             class_by_id[str(cls.id)] = cls
             teacher_rows.append((teacher, cls, subject))
         class_ids = list(class_by_id.keys())
+        udemy_context_by_class = self._teacher_udemy_context(list(class_by_id.values()))
 
         student_count_by_class = {
             str(class_id): int(count or 0)
@@ -272,6 +383,15 @@ class AcademicTeacherReportWorkflowService:
                 'class_ids': set(),
                 'student_count': 0,
                 'unique_student_count': 0,
+                'cms_class_count': 0,
+                'udemy_class_count': 0,
+                'cms_student_count': 0,
+                'udemy_student_count': 0,
+                'udemy_progress_student_count': 0,
+                'udemy_progress_late_count': 0,
+                'udemy_progress_weighted_sum': 0.0,
+                'udemy_progress_weight': 0,
+                'udemy_last_imported_at': None,
                 'cms_synced_count': 0,
                 'cms_unsynced_count': 0,
                 'learning_enrolled_count': 0,
@@ -295,25 +415,45 @@ class AcademicTeacherReportWorkflowService:
             total_students = int(student_count_by_class.get(class_id, 0) or 0)
             bucket['student_count'] += total_students
             bucket['unique_student_count'] += total_students
-            sync_bucket = sync_by_class.get(class_id, {})
-            matched = int(sync_bucket.get('matched', 0) or 0)
-            bucket['cms_synced_count'] += matched
-            bucket['cms_unsynced_count'] += max(0, total_students - matched)
-            learning = learning_by_class.get(class_id, {})
-            bucket['learning_enrolled_count'] += int(learning.get('learning_enrolled_count') or 0)
-            bucket['learning_active_count'] += int(learning.get('learning_active_count') or 0)
-            bucket['learning_synced_count'] += int(learning.get('learning_synced_count') or 0)
-            if learning.get('learning_avg_progress_percent') is not None:
-                bucket['progress_values'].append(float(learning.get('learning_avg_progress_percent')))
-            if learning.get('learning_avg_grade_percent') is not None:
-                bucket['grade_values'].append(float(learning.get('learning_avg_grade_percent')))
-            last_synced_at = learning.get('learning_last_synced_at')
-            if last_synced_at and (bucket['last_synced_at'] is None or last_synced_at > bucket['last_synced_at']):
-                bucket['last_synced_at'] = last_synced_at
-            if not course_by_class.get(class_id):
-                bucket['classes_without_course_count'] += 1
-            for status_name, count in (status_counts_by_class.get(class_id) or {}).items():
-                bucket['status_counts'][status_name] = int(bucket['status_counts'].get(status_name, 0) or 0) + int(count or 0)
+            udemy_context = udemy_context_by_class.get(class_id, {})
+            is_udemy = udemy_context.get('learning_platform') == 'udemy'
+            if is_udemy:
+                bucket['udemy_class_count'] += 1
+                bucket['udemy_student_count'] += total_students
+                imported = int(udemy_context.get('progress_student_count') or 0)
+                late = int(udemy_context.get('late_student_count') or 0)
+                bucket['udemy_progress_student_count'] += imported
+                bucket['udemy_progress_late_count'] += late
+                if imported and udemy_context.get('average_progress_percent') is not None:
+                    bucket['udemy_progress_weighted_sum'] += float(udemy_context.get('average_progress_percent')) * imported
+                    bucket['udemy_progress_weight'] += imported
+                last_imported = udemy_context.get('last_imported_at')
+                if last_imported and (bucket['udemy_last_imported_at'] is None or last_imported > bucket['udemy_last_imported_at']):
+                    bucket['udemy_last_imported_at'] = last_imported
+                if late:
+                    bucket['status_counts']['udemy_late'] = int(bucket['status_counts'].get('udemy_late', 0) or 0) + late
+            else:
+                bucket['cms_class_count'] += 1
+                bucket['cms_student_count'] += total_students
+                sync_bucket = sync_by_class.get(class_id, {})
+                matched = int(sync_bucket.get('matched', 0) or 0)
+                bucket['cms_synced_count'] += matched
+                bucket['cms_unsynced_count'] += max(0, total_students - matched)
+                learning = learning_by_class.get(class_id, {})
+                bucket['learning_enrolled_count'] += int(learning.get('learning_enrolled_count') or 0)
+                bucket['learning_active_count'] += int(learning.get('learning_active_count') or 0)
+                bucket['learning_synced_count'] += int(learning.get('learning_synced_count') or 0)
+                if learning.get('learning_avg_progress_percent') is not None:
+                    bucket['progress_values'].append(float(learning.get('learning_avg_progress_percent')))
+                if learning.get('learning_avg_grade_percent') is not None:
+                    bucket['grade_values'].append(float(learning.get('learning_avg_grade_percent')))
+                last_synced_at = learning.get('learning_last_synced_at')
+                if last_synced_at and (bucket['last_synced_at'] is None or last_synced_at > bucket['last_synced_at']):
+                    bucket['last_synced_at'] = last_synced_at
+                if not course_by_class.get(class_id):
+                    bucket['classes_without_course_count'] += 1
+                for status_name, count in (status_counts_by_class.get(class_id) or {}).items():
+                    bucket['status_counts'][status_name] = int(bucket['status_counts'].get(status_name, 0) or 0) + int(count or 0)
 
         items: list[dict[str, Any]] = []
         for bucket in buckets.values():
@@ -335,6 +475,9 @@ class AcademicTeacherReportWorkflowService:
                 learning_alerts.append(f"{int(status_counts.get('low_progress', 0) or 0)} SV tiến độ thấp")
             if int(status_counts.get('low_grade', 0) or 0):
                 learning_alerts.append(f"{int(status_counts.get('low_grade', 0) or 0)} SV điểm thấp")
+            if int(bucket.get('udemy_progress_late_count') or 0):
+                learning_alerts.append(f"{int(bucket.get('udemy_progress_late_count') or 0)} SV Udemy chậm tiến độ")
+            udemy_avg = round(bucket['udemy_progress_weighted_sum'] / bucket['udemy_progress_weight'], 2) if bucket['udemy_progress_weight'] else None
             items.append({
                 'teacher_id': bucket['teacher_id'],
                 'teacher_code': bucket['teacher_code'],
@@ -348,6 +491,14 @@ class AcademicTeacherReportWorkflowService:
                 'class_count': len(bucket['class_ids']),
                 'student_count': student_total,
                 'unique_student_count': int(bucket['unique_student_count'] or 0),
+                'cms_class_count': int(bucket['cms_class_count'] or 0),
+                'udemy_class_count': int(bucket['udemy_class_count'] or 0),
+                'cms_student_count': int(bucket['cms_student_count'] or 0),
+                'udemy_student_count': int(bucket['udemy_student_count'] or 0),
+                'udemy_progress_student_count': int(bucket['udemy_progress_student_count'] or 0),
+                'udemy_progress_late_count': int(bucket['udemy_progress_late_count'] or 0),
+                'udemy_progress_average_percent': udemy_avg,
+                'udemy_progress_last_imported_at': bucket['udemy_last_imported_at'],
                 'relearn_student_count': 0,
                 'total_relearn_count': 0,
                 'cms_synced_count': int(bucket['cms_synced_count'] or 0),
@@ -561,7 +712,14 @@ class AcademicTeacherReportWorkflowService:
                     'unique_student_count': 0,
                     'relearn_student_count': 0,
                     'total_relearn_count': 0,
+                    'cms_class_count': 0,
+                    'udemy_class_count': 0,
+                    'cms_student_count': 0,
+                    'udemy_student_count': 0,
                     'cms_synced_count': 0,
+                    'udemy_progress_student_count': 0,
+                    'udemy_progress_late_count': 0,
+                    'udemy_progress_average_percent': None,
                     'learning_enrolled_count': 0,
                     'learning_active_count': 0,
                     'risk_student_count': 0,
@@ -617,6 +775,7 @@ class AcademicTeacherReportWorkflowService:
             AcademicTerm,
             AcademicBlock,
             AcademicSubject,
+    AcademicSubjectDelivery,
         ).join(
             AcademicTeacherAssignment,
             AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
@@ -631,6 +790,7 @@ class AcademicTeacherReportWorkflowService:
             AcademicBlock.id == AcademicClass.block_id,
         ).join(
             AcademicSubject,
+    AcademicSubjectDelivery,
             AcademicSubject.id == AcademicClass.subject_id,
         ).filter(
             AcademicTeacher.active.is_(True),
@@ -699,6 +859,7 @@ class AcademicTeacherReportWorkflowService:
                 'subject_name': subject.subject_name if subject else None,
             }
         class_ids = list(class_by_id.keys())
+        udemy_context_by_class = self._teacher_udemy_context(list(class_by_id.values()))
 
         student_rows = self.db.query(AcademicClassStudent.class_id, AcademicClassStudent.student_id, AcademicClassStudent.metadata_json).filter(
             AcademicClassStudent.class_id.in_(class_ids)
@@ -806,6 +967,15 @@ class AcademicTeacherReportWorkflowService:
                 'class_ids': set(),
                 'unique_student_ids': set(),
                 'student_count': 0,
+                'cms_class_count': 0,
+                'udemy_class_count': 0,
+                'cms_student_count': 0,
+                'udemy_student_count': 0,
+                'udemy_progress_student_count': 0,
+                'udemy_progress_late_count': 0,
+                'udemy_progress_weighted_sum': 0.0,
+                'udemy_progress_weight': 0,
+                'udemy_last_imported_at': None,
                 'cms_synced_count': 0,
                 'cms_unsynced_count': 0,
                 'learning_enrolled_count': 0,
@@ -856,70 +1026,111 @@ class AcademicTeacherReportWorkflowService:
             bucket['student_count'] += class_student_count
             bucket['relearn_student_count'] += relearn_student_count
             bucket['total_relearn_count'] += total_relearn_count
-            sync_counts = sync_by_class.get(cls.id, {})
-            cms_synced = int(sync_counts.get('matched', 0) or 0)
-            cms_unsynced = max(0, class_student_count - cms_synced)
-            bucket['cms_synced_count'] += cms_synced
-            bucket['cms_unsynced_count'] += cms_unsynced
-            learning = learning_by_class.get(cls.id, {})
-            enrolled = int(learning.get('learning_enrolled_count') or 0)
-            active = int(learning.get('learning_active_count') or 0)
-            synced = int(learning.get('learning_synced_count') or 0)
-            bucket['learning_enrolled_count'] += enrolled
-            bucket['learning_active_count'] += active
-            bucket['learning_synced_count'] += synced
-            if not course_by_class.get(cls.id):
-                bucket['classes_without_course_count'] += 1
-            avg_progress = learning.get('learning_avg_progress_percent')
-            avg_grade = learning.get('learning_avg_grade_percent')
-            if isinstance(avg_progress, (int, float)) and synced:
-                bucket['progress_weighted_sum'] += float(avg_progress) * synced
-                bucket['progress_weight'] += synced
-            if isinstance(avg_grade, (int, float)) and synced:
-                bucket['grade_weighted_sum'] += float(avg_grade) * synced
-                bucket['grade_weight'] += synced
-            status_counts = status_counts_by_class.get(cls.id, {})
-            for status_name, count in status_counts.items():
-                bucket['status_counts'][status_name] = int(bucket['status_counts'].get(status_name, 0) or 0) + int(count or 0)
+            udemy_context = udemy_context_by_class.get(str(cls.id), {})
+            is_udemy = udemy_context.get('learning_platform') == 'udemy'
+            cms_synced = 0
+            cms_unsynced = 0
+            enrolled = 0
+            active = 0
+            synced = 0
+            avg_progress = None
+            avg_grade = None
+            last_synced = None
+            status_counts: dict[str, int] = {}
             class_risk_student_ids: set[str] = set()
-            for student_id in class_student_ids:
-                # Use the precomputed per-student learning status, including CMS mapping,
-                # so risk counts are precise and each student is counted at most once
-                # for the teacher.
-                status_name = status_by_class_student.get((cls.id, student_id))
-                if status_name in self._risk_status_keys():
-                    class_risk_student_ids.add(student_id)
-            last_synced = learning.get('learning_last_synced_at')
-            if last_synced and (bucket['last_synced_at'] is None or last_synced > bucket['last_synced_at']):
-                bucket['last_synced_at'] = last_synced
-            deadline = deadline_by_class.get(cls.id, {})
-            deadline_late_students = int(deadline.get('late_student_count') or 0)
-            deadline_late_quizzes = int(deadline.get('late_quiz_count') or 0)
-            deadline_due_quizzes = int(deadline.get('due_quiz_count') or 0)
-            bucket['deadline_late_student_count'] += deadline_late_students
-            bucket['deadline_late_quiz_count'] += deadline_late_quizzes
-            bucket['deadline_due_quiz_count'] += deadline_due_quizzes
-            policy_summary = policy_summary_by_class.get(cls.id, {})
-            for policy_key in ('exam_eligible_student_count', 'exam_not_eligible_student_count', 'exam_insufficient_data_student_count', 'quiz_failed_count', 'quiz_late_count', 'quiz_not_attempted_count', 'quiz_missing_deadline_count', 'assignment_not_graded_count'):
-                bucket[policy_key] += int(policy_summary.get(policy_key) or 0)
-            if int(policy_summary.get('exam_not_eligible_student_count') or 0):
-                bucket['status_counts']['exam_not_eligible'] = int(bucket['status_counts'].get('exam_not_eligible', 0) or 0) + int(policy_summary.get('exam_not_eligible_student_count') or 0)
-                for (policy_class_id, policy_student_id), policy in policy_by_class_student.items():
-                    if policy_class_id == cls.id and str(policy.get('exam_status') or '') == 'not_eligible':
-                        class_risk_student_ids.add(policy_student_id)
-            if int(policy_summary.get('exam_insufficient_data_student_count') or 0):
-                bucket['status_counts']['exam_insufficient_data'] = int(bucket['status_counts'].get('exam_insufficient_data', 0) or 0) + int(policy_summary.get('exam_insufficient_data_student_count') or 0)
-            if deadline_late_students:
-                bucket['status_counts']['deadline_late'] = int(bucket['status_counts'].get('deadline_late', 0) or 0) + deadline_late_students
-                for (deadline_class_id, deadline_student_id), deadline_status in deadline_by_class_student.items():
-                    if deadline_class_id == cls.id and int(deadline_status.get('late_quiz_count') or 0) > 0:
-                        class_risk_student_ids.add(deadline_student_id)
-            bucket['risk_student_ids'].update(class_risk_student_ids)
-            alerts = list(learning.get('learning_alerts') or [])
-            if not course_by_class.get(cls.id) and 'Chưa map Course CMS' not in alerts:
-                alerts.append('Chưa map Course CMS')
-            if deadline_late_students:
-                alerts.append(f'{deadline_late_students} SV trễ deadline quiz ({deadline_late_quizzes} lượt quiz)')
+            deadline: dict[str, Any] = {}
+            deadline_late_students = 0
+            deadline_late_quizzes = 0
+            deadline_due_quizzes = 0
+            policy_summary: dict[str, Any] = {}
+            alerts: list[str] = []
+            if is_udemy:
+                bucket['udemy_class_count'] += 1
+                bucket['udemy_student_count'] += class_student_count
+                imported = int(udemy_context.get('progress_student_count') or 0)
+                udemy_late = int(udemy_context.get('late_student_count') or 0)
+                bucket['udemy_progress_student_count'] += imported
+                bucket['udemy_progress_late_count'] += udemy_late
+                if imported and udemy_context.get('average_progress_percent') is not None:
+                    bucket['udemy_progress_weighted_sum'] += float(udemy_context.get('average_progress_percent')) * imported
+                    bucket['udemy_progress_weight'] += imported
+                last_imported = udemy_context.get('last_imported_at')
+                if last_imported and (bucket['udemy_last_imported_at'] is None or last_imported > bucket['udemy_last_imported_at']):
+                    bucket['udemy_last_imported_at'] = last_imported
+                if udemy_late:
+                    bucket['status_counts']['udemy_late'] = int(bucket['status_counts'].get('udemy_late', 0) or 0) + udemy_late
+                    status_counts['udemy_late'] = udemy_late
+                    class_risk_student_ids.update(udemy_context.get('late_student_ids') or set())
+                    alerts.append(f'{udemy_late} SV Udemy chậm tiến độ')
+                if imported < class_student_count:
+                    alerts.append(f'{max(0, class_student_count - imported)} SV chưa có tiến độ Udemy')
+                bucket['risk_student_ids'].update(class_risk_student_ids)
+            else:
+                bucket['cms_class_count'] += 1
+                bucket['cms_student_count'] += class_student_count
+                sync_counts = sync_by_class.get(cls.id, {})
+                cms_synced = int(sync_counts.get('matched', 0) or 0)
+                cms_unsynced = max(0, class_student_count - cms_synced)
+                bucket['cms_synced_count'] += cms_synced
+                bucket['cms_unsynced_count'] += cms_unsynced
+                learning = learning_by_class.get(cls.id, {})
+                enrolled = int(learning.get('learning_enrolled_count') or 0)
+                active = int(learning.get('learning_active_count') or 0)
+                synced = int(learning.get('learning_synced_count') or 0)
+                bucket['learning_enrolled_count'] += enrolled
+                bucket['learning_active_count'] += active
+                bucket['learning_synced_count'] += synced
+                if not course_by_class.get(cls.id):
+                    bucket['classes_without_course_count'] += 1
+                avg_progress = learning.get('learning_avg_progress_percent')
+                avg_grade = learning.get('learning_avg_grade_percent')
+                if isinstance(avg_progress, (int, float)) and synced:
+                    bucket['progress_weighted_sum'] += float(avg_progress) * synced
+                    bucket['progress_weight'] += synced
+                if isinstance(avg_grade, (int, float)) and synced:
+                    bucket['grade_weighted_sum'] += float(avg_grade) * synced
+                    bucket['grade_weight'] += synced
+                status_counts = status_counts_by_class.get(cls.id, {})
+                for status_name, count in status_counts.items():
+                    bucket['status_counts'][status_name] = int(bucket['status_counts'].get(status_name, 0) or 0) + int(count or 0)
+                for student_id in class_student_ids:
+                    # Use the precomputed per-student learning status, including CMS mapping,
+                    # so risk counts are precise and each student is counted at most once
+                    # for the teacher.
+                    status_name = status_by_class_student.get((cls.id, student_id))
+                    if status_name in self._risk_status_keys():
+                        class_risk_student_ids.add(student_id)
+                last_synced = learning.get('learning_last_synced_at')
+                if last_synced and (bucket['last_synced_at'] is None or last_synced > bucket['last_synced_at']):
+                    bucket['last_synced_at'] = last_synced
+                deadline = deadline_by_class.get(cls.id, {})
+                deadline_late_students = int(deadline.get('late_student_count') or 0)
+                deadline_late_quizzes = int(deadline.get('late_quiz_count') or 0)
+                deadline_due_quizzes = int(deadline.get('due_quiz_count') or 0)
+                bucket['deadline_late_student_count'] += deadline_late_students
+                bucket['deadline_late_quiz_count'] += deadline_late_quizzes
+                bucket['deadline_due_quiz_count'] += deadline_due_quizzes
+                policy_summary = policy_summary_by_class.get(cls.id, {})
+                for policy_key in ('exam_eligible_student_count', 'exam_not_eligible_student_count', 'exam_insufficient_data_student_count', 'quiz_failed_count', 'quiz_late_count', 'quiz_not_attempted_count', 'quiz_missing_deadline_count', 'assignment_not_graded_count'):
+                    bucket[policy_key] += int(policy_summary.get(policy_key) or 0)
+                if int(policy_summary.get('exam_not_eligible_student_count') or 0):
+                    bucket['status_counts']['exam_not_eligible'] = int(bucket['status_counts'].get('exam_not_eligible', 0) or 0) + int(policy_summary.get('exam_not_eligible_student_count') or 0)
+                    for (policy_class_id, policy_student_id), policy in policy_by_class_student.items():
+                        if policy_class_id == cls.id and str(policy.get('exam_status') or '') == 'not_eligible':
+                            class_risk_student_ids.add(policy_student_id)
+                if int(policy_summary.get('exam_insufficient_data_student_count') or 0):
+                    bucket['status_counts']['exam_insufficient_data'] = int(bucket['status_counts'].get('exam_insufficient_data', 0) or 0) + int(policy_summary.get('exam_insufficient_data_student_count') or 0)
+                if deadline_late_students:
+                    bucket['status_counts']['deadline_late'] = int(bucket['status_counts'].get('deadline_late', 0) or 0) + deadline_late_students
+                    for (deadline_class_id, deadline_student_id), deadline_status in deadline_by_class_student.items():
+                        if deadline_class_id == cls.id and int(deadline_status.get('late_quiz_count') or 0) > 0:
+                            class_risk_student_ids.add(deadline_student_id)
+                bucket['risk_student_ids'].update(class_risk_student_ids)
+                alerts = list(learning.get('learning_alerts') or [])
+                if not course_by_class.get(cls.id) and 'Chưa map Course CMS' not in alerts:
+                    alerts.append('Chưa map Course CMS')
+                if deadline_late_students:
+                    alerts.append(f'{deadline_late_students} SV trễ deadline quiz ({deadline_late_quizzes} lượt quiz)')
             bucket['class_items'].append({
                 'class_id': cls.id,
                 'class_code': cls.class_code,
@@ -933,7 +1144,16 @@ class AcademicTeacherReportWorkflowService:
                 'subject_name': subject.subject_name,
                 'campus': cls.campus,
                 'branch': cls.branch,
+                'learning_platform': 'udemy' if is_udemy else 'cms',
+                'subject_delivery_id': udemy_context.get('subject_delivery_id') if is_udemy else None,
                 'student_count': class_student_count,
+                'udemy_progress_student_count': int(udemy_context.get('progress_student_count') or 0) if is_udemy else 0,
+                'udemy_progress_late_count': int(udemy_context.get('late_student_count') or 0) if is_udemy else 0,
+                'udemy_progress_average_percent': udemy_context.get('average_progress_percent') if is_udemy else None,
+                'udemy_progress_required_percent': udemy_context.get('required_progress_percent') if is_udemy else None,
+                'udemy_progress_current_week': udemy_context.get('current_plan_week') if is_udemy else None,
+                'udemy_progress_deadline_date': udemy_context.get('current_deadline_date') if is_udemy else None,
+                'udemy_progress_last_imported_at': udemy_context.get('last_imported_at') if is_udemy else None,
                 'relearn_student_count': relearn_student_count,
                 'total_relearn_count': total_relearn_count,
                 'cms_synced_count': cms_synced,
@@ -998,6 +1218,9 @@ class AcademicTeacherReportWorkflowService:
                 learning_alerts.append(f"{int(status_counts.get('exam_not_eligible', 0) or 0)} SV không được thi")
             if int(status_counts.get('exam_insufficient_data', 0) or 0):
                 learning_alerts.append(f"{int(status_counts.get('exam_insufficient_data', 0) or 0)} SV chưa đủ dữ liệu xét thi")
+            if int(bucket.get('udemy_progress_late_count') or 0):
+                learning_alerts.append(f"{int(bucket.get('udemy_progress_late_count') or 0)} SV Udemy chậm tiến độ")
+            udemy_avg = round(bucket['udemy_progress_weighted_sum'] / bucket['udemy_progress_weight'], 2) if bucket['udemy_progress_weight'] else None
             item = {
                 'teacher_id': bucket['teacher_id'],
                 'teacher_code': bucket['teacher_code'],
@@ -1011,6 +1234,14 @@ class AcademicTeacherReportWorkflowService:
                 'class_count': len(bucket['class_ids']),
                 'student_count': int(bucket['student_count']),
                 'unique_student_count': len(bucket['unique_student_ids']),
+                'cms_class_count': int(bucket['cms_class_count']),
+                'udemy_class_count': int(bucket['udemy_class_count']),
+                'cms_student_count': int(bucket['cms_student_count']),
+                'udemy_student_count': int(bucket['udemy_student_count']),
+                'udemy_progress_student_count': int(bucket['udemy_progress_student_count']),
+                'udemy_progress_late_count': int(bucket['udemy_progress_late_count']),
+                'udemy_progress_average_percent': udemy_avg,
+                'udemy_progress_last_imported_at': bucket['udemy_last_imported_at'],
                 'relearn_student_count': int(bucket['relearn_student_count']),
                 'total_relearn_count': int(bucket['total_relearn_count']),
                 'cms_synced_count': int(bucket['cms_synced_count']),
@@ -1055,6 +1286,8 @@ class AcademicTeacherReportWorkflowService:
                 return int(status_counts.get('not_enrolled', 0) or 0) > 0 or int(item.get('learning_enrolled_count') or 0) < int(item.get('student_count') or 0)
             if status_filter == 'no_learning_data':
                 return int(item.get('learning_synced_count') or 0) == 0 and int(item.get('student_count') or 0) > 0
+            if status_filter == 'udemy_late':
+                return int(item.get('udemy_progress_late_count') or 0) > 0
             if status_filter in {'no_activity', 'low_progress', 'low_grade', 'sync_error', 'deadline_late', 'exam_not_eligible', 'exam_insufficient_data'}:
                 return int(status_counts.get(status_filter, 0) or 0) > 0
             if status_filter == 'has_alert':
@@ -1085,7 +1318,22 @@ class AcademicTeacherReportWorkflowService:
             'unique_student_count': sum(int(item.get('unique_student_count') or 0) for item in filtered_items),
             'relearn_student_count': sum(int(item.get('relearn_student_count') or 0) for item in filtered_items),
             'total_relearn_count': sum(int(item.get('total_relearn_count') or 0) for item in filtered_items),
-            'cms_synced_count': min(sum(int(item.get('cms_synced_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
+            'cms_class_count': sum(int(item.get('cms_class_count') or 0) for item in filtered_items),
+            'udemy_class_count': sum(int(item.get('udemy_class_count') or 0) for item in filtered_items),
+            'cms_student_count': sum(int(item.get('cms_student_count') or 0) for item in filtered_items),
+            'udemy_student_count': sum(int(item.get('udemy_student_count') or 0) for item in filtered_items),
+            'cms_synced_count': min(sum(int(item.get('cms_synced_count') or 0) for item in filtered_items), sum(int(item.get('cms_student_count') or 0) for item in filtered_items)),
+            'udemy_progress_student_count': sum(int(item.get('udemy_progress_student_count') or 0) for item in filtered_items),
+            'udemy_progress_late_count': sum(int(item.get('udemy_progress_late_count') or 0) for item in filtered_items),
+            'udemy_progress_average_percent': (
+                round(
+                    sum(float(item.get('udemy_progress_average_percent') or 0) * int(item.get('udemy_progress_student_count') or 0) for item in filtered_items)
+                    / sum(int(item.get('udemy_progress_student_count') or 0) for item in filtered_items),
+                    2,
+                )
+                if sum(int(item.get('udemy_progress_student_count') or 0) for item in filtered_items)
+                else None
+            ),
             'learning_enrolled_count': min(sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
             'learning_active_count': min(sum(int(item.get('learning_active_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
             'risk_student_count': min(sum(int(item.get('risk_student_count') or 0) for item in filtered_items), sum(int(item.get('student_count') or 0) for item in filtered_items)),
@@ -1106,11 +1354,13 @@ class AcademicTeacherReportWorkflowService:
                 AcademicClassStudent.metadata_json,
                 AcademicStudent,
                 OpenEdXUserMapping,
+    UdemyStudentProgress,
             ).join(
                 AcademicStudent,
                 AcademicStudent.id == AcademicClassStudent.student_id,
             ).outerjoin(
                 OpenEdXUserMapping,
+    UdemyStudentProgress,
                 OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
             ).filter(AcademicClassStudent.class_id.in_(class_ids))
             watch_rows: list[dict[str, Any]] = []

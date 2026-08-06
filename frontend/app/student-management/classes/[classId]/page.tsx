@@ -27,6 +27,7 @@ import { PageRoot } from '../../../../components/layout/PageHeader'
 import { EnterpriseScreenHeader } from '../../../../components/layout/EnterpriseDesignContract'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState } from '../../../../components/training/TrainingWorkspace'
 import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
+import { InlineNotice, noticeInfo } from '../../../../components/ui/InlineNotice'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { VisualIcon } from '../../../../components/ui/VisualIcon'
 import { AppIcon } from '../../../../components/icons/AppIcon'
@@ -345,6 +346,8 @@ function ClassDetailContent() {
   const [selectedBehaviorDetail, setSelectedBehaviorDetail] = useState<AnalyticsStudentLearningBehaviorDetail | null>(null)
   const [selectedBehaviorLoading, setSelectedBehaviorLoading] = useState(false)
   const effectiveCourseId = learningSummary?.openedx_course_id || classInfo?.openedx_course_id || ''
+  const isUdemyClass = classInfo?.learning_platform === 'udemy'
+  const udemyDashboardHref = classInfo?.subject_delivery_id ? `/subject-management/${encodeURIComponent(classInfo.subject_delivery_id)}/udemy` : '/subject-management'
 
   const refreshStudentPage = async () => {
     const studentPage = await getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize })
@@ -801,20 +804,20 @@ function ClassDetailContent() {
     <EnterpriseScreenHeader
       eyebrow="Vận hành đào tạo"
       title={`Chi tiết lớp ${classInfo?.class_code || ''}`.trim()}
-      description="Theo dõi sinh viên, đồng bộ CMS, ghi danh, tiến độ học, đầu điểm và các tín hiệu cần giáo viên xác minh."
+      description={isUdemyClass ? 'Lớp đang học trên Udemy. Theo dõi tiến độ và cảnh báo từ báo cáo Udemy, không thực hiện Full CMS hoặc Enrollment Open edX.' : 'Theo dõi sinh viên, đồng bộ CMS, ghi danh, tiến độ học, đầu điểm và các tín hiệu cần giáo viên xác minh.'}
       icon="students"
       tone="blue"
       breadcrumbs={teacherIdForBack
         ? [{ label: 'Vận hành đào tạo' }, { label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Lớp giảng viên', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]
         : [{ label: 'Vận hành đào tạo' }, { label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Danh sách lớp', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]}
       secondaryActions={<Link className="btn secondary" href={operationalBackHref}>Quay lại danh sách lớp</Link>}
-      primaryAction={<Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
+      primaryAction={isUdemyClass ? <Link className="btn primary" href={udemyDashboardHref}>Xem tiến độ Udemy</Link> : <Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
     />
     <section className="card academic-unified-card training-workspace-section">
       <div className="class-action-row compact-sync-action-strip clean-sync-action-strip class-primary-actions">
         <div className="toolbar-actions">
-          {canRunFullCmsSync && <button className="btn primary class-action-button action-full-sync" type="button" disabled={actionBusy} onClick={runFullCmsSync}><AppIcon name="sync" size={16} />{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>}
-          {canRunFullCmsSync && <button className="btn secondary class-action-button action-score-update" type="button" disabled={actionBusy} onClick={runScoreUpdate}><AppIcon name="analytics" size={16} />{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>}
+          {!isUdemyClass && canRunFullCmsSync && <button className="btn primary class-action-button action-full-sync" type="button" disabled={actionBusy} onClick={runFullCmsSync}><AppIcon name="sync" size={16} />{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>}
+          {!isUdemyClass && canRunFullCmsSync && <button className="btn secondary class-action-button action-score-update" type="button" disabled={actionBusy} onClick={runScoreUpdate}><AppIcon name="analytics" size={16} />{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>}
           {can('manage_settings') && <Link className="btn secondary class-action-button action-week-settings" href="/semesters"><AppIcon name="calendar" size={16} />Cấu hình tuần học</Link>}
         </div>
       </div>
@@ -831,8 +834,15 @@ function ClassDetailContent() {
       {message && <p className="form-message">{message}</p>}
 
 
-      <TrainingContextChips items={[classInfo?.block_name || 'Chưa có block', classInfo?.teacher_name || classInfo?.teacher_username || 'Chưa phân công giảng viên', classInfo?.openedx_course_id || 'Chưa ghép Course CMS']} />
-      <TrainingKpiStrip compact items={[
+      <TrainingContextChips items={[classInfo?.block_name || 'Chưa có block', classInfo?.teacher_name || classInfo?.teacher_username || 'Chưa phân công giảng viên', isUdemyClass ? 'Nền tảng Udemy' : (classInfo?.openedx_course_id || 'Chưa ghép Course CMS')]} />
+      <TrainingKpiStrip compact items={isUdemyClass ? [
+        { key: 'students', label: 'Sinh viên AP', value: classInfo?.student_count ?? 0 },
+        { key: 'udemyImported', label: 'Đã có tiến độ', value: classInfo?.udemy_progress_student_count ?? 0 },
+        { key: 'udemyLate', label: 'Chậm tiến độ', value: classInfo?.udemy_progress_late_count ?? 0, tone: (classInfo?.udemy_progress_late_count || 0) > 0 ? 'warning' : 'success' },
+        { key: 'udemyAverage', label: 'Tiến độ TB', value: percentLabel(classInfo?.udemy_progress_average_percent) },
+        { key: 'platform', label: 'Nền tảng', value: 'Udemy', tone: 'success' },
+        { key: 'updated', label: 'Cập nhật gần nhất', value: classInfo?.udemy_progress_last_imported_at ? formatVNTimeDate(classInfo.udemy_progress_last_imported_at) : 'Chưa import' },
+      ] : [
         { key: 'students', label: 'Sinh viên', value: summary?.total ?? classInfo?.student_count ?? 0 },
         { key: 'cms', label: 'CMS match', value: `${matched}/${summary?.total ?? classInfo?.student_count ?? 0}`, hint: `${needsCmsAction} cần xử lý`, tone: needsCmsAction > 0 ? 'warning' : 'success' },
         { key: 'enrolled', label: 'Đã ghi danh', value: learningSummary?.counts?.enrolled || 0 },
@@ -840,10 +850,12 @@ function ClassDetailContent() {
         { key: 'progress', label: 'Hoàn thành TB', value: percentLabel(learningSummary?.avg_progress_percent) },
         { key: 'grade', label: 'Điểm tổng TB', value: grade10Label(learningSummary?.avg_grade_percent), hint: learningSummary?.last_synced_at ? `Cập nhật ${formatVNTimeDate(learningSummary.last_synced_at)}` : 'Chưa cập nhật' },
       ]} />
-      {!effectiveCourseId ? <TrainingMappingEmptyState action={canRunFullCmsSync ? <button className="btn secondary small" type="button" disabled={actionBusy} onClick={runFullCmsSync}>Đồng bộ full CMS</button> : undefined} /> : null}
+      {isUdemyClass ? <InlineNotice notice={{ ...noticeInfo('Điểm và tiến độ lấy từ file Udemy. Full CMS, Enrollment và cập nhật điểm Open edX đã được ẩn để tránh chạy sai nền tảng.', 'Lớp đang vận hành trên Udemy'), actionHref: udemyDashboardHref, actionLabel: 'Mở quản lý Udemy' }} /> : null}
+      {!isUdemyClass && !effectiveCourseId ? <TrainingMappingEmptyState action={canRunFullCmsSync ? <button className="btn secondary small" type="button" disabled={actionBusy} onClick={runFullCmsSync}>Đồng bộ full CMS</button> : undefined} /> : null}
 
     </section>
 
+    {!isUdemyClass ? <>
     <section className="card academic-unified-card online-learning-card">
       <div className="enterprise-content-section-head">
         <div className="enterprise-section-heading-identity">
@@ -909,6 +921,7 @@ function ClassDetailContent() {
         emptyDescription="Đổi trạng thái hoặc từ khóa tìm kiếm; nếu vẫn trống, kiểm tra roster AP và đồng bộ CMS."
       />
     </section>
+    </> : null}
 
 
 

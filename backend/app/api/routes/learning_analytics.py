@@ -17,6 +17,7 @@ from app.services.audit_log import log_audit
 from app.core.json_safe import json_safe_value
 from app.models.academic import AcademicClassSyncJob
 from app.services.academic_service import AcademicService
+from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
 from app.schemas.academic import AcademicClassSyncJobOut
 
 router = APIRouter()
@@ -97,6 +98,7 @@ def _enqueue_analytics_recalculate_job(
     limit: int | None = None,
 ) -> AcademicClassSyncJob:
     AcademicService(db).assert_can_access_class(user, class_id)
+    AcademicSubjectDeliveryService(db).assert_cms_workflow_allowed_for_class(class_id, job_type='learning_analytics_recalculate')
     service = LearningAnalyticsCoreService(db)
     rollout = service.rollout_control_report(class_id=class_id, course_id=course_id, allowed_class_ids=None, limit=10)
     rollout_item = next((item for item in (rollout.get('items') or []) if item.get('class_id') == class_id), None)

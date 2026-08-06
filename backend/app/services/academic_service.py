@@ -23,6 +23,7 @@ from app.models.academic import (
     AcademicStudent,
     AcademicStudentLearningSnapshot,
     AcademicSubject,
+    AcademicSubjectDelivery,
     AcademicTeacher,
     AcademicTeacherAssignment,
     AcademicTeacherReportSummary,
@@ -61,6 +62,8 @@ from app.services.academic.roster import AcademicRosterWorkflowService
 from app.services.academic.sync_enrollment import AcademicSyncEnrollmentWorkflowService
 from app.services.academic.identity import AcademicIdentityReconciliationWorkflowService
 from app.services.academic.teacher_report import AcademicTeacherReportWorkflowService
+from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
+from app.services.academic.udemy_progress import UdemyProgressService
 class AcademicService:
     CONNECTOR_MIN_CONTRACT_VERSION = 'learning-sync/v25.9.16.5.98'
     CONNECTOR_MIN_RUNTIME_VERSION = '25.9.16.5.98'
@@ -1640,6 +1643,7 @@ class AcademicService:
             'no_activity': 'no_activity',
             'low_progress': 'low_progress', 'low_grade': 'low_grade',
             'deadline_late': 'deadline_late', 'late_deadline': 'deadline_late', 'quiz_deadline_late': 'deadline_late',
+            'udemy_late': 'udemy_late', 'udemy_warning': 'udemy_late',
             'exam_not_eligible': 'exam_not_eligible', 'not_eligible': 'exam_not_eligible',
             'exam_insufficient_data': 'exam_insufficient_data', 'insufficient_data': 'exam_insufficient_data',
             'sync_error': 'sync_error', 'has_alert': 'has_alert', 'warning': 'has_alert',
@@ -1676,6 +1680,8 @@ class AcademicService:
             return isinstance(avg_progress, (int, float)) and avg_progress < self._low_progress_threshold()
         if status == 'low_grade':
             return isinstance(avg_grade, (int, float)) and avg_grade < self._low_grade_threshold()
+        if status == 'udemy_late':
+            return int(entry.get('udemy_progress_late_count') or 0) > 0
         if status == 'sync_error':
             return any('lỗi' in str(item).lower() for item in alerts)
         if status == 'has_alert':
@@ -2021,6 +2027,11 @@ class AcademicService:
         if not term or not subject:
             raise HTTPException(status_code=404, detail='Không tìm thấy kỳ hoặc môn AP')
         branch_value = (branch or subject.branch or term.branch or '').strip().lower() or None
+        AcademicSubjectDeliveryService(self.db).assert_subject_course_mapping_allowed(
+            term_id=term_id,
+            subject_id=subject_id,
+            branch=branch_value,
+        )
         current = self._scope_filter_course_mapping(
             term_id=term_id,
             block_id=None,
@@ -2128,23 +2139,39 @@ class AcademicService:
                 break
 
         visible_subject_ids = [str(item.get('id') or '') for item in subjects if str(item.get('id') or '')]
-        mapped_subject_ids: set[str] = set(visible_subject_ids) if dry_run else set()
+        eligible_subject_ids: list[str] = []
+        mapped_subject_ids: set[str] = set()
         subject_results: list[dict[str, Any]] = []
         already_mapped = 0
         auto_mapped = 0
         failed = 0
+        udemy_skipped = 0
+        delivery_service = AcademicSubjectDeliveryService(self.db)
         for item in subjects:
             subject_id = str(item.get('id') or '')
             if not subject_id:
                 continue
+            if delivery_service.is_subject_udemy_only(term_id=term_id, subject_id=subject_id, branch=branch_value):
+                udemy_skipped += 1
+                subject_results.append({
+                    'subject_id': subject_id,
+                    'subject_code': item.get('subject_code'),
+                    'status': 'udemy_skipped',
+                    'ok': True,
+                    'openedx_course_id': None,
+                    'message': 'Môn được cấu hình Udemy ở toàn bộ Block nên không auto map Course CMS.',
+                })
+                continue
+            eligible_subject_ids.append(subject_id)
             if dry_run:
+                mapped_subject_ids.add(subject_id)
                 subject_results.append({
                     'subject_id': subject_id,
                     'subject_code': item.get('subject_code'),
                     'status': 'scope_only',
                     'ok': True,
                     'openedx_course_id': item.get('openedx_course_id'),
-                    'message': 'Môn nằm trong phạm vi được phân quyền.',
+                    'message': 'Môn CMS/chưa chọn nằm trong phạm vi được phân quyền.',
                 })
                 continue
             status_value = str(item.get('course_mapping_status') or '').lower()
@@ -2196,10 +2223,28 @@ class AcademicService:
         capped = False
         if mapped_subject_ids:
             decision = self.access_decision(user)
-            class_query = self.db.query(AcademicClass).filter(
-                AcademicClass.active.is_(True),
-                AcademicClass.term_id == term_id,
-                AcademicClass.subject_id.in_(list(mapped_subject_ids)),
+            class_query = (
+                self.db.query(AcademicClass)
+                .outerjoin(
+                    AcademicSubjectDelivery,
+                    and_(
+                        AcademicSubjectDelivery.subject_id == AcademicClass.subject_id,
+                        AcademicSubjectDelivery.term_id == AcademicClass.term_id,
+                        AcademicSubjectDelivery.block_id == AcademicClass.block_id,
+                        func.lower(AcademicSubjectDelivery.branch) == func.lower(func.coalesce(AcademicClass.branch, branch_value or 'poly')),
+                        AcademicSubjectDelivery.active.is_(True),
+                    ),
+                )
+                .filter(
+                    AcademicClass.active.is_(True),
+                    AcademicClass.term_id == term_id,
+                    AcademicClass.subject_id.in_(list(mapped_subject_ids)),
+                    or_(
+                        AcademicSubjectDelivery.id.is_(None),
+                        AcademicSubjectDelivery.learning_platform.is_(None),
+                        AcademicSubjectDelivery.learning_platform != 'udemy',
+                    ),
+                )
             )
             if branch_value:
                 class_query = class_query.filter(func.lower(AcademicClass.branch) == branch_value)
@@ -2220,11 +2265,13 @@ class AcademicService:
             'subject_mapped': auto_mapped,
             'subject_already_mapped': already_mapped,
             'subject_failed': failed,
+            'subject_udemy_skipped': udemy_skipped,
             'class_total': class_total,
             'class_ids': class_ids,
             'capped': capped,
             'subject_results': subject_results,
-            'subject_ids': visible_subject_ids,
+            'subject_ids': eligible_subject_ids,
+            'visible_subject_ids': visible_subject_ids,
         }
 
     def list_teacher_subjects(
@@ -2245,6 +2292,7 @@ class AcademicService:
         needs_status_filter = status_filter != 'all'
         query = self.db.query(
             AcademicSubject,
+    AcademicSubjectDelivery,
             func.count(func.distinct(AcademicClass.id)).label('class_count'),
             func.count(func.distinct(AcademicClass.campus)).label('campus_count'),
             func.count(func.distinct(AcademicTeacherAssignment.teacher_id)).label('teacher_count'),
@@ -2393,6 +2441,21 @@ class AcademicService:
         teacher = self.db.query(AcademicTeacher).join(
             AcademicTeacherAssignment, AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
         ).filter(AcademicTeacherAssignment.class_id == cls.id).order_by(AcademicTeacher.username.asc()).first()
+        class_branch = str(cls.branch or 'poly').strip().lower()
+        delivery = self.db.query(AcademicSubjectDelivery).filter(
+            AcademicSubjectDelivery.subject_id == cls.subject_id,
+            AcademicSubjectDelivery.term_id == cls.term_id,
+            AcademicSubjectDelivery.block_id == cls.block_id,
+            func.lower(func.coalesce(AcademicSubjectDelivery.branch, 'poly')) == class_branch,
+            AcademicSubjectDelivery.active.is_(True),
+        ).first()
+        udemy_summary: dict[str, Any] = {}
+        if delivery and delivery.learning_platform == 'udemy':
+            udemy_summary = UdemyProgressService(self.db).dashboard(
+                delivery.id,
+                allowed_class_ids={cls.id},
+                scope_label=f'Lớp {cls.class_code}',
+            )['summary']
 
         effective_mapping = class_mapping or inherited
         return {
@@ -2422,6 +2485,12 @@ class AcademicService:
             'openedx_mapping_source': 'class_override' if class_mapping else ('subject_term_mapping' if inherited else None),
             'openedx_mapping_validation_status': effective_mapping.validation_status if effective_mapping else None,
             'quiz_count': 0,
+            'learning_platform': delivery.learning_platform if delivery else None,
+            'subject_delivery_id': delivery.id if delivery else None,
+            'udemy_progress_student_count': int(udemy_summary.get('total_students') or 0),
+            'udemy_progress_late_count': int(udemy_summary.get('late_students') or 0),
+            'udemy_progress_average_percent': udemy_summary.get('average_progress_percent'),
+            'udemy_progress_last_imported_at': udemy_summary.get('last_imported_at'),
         }
 
     def _student_mapping_item(
@@ -2865,6 +2934,20 @@ class AcademicService:
     def create_or_update_course_mapping(self, user: UserContext, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.rbac.is_system_admin(user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Chỉ admin được tạo mapping course AP ↔ Open edX')
+        AcademicSubjectDeliveryService(self.db).assert_subject_course_mapping_allowed(
+            term_id=str(payload.get('term_id') or ''),
+            subject_id=str(payload.get('subject_id') or ''),
+            branch=payload.get('branch'),
+        )
+        if payload.get('block_id'):
+            delivery = self.db.query(AcademicSubjectDelivery).filter(
+                AcademicSubjectDelivery.term_id == payload.get('term_id'),
+                AcademicSubjectDelivery.block_id == payload.get('block_id'),
+                AcademicSubjectDelivery.subject_id == payload.get('subject_id'),
+                AcademicSubjectDelivery.active.is_(True),
+            ).first()
+            if delivery and delivery.learning_platform == 'udemy':
+                raise HTTPException(status_code=409, detail='Môn trong Block này được chọn là Udemy. Không thể tạo mapping Course CMS.')
         validation = self.validate_course_mapping_payload(**{k: payload.get(k) for k in ['term_id', 'subject_id', 'openedx_course_id', 'block_id', 'campus', 'branch', 'openedx_course_title']})
         if not validation['can_save']:
             raise HTTPException(status_code=400, detail=validation['message'])
@@ -3045,6 +3128,7 @@ class AcademicService:
 
     def create_or_update_class_course_mapping(self, user: UserContext, class_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
+        AcademicSubjectDeliveryService(self.db).assert_cms_workflow_allowed_for_class(class_id, job_type='course_mapping')
         validation = self.validate_class_course_mapping(user, class_id, payload)
         if not validation['can_save']:
             raise HTTPException(status_code=400, detail=validation['message'])

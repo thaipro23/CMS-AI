@@ -1,0 +1,20 @@
+BATCH 33 — UDEMY PROGRESS IMPORT
+
+NEW
+backend/alembic/versions/0056_v25_9_16_7_2_64_33_udemy_progress.py
+backend/app/services/academic/udemy_progress.py
+backend/app/tests/test_v25_9_16_7_2_64_33_udemy_progress_import.py
+frontend/components/subject-management/UdemyProgressImportDialog.tsx
+docs/UDEMY_PROGRESS_IMPORT_BATCH_33.md
+docs/CHANGED_FILES_UDEMY_PROGRESS_IMPORT_BATCH_33.txt
+
+MODIFIED
+backend/app/models/academic.py
+backend/app/schemas/academic.py
+backend/app/services/academic/subject_delivery.py
+backend/app/api/routes/academic.py
+backend/app/worker.py
+frontend/types/index.ts
+frontend/lib/api.ts
+frontend/app/subject-management/page.tsx
+frontend/styles/subject-management-udemy.css

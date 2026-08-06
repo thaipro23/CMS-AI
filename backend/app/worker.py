@@ -4,6 +4,7 @@ from datetime import datetime
 from collections import defaultdict
 from celery import Celery
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, OperationalError
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.core.json_safe import json_safe_value
@@ -57,7 +58,11 @@ celery_app.conf.update(
         'academic_ap_sync_task': {'queue': 'sync'},
         'academic_class_sync_task': {'queue': 'sync'},
         'academic_subject_auto_map_all_sync_task': {'queue': 'sync'},
+        'academic_subject_catalog_refresh_task': {'queue': 'sync'},
         'academic_teacher_report_job_task': {'queue': 'exports'},
+        'academic_udemy_progress_import_task': {'queue': 'exports'},
+        'academic_udemy_progress_export_task': {'queue': 'exports'},
+        'academic_udemy_artifact_cleanup_task': {'queue': 'exports'},
         'analytics_ingest_task': {'queue': 'analytics'},
         'analytics_class_recalculate_task': {'queue': 'analytics'},
     },
@@ -72,20 +77,35 @@ celery_app.conf.update(
         'academic_ap_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
         'academic_class_sync_task': {'soft_time_limit': 1500, 'time_limit': 1800},
         'academic_subject_auto_map_all_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
+        'academic_subject_catalog_refresh_task': {'soft_time_limit': 900, 'time_limit': 1200},
         'academic_teacher_report_job_task': {'soft_time_limit': 1800, 'time_limit': 2100},
+        'academic_udemy_progress_import_task': {'soft_time_limit': 1800, 'time_limit': 2100},
+        'academic_udemy_progress_export_task': {'soft_time_limit': 1800, 'time_limit': 2100},
+        'academic_udemy_artifact_cleanup_task': {'soft_time_limit': 300, 'time_limit': 600},
         'analytics_ingest_task': {'soft_time_limit': 540, 'time_limit': 600},
         'analytics_class_recalculate_task': {'soft_time_limit': 1500, 'time_limit': 1800},
     },
 )
+_beat_schedule = dict(getattr(celery_app.conf, 'beat_schedule', {}) or {})
+_beat_schedule['udemy-artifact-cleanup'] = {
+    'task': 'academic_udemy_artifact_cleanup_task',
+    'schedule': max(3600, int(settings.academic_udemy_cleanup_interval_seconds)),
+}
 if getattr(settings, 'analytics_ingest_scheduler_enabled', False):
-    celery_app.conf.beat_schedule = {
-        **getattr(celery_app.conf, 'beat_schedule', {}),
-        'analytics-ingest-openedx-tracking-log': {
-            'task': 'analytics_ingest_task',
-            'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
-            'args': (None, None),
-        },
+    _beat_schedule['analytics-ingest-openedx-tracking-log'] = {
+        'task': 'analytics_ingest_task',
+        'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
+        'args': (None, None),
     }
+celery_app.conf.beat_schedule = _beat_schedule
+
+
+def _is_transient_worker_error(exc: Exception) -> bool:
+    if isinstance(exc, (OperationalError, ConnectionError, TimeoutError)):
+        return True
+    if isinstance(exc, DBAPIError):
+        return bool(getattr(exc, 'connection_invalidated', False))
+    return False
 
 
 @celery_app.task(name='generate_questions_task')
@@ -1217,8 +1237,10 @@ def _advisory_xact_lock_for_key(db, key: str) -> None:
 @celery_app.task(name='academic_class_sync_task')
 def academic_class_sync_task(job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
+    from fastapi import HTTPException
     from app.models.academic import AcademicClassSyncJob
     from app.services.academic_service import AcademicService
+    from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
     from app.services.audit_log import AuditErrorType, log_audit
 
     db = SessionLocal()
@@ -1259,6 +1281,43 @@ def academic_class_sync_task(job_id: str):
         # tampered job rows; for bulk child jobs the approved_class_id above
         # additionally freezes the scope authorized at parent enqueue time.
         service.assert_can_access_class(worker_user, job.class_id)
+        try:
+            AcademicSubjectDeliveryService(db).assert_cms_workflow_allowed_for_class(job.class_id, job_type=job.job_type)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            result = json_safe_value({
+                'ok': True,
+                'skipped': True,
+                'skip_reason': 'udemy_platform',
+                'class_id': job.class_id,
+                'job_type': job.job_type,
+                'message': str(exc.detail),
+            })
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = 'Đã bỏ qua vì môn được chọn là Udemy'
+            job.result_json = result
+            job.error_message = None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(
+                    db,
+                    action='academic.class_sync.async.skipped_udemy',
+                    status='success',
+                    message=job.progress_label,
+                    user=None,
+                    target_type='academic_class_sync_job',
+                    target_id=job.id,
+                    metadata=result,
+                )
+            except Exception:
+                pass
+            return result
         force = bool(job.force)
         limit = max(1, min(500, int(job.limit or 500)))
 
@@ -1397,6 +1456,101 @@ def _enqueue_academic_class_sync_child_job(
     db.refresh(job)
     academic_class_sync_task.delay(job.id)
     return job, False
+
+
+@celery_app.task(name='academic_subject_catalog_refresh_task')
+def academic_subject_catalog_refresh_task(job_id: str):
+    """Fetch the AP subject catalog and materialize term/block delivery rows."""
+    from app.models.academic import AcademicBulkOperationJob
+    from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+
+        request_json = job.request_json if isinstance(job.request_json, dict) else {}
+        job.status = 'running'
+        job.started_at = job.started_at or datetime.utcnow()
+        job.progress_current = 10
+        job.progress_total = 100
+        job.progress_label = 'Đang lấy danh sách môn từ AP'
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+
+        service = AcademicSubjectDeliveryService(db)
+        result = service.refresh_catalog(
+            term_id=str(request_json.get('term_id') or job.term_id or ''),
+            block_id=request_json.get('block_id') or None,
+            branch=request_json.get('branch') or job.branch,
+            actor=job.requested_by,
+        )
+        message = (
+            f"Đã lấy {int(result.get('ap_subject_count') or 0)} môn từ AP; "
+            f"tạo {int(result.get('delivery_created') or 0)} và cập nhật "
+            f"{int(result.get('delivery_updated') or 0)} bản ghi môn theo học kỳ/block."
+        )
+        result = {'ok': True, 'message': message, **result}
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if job:
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = message[:255]
+            job.result_json = json_safe_value(result)
+            job.error_message = None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+        try:
+            log_audit(
+                db,
+                action='academic.subject_delivery.catalog_refresh.finish',
+                status='success',
+                message=message,
+                user=None,
+                target_type='academic_bulk_operation_job',
+                target_id=job_id,
+                metadata=json_safe_value(result),
+            )
+        except Exception:
+            pass
+        return json_safe_value(result)
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if job:
+            job.status = 'failed'
+            job.error_message = str(exc)[:4000] or 'Không thể lấy danh sách môn từ AP.'
+            job.progress_label = 'Lấy danh sách môn từ AP thất bại'
+            job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(
+                    db,
+                    action='academic.subject_delivery.catalog_refresh.failed',
+                    status='failed',
+                    error_type=AuditErrorType.EXTERNAL_SERVICE,
+                    message=str(exc),
+                    user=None,
+                    target_type='academic_bulk_operation_job',
+                    target_id=job_id,
+                    metadata=json_safe_value({'request_json': job.request_json}),
+                )
+            except Exception:
+                pass
+        return {'ok': False, 'error': str(exc)}
+    finally:
+        db.close()
 
 
 @celery_app.task(name='academic_subject_auto_map_all_sync_task')
@@ -1578,6 +1732,372 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         db.close()
 
 
+# Compatibility marker retained for Batch 33 regression: @celery_app.task(name='academic_udemy_progress_import_task')
+@celery_app.task(
+    bind=True,
+    name='academic_udemy_progress_import_task',
+    max_retries=int(settings.academic_udemy_worker_max_retries),
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def academic_udemy_progress_import_task(self, job_id: str):
+    """Import one or many Udemy workbooks outside the HTTP request."""
+    from app.models.academic import AcademicBulkOperationJob, UdemyProgressImportBatch
+    from app.services.academic.udemy_progress import UdemyProgressService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+        request = job.request_json if isinstance(job.request_json, dict) else {}
+        batch_ids = [str(item) for item in (request.get('queued_batch_ids') or []) if str(item).strip()]
+        job.status = 'running'
+        job.started_at = job.started_at or datetime.utcnow()
+        job.progress_current = 5
+        job.progress_total = 100
+        job.progress_label = f'Đang xử lý {len(batch_ids)} file tiến độ Udemy'
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+
+        results: list[dict] = []
+        completed_count = 0
+        failed_count = 0
+        for index, batch_id in enumerate(batch_ids, start=1):
+            batch = db.get(UdemyProgressImportBatch, batch_id)
+            if not batch or batch.parent_job_id != job_id:
+                failed_count += 1
+                results.append({'id': batch_id, 'status': 'failed', 'message': 'Không tìm thấy batch hợp lệ.'})
+                continue
+            if batch.status not in {'queued', 'running'}:
+                results.append(UdemyProgressService(db).batch_to_dict(batch))
+                continue
+            batch.status = 'running'
+            batch.started_at = batch.started_at or datetime.utcnow()
+            batch.updated_at = datetime.utcnow()
+            db.add(batch)
+            job = db.get(AcademicBulkOperationJob, job_id)
+            if job:
+                job.progress_current = min(95, 5 + int((index - 1) / max(1, len(batch_ids)) * 90))
+                job.progress_label = f'Đang import file {index}/{len(batch_ids)}: {batch.file_name}'[:255]
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+            db.commit()
+            try:
+                service = UdemyProgressService(db)
+                service.process_batch(batch)
+                completed_count += 1
+                current = db.get(UdemyProgressImportBatch, batch_id)
+                results.append(service.batch_to_dict(current))
+            except Exception as exc:
+                db.rollback()
+                if _is_transient_worker_error(exc):
+                    retry_batch = db.get(UdemyProgressImportBatch, batch_id)
+                    if retry_batch:
+                        retry_batch.status = 'queued'
+                        retry_batch.updated_at = datetime.utcnow()
+                        db.add(retry_batch)
+                        db.commit()
+                    raise
+                failed_count += 1
+                failed_batch = db.get(UdemyProgressImportBatch, batch_id)
+                public_message = 'Không thể xử lý file Udemy. Hãy tải file lỗi hoặc kiểm tra Nhật ký hoạt động.'
+                if failed_batch:
+                    failed_batch.status = 'failed'
+                    failed_batch.error_message = public_message
+                    failed_batch.result_json = json_safe_value({
+                        'ok': False,
+                        'code': 'UDEMY_PROGRESS_IMPORT_FILE_FAILED',
+                        'message': public_message,
+                        'exception_class': exc.__class__.__name__,
+                    })
+                    failed_batch.finished_at = datetime.utcnow()
+                    failed_batch.updated_at = datetime.utcnow()
+                    db.add(failed_batch)
+                    db.commit()
+                    results.append(UdemyProgressService(db).batch_to_dict(failed_batch))
+                try:
+                    log_audit(
+                        db,
+                        action='academic.udemy_progress.import.file.failed',
+                        status='failed',
+                        error_type=AuditErrorType.VALIDATION_ERROR,
+                        message=str(exc),
+                        user=None,
+                        target_type='udemy_progress_import_batch',
+                        target_id=batch_id,
+                        metadata=json_safe_value({'parent_job_id': job_id, 'file_name': batch.file_name}),
+                    )
+                except Exception:
+                    pass
+            job = db.get(AcademicBulkOperationJob, job_id)
+            if job:
+                job.progress_current = min(95, 5 + int(index / max(1, len(batch_ids)) * 90))
+                job.progress_label = f'Đã xử lý {index}/{len(batch_ids)} file Udemy'
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+
+        skipped_batches = db.query(UdemyProgressImportBatch).filter(
+            UdemyProgressImportBatch.parent_job_id == job_id,
+            UdemyProgressImportBatch.status == 'skipped',
+        ).all()
+        duplicate_count = len(skipped_batches)
+        result = {
+            'ok': completed_count > 0 or (not batch_ids and duplicate_count > 0),
+            'completed_count': completed_count,
+            'failed_count': failed_count,
+            'duplicate_count': duplicate_count,
+            'partial_failure': bool(failed_count and completed_count),
+            'batches': results + [UdemyProgressService(db).batch_to_dict(item) for item in skipped_batches],
+        }
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if job:
+            if failed_count and completed_count == 0:
+                job.status = 'failed'
+                job.error_message = 'Không file Udemy nào được import thành công. Hãy xem chi tiết từng file.'
+                job.progress_label = 'Import tiến độ Udemy thất bại'
+            else:
+                job.status = 'completed'
+                job.error_message = None
+                job.progress_label = (
+                    f'Đã import {completed_count} file; {failed_count} file lỗi; {duplicate_count} file trùng.'
+                )[:255]
+            job.progress_current = 100
+            job.progress_total = 100
+            job.result_json = json_safe_value(result)
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+        try:
+            log_audit(
+                db,
+                action='academic.udemy_progress.import.finish',
+                status='success' if not failed_count else ('warning' if completed_count else 'failed'),
+                message=job.progress_label if job else 'Đã hoàn tất import tiến độ Udemy',
+                user=None,
+                target_type='academic_bulk_operation_job',
+                target_id=job_id,
+                metadata=json_safe_value(result),
+            )
+        except Exception:
+            pass
+        return json_safe_value(result)
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if _is_transient_worker_error(exc) and int(self.request.retries or 0) < int(settings.academic_udemy_worker_max_retries):
+            if job:
+                job.status = 'queued'
+                job.progress_label = f'Hạ tầng tạm thời gián đoạn; sẽ thử lại ({int(self.request.retries or 0) + 1}/{int(settings.academic_udemy_worker_max_retries)})'[:255]
+                job.error_message = None
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+            countdown = min(300, 30 * (2 ** int(self.request.retries or 0)))
+            raise self.retry(exc=exc, countdown=countdown)
+        if job:
+            job.status = 'failed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = 'Import tiến độ Udemy thất bại'
+            job.error_message = 'Không thể hoàn tất import tiến độ Udemy. Vui lòng thử lại hoặc kiểm tra Nhật ký hoạt động.'
+            job.result_json = json_safe_value({'ok': False, 'code': 'UDEMY_PROGRESS_IMPORT_FAILED', 'message': job.error_message})
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(db, action='academic.udemy_progress.import.failed', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_bulk_operation_job', target_id=job_id)
+            except Exception:
+                pass
+        return json_safe_value({'ok': False, 'error': 'udemy_progress_import_failed'})
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name='academic_udemy_progress_export_task',
+    max_retries=int(settings.academic_udemy_worker_max_retries),
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def academic_udemy_progress_export_task(self, job_id: str):
+    """Build a scope-preserving Udemy workbook outside request/response."""
+    from pathlib import Path
+    from app.models.academic import AcademicBulkOperationJob, AcademicSubject
+    from app.services.academic.udemy_progress import UdemyProgressService
+    from app.services.audit_log import AuditErrorType, log_audit
+    from app.api.routes.academic import _udemy_delivery_access_scope
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+        request = job.request_json if isinstance(job.request_json, dict) else {}
+        worker_user = _worker_user_from_request_json(
+            request,
+            fallback_user_id=job.requested_by,
+            source='celery_udemy_progress_export',
+            job_id=job.id,
+        )
+        delivery_id = str(request.get('delivery_id') or '')
+        delivery, current_allowed_ids, current_scope_label = _udemy_delivery_access_scope(db, worker_user, delivery_id)
+        requested_ids = request.get('allowed_class_ids')
+        if requested_ids is None:
+            allowed_class_ids = current_allowed_ids
+        else:
+            requested_set = {str(item) for item in requested_ids if str(item).strip()}
+            allowed_class_ids = requested_set if current_allowed_ids is None else requested_set.intersection(current_allowed_ids)
+            if not allowed_class_ids and requested_set:
+                raise PermissionError('Quyền hiện tại không còn bao phủ phạm vi export đã yêu cầu.')
+        scope_label = str(request.get('scope_label') or current_scope_label)
+        job.status = 'running'
+        job.started_at = job.started_at or datetime.utcnow()
+        job.progress_current = 10
+        job.progress_label = 'Đang dựng báo cáo tiến độ Udemy'
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+
+        service = UdemyProgressService(db)
+        raw = service.export_workbook(
+            delivery_id,
+            allowed_class_ids=allowed_class_ids,
+            scope_label=scope_label,
+            q=request.get('q'),
+            class_id=request.get('class_id'),
+            status_filter=request.get('status'),
+        )
+        job = db.get(AcademicBulkOperationJob, job_id)
+        job.progress_current = 85
+        job.progress_label = 'Đang ghi file Excel Udemy'
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+
+        root = Path(settings.local_storage_path or '/app/.runtime').expanduser().resolve()
+        out_dir = root / 'udemy-progress-exports'
+        out_dir.mkdir(parents=True, exist_ok=True)
+        subject = db.get(AcademicSubject, delivery.subject_id)
+        code = ''.join(char if char.isalnum() or char in {'-', '_'} else '-' for char in str(subject.subject_code if subject else 'udemy'))
+        filename = f'udemy-progress-{code}-{job.id[:8]}.xlsx'
+        path = out_dir / filename
+        temp_path = out_dir / f'.{filename}.tmp'
+        temp_path.write_bytes(raw)
+        temp_path.replace(path)
+        active_import_job_ids = {
+            str(row[0])
+            for row in db.query(AcademicBulkOperationJob.id).filter(
+                AcademicBulkOperationJob.job_type == 'udemy_progress_import',
+                AcademicBulkOperationJob.status.in_(['queued', 'running']),
+            ).all()
+        }
+        cleanup = UdemyProgressService.cleanup_expired_artifacts(
+            root=root,
+            protected_import_job_ids=active_import_job_ids,
+            protected_export_file_names={filename},
+        )
+
+        result = {
+            'ok': True,
+            'delivery_id': delivery_id,
+            'row_count': int(request.get('row_count') or 0),
+            'file_name': filename,
+            'bytes': len(raw),
+            'cleanup': cleanup,
+        }
+        job = db.get(AcademicBulkOperationJob, job_id)
+        job.status = 'completed'
+        job.progress_current = 100
+        job.progress_total = 100
+        job.progress_label = f'Đã tạo báo cáo Udemy {int(request.get("row_count") or 0)} dòng'[:255]
+        job.result_json = json_safe_value(result)
+        job.error_message = None
+        job.finished_at = datetime.utcnow()
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+        try:
+            log_audit(
+                db,
+                action='academic.udemy_progress.export.finish',
+                status='success',
+                message=job.progress_label,
+                user=None,
+                target_type='academic_bulk_operation_job',
+                target_id=job.id,
+                metadata=json_safe_value({'delivery_id': delivery_id, 'row_count': request.get('row_count'), 'bytes': len(raw)}),
+            )
+        except Exception:
+            pass
+        return json_safe_value(result)
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if _is_transient_worker_error(exc) and int(self.request.retries or 0) < int(settings.academic_udemy_worker_max_retries):
+            if job:
+                job.status = 'queued'
+                job.progress_label = f'Hạ tầng tạm thời gián đoạn; export sẽ thử lại ({int(self.request.retries or 0) + 1}/{int(settings.academic_udemy_worker_max_retries)})'[:255]
+                job.error_message = None
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+            countdown = min(300, 30 * (2 ** int(self.request.retries or 0)))
+            raise self.retry(exc=exc, countdown=countdown)
+        if job:
+            public_message = 'Không thể hoàn tất export Udemy. Vui lòng thử lại hoặc kiểm tra Nhật ký hoạt động.'
+            job.status = 'failed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = 'Export tiến độ Udemy thất bại'
+            job.error_message = public_message
+            job.result_json = json_safe_value({'ok': False, 'code': 'UDEMY_PROGRESS_EXPORT_FAILED', 'message': public_message})
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(db, action='academic.udemy_progress.export.failed', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_bulk_operation_job', target_id=job_id)
+            except Exception:
+                pass
+        return json_safe_value({'ok': False, 'error': 'udemy_progress_export_failed'})
+    finally:
+        db.close()
+
+
+@celery_app.task(name='academic_udemy_artifact_cleanup_task', acks_late=True)
+def academic_udemy_artifact_cleanup_task():
+    """Periodic retention enforcement without deleting active import inputs."""
+    from app.models.academic import AcademicBulkOperationJob
+    from app.services.academic.udemy_progress import UdemyProgressService
+
+    db = SessionLocal()
+    try:
+        active_import_job_ids = {
+            str(row[0])
+            for row in db.query(AcademicBulkOperationJob.id).filter(
+                AcademicBulkOperationJob.job_type == 'udemy_progress_import',
+                AcademicBulkOperationJob.status.in_(['queued', 'running']),
+            ).all()
+        }
+        result = UdemyProgressService.cleanup_expired_artifacts(
+            protected_import_job_ids=active_import_job_ids,
+        )
+        return json_safe_value({'ok': True, **result})
+    finally:
+        db.close()
+
+
 @celery_app.task(name='academic_teacher_report_job_task')
 def academic_teacher_report_job_task(job_id: str):
     """Run teacher-management cache rebuild/export jobs outside request/response."""
@@ -1746,7 +2266,9 @@ def analytics_ingest_task(file_path: str | None = None, max_lines: int | None = 
 @celery_app.task(name='analytics_class_recalculate_task')
 def analytics_class_recalculate_task(job_id: str):
     """Recalculate online-learning signals for one class using the existing job table."""
+    from fastapi import HTTPException
     from app.models.academic import AcademicClassSyncJob
+    from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
     from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
     from app.services.audit_log import AuditErrorType, log_audit
 
@@ -1773,6 +2295,48 @@ def analytics_class_recalculate_task(job_id: str):
         job.progress_label = 'Đang tính lại học online'
         db.add(job)
         db.commit()
+
+        try:
+            AcademicSubjectDeliveryService(db).assert_cms_workflow_allowed_for_class(
+                job.class_id,
+                job_type='learning_analytics_recalculate',
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            result = json_safe_value({
+                'ok': True,
+                'skipped': True,
+                'skip_reason': 'udemy_platform',
+                'class_id': job.class_id,
+                'course_id': course_id,
+                'message': str(exc.detail),
+            })
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = 'Đã bỏ qua học online vì môn được chọn là Udemy'
+            job.result_json = result
+            job.error_message = None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(
+                    db,
+                    action='analytics.learning_behavior.recalculate.async.skipped_udemy',
+                    status='success',
+                    message=job.progress_label,
+                    user=None,
+                    course_id=course_id,
+                    target_type='academic_class_sync_job',
+                    target_id=job.id,
+                    metadata=result,
+                )
+            except Exception:
+                pass
+            return result
 
         service = LearningAnalyticsCoreService(db)
         video_result = service.recalculate_course_video_progress(course_id=course_id, username=username, class_id=job.class_id)

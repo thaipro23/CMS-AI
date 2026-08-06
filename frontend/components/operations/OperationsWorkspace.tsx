@@ -32,7 +32,7 @@ export function CompactFilterBar({ children, actions, ariaLabel = 'Bộ lọc' }
 }
 
 export type WorkspaceTab = { key: string; label: string; count?: number; icon?: AppIconName }
-export function WorkspaceTabs({ tabs, active, onChange, ariaLabel = 'Nhóm cấu hình' }: { tabs: WorkspaceTab[]; active: string; onChange: (key: string) => void; ariaLabel?: string }) {
+export function WorkspaceTabs({ tabs, active, onChange, ariaLabel = 'Nhóm cấu hình', idPrefix }: { tabs: WorkspaceTab[]; active: string; onChange: (key: string) => void; ariaLabel?: string; idPrefix?: string }) {
   function handleKey(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     if (!['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
@@ -53,6 +53,8 @@ export function WorkspaceTabs({ tabs, active, onChange, ariaLabel = 'Nhóm cấu
       key={tab.key}
       type="button"
       role="tab"
+      id={idPrefix ? `${idPrefix}-tab-${tab.key}` : undefined}
+      aria-controls={idPrefix ? `${idPrefix}-panel-${tab.key}` : undefined}
       aria-selected={active === tab.key}
       tabIndex={active === tab.key ? 0 : -1}
       className={active === tab.key ? 'active' : ''}

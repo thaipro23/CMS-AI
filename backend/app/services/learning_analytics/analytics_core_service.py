@@ -25,6 +25,7 @@ from app.models.learning_analytics import (
 from app.services.learning_analytics.learning_behavior_classifier import BehaviorInput, classify_learning_behavior
 from app.services.learning_analytics.session_deadline_mapper import build_session_mappings_from_blocks, week_for_session
 from app.services.academic_service import AcademicService
+from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
 from app.services.learning_analytics.tracking_event_parser import TrackingParseError, parse_tracking_log_line
 from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
@@ -258,6 +259,7 @@ class LearningAnalyticsCoreService:
         queued: list[dict[str, Any]] = []
         skipped: Counter[str] = Counter()
         considered = 0
+        delivery_service = AcademicSubjectDeliveryService(self.db)
 
         # Highest-impact courses first. The event count is not used as a score
         # for students; it only prioritizes which class jobs enter the queue
@@ -272,6 +274,15 @@ class LearningAnalyticsCoreService:
                 continue
             impacted_users = sorted(str(u) for u in (course_usernames.get(course_id) or set()) if str(u or '').strip())
             for class_id in class_ids:
+                try:
+                    class_row = self.db.get(AcademicClass, class_id)
+                    delivery = delivery_service.delivery_for_class(class_row) if class_row else None
+                    if delivery and delivery.learning_platform == 'udemy':
+                        skipped['UDEMY_PLATFORM'] += 1
+                        continue
+                except Exception:
+                    skipped['PLATFORM_LOOKUP_ERROR'] += 1
+                    continue
                 considered += 1
                 if len(queued) >= max_jobs_per_run:
                     skipped['RUN_JOB_CAP_REACHED'] += 1
