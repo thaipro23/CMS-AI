@@ -1830,6 +1830,12 @@ export type AcademicTerm = {
   term_code: string
   term_name: string
   branch?: string | null
+  learning_platform?: 'cms' | 'udemy'
+  subject_delivery_id?: string | null
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
   start_date?: string | null
   end_date?: string | null
   active: boolean
@@ -1861,6 +1867,22 @@ export type AcademicSubject = {
 }
 
 export type AcademicLearningPlatform = 'cms' | 'udemy' | null
+
+export type AcademicSubjectDeliveryBlock = {
+  id: string
+  block_id: string
+  block_name: string
+  learning_platform: AcademicLearningPlatform
+  class_count: number
+  campus_count: number
+  has_udemy_plan: boolean
+  udemy_plan_version?: number | null
+  udemy_milestone_count?: number
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  last_udemy_import_at?: string | null
+}
 
 export type AcademicSubjectDelivery = {
   id: string
@@ -1894,6 +1916,13 @@ export type AcademicSubjectDelivery = {
   udemy_progress_late_count?: number
   udemy_progress_unmatched_count?: number
   metadata_json?: Record<string, any> | null
+  delivery_ids?: string[]
+  block_count?: number
+  block_names?: string[]
+  platform_consistent?: boolean
+  platform_values?: AcademicLearningPlatform[]
+  management_scope?: 'delivery' | 'term'
+  block_deliveries?: AcademicSubjectDeliveryBlock[]
   created_at?: string | null
   updated_at?: string | null
 }
@@ -1910,6 +1939,7 @@ export type AcademicSubjectDeliveryListResponse = {
     cms_count: number
     udemy_count: number
     unassigned_count: number
+    mixed_count?: number
     class_count: number
     scope_label: string
   }
@@ -2192,6 +2222,8 @@ export type AcademicAssignmentDefenseScore = {
 }
 
 export type AcademicSubjectManagement = AcademicSubject & {
+  learning_platform: 'cms' | 'udemy'
+  subject_delivery_ids?: string[]
   class_count: number
   campus_count: number
   teacher_count: number
@@ -2215,9 +2247,15 @@ export type AcademicSubjectManagement = AcademicSubject & {
   learning_last_synced_at?: string | null
   learning_component_summaries?: AcademicLearningComponentScore[]
   learning_alerts?: string[]
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
 }
 
 export type AcademicSubjectManagementSummary = {
+  learning_platform?: 'cms' | 'udemy'
   subject_count: number
   class_count: number
   cms_class_count?: number
@@ -2234,6 +2272,10 @@ export type AcademicSubjectManagementSummary = {
   learning_active_count: number
   learning_synced_count: number
   alert_subject_count: number
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  udemy_progress_average_percent?: number | null
   scope_label: string
 }
 
@@ -2559,6 +2601,7 @@ export type AcademicTrainingClassReport = {
 }
 
 export type AcademicTrainingTeacherReport = {
+  learning_platform?: 'cms' | 'udemy' | 'all'
   teacher_id: string
   teacher_code?: string | null
   teacher_username: string
@@ -2692,6 +2735,10 @@ export type AcademicClassListSummary = {
   course_mapped_count?: number
   course_missing_count?: number
   alert_class_count?: number
+  learning_platform?: 'cms' | 'udemy'
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_average_percent?: number | null
   scope_label?: string
 }
 

@@ -23,6 +23,7 @@ type NavItem = {
   diagnostic?: boolean
   exact?: boolean
   matchPrefixes?: string[]
+  platform?: 'cms' | 'udemy'
 }
 
 const SIDEBAR_STORAGE_KEY = 'ai-shell-sidebar'
@@ -50,8 +51,10 @@ const navItems: NavItem[] = [
   },
   { href: '/bank/quiz', label: 'Tạo Quiz', icon: 'quiz', group: 'bank', permission: 'publish_questions' },
   { href: '/bank/history', label: 'Lịch sử Quiz', icon: 'release', group: 'bank', permission: 'publish_questions' },
-  { href: '/student-management', label: 'Quản lý sinh viên', icon: 'students', group: 'training', permission: 'view_training_reports' },
-  { href: '/teacher-management', label: 'Quản lý giảng viên', icon: 'teachers', group: 'training', permission: 'view_training_reports' },
+  { href: '/student-management/cms', label: 'Quản lý sinh viên CMS', icon: 'students', group: 'training', permission: 'view_training_reports', platform: 'cms', matchPrefixes: ['/student-management/cms', '/student-management/subjects', '/student-management/classes'] },
+  { href: '/teacher-management/cms', label: 'Quản lý giảng viên CMS', icon: 'teachers', group: 'training', permission: 'view_training_reports', platform: 'cms', matchPrefixes: ['/teacher-management/cms', '/teacher-management/teachers'] },
+  { href: '/student-management/udemy', label: 'Quản lý sinh viên Udemy', icon: 'students', group: 'training', permission: 'view_training_reports', platform: 'udemy', matchPrefixes: ['/student-management/udemy', '/student-management/subjects', '/student-management/classes'] },
+  { href: '/teacher-management/udemy', label: 'Quản lý giảng viên Udemy', icon: 'teachers', group: 'training', permission: 'view_training_reports', platform: 'udemy', matchPrefixes: ['/teacher-management/udemy', '/teacher-management/teachers'] },
   { href: '/analytics/learning', label: 'Phân tích học tập', icon: 'analytics', group: 'training', permission: 'view_training_reports' },
   { href: '/jobs', label: 'Tác vụ nền', icon: 'jobs', group: 'operations', permission: 'view_jobs' },
   { href: '/audit', label: 'Nhật ký hoạt động', icon: 'audit', group: 'operations', permission: 'view_jobs' },
@@ -64,16 +67,18 @@ const navItems: NavItem[] = [
   { href: '/settings', label: 'Cài đặt', icon: 'settings', group: 'admin', permission: 'manage_settings' },
 ]
 
-function navMatchScore(pathname: string, item: NavItem) {
+function navMatchScore(pathname: string, item: NavItem, activePlatform: 'cms' | 'udemy') {
   if (item.exact && pathname === item.href) return 10_000 + item.href.length
+  if (pathname === item.href) return 10_000 + item.href.length
+  if (item.platform && item.platform !== activePlatform) return -1
   const prefixes = item.matchPrefixes?.length ? item.matchPrefixes : item.exact ? [] : [item.href]
   const matches = prefixes.filter((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
   return matches.reduce((score, prefix) => Math.max(score, prefix.length), -1)
 }
 
-function bestNavItem(pathname: string, items: NavItem[]) {
+function bestNavItem(pathname: string, items: NavItem[], activePlatform: 'cms' | 'udemy' = 'cms') {
   return items
-    .map((item) => ({ item, score: navMatchScore(pathname, item) }))
+    .map((item) => ({ item, score: navMatchScore(pathname, item, activePlatform) }))
     .filter(({ score }) => score >= 0)
     .sort((a, b) => b.score - a.score)[0]?.item
 }
@@ -97,8 +102,8 @@ function requiredPermissionForPath(pathname: string): string | null {
   return rules.find(([pattern]) => pattern.test(pathname))?.[1] || null
 }
 
-function pageLabel(pathname: string) {
-  return bestNavItem(pathname, navItems)?.label || 'AI Server'
+function pageLabel(pathname: string, activePlatform: 'cms' | 'udemy') {
+  return bestNavItem(pathname, navItems, activePlatform)?.label || 'AI Server'
 }
 
 function fallbackPageLayoutClass(pathname: string) {
@@ -147,6 +152,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
   const [pageChrome, setPageChrome] = useState<PageChrome | null>(null)
+  const [activePlatform, setActivePlatform] = useState<'cms' | 'udemy'>('cms')
   const [pageLayoutClass, setPageLayoutClass] = useState(() => fallbackPageLayoutClass(pathname))
   const { courseId, role, userId, can, isAuthenticated, authReady, clearAuthSession } = useAppContext()
   const { notify } = useFeedback()
@@ -170,13 +176,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const availableItems = useMemo(() => navItems.filter((item) => !item.diagnostic || SHOW_DIAGNOSTICS_UI), [])
   const visibleItems = useMemo(() => authReady ? availableItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, availableItems, can])
-  const activeNavItem = useMemo(() => bestNavItem(pathname, availableItems), [availableItems, pathname])
+  const activeNavItem = useMemo(() => bestNavItem(pathname, availableItems, activePlatform), [activePlatform, availableItems, pathname])
   const currentGroup = activeNavItem?.group
   const routePermission = requiredPermissionForPath(pathname)
   const diagnosticsRouteBlocked = pathname.startsWith('/ops/readiness') && !SHOW_DIAGNOSTICS_UI
   const routeAllowed = !diagnosticsRouteBlocked && (!routePermission || (authReady && can(routePermission)))
   const fallbackHref = visibleItems[0]?.href || '/bank'
   const isBankHierarchyRoute = pathname === '/bank/departments' || pathname.startsWith('/bank/departments/') || pathname.startsWith('/bank/subjects/') || pathname.startsWith('/bank/subject-versions/') || pathname.startsWith('/bank/chapters/')
+
+
+  useEffect(() => {
+    const queryPlatform = new URLSearchParams(window.location.search).get('platform')
+    const nextPlatform: 'cms' | 'udemy' = pathname.includes('/udemy') || queryPlatform === 'udemy' ? 'udemy' : pathname.includes('/cms') || queryPlatform === 'cms' ? 'cms' : (window.sessionStorage.getItem('ai-training-platform') === 'udemy' ? 'udemy' : 'cms')
+    setActivePlatform(nextPlatform)
+    window.sessionStorage.setItem('ai-training-platform', nextPlatform)
+  }, [pathname])
 
   useEffect(() => {
     const media = window.matchMedia(SHELL_MOBILE_QUERY)
@@ -396,6 +410,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   key={item.href}
                   href={item.href}
                   className={`enterprise-nav-link${active ? ' active' : ''}`}
+                  onClick={() => { if (item.platform) { setActivePlatform(item.platform); window.sessionStorage.setItem('ai-training-platform', item.platform) } }}
                   aria-current={active ? 'page' : undefined}
                   data-tooltip={item.label}
                 >
@@ -427,7 +442,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {pageChrome?.icon ? <VisualIcon label={pageChrome.title} icon={pageChrome.icon} tone={pageChrome.tone} size={17} className="enterprise-topbar-page-icon" /> : null}
             <div className="enterprise-topbar-page-copy">
               {topbarBreadcrumbs.length ? <nav className="enterprise-topbar-breadcrumbs" aria-label="Đường dẫn trang"><ol>{topbarBreadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={item.href}>{item.label}</Link> : <span>{item.label}</span>}</li>)}</ol></nav> : pageChrome?.eyebrow ? <small>{pageChrome.eyebrow}</small> : null}
-              {!topbarBreadcrumbs.length ? <h1>{pageChrome?.title || pageLabel(pathname)}</h1> : null}
+              {!topbarBreadcrumbs.length ? <h1>{pageChrome?.title || pageLabel(pathname, activePlatform)}</h1> : null}
             </div>
           </div>
         </div>

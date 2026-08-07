@@ -20,6 +20,12 @@ class AcademicTermOut(BaseModel):
     term_code: str
     term_name: str
     branch: str | None = None
+    learning_platform: str = 'cms'
+    subject_delivery_id: str | None = None
+    udemy_progress_student_count: int = 0
+    udemy_progress_late_count: int = 0
+    udemy_progress_average_percent: float | None = None
+    udemy_progress_last_imported_at: datetime | None = None
     start_date: datetime | None = None
     end_date: datetime | None = None
     active: bool
@@ -97,6 +103,8 @@ class AcademicSubjectOut(BaseModel):
 
 
 class AcademicSubjectManagementOut(AcademicSubjectOut):
+    learning_platform: str = 'cms'
+    subject_delivery_ids: list[str] = Field(default_factory=list)
     class_count: int = 0
     campus_count: int = 0
     teacher_count: int = 0
@@ -118,6 +126,27 @@ class AcademicSubjectManagementOut(AcademicSubjectOut):
     learning_last_synced_at: datetime | None = None
     learning_component_summaries: list[dict[str, Any]] = Field(default_factory=list)
     learning_alerts: list[str] = Field(default_factory=list)
+    udemy_progress_student_count: int = 0
+    udemy_progress_late_count: int = 0
+    udemy_progress_unmatched_count: int = 0
+    udemy_progress_average_percent: float | None = None
+    udemy_progress_last_imported_at: datetime | None = None
+
+
+class AcademicSubjectDeliveryBlockOut(BaseModel):
+    id: str
+    block_id: str
+    block_name: str
+    learning_platform: str | None = None
+    class_count: int = 0
+    campus_count: int = 0
+    has_udemy_plan: bool = False
+    udemy_plan_version: int | None = None
+    udemy_milestone_count: int = 0
+    udemy_progress_student_count: int = 0
+    udemy_progress_late_count: int = 0
+    udemy_progress_unmatched_count: int = 0
+    last_udemy_import_at: datetime | None = None
 
 
 class AcademicSubjectDeliveryOut(BaseModel):
@@ -152,6 +181,13 @@ class AcademicSubjectDeliveryOut(BaseModel):
     udemy_progress_late_count: int = 0
     udemy_progress_unmatched_count: int = 0
     metadata_json: dict[str, Any] | None = None
+    delivery_ids: list[str] = Field(default_factory=list)
+    block_count: int = 1
+    block_names: list[str] = Field(default_factory=list)
+    platform_consistent: bool = True
+    platform_values: list[str | None] = Field(default_factory=list)
+    management_scope: str = 'delivery'
+    block_deliveries: list[AcademicSubjectDeliveryBlockOut] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -161,6 +197,7 @@ class AcademicSubjectDeliverySummaryOut(BaseModel):
     cms_count: int = 0
     udemy_count: int = 0
     unassigned_count: int = 0
+    mixed_count: int = 0
     class_count: int = 0
     scope_label: str = 'Toàn bộ bộ lọc'
 
@@ -441,6 +478,7 @@ class UdemyProgressDashboardOut(BaseModel):
 
 
 class AcademicSubjectManagementSummaryOut(BaseModel):
+    learning_platform: str = 'cms'
     subject_count: int = 0
     class_count: int = 0
     student_count: int = 0
@@ -453,6 +491,10 @@ class AcademicSubjectManagementSummaryOut(BaseModel):
     learning_active_count: int = 0
     learning_synced_count: int = 0
     alert_subject_count: int = 0
+    udemy_progress_student_count: int = 0
+    udemy_progress_late_count: int = 0
+    udemy_progress_unmatched_count: int = 0
+    udemy_progress_average_percent: float | None = None
     scope_label: str = 'Toàn bộ bộ lọc'
 
 
@@ -480,6 +522,12 @@ class AcademicClassOut(BaseModel):
     class_name: str
     campus: str | None = None
     branch: str | None = None
+    learning_platform: str = 'cms'
+    subject_delivery_id: str | None = None
+    udemy_progress_student_count: int = 0
+    udemy_progress_late_count: int = 0
+    udemy_progress_average_percent: float | None = None
+    udemy_progress_last_imported_at: datetime | None = None
     start_date: datetime | None = None
     end_date: datetime | None = None
     active: bool

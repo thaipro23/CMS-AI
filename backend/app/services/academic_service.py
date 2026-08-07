@@ -29,6 +29,7 @@ from app.models.academic import (
     AcademicTeacherReportSummary,
     AcademicTerm,
     OpenEdXUserMapping,
+    UdemyStudentProgress,
 )
 from app.services.business_rbac import BusinessRBACService
 from app.services.openedx_student_insight import OpenEdXConnectorClient, normalize_username, mask_email
@@ -284,6 +285,24 @@ class AcademicService:
             query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
         return query.order_by(AcademicSubject.subject_code.asc()).limit(500).all()
 
+    @staticmethod
+    def _normalize_training_platform(value: str | None, *, default: str = 'cms') -> str:
+        normalized = str(value or default).strip().lower()
+        if normalized not in {'cms', 'udemy'}:
+            raise HTTPException(status_code=422, detail='Nền tảng đào tạo chỉ nhận cms hoặc udemy')
+        return normalized
+
+    @staticmethod
+    def _class_delivery_join_condition():
+        return and_(
+            AcademicSubjectDelivery.subject_id == AcademicClass.subject_id,
+            AcademicSubjectDelivery.term_id == AcademicClass.term_id,
+            AcademicSubjectDelivery.block_id == AcademicClass.block_id,
+            func.lower(func.coalesce(AcademicSubjectDelivery.branch, 'poly'))
+            == func.lower(func.coalesce(AcademicClass.branch, 'poly')),
+            AcademicSubjectDelivery.active.is_(True),
+        )
+
     def list_teacher_classes(
         self,
         user: UserContext,
@@ -295,11 +314,13 @@ class AcademicService:
         branch: str | None = None,
         search: str | None = None,
         learning_status: str | None = None,
+        learning_platform: str | None = 'cms',
         teacher_id: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
+        platform = self._normalize_training_platform(learning_platform)
         decision = self.access_decision(user)
         status_filter = self._normalize_learning_list_filter(learning_status)
         needs_status_filter = status_filter != 'all'
@@ -308,8 +329,6 @@ class AcademicService:
             func.count(AcademicClassStudent.student_id).label('student_count'),
         ).group_by(AcademicClassStudent.class_id).subquery()
 
-        # Aggregate teacher display fields per class so the main query remains
-        # one row per class and avoids PostgreSQL DISTINCT ON ORDER BY traps.
         teacher_summary_sq = self.db.query(
             AcademicTeacherAssignment.class_id.label('class_id'),
             func.min(AcademicTeacher.username).label('teacher_username'),
@@ -328,9 +347,12 @@ class AcademicService:
             func.coalesce(student_count_sq.c.student_count, 0).label('student_count'),
             AcademicClassCourseMapping.openedx_course_id,
             AcademicClassCourseMapping.openedx_cohort_name,
+            AcademicSubjectDelivery.id.label('subject_delivery_id'),
+            AcademicSubjectDelivery.learning_platform.label('delivery_platform'),
         ).join(AcademicTerm, AcademicTerm.id == AcademicClass.term_id)
         query = query.outerjoin(AcademicBlock, AcademicBlock.id == AcademicClass.block_id)
         query = query.join(AcademicSubject, AcademicSubject.id == AcademicClass.subject_id)
+        query = query.outerjoin(AcademicSubjectDelivery, self._class_delivery_join_condition())
         query = query.filter(AcademicClass.active.is_(True), AcademicSubject.active.is_(True))
         query = query.outerjoin(teacher_summary_sq, teacher_summary_sq.c.class_id == AcademicClass.id)
         query = query.outerjoin(student_count_sq, student_count_sq.c.class_id == AcademicClass.id)
@@ -338,6 +360,10 @@ class AcademicService:
             AcademicClassCourseMapping,
             and_(AcademicClassCourseMapping.class_id == AcademicClass.id, AcademicClassCourseMapping.active.is_(True)),
         )
+        if platform == 'udemy':
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
+        else:
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
         if not decision.unrestricted:
             access_conditions = []
             if decision.teacher_ids:
@@ -350,7 +376,7 @@ class AcademicService:
             if decision.campus_codes:
                 access_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
             if not access_conditions:
-                return {'items': [], 'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0, 'has_next': False}
+                return {'items': [], 'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0, 'has_next': False, 'summary': {'learning_platform': platform}}
             query = query.filter(or_(*access_conditions))
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
@@ -363,6 +389,10 @@ class AcademicService:
         if campus:
             campus_code = self._campus_filter_value(campus)
             query = query.filter(func.lower(AcademicClass.campus) == campus_code)
+        if teacher_id:
+            query = query.filter(AcademicClass.id.in_(
+                self.db.query(AcademicTeacherAssignment.class_id).filter(AcademicTeacherAssignment.teacher_id == teacher_id)
+            ))
         if search and search.strip():
             like = f"%{search.strip()}%"
             teacher_match_class_ids = self.db.query(AcademicTeacherAssignment.class_id).join(
@@ -375,15 +405,18 @@ class AcademicService:
                 AcademicSubject.subject_name.ilike(like),
                 AcademicClass.id.in_(teacher_match_class_ids),
             ))
-        ordered = query.order_by(AcademicTerm.start_date.desc().nullslast(), AcademicBlock.sort_order.asc().nullslast(), AcademicSubject.subject_code.asc(), AcademicClass.class_code.asc())
-        # Production rule: management KPI cards must be calculated from the full current filter,
-        # not from the current page. The previous page-only aggregate made a subject opened as
-        # "Tất cả cơ sở" shrink to one campus after returning from class detail. Keep the page
-        # small for rendering, but compute totals from all filtered classes.
+        ordered = query.order_by(
+            AcademicTerm.start_date.desc().nullslast(),
+            AcademicBlock.sort_order.asc().nullslast(),
+            AcademicSubject.subject_code.asc(),
+            AcademicClass.class_code.asc(),
+        )
         rows = ordered.all()
         items: list[dict[str, Any]] = []
+        classes_by_id: dict[str, AcademicClass] = {}
         for row in rows:
             item = row[0]
+            classes_by_id[item.id] = item
             items.append({
                 'id': item.id,
                 'ap_class_id': item.ap_class_id,
@@ -398,57 +431,114 @@ class AcademicService:
                 'class_name': item.class_name,
                 'campus': item.campus,
                 'branch': item.branch,
+                'learning_platform': platform,
+                'subject_delivery_id': row.subject_delivery_id,
                 'start_date': item.start_date,
                 'end_date': item.end_date,
                 'active': item.active,
                 'teacher_username': row.teacher_username,
                 'teacher_name': row.teacher_name,
                 'student_count': int(row.student_count or 0),
-                'openedx_course_id': row.openedx_course_id,
-                'openedx_cohort_name': row.openedx_cohort_name,
-                'openedx_mapping_source': 'class_override' if row.openedx_course_id else None,
+                'openedx_course_id': row.openedx_course_id if platform == 'cms' else None,
+                'openedx_cohort_name': row.openedx_cohort_name if platform == 'cms' else None,
+                'openedx_mapping_source': 'class_override' if platform == 'cms' and row.openedx_course_id else None,
                 'openedx_mapping_validation_status': None,
+                'cms_synced_count': 0,
+                'cms_unsynced_count': 0,
+                'learning_enrolled_count': 0,
+                'learning_active_count': 0,
+                'learning_synced_count': 0,
+                'learning_alerts': [],
+                'udemy_progress_student_count': 0,
+                'udemy_progress_late_count': 0,
+                'udemy_progress_average_percent': None,
+                'udemy_progress_last_imported_at': None,
             })
-        classes_by_id = {row[0].id: row[0] for row in rows}
-        inherited_mappings = self.inherited_course_mappings_for_classes(list(classes_by_id.values()))
-        for entry in items:
-            if entry.get('openedx_course_id'):
-                continue
-            inherited = inherited_mappings.get(entry['id'])
-            if inherited:
-                entry['openedx_course_id'] = inherited.openedx_course_id
-                entry['openedx_cohort_name'] = entry['class_code']
-                entry['openedx_mapping_source'] = 'subject_term_mapping'
-                entry['openedx_mapping_validation_status'] = inherited.validation_status
-        class_ids = [item['id'] for item in items]
-        sync_by_class = self._student_sync_summary_for_classes(class_ids)
-        for entry in items:
-            counts = sync_by_class.get(entry['id'], {})
-            entry['cms_synced_count'] = int(counts.get('matched', 0))
-            entry['cms_unsynced_count'] = int(sum(v for k, v in counts.items() if k != 'matched'))
-        learning_by_class = self._learning_summary_by_class_ids(class_ids, {item['id']: item.get('openedx_course_id') for item in items})
-        for entry in items:
-            entry.update(learning_by_class.get(entry['id'], {}))
+
+        if platform == 'cms':
+            inherited_mappings = self.inherited_course_mappings_for_classes(list(classes_by_id.values()))
+            for entry in items:
+                if not entry.get('openedx_course_id'):
+                    inherited = inherited_mappings.get(entry['id'])
+                    if inherited:
+                        entry['openedx_course_id'] = inherited.openedx_course_id
+                        entry['openedx_cohort_name'] = entry['class_code']
+                        entry['openedx_mapping_source'] = 'subject_term_mapping'
+                        entry['openedx_mapping_validation_status'] = inherited.validation_status
+            class_ids = [item['id'] for item in items]
+            sync_by_class = self._student_sync_summary_for_classes(class_ids)
+            learning_by_class = self._learning_summary_by_class_ids(
+                class_ids,
+                {item['id']: item.get('openedx_course_id') for item in items},
+            )
+            for entry in items:
+                counts = sync_by_class.get(entry['id'], {})
+                entry['cms_synced_count'] = int(counts.get('matched', 0))
+                entry['cms_unsynced_count'] = max(0, int(entry.get('student_count') or 0) - entry['cms_synced_count'])
+                entry.update(learning_by_class.get(entry['id'], {}))
+        else:
+            udemy_context = self._training_teacher_report_workflow()._teacher_udemy_context(list(classes_by_id.values()))
+            for entry in items:
+                context = udemy_context.get(entry['id'], {})
+                entry['subject_delivery_id'] = context.get('subject_delivery_id') or entry.get('subject_delivery_id')
+                entry['udemy_progress_student_count'] = int(context.get('progress_student_count') or 0)
+                entry['udemy_progress_late_count'] = int(context.get('late_student_count') or 0)
+                entry['udemy_progress_average_percent'] = context.get('average_progress_percent')
+                entry['udemy_progress_last_imported_at'] = context.get('last_imported_at')
+                alerts: list[str] = []
+                if entry['udemy_progress_late_count']:
+                    alerts.append(f"{entry['udemy_progress_late_count']} SV chậm tiến độ")
+                missing = max(0, int(entry.get('student_count') or 0) - entry['udemy_progress_student_count'])
+                if missing:
+                    alerts.append(f"{missing} SV chưa có tiến độ")
+                entry['learning_alerts'] = alerts
+
         if needs_status_filter:
-            filtered_items = [entry for entry in items if self._entry_matches_learning_list_filter(entry, status_filter)]
+            if platform == 'cms':
+                filtered_items = [entry for entry in items if self._entry_matches_learning_list_filter(entry, status_filter)]
+            else:
+                def udemy_match(entry: dict[str, Any]) -> bool:
+                    if status_filter in {'no_learning_data', 'udemy_not_imported'}:
+                        return int(entry.get('udemy_progress_student_count') or 0) == 0
+                    if status_filter == 'udemy_late':
+                        return int(entry.get('udemy_progress_late_count') or 0) > 0
+                    if status_filter == 'has_alert':
+                        return bool(entry.get('learning_alerts'))
+                    return True
+                filtered_items = [entry for entry in items if udemy_match(entry)]
         else:
             filtered_items = items
         total = len(filtered_items)
         total_pages = math.ceil(total / page_size) if total else 0
         page_items = filtered_items[(page - 1) * page_size:page * page_size]
-        summary = {
-            'class_count': int(total),
-            'student_count': int(sum(int(item.get('student_count') or 0) for item in filtered_items)),
-            'cms_synced_count': int(sum(int(item.get('cms_synced_count') or 0) for item in filtered_items)),
-            'cms_unsynced_count': int(sum(int(item.get('cms_unsynced_count') or 0) for item in filtered_items)),
-            'learning_enrolled_count': int(sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items)),
-            'learning_synced_count': int(sum(int(item.get('learning_synced_count') or 0) for item in filtered_items)),
-            'learning_active_count': int(sum(int(item.get('learning_active_count') or 0) for item in filtered_items)),
-            'course_mapped_count': int(sum(1 for item in filtered_items if item.get('openedx_course_id'))),
-            'course_missing_count': int(sum(1 for item in filtered_items if not item.get('openedx_course_id'))),
-            'alert_class_count': int(sum(1 for item in filtered_items if item.get('learning_alerts'))),
-            'scope_label': 'Toàn bộ bộ lọc',
-        }
+        if platform == 'cms':
+            summary = {
+                'learning_platform': platform,
+                'class_count': total,
+                'student_count': sum(int(item.get('student_count') or 0) for item in filtered_items),
+                'cms_synced_count': sum(int(item.get('cms_synced_count') or 0) for item in filtered_items),
+                'cms_unsynced_count': sum(int(item.get('cms_unsynced_count') or 0) for item in filtered_items),
+                'learning_enrolled_count': sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items),
+                'learning_synced_count': sum(int(item.get('learning_synced_count') or 0) for item in filtered_items),
+                'learning_active_count': sum(int(item.get('learning_active_count') or 0) for item in filtered_items),
+                'course_mapped_count': sum(1 for item in filtered_items if item.get('openedx_course_id')),
+                'course_missing_count': sum(1 for item in filtered_items if not item.get('openedx_course_id')),
+                'alert_class_count': sum(1 for item in filtered_items if item.get('learning_alerts')),
+                'scope_label': 'Toàn bộ bộ lọc',
+            }
+        else:
+            imported = sum(int(item.get('udemy_progress_student_count') or 0) for item in filtered_items)
+            weighted = sum(float(item.get('udemy_progress_average_percent') or 0) * int(item.get('udemy_progress_student_count') or 0) for item in filtered_items)
+            summary = {
+                'learning_platform': platform,
+                'class_count': total,
+                'student_count': sum(int(item.get('student_count') or 0) for item in filtered_items),
+                'udemy_progress_student_count': imported,
+                'udemy_progress_late_count': sum(int(item.get('udemy_progress_late_count') or 0) for item in filtered_items),
+                'udemy_progress_average_percent': round(weighted / imported, 2) if imported else None,
+                'alert_class_count': sum(1 for item in filtered_items if item.get('learning_alerts')),
+                'scope_label': 'Toàn bộ bộ lọc',
+            }
         return {'items': page_items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages, 'summary': summary}
 
     def _apply_academic_access_filter(self, query, user: UserContext, decision: AccessDecision | None = None):
@@ -2239,11 +2329,7 @@ class AcademicService:
                     AcademicClass.active.is_(True),
                     AcademicClass.term_id == term_id,
                     AcademicClass.subject_id.in_(list(mapped_subject_ids)),
-                    or_(
-                        AcademicSubjectDelivery.id.is_(None),
-                        AcademicSubjectDelivery.learning_platform.is_(None),
-                        AcademicSubjectDelivery.learning_platform != 'udemy',
-                    ),
+                    AcademicSubjectDelivery.learning_platform == 'cms',
                 )
             )
             if branch_value:
@@ -2283,95 +2369,95 @@ class AcademicService:
         campus: str | None = None,
         search: str | None = None,
         learning_status: str | None = None,
+        learning_platform: str | None = 'cms',
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
+        platform = self._normalize_training_platform(learning_platform)
         decision = self.access_decision(user)
         status_filter = self._normalize_learning_list_filter(learning_status)
-        needs_status_filter = status_filter != 'all'
-        query = self.db.query(
-            AcademicSubject,
-    AcademicSubjectDelivery,
-            func.count(func.distinct(AcademicClass.id)).label('class_count'),
-            func.count(func.distinct(AcademicClass.campus)).label('campus_count'),
-            func.count(func.distinct(AcademicTeacherAssignment.teacher_id)).label('teacher_count'),
-            func.count(func.distinct(AcademicClassStudent.id)).label('student_count'),
-        ).join(AcademicClass, AcademicClass.subject_id == AcademicSubject.id).outerjoin(
-            AcademicTeacherAssignment, AcademicTeacherAssignment.class_id == AcademicClass.id,
-        ).outerjoin(AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id).filter(AcademicSubject.active.is_(True), AcademicClass.active.is_(True))
+        query = self.db.query(AcademicSubject, AcademicClass, AcademicSubjectDelivery).join(
+            AcademicClass, AcademicClass.subject_id == AcademicSubject.id,
+        ).outerjoin(
+            AcademicSubjectDelivery, self._class_delivery_join_condition(),
+        ).filter(AcademicSubject.active.is_(True), AcademicClass.active.is_(True))
         query = self._apply_academic_access_filter(query, user, decision)
+        if platform == 'udemy':
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
+        else:
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
         if branch:
-            query = query.filter(AcademicClass.branch == branch.strip().lower())
+            query = query.filter(func.lower(AcademicClass.branch) == branch.strip().lower())
         if campus:
-            query = query.filter(func.lower(AcademicClass.campus) == campus.strip().lower())
+            query = query.filter(func.lower(AcademicClass.campus) == self._campus_filter_value(campus))
         if search and search.strip():
             like = f"%{search.strip()}%"
             query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
-        query = query.group_by(AcademicSubject.id)
-        ordered = query.order_by(AcademicSubject.subject_code.asc())
+        rows = query.order_by(AcademicSubject.subject_code.asc(), AcademicClass.class_code.asc()).all()
 
-        # The subject screen is intentionally a compact subject list, but its KPI
-        # cards must represent the whole current filter. The number of subjects in
-        # one branch/campus/term is small enough to aggregate once here and avoids
-        # the misleading "page only" totals that made the student/teacher pages
-        # look inconsistent after a report rebuild.
-        all_rows = ordered.all()
-        base_total = len(all_rows)
-        all_subject_ids = [row[0].id for row in all_rows]
+        buckets: dict[str, dict[str, Any]] = {}
+        classes_by_id: dict[str, AcademicClass] = {}
+        for subject, cls, delivery in rows:
+            classes_by_id[cls.id] = cls
+            bucket = buckets.setdefault(subject.id, {
+                'subject': subject,
+                'class_ids': set(),
+                'classes': [],
+                'campuses': set(),
+                'delivery_ids': set(),
+            })
+            if cls.id not in bucket['class_ids']:
+                bucket['class_ids'].add(cls.id)
+                bucket['classes'].append(cls)
+                if cls.campus:
+                    bucket['campuses'].add(str(cls.campus).lower())
+            if delivery:
+                bucket['delivery_ids'].add(delivery.id)
+        class_ids = list(classes_by_id.keys())
+        student_count_by_class = {
+            str(class_id): int(count or 0)
+            for class_id, count in self.db.query(
+                AcademicClassStudent.class_id,
+                func.count(AcademicClassStudent.id),
+            ).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(AcademicClassStudent.class_id).all()
+        } if class_ids else {}
+        teacher_ids_by_class: dict[str, set[str]] = {class_id: set() for class_id in class_ids}
+        if class_ids:
+            for class_id, teacher_id in self.db.query(
+                AcademicTeacherAssignment.class_id,
+                AcademicTeacherAssignment.teacher_id,
+            ).filter(AcademicTeacherAssignment.class_id.in_(class_ids)).all():
+                teacher_ids_by_class.setdefault(str(class_id), set()).add(str(teacher_id))
 
-        mapping_rows_all = []
-        if all_subject_ids and term_id:
-            mapping_query_all = self.db.query(AcademicCourseMapping).filter(
+        mapping_by_subject: dict[str, AcademicCourseMapping] = {}
+        if platform == 'cms' and term_id and buckets:
+            mapping_query = self.db.query(AcademicCourseMapping).filter(
                 AcademicCourseMapping.term_id == term_id,
-                AcademicCourseMapping.subject_id.in_(all_subject_ids),
+                AcademicCourseMapping.subject_id.in_(list(buckets.keys())),
                 AcademicCourseMapping.active.is_(True),
                 AcademicCourseMapping.block_id.is_(None),
                 AcademicCourseMapping.campus.is_(None),
             )
             if branch:
-                mapping_query_all = mapping_query_all.filter(AcademicCourseMapping.branch == branch.strip().lower())
-            mapping_rows_all = mapping_query_all.all()
-        mapping_by_subject_all = {item.subject_id: item for item in mapping_rows_all}
+                mapping_query = mapping_query.filter(AcademicCourseMapping.branch == branch.strip().lower())
+            mapping_by_subject = {item.subject_id: item for item in mapping_query.all()}
 
-        sync_summary_all = self._student_sync_summary_for_subjects(user, term_id, all_subject_ids, branch=branch, campus=campus, decision=decision)
-        learning_all = self._learning_summary_by_subject_ids(
-            all_subject_ids,
-            term_id=term_id,
-            branch=branch,
-            campus=campus,
-            course_by_subject={subject_id: mapping_by_subject_all.get(subject_id).openedx_course_id if mapping_by_subject_all.get(subject_id) else None for subject_id in all_subject_ids},
-            decision=decision,
-            user=user,
-        )
+        sync_by_class = self._student_sync_summary_for_classes(class_ids) if platform == 'cms' else {}
+        inherited = self.inherited_course_mappings_for_classes(list(classes_by_id.values())) if platform == 'cms' else {}
+        course_by_class = {class_id: (inherited.get(class_id).openedx_course_id if inherited.get(class_id) else None) for class_id in class_ids}
+        learning_by_class = self._learning_summary_by_class_ids(class_ids, course_by_class) if platform == 'cms' else {}
+        udemy_context = self._training_teacher_report_workflow()._teacher_udemy_context(list(classes_by_id.values())) if platform == 'udemy' else {}
 
-        def build_entry(row: Any) -> dict[str, Any]:
-            subject = row[0]
-            mapping = mapping_by_subject_all.get(subject.id)
-            suggested = self.suggested_course_id_for_scope(term_id, subject.id) if term_id else None
-            candidate, candidate_count, candidate_title, _candidate_source = self._find_exact_openedx_course_candidate(suggested or '', allow_external=False)
-            if mapping:
-                status_value = 'mapped'
-                status_label = 'Đã map Course CMS'
-                effective_course_id = mapping.openedx_course_id
-            elif candidate_count == 1 and candidate and term_id:
-                # GET/list APIs must not create or commit mappings. They only show a safe candidate;
-                # the actual mapping is created by the explicit Auto map button.
-                status_value = 'auto_candidate'
-                status_label = 'Có thể auto map'
-                effective_course_id = candidate
-            elif candidate_count > 1:
-                status_value = 'multiple_candidates'
-                status_label = 'Nhiều course trùng'
-                effective_course_id = None
-            else:
-                status_value = 'not_found'
-                status_label = 'Chưa tìm thấy course'
-                effective_course_id = None
-            counts = sync_summary_all.get(subject.id, {})
-            entry = {
+        all_items: list[dict[str, Any]] = []
+        for subject_id, bucket in buckets.items():
+            subject = bucket['subject']
+            subject_class_ids = list(bucket['class_ids'])
+            student_count = sum(student_count_by_class.get(class_id, 0) for class_id in subject_class_ids)
+            teacher_ids = {teacher_id for class_id in subject_class_ids for teacher_id in teacher_ids_by_class.get(class_id, set())}
+            entry: dict[str, Any] = {
                 'id': subject.id,
                 'ap_subject_id': subject.ap_subject_id,
                 'subject_code': subject.subject_code,
@@ -2380,47 +2466,173 @@ class AcademicService:
                 'skill_code': subject.skill_code,
                 'branch': subject.branch,
                 'active': subject.active,
-                'class_count': int(row.class_count or 0),
-                'campus_count': int(row.campus_count or 0),
-                'teacher_count': int(row.teacher_count or 0),
-                'student_count': int(row.student_count or 0),
-                'cms_synced_count': int(counts.get('matched', 0)),
-                'cms_unsynced_count': int(sum(v for k, v in counts.items() if k not in {'matched'})),
-                'course_mapping_status': status_value,
-                'course_mapping_label': status_label,
-                'openedx_course_id': mapping.openedx_course_id if mapping else effective_course_id,
-                'openedx_course_title': mapping.openedx_course_title if mapping else candidate_title,
-                'openedx_mapping_id': mapping.id if mapping else None,
-                'suggested_openedx_course_id': suggested,
+                'learning_platform': platform,
+                'subject_delivery_ids': sorted(bucket['delivery_ids']),
+                'class_count': len(subject_class_ids),
+                'campus_count': len(bucket['campuses']),
+                'teacher_count': len(teacher_ids),
+                'student_count': student_count,
+                'cms_synced_count': 0,
+                'cms_unsynced_count': 0,
+                'course_mapping_status': 'not_applicable' if platform == 'udemy' else 'not_found',
+                'course_mapping_label': 'Không áp dụng cho Udemy' if platform == 'udemy' else 'Chưa tìm thấy course',
+                'openedx_course_id': None,
+                'openedx_course_title': None,
+                'openedx_mapping_id': None,
+                'suggested_openedx_course_id': None,
+                'learning_enrolled_count': 0,
+                'learning_active_count': 0,
+                'learning_synced_count': 0,
+                'learning_not_enrolled_count': 0,
+                'learning_avg_progress_percent': None,
+                'learning_avg_grade_percent': None,
+                'learning_last_synced_at': None,
+                'learning_component_summaries': [],
+                'learning_alerts': [],
+                'udemy_progress_student_count': 0,
+                'udemy_progress_late_count': 0,
+                'udemy_progress_unmatched_count': 0,
+                'udemy_progress_average_percent': None,
+                'udemy_progress_last_imported_at': None,
             }
-            entry.update(learning_all.get(subject.id, {}))
-            return entry
+            if platform == 'cms':
+                mapping = mapping_by_subject.get(subject_id)
+                suggested = self.suggested_course_id_for_scope(term_id, subject_id) if term_id else None
+                candidate, candidate_count, candidate_title, _candidate_source = self._find_exact_openedx_course_candidate(suggested or '', allow_external=False)
+                if mapping:
+                    entry.update({
+                        'course_mapping_status': 'mapped',
+                        'course_mapping_label': 'Đã map Course CMS',
+                        'openedx_course_id': mapping.openedx_course_id,
+                        'openedx_course_title': mapping.openedx_course_title,
+                        'openedx_mapping_id': mapping.id,
+                    })
+                elif candidate_count == 1 and candidate and term_id:
+                    entry.update({'course_mapping_status': 'auto_candidate', 'course_mapping_label': 'Có thể auto map', 'openedx_course_id': candidate, 'openedx_course_title': candidate_title})
+                elif candidate_count > 1:
+                    entry.update({'course_mapping_status': 'multiple_candidates', 'course_mapping_label': 'Nhiều course trùng'})
+                entry['suggested_openedx_course_id'] = suggested
+                progress_weight = 0
+                progress_sum = 0.0
+                grade_weight = 0
+                grade_sum = 0.0
+                latest_sync = None
+                alerts: list[str] = []
+                for class_id in subject_class_ids:
+                    matched = int((sync_by_class.get(class_id) or {}).get('matched', 0) or 0)
+                    entry['cms_synced_count'] += matched
+                    learning = learning_by_class.get(class_id, {})
+                    synced = int(learning.get('learning_synced_count') or 0)
+                    entry['learning_enrolled_count'] += int(learning.get('learning_enrolled_count') or 0)
+                    entry['learning_active_count'] += int(learning.get('learning_active_count') or 0)
+                    entry['learning_synced_count'] += synced
+                    if synced and learning.get('learning_avg_progress_percent') is not None:
+                        progress_sum += float(learning.get('learning_avg_progress_percent')) * synced
+                        progress_weight += synced
+                    if synced and learning.get('learning_avg_grade_percent') is not None:
+                        grade_sum += float(learning.get('learning_avg_grade_percent')) * synced
+                        grade_weight += synced
+                    value = learning.get('learning_last_synced_at')
+                    if value and (latest_sync is None or value > latest_sync):
+                        latest_sync = value
+                    for alert in learning.get('learning_alerts') or []:
+                        if alert not in alerts:
+                            alerts.append(alert)
+                entry['cms_unsynced_count'] = max(0, student_count - entry['cms_synced_count'])
+                entry['learning_not_enrolled_count'] = max(0, student_count - entry['learning_enrolled_count'])
+                entry['learning_avg_progress_percent'] = round(progress_sum / progress_weight, 2) if progress_weight else None
+                entry['learning_avg_grade_percent'] = round(grade_sum / grade_weight, 2) if grade_weight else None
+                entry['learning_last_synced_at'] = latest_sync
+                entry['learning_alerts'] = alerts
+            else:
+                imported = 0
+                late = 0
+                weighted_sum = 0.0
+                weighted_count = 0
+                latest_import = None
+                for class_id in subject_class_ids:
+                    context = udemy_context.get(class_id, {})
+                    class_imported = int(context.get('progress_student_count') or 0)
+                    imported += class_imported
+                    late += int(context.get('late_student_count') or 0)
+                    if class_imported and context.get('average_progress_percent') is not None:
+                        weighted_sum += float(context.get('average_progress_percent')) * class_imported
+                        weighted_count += class_imported
+                    value = context.get('last_imported_at')
+                    if value and (latest_import is None or value > latest_import):
+                        latest_import = value
+                entry['udemy_progress_student_count'] = imported
+                entry['udemy_progress_late_count'] = late
+                entry['udemy_progress_average_percent'] = round(weighted_sum / weighted_count, 2) if weighted_count else None
+                entry['udemy_progress_last_imported_at'] = latest_import
+                alerts: list[str] = []
+                if late:
+                    alerts.append(f'{late} SV chậm tiến độ')
+                missing = max(0, student_count - imported)
+                if missing:
+                    alerts.append(f'{missing} SV chưa có tiến độ')
+                entry['learning_alerts'] = alerts
+            all_items.append(entry)
 
-        all_items = [build_entry(row) for row in all_rows]
-        if needs_status_filter:
-            filtered_items = [entry for entry in all_items if self._entry_matches_learning_list_filter(entry, status_filter)]
+        if status_filter != 'all':
+            if platform == 'cms':
+                filtered_items = [entry for entry in all_items if self._entry_matches_learning_list_filter(entry, status_filter)]
+            else:
+                def match_udemy(entry: dict[str, Any]) -> bool:
+                    if status_filter in {'no_learning_data', 'udemy_not_imported'}:
+                        return int(entry.get('udemy_progress_student_count') or 0) == 0
+                    if status_filter == 'udemy_late':
+                        return int(entry.get('udemy_progress_late_count') or 0) > 0
+                    if status_filter == 'has_alert':
+                        return bool(entry.get('learning_alerts'))
+                    return True
+                filtered_items = [entry for entry in all_items if match_udemy(entry)]
         else:
             filtered_items = all_items
-        total = len(filtered_items) if needs_status_filter else base_total
-        items = filtered_items[(page - 1) * page_size:page * page_size]
+        filtered_items.sort(key=lambda entry: str(entry.get('subject_code') or ''))
+        total = len(filtered_items)
         total_pages = math.ceil(total / page_size) if total else 0
-
-        summary_source = filtered_items if needs_status_filter else all_items
-        summary = {
-            'subject_count': int(total),
-            'class_count': int(sum(item.get('class_count') or 0 for item in summary_source)),
-            'student_count': int(sum(item.get('student_count') or 0 for item in summary_source)),
-            'teacher_count': int(sum(item.get('teacher_count') or 0 for item in summary_source)),
-            'cms_synced_count': int(sum(item.get('cms_synced_count') or 0 for item in summary_source)),
-            'cms_unsynced_count': int(sum(item.get('cms_unsynced_count') or 0 for item in summary_source)),
-            'course_mapped_count': int(sum(1 for item in summary_source if str(item.get('course_mapping_status') or '').lower() in {'mapped', 'already_mapped', 'auto_mapped'})),
-            'course_missing_count': int(sum(1 for item in summary_source if str(item.get('course_mapping_status') or '').lower() in {'not_found', 'multiple_candidates'})),
-            'learning_enrolled_count': int(sum(item.get('learning_enrolled_count') or 0 for item in summary_source)),
-            'learning_active_count': int(sum(item.get('learning_active_count') or 0 for item in summary_source)),
-            'learning_synced_count': int(sum(item.get('learning_synced_count') or 0 for item in summary_source)),
-            'alert_subject_count': int(sum(1 for item in summary_source if item.get('learning_alerts'))),
-            'scope_label': 'Toàn bộ bộ lọc',
-        }
+        items = filtered_items[(page - 1) * page_size:page * page_size]
+        if platform == 'cms':
+            summary = {
+                'learning_platform': platform,
+                'subject_count': total,
+                'class_count': sum(int(item.get('class_count') or 0) for item in filtered_items),
+                'student_count': sum(int(item.get('student_count') or 0) for item in filtered_items),
+                'teacher_count': sum(int(item.get('teacher_count') or 0) for item in filtered_items),
+                'cms_synced_count': sum(int(item.get('cms_synced_count') or 0) for item in filtered_items),
+                'cms_unsynced_count': sum(int(item.get('cms_unsynced_count') or 0) for item in filtered_items),
+                'course_mapped_count': sum(1 for item in filtered_items if str(item.get('course_mapping_status') or '') in {'mapped', 'already_mapped', 'auto_mapped'}),
+                'course_missing_count': sum(1 for item in filtered_items if str(item.get('course_mapping_status') or '') in {'not_found', 'multiple_candidates'}),
+                'learning_enrolled_count': sum(int(item.get('learning_enrolled_count') or 0) for item in filtered_items),
+                'learning_active_count': sum(int(item.get('learning_active_count') or 0) for item in filtered_items),
+                'learning_synced_count': sum(int(item.get('learning_synced_count') or 0) for item in filtered_items),
+                'alert_subject_count': sum(1 for item in filtered_items if item.get('learning_alerts')),
+                'scope_label': 'Toàn bộ bộ lọc',
+            }
+        else:
+            imported = sum(int(item.get('udemy_progress_student_count') or 0) for item in filtered_items)
+            weighted = sum(float(item.get('udemy_progress_average_percent') or 0) * int(item.get('udemy_progress_student_count') or 0) for item in filtered_items)
+            summary = {
+                'learning_platform': platform,
+                'subject_count': total,
+                'class_count': sum(int(item.get('class_count') or 0) for item in filtered_items),
+                'student_count': sum(int(item.get('student_count') or 0) for item in filtered_items),
+                'teacher_count': sum(int(item.get('teacher_count') or 0) for item in filtered_items),
+                'cms_synced_count': 0,
+                'cms_unsynced_count': 0,
+                'course_mapped_count': 0,
+                'course_missing_count': 0,
+                'learning_enrolled_count': 0,
+                'learning_active_count': 0,
+                'learning_synced_count': 0,
+                'alert_subject_count': sum(1 for item in filtered_items if item.get('learning_alerts')),
+                'udemy_progress_student_count': imported,
+                'udemy_progress_late_count': sum(int(item.get('udemy_progress_late_count') or 0) for item in filtered_items),
+                'udemy_progress_unmatched_count': sum(int(item.get('udemy_progress_unmatched_count') or 0) for item in filtered_items),
+                'udemy_progress_average_percent': round(weighted / imported, 2) if imported else None,
+                'scope_label': 'Toàn bộ bộ lọc',
+            }
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages, 'has_next': page < total_pages, 'summary': summary}
 
     def get_class_detail(self, user: UserContext, class_id: str) -> dict[str, Any]:
@@ -2715,17 +2927,17 @@ class AcademicService:
     def _teacher_report_summary_from_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         return self._training_teacher_report_workflow()._teacher_report_summary_from_items(items)
 
-    def _training_teacher_report_lite_fast(self, user: UserContext, *, term_id: str | None, branch: str | None, campus: str | None, search: str | None, learning_status: str | None, teacher_id: str | None, page: int, page_size: int, decision: AccessDecision) -> dict[str, Any] | None:
-        return self._training_teacher_report_workflow()._training_teacher_report_lite_fast(user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, teacher_id=teacher_id, page=page, page_size=page_size, decision=decision)
+    def _training_teacher_report_lite_fast(self, user: UserContext, *, term_id: str | None, branch: str | None, campus: str | None, search: str | None, learning_status: str | None, learning_platform: str | None, teacher_id: str | None, page: int, page_size: int, decision: AccessDecision) -> dict[str, Any] | None:
+        return self._training_teacher_report_workflow()._training_teacher_report_lite_fast(user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, learning_platform=learning_platform, teacher_id=teacher_id, page=page, page_size=page_size, decision=decision)
 
-    def _training_teacher_report_from_cache(self, *, term_id: str | None, branch: str | None, campus: str | None, search: str | None, learning_status: str | None, teacher_id: str | None, page: int, page_size: int, decision: AccessDecision, include_classes: bool) -> dict[str, Any] | None:
-        return self._training_teacher_report_workflow()._training_teacher_report_from_cache(term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, teacher_id=teacher_id, page=page, page_size=page_size, decision=decision, include_classes=include_classes)
+    def _training_teacher_report_from_cache(self, *, term_id: str | None, branch: str | None, campus: str | None, search: str | None, learning_status: str | None, learning_platform: str | None, teacher_id: str | None, page: int, page_size: int, decision: AccessDecision, include_classes: bool) -> dict[str, Any] | None:
+        return self._training_teacher_report_workflow()._training_teacher_report_from_cache(term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, learning_platform=learning_platform, teacher_id=teacher_id, page=page, page_size=page_size, decision=decision, include_classes=include_classes)
 
     def rebuild_training_teacher_report_cache(self, user: UserContext, *, term_id: str, branch: str | None = None, campus: str | None = None, source_sync_run_id: str | None = None) -> dict[str, Any]:
         return self._training_teacher_report_workflow().rebuild_training_teacher_report_cache(user, term_id=term_id, branch=branch, campus=campus, source_sync_run_id=source_sync_run_id)
 
-    def training_teacher_report(self, user: UserContext, *, term_id: str | None = None, branch: str | None = None, campus: str | None = None, search: str | None = None, learning_status: str | None = None, teacher_id: str | None = None, page: int = 1, page_size: int = 50, include_all: bool = False, include_classes: bool = False, include_students: bool = False, use_cache: bool = True) -> dict[str, Any]:
-        return self._training_teacher_report_workflow().training_teacher_report(user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, teacher_id=teacher_id, page=page, page_size=page_size, include_all=include_all, include_classes=include_classes, include_students=include_students, use_cache=use_cache)
+    def training_teacher_report(self, user: UserContext, *, term_id: str | None = None, branch: str | None = None, campus: str | None = None, search: str | None = None, learning_status: str | None = None, learning_platform: str | None = None, teacher_id: str | None = None, page: int = 1, page_size: int = 50, include_all: bool = False, include_classes: bool = False, include_students: bool = False, use_cache: bool = True) -> dict[str, Any]:
+        return self._training_teacher_report_workflow().training_teacher_report(user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, learning_platform=learning_platform, teacher_id=teacher_id, page=page, page_size=page_size, include_all=include_all, include_classes=include_classes, include_students=include_students, use_cache=use_cache)
 
     def _upsert_mapping(self, student: AcademicStudent, result: dict[str, Any] | None, *, source: str = 'plugin') -> OpenEdXUserMapping:
         now = datetime.utcnow()

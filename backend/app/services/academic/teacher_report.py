@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 from app.core.rbac import UserContext
 
@@ -87,6 +87,97 @@ class AcademicTeacherReportWorkflowService:
             return bool(item.get('learning_alerts')) or int(item.get('risk_student_count') or 0) > 0
         return True
 
+
+    @staticmethod
+    def _normalize_report_platform(value: str | None) -> str | None:
+        normalized = str(value or '').strip().lower()
+        return normalized if normalized in {'cms', 'udemy'} else None
+
+    def _project_teacher_report_platform(self, item: dict[str, Any], learning_platform: str | None) -> dict[str, Any] | None:
+        platform = self._normalize_report_platform(learning_platform)
+        if not platform:
+            return dict(item or {})
+        payload = dict(item or {})
+        classes = [dict(cls) for cls in (payload.get('classes') or []) if str(cls.get('learning_platform') or 'cms').lower() == platform]
+        if payload.get('classes') is not None:
+            if not classes:
+                return None
+            payload['classes'] = classes
+            payload['class_count'] = len(classes)
+            payload['subject_codes'] = sorted({str(cls.get('subject_code') or '') for cls in classes if cls.get('subject_code')})
+            payload['subject_count'] = len(payload['subject_codes'])
+            payload['student_count'] = sum(int(cls.get('student_count') or 0) for cls in classes)
+            payload['unique_student_count'] = payload['student_count']
+            payload['relearn_student_count'] = sum(int(cls.get('relearn_student_count') or 0) for cls in classes)
+            payload['total_relearn_count'] = sum(int(cls.get('total_relearn_count') or 0) for cls in classes)
+            status_counts: dict[str, int] = {}
+            alerts: list[str] = []
+            for cls in classes:
+                for key, value in (cls.get('status_counts') or {}).items():
+                    status_counts[str(key)] = status_counts.get(str(key), 0) + int(value or 0)
+                for alert in cls.get('learning_alerts') or []:
+                    if alert not in alerts:
+                        alerts.append(alert)
+            payload['status_counts'] = status_counts
+            payload['learning_alerts'] = alerts
+            payload['risk_student_count'] = min(payload['student_count'], sum(int(cls.get('risk_student_count') or 0) for cls in classes))
+            if platform == 'cms':
+                payload['cms_class_count'] = len(classes)
+                payload['udemy_class_count'] = 0
+                payload['cms_student_count'] = payload['student_count']
+                payload['udemy_student_count'] = 0
+                payload['cms_synced_count'] = sum(int(cls.get('cms_synced_count') or 0) for cls in classes)
+                payload['cms_unsynced_count'] = sum(int(cls.get('cms_unsynced_count') or 0) for cls in classes)
+                payload['learning_enrolled_count'] = sum(int(cls.get('learning_enrolled_count') or 0) for cls in classes)
+                payload['learning_active_count'] = sum(int(cls.get('learning_active_count') or 0) for cls in classes)
+                payload['learning_synced_count'] = sum(int(cls.get('learning_synced_count') or 0) for cls in classes)
+                payload['classes_without_course_count'] = sum(1 for cls in classes if not cls.get('openedx_course_id'))
+                payload['udemy_progress_student_count'] = 0
+                payload['udemy_progress_late_count'] = 0
+                payload['udemy_progress_average_percent'] = None
+                payload['udemy_progress_last_imported_at'] = None
+            else:
+                payload['cms_class_count'] = 0
+                payload['udemy_class_count'] = len(classes)
+                payload['cms_student_count'] = 0
+                payload['udemy_student_count'] = payload['student_count']
+                imported = sum(int(cls.get('udemy_progress_student_count') or 0) for cls in classes)
+                payload['udemy_progress_student_count'] = imported
+                payload['udemy_progress_late_count'] = sum(int(cls.get('udemy_progress_late_count') or 0) for cls in classes)
+                weighted = sum(float(cls.get('udemy_progress_average_percent') or 0) * int(cls.get('udemy_progress_student_count') or 0) for cls in classes)
+                payload['udemy_progress_average_percent'] = round(weighted / imported, 2) if imported else None
+                imported_dates = [cls.get('udemy_progress_last_imported_at') for cls in classes if cls.get('udemy_progress_last_imported_at')]
+                payload['udemy_progress_last_imported_at'] = max(imported_dates) if imported_dates else None
+                payload['cms_synced_count'] = 0
+                payload['cms_unsynced_count'] = 0
+                payload['learning_enrolled_count'] = 0
+                payload['learning_active_count'] = 0
+                payload['learning_synced_count'] = 0
+                payload['classes_without_course_count'] = 0
+        else:
+            count_key = 'udemy_class_count' if platform == 'udemy' else 'cms_class_count'
+            if int(payload.get(count_key) or 0) <= 0:
+                return None
+            payload['class_count'] = int(payload.get(count_key) or 0)
+            payload['student_count'] = int(payload.get('udemy_student_count' if platform == 'udemy' else 'cms_student_count') or 0)
+            payload['unique_student_count'] = payload['student_count']
+            if platform == 'udemy':
+                payload['cms_class_count'] = 0
+                payload['cms_student_count'] = 0
+                payload['cms_synced_count'] = 0
+                payload['cms_unsynced_count'] = 0
+                payload['learning_enrolled_count'] = 0
+                payload['learning_active_count'] = 0
+                payload['learning_synced_count'] = 0
+                payload['classes_without_course_count'] = 0
+            else:
+                payload['udemy_class_count'] = 0
+                payload['udemy_student_count'] = 0
+                payload['udemy_progress_student_count'] = 0
+                payload['udemy_progress_late_count'] = 0
+                payload['udemy_progress_average_percent'] = None
+        payload['learning_platform'] = platform
+        return payload
 
     @staticmethod
     def _teacher_report_item_allowed_for_decision(item: dict[str, Any], decision: AccessDecision) -> bool:
@@ -263,6 +354,7 @@ class AcademicTeacherReportWorkflowService:
         campus: str | None,
         search: str | None,
         learning_status: str | None,
+        learning_platform: str | None,
         teacher_id: str | None,
         page: int,
         page_size: int,
@@ -283,7 +375,6 @@ class AcademicTeacherReportWorkflowService:
             AcademicTeacher,
             AcademicClass,
             AcademicSubject,
-    AcademicSubjectDelivery,
         ).join(
             AcademicTeacherAssignment,
             AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
@@ -292,8 +383,16 @@ class AcademicTeacherReportWorkflowService:
             AcademicClass.id == AcademicTeacherAssignment.class_id,
         ).join(
             AcademicSubject,
-    AcademicSubjectDelivery,
             AcademicSubject.id == AcademicClass.subject_id,
+        ).outerjoin(
+            AcademicSubjectDelivery,
+            and_(
+                AcademicSubjectDelivery.subject_id == AcademicClass.subject_id,
+                AcademicSubjectDelivery.term_id == AcademicClass.term_id,
+                AcademicSubjectDelivery.block_id == AcademicClass.block_id,
+                func.lower(func.coalesce(AcademicSubjectDelivery.branch, 'poly')) == func.lower(func.coalesce(AcademicClass.branch, 'poly')),
+                AcademicSubjectDelivery.active.is_(True),
+            ),
         ).filter(
             AcademicTeacher.active.is_(True),
             AcademicClass.active.is_(True),
@@ -301,6 +400,11 @@ class AcademicTeacherReportWorkflowService:
         )
         query = self._apply_academic_access_filter(query, user, decision)
         query = query.filter(AcademicClass.term_id == term_id)
+        platform = self._normalize_report_platform(learning_platform)
+        if platform == 'udemy':
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
+        elif platform == 'cms':
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
         if branch:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:
@@ -556,6 +660,7 @@ class AcademicTeacherReportWorkflowService:
         campus: str | None,
         search: str | None,
         learning_status: str | None,
+        learning_platform: str | None,
         teacher_id: str | None,
         decision: AccessDecision,
         page: int,
@@ -575,6 +680,9 @@ class AcademicTeacherReportWorkflowService:
             payload.setdefault('teacher_username', row.teacher_username)
             payload.setdefault('teacher_name', row.teacher_name)
             payload['cache_built_at'] = row.built_at
+            payload = self._project_teacher_report_platform(payload, learning_platform)
+            if payload is None:
+                continue
             if not self._teacher_report_item_allowed_for_decision(payload, decision):
                 continue
             if teacher_id and str(payload.get('teacher_id')) != str(teacher_id):
@@ -690,6 +798,7 @@ class AcademicTeacherReportWorkflowService:
         campus: str | None = None,
         search: str | None = None,
         learning_status: str | None = None,
+        learning_platform: str | None = None,
         teacher_id: str | None = None,
         page: int = 1,
         page_size: int = 50,
@@ -745,6 +854,7 @@ class AcademicTeacherReportWorkflowService:
                 campus=campus,
                 search=search,
                 learning_status=status_filter,
+                learning_platform=learning_platform,
                 teacher_id=teacher_id,
                 decision=decision,
                 page=page,
@@ -761,6 +871,7 @@ class AcademicTeacherReportWorkflowService:
                 campus=campus,
                 search=search,
                 learning_status=status_filter,
+                learning_platform=learning_platform,
                 teacher_id=teacher_id,
                 page=page,
                 page_size=page_size,
@@ -775,7 +886,6 @@ class AcademicTeacherReportWorkflowService:
             AcademicTerm,
             AcademicBlock,
             AcademicSubject,
-    AcademicSubjectDelivery,
         ).join(
             AcademicTeacherAssignment,
             AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
@@ -790,8 +900,16 @@ class AcademicTeacherReportWorkflowService:
             AcademicBlock.id == AcademicClass.block_id,
         ).join(
             AcademicSubject,
-    AcademicSubjectDelivery,
             AcademicSubject.id == AcademicClass.subject_id,
+        ).outerjoin(
+            AcademicSubjectDelivery,
+            and_(
+                AcademicSubjectDelivery.subject_id == AcademicClass.subject_id,
+                AcademicSubjectDelivery.term_id == AcademicClass.term_id,
+                AcademicSubjectDelivery.block_id == AcademicClass.block_id,
+                func.lower(func.coalesce(AcademicSubjectDelivery.branch, 'poly')) == func.lower(func.coalesce(AcademicClass.branch, 'poly')),
+                AcademicSubjectDelivery.active.is_(True),
+            ),
         ).filter(
             AcademicTeacher.active.is_(True),
             AcademicClass.active.is_(True),
@@ -800,6 +918,11 @@ class AcademicTeacherReportWorkflowService:
         query = self._apply_academic_access_filter(query, user, decision)
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
+        platform = self._normalize_report_platform(learning_platform)
+        if platform == 'udemy':
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
+        elif platform == 'cms':
+            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
         if branch:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:
@@ -1272,6 +1395,7 @@ class AcademicTeacherReportWorkflowService:
             if include_classes or include_students or include_all:
                 item['classes'] = sorted(bucket['class_items'], key=lambda item: (str(item.get('subject_code') or ''), str(item.get('class_code') or '')))
 
+            item['learning_platform'] = platform or 'all'
             items.append(item)
 
         def matches_training_filter(item: dict[str, Any]) -> bool:

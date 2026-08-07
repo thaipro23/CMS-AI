@@ -634,6 +634,7 @@ def _enqueue_teacher_report_job(
     campus: str | None = None,
     search: str | None = None,
     learning_status: str | None = None,
+    learning_platform: str | None = None,
     teacher_id: str | None = None,
 ) -> AcademicTeacherReportJob:
     if not term_id:
@@ -659,6 +660,7 @@ def _enqueue_teacher_report_job(
         'campus': normalized_campus,
         'search': (search or '').strip(),
         'learning_status': (learning_status or '').strip(),
+        'learning_platform': (learning_platform or '').strip().lower(),
         'teacher_id': (teacher_id or '').strip(),
         'requested_by': user.user_id,
     }
@@ -692,6 +694,7 @@ def _enqueue_teacher_report_job(
             'campus': campus,
             'search': search,
             'learning_status': learning_status,
+            'learning_platform': learning_platform,
             'teacher_id': teacher_id,
             'requester_context': _requester_context_json(user),
             'approved_campus_codes': campus_scope.get('campus_codes') or ([] if campus_scope.get('unrestricted') else []),
@@ -727,11 +730,12 @@ def enqueue_training_teacher_export_job(
     campus: str | None = Query(None),
     search: str | None = Query(None),
     learning_status: str | None = Query(None),
+    learning_platform: str = Query('cms', pattern='^(cms|udemy)$'),
     teacher_id: str | None = Query(None),
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
-    return _enqueue_teacher_report_job(db=db, user=user, job_type='export_excel', term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, teacher_id=teacher_id)
+    return _enqueue_teacher_report_job(db=db, user=user, job_type='export_excel', term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, learning_platform=learning_platform, teacher_id=teacher_id)
 
 
 
@@ -837,6 +841,7 @@ def list_training_teacher_report(
     campus: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
+    learning_platform: str = Query('cms', pattern='^(cms|udemy)$'),
     teacher_id: str | None = Query(None, description='Lọc đúng một giáo viên để mở trang lớp'),
     include_classes: bool = Query(False, description='Chỉ bật khi mở chi tiết giảng viên để tránh payload lớn ở danh sách'),
     fresh: bool = Query(False, description='Bỏ cache khi cần đối soát số liệu mới nhất'),
@@ -852,6 +857,7 @@ def list_training_teacher_report(
         campus=campus,
         search=search,
         learning_status=learning_status,
+        learning_platform=learning_platform,
         teacher_id=teacher_id,
         page=page,
         page_size=page_size,
@@ -867,6 +873,7 @@ def export_training_teacher_report(
     campus: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc giáo viên theo cảnh báo học tập'),
+    learning_platform: str = Query('cms', pattern='^(cms|udemy)$'),
     teacher_id: str | None = Query(None, description='Lọc đúng một giáo viên để xuất lớp'),
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
@@ -879,6 +886,7 @@ def export_training_teacher_report(
         campus=campus,
         search=search,
         learning_status=learning_status,
+        learning_platform=learning_platform,
         teacher_id=teacher_id,
         page=1,
         page_size=1,
@@ -906,6 +914,7 @@ def export_training_teacher_report(
         campus=campus,
         search=search,
         learning_status=learning_status,
+        learning_platform=learning_platform,
         teacher_id=teacher_id,
         page=1,
         page_size=max(1, min(200, int(settings.academic_teacher_report_sync_export_max_teachers))),
@@ -1009,6 +1018,7 @@ def list_academic_subject_deliveries(
     branch: str | None = None,
     learning_platform: str | None = Query(None, alias='platform'),
     search: str | None = None,
+    management_scope: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(_require_academic_catalog_admin),
@@ -1023,6 +1033,7 @@ def list_academic_subject_deliveries(
         search=search,
         page=page,
         page_size=page_size,
+        management_scope=management_scope,
     )
 
 
@@ -1146,7 +1157,7 @@ def bulk_update_academic_subject_delivery_platform(
     service = AcademicSubjectDeliveryService(db)
     rows = service.bulk_set_platform(payload.delivery_ids, payload.learning_platform, actor=user.user_id or user.username)
     platform_label = {'cms': 'CMS', 'udemy': 'Udemy'}.get(payload.learning_platform, 'Chưa chọn')
-    message = f'Đã cập nhật {len(rows)} môn sang {platform_label}. Dữ liệu lịch sử không bị xóa.'
+    message = f'Đã cập nhật {len(rows)} cấu hình môn theo Block sang {platform_label}. Dữ liệu lịch sử không bị xóa.'
     log_audit(
         db,
         action='academic.subject_delivery.platform.bulk_update',
@@ -1982,6 +1993,7 @@ def list_teacher_classes(
     branch: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
+    learning_platform: str = Query('cms', pattern='^(cms|udemy)$'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(_require_academic_view_permission),
@@ -1996,6 +2008,7 @@ def list_teacher_classes(
         branch=branch,
         search=search,
         learning_status=learning_status,
+        learning_platform=learning_platform,
         page=page,
         page_size=page_size,
     )
@@ -2009,13 +2022,14 @@ def list_teacher_subjects(
     campus: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
+    learning_platform: str = Query('cms', pattern='^(cms|udemy)$'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     return AcademicService(db).list_teacher_subjects(
-        user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, page=page, page_size=page_size
+        user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, learning_platform=learning_platform, page=page, page_size=page_size
     )
 
 
@@ -2228,15 +2242,16 @@ def list_subject_classes(
     branch: str | None = None,
     search: str | None = None,
     learning_status: str | None = Query(None, description='Lọc trạng thái học tập/cảnh báo'),
+    learning_platform: str = Query('cms', pattern='^(cms|udemy)$'),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    user: UserContext = Depends(require_permission('view_questions')),
+    user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
     service = AcademicService(db)
     service.assert_can_access_subject(user, subject_id)
     return service.list_teacher_classes(
-        user, term_id=term_id, block_id=block_id, subject_id=subject_id, campus=campus, branch=branch, search=search, learning_status=learning_status, page=page, page_size=page_size
+        user, term_id=term_id, block_id=block_id, subject_id=subject_id, campus=campus, branch=branch, search=search, learning_status=learning_status, learning_platform=learning_platform, page=page, page_size=page_size
     )
 
 

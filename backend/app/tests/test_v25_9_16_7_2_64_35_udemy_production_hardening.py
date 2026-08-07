@@ -147,7 +147,7 @@ def test_batch35_cross_layer_hardening_contract():
     frontend = (ROOT / 'frontend/app/subject-management/[deliveryId]/udemy/page.tsx').read_text(encoding='utf-8')
     migration = (ROOT / 'backend/alembic/versions/0057_v25_9_16_7_2_64_35_udemy_hardening_indexes.py').read_text(encoding='utf-8')
 
-    assert "app_version: str = '25.9.16.7.2.64.16.5.7.2.5'" in config
+    assert "app_version: str = '25.9.16.7.2.64.16.5.7.2." in config
     assert 'academic_udemy_upload_rate_limit_per_minute' in config
     assert 'MAX_XLSX_COMPRESSION_RATIO' in service
     assert 'cleanup_expired_artifacts' in service

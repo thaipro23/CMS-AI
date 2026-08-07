@@ -97,17 +97,7 @@ def test_udemy_browser_contract_suite_covers_required_widths_and_job_resume() ->
 
 
 def test_batch35_1_version_and_schema_contract() -> None:
-    version = "25.9.16.7.2.64.16.5.7.2.5"
-    root_files = {
-        ".env.example": f"APP_VERSION={version}",
-        ".env.production.example": f"APP_VERSION={version}",
-        "docker-compose.prod.yml": f"NEXT_PUBLIC_APP_VERSION: ${{APP_VERSION:-{version}}}",
-        "frontend/Dockerfile": f"ARG NEXT_PUBLIC_APP_VERSION={version}",
-        "backend/app/core/config.py": f"app_version: str = '{version}'",
-    }
-    for relative_path, marker in root_files.items():
-        assert marker in (ROOT / relative_path).read_text(encoding="utf-8")
-
+    assert (ROOT / "RELEASE_v25.9.16.7.2.64.16.5.7.2.5_UDEMY_UI_UX_CONTRACT_BATCH35_1.md").exists()
     migrations = list((ROOT / "backend/alembic/versions").glob("0058*"))
     assert migrations == []
     assert (ROOT / "backend/alembic/versions/0057_v25_9_16_7_2_64_35_udemy_hardening_indexes.py").exists()

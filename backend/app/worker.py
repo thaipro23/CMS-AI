@@ -1490,11 +1490,14 @@ def academic_subject_catalog_refresh_task(job_id: str):
             branch=request_json.get('branch') or job.branch,
             actor=job.requested_by,
         )
+        inherited_subject_count = int(result.get('inherited_subject_count') or 0)
         message = (
             f"Đã lấy {int(result.get('ap_subject_count') or 0)} môn từ AP; "
             f"tạo {int(result.get('delivery_created') or 0)} và cập nhật "
-            f"{int(result.get('delivery_updated') or 0)} bản ghi môn theo học kỳ/block."
+            f"{int(result.get('delivery_updated') or 0)} bản ghi môn theo học kỳ/Block."
         )
+        if inherited_subject_count:
+            message += f" Kế thừa lựa chọn nền tảng của {inherited_subject_count} môn từ kỳ gần nhất; có thể thêm, đổi hoặc bỏ chọn."
         result = {'ok': True, 'message': message, **result}
         job = db.get(AcademicBulkOperationJob, job_id)
         if job:
@@ -2151,6 +2154,7 @@ def academic_teacher_report_job_task(job_id: str):
                 campus=campus,
                 search=request.get('search'),
                 learning_status=request.get('learning_status'),
+                learning_platform=request.get('learning_platform'),
                 teacher_id=request.get('teacher_id'),
                 page=1,
                 page_size=200,

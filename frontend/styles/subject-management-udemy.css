@@ -152,3 +152,20 @@
   .udemy-overview-grid { grid-template-columns: 1fr; }
   .udemy-overview-actions .btn { flex: 1 1 100%; }
 }
+
+/* Batch 35.2: term-level subject management; Block remains an operational scope. */
+.subject-platform-control { display: grid; gap: 7px; min-width: 0; }
+.subject-platform-control > .status-badge { justify-self: start; }
+.subject-block-operations { min-width: 260px; }
+.subject-block-operations > summary { cursor: pointer; color: var(--color-primary-strong, #1d4ed8); font-weight: 800; list-style-position: inside; }
+.subject-block-operations[open] > summary { margin-bottom: 9px; }
+.subject-block-operation-list { display: grid; gap: 8px; min-width: 0; }
+.subject-block-operation-row { display: grid; grid-template-columns: minmax(95px, .45fr) minmax(0, 1fr); align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--color-border, #d9e1ea); border-radius: 10px; background: var(--color-bg-subtle, #f8fafc); }
+.subject-block-operation-row > div:first-child { display: grid; gap: 2px; min-width: 0; }
+.subject-block-operation-row small { color: var(--text-muted, #64748b); }
+.subject-block-operation-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 760px) {
+  .subject-block-operation-row { grid-template-columns: 1fr; align-items: start; }
+  .subject-block-operation-actions { justify-content: flex-start; }
+  .subject-block-operation-actions .btn { flex: 1 1 120px; }
+}

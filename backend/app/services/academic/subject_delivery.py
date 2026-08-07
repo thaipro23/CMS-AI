@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, func, inspect, literal, or_, text
+from sqlalchemy import and_, case, func, inspect, literal, literal_column, or_, text
 from sqlalchemy.orm import Session
 
 from app.core.json_safe import json_safe_value
@@ -51,6 +51,65 @@ class AcademicSubjectDeliveryService:
     def _subject_code_from_item(item: dict[str, Any]) -> str:
         return str(item.get('psubject_code') or item.get('subject_code') or item.get('id') or '').strip().upper()
 
+    def _previous_term(self, term: AcademicTerm, branch: str) -> AcademicTerm | None:
+        candidates = (
+            self.db.query(AcademicTerm)
+            .filter(
+                AcademicTerm.id != term.id,
+                func.lower(func.coalesce(AcademicTerm.branch, branch)) == branch,
+            )
+            .all()
+        )
+        if term.start_date:
+            candidates = [
+                item for item in candidates
+                if (item.start_date and item.start_date < term.start_date)
+                or (item.end_date and item.end_date <= term.start_date)
+            ]
+        else:
+            candidates = [item for item in candidates if item.created_at <= term.created_at]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda item: (
+                item.start_date or item.end_date or item.created_at,
+                item.created_at,
+                str(item.term_name or item.term_code or ''),
+            ),
+        )
+
+    def _previous_term_platforms(
+        self,
+        *,
+        term: AcademicTerm,
+        branch: str,
+        subject_ids: list[str],
+    ) -> tuple[AcademicTerm | None, dict[str, str]]:
+        previous_term = self._previous_term(term, branch)
+        if not previous_term or not subject_ids:
+            return previous_term, {}
+        rows = (
+            self.db.query(AcademicSubjectDelivery.subject_id, AcademicSubjectDelivery.learning_platform)
+            .filter(
+                AcademicSubjectDelivery.term_id == previous_term.id,
+                AcademicSubjectDelivery.subject_id.in_(subject_ids),
+                func.lower(AcademicSubjectDelivery.branch) == branch,
+                AcademicSubjectDelivery.active.is_(True),
+            )
+            .all()
+        )
+        values_by_subject: dict[str, set[str | None]] = {}
+        for subject_id, platform in rows:
+            values_by_subject.setdefault(subject_id, set()).add(platform)
+        inherited: dict[str, str] = {}
+        for subject_id, values in values_by_subject.items():
+            if len(values) == 1:
+                platform = next(iter(values))
+                if platform in {'cms', 'udemy'}:
+                    inherited[subject_id] = platform
+        return previous_term, inherited
+
     def _get_scope(self, *, term_id: str, block_id: str, branch: str | None) -> tuple[AcademicTerm, AcademicBlock, str]:
         term = self.db.get(AcademicTerm, term_id)
         block = self.db.get(AcademicBlock, block_id)
@@ -71,21 +130,33 @@ class AcademicSubjectDeliveryService:
         search: str | None = None,
         page: int = 1,
         page_size: int = 50,
+        management_scope: str | None = None,
     ) -> dict[str, Any]:
-        platform_filter = self.normalize_platform(learning_platform) if learning_platform not in {None, '', 'all'} else 'all'
+        scope_mode = str(management_scope or 'delivery').strip().lower()
+        if scope_mode not in {'delivery', 'term'}:
+            raise HTTPException(status_code=422, detail='management_scope chỉ nhận delivery hoặc term.')
+        if str(learning_platform or '').strip().lower() == 'mixed':
+            platform_filter: str | None = 'mixed'
+        else:
+            platform_filter = self.normalize_platform(learning_platform) if learning_platform not in {None, '', 'all'} else 'all'
         branch_value = self.normalize_branch(branch) if branch else None
 
+        # Reuse the exact same SQL expression in SELECT and GROUP BY. Creating
+        # two COALESCE expressions with Python string literals makes SQLAlchemy
+        # generate different bind parameters; PostgreSQL then rejects the query
+        # because the selected expression is not textually identical to GROUP BY.
+        class_branch_key = func.lower(func.coalesce(AcademicClass.branch, literal_column("''")))
         class_counts = (
             self.db.query(
                 AcademicClass.subject_id.label('subject_id'),
                 AcademicClass.term_id.label('term_id'),
                 AcademicClass.block_id.label('block_id'),
-                func.lower(func.coalesce(AcademicClass.branch, '')).label('branch_key'),
+                class_branch_key.label('branch_key'),
                 func.count(AcademicClass.id).label('class_count'),
                 func.count(func.distinct(AcademicClass.campus)).label('campus_count'),
             )
             .filter(AcademicClass.active.is_(True))
-            .group_by(AcademicClass.subject_id, AcademicClass.term_id, AcademicClass.block_id, func.lower(func.coalesce(AcademicClass.branch, '')))
+            .group_by(AcademicClass.subject_id, AcademicClass.term_id, AcademicClass.block_id, class_branch_key)
             .subquery()
         )
 
@@ -171,7 +242,10 @@ class AcademicSubjectDeliveryService:
             query = query.filter(AcademicSubjectDelivery.block_id == block_id)
         if branch_value:
             query = query.filter(func.lower(AcademicSubjectDelivery.branch) == branch_value)
-        if platform_filter != 'all':
+        # In term-management mode the filter must be applied after all Block
+        # deliveries are aggregated. Filtering rows here would make a mixed
+        # CMS/Udemy subject look falsely consistent.
+        if scope_mode != 'term' and platform_filter != 'all':
             if platform_filter is None:
                 query = query.filter(AcademicSubjectDelivery.learning_platform.is_(None))
             else:
@@ -180,16 +254,16 @@ class AcademicSubjectDeliveryService:
             like = f"%{search.strip()}%"
             query = query.filter(or_(AcademicSubject.subject_code.ilike(like), AcademicSubject.subject_name.ilike(like)))
 
-        rows = query.order_by(AcademicSubject.subject_code.asc(), AcademicSubject.subject_name.asc()).all()
-        total = len(rows)
-        page_value = max(1, int(page or 1))
-        page_size_value = max(1, min(200, int(page_size or 50)))
-        total_pages = math.ceil(total / page_size_value) if total else 0
-        selected_rows = rows[(page_value - 1) * page_size_value:page_value * page_size_value]
+        rows = query.order_by(
+            AcademicSubject.subject_code.asc(),
+            AcademicSubject.subject_name.asc(),
+            AcademicBlock.sort_order.asc(),
+            AcademicBlock.block_name.asc(),
+        ).all()
 
-        items: list[dict[str, Any]] = []
-        for delivery, subject, term, block, class_count, campus_count, plan_id, plan_version, item_count, milestone_count, plan_imported_at, plan_updated_at, progress_student_count, progress_late_count, progress_unmatched_count, last_udemy_import_at in selected_rows:
-            items.append({
+        detailed_items: list[dict[str, Any]] = []
+        for delivery, subject, term, block, class_count, campus_count, plan_id, plan_version, item_count, milestone_count, plan_imported_at, plan_updated_at, progress_student_count, progress_late_count, progress_unmatched_count, last_udemy_import_at in rows:
+            detailed_items.append({
                 'id': delivery.id,
                 'subject_id': subject.id,
                 'ap_subject_id': subject.ap_subject_id,
@@ -223,16 +297,104 @@ class AcademicSubjectDeliveryService:
                 'metadata_json': delivery.metadata_json if isinstance(delivery.metadata_json, dict) else {},
                 'created_at': delivery.created_at,
                 'updated_at': delivery.updated_at,
+                'delivery_ids': [delivery.id],
+                'block_count': 1,
+                'block_names': [block.block_name],
+                'platform_consistent': True,
+                'platform_values': [delivery.learning_platform],
+                'management_scope': 'delivery',
+                'block_deliveries': [],
             })
 
-        all_deliveries = [row[0] for row in rows]
+        if scope_mode == 'term':
+            grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for item in detailed_items:
+                key = (item['subject_id'], item['term_id'], self.normalize_branch(item['branch']))
+                current = grouped.get(key)
+                block_ref = {
+                    'id': item['id'],
+                    'block_id': item['block_id'],
+                    'block_name': item['block_name'],
+                    'learning_platform': item['learning_platform'],
+                    'class_count': item['class_count'],
+                    'campus_count': item['campus_count'],
+                    'has_udemy_plan': item['has_udemy_plan'],
+                    'udemy_plan_version': item['udemy_plan_version'],
+                    'udemy_milestone_count': item['udemy_milestone_count'],
+                    'udemy_progress_student_count': item['udemy_progress_student_count'],
+                    'udemy_progress_late_count': item['udemy_progress_late_count'],
+                    'udemy_progress_unmatched_count': item['udemy_progress_unmatched_count'],
+                    'last_udemy_import_at': item['last_udemy_import_at'],
+                }
+                if current is None:
+                    current = dict(item)
+                    current.update({
+                        'block_id': item['block_id'],
+                        'block_name': item['block_name'],
+                        'delivery_ids': [],
+                        'block_names': [],
+                        'block_deliveries': [],
+                        'class_count': 0,
+                        'campus_count': 0,
+                        'udemy_progress_student_count': 0,
+                        'udemy_progress_late_count': 0,
+                        'udemy_progress_unmatched_count': 0,
+                        'udemy_milestone_count': 0,
+                        'management_scope': 'term',
+                    })
+                    grouped[key] = current
+                current['delivery_ids'].append(item['id'])
+                current['block_names'].append(item['block_name'])
+                current['block_deliveries'].append(block_ref)
+                current['class_count'] += int(item['class_count'] or 0)
+                current['campus_count'] += int(item['campus_count'] or 0)
+                current['udemy_progress_student_count'] += int(item['udemy_progress_student_count'] or 0)
+                current['udemy_progress_late_count'] += int(item['udemy_progress_late_count'] or 0)
+                current['udemy_progress_unmatched_count'] += int(item['udemy_progress_unmatched_count'] or 0)
+                current['has_udemy_plan'] = bool(current.get('has_udemy_plan')) or bool(item['has_udemy_plan'])
+                current['udemy_milestone_count'] = int(current.get('udemy_milestone_count') or 0) + int(item['udemy_milestone_count'] or 0)
+                for field in ('configured_at', 'catalog_refreshed_at', 'udemy_plan_updated_at', 'last_udemy_import_at', 'updated_at'):
+                    candidate = item.get(field)
+                    if candidate is not None and (current.get(field) is None or candidate > current[field]):
+                        current[field] = candidate
+
+            term_items: list[dict[str, Any]] = []
+            for current in grouped.values():
+                values = {block.get('learning_platform') for block in current['block_deliveries']}
+                consistent = len(values) <= 1
+                current['platform_consistent'] = consistent
+                current['platform_values'] = sorted(values, key=lambda value: '' if value is None else str(value))
+                current['learning_platform'] = next(iter(values)) if consistent and values else None
+                current['block_count'] = len(current['block_deliveries'])
+                current['block_name'] = ', '.join(current['block_names'])
+                current['configuration_source'] = 'term_management'
+                term_items.append(current)
+
+            if platform_filter != 'all':
+                if platform_filter == 'mixed':
+                    term_items = [item for item in term_items if not item['platform_consistent']]
+                elif platform_filter is None:
+                    term_items = [item for item in term_items if item['platform_consistent'] and item['learning_platform'] is None]
+                else:
+                    term_items = [item for item in term_items if item['platform_consistent'] and item['learning_platform'] == platform_filter]
+            all_items = term_items
+        else:
+            all_items = detailed_items
+
+        total = len(all_items)
+        page_value = max(1, int(page or 1))
+        page_size_value = max(1, min(200, int(page_size or 50)))
+        total_pages = math.ceil(total / page_size_value) if total else 0
+        items = all_items[(page_value - 1) * page_size_value:page_value * page_size_value]
+
         summary = {
             'total': total,
-            'cms_count': sum(1 for item in all_deliveries if item.learning_platform == 'cms'),
-            'udemy_count': sum(1 for item in all_deliveries if item.learning_platform == 'udemy'),
-            'unassigned_count': sum(1 for item in all_deliveries if item.learning_platform is None),
-            'class_count': sum(int(row[4] or 0) for row in rows),
-            'scope_label': 'Toàn bộ bộ lọc',
+            'cms_count': sum(1 for item in all_items if item.get('platform_consistent', True) and item.get('learning_platform') == 'cms'),
+            'udemy_count': sum(1 for item in all_items if item.get('platform_consistent', True) and item.get('learning_platform') == 'udemy'),
+            'unassigned_count': sum(1 for item in all_items if item.get('platform_consistent', True) and item.get('learning_platform') is None),
+            'mixed_count': sum(1 for item in all_items if not item.get('platform_consistent', True)),
+            'class_count': sum(int(item.get('class_count') or 0) for item in all_items),
+            'scope_label': 'Theo học kỳ' if scope_mode == 'term' else 'Theo học kỳ và Block',
         }
         return {
             'items': items,
@@ -358,10 +520,17 @@ class AcademicSubjectDeliveryService:
             .all()
         ) if codes else []
         by_code = {str(row.subject_code or '').strip().upper(): row for row in subjects}
+        previous_term, inherited_platforms = self._previous_term_platforms(
+            term=term,
+            branch=branch_value,
+            subject_ids=[row.id for row in subjects],
+        )
 
         now = datetime.utcnow()
         created = 0
         updated = 0
+        inherited_delivery_count = 0
+        inherited_subject_ids: set[str] = set()
         missing_codes: list[str] = []
         for code in codes:
             subject = by_code.get(code)
@@ -380,22 +549,43 @@ class AcademicSubjectDeliveryService:
                     .first()
                 )
                 if not delivery:
+                    inherited_platform = inherited_platforms.get(subject.id)
+                    metadata: dict[str, Any] = {
+                        'catalog_source': 'ap.cms.get-subject-cms',
+                        'catalog_term_name': term.term_name,
+                        'catalog_actor': actor,
+                    }
+                    configuration_source = 'ap_catalog'
+                    configured_at = None
+                    if inherited_platform and previous_term:
+                        configuration_source = 'previous_term_carry_forward'
+                        configured_at = now
+                        inherited_delivery_count += 1
+                        inherited_subject_ids.add(subject.id)
+                        metadata.update({
+                            'platform_inherited_from_term_id': previous_term.id,
+                            'platform_inherited_from_term_name': previous_term.term_name,
+                            'platform_history': [{
+                                'from': None,
+                                'to': inherited_platform,
+                                'source': 'previous_term_carry_forward',
+                                'actor': actor,
+                                'changed_at': now.isoformat(),
+                            }],
+                            'platform_policy_version': 'udemy-subject-management/batch35.2',
+                        })
                     delivery = AcademicSubjectDelivery(
                         subject_id=subject.id,
                         term_id=term.id,
                         block_id=block.id,
                         branch=branch_value,
-                        learning_platform=None,
+                        learning_platform=inherited_platform,
                         active=True,
-                        configuration_source='ap_catalog',
-                        configured_by=None,
-                        configured_at=None,
+                        configuration_source=configuration_source,
+                        configured_by=actor if inherited_platform else None,
+                        configured_at=configured_at,
                         catalog_refreshed_at=now,
-                        metadata_json={
-                            'catalog_source': 'ap.cms.get-subject-cms',
-                            'catalog_term_name': term.term_name,
-                            'catalog_actor': actor,
-                        },
+                        metadata_json=json_safe_value(metadata),
                     )
                     self.db.add(delivery)
                     created += 1
@@ -420,6 +610,10 @@ class AcademicSubjectDeliveryService:
             'subject_imported_count': int(counters.subjects or 0),
             'delivery_created': created,
             'delivery_updated': updated,
+            'previous_term_id': previous_term.id if previous_term else None,
+            'previous_term_name': previous_term.term_name if previous_term else None,
+            'inherited_subject_count': len(inherited_subject_ids),
+            'inherited_delivery_count': inherited_delivery_count,
             'missing_subject_codes': missing_codes[:100],
             'catalog_refreshed_at': now.isoformat(),
         }

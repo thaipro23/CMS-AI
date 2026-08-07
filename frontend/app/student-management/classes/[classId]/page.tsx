@@ -743,6 +743,8 @@ function ClassDetailContent() {
     return student.learning_component_scores?.find((score) => gradeColumnIdentity(score) === column.key || componentKey(score) === column.key || score.name === column.name) || null
   }
 
+  const navigationPlatform = searchParams.get('platform') === 'udemy' || isUdemyClass ? 'udemy' : 'cms'
+  const navigationPlatformLabel = navigationPlatform === 'udemy' ? 'Udemy' : 'CMS'
   const subjectIdForBack = searchParams.get('subject_id') || classInfo?.subject_id || ''
   const subjectBackParams = new URLSearchParams()
   const backTermId = searchParams.get('term_id') || classInfo?.term_id || ''
@@ -762,7 +764,8 @@ function ClassDetailContent() {
   if (backTermName) subjectBackParams.set('term_name', backTermName)
   if (backSubjectCode) subjectBackParams.set('subject_code', backSubjectCode)
   if (backSubjectName) subjectBackParams.set('subject_name', backSubjectName)
-  const backToClassesHref = subjectIdForBack ? `/student-management/subjects/${encodeURIComponent(subjectIdForBack)}/classes?${subjectBackParams.toString()}` : '/student-management'
+  subjectBackParams.set('platform', navigationPlatform)
+  const backToClassesHref = subjectIdForBack ? `/student-management/subjects/${encodeURIComponent(subjectIdForBack)}/classes?${subjectBackParams.toString()}` : `/student-management/${navigationPlatform}`
   const teacherIdForBack = searchParams.get('teacher_id') || ''
   const teacherBackParams = new URLSearchParams()
   if (backTermId) teacherBackParams.set('term_id', backTermId)
@@ -770,6 +773,7 @@ function ClassDetailContent() {
   if (backCampus) teacherBackParams.set('campus', backCampus)
   if (backTermName) teacherBackParams.set('term_name', backTermName)
   if (searchParams.get('teacher_name')) teacherBackParams.set('teacher_name', searchParams.get('teacher_name') || '')
+  teacherBackParams.set('platform', navigationPlatform)
   const backToTeacherClassesHref = teacherIdForBack ? `/teacher-management/teachers/${encodeURIComponent(teacherIdForBack)}/classes?${teacherBackParams.toString()}` : ''
   const operationalBackHref = backToTeacherClassesHref || backToClassesHref
   const behaviorParams = new URLSearchParams()
@@ -808,8 +812,8 @@ function ClassDetailContent() {
       icon="students"
       tone="blue"
       breadcrumbs={teacherIdForBack
-        ? [{ label: 'Vận hành đào tạo' }, { label: 'Quản lý giảng viên', href: '/teacher-management' }, { label: 'Lớp giảng viên', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]
-        : [{ label: 'Vận hành đào tạo' }, { label: 'Quản lý sinh viên', href: '/student-management' }, { label: 'Danh sách lớp', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]}
+        ? [{ label: 'Vận hành đào tạo' }, { label: `Quản lý giảng viên ${navigationPlatformLabel}`, href: `/teacher-management/${navigationPlatform}` }, { label: 'Lớp giảng viên', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]
+        : [{ label: 'Vận hành đào tạo' }, { label: `Quản lý sinh viên ${navigationPlatformLabel}`, href: `/student-management/${navigationPlatform}` }, { label: 'Danh sách lớp', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]}
       secondaryActions={<Link className="btn secondary" href={operationalBackHref}>Quay lại danh sách lớp</Link>}
       primaryAction={isUdemyClass ? <Link className="btn primary" href={udemyDashboardHref}>Xem tiến độ Udemy</Link> : <Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
     />

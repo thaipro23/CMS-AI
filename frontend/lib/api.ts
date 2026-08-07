@@ -3281,7 +3281,8 @@ export async function getAcademicSubjectDeliveries(
     termId?: string
     blockId?: string
     branch?: string
-    platform?: AcademicLearningPlatform | 'all'
+    platform?: AcademicLearningPlatform | 'all' | 'mixed'
+    managementScope?: 'delivery' | 'term'
     search?: string
     page?: number
     pageSize?: number
@@ -3293,6 +3294,7 @@ export async function getAcademicSubjectDeliveries(
   if (filters.branch) params.set('branch', filters.branch)
   if (filters.platform && filters.platform !== 'all') params.set('platform', filters.platform)
   if (filters.platform === null) params.set('platform', 'unassigned')
+  if (filters.managementScope) params.set('management_scope', filters.managementScope)
   if (filters.search?.trim()) params.set('search', filters.search.trim())
   params.set('page', String(Math.max(1, filters.page || 1)))
   params.set('page_size', String(Math.max(1, Math.min(200, filters.pageSize || 50))))
@@ -3629,6 +3631,7 @@ export async function getAcademicTrainingTeacherReport(
     branch?: string;
     search?: string;
     learningStatus?: string;
+    learningPlatform?: 'cms' | 'udemy';
     teacherId?: string;
     page?: number;
     pageSize?: number;
@@ -3643,6 +3646,7 @@ export async function getAcademicTrainingTeacherReport(
   if (filters.search?.trim()) params.set("search", filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== "all")
     params.set("learning_status", filters.learningStatus.trim());
+  if (filters.learningPlatform) params.set("learning_platform", filters.learningPlatform);
   if (filters.teacherId?.trim())
     params.set("teacher_id", filters.teacherId.trim());
   if (typeof filters.includeClasses === "boolean")
@@ -3666,6 +3670,7 @@ export async function downloadAcademicTrainingTeacherReport(
     branch?: string;
     search?: string;
     learningStatus?: string;
+    learningPlatform?: 'cms' | 'udemy';
     teacherId?: string;
   } = {},
 ): Promise<Blob> {
@@ -3676,6 +3681,7 @@ export async function downloadAcademicTrainingTeacherReport(
   if (filters.search?.trim()) params.set("search", filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== "all")
     params.set("learning_status", filters.learningStatus.trim());
+  if (filters.learningPlatform) params.set("learning_platform", filters.learningPlatform);
   if (filters.teacherId?.trim())
     params.set("teacher_id", filters.teacherId.trim());
   const response = await apiFetch(
@@ -3713,6 +3719,7 @@ export async function createAcademicTrainingTeacherExportJob(
     branch?: string;
     search?: string;
     learningStatus?: string;
+    learningPlatform?: 'cms' | 'udemy';
     teacherId?: string;
   },
 ): Promise<AcademicTeacherReportJob> {
@@ -3723,6 +3730,7 @@ export async function createAcademicTrainingTeacherExportJob(
   if (filters.search?.trim()) params.set("search", filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== "all")
     params.set("learning_status", filters.learningStatus.trim());
+  if (filters.learningPlatform) params.set("learning_platform", filters.learningPlatform);
   if (filters.teacherId?.trim())
     params.set("teacher_id", filters.teacherId.trim());
   return parseResponse(
@@ -3816,6 +3824,7 @@ export async function getAcademicTeacherClasses(
     branch?: string;
     search?: string;
     learningStatus?: string;
+    learningPlatform?: 'cms' | 'udemy';
     page?: number;
     pageSize?: number;
   } = {},
@@ -3829,6 +3838,7 @@ export async function getAcademicTeacherClasses(
   if (filters.search?.trim()) params.set("search", filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== "all")
     params.set("learning_status", filters.learningStatus.trim());
+  if (filters.learningPlatform) params.set("learning_platform", filters.learningPlatform);
   params.set("page", String(filters.page || 1));
   params.set("page_size", String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(
@@ -3847,6 +3857,7 @@ export async function getAcademicTeacherSubjects(
     branch?: string;
     search?: string;
     learningStatus?: string;
+    learningPlatform?: 'cms' | 'udemy';
     page?: number;
     pageSize?: number;
   } = {},
@@ -3858,6 +3869,7 @@ export async function getAcademicTeacherSubjects(
   if (filters.search?.trim()) params.set("search", filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== "all")
     params.set("learning_status", filters.learningStatus.trim());
+  if (filters.learningPlatform) params.set("learning_platform", filters.learningPlatform);
   params.set("page", String(filters.page || 1));
   params.set("page_size", String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(
@@ -3878,6 +3890,7 @@ export async function getAcademicSubjectClasses(
     branch?: string;
     search?: string;
     learningStatus?: string;
+    learningPlatform?: 'cms' | 'udemy';
     page?: number;
     pageSize?: number;
   } = {},
@@ -3890,6 +3903,7 @@ export async function getAcademicSubjectClasses(
   if (filters.search?.trim()) params.set("search", filters.search.trim());
   if (filters.learningStatus?.trim() && filters.learningStatus.trim() !== "all")
     params.set("learning_status", filters.learningStatus.trim());
+  if (filters.learningPlatform) params.set("learning_platform", filters.learningPlatform);
   params.set("page", String(filters.page || 1));
   params.set("page_size", String(clampAcademicPageSize(filters.pageSize)));
   return parseResponse(
