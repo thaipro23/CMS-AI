@@ -155,7 +155,7 @@ export function UdemyProgressImportDialog({
   return <AccessibleDialog
     open={open}
     title={delivery ? `Import tiến độ ${delivery.subject_code}` : 'Import điểm và tiến độ Udemy'}
-    description={delivery ? `${delivery.subject_name} · ${delivery.term_name} · ${delivery.block_name}` : 'Import nhiều file theo tên MAMON_*.xlsx trong đúng học kỳ và Block'}
+    description={delivery ? `${delivery.subject_name} · ${delivery.term_name} · ${delivery.block_name}` : 'Import nhiều file theo tên MAMON_*.xlsx hoặc MAMON_*.csv trong đúng học kỳ và Block'}
     onClose={close}
     busy={busy || Boolean(busyBatchId)}
     size="xlarge"
@@ -168,10 +168,10 @@ export function UdemyProgressImportDialog({
   >
     <InlineNotice notice={noticeInfo(delivery
       ? `File được gắn trực tiếp với môn ${delivery.subject_code}. Tác vụ chạy nền; F5 hoặc chuyển trang không làm mất tiến trình.`
-      : 'Tên file phải bắt đầu bằng mã môn, ví dụ SOF3032_report.xlsx. Mỗi lần tối đa 50 file. Tác vụ tiếp tục chạy khi F5 hoặc chuyển trang.', 'Quy tắc import')} />
+      : 'Tên file phải bắt đầu bằng mã môn, ví dụ SOF3032_report.xlsx hoặc SOF3032_report.csv. Mỗi lần tối đa 50 file. Tác vụ tiếp tục chạy khi F5 hoặc chuyển trang.', 'Quy tắc import')} />
     <div className="udemy-progress-upload-panel">
-      <label><b>File Excel tiến độ</b><small>Hỗ trợ file export gốc Udemy 25 cột và file tổng hợp tiến độ 7 cột. Tối đa 20 MB/file.</small>
-        <input className="input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple={!delivery} disabled={busy || Boolean(result)} onChange={(event) => { setFiles(Array.from(event.target.files || [])); setResult(null); setError('') }} />
+      <label><b>File tiến độ Udemy</b><small>Hỗ trợ .xlsx/.csv export gốc Udemy theo header, kể cả file mới có cột “ID bên ngoài”, và file tổng hợp tiến độ 7 cột. Tối đa 20 MB/file.</small>
+        <input className="input" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" multiple={!delivery} disabled={busy || Boolean(result)} onChange={(event) => { setFiles(Array.from(event.target.files || [])); setResult(null); setError('') }} />
       </label>
       <label className="udemy-progress-force"><input type="checkbox" checked={force} disabled={busy || Boolean(result)} onChange={(event) => setForce(event.target.checked)} /><span><b>Import lại có chủ đích</b><small>Cho phép xử lý lại cùng file SHA-256. Mặc định hệ thống bỏ qua file trùng.</small></span></label>
     </div>

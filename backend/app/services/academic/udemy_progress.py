@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 import re
 import time
@@ -8,7 +9,7 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
 
@@ -52,11 +53,13 @@ class ParsedProgressRecord:
 
 
 class UdemyProgressService:
-    """Safe parser and snapshot writer for Udemy progress workbooks.
+    """Safe parser and snapshot writer for Udemy progress exports.
 
     Supported formats:
-    - Raw Udemy item-level export (header based, with the legacy 25-column
-      fallback: email at column 3 and item progress at column 17).
+    - Raw Udemy item-level export in .xlsx or UTF-8 .csv. Columns are resolved
+      by header name, so optional/new columns such as ``ID bên ngoài`` may be
+      inserted or reordered without shifting Email or completion percentage.
+    - Legacy 25-column item export as a compatibility fallback.
     - ACMS aggregate export containing Email, Name and Tiến độ hiện tại.
     """
 
@@ -72,15 +75,30 @@ class UdemyProgressService:
         'application/octet-stream',
         'application/zip',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/csv',
+        'application/csv',
+        'application/vnd.ms-excel',
+        'text/plain',
     }
+    ALLOWED_EXTENSIONS = {'.xlsx', '.csv'}
     EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
 
     HEADER_ALIASES = {
-        'email': {'email', 'email address', 'user email', 'learner email', 'student email', 'e mail'},
-        'name': {'name', 'full name', 'user name', 'learner name', 'student name', 'ten', 'ho ten'},
+        'email': {
+            'email', 'email address', 'user email', 'learner email', 'student email', 'e mail',
+            'email cua nguoi dung', 'email người dùng', 'email nguoi dung',
+        },
+        'name': {
+            'name', 'full name', 'user name', 'learner name', 'student name', 'ten', 'ho ten',
+            'ten cua nguoi dung', 'ten người dùng', 'ten nguoi dung',
+        },
+        'last_name': {'last name', 'surname', 'family name', 'ho cua nguoi dung', 'ho nguoi dung'},
         'progress': {
             'progress', 'progress percent', 'progress percentage', 'completion', 'completion percent',
-            'item progress', 'tien do', 'tien do hien tai', 'phan tram tien do',
+            'item progress', 'item completion', 'item completion percent', 'item completion percentage',
+            'path item completion', 'path item completion percent', 'path item completion percentage',
+            'tien do', 'tien do hien tai', 'phan tram tien do',
+            'ty le hoan thanh muc trong lo trinh', 'ti le hoan thanh muc trong lo trinh',
         },
         'class_code': {'class', 'class code', 'class name', 'lop', 'ma lop'},
         'subject_code': {'subject', 'subject code', 'course code', 'ma mon', 'ma mon hoc'},
@@ -112,19 +130,24 @@ class UdemyProgressService:
 
     @classmethod
     def validate_upload_metadata(cls, *, filename: str, content_type: str | None) -> None:
+        suffix = Path(str(filename or '')).suffix.lower()
+        if suffix not in cls.ALLOWED_EXTENSIONS:
+            raise ValueError('Chỉ chấp nhận file tiến độ Udemy .xlsx hoặc .csv.')
         clean_type = str(content_type or '').split(';', 1)[0].strip().lower()
         if clean_type not in cls.ALLOWED_CONTENT_TYPES:
-            raise ValueError('Content-Type của file không phù hợp với workbook .xlsx.')
-        if not str(filename or '').lower().endswith('.xlsx'):
-            raise ValueError('Chỉ chấp nhận workbook .xlsx.')
+            raise ValueError('Content-Type của file không phù hợp với .xlsx/.csv.')
 
     @classmethod
-    def _validate_xlsx(cls, raw: bytes) -> None:
+    def _validate_common_size(cls, raw: bytes) -> None:
         if not raw:
-            raise ValueError('File Excel rỗng.')
+            raise ValueError('File Udemy rỗng.')
         if len(raw) > cls.MAX_FILE_BYTES:
             limit_mb = max(1, cls.MAX_FILE_BYTES // (1024 * 1024))
             raise ValueError(f'Mỗi file Udemy tối đa {limit_mb} MB.')
+
+    @classmethod
+    def _validate_xlsx(cls, raw: bytes) -> None:
+        cls._validate_common_size(raw)
         if not raw.startswith(b'PK'):
             raise ValueError('Nội dung file không phải workbook .xlsx hợp lệ.')
         try:
@@ -152,6 +175,43 @@ class UdemyProgressService:
                     raise ValueError('Dữ liệu giải nén của file Excel vượt giới hạn an toàn.')
         except zipfile.BadZipFile as exc:
             raise ValueError('Không đọc được file Excel. Hãy dùng file .xlsx hợp lệ.') from exc
+
+    @classmethod
+    def _decode_csv(cls, raw: bytes) -> str:
+        cls._validate_common_size(raw)
+        if b'\x00' in raw:
+            raise ValueError('File CSV chứa byte rỗng và không phải CSV văn bản hợp lệ.')
+        try:
+            return raw.decode('utf-8-sig')
+        except UnicodeDecodeError as exc:
+            raise ValueError('File CSV phải dùng mã hóa UTF-8.') from exc
+
+    @classmethod
+    def _csv_dialect(cls, text: str):
+        sample = text[:65536]
+        try:
+            return csv.Sniffer().sniff(sample, delimiters=',;\t')
+        except csv.Error:
+            return csv.excel
+
+    @classmethod
+    def validate_upload_content(cls, *, filename: str, raw: bytes) -> None:
+        suffix = Path(str(filename or '')).suffix.lower()
+        if suffix == '.xlsx':
+            cls._validate_xlsx(raw)
+            return
+        if suffix == '.csv':
+            text = cls._decode_csv(raw)
+            reader = csv.reader(StringIO(text), dialect=cls._csv_dialect(text))
+            rows = []
+            for _ in range(15):
+                try:
+                    rows.append(next(reader))
+                except StopIteration:
+                    break
+            cls._find_header_rows(rows)
+            return
+        raise ValueError('Chỉ chấp nhận file tiến độ Udemy .xlsx hoặc .csv.')
 
     @classmethod
     def cleanup_expired_artifacts(
@@ -301,69 +361,97 @@ class UdemyProgressService:
         return round(number, 4), clamped
 
     @classmethod
-    def _find_header(cls, ws) -> tuple[int, dict[str, int], str]:
-        for row_no in range(1, min(15, ws.max_row or 15) + 1):
-            found: dict[str, int] = {}
-            raw_progress_header = ''
-            for col_no in range(1, min(ws.max_column or 1, 200) + 1):
-                raw = ws.cell(row=row_no, column=col_no).value
-                canonical = cls._canonical_header(raw)
-                if canonical and canonical not in found:
-                    found[canonical] = col_no
-                    if canonical == 'progress':
-                        raw_progress_header = cls.normalize_text(raw)
-            if 'email' in found and 'progress' in found:
-                aggregate = raw_progress_header in {cls.normalize_text(item) for item in cls.AGGREGATE_PROGRESS_HEADERS}
-                if (ws.max_column or 0) < 20:
-                    aggregate = True
-                return row_no, found, 'aggregate' if aggregate else 'item_rows'
-        if int(ws.max_column or 0) == 25:
-            return 1, {'email': 3, 'name': 2, 'progress': 17}, 'legacy_25_item_rows'
-        raise ValueError('Không nhận diện được cột Email và Tiến độ. Hãy dùng file export gốc từ Udemy hoặc file tổng hợp ACMS.')
+    def _classify_header(cls, found: dict[str, int], raw_progress_header: str, column_count: int) -> str:
+        aggregate = raw_progress_header in {cls.normalize_text(item) for item in cls.AGGREGATE_PROGRESS_HEADERS}
+        if column_count < 20:
+            aggregate = True
+        return 'aggregate' if aggregate else 'item_rows'
 
-    def parse_path(self, path: Path, *, active_plan: UdemySubjectPlan | None) -> dict[str, Any]:
-        raw = path.read_bytes()
-        self._validate_xlsx(raw)
-        try:
-            wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
-        except Exception as exc:
-            raise ValueError('Không đọc được nội dung workbook.') from exc
-        if not wb.worksheets:
-            wb.close()
-            raise ValueError('File không có sheet dữ liệu.')
-        ws = wb.worksheets[0]
-        header_row, columns, parser_format = self._find_header(ws)
+    @classmethod
+    def _map_header_values(cls, values: list[Any]) -> tuple[dict[str, int], str]:
+        found: dict[str, int] = {}
+        raw_progress_header = ''
+        for col_no, raw in enumerate(values[:200], start=1):
+            canonical = cls._canonical_header(raw)
+            if canonical and canonical not in found:
+                found[canonical] = col_no
+                if canonical == 'progress':
+                    raw_progress_header = cls.normalize_text(raw)
+        return found, raw_progress_header
+
+    @classmethod
+    def _find_header_rows(cls, rows: list[list[Any]]) -> tuple[int, dict[str, int], str]:
+        for row_no, values in enumerate(rows[:15], start=1):
+            found, raw_progress_header = cls._map_header_values(list(values))
+            if 'email' in found and 'progress' in found:
+                return row_no, found, cls._classify_header(found, raw_progress_header, len(values))
+        # Compatibility only for historical exports whose headers cannot be
+        # normalized. New/current Udemy exports are always resolved by header.
+        if rows:
+            column_count = len(rows[0])
+            if column_count == 25:
+                return 1, {'email': 3, 'name': 2, 'progress': 17}, 'legacy_25_item_rows'
+            if column_count == 26:
+                return 1, {'email': 3, 'name': 2, 'progress': 18}, 'legacy_26_item_rows'
+        raise ValueError('Không nhận diện được cột Email và Tỷ lệ hoàn thành. Hãy dùng file export gốc từ Udemy hoặc file tổng hợp tiến độ.')
+
+    @classmethod
+    def _find_header(cls, ws) -> tuple[int, dict[str, int], str]:
+        rows: list[list[Any]] = []
+        for row_no in range(1, min(15, ws.max_row or 15) + 1):
+            rows.append([ws.cell(row=row_no, column=col_no).value for col_no in range(1, min(ws.max_column or 1, 200) + 1)])
+        return cls._find_header_rows(rows)
+
+    @classmethod
+    def _finalize_parsed_rows(
+        cls,
+        *,
+        rows: Any,
+        header_row: int,
+        columns: dict[str, int],
+        parser_format: str,
+        active_plan: UdemySubjectPlan | None,
+        cells: bool,
+    ) -> dict[str, Any]:
         grouped: dict[str, dict[str, Any]] = {}
         issues: list[dict[str, Any]] = []
         read_rows = 0
-        for row_no, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=False), start=header_row + 1):
-            if read_rows >= self.MAX_ROWS:
-                issues.append({'row_number': row_no, 'reason_code': 'ROW_LIMIT', 'reason_message': f'File vượt giới hạn {self.MAX_ROWS} dòng.'})
+        for row_no, row in enumerate(rows, start=header_row + 1):
+            if read_rows >= cls.MAX_ROWS:
+                issues.append({'row_number': row_no, 'reason_code': 'ROW_LIMIT', 'reason_message': f'File vượt giới hạn {cls.MAX_ROWS} dòng.'})
                 break
             read_rows += 1
-            def cell_at(canonical: str):
+
+            def item_at(canonical: str):
                 col = columns.get(canonical)
                 return row[col - 1] if col and col - 1 < len(row) else None
-            email_cell = cell_at('email')
-            progress_cell = cell_at('progress')
-            name_cell = cell_at('name')
-            class_cell = cell_at('class_code')
-            email_raw = email_cell.value if email_cell is not None else None
-            progress_raw = progress_cell.value if progress_cell is not None else None
-            name = str(name_cell.value).strip() if name_cell is not None and name_cell.value not in {None, ''} else None
-            class_code = str(class_cell.value).strip() if class_cell is not None and class_cell.value not in {None, ''} else None
+
+            def value_at(canonical: str):
+                item = item_at(canonical)
+                return getattr(item, 'value', None) if cells and item is not None else item
+
+            email_raw = value_at('email')
+            progress_raw = value_at('progress')
+            name_raw = value_at('name')
+            last_name_raw = value_at('last_name')
+            class_raw = value_at('class_code')
+            name_parts = [str(value).strip() for value in (name_raw, last_name_raw) if value not in {None, ''}]
+            name = ' '.join(name_parts) or None
+            class_code = str(class_raw).strip() if class_raw not in {None, ''} else None
             if email_raw in {None, ''} and progress_raw in {None, ''} and not name:
                 continue
-            normalized_email = self.normalize_email(email_raw)
-            if not normalized_email or not self.EMAIL_RE.match(normalized_email):
+            normalized_email = cls.normalize_email(email_raw)
+            if not normalized_email or not cls.EMAIL_RE.match(normalized_email):
                 issues.append({
                     'row_number': row_no, 'email': str(email_raw or ''), 'display_name': name,
                     'raw_progress': str(progress_raw or ''), 'reason_code': 'INVALID_EMAIL',
                     'reason_message': 'Email trống hoặc không đúng định dạng.',
                 })
                 continue
+            progress_item = item_at('progress')
+            number_format = getattr(progress_item, 'number_format', None) if cells and progress_item is not None else None
             try:
-                progress, clamped = self._parse_percent(progress_raw, getattr(progress_cell, 'number_format', None))
+                progress, clamped = cls._parse_percent(progress_raw, number_format)
             except ValueError as exc:
                 issues.append({
                     'row_number': row_no, 'email': normalized_email, 'display_name': name,
@@ -382,23 +470,19 @@ class UdemyProgressService:
             item['values'].append(progress)
             item['row_numbers'].append(row_no)
             item['clamped_rows'] += int(clamped)
-        wb.close()
 
         records: list[ParsedProgressRecord] = []
         warnings: list[str] = []
         item_count = int(active_plan.item_count) if active_plan else 0
         for item in grouped.values():
             values = item['values']
-            if parser_format in {'item_rows', 'legacy_25_item_rows'}:
+            if parser_format in {'item_rows', 'legacy_25_item_rows', 'legacy_26_item_rows'}:
                 denominator = item_count or len(values)
                 if not item_count:
                     warnings.append('Môn chưa có kế hoạch Udemy; tiến độ item được ước tính theo số dòng quan sát và chưa thể đánh giá chậm tiến độ.')
                 progress = math.floor(sum(values) / max(1, denominator))
                 progress = max(0.0, min(100.0, float(progress)))
             else:
-                # Aggregate exports should contain one row per learner. When a file
-                # contains duplicates, keep the highest monotonic snapshot and retain
-                # the duplicate count in metadata instead of summing percentages.
                 progress = max(values)
             records.append(ParsedProgressRecord(
                 email=item['email'], normalized_email=item['normalized_email'], display_name=item.get('display_name'),
@@ -414,6 +498,52 @@ class UdemyProgressService:
             'issues': issues,
             'warnings': sorted(set(warnings)),
         }
+
+    def parse_path(self, path: Path, *, active_plan: UdemySubjectPlan | None) -> dict[str, Any]:
+        raw = path.read_bytes()
+        suffix = path.suffix.lower()
+        if suffix == '.csv':
+            text = self._decode_csv(raw)
+            dialect = self._csv_dialect(text)
+            sample_reader = csv.reader(StringIO(text), dialect=dialect)
+            sample_rows: list[list[Any]] = []
+            for _ in range(15):
+                try:
+                    sample_rows.append(next(sample_reader))
+                except StopIteration:
+                    break
+            header_row, columns, parser_format = self._find_header_rows(sample_rows)
+            reader = csv.reader(StringIO(text), dialect=dialect)
+            for _ in range(header_row):
+                try:
+                    next(reader)
+                except StopIteration:
+                    break
+            return self._finalize_parsed_rows(
+                rows=reader, header_row=header_row, columns=columns, parser_format=parser_format,
+                active_plan=active_plan, cells=False,
+            )
+
+        if suffix != '.xlsx':
+            raise ValueError('Chỉ chấp nhận file tiến độ Udemy .xlsx hoặc .csv.')
+        self._validate_xlsx(raw)
+        try:
+            wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+        except Exception as exc:
+            raise ValueError('Không đọc được nội dung workbook.') from exc
+        if not wb.worksheets:
+            wb.close()
+            raise ValueError('File không có sheet dữ liệu.')
+        ws = wb.worksheets[0]
+        header_row, columns, parser_format = self._find_header(ws)
+        try:
+            return self._finalize_parsed_rows(
+                rows=ws.iter_rows(min_row=header_row + 1, values_only=False),
+                header_row=header_row, columns=columns, parser_format=parser_format,
+                active_plan=active_plan, cells=True,
+            )
+        finally:
+            wb.close()
 
     def _active_plan_context(self, delivery_id: str, as_of: date) -> tuple[UdemySubjectPlan | None, dict[str, Any] | None]:
         plan = self.db.query(UdemySubjectPlan).filter(

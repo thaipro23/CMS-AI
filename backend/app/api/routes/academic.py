@@ -1312,7 +1312,7 @@ async def create_udemy_progress_import_job(
         # when a stale artifact cannot be removed because of filesystem races.
         pass
     if not files:
-        raise HTTPException(status_code=400, detail='Hãy chọn ít nhất một file Udemy .xlsx.')
+        raise HTTPException(status_code=400, detail='Hãy chọn ít nhất một file Udemy .xlsx hoặc .csv.')
     if len(files) > UdemyProgressService.MAX_FILES:
         raise HTTPException(status_code=400, detail=f'Mỗi lần tối đa {UdemyProgressService.MAX_FILES} file.')
     if delivery_id and len(files) != 1:
@@ -1335,7 +1335,7 @@ async def create_udemy_progress_import_job(
         if total_bytes > UdemyProgressService.MAX_TOTAL_UPLOAD_BYTES:
             raise HTTPException(status_code=400, detail=f'Tổng dung lượng upload vượt giới hạn {max(1, UdemyProgressService.MAX_TOTAL_UPLOAD_BYTES // (1024 * 1024))} MB.')
         try:
-            service._validate_xlsx(raw)
+            service.validate_upload_content(filename=filename, raw=raw)
             delivery, subject = service.resolve_delivery(
                 term_id=term_id,
                 block_id=block_id,
