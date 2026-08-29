@@ -43,6 +43,14 @@ class Question(Base):
     difficulty: Mapped[str] = mapped_column(String(50), default='easy')
     cognitive_level: Mapped[str] = mapped_column(String(100), default='remember')
     learning_objective: Mapped[str] = mapped_column(Text, default='')
+    # Compact pedagogical metadata generated once, then rendered deterministically
+    # into native Open edX hints/choice feedback. Keeps LMS behavior core-free.
+    pedagogy_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    # Canonical authoring schema v2. Legacy A-D fields remain compatibility mirrors.
+    question_schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    authoring_mode: Mapped[str] = mapped_column(String(50), default='ai', index=True)  # ai | manual | import
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    question_content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     question_type: Mapped[str] = mapped_column(String(50), default='single_choice')
     question_text: Mapped[str] = mapped_column(Text)
     # v25.3 deterministic duplicate fingerprint. Prevents exact duplicate
@@ -124,6 +132,32 @@ class Question(Base):
         Index('ix_ai_questions_release_difficulty', 'bank_release_id', 'difficulty'),
         Index('ix_ai_questions_bank_lineage', 'bank_version_id', 'lineage_root_question_id'),
         Index('ix_ai_questions_bank_retired', 'bank_version_id', 'is_retired'),
+    )
+
+
+class QuestionMedia(Base):
+    __tablename__ = 'ai_question_media'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    question_id: Mapped[str] = mapped_column(String, ForeignKey('ai_questions.id', ondelete='CASCADE'), index=True)
+    bank_version_id: Mapped[str | None] = mapped_column(String, ForeignKey('ai_question_bank_versions.id', ondelete='CASCADE'), nullable=True, index=True)
+    media_role: Mapped[str] = mapped_column(String(50), default='prompt_image', index=True)
+    storage_reference: Mapped[str] = mapped_column(String(2048))
+    file_name: Mapped[str] = mapped_column(String(512))
+    mime_type: Mapped[str] = mapped_column(String(100))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    alt_text: Mapped[str] = mapped_column(String(500))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_ai_question_media_question_order', 'question_id', 'sort_order', 'created_at'),
+        Index('ix_ai_question_media_bank_question', 'bank_version_id', 'question_id'),
     )
 
 

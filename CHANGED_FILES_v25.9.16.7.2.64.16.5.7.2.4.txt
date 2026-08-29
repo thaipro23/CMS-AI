@@ -1,0 +1,42 @@
+# Changed files — v25.9.16.7.2.64.16.5.7.2.4 Batch 35
+
+Baseline: v25.9.16.7.2.64.16.5.7.2.3 Batch 34 canonical
+Policy: no legacy ACMS data transfer
+
+Added (9):
++ AI_SERVER_PROJECT_HANDOFF_V25_9_16_7_2_64_16_5_7_2_4.md
++ RELEASE_v25.9.16.7.2.64.16.5.7.2.4_UDEMY_PRODUCTION_HARDENING_BATCH35.md
++ RUN_V25_9_16_7_2_64_16_5_7_2_4.md
++ VERIFICATION_v25.9.16.7.2.64.16.5.7.2.4.md
++ backend/alembic/versions/0057_v25_9_16_7_2_64_35_udemy_hardening_indexes.py
++ backend/app/core/operation_rate_limit.py
++ backend/app/tests/test_v25_9_16_7_2_64_35_udemy_production_hardening.py
++ docs/UDEMY_PRODUCTION_HARDENING_BATCH_35.md
++ CHANGED_FILES_v25.9.16.7.2.64.16.5.7.2.4.txt
+
+Modified (22):
+M .env.example
+M .env.production.example
+M .github/workflows/ci.yml
+M CHANGELOG.md
+M README.md
+M RUN_CURRENT.md
+M backend/app/api/routes/academic.py
+M backend/app/core/config.py
+M backend/app/models/academic.py
+M backend/app/services/academic/udemy_progress.py
+M backend/app/worker.py
+M docker-compose.prod.yml
+M e2e/package-lock.json
+M e2e/package.json
+M frontend/Dockerfile
+M frontend/app/subject-management/[deliveryId]/udemy/page.tsx
+M frontend/lib/api.ts
+M frontend/package-lock.json
+M frontend/package.json
+M scripts/frontend-build-verify.sh
+M scripts/npm-public-registry-lockfile-report.sh
+M scripts/uat-runtime-verify.sh
+
+Removed (0):
+(none)

@@ -1,0 +1,57 @@
+v25.9.16.7.2.64.16.5.5 changed files vs .64.16.5.4
+Added: 8
+Modified: 38
+Deleted: 0
+
+## Added
+AI_SERVER_PROJECT_CONTEXT_V25_9_16_7_2_64_16_5_5.md
+CHANGED_FILES_v25.9.16.7.2.64.16.5.5.txt
+RELEASE_v25.9.16.7.2.64.16.5.5_PERFORMANCE_WORKER_RELIABILITY.md
+RUN_V25_9_16_7_2_64_16_5_5.md
+VERIFICATION_v25.9.16.7.2.64.16.5.5.md
+backend/app/tests/test_v25_9_16_7_2_64_16_5_5_performance_worker_reliability.py
+backend/app/tests/test_v25_9_16_7_2_64_16_5_5_release_contract.py
+scripts/performance-worker-reliability-report.sh
+
+## Modified
+.env.example
+.env.production.example
+CHANGELOG.md
+README.md
+RUN_CURRENT.md
+backend/app/api/routes/academic.py
+backend/app/api/routes/learning_analytics.py
+backend/app/api/routes/question_bank_v2.py
+backend/app/core/config.py
+backend/app/services/learning_analytics/analytics_core_service.py
+backend/app/services/performance_readiness.py
+backend/app/services/query_hotspot.py
+backend/app/worker.py
+docker-compose.prod.yml
+frontend/Dockerfile
+frontend/app/teacher-management/page.tsx
+frontend/app/users/page.tsx
+frontend/context/AppContext.tsx
+frontend/lib/api.ts
+frontend/package-lock.json
+frontend/package.json
+scripts/claude-code-review-pack.sh
+scripts/frontend-build-verify.sh
+scripts/global-visual-polish-report.sh
+scripts/load-test-hot-endpoints.sh
+scripts/maintainability-contract-report.sh
+scripts/openedx-publish-verify.sh
+scripts/performance-readiness-report.sh
+scripts/pilot-operations-runbook.sh
+scripts/pilot-release-candidate-report.sh
+scripts/production-pilot-final-gate.sh
+scripts/production-security-closure-report.sh
+scripts/production-ux-acceptance-report.sh
+scripts/query-hotspot-report.sh
+scripts/security-attack-simulation-report.sh
+scripts/security-readiness-report.sh
+scripts/uat-build-gate.sh
+scripts/uat-runtime-verify.sh
+
+## Deleted
+(none)

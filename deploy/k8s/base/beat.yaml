@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-server-beat
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ai-server-beat
+  template:
+    metadata:
+      labels:
+        app: ai-server-beat
+    spec:
+      imagePullSecrets:
+        - name: harbor-regcred
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: beat
+          image: ai-server-backend
+          imagePullPolicy: IfNotPresent
+          command: ["celery"]
+          args:
+            - -A
+            - app.worker.celery_app
+            - beat
+            - --loglevel=INFO
+            - --pidfile=/tmp/celerybeat.pid
+            - --schedule=/app/.runtime/celerybeat-schedule
+          envFrom:
+            - secretRef: {name: ai-server-env}
+          env:
+            - {name: LOCAL_STORAGE_PATH, value: /app/.runtime}
+            - {name: HOME, value: /tmp}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: runtime, mountPath: /app/.runtime}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: runtime
+          persistentVolumeClaim: {claimName: ai-server-runtime}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}

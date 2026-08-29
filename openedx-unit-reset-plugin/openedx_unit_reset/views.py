@@ -4,8 +4,10 @@ import json
 import logging
 import os
 import time
+import re
 
 from django.conf import settings
+from django.core.cache import cache
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt, csrf_protect
 from django.views.decorators.http import require_GET, require_POST
@@ -17,6 +19,8 @@ from .services import (
     UnitResetError,
     audit_reset,
     get_status_for_current_user,
+    get_legacy_compatible_timer_status_for_current_user,
+    get_timer_config_or_none,
     parse_keys,
     reset_unit_for_current_user,
     get_quiz_session_status_for_current_user,
@@ -53,12 +57,23 @@ def _connector_hmac_secret():
     )
 
 
+def _check_and_store_hmac_nonce(client: str, timestamp: str, nonce: str, ttl: int) -> bool:
+    clean_client = re.sub(r'[^a-zA-Z0-9_.:-]+', '_', str(client or 'unit-reset'))[:80]
+    clean_nonce = hashlib.sha256(str(nonce or '').encode('utf-8')).hexdigest()
+    key = f'ai_unit_reset_hmac_nonce:{clean_client}:{timestamp}:{clean_nonce}'
+    try:
+        return bool(cache.add(key, '1', timeout=max(60, min(int(ttl or 300), 3600))))
+    except Exception:
+        return False
+
+
 def _valid_connector_hmac(request):
     secret = str(_connector_hmac_secret() or '')
     if not secret:
         return False
     timestamp = request.META.get('HTTP_X_AI_CONNECTOR_TIMESTAMP') or ''
     supplied = request.META.get('HTTP_X_AI_CONNECTOR_SIGNATURE') or ''
+    nonce = request.META.get('HTTP_X_AI_CONNECTOR_NONCE') or ''
     try:
         ts = int(timestamp)
     except Exception:
@@ -67,27 +82,25 @@ def _valid_connector_hmac(request):
     if abs(int(time.time()) - ts) > skew:
         return False
     body_hash = hashlib.sha256(request.body or b'').hexdigest()
-    message = f'{timestamp}.{request.method.upper()}.{_request_path_with_query(request)}.{body_hash}'
+    if nonce:
+        message = f'{timestamp}.{request.method.upper()}.{_request_path_with_query(request)}.{body_hash}.{nonce}'
+        replay_nonce = nonce
+    else:
+        # Backward-compatible verification for older AI Server builds that did
+        # not send a nonce. Replay protection stores the signature as a one-time
+        # token within the timestamp skew window.
+        message = f'{timestamp}.{request.method.upper()}.{_request_path_with_query(request)}.{body_hash}'
+        replay_nonce = supplied
     expected = hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, supplied)
+    if not hmac.compare_digest(expected, supplied):
+        return False
+    return _check_and_store_hmac_nonce('ai-server', timestamp, replay_nonce, skew)
 
 
-def _staff_or_hmac(request):
-    user = getattr(request, 'user', None)
-    if _valid_connector_hmac(request):
-        return True
-    return bool(getattr(user, 'is_authenticated', False) and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)))
-
-
-def _debug_errors_enabled():
-    value = os.environ.get('AI_CONNECTOR_DEBUG_ERRORS')
-    if value is not None:
-        return value.strip().lower() in {'1', 'true', 'yes', 'on'}
-    return bool(getattr(settings, 'DEBUG', False))
-
-
-def _hmac_required_response():
-    return JsonResponse({'success': False, 'code': 'CONNECTOR_AUTH_REQUIRED', 'message': 'HMAC server-to-server required'}, status=403)
+def _connector_hmac_only(request):
+    # v25.9.16.7.2.64.13: csrf_exempt server-to-server write endpoints are HMAC-only.
+    # Browser staff/admin sessions must use csrf_protect endpoints instead of this connector path.
+    return _valid_connector_hmac(request)
 
 
 @login_required
@@ -103,7 +116,10 @@ def reset_unit_status(request):
         )
 
     try:
-        data = get_status_for_current_user(request, course_id, unit_usage_key)
+        if get_timer_config_or_none(course_id, unit_usage_key):
+            data = get_legacy_compatible_timer_status_for_current_user(request, course_id, unit_usage_key)
+        else:
+            data = get_status_for_current_user(request, course_id, unit_usage_key)
         return JsonResponse(data, status=200)
     except UnitResetError as exc:
         return JsonResponse({"success": False, "code": exc.code, "message": str(exc)}, status=exc.status_code)
@@ -138,7 +154,10 @@ def reset_unit_attempt(request):
         )
 
     try:
-        result = reset_unit_for_current_user(request, course_id, unit_usage_key)
+        if get_timer_config_or_none(course_id, unit_usage_key):
+            result = reset_quiz_session_for_current_user(request, course_id, unit_usage_key)
+        else:
+            result = reset_unit_for_current_user(request, course_id, unit_usage_key)
         return JsonResponse(result, status=200)
 
     except ResetCooldownError as exc:
@@ -293,8 +312,8 @@ def quiz_session_reset(request):
 @csrf_exempt
 @require_POST
 def quiz_timer_config_upsert(request):
-    if not _valid_connector_hmac(request):
-        return _hmac_required_response()
+    if not _connector_hmac_only(request):
+        return JsonResponse({'success': False, 'code': 'CONNECTOR_HMAC_REQUIRED', 'message': 'Endpoint cấu hình timer chỉ nhận HMAC server-to-server; staff cookie không được chấp nhận ở csrf_exempt endpoint.'}, status=403)
     payload = _json_body(request)
     try:
         result = upsert_unit_quiz_timer_config(
@@ -308,7 +327,7 @@ def quiz_timer_config_upsert(request):
             auto_submit_on_timeout=payload.get('auto_submit_on_timeout', True),
             lock_after_timeout=payload.get('lock_after_timeout', True),
             native_timed_exam=payload.get('native_timed_exam', False),
-            actor=(getattr(getattr(request, 'user', None), 'username', '') or 'ai-server-hmac'),
+            actor=getattr(request.user, 'username', '') or str(request.user.id),
             metadata_json=payload.get('metadata') or {},
         )
         return JsonResponse(result, status=200)
@@ -319,65 +338,416 @@ def quiz_timer_config_upsert(request):
 @require_GET
 def quiz_session_runtime_js(request):
     from django.http import HttpResponse
-    js = """
+    js = r"""
 (function(){
   if (window.__OPENEDX_UNIT_RESET_TIMER_JS__) return;
   window.__OPENEDX_UNIT_RESET_TIMER_JS__ = true;
-  function selected(problem){
-    var checked = problem.querySelector('input[type="radio"]:checked,input[type="checkbox"]:checked');
-    if (checked) return true;
-    var textInputs = Array.prototype.slice.call(problem.querySelectorAll('input[type="text"],textarea'));
-    if (textInputs.some(function(el){ return el.value && el.value.trim().length > 0; })) return true;
-    var selects = Array.prototype.slice.call(problem.querySelectorAll('select'));
-    return selects.some(function(el){ return el.value && el.value.trim().length > 0; });
+
+  // v0.4.15: iframe runtime submits selected answers by calling Open edX
+  // problem_check APIs directly. It never clicks Submit/Check buttons. This is
+  // more stable when the native button is disabled or the learner switches tabs.
+  if (!window.parent || window.parent === window) return;
+
+  var autoSubmitting = false;
+  var lastReportedHeight = 0;
+  var lastReportedWidth = 0;
+  var resizeTimers = [];
+  var resizeRaf = 0;
+  var queuedResizeReason = '';
+  var queuedResizeForce = false;
+  var RESIZE_TOLERANCE_PX = 4;
+  var MAX_IFRAME_HEIGHT_PX = 50000;
+
+  function lower(value){ return ((value || '') + '').toLowerCase(); }
+
+  function parentOrigin(){
+    try { return document.referrer ? new URL(document.referrer).origin : '*'; }
+    catch (error) { return '*'; }
   }
-  function submitButton(problem){
-    var buttons = Array.prototype.slice.call(problem.querySelectorAll('button,input[type="button"],input[type="submit"]'));
-    return buttons.find(function(btn){
-      var text = ((btn.innerText || btn.value || '') + '').trim().toLowerCase();
-      return ['submit','check','nộp bài','nop bai','kiểm tra','kiem tra'].some(function(x){ return text.indexOf(x) >= 0; });
+
+  function normalizedTheme(value){
+    var raw = lower(value);
+    if (raw.indexOf('dark') >= 0) return 'dark';
+    return 'light';
+  }
+
+  function applyHostTheme(data){
+    var variant = String((data && data.theme_variant) || (data && data.theme) || 'light');
+    var theme = normalizedTheme(variant);
+    var roots = [document.documentElement, document.body].filter(Boolean);
+    var removable = ['dark', 'light', 'theme-dark', 'theme-light', 'dark-theme', 'light-theme'];
+    roots.forEach(function(root){
+      removable.forEach(function(name){ root.classList.remove(name); });
+      root.classList.add(theme === 'dark' ? 'theme-dark' : 'theme-light');
+      root.setAttribute('data-paragon-theme-variant', variant || theme);
+      root.setAttribute('data-bs-theme', theme);
+      root.setAttribute('data-theme', theme);
+      root.setAttribute('data-ai-host-theme', theme);
+      try { root.style.colorScheme = theme; } catch (error) { /* ignore */ }
+    });
+    try {
+      window.dispatchEvent(new CustomEvent('openedx:theme-sync', { detail: { theme: theme, variant: variant } }));
+    } catch (error) { /* ignore */ }
+    scheduleResizeBurst('theme-sync');
+  }
+
+  function elementBottom(element){
+    if (!element || !element.getBoundingClientRect) return 0;
+    try {
+      var style = window.getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.position === 'fixed') return 0;
+      var rect = element.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return 0;
+      return Math.ceil(rect.bottom + window.scrollY);
+    } catch (error) { return 0; }
+  }
+
+  function intrinsicContentHeight(){
+    var body = document.body;
+    if (!body) return 0;
+    var selectors = [
+      'h1','h2','h3','h4','h5','h6','p','li','table','form','fieldset',
+      'button','input','select','textarea','label','img','video','canvas','svg','iframe',
+      '.problem','.problem-wrapper','.problem-progress','.problem-action-buttons-wrapper',
+      '.notification','.feedback','.submission-feedback','.detailed-solution',
+      '.xblock-student_view','[data-usage-id]'
+    ];
+    var maxBottom = 0;
+    try {
+      var nodes = body.querySelectorAll(selectors.join(','));
+      Array.prototype.forEach.call(nodes, function(node){
+        maxBottom = Math.max(maxBottom, elementBottom(node));
+      });
+      Array.prototype.forEach.call(body.children || [], function(node){
+        // Only use a top-level container when it is not simply stretching to
+        // the iframe viewport. Viewport-height wrappers caused the old +N px
+        // feedback loop after every plugin.resize message.
+        var bottom = elementBottom(node);
+        var rect = node.getBoundingClientRect && node.getBoundingClientRect();
+        if (rect && rect.height < Math.max(160, (window.innerHeight || 0) - 8)) {
+          maxBottom = Math.max(maxBottom, bottom);
+        }
+      });
+      var bodyStyle = window.getComputedStyle(body);
+      maxBottom += parseFloat(bodyStyle.paddingBottom || '0') || 0;
+      maxBottom += parseFloat(bodyStyle.marginBottom || '0') || 0;
+    } catch (error) { /* ignore */ }
+    return Math.ceil(maxBottom + 8);
+  }
+
+  function contentDimensions(){
+    var width = Math.max(1, Math.ceil(document.documentElement && document.documentElement.clientWidth || window.innerWidth || 1));
+    var measuredHeight = intrinsicContentHeight();
+    // Do not use html/body scrollHeight or offsetHeight. Those values include
+    // the current iframe viewport and therefore grow again after the parent
+    // applies the previous resize request.
+    var height = measuredHeight > 0 ? measuredHeight : Math.max(120, lastReportedHeight || 0);
+    height = Math.max(120, Math.min(MAX_IFRAME_HEIGHT_PX, Math.ceil(height)));
+    return { width: width, height: height };
+  }
+
+  function dispatchResizeNow(reason, force){
+    var size = contentDimensions();
+    var widthChanged = Math.abs(size.width - lastReportedWidth) > RESIZE_TOLERANCE_PX;
+    var heightChanged = Math.abs(size.height - lastReportedHeight) > RESIZE_TOLERANCE_PX;
+    if (!force && !widthChanged && !heightChanged) return;
+    lastReportedWidth = size.width;
+    lastReportedHeight = size.height;
+    try {
+      window.parent.postMessage({
+        type: 'plugin.resize',
+        payload: { width: size.width, height: size.height },
+        source: 'ai-unit-reset-runtime',
+        reason: reason || 'content-change'
+      }, parentOrigin());
+    } catch (error) { /* ignore */ }
+  }
+
+  function dispatchResize(reason, force){
+    queuedResizeReason = reason || queuedResizeReason || 'content-change';
+    queuedResizeForce = queuedResizeForce || Boolean(force);
+    if (resizeRaf) return;
+    resizeRaf = window.requestAnimationFrame(function(){
+      resizeRaf = 0;
+      var nextReason = queuedResizeReason;
+      var nextForce = queuedResizeForce;
+      queuedResizeReason = '';
+      queuedResizeForce = false;
+      dispatchResizeNow(nextReason, nextForce);
+    });
+  }
+
+  function scheduleResizeBurst(reason){
+    resizeTimers.forEach(function(timer){ window.clearTimeout(timer); });
+    resizeTimers = [0, 80, 220, 500, 1000, 1800].map(function(delay){
+      return window.setTimeout(function(){ dispatchResize(reason, false); }, delay);
     });
   }
   function sleep(ms){ return new Promise(function(resolve){ setTimeout(resolve, ms); }); }
-  async function autoSubmit(){
-    var problems = Array.prototype.slice.call(document.querySelectorAll('.problem,.xblock-student_view,[data-usage-id]'));
-    var submitted = 0;
-    for (var i=0; i<problems.length; i++){
-      var p = problems[i];
-      if (!selected(p)) continue;
-      var btn = submitButton(p);
-      if (!btn || btn.disabled) continue;
-      btn.click();
-      submitted += 1;
-      await sleep(800);
+
+  function reloadIframeDocument(reason, token){
+    try {
+      var storageKey = 'openedx-unit-reset:iframe-self-reload:' + (reason || 'active') + ':' + (token || 'active');
+      try {
+        if (window.sessionStorage && window.sessionStorage.getItem(storageKey) === '1') return;
+        if (window.sessionStorage) window.sessionStorage.setItem(storageKey, '1');
+      } catch (storageError) { /* ignore */ }
+      var url = new URL(window.location.href);
+      url.searchParams.set('unit_reset_nonce', String(token || Date.now()));
+      url.searchParams.set('unit_reset_reason', reason || 'active-session-ready');
+      window.location.replace(url.toString());
+    } catch (error) {
+      try { window.location.reload(); } catch (reloadError) { /* ignore */ }
     }
-    return submitted;
   }
-  function lock(){
+
+  window.addEventListener('message', function(event){
+    if (!event.data) return;
+    if (event.data.type === 'AI_MFE_THEME_SYNC') {
+      applyHostTheme(event.data);
+      return;
+    }
+    if (event.data.type === 'AI_MFE_REQUEST_RESIZE') {
+      scheduleResizeBurst(event.data.reason || 'parent-request');
+      return;
+    }
+    if (event.data.type !== 'AI_QUIZ_ACTIVE_SESSION_READY_RELOAD') return;
+    reloadIframeDocument(event.data.reason || 'active-session-ready', event.data.token || Date.now());
+  });
+
+  function isSubmitControl(target){
+    if (!target || !target.closest) return false;
+    var control = target.closest('button,input[type=submit],input[type=button],a');
+    if (!control) return false;
+    var text = lower((control.innerText || control.value || control.getAttribute('aria-label') || '') + '');
+    return text.indexOf('submit') >= 0 || text.indexOf('check') >= 0 || text.indexOf('nộp') >= 0 || text.indexOf('kiểm tra') >= 0;
+  }
+
+  document.addEventListener('click', function(event){
+    if (isSubmitControl(event.target)) scheduleResizeBurst('problem-submit-click');
+  }, true);
+  document.addEventListener('submit', function(){ scheduleResizeBurst('problem-form-submit'); }, true);
+
+  var resizeObserver = null;
+  if (window.ResizeObserver) {
+    resizeObserver = new ResizeObserver(function(){ dispatchResize('resize-observer', false); });
+    // Never observe html/body: their size is the iframe viewport, so parent
+    // height changes would trigger another resize request forever.
+    var observed = document.querySelectorAll('.problem,.problem-wrapper,.xblock-student_view,form,table,img,video,iframe');
+    Array.prototype.forEach.call(observed, function(node){
+      try { resizeObserver.observe(node); } catch (error) { /* ignore */ }
+    });
+  }
+  var mutationObserver = new MutationObserver(function(records){
+    if (resizeObserver) {
+      records.forEach(function(record){
+        Array.prototype.forEach.call(record.addedNodes || [], function(node){
+          if (!node || node.nodeType !== 1) return;
+          try { resizeObserver.observe(node); } catch (error) { /* ignore */ }
+          if (node.querySelectorAll) {
+            Array.prototype.forEach.call(node.querySelectorAll('.problem,.problem-wrapper,.xblock-student_view,form,table,img,video,iframe'), function(child){
+              try { resizeObserver.observe(child); } catch (error) { /* ignore */ }
+            });
+          }
+        });
+      });
+    }
+    dispatchResize('mutation-observer', false);
+  });
+  if (document.body) mutationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+  window.addEventListener('resize', function(){ scheduleResizeBurst('iframe-window-resize'); });
+  window.addEventListener('load', function(){ scheduleResizeBurst('window-load'); });
+  window.addEventListener('pageshow', function(){ scheduleResizeBurst('page-show'); });
+  try {
+    if (window.jQuery) window.jQuery(document).ajaxComplete(function(){ scheduleResizeBurst('ajax-complete'); });
+  } catch (error) { /* ignore */ }
+
+  try {
+    window.parent.postMessage({ type: 'AI_QUIZ_IFRAME_READY' }, parentOrigin());
+  } catch (error) { /* ignore */ }
+  scheduleResizeBurst('runtime-ready');
+
+  function getCookie(name){
+    var value = '; ' + (document.cookie || '');
+    var parts = value.split('; ' + name + '=');
+    if (parts.length === 2) return decodeURIComponent(parts.pop().split(';').shift());
+    return '';
+  }
+
+  function isVisible(el){
+    if (!el) return false;
+    var style = window.getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  }
+
+  function rootUsageId(root){
+    if (!root) return '';
+    var attrs = ['data-usage-id', 'data-locator', 'data-block-id', 'data-problem-id', 'data-location', 'data-usage-key', 'data-block-usage-key'];
+    for (var i=0; i<attrs.length; i++) {
+      var v = root.getAttribute && root.getAttribute(attrs[i]);
+      if (v && (v.indexOf('block-v1:') >= 0 || v.indexOf('+type@') >= 0)) return v;
+    }
+    var candidate = root.querySelector && root.querySelector('[data-usage-id],[data-locator],[data-block-id],[data-problem-id],[data-location],[data-usage-key],[data-block-usage-key]');
+    if (candidate) return rootUsageId(candidate);
+    var html = '';
+    try { html = root.outerHTML || ''; } catch (error) { html = ''; }
+    var match = html.match(/block-v1:[^"'<>\\s]+/);
+    return match ? match[0] : '';
+  }
+
+  function courseFromLocation(){
+    var match = (window.location.pathname || '').match(/\/courses\/([^\/]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  function findProblemCheckUrl(root, courseId){
+    var nodes = [root].concat(Array.prototype.slice.call(root.querySelectorAll('form,button,input,a,[data-url],[data-check-url],[data-submit-url],[data-problem-check-url]')));
+    var attrs = ['action', 'href', 'data-check-url', 'data-url', 'data-submit-url', 'data-problem-check-url'];
+    for (var i=0; i<nodes.length; i++) {
+      for (var j=0; j<attrs.length; j++) {
+        var value = '';
+        try { value = nodes[i].getAttribute && nodes[i].getAttribute(attrs[j]); } catch (error) { value = ''; }
+        if (value && value.indexOf('problem_check') >= 0) return new URL(value, window.location.href).toString();
+      }
+    }
+    var html = '';
+    try { html = root.outerHTML || ''; } catch (error) { html = ''; }
+    var match = html.match(/([^"']*problem_check[^"']*)/);
+    if (match && match[1]) return new URL(match[1], window.location.href).toString();
+
+    var usage = rootUsageId(root);
+    var course = courseId || courseFromLocation();
+    if (usage && course) {
+      return window.location.origin + '/courses/' + course + '/xblock/' + encodeURIComponent(usage) + '/handler/xmodule_handler/problem_check';
+    }
+    return '';
+  }
+
+  function problemRoots(){
+    var roots = Array.prototype.slice.call(document.querySelectorAll('.problem, .xmodule_display.xmodule_CapaModule, .xblock-student_view-problem, [data-block-type="problem"], div[id^="problem_"]'));
+    roots = roots.filter(function(root){ return root && root.querySelector('input,textarea,select'); });
+    if (roots.length) return roots;
+    roots = Array.prototype.slice.call(document.querySelectorAll('[data-usage-id], [data-locator], [data-location], .xblock-student_view, .xblock'));
+    var filtered = [];
+    roots.forEach(function(root){
+      if (!root || filtered.some(function(existing){ return existing.contains(root); })) return;
+      if (root.querySelector('input,textarea,select')) filtered.push(root);
+    });
+    return filtered;
+  }
+
+  function selected(root){
+    if (!root) return false;
+    if (root.querySelector('input[type="radio"]:checked,input[type="checkbox"]:checked')) return true;
+    var fields = Array.prototype.slice.call(root.querySelectorAll('input[type="text"],input[type="number"],input:not([type]),textarea,select'));
+    return fields.some(function(el){ return el.name && el.value && String(el.value).trim().length > 0; });
+  }
+
+  function appendField(formData, name, value){
+    if (!name) return;
+    formData.append(name, value == null ? '' : value);
+  }
+
+  function collectAnswerFormData(root){
+    var formData = new FormData();
+    var fields = Array.prototype.slice.call(root.querySelectorAll('input,textarea,select'));
+    fields.forEach(function(el){
+      if (!el.name) return;
+      var tag = lower(el.tagName);
+      var type = lower(el.type);
+      if (type === 'button' || type === 'submit' || type === 'reset' || type === 'file') return;
+      if ((type === 'checkbox' || type === 'radio') && !el.checked) return;
+      if (tag === 'select' && el.multiple) {
+        Array.prototype.slice.call(el.selectedOptions || []).forEach(function(opt){ appendField(formData, el.name, opt.value); });
+        return;
+      }
+      appendField(formData, el.name, el.value);
+    });
+    if (!formData.has('csrfmiddlewaretoken')) {
+      var csrfInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
+      if (csrfInput && csrfInput.value) appendField(formData, 'csrfmiddlewaretoken', csrfInput.value);
+    }
+    return formData;
+  }
+
+  async function submitProblemByApi(root, courseId){
+    if (!root || !selected(root)) return { skipped: true, reason: 'no_answer' };
+    var url = findProblemCheckUrl(root, courseId);
+    if (!url) return { skipped: true, reason: 'missing_problem_check_url' };
+    var csrf = getCookie('csrftoken') || getCookie('csrf_token') || '';
+    var response = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: csrf ? { 'X-CSRFToken': csrf, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' } : { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+      body: collectAnswerFormData(root),
+    });
+    return { skipped: false, ok: response.ok, status: response.status, url: url };
+  }
+
+  async function autoSubmitByApi(courseId){
+    var roots = problemRoots().filter(function(root){ return isVisible(root) && selected(root); });
+    var submitted = 0;
+    var failed = 0;
+    var skipped = 0;
+    for (var i=0; i<roots.length; i++) {
+      try {
+        var result = await submitProblemByApi(roots[i], courseId);
+        if (result.skipped) skipped += 1;
+        else if (result.ok) submitted += 1;
+        else failed += 1;
+      } catch (error) {
+        failed += 1;
+      }
+      await sleep(120);
+    }
+    return { submitted: submitted, failed: failed, skipped: skipped, discovered: roots.length };
+  }
+
+  function lockLocally(){
     Array.prototype.slice.call(document.querySelectorAll('input,textarea,select,button')).forEach(function(el){
-      var text = ((el.innerText || el.value || '') + '').toLowerCase();
+      var text = lower((el.innerText || el.value || '') + '');
       if (text.indexOf('hint') >= 0 || text.indexOf('show answer') >= 0 || text.indexOf('xem đáp án') >= 0 || text.indexOf('submission history') >= 0) return;
       el.disabled = true;
       el.setAttribute('aria-disabled', 'true');
     });
     document.body.classList.add('ai-quiz-timeout-locked');
   }
-  var configuredOrigins = __ALLOWED_PARENT_ORIGINS__;
-  function allowedOrigin(origin){
+
+  function aiAllowedOrigin(origin){
     if (!origin) return false;
     if (origin === window.location.origin) return true;
-    return configuredOrigins.indexOf(origin) >= 0;
+    try {
+      var url = new URL(origin);
+      var host = (url.hostname || '').toLowerCase();
+      var selfHost = (window.location.hostname || '').toLowerCase();
+      if (host === selfHost) return true;
+      if (host.endsWith('.poly.edu.vn') || host.endsWith('.cms-test.poly.edu.vn') || host.endsWith('.local.openedx.io')) return true;
+    } catch (error) { return false; }
+    return false;
   }
+
   window.addEventListener('message', async function(event){
-    if (!allowedOrigin(event.origin)) return;
-    if (!event.data || event.data.type !== 'AI_QUIZ_TIMEOUT_AUTO_SUBMIT') return;
-    var count = await autoSubmit();
-    lock();
-    window.parent && window.parent.postMessage({type:'AI_QUIZ_TIMEOUT_AUTO_SUBMIT_DONE', submitted_problem_count: count}, event.origin);
+    if (!aiAllowedOrigin(event.origin)) return;
+    if (!event.data || event.data.type !== 'AI_QUIZ_TIMEOUT_API_SUBMIT') return;
+    if (autoSubmitting) return;
+    autoSubmitting = true;
+    var result = { submitted: 0, failed: 0, skipped: 0, discovered: 0 };
+    try { result = await autoSubmitByApi(event.data.course_id || ''); } catch (error) { /* best effort */ }
+    lockLocally();
+    if (window.parent) {
+      window.parent.postMessage({
+        type: 'AI_QUIZ_TIMEOUT_API_SUBMIT_DONE',
+        submitted_problem_count: result.submitted || 0,
+        failed_problem_count: result.failed || 0,
+        skipped_problem_count: result.skipped || 0,
+        discovered_problem_count: result.discovered || 0
+      }, event.origin || window.location.origin);
+    }
+    autoSubmitting = false;
   });
 })();
 """
-    raw_origins = os.environ.get('AI_QUIZ_RUNTIME_ALLOWED_ORIGINS') or getattr(settings, 'AI_QUIZ_RUNTIME_ALLOWED_ORIGINS', '') or ''
-    allowed_origins = [item.strip().rstrip('/') for item in str(raw_origins).split(',') if item.strip()]
-    js = js.replace('__ALLOWED_PARENT_ORIGINS__', json.dumps(allowed_origins))
-    return HttpResponse(js, content_type='application/javascript; charset=utf-8')
+    response = HttpResponse(js, content_type='application/javascript; charset=utf-8')
+    response['Cache-Control'] = 'no-store, max-age=0'
+    return response
+

@@ -1,11 +1,18 @@
 'use client'
 
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { ContextBackLink } from '../../../../components/navigation/ContextBackLink'
+import { AccessibleDialog } from '../../../../components/ui/AccessibleDialog'
+import { AppIcon } from '../../../../components/icons/AppIcon'
+
+import { formatVNDateTime } from '../../../../lib/time'
 import Link from 'next/link'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../../context/AppContext'
 import {
   BankRelease,
+  BankReleasePreview,
   BankDashboardOverview,
   BankSearchResult,
   DepartmentSummary,
@@ -16,7 +23,9 @@ import {
   BankReleaseReadiness,
   BankVersion,
   BankVersionDiffPreview,
+  BankMaterialRecheckResult,
   BankVersionQuestion,
+  BankQuestionMedia,
   CourseQuizInstance,
   AuditLogRow,
   Job,
@@ -26,11 +35,13 @@ import {
   Subject,
   SubjectChapter,
   SubjectOffering,
+  BankOperationJob,
 } from '../../../../types'
 import {
   bulkReviewBankQuestions,
   createBankRelease,
   createBankVersion,
+  createManualBankQuestion,
   createDepartment,
   createSubject,
   createSubjectChapter,
@@ -40,8 +51,13 @@ import {
   deleteSubjectChapter,
   deleteSubjectOffering,
   deleteMaterialVersion,
-  generateFromBankVersion,
+  enqueueGenerateFromBankVersion,
+  uploadBankQuestionMedia,
+  deleteBankQuestionMedia,
+  bankQuestionMediaContentUrl,
   getBankDashboardOverview,
+  getBankOperationJob,
+  getBankOperationJobs,
   getAuditLogs,
   getJobs,
   searchBankDashboard,
@@ -52,22 +68,30 @@ import {
   getBankMaterialChunks,
   getBankReleaseReadiness,
   getBankReleases,
+  getBankReleasePreview,
   getBankVersionQuestion,
   getBankVersionQuestionPage,
+  getBankVersionQuestionOffsetPage,
+  exportBankVersionQuestions,
   getBankVersions,
   getCourseQuizInstances,
   getDepartments,
+  getDepartment,
   getMaterialVersions,
+  getSubjectChapter,
   getSubjectChapters,
+  getSubjectOffering,
   getSubjectOfferings,
+  getSubject,
   getSubjects,
   markBankDiffResolved,
   previewBankVersionDiff,
   previewGenerateFromBankVersion,
-  publishBankRelease,
+  recheckBankMaterialCarryOver,
+  enqueueBankReleasePublish,
   reviewBankQuestion,
   rollbackCourseQuizInstance,
-  uploadBankMaterial,
+  enqueueBankMaterialUpload,
   updateBankQuestion,
   updateDepartment,
   updateSubject,
@@ -87,8 +111,8 @@ import {
   Toolbar,
   SearchActionBar,
   Modal,
+  ConfirmDialog,
   EntityActions,
-  promptText,
   matchesSearch,
   reviewStatusText,
   reviewStatusClass,
@@ -102,105 +126,488 @@ import {
   BankQuestionEditForm,
   BankChartRow,
   toBankQuestionEditForm,
+  defaultQuestionContent,
   BankBarChart,
   BankStackedChart,
   countRows,
   auditActionText,
 } from '../shared'
+import { BankQuestionEnterpriseTable } from '../BankQuestionEnterpriseTable'
+import { BankQuestionImportModal } from '../BankQuestionImportModal'
+import { BankOpenEdxImportModal } from '../BankOpenEdxImportModal'
+import { QuestionAuthoringEditor, QuestionResponsePreview, questionFormValidationError, type PendingQuestionImage } from '../QuestionAuthoringEditor'
+import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
+import { useBankQuestionTableState } from '../../../../hooks/useBankQuestionTableState'
+
+type ChapterLongOperation = {
+  id: string
+  jobId: string
+  bankVersionId: string
+  chapterId: string
+  type: 'generate' | 'material_upload' | 'question_import' | 'release_publish'
+  label: string
+  successMessage: string
+  questionCount?: number
+  fileName?: string
+  releaseId?: string
+  progressCurrent?: number
+  progressTotal?: number
+  progressPercent?: number
+  progressLabel?: string
+  createdAt: number
+}
+
+type PopupMessage = { type: 'info' | 'success' | 'warning' | 'danger'; text: string }
+type ChapterActionKey =
+  | 'prepare_workspace'
+  | 'generate_preview'
+  | 'generate_enqueue'
+  | 'material_upload_enqueue'
+  | 'material_delete'
+  | 'diff_check'
+  | 'diff_apply'
+  | 'release_create'
+  | 'release_publish'
+  | 'release_audit'
+  | 'release_preview'
+  | 'bulk_approve'
+  | 'bulk_review'
+  | 'question_export'
+  | 'question_review'
+  | 'question_edit'
+  | 'question_create'
+  | 'question_reject'
+
+const OPERATION_STEPS: Record<ChapterLongOperation['type'], string[]> = {
+  material_upload: ['Tiếp nhận', 'Bóc tách học liệu', 'Chuẩn hóa văn bản', 'Đồng bộ'],
+  generate: ['Dựng ngữ cảnh', 'Sinh câu hỏi', 'Đối chiếu trùng lặp', 'Ghi bộ câu hỏi'],
+  question_import: ['Đọc file', 'Kiểm tra trùng lặp', 'Ghi câu hỏi', 'Cập nhật thống kê'],
+  release_publish: ['Kiểm tra Release', 'Chuẩn bị thư viện', 'Đưa câu hỏi lên CMS', 'Xác minh dữ liệu', 'Hoàn tất'],
+}
+
+function BusyLabel({ text }: { text: string }) {
+  return <span className="inline-busy-label"><span className="spinner tiny" aria-hidden="true" />{text}</span>
+}
+
+function operationDetailText(operation: ChapterLongOperation) {
+  if (operation.type === 'material_upload') return 'Đang bóc tách nội dung, chuẩn hóa văn bản và cập nhật danh sách tài liệu.'
+  if (operation.type === 'question_import') return 'Đang đọc file Excel, kiểm tra trùng lặp và tạo câu hỏi ở trạng thái Chờ duyệt.'
+  if (operation.type === 'release_publish') return operation.progressLabel || 'Đang đưa snapshot Release lên Content Library và xác minh từng component trên CMS.'
+  return 'Đang dựng ngữ cảnh, sinh ứng viên câu hỏi và đối chiếu trùng lặp trước khi ghi vào ngân hàng.'
+}
+
+function ChapterOperationStatus({ operation }: { operation: ChapterLongOperation }) {
+  const steps = OPERATION_STEPS[operation.type]
+  const rawPercent = Number(operation.progressPercent ?? 0)
+  const percent = Number.isFinite(rawPercent) ? Math.max(0, Math.min(100, rawPercent)) : 0
+  const hasDeterminateProgress = Number(operation.progressTotal || 0) > 0
+  const completedStepCount = hasDeterminateProgress ? Math.min(steps.length, Math.floor((percent / 100) * steps.length)) : 0
+  const activeStepIndex = hasDeterminateProgress ? Math.min(steps.length - 1, completedStepCount) : -1
+  const runningText = operation.progressLabel?.toLowerCase().includes('chờ worker')
+    ? 'Đang chờ worker'
+    : `Đang chạy nền${hasDeterminateProgress ? ` · ${Math.round(percent)}%` : ''}`
+
+  return <div className="chapter-operation-status" role="status" aria-live="polite" aria-busy="true">
+    <div className="chapter-operation-status__head"><div><b>{operation.label}</b><small>{operationDetailText(operation)}</small></div><span className="inline-busy-label"><span className="spinner tiny" aria-hidden="true" />{runningText}</span></div>
+    <div
+      className="chapter-operation-progress"
+      role="progressbar"
+      aria-label="Tiến trình xử lý đang chạy"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={hasDeterminateProgress ? Math.round(percent) : undefined}
+    ><span className={hasDeterminateProgress ? 'is-determinate' : ''} style={hasDeterminateProgress ? { width: `${percent}%` } : undefined} /></div>
+    <div className="chapter-operation-steps">{steps.map((step, index) => <span className={index < completedStepCount ? 'is-complete' : index === activeStepIndex ? 'is-active' : ''} key={step}>{index < completedStepCount ? '✓ ' : index === activeStepIndex ? '● ' : '○ '}{step}</span>)}</div>
+  </div>
+}
+
+const ACTIVE_OPERATION_STATUSES = ['queued', 'running']
+const CHAPTER_OPERATION_TYPES = ['material_extract', 'bank_generate', 'question_import', 'release_publish']
+
+function jobCreatedAt(job: BankOperationJob) {
+  const raw = job.created_at || job.enqueued_at || job.updated_at
+  const parsed = raw ? Date.parse(raw) : NaN
+  return Number.isFinite(parsed) ? parsed : Date.now()
+}
+
+function buildChapterLongOperationFromJob(job: BankOperationJob, chapterId: string): ChapterLongOperation | null {
+  const request = job.request || {}
+  const requestBankVersionId = typeof request.bank_version_id === 'string' ? request.bank_version_id : ''
+  const progress = {
+    progressCurrent: Number(job.progress_current || 0),
+    progressTotal: Number(job.progress_total || 0),
+    progressPercent: Number(job.progress_percent || 0),
+    progressLabel: job.progress_label || '',
+  }
+
+  if (job.operation_type === 'release_publish') {
+    const bankVersionId = job.bank_version_id || requestBankVersionId
+    const releaseId = job.release_id || (job.target_type === 'bank_release' ? job.target_id : '') || (typeof request.release_id === 'string' ? request.release_id : '')
+    if (!bankVersionId || !releaseId) return null
+    return {
+      id: `${job.id}:release_publish`,
+      jobId: job.id,
+      bankVersionId,
+      releaseId,
+      chapterId,
+      type: 'release_publish',
+      label: 'Hệ thống đang đưa bộ đề lên CMS. Bạn có thể rời trang; worker sẽ tiếp tục xử lý.',
+      successMessage: 'Đã đưa bộ đề lên CMS và xác minh đầy đủ.',
+      ...progress,
+      createdAt: jobCreatedAt(job),
+    }
+  }
+
+  const bankVersionId = job.bank_version_id || job.target_id || requestBankVersionId
+  if (!bankVersionId) return null
+
+  if (job.operation_type === 'material_extract') {
+    const fileName = typeof request.filename === 'string' ? request.filename : (typeof request.title === 'string' ? request.title : undefined)
+    return {
+      id: `${job.id}:material_upload`,
+      jobId: job.id,
+      bankVersionId,
+      chapterId,
+      type: 'material_upload',
+      label: `Hệ thống đang tiếp nhận học liệu${fileName ? ` ${fileName}` : ''} và kiểm tra định dạng tệp. Trạng thái sẽ tự cập nhật tại đây.`,
+      successMessage: 'Hệ thống đã ghi nhận tài liệu. Bạn có thể tiếp tục bước tạo câu hỏi.',
+      fileName,
+      ...progress,
+      createdAt: jobCreatedAt(job),
+    }
+  }
+
+
+  if (job.operation_type === 'question_import') {
+    const rawCount = request.valid_count
+    const questionCount = typeof rawCount === 'number' ? rawCount : Number(rawCount || 0)
+    return {
+      id: `${job.id}:question_import`,
+      jobId: job.id,
+      bankVersionId,
+      chapterId,
+      type: 'question_import',
+      label: `Hệ thống đang import ${questionCount || ''} câu hỏi từ Excel. Các câu mới sẽ ở trạng thái Chờ duyệt.`,
+      successMessage: `Đã import câu hỏi và đồng bộ danh sách bên dưới.`,
+      questionCount: Number.isFinite(questionCount) && questionCount > 0 ? questionCount : undefined,
+      ...progress,
+      createdAt: jobCreatedAt(job),
+    }
+  }
+
+  if (job.operation_type === 'bank_generate') {
+    const rawCount = request.question_count
+    const questionCount = typeof rawCount === 'number' ? rawCount : Number(rawCount || 0)
+    const countText = Number.isFinite(questionCount) && questionCount > 0 ? `${questionCount} câu hỏi` : 'câu hỏi'
+    return {
+      id: `${job.id}:generate`,
+      jobId: job.id,
+      bankVersionId,
+      chapterId,
+      type: 'generate',
+      label: `Hệ thống đang tạo ${countText} từ học liệu của bài này. Trạng thái sẽ tự cập nhật tại đây.`,
+      successMessage: Number.isFinite(questionCount) && questionCount > 0
+        ? `Hệ thống đã tạo xong ${questionCount} câu hỏi và đồng bộ danh sách bên dưới.`
+        : 'Hệ thống đã tạo xong câu hỏi và đồng bộ danh sách bên dưới.',
+      questionCount: Number.isFinite(questionCount) && questionCount > 0 ? questionCount : undefined,
+      ...progress,
+      createdAt: jobCreatedAt(job),
+    }
+  }
+
+  return null
+}
+
+function errorText(error: unknown, fallback = 'Thao tác thất bại. Vui lòng thử lại.') {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === 'string' && error.trim()) return error
+  return fallback
+}
+
+function operationResultMessage(result: Record<string, unknown> | null | undefined, fallback: string) {
+  const userMessage = typeof result?.user_message === 'string' ? result.user_message : ''
+  const message = typeof result?.message === 'string' ? result.message : ''
+  return userMessage || message || fallback
+}
+
+function diffImpactGroups(diff: BankVersionDiffPreview | null) {
+  const summary = diff?.summary
+  if (!summary) return { critical: [] as string[], warning: [] as string[], info: [] as string[] }
+  const similarity = Number(summary.material_similarity ?? diff?.material_similarity ?? 0)
+  const critical: string[] = []
+  const warning: string[] = []
+  const info: string[] = []
+
+  if (summary.removed_concept_count > 0) critical.push(`${summary.removed_concept_count} concept nguồn không còn trong tài liệu mới; các câu hỏi bám vào concept này nên bị bỏ hoặc review lại.`)
+  if (summary.retire_candidate_count > 0) critical.push(`${summary.retire_candidate_count} câu nên bỏ vì không còn căn cứ rõ trong tài liệu hiện tại.`)
+  if (summary.review_candidate_count > 0) warning.push(`${summary.review_candidate_count} câu cần giáo viên xem lại vì concept/tài liệu đã thay đổi hoặc hệ thống chưa đủ chắc để giữ tự động.`)
+  if (summary.new_concept_count > 0) warning.push(`${summary.new_concept_count} concept mới xuất hiện; nên sinh/bổ sung câu hỏi để phủ nội dung mới.`)
+  if (summary.changed_concept_count > 0) warning.push(`${summary.changed_concept_count} concept có nội dung thay đổi; cần rà lại câu hỏi liên quan.`)
+  if (summary.carry_over_candidate_count > 0) info.push(`${summary.carry_over_candidate_count} câu có thể giữ vì concept ổn định hoặc tài liệu đủ giống.`)
+  if (summary.already_exists_count > 0) info.push(`${summary.already_exists_count} câu đã tồn tại trong version hiện tại nên không cần tạo lại.`)
+  if (similarity < 0.72) critical.push(`Độ giống tài liệu chỉ khoảng ${Math.round(similarity * 100)}%; không nên giữ câu cũ hàng loạt.`)
+  if (!critical.length && !warning.length) info.push('Không phát hiện thay đổi có rủi ro cao so với Bank Version gốc. Không cần xử lý thêm nếu giáo viên đã kiểm tra nội dung.')
+  return { critical, warning, info }
+}
+
+function diffActionHint(diff: BankVersionDiffPreview | null) {
+  const summary = diff?.summary
+  if (!summary) return 'Chưa có kết quả kiểm tra.'
+  if (summary.retire_candidate_count || summary.review_candidate_count || summary.removed_concept_count) return 'Nên bấm “Áp dụng xử lý tự động” để hệ thống tự loại câu clone không còn căn cứ, rồi giáo viên review các câu còn lại.'
+  if (summary.new_concept_count || summary.changed_concept_count) return 'Nên bổ sung/sinh thêm câu hỏi cho concept mới hoặc concept đã thay đổi.'
+  return 'Không cần đồng bộ mù. Có thể tiếp tục duyệt/chốt bộ đề nếu câu hỏi đã đạt.'
+}
 
 export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
-  const { headers, can } = useBankData()
-  const searchParams = useSearchParams()
-  const { message, busy, busyLabel, run } = useAsyncMessage()
+  const { headers, canScope } = useBankData()
+  const { state: questionTableState, update: updateQuestionTableState } = useBankQuestionTableState()
+  const { message, setMessage, busy, busyLabel, run } = useAsyncMessage()
   const [departments, setDepartments] = useState<Department[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [offerings, setOfferings] = useState<SubjectOffering[]>([])
   const [chapters, setChapters] = useState<SubjectChapter[]>([])
+  const chapterScope = {
+    scopeType: 'CHAPTER' as const,
+    scopeId: chapterId,
+    chapterId,
+    subjectOfferingId: offerings[0]?.id,
+    subjectId: subjects[0]?.id,
+    departmentId: departments[0]?.id,
+  }
+  const canGenerateQuestions = canScope('generate_questions', chapterScope)
+  const canEditQuestions = canScope('edit_questions', chapterScope)
+  const canReviewQuestions = canScope('review_questions', chapterScope)
+  const canPublishQuestions = canScope('publish_questions', chapterScope)
   const [bankVersions, setBankVersions] = useState<BankVersion[]>([])
   const [releases, setReleases] = useState<BankRelease[]>([])
   const [materials, setMaterials] = useState<MaterialVersion[]>([])
   const [questions, setQuestions] = useState<BankVersionQuestion[]>([])
-  const [questionCursor, setQuestionCursor] = useState<{ created_at: string; id: string } | null>(null)
-  const [questionHasNext, setQuestionHasNext] = useState(false)
-  const [questionLoadingMore, setQuestionLoadingMore] = useState(false)
+  const [questionTotal, setQuestionTotal] = useState(0)
+  const [questionTotalPages, setQuestionTotalPages] = useState(1)
+  const [questionLoading, setQuestionLoading] = useState(false)
+  const [questionError, setQuestionError] = useState('')
+  const [questionSearchDraft, setQuestionSearchDraft] = useState(questionTableState.q)
+  const questionReviewSectionRef = useRef<HTMLElement | null>(null)
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set())
+  const [selectAllFiltered, setSelectAllFiltered] = useState(false)
+  const [previewQuestion, setPreviewQuestion] = useState<BankVersionQuestion | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [openEdxImportOpen, setOpenEdxImportOpen] = useState(false)
   const [readiness, setReadiness] = useState<BankReleaseReadiness | null>(null)
+  const [releasePreview, setReleasePreview] = useState<BankReleasePreview | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [generateCount, setGenerateCount] = useState('10')
   const [difficultyEasy, setDifficultyEasy] = useState('50')
   const [difficultyMedium, setDifficultyMedium] = useState('30')
   const [difficultyHard, setDifficultyHard] = useState('20')
+  const [questionTypeSingle, setQuestionTypeSingle] = useState('70')
+  const [questionTypeMulti, setQuestionTypeMulti] = useState('30')
   const [autoCreateTried, setAutoCreateTried] = useState(false)
   const [materialView, setMaterialView] = useState<{ material: MaterialVersion; chunks: MaterialChunk[] } | null>(null)
   const [diffPreview, setDiffPreview] = useState<BankVersionDiffPreview | null>(null)
+  const [materialRecheckResult, setMaterialRecheckResult] = useState<BankMaterialRecheckResult | null>(null)
   const [generatePreview, setGeneratePreview] = useState<BankGeneratePreview | null>(null)
   const [editingQuestion, setEditingQuestion] = useState<BankVersionQuestion | null>(null)
   const [editForm, setEditForm] = useState<BankQuestionEditForm | null>(null)
+  const [editPendingMedia, setEditPendingMedia] = useState<PendingQuestionImage[]>([])
+  const [editDeletedMediaIds, setEditDeletedMediaIds] = useState<Set<string>>(new Set())
+  const [createForm, setCreateForm] = useState<BankQuestionEditForm | null>(null)
+  const [createPendingMedia, setCreatePendingMedia] = useState<PendingQuestionImage[]>([])
   const [rejectingQuestion, setRejectingQuestion] = useState<BankVersionQuestion | null>(null)
   const [rejectReason, setRejectReason] = useState('')
   const [materialManagerOpen, setMaterialManagerOpen] = useState(false)
   const [generateManagerOpen, setGenerateManagerOpen] = useState(false)
-  const [questionStatusFilter, setQuestionStatusFilter] = useState(() => searchParams.get('status') || 'all')
-  const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState(() => searchParams.get('difficulty') || 'all')
-  const [questionSort, setQuestionSort] = useState('needs_review')
+  const [popupMessage, setPopupMessage] = useState<PopupMessage | null>(null)
+  const [confirmation, setConfirmation] = useState<'release_create' | 'release_publish' | 'bulk_reject' | null>(null)
+  useEffect(() => { setQuestionSearchDraft(questionTableState.q) }, [questionTableState.q])
+  useEffect(() => {
+    if (questionSearchDraft === questionTableState.q) return
+    const timer = window.setTimeout(() => updateQuestionTableState({ q: questionSearchDraft }), 350)
+    return () => window.clearTimeout(timer)
+  }, [questionSearchDraft, questionTableState.q, updateQuestionTableState])
+  const [submittingLabel, setSubmittingLabel] = useState('')
+  const [actionBusy, setActionBusy] = useState<ChapterActionKey | null>(null)
+  const [activeOperation, setActiveOperation] = useState<ChapterLongOperation | null>(null)
+  const questionStatusFilter = questionTableState.status === 'overdue' ? 'pending_review' : questionTableState.status
+  const questionDifficultyFilter = questionTableState.difficulty
+  const questionSort = questionTableState.sort
 
   const load = async () => {
-    const [nextDepartments, nextSubjects, nextOfferings, nextChapters, nextBankVersions, nextReleases] = await Promise.all([
-      getDepartments(headers), getSubjects(headers), getSubjectOfferings(headers), getSubjectChapters(headers), getBankVersions(headers, chapterId), getBankReleases(headers, undefined, chapterId),
+    const chapter = await getSubjectChapter(headers, chapterId)
+    const [subject, offering, nextBankVersions, nextReleases] = await Promise.all([
+      getSubject(headers, chapter.subject_id),
+      chapter.subject_offering_id ? getSubjectOffering(headers, chapter.subject_offering_id) : Promise.resolve(null),
+      getBankVersions(headers, chapterId),
+      getBankReleases(headers, undefined, chapterId),
     ])
-    setDepartments(nextDepartments); setSubjects(nextSubjects); setOfferings(nextOfferings); setChapters(nextChapters); setBankVersions(nextBankVersions); setReleases(nextReleases)
+    const department = await getDepartment(headers, subject.department_id)
+    setDepartments([department]); setSubjects([subject]); setOfferings(offering ? [offering] : []); setChapters([chapter]); setBankVersions(nextBankVersions); setReleases(nextReleases)
   }
 
   const selectedBankVersion = bankVersions[0] || null
+  const latestReleaseId = releases[0]?.id || ''
   const loadDetail = async (bankVersionId?: string | null) => {
     if (!bankVersionId) {
       setMaterials([])
       setQuestions([])
-      setQuestionCursor(null)
-      setQuestionHasNext(false)
+      setQuestionTotal(0)
+      setQuestionTotalPages(1)
       setReadiness(null)
       return
     }
-    const [nextMaterials, questionPage, nextReadiness] = await Promise.all([
-      getMaterialVersions(headers, bankVersionId).catch(() => []),
-      getBankVersionQuestionPage(headers, bankVersionId, { limit: 100 }).catch(() => ({ items: [], has_next: false, next_cursor: null } as any)),
-      getBankReleaseReadiness(headers, bankVersionId).catch(() => null),
-    ])
-    setMaterials(nextMaterials.filter((item) => item.status !== 'deleted'))
-    setQuestions(questionPage.items || [])
-    setQuestionCursor(questionPage.next_cursor?.created_at && questionPage.next_cursor?.id ? { created_at: questionPage.next_cursor.created_at, id: questionPage.next_cursor.id } : null)
-    setQuestionHasNext(Boolean(questionPage.has_next))
-    setReadiness(nextReadiness)
-  }
-
-  const loadMoreQuestions = async () => {
-    if (!selectedBankVersion || !questionCursor || questionLoadingMore) return
-    setQuestionLoadingMore(true)
+    setQuestionLoading(true)
+    setQuestionError('')
     try {
-      const page = await getBankVersionQuestionPage(headers, selectedBankVersion.id, {
-        limit: 100,
-        cursorCreatedAt: questionCursor.created_at,
-        cursorId: questionCursor.id,
-      })
-      setQuestions((current) => {
-        const seen = new Set(current.map((item) => item.id))
-        const extra = (page.items || []).filter((item) => !seen.has(item.id))
-        return [...current, ...extra]
-      })
-      setQuestionCursor(page.next_cursor?.created_at && page.next_cursor?.id ? { created_at: page.next_cursor.created_at, id: page.next_cursor.id } : null)
-      setQuestionHasNext(Boolean(page.has_next))
+      const [nextMaterials, questionPage, nextReadiness] = await Promise.all([
+        getMaterialVersions(headers, bankVersionId).catch(() => []),
+        getBankVersionQuestionOffsetPage(headers, bankVersionId, {
+          statusFilter: questionStatusFilter,
+          difficulty: questionDifficultyFilter,
+          search: questionTableState.q,
+          sort: questionSort,
+          page: questionTableState.page,
+          pageSize: questionTableState.pageSize,
+        }),
+        getBankReleaseReadiness(headers, bankVersionId).catch(() => null),
+      ])
+      setMaterials(nextMaterials.filter((item) => item.status !== 'deleted'))
+      setQuestions(questionPage.items || [])
+      setQuestionTotal(Number(questionPage.total || 0))
+      setQuestionTotalPages(Math.max(1, Number(questionPage.total_pages || 1)))
+      setReadiness(nextReadiness)
+      setSelectedQuestionIds(new Set())
+      setSelectAllFiltered(false)
+    } catch (error) {
+      setQuestions([])
+      setQuestionTotal(0)
+      setQuestionTotalPages(1)
+      setQuestionError(error instanceof Error ? error.message : 'Không tải được danh sách câu hỏi.')
     } finally {
-      setQuestionLoadingMore(false)
+      setQuestionLoading(false)
     }
   }
 
   useEffect(() => { load().catch(() => null) }, [chapterId]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { loadDetail(selectedBankVersion?.id).catch(() => null) }, [selectedBankVersion?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadDetail(selectedBankVersion?.id).catch(() => null) }, [selectedBankVersion?.id, questionStatusFilter, questionDifficultyFilter, questionSort, questionTableState.q, questionTableState.page, questionTableState.pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
-    const nextStatus = searchParams.get('status') || 'all'
-    const nextDifficulty = searchParams.get('difficulty') || 'all'
-    setQuestionStatusFilter(nextStatus === 'overdue' ? 'pending_review' : nextStatus)
-    setQuestionDifficultyFilter(nextDifficulty)
-  }, [searchParams])
+    if (!selectedBankVersion?.id) return
+    let canceled = false
+
+    const loadActiveOperationFromServer = async () => {
+      try {
+        const bankVersionPages = await Promise.all(ACTIVE_OPERATION_STATUSES.map((status) => getBankOperationJobs(headers, {
+          status,
+          targetType: 'bank_version',
+          targetId: selectedBankVersion.id,
+          page: 1,
+          pageSize: 20,
+        })))
+        const releasePages = latestReleaseId
+          ? await Promise.all(ACTIVE_OPERATION_STATUSES.map((status) => getBankOperationJobs(headers, {
+              status,
+              operationType: 'release_publish',
+              targetType: 'bank_release',
+              targetId: latestReleaseId,
+              page: 1,
+              pageSize: 5,
+            })))
+          : []
+        if (canceled) return
+        const activeJob = [...bankVersionPages, ...releasePages]
+          .flatMap((page) => page.items || [])
+          .filter((job) => CHAPTER_OPERATION_TYPES.includes(job.operation_type))
+          .sort((a, b) => jobCreatedAt(b) - jobCreatedAt(a))[0]
+        const operation = activeJob ? buildChapterLongOperationFromJob(activeJob, chapterId) : null
+        setActiveOperation((current) => {
+          if (current?.jobId && activeJob?.id === current.jobId && operation) return { ...current, ...operation }
+          return operation
+        })
+      } catch {
+        // Trạng thái vận hành dài là dữ liệu phụ trợ cho UX. Nếu không đọc được,
+        // không chặn người dùng làm việc với phần còn lại của trang.
+      }
+    }
+
+    loadActiveOperationFromServer().catch(() => null)
+    return () => { canceled = true }
+  }, [selectedBankVersion?.id, latestReleaseId, chapterId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setRunningOperation = (operation: ChapterLongOperation) => {
+    setActiveOperation(operation)
+  }
+
+  const clearRunningOperation = () => {
+    setActiveOperation(null)
+  }
+
+  const isActionBusy = (key: ChapterActionKey) => actionBusy === key
+  const runAction = async (key: ChapterActionKey, work: () => Promise<unknown>, ok: string, after?: () => Promise<void>, fail = 'Thao tác thất bại. Vui lòng thử lại.') => {
+    if (actionBusy) return
+    setActionBusy(key)
+    try {
+      await work()
+      setMessage(ok)
+      if (after) await after()
+    } catch (error) {
+      const text = errorText(error, fail)
+      setPopupMessage({ type: 'danger', text })
+      setMessage(text)
+    } finally {
+      setActionBusy(null)
+    }
+  }
+
+  useEffect(() => {
+    if (!activeOperation?.jobId) return
+    let canceled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const poll = async () => {
+      try {
+        const job = await getBankOperationJob(headers, activeOperation.jobId)
+        if (canceled) return
+        const refreshedOperation = buildChapterLongOperationFromJob(job, chapterId)
+        if (refreshedOperation && !['completed', 'failed', 'canceled'].includes(job.status)) {
+          setActiveOperation((current) => current?.jobId === job.id ? { ...current, ...refreshedOperation } : current)
+        }
+        if (['completed', 'failed', 'canceled'].includes(job.status)) {
+          clearRunningOperation()
+          const result = (job.result || {}) as Record<string, unknown>
+          if (job.status === 'completed') {
+            const verificationWarnings = Array.isArray(result.verification_warnings) ? result.verification_warnings : []
+            const text = activeOperation.type === 'release_publish' && verificationWarnings.length
+              ? `Đã đưa bộ đề lên CMS, nhưng có ${verificationWarnings.length} component cần kiểm tra thủ công trong Library.`
+              : operationResultMessage(result, activeOperation.successMessage)
+            setPopupMessage({ type: activeOperation.type === 'release_publish' && verificationWarnings.length ? 'warning' : 'success', text })
+            setMessage(text)
+            await refreshCurrent()
+            if (activeOperation.type === 'material_upload' && result.diff_required && result.diff_base_bank_version_id && activeOperation.bankVersionId) {
+              await runDiffNow(activeOperation.bankVersionId, String(result.diff_base_bank_version_id))
+            }
+          } else {
+            const text = operationResultMessage(result, job.error_message || job.progress_label || 'Việc xử lý thất bại. Vui lòng thử lại hoặc xem trang Tiến trình xử lý.')
+            setPopupMessage({ type: 'danger', text })
+            setMessage(text)
+          }
+          return
+        }
+      } catch (error) {
+        if (!canceled) {
+          const text = errorText(error, 'Không kiểm tra được trạng thái việc xử lý. Vui lòng tải lại trang hoặc xem Tiến trình xử lý.')
+          setPopupMessage({ type: 'warning', text })
+          setMessage(text)
+        }
+      }
+      if (!canceled) timer = setTimeout(poll, 1500)
+    }
+
+    poll()
+    return () => {
+      canceled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [activeOperation?.jobId]) // eslint-disable-line react-hooks/exhaustive-deps
 
 
   const chapter = chapters.find((item) => item.id === chapterId)
@@ -213,6 +620,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const diffBaseBankVersionId = String((metadata as any).diff_base_bank_version_id || selectedBankVersion?.based_on_version_id || '')
   const publishedRelease = releases.find((item) => item.status === 'published')
   const latestRelease = releases[0]
+
   const chapterPublished = Boolean(
     publishedRelease
     || selectedBankVersion?.status === 'published'
@@ -224,37 +632,25 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   const numericGenerateCount = Number(generateCount || 0)
   const chapterQuestionLimit = Number((readiness?.stats as any)?.chapter_question_limit || 100)
   const usedQuestionCount = Number((readiness?.stats as any)?.chapter_total_count ?? stats.total)
-  const unresolvedQuestionCount = Number((readiness?.stats as any)?.unresolved_count ?? (stats.pending + stats.draftError))
+  const approvedQuestionCount = Number((readiness?.stats as any)?.approved_count ?? stats.approved)
+  const pendingReviewCount = Number((readiness?.stats as any)?.pending_review_count ?? stats.pending)
+  const draftErrorCount = Number((readiness?.stats as any)?.draft_error_count ?? stats.draftError)
+  const unresolvedQuestionCount = Number((readiness?.stats as any)?.unresolved_count ?? (pendingReviewCount + draftErrorCount))
   const releaseReviewBlocked = unresolvedQuestionCount > 0
   const remainingQuota = Math.max(0, chapterQuestionLimit - usedQuestionCount)
+  const generationQuotaPercent = chapterQuestionLimit > 0 ? Math.min(100, Math.max(0, Math.round((usedQuestionCount / chapterQuestionLimit) * 100))) : 0
   const difficultyTotal = Number(difficultyEasy || 0) + Number(difficultyMedium || 0) + Number(difficultyHard || 0)
+  const questionTypeTotal = Number(questionTypeSingle || 0) + Number(questionTypeMulti || 0)
   const overQuota = numericGenerateCount > remainingQuota
   const invalidDifficulty = difficultyTotal !== 100
-  const canGenerateNow = Boolean(!chapterPublished && selectedBankVersion && materials.length && can('generate_questions') && !overQuota && !invalidDifficulty && numericGenerateCount >= 1 && remainingQuota > 0)
-  const filteredQuestions = useMemo(() => {
-    const reviewRank = (q: BankVersionQuestion) => {
-      if (q.status === 'draft_error') return 0
-      if (q.status === 'pending_review' || q.status === 'needs_review') return 1
-      if (q.status === 'approved') return 2
-      if (q.status === 'rejected') return 3
-      if (q.status === 'published') return 4
-      return 5
-    }
-    const difficultyRank = (difficulty?: string | null) => ({ easy: 1, medium: 2, hard: 3 } as Record<string, number>)[String(difficulty || '').toLowerCase()] || 9
-    const result = questions.filter((question) => {
-      const statusOk = questionStatusFilter === 'all'
-        || (questionStatusFilter === 'needs_action' && isQuestionWaitingForReview(question))
-        || question.status === questionStatusFilter
-      const difficultyOk = questionDifficultyFilter === 'all' || String(question.difficulty || '').toLowerCase() === questionDifficultyFilter
-      return statusOk && difficultyOk
-    })
-    return result.sort((a, b) => {
-      if (questionSort === 'difficulty') return difficultyRank(a.difficulty) - difficultyRank(b.difficulty)
-      if (questionSort === 'quality_low') return Number(a.quality_score || 0) - Number(b.quality_score || 0)
-      if (questionSort === 'quality_high') return Number(b.quality_score || 0) - Number(a.quality_score || 0)
-      return reviewRank(a) - reviewRank(b)
-    })
-  }, [questions, questionStatusFilter, questionDifficultyFilter, questionSort])
+  const invalidQuestionTypeMix = questionTypeTotal !== 100
+  const canGenerateNow = Boolean(!chapterPublished && selectedBankVersion && materials.length && canGenerateQuestions && !overQuota && !invalidDifficulty && !invalidQuestionTypeMix && numericGenerateCount >= 1 && remainingQuota > 0)
+  const materialOperationBusy = activeOperation?.type === 'material_upload'
+  const generateOperationBusy = activeOperation?.type === 'generate'
+  const longOperationBusy = Boolean(activeOperation)
+  const activeOperationMessage = activeOperation?.label || ''
+  const filteredQuestions = questions
+
 
   const ensureBankVersion = async () => {
     if (!chapter) throw new Error('Không tìm thấy bài')
@@ -263,7 +659,7 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   }
 
   useEffect(() => {
-    if (chapter && !chapterPublished && !selectedBankVersion && !autoCreateTried && can('edit_questions')) {
+    if (chapter && !chapterPublished && !selectedBankVersion && !autoCreateTried && canEditQuestions) {
       setAutoCreateTried(true)
       run(async () => { await ensureBankVersion() }, 'Đã chuẩn bị workspace cho bài', load).catch(() => null)
     }
@@ -282,7 +678,16 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
 
   const runDiffNow = async (bankVersionId: string, baseId: string) => {
     const diff = await previewBankVersionDiff(headers, bankVersionId, { base_bank_version_id: baseId, persist: true })
+    setMaterialRecheckResult(null)
     setDiffPreview(diff)
+  }
+
+  const applyMaterialRecheck = async () => {
+    if (!selectedBankVersion) return
+    const result = await recheckBankMaterialCarryOver(headers, selectedBankVersion.id)
+    setMaterialRecheckResult(result)
+    setPopupMessage({ type: 'success', text: result.user_message || result.message || 'Đã áp dụng xử lý tự động sau khi kiểm tra thay đổi tài liệu.' })
+    await refreshCurrent()
   }
 
   const rejectQuestionsByPreviousIds = async (sourceIds: string[], note: string) => {
@@ -314,21 +719,141 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
     const detail = await getBankVersionQuestion(headers, selectedBankVersion.id, question.id).catch(() => question)
     setEditingQuestion(detail)
     setEditForm(toBankQuestionEditForm(detail))
+    setEditPendingMedia([])
+    setEditDeletedMediaIds(new Set())
   }
 
-  const updateEditForm = <K extends keyof BankQuestionEditForm>(key: K, value: BankQuestionEditForm[K]) => {
-    setEditForm((current) => current ? { ...current, [key]: value } : current)
+  const newManualQuestionForm = (): BankQuestionEditForm => ({
+    difficulty: 'easy',
+    cognitive_level: 'remember',
+    learning_objective: '',
+    question_type: 'single_select',
+    question_content_json: defaultQuestionContent('single_select'),
+    question_text: '',
+    explanation: '',
+    concept_title: '',
+    question_family_id: '',
+    source_ref: 'manual-authoring',
+    source_type: 'manual',
+    source_excerpt: '',
+    source_evidence: '',
+    target_status: 'pending_review',
+  })
+
+  const openCreateQuestion = () => {
+    if (!selectedBankVersion || chapterPublished || !canEditQuestions) return
+    setCreateForm(newManualQuestionForm())
+    setCreatePendingMedia([])
+  }
+
+  const uploadPendingQuestionMedia = async (questionId: string, pending: PendingQuestionImage[]) => {
+    if (!selectedBankVersion) return { uploaded: 0, failed: [] as string[] }
+    let uploaded = 0
+    const failed: string[] = []
+    for (const item of pending) {
+      if (!item.altText.trim()) {
+        failed.push(`${item.file.name}: thiếu alt text`)
+        continue
+      }
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await uploadBankQuestionMedia(headers, selectedBankVersion.id, questionId, item.file, item.altText.trim())
+        uploaded += 1
+      } catch (error) {
+        failed.push(`${item.file.name}: ${error instanceof Error ? error.message : 'upload thất bại'}`)
+      }
+    }
+    return { uploaded, failed }
+  }
+
+  const saveCreatedQuestion = async () => {
+    if (!selectedBankVersion || chapterPublished || !createForm || isActionBusy('question_create')) return
+    const invalid = questionFormValidationError(createForm)
+    if (invalid) { setPopupMessage({ type: 'warning', text: invalid }); return }
+    if (createPendingMedia.some((item) => !item.altText.trim())) { setPopupMessage({ type: 'warning', text: 'Mỗi ảnh phải có alt text trước khi lưu.' }); return }
+    setActionBusy('question_create')
+    setPopupMessage(null)
+    try {
+      const created = await createManualBankQuestion(headers, selectedBankVersion.id, {
+        question_type: createForm.question_type,
+        question_text: createForm.question_text,
+        question_content_json: createForm.question_content_json,
+        difficulty: createForm.difficulty,
+        cognitive_level: createForm.cognitive_level,
+        learning_objective: createForm.learning_objective,
+        explanation: createForm.explanation,
+        concept_title: createForm.concept_title,
+        question_family_id: createForm.question_family_id || null,
+        source_ref: createForm.source_ref || 'manual-authoring',
+        source_excerpt: createForm.source_excerpt,
+        source_evidence: createForm.source_evidence,
+      })
+      const mediaResult = await uploadPendingQuestionMedia(created.id, createPendingMedia)
+      setCreateForm(null)
+      setCreatePendingMedia([])
+      await refreshCurrent()
+      if (mediaResult.failed.length) {
+        setPopupMessage({ type: 'warning', text: `Câu hỏi đã được tạo ở trạng thái Chờ duyệt nhưng ${mediaResult.failed.length} ảnh chưa upload được. Mở Sửa câu hỏi để thử lại. ${mediaResult.failed.slice(0, 2).join(' · ')}` })
+      } else {
+        setPopupMessage({ type: 'success', text: `Đã thêm câu hỏi thủ công${mediaResult.uploaded ? ` và ${mediaResult.uploaded} ảnh` : ''} ở trạng thái Chờ duyệt.` })
+      }
+    } catch (error) {
+      setPopupMessage({ type: 'danger', text: error instanceof Error ? error.message : 'Không tạo được câu hỏi thủ công.' })
+    } finally {
+      setActionBusy(null)
+    }
   }
 
   const saveEditedQuestion = async () => {
-    if (!selectedBankVersion || chapterPublished || !editingQuestion || !editForm) return
-    await run(async () => {
-      await updateBankQuestion(headers, selectedBankVersion.id, editingQuestion.id, { ...editForm, note: 'Giáo viên sửa câu hỏi trong workspace bài' })
+    if (!selectedBankVersion || chapterPublished || !editingQuestion || !editForm || isActionBusy('question_edit')) return
+    const invalid = questionFormValidationError(editForm)
+    if (invalid) { setPopupMessage({ type: 'warning', text: invalid }); return }
+    if (editPendingMedia.some((item) => !item.altText.trim())) { setPopupMessage({ type: 'warning', text: 'Mỗi ảnh mới phải có alt text trước khi lưu.' }); return }
+    setActionBusy('question_edit')
+    setPopupMessage(null)
+    try {
+      await updateBankQuestion(headers, selectedBankVersion.id, editingQuestion.id, {
+        difficulty: editForm.difficulty,
+        cognitive_level: editForm.cognitive_level,
+        learning_objective: editForm.learning_objective,
+        question_type: editForm.question_type,
+        question_content_json: editForm.question_content_json,
+        question_text: editForm.question_text,
+        explanation: editForm.explanation,
+        concept_title: editForm.concept_title,
+        question_family_id: editForm.question_family_id,
+        source_ref: editForm.source_ref,
+        source_type: editForm.source_type,
+        source_excerpt: editForm.source_excerpt,
+        source_evidence: editForm.source_evidence,
+        target_status: editForm.target_status,
+        note: 'Giáo viên sửa câu hỏi trong workspace bài',
+      })
+      const mediaFailures: string[] = []
+      for (const mediaId of Array.from(editDeletedMediaIds)) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await deleteBankQuestionMedia(headers, selectedBankVersion.id, editingQuestion.id, mediaId)
+        } catch (error) {
+          mediaFailures.push(`xóa media ${mediaId.slice(0, 8)}: ${error instanceof Error ? error.message : 'thất bại'}`)
+        }
+      }
+      const uploaded = await uploadPendingQuestionMedia(editingQuestion.id, editPendingMedia)
+      mediaFailures.push(...uploaded.failed)
       setEditingQuestion(null)
       setEditForm(null)
-    }, 'Đã lưu câu hỏi', refreshCurrent)
+      setEditPendingMedia([])
+      setEditDeletedMediaIds(new Set())
+      await refreshCurrent()
+      setPopupMessage(mediaFailures.length
+        ? { type: 'warning', text: `Nội dung câu hỏi đã lưu nhưng có ${mediaFailures.length} thao tác ảnh chưa hoàn tất. ${mediaFailures.slice(0, 2).join(' · ')}` }
+        : { type: 'success', text: 'Đã lưu nội dung và media câu hỏi.' })
+    } catch (error) {
+      setPopupMessage({ type: 'danger', text: error instanceof Error ? error.message : 'Không lưu được câu hỏi.' })
+    } finally {
+      setActionBusy(null)
+    }
   }
-
 
 
   const openRejectQuestion = async (question: BankVersionQuestion) => {
@@ -346,168 +871,353 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
       setRejectReason('')
     }, 'Đã bỏ câu hỏi', refreshCurrent)
   }
-  const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: difficultyEasy === '' ? 50 : Number(difficultyEasy), difficulty_medium: difficultyMedium === '' ? 30 : Number(difficultyMedium), difficulty_hard: difficultyHard === '' ? 20 : Number(difficultyHard) }
+
+  const openQuestionPreview = async (question: BankVersionQuestion) => {
+    if (!selectedBankVersion) return
+    const detail = await getBankVersionQuestion(headers, selectedBankVersion.id, question.id).catch(() => question)
+    setPreviewQuestion(detail)
+  }
+
+
+  const moveQuestionPreview = async (direction: -1 | 1) => {
+    if (!previewQuestion || !questions.length) return
+    const currentIndex = questions.findIndex((item) => item.id === previewQuestion.id)
+    const nextIndex = currentIndex < 0 ? 0 : Math.min(Math.max(currentIndex + direction, 0), questions.length - 1)
+    const next = questions[nextIndex]
+    if (next && next.id !== previewQuestion.id) await openQuestionPreview(next)
+  }
+
+  const approvePreviewQuestion = async () => {
+    if (!selectedBankVersion || !previewQuestion || chapterPublished || !canReviewQuestions) return
+    const currentIndex = questions.findIndex((item) => item.id === previewQuestion.id)
+    const next = questions[currentIndex + 1] || questions[currentIndex - 1] || null
+    await run(async () => {
+      await reviewBankQuestion(headers, selectedBankVersion.id, previewQuestion.id, { action: 'approve', note: 'Duyệt trong panel xem câu hỏi' })
+    }, 'Đã duyệt câu hỏi', refreshCurrent)
+    if (next && next.id !== previewQuestion.id) await openQuestionPreview(next)
+    else setPreviewQuestion(null)
+  }
+
+  useEffect(() => {
+    if (!previewQuestion) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      if (event.key === 'Escape') { event.preventDefault(); setPreviewQuestion(null); return }
+      if (event.key.toLowerCase() === 'j') { event.preventDefault(); moveQuestionPreview(1).catch(() => null); return }
+      if (event.key.toLowerCase() === 'k') { event.preventDefault(); moveQuestionPreview(-1).catch(() => null); return }
+      if (!chapterPublished && canReviewQuestions && event.key.toLowerCase() === 'a' && ['pending_review', 'needs_review', 'rejected'].includes(previewQuestion.status)) {
+        event.preventDefault(); approvePreviewQuestion().catch(() => null); return
+      }
+      if (!chapterPublished && canReviewQuestions && event.key.toLowerCase() === 'e') {
+        event.preventDefault(); const item = previewQuestion; setPreviewQuestion(null); startEditQuestion(item).catch(() => null); return
+      }
+      if (!chapterPublished && canReviewQuestions && event.key.toLowerCase() === 'r' && !['rejected', 'published'].includes(previewQuestion.status)) {
+        event.preventDefault(); const item = previewQuestion; setPreviewQuestion(null); openRejectQuestion(item).catch(() => null)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [previewQuestion, questions, selectedBankVersion?.id, chapterPublished, canReviewQuestions]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleQuestion = (question: BankVersionQuestion) => {
+    setSelectAllFiltered(false)
+    setSelectedQuestionIds((current) => {
+      const next = new Set(current)
+      if (next.has(question.id)) next.delete(question.id)
+      else next.add(question.id)
+      return next
+    })
+  }
+
+  const toggleQuestionPage = (rows: BankVersionQuestion[], selected: boolean) => {
+    setSelectAllFiltered(false)
+    setSelectedQuestionIds((current) => {
+      const next = new Set(current)
+      rows.forEach((row) => { if (row.status !== 'published') selected ? next.add(row.id) : next.delete(row.id) })
+      return next
+    })
+  }
+
+  const runBulkReview = async (action: 'approve' | 'reject' | 'back_to_review', note: string) => {
+    if (!selectedBankVersion || chapterPublished) return
+    const selectedIds = Array.from(selectedQuestionIds)
+    if (!selectAllFiltered && !selectedIds.length) {
+      setPopupMessage({ type: 'warning', text: 'Chưa chọn câu hỏi.' })
+      return
+    }
+    await runAction('bulk_review', async () => {
+      await bulkReviewBankQuestions(headers, selectedBankVersion.id, {
+        action,
+        question_ids: selectAllFiltered ? [] : selectedIds,
+        apply_to_filtered: selectAllFiltered,
+        status_filter: questionStatusFilter,
+        difficulty: questionDifficultyFilter,
+        search: questionTableState.q,
+        note,
+      })
+      setSelectedQuestionIds(new Set())
+      setSelectAllFiltered(false)
+    }, 'Đã xử lý các câu hỏi đã chọn.', refreshCurrent, 'Không xử lý được danh sách câu hỏi đã chọn.')
+  }
+
+  const saveQuestionExport = async () => {
+    if (!selectedBankVersion) return
+    await runAction('question_export', async () => {
+      const blob = await exportBankVersionQuestions(headers, selectedBankVersion.id, {
+        statusFilter: questionStatusFilter,
+        difficulty: questionDifficultyFilter,
+        search: questionTableState.q,
+        questionIds: selectedQuestionIds.size && !selectAllFiltered ? Array.from(selectedQuestionIds) : undefined,
+      })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `bank-questions-${chapterDisplayName(chapter).replace(/\s+/g, '-')}.csv`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    }, 'Đã xuất danh sách câu hỏi.', undefined, 'Không xuất được danh sách câu hỏi.')
+  }
+
+  const confirmDangerousAction = async () => {
+    const pending = confirmation
+    setConfirmation(null)
+    if (pending === 'bulk_reject') {
+      await runBulkReview('reject', 'Bỏ hàng loạt từ bảng câu hỏi')
+      return
+    }
+    if (pending === 'release_create') {
+      await runAction('release_create', async () => {
+        if (!selectedBankVersion) return
+        await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
+      }, 'Hệ thống đã chốt bộ đề. Bạn có thể đưa lên CMS khi sẵn sàng.', refreshCurrent, 'Không chốt được bộ đề. Vui lòng kiểm tra câu hỏi còn chờ xử lý.')
+      return
+    }
+    if (pending === 'release_publish' && latestRelease) {
+      if (actionBusy || activeOperation) return
+      setPopupMessage(null)
+      setActionBusy('release_publish')
+      try {
+        const queued = await enqueueBankReleasePublish(headers, latestRelease.id, {})
+        const operation = buildChapterLongOperationFromJob(queued.job, chapterId)
+        if (!operation) throw new Error('Worker đã nhận việc nhưng phản hồi thiếu thông tin Release/Bank Version.')
+        setRunningOperation(operation)
+        setMessage(queued.message || 'Đang chờ worker đưa bộ đề lên CMS.')
+      } catch (error) {
+        const text = errorText(error, 'Không đưa được thư viện vào hàng đợi CMS. Vui lòng thử lại.')
+        setPopupMessage({ type: 'danger', text })
+        setMessage(text)
+      } finally {
+        setActionBusy(null)
+      }
+    }
+  }
+
+  const selectedQuestionCount = selectAllFiltered ? questionTotal : selectedQuestionIds.size
+
+  const generationPayload = { question_count: numericGenerateCount, target_question_count: chapterQuestionLimit, difficulty_easy: difficultyEasy === '' ? 50 : Number(difficultyEasy), difficulty_medium: difficultyMedium === '' ? 30 : Number(difficultyMedium), difficulty_hard: difficultyHard === '' ? 20 : Number(difficultyHard), question_type_single_select: questionTypeSingle === '' ? 70 : Number(questionTypeSingle), question_type_multi_select: questionTypeMulti === '' ? 30 : Number(questionTypeMulti) }
 
   const openGenerateConfirm = async () => {
-    if (!selectedBankVersion || chapterPublished) return
-    await run(async () => {
+    if (!selectedBankVersion || chapterPublished || isActionBusy('generate_preview') || generateOperationBusy || materialOperationBusy) return
+    await runAction('generate_preview', async () => {
       const preview = await previewGenerateFromBankVersion(headers, selectedBankVersion.id, generationPayload)
       setGeneratePreview(preview)
-    }, 'Đã tính chi phí dự kiến', undefined, 'Đang tính chi phí dự kiến...')
+    }, 'Đã tính chi phí dự kiến', undefined, 'Không tính được chi phí dự kiến. Vui lòng thử lại.')
   }
 
   const confirmGenerateQuestions = async () => {
-    if (!selectedBankVersion || chapterPublished || !generatePreview) return
-    await run(async () => {
-      await generateFromBankVersion(headers, selectedBankVersion.id, generationPayload)
+    if (!selectedBankVersion || chapterPublished || !generatePreview || generateOperationBusy || materialOperationBusy || isActionBusy('generate_enqueue')) return
+    const questionCount = generatePreview.question_count || numericGenerateCount
+    setPopupMessage(null)
+    setActionBusy('generate_enqueue')
+    try {
+      const queued = await enqueueGenerateFromBankVersion(headers, selectedBankVersion.id, generationPayload)
+      const label = `Hệ thống đang tạo ${questionCount} câu hỏi từ học liệu của bài này. Trạng thái sẽ tự cập nhật tại đây.`
+      setRunningOperation({
+        id: `${queued.job.id}:generate`,
+        jobId: queued.job.id,
+        bankVersionId: selectedBankVersion.id,
+        chapterId,
+        type: 'generate',
+        label,
+        successMessage: `Hệ thống đã tạo xong ${questionCount} câu hỏi và đồng bộ danh sách bên dưới.`,
+        questionCount,
+        createdAt: Date.now(),
+      })
       setGeneratePreview(null)
-    }, 'Đã tạo câu hỏi', refreshCurrent, 'Đang tạo câu hỏi bằng GPT, vui lòng chờ...')
+      setGenerateManagerOpen(false)
+      setMessage(label)
+    } catch (error) {
+      const text = errorText(error, 'Không tạo được câu hỏi. Vui lòng kiểm tra tài liệu hoặc thử lại.')
+      setPopupMessage({ type: 'danger', text })
+      setMessage(text)
+    } finally {
+      setActionBusy(null)
+      setSubmittingLabel('')
+    }
+  }
+
+  const uploadSelectedMaterial = async () => {
+    if (!file || !selectedBankVersion || chapterPublished || materialOperationBusy || generateOperationBusy || isActionBusy('material_upload_enqueue')) return
+    const selectedFile = file
+    setPopupMessage(null)
+    setActionBusy('material_upload_enqueue')
+    try {
+      const queued = await enqueueBankMaterialUpload(headers, selectedBankVersion.id, selectedFile, { title: selectedFile.name, change_type: diffBaseBankVersionId ? 'updated_after_clone' : 'initial', replace_existing: false })
+      const label = `Hệ thống đang tiếp nhận học liệu và kiểm tra định dạng tệp ${selectedFile.name}. Trạng thái sẽ tự cập nhật tại đây.`
+      setRunningOperation({
+        id: `${queued.job.id}:material_upload`,
+        jobId: queued.job.id,
+        bankVersionId: selectedBankVersion.id,
+        chapterId,
+        type: 'material_upload',
+        label,
+        successMessage: 'Hệ thống đã ghi nhận tài liệu. Bạn có thể tiếp tục bước tạo câu hỏi.',
+        fileName: selectedFile.name,
+        createdAt: Date.now(),
+      })
+      setFile(null)
+      setMessage(label)
+    } catch (error) {
+      const text = errorText(error, 'Không thêm được tài liệu. Vui lòng kiểm tra file hoặc thử lại.')
+      setPopupMessage({ type: 'danger', text })
+      setMessage(text)
+    } finally {
+      setActionBusy(null)
+      setSubmittingLabel('')
+    }
+  }
+
+  const scrollToQuestionReview = () => {
+    const nextStatus = chapterPublished || pendingReviewCount <= 0 ? 'all' : 'pending_review'
+    updateQuestionTableState({ status: nextStatus, sort: 'needs_review', page: 1 }, { resetPage: false })
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const target = questionReviewSectionRef.current
+        if (!target) return
+        const scrollContainer = target.closest<HTMLElement>('.enterprise-content')
+        if (scrollContainer) {
+          const targetRect = target.getBoundingClientRect()
+          const containerRect = scrollContainer.getBoundingClientRect()
+          const nextTop = Math.max(0, scrollContainer.scrollTop + targetRect.top - containerRect.top - 10)
+          scrollContainer.scrollTo({ top: nextTop, behavior: 'smooth' })
+        } else {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+        window.setTimeout(() => target.focus({ preventScroll: true }), 260)
+      })
+    })
   }
 
   const materialPreviewChunks = (materialView?.chunks || []).slice(0, 80)
   const materialPreviewText = materialPreviewChunks.map((chunk, index) => `Đoạn ${index + 1}
 ${chunk.content}`).join('\n\n')
 
-  return <div className="page-stack bank-multipage">
-    {busy ? <div className="bank-loading-overlay"><div className="bank-loading-card"><div className="spinner" /><b>{busyLabel}</b><small>Không tắt trang trong lúc hệ thống đang xử lý.</small></div></div> : null}
-    <Breadcrumb items={[{ label: 'Bộ môn', href: '/bank/departments' }, { label: department?.name || 'Bộ môn', href: department ? `/bank/departments/${department.id}/subjects` : undefined }, { label: subject?.code || 'Môn', href: subject ? `/bank/subjects/${subject.id}/versions` : undefined }, { label: offering?.code || 'Version môn', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : undefined }, { label: chapterDisplayName(chapter) }]} />
+  return <PageRoot className="page-stack bank-multipage bank-contract-page bank-hierarchy-detail-page chapter-workspace-page">
+    <PageHeader eyebrow="Ngân hàng đề" title={chapterDisplayName(chapter)} breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Bộ môn', href: '/bank/departments' }, { label: 'Môn học', href: subject ? `/bank/departments/${subject.department_id}/subjects` : '/bank/departments' }, { label: 'Phiên bản môn', href: subject ? `/bank/subjects/${subject.id}/versions` : '/bank/departments' }, { label: 'Bài học', href: offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments' }, { label: chapterDisplayName(chapter) }]} />
+    <ContextBackLink href={offering ? `/bank/subject-versions/${offering.id}/chapters` : '/bank/departments'} label="Quay lại Bài học" />
+    <BankHierarchyPageIntro
+      title={chapterDisplayName(chapter)}
+      description={subject && offering
+        ? `Quản lý tài liệu, tạo và duyệt câu hỏi, chốt bộ đề và đưa lên CMS cho ${subject.code} — ${offering.code}.`
+        : 'Quản lý tài liệu, câu hỏi, quy trình duyệt và Release của bài học.'}
+      icon="file"
+    />
     {message ? <div className="alert info">{message}</div> : null}
+    {activeOperation ? <ChapterOperationStatus operation={activeOperation} /> : null}
     {chapterPublished ? <div className="alert success"><b>Bài đã publish.</b> Các thao tác sửa tài liệu, tạo câu hỏi, duyệt/bỏ câu, kiểm tra thay đổi và chốt lại đã được khóa. Muốn thay đổi, hãy clone/tạo version mới.</div> : null}
     {!chapterPublished && diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
-    {!chapterPublished && unresolvedQuestionCount > 0 ? <div className="alert warning"><b>Còn câu chưa xử lý.</b> Hiện có {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Phải duyệt, sửa hoặc bỏ hết thì mới chốt bộ đề được.</div> : null}
 
-    <section className={`card teacher-next-step ${chapterPublished ? 'success-card' : unresolvedQuestionCount > 0 ? 'warning-card' : readiness?.can_create_release ? 'success-card' : ''}`}>
-      <div className="section-head"><div><h2>Bạn cần làm gì tiếp?</h2><p className="helper">Hệ thống tự đọc trạng thái bài và chỉ ra bước tiếp theo, không cần giáo viên tự đoán.</p></div></div>
-      {chapterPublished ? <div className="next-step-message"><b>Đã publish và khóa chỉnh sửa.</b><span>Bộ câu hỏi đã được đưa sang Open edX Library. Trang này chỉ dùng để xem lại tài liệu/câu hỏi.</span></div> : stats.draftError > 0 ? <div className="next-step-message"><b>Còn {stats.draftError} câu lỗi.</b><span>Hãy bấm Sửa hoặc Bỏ câu lỗi. Khi bấm Bỏ, hệ thống yêu cầu nhập lý do để sau này fine-tune AI.</span></div> : stats.pending > 0 ? <div className="next-step-message"><b>Còn {stats.pending} câu chưa duyệt.</b><span>Hãy duyệt hoặc bỏ hết các câu này. Sau đó mới chốt bộ đề.</span></div> : readiness?.can_create_release ? <div className="next-step-message"><b>Sẵn sàng chốt bộ đề.</b><span>Tất cả câu đã được xử lý. Có thể bấm Chốt bộ đề.</span></div> : <div className="next-step-message"><b>Chưa có việc cần duyệt.</b><span>Hãy gắn tài liệu và tạo câu hỏi nếu bài này chưa đủ câu.</span></div>}
-      <div className="button-row no-margin chapter-primary-actions"><button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? 'Xem câu hỏi' : 'Duyệt câu hỏi'}</button>{!chapterPublished && !latestRelease ? <button className="btn chapter-action-button release" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} onClick={() => run(async () => { if (!selectedBankVersion) return; await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true }) }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : null}</div>
-    </section>
-
-    <section className="summary-grid compact-summary">
-      <div><span>Tài liệu</span><b>{materials.length}</b></div>
-      <div><span>Tổng câu hiện có</span><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Còn {remainingQuota} câu</small></div>
-      <div><span>Câu đã duyệt</span><b>{stats.approved}</b></div>
-      <div><span>Câu chờ duyệt</span><b>{stats.pending}</b></div>
-      <div><span>Câu bị loại</span><b>{stats.rejected}</b></div>
-      <div><span>Nhóm kiến thức</span><b>{stats.families}</b></div>
-      <div><span>Release</span><b>{publishedRelease ? 'Đã publish' : latestRelease ? 'Đã chốt' : 'Chưa chốt'}</b><small>{nextReleaseText(publishedRelease || latestRelease)}</small></div>
-    </section>
-
-    <section className="card chapter-command-bar">
-      <div>
-        <div className="eyebrow">Workspace bài</div>
-        <h2>{chapterDisplayName(chapter)}</h2>
-        <p className="helper">Các thao tác chính nằm trong popup để màn hình duyệt câu hỏi không bị rời rạc.</p>
-      </div>
-      <div className="button-row no-margin">
-        <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>Tài liệu ({materials.length})</button>
-        {!chapterPublished ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>Tạo câu hỏi</button> : null}
-        <button className="btn secondary chapter-action-button review" onClick={() => document.getElementById('bank-question-list')?.scrollIntoView({ behavior: 'smooth' })}>{chapterPublished ? 'Xem câu hỏi' : 'Duyệt câu hỏi'}</button>
-        {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={busy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => run(async () => {
+    <section className="bank-hierarchy-panel chapter-command-bar compact-command-bar chapter-workflow-panel" aria-label="Thao tác bài học">
+      <div className="button-row no-margin chapter-primary-actions">
+        <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>
+        {!chapterPublished && canGenerateQuestions ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : `Tạo câu hỏi (${usedQuestionCount}/${chapterQuestionLimit})`}</button> : null}
+        <button className="btn secondary chapter-action-button review" onClick={scrollToQuestionReview}>{chapterPublished ? `Xem câu hỏi (${usedQuestionCount})` : `Duyệt câu hỏi (${pendingReviewCount} câu chờ duyệt)`}</button>
+        {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={isActionBusy('diff_check') || longOperationBusy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => runAction('diff_check', async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
-        }, 'Đã kiểm tra khác biệt', refreshCurrent)}>Kiểm tra thay đổi</button> : null}
-        {chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã publish</button> : !latestRelease ? <button className="btn" disabled={busy || !selectedBankVersion || !can('publish_questions') || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => run(async () => {
-          if (!selectedBankVersion) return
-          await createBankRelease(headers, { bank_version_id: selectedBankVersion.id, include_approved_questions: true })
-        }, 'Đã chốt Release', refreshCurrent)}>Chốt bộ đề</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={busy || !can('publish_questions')} onClick={() => run(async () => { await publishBankRelease(headers, latestRelease.id, {}) }, 'Đã publish Library sang Open edX', refreshCurrent)}>Publish Library</button> : <button className="btn secondary chapter-action-button published" disabled>Đã publish</button>}
+        }, 'Hệ thống đã kiểm tra khác biệt tài liệu.', refreshCurrent, 'Không kiểm tra được khác biệt tài liệu. Vui lòng thử lại.')}>{isActionBusy('diff_check') ? <BusyLabel text="Đang kiểm tra" /> : `Kiểm tra thay đổi${diffRequired ? ' (cần xử lý)' : ''}`}</button> : null}
+        {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_preview')} onClick={() => runAction('release_preview', async () => { setReleasePreview(await getBankReleasePreview(headers, latestRelease.id)) }, 'Đã tải snapshot Release.', undefined, 'Không tải được snapshot Release.')}>{isActionBusy('release_preview') ? <BusyLabel text="Đang tải" /> : 'Xem trước Release'}</button> : null}
+        {canPublishQuestions ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Phải duyệt hoặc bỏ hết tất cả câu hỏi trước khi chốt bộ đề.' : undefined} onClick={() => setConfirmation('release_create')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : `Chốt bộ đề (${approvedQuestionCount} câu)`}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => setConfirmation('release_publish')}>{activeOperation?.type === 'release_publish' ? <BusyLabel text="Đang đưa lên CMS" /> : isActionBusy('release_publish') ? <BusyLabel text="Đang xếp hàng" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
       </div>
-      {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {stats.pending} câu chờ duyệt và {stats.draftError} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
+      {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {pendingReviewCount} câu chờ duyệt và {draftErrorCount} câu lỗi. Hãy duyệt hoặc bỏ hết tất cả câu hỏi trước.</div> : null}
     </section>
 
-    {!selectedBankVersion ? <section className="card"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section className="workspace-grid multipage-workspace chapter-question-workspace">
-      <div className="workspace-panel full" id="bank-question-list">
-        <div className="section-head question-list-head"><div><h3>Danh sách câu hỏi</h3><p className="helper">Lọc nhanh theo trạng thái, độ khó và sắp xếp để giáo viên xử lý hết câu trước khi chốt bộ đề.</p></div>{!chapterPublished ? <button className="btn secondary chapter-action-button review" disabled={busy || !can('review_questions') || stats.pending === 0} onClick={() => run(async () => {
-          if (!selectedBankVersion) return
-          await bulkReviewBankQuestions(headers, selectedBankVersion.id, { action: 'approve', approve_all_pending: true, note: 'Duyệt hết câu chờ' })
-        }, 'Đã duyệt hết câu chờ', refreshCurrent)}>Duyệt hết câu chờ</button> : null}</div>
-        <div className="question-filter-bar">
-          <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => setQuestionStatusFilter(event.target.value)}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã publish</option></select></label>
-          <label>Độ khó<select className="input" value={questionDifficultyFilter} onChange={(event) => setQuestionDifficultyFilter(event.target.value)}><option value="all">Tất cả</option><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
-          <label>Sắp xếp<select className="input" value={questionSort} onChange={(event) => setQuestionSort(event.target.value)}><option value="needs_review">Cần xử lý trước</option><option value="difficulty">Theo độ khó</option><option value="quality_low">Điểm chất lượng thấp trước</option><option value="quality_high">Điểm chất lượng cao trước</option></select></label>
-          <button className="btn secondary" type="button" onClick={() => { setQuestionStatusFilter('all'); setQuestionDifficultyFilter('all'); setQuestionSort('needs_review') }}>Xóa lọc</button>
-          <span className="filter-result-count">Hiện {filteredQuestions.length}/{questions.length} câu</span>
+    {!selectedBankVersion ? <section className="bank-hierarchy-panel"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section ref={questionReviewSectionRef} className="bank-hierarchy-panel chapter-question-workspace chapter-review-section" id="bank-question-list" tabIndex={-1} aria-labelledby="chapter-review-heading">
+        <div className="section-head question-list-head chapter-question-list-head"><div className="chapter-question-list-heading"><span className="chapter-question-list-icon" aria-hidden="true"><AppIcon name="layers" size={18} /></span><div><h3 id="chapter-review-heading">Danh sách câu hỏi</h3><p className="helper">Chọn một câu để mở popup duyệt, xem đầy đủ đáp án, giải thích và bằng chứng nguồn.</p></div></div><div className="button-row no-margin">
+          {!chapterPublished && canEditQuestions ? <button className="btn" onClick={openCreateQuestion}>+ Thêm câu hỏi</button> : null}
+          {!chapterPublished && canEditQuestions ? <button className="btn secondary" onClick={() => setImportOpen(true)}>Import Excel</button> : null}
+          {!chapterPublished && canEditQuestions ? <button className="btn secondary" onClick={() => setOpenEdxImportOpen(true)}>Import Open edX</button> : null}
+          <button className="btn secondary" disabled={isActionBusy('question_export')} onClick={saveQuestionExport}>{isActionBusy('question_export') ? <BusyLabel text="Đang xuất" /> : 'Xuất CSV'}</button>
+        </div></div>
+        <div className="question-filter-bar enterprise-filter-bar">
+          <label>Tìm câu hỏi<input className="input" value={questionSearchDraft} onChange={(event) => setQuestionSearchDraft(event.target.value)} placeholder="Nội dung, concept hoặc family" /></label>
+          <label>Trạng thái<select className="input" value={questionStatusFilter} onChange={(event) => updateQuestionTableState({ status: event.target.value })}><option value="all">Tất cả</option><option value="needs_action">Cần xử lý</option><option value="pending_review">Chờ duyệt</option><option value="draft_error">Câu lỗi</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option><option value="published">Đã đưa lên CMS</option></select></label>
+          <label>Độ khó<select className="input" value={questionDifficultyFilter} onChange={(event) => updateQuestionTableState({ difficulty: event.target.value })}><option value="all">Tất cả</option><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
+          <label>Sắp xếp<select className="input" value={questionSort} onChange={(event) => updateQuestionTableState({ sort: event.target.value })}><option value="needs_review">Cần xử lý trước</option><option value="newest">Mới nhất</option><option value="oldest">Cũ nhất</option><option value="difficulty">Theo độ khó</option><option value="quality_low">Chất lượng thấp trước</option><option value="quality_high">Chất lượng cao trước</option></select></label>
+          <button className="btn secondary" type="button" onClick={() => { setQuestionSearchDraft(''); updateQuestionTableState({ q: '', status: 'all', difficulty: 'all', sort: 'needs_review', page: 1 }, { resetPage: false }) }}>Xóa lọc</button>
+          <span className="filter-result-count">{questionTotal.toLocaleString('vi-VN')} kết quả</span>
         </div>
-        <div className="question-card-list bank-review-list">
-          {filteredQuestions.map((item, index) => {
-            const draftReason = item.status === 'draft_error' ? bankQuestionErrorMessage(item) : null
-            const waitingForReview = isQuestionWaitingForReview(item)
-            return <article className="question-review-card" key={item.id}>
-              <div className="question-main-box">
-                <div className="question-main-head"><span className="question-index">Câu {index + 1}</span><span className={statusClass(item.status)}>{statusLabel(item.status)}</span></div>
-                <div className="question-prompt">{item.question_text}</div>
-                <div className="answer-grid">
-                  {bankAnswerRows.map(([letter, field]) => {
-                    const isCorrect = item.correct_answer === letter
-                    return <div key={letter} className={isCorrect ? 'answer-option correct' : 'answer-option'}>
-                      <span className="answer-letter">{letter}</span>
-                      <span>{item[field] || '—'}</span>
-                    </div>
-                  })}
-                </div>
-                <div className="question-meta-row">
-                  <span>Độ khó: <b>{item.difficulty}</b></span>
-                  {item.concept_title ? <span>Concept: <b>{item.concept_title}</b></span> : null}
-                  {item.question_family_id ? <span>Family: <code>{item.question_family_id}</code></span> : null}
-                  {item.variant_no ? <span>Variant: <b>{item.variant_no}</b></span> : null}
-                  {item.is_carry_over ? <span>Clone từ kỳ trước</span> : null}
-                  <span>Điểm chất lượng: {Math.round(Number(item.quality_score || 0) * 100)}%</span>
-                </div>
-                {item.explanation ? <div className="question-explanation"><b>Giải thích:</b> {item.explanation}</div> : null}
-                {draftReason ? <div className="draft-error-reason"><strong>Lý do lỗi:</strong> {draftReason}{item.draft_error_detail?.message ? <span> · {String(item.draft_error_detail.message)}</span> : null}</div> : null}
-              </div>
-              <div className="question-control-box">
-                <div className="question-control-status"><div className="box-label">Trạng thái</div><span className={statusClass(item.status)}>{statusLabel(item.status)}</span><small className="control-note">{waitingForReview ? 'Cần xử lý trước khi chốt bộ đề' : 'Đã xử lý'}</small></div>
-                <div className="question-control-actions">
-                  <div className="box-label">Thao tác</div>
-                  <div className="question-actions">
-                    {!chapterPublished && item.status !== 'published' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => startEditQuestion(item)}>Sửa</button> : null}
-                    {!chapterPublished && (item.status === 'pending_review' || item.status === 'needs_review' || item.status === 'rejected') ? <button className="btn small success" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
-                      if (!selectedBankVersion) return
-                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' })
-                    }, 'Đã duyệt câu hỏi', refreshCurrent)}>{item.status === 'rejected' ? 'Duyệt lại' : 'Duyệt'}</button> : null}
-                    {!chapterPublished && item.status !== 'rejected' && item.status !== 'published' ? <button className="btn small danger" disabled={busy || !can('review_questions')} onClick={() => openRejectQuestion(item)}>{item.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ'}</button> : null}
-                    {!chapterPublished && item.status === 'approved' ? <button className="btn small secondary" disabled={busy || !can('review_questions')} onClick={() => run(async () => {
-                      if (!selectedBankVersion) return
-                      await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' })
-                    }, 'Đã đưa câu hỏi về chờ duyệt', refreshCurrent)}>Hoàn tác</button> : null}
-                  </div>
-                </div>
-              </div>
-            </article>
-          })}
-        </div>
-        {questionHasNext ? <div className="load-more-row"><button className="btn secondary" type="button" disabled={questionLoadingMore || busy} onClick={loadMoreQuestions}>{questionLoadingMore ? 'Đang tải thêm...' : 'Tải thêm 100 câu'}</button><span className="helper">Đang hiển thị {questions.length} câu đầu. Danh sách dùng cursor/keyset nên không kéo toàn bộ bank vào trình duyệt.</span></div> : null}
-        {!filteredQuestions.length ? <div className="empty-state">Không có câu hỏi phù hợp bộ lọc.</div> : null}
-      </div>
+        {!chapterPublished && canReviewQuestions && selectedQuestionCount > 0 ? <div className="bank-batch-action-bar" role="region" aria-label="Thao tác hàng loạt câu hỏi">
+          <div><b>{selectAllFiltered ? `Đã chọn toàn bộ ${questionTotal.toLocaleString('vi-VN')} kết quả lọc` : `Đã chọn ${selectedQuestionIds.size} câu trên trang`}</b><small>{selectAllFiltered ? 'Hành động áp dụng theo bộ lọc hiện tại.' : 'Checkbox chọn tất cả chỉ chọn các dòng trên trang hiện tại.'}</small></div>
+          <div className="button-row no-margin">
+            {questionTotal > questions.length && <button className={selectAllFiltered ? 'btn small' : 'btn small secondary'} onClick={() => { setSelectAllFiltered((value) => !value); setSelectedQuestionIds(new Set()) }}>{selectAllFiltered ? 'Bỏ chọn toàn bộ kết quả lọc' : `Chọn toàn bộ ${questionTotal.toLocaleString('vi-VN')} kết quả lọc`}</button>}
+            <button className="btn small success" disabled={isActionBusy('bulk_review') || selectedQuestionCount === 0} onClick={() => runBulkReview('approve', 'Duyệt hàng loạt từ bảng câu hỏi')}>Duyệt</button>
+            <button className="btn small secondary" disabled={isActionBusy('bulk_review') || selectedQuestionCount === 0} onClick={() => runBulkReview('back_to_review', 'Đưa hàng loạt về Chờ duyệt')}>Về chờ duyệt</button>
+            <button className="btn small danger" disabled={isActionBusy('bulk_review') || selectedQuestionCount === 0} onClick={() => setConfirmation('bulk_reject')}>Bỏ</button>
+            <button className="btn small secondary" disabled={!selectedQuestionIds.size && !selectAllFiltered} onClick={() => { setSelectedQuestionIds(new Set()); setSelectAllFiltered(false) }}>Bỏ chọn</button>
+          </div>
+        </div> : null}
+        <BankQuestionEnterpriseTable
+          rows={questions}
+          density={questionTableState.density}
+          page={Math.min(questionTableState.page, questionTotalPages)}
+          pageSize={questionTableState.pageSize}
+          total={questionTotal}
+          totalPages={questionTotalPages}
+          selectedKeys={selectedQuestionIds}
+          loading={questionLoading}
+          error={questionError}
+          locked={chapterPublished}
+          canReview={canReviewQuestions}
+          activeQuestionId={previewQuestion?.id}
+          onDensityChange={(density) => updateQuestionTableState({ density }, { resetPage: false })}
+          onPageChange={(page) => updateQuestionTableState({ page }, { resetPage: false })}
+          onPageSizeChange={(pageSize) => updateQuestionTableState({ pageSize, page: 1 }, { resetPage: false })}
+          onToggle={toggleQuestion}
+          onTogglePage={toggleQuestionPage}
+          onPreview={openQuestionPreview}
+          onEdit={startEditQuestion}
+          onApprove={(item) => run(async () => { if (!selectedBankVersion) return; await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'approve', note: 'Giữ câu hỏi này' }) }, 'Đã duyệt câu hỏi', refreshCurrent)}
+          onReject={openRejectQuestion}
+          onBackToReview={(item) => run(async () => { if (!selectedBankVersion) return; await reviewBankQuestion(headers, selectedBankVersion.id, item.id, { action: 'back_to_review', note: 'Đưa về chờ duyệt' }) }, 'Đã đưa câu hỏi về chờ duyệt', refreshCurrent)}
+          onRetry={() => loadDetail(selectedBankVersion?.id)}
+        />
     </section>}
 
     <Modal open={materialManagerOpen} title="Tài liệu của bài" onClose={() => setMaterialManagerOpen(false)} wide>
       <div className="chapter-popup-grid">
-        {!chapterPublished ? <div className="popup-action-panel">
+        {!chapterPublished && canEditQuestions ? <div className="popup-action-panel">
           <h3>Gắn tài liệu</h3>
           <p className="helper">Tài liệu là nguồn để AI tạo câu hỏi cho đúng bài này. Nếu version clone bị đổi tài liệu, hệ thống sẽ kiểm tra khác biệt.</p>
+          {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
+          {activeOperation?.type === 'material_upload' ? <div className="alert info" role="status" aria-live="polite"><b>Hệ thống đang xử lý tài liệu.</b> {activeOperation.label}</div> : null}
           <div className="mini-form">
             <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
-            <button className="btn" disabled={busy || !file || !can('edit_questions')} onClick={() => run(async () => {
-              if (!file || !selectedBankVersion) return
-              const result = await uploadBankMaterial(headers, selectedBankVersion.id, file, { title: file.name, change_type: diffBaseBankVersionId ? 'updated_after_clone' : 'initial', replace_existing: false })
-              setFile(null)
-              if (result.diff_required && result.diff_base_bank_version_id) {
-                await runDiffNow(selectedBankVersion.id, result.diff_base_bank_version_id)
-              }
-              return result
-            }, 'Đã gắn tài liệu', refreshCurrent, 'Đang kiểm tra file, OCR nếu cần và tách nội dung...')}>+ Gắn tài liệu</button>
+            <button className="btn" disabled={materialOperationBusy || generateOperationBusy || isActionBusy('material_upload_enqueue') || !file} onClick={uploadSelectedMaterial}>{isActionBusy('material_upload_enqueue') || materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : '+ Gắn tài liệu'}</button>
           </div>
-        </div> : <div className="popup-action-panel"><h3>Đã publish</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo Release.</p></div>}
+        </div> : <div className="popup-action-panel"><h3>Đã đưa lên CMS</h3><p className="helper">Tài liệu của bài đã khóa. Bạn chỉ có thể xem lại tài liệu đã dùng để tạo bộ đề.</p></div>}
         <div className="popup-list-panel">
           <h3>Tài liệu đã gắn</h3>
           <div className="entity-list compact-list small-chunk-list popup-scroll-list">
             {materials.map((item) => <div className="entity-card" key={item.id}>
               <b>{item.title || item.file_name}</b>
-              <small>{item.file_type} · {new Date(item.created_at).toLocaleString('vi-VN')}</small>
+              <small>{item.file_type} · {formatVNDateTime(item.created_at)}</small>
               <div className="button-row no-margin">
                 <button className="btn small secondary" onClick={() => openMaterial(item)}>Xem</button>
-                {!chapterPublished ? <button className="btn small danger" disabled={busy || !can('edit_questions')} onClick={() => run(async () => { await deleteMaterialVersion(headers, item.id) }, 'Đã xóa tài liệu', refreshCurrent)}>Xóa</button> : null}
+                {!chapterPublished && canEditQuestions ? <button className="btn small danger" disabled={isActionBusy('material_delete')} onClick={() => runAction('material_delete', async () => { await deleteMaterialVersion(headers, item.id) }, 'Hệ thống đã xóa tài liệu khỏi bài.', refreshCurrent, 'Không xóa được tài liệu. Vui lòng thử lại.')}>{isActionBusy('material_delete') ? <BusyLabel text="Đang xóa" /> : 'Xóa'}</button> : null}
               </div>
             </div>)}
             {!materials.length ? <div className="empty-state">Chưa có tài liệu.</div> : null}
@@ -516,37 +1226,57 @@ ${chunk.content}`).join('\n\n')
       </div>
     </Modal>
 
-    <Modal open={generateManagerOpen} title="Tạo câu hỏi từ tài liệu" onClose={() => setGenerateManagerOpen(false)} wide>
-      <div className="chapter-popup-grid">
-        <div className="popup-action-panel">
-          <h3>Kế hoạch tạo câu hỏi</h3>
-          <p className="helper">AI dùng tài liệu đã gắn để tạo câu hỏi theo tỷ lệ EASY/MEDIUM/HARD, kiểm tra chất lượng rồi đưa vào hàng chờ duyệt.</p>
+    <AccessibleDialog
+      open={generateManagerOpen}
+      title="Tạo câu hỏi từ tài liệu"
+      onClose={() => setGenerateManagerOpen(false)}
+      size="xlarge"
+      className="chapter-generate-dialog"
+      bodyClassName="chapter-generate-dialog-body"
+      footer={<div className="chapter-generate-dialog-footer">
+        <button className="btn secondary" type="button" onClick={() => setGenerateManagerOpen(false)}>Đóng</button>
+        <button className="btn" type="button" disabled={isActionBusy('generate_preview') || generateOperationBusy || materialOperationBusy || !canGenerateNow} onClick={openGenerateConfirm}>{isActionBusy('generate_preview') ? <BusyLabel text="Đang tính" /> : generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : 'Tính chi phí & tạo'}</button>
+      </div>}
+    >
+      <div className="chapter-generate-layout">
+        <section className="chapter-generate-plan" aria-labelledby="chapter-generate-plan-title">
+          <div className="chapter-generate-plan-heading">
+            <span className="chapter-generate-plan-icon" aria-hidden="true"><AppIcon name="file" size={19} /></span>
+            <div><h3 id="chapter-generate-plan-title">Kế hoạch tạo câu hỏi</h3><p>AI dùng tài liệu đã gắn để tạo câu hỏi theo tỷ lệ <b>EASY/MEDIUM/HARD</b>, kiểm tra chất lượng rồi đưa vào hàng chờ duyệt.</p></div>
+          </div>
+          {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
+          {activeOperation?.type === 'generate' ? <div className="alert info" role="status" aria-live="polite"><b>Hệ thống đang tạo câu hỏi.</b> {activeOperation.label}</div> : null}
           {chapterPublished ? <div className="alert warning">Bài đã publish nên không thể tạo thêm câu hỏi trên version này.</div> : null}
-          <div className="quota-box"><b>{usedQuestionCount}/{chapterQuestionLimit}</b><small>Tổng câu đã tạo / giới hạn của bài · còn {remainingQuota} câu</small></div>
-          <div className="generation-plan-box">
-            <div><span>Nguồn tạo</span><b>{materials.length ? `${materials.length} tài liệu đã gắn` : 'Chưa có tài liệu'}</b></div>
-            <div><span>Sẽ tạo</span><b>{Math.max(0, numericGenerateCount || 0)} câu mới</b></div>
-            <div><span>Tỷ lệ</span><b>{difficultyEasy}/{difficultyMedium}/{difficultyHard}</b><small>Dễ / Trung bình / Khó</small></div>
+          <div className="chapter-generate-quota-card">
+            <div className="chapter-generate-quota-ring" style={{ background: `conic-gradient(#2563eb ${generationQuotaPercent}%, #dbeafe ${generationQuotaPercent}% 100%)` }}><span /></div>
+            <div><b>{usedQuestionCount}/{chapterQuestionLimit}</b><span>Tổng câu đã tạo / giới hạn của bài</span><small>Còn {remainingQuota} câu có thể tạo thêm</small></div>
           </div>
-        </div>
-        <div className="popup-list-panel">
-          <div className="mini-form">
-            <label>Số câu muốn tạo thêm</label>
-            <input className="input" type="number" min={1} max={remainingQuota || 1} value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Ví dụ: 10" />
-            <div className="three-col-form">
-              <label>Dễ %<input className="input" type="number" min={0} max={100} value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} /></label>
-              <label>Trung bình %<input className="input" type="number" min={0} max={100} value={difficultyMedium} onChange={(event) => setDifficultyMedium(event.target.value)} /></label>
-              <label>Khó %<input className="input" type="number" min={0} max={100} value={difficultyHard} onChange={(event) => setDifficultyHard(event.target.value)} /></label>
-            </div>
-            {!materials.length ? <div className="alert warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</div> : null}
-            {invalidDifficulty ? <div className="alert warning">Tổng tỷ lệ Dễ/Trung bình/Khó phải bằng 100%.</div> : null}
-            {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
-            {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu. Không thể tạo thêm.</div> : null}
-            <div className="modal-actions"><button className="btn secondary" onClick={() => setGenerateManagerOpen(false)}>Đóng</button><button className="btn" disabled={busy || !canGenerateNow} onClick={openGenerateConfirm}>Tính chi phí & tạo</button></div>
+          <div className="chapter-generate-summary-card">
+            <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="file" size={18} /></span><div><b>Nguồn tài liệu đã gắn</b><span>{materials.length ? `Đã gắn ${materials.length} tài liệu` : 'Chưa có tài liệu'}</span></div></div>
+            <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="sparkles" size={18} /></span><div><b>Sẽ tạo thêm: {Math.max(0, numericGenerateCount || 0)} câu mới</b><span>Tổng dự kiến sau khi tạo: {Math.min(chapterQuestionLimit, usedQuestionCount + Math.max(0, numericGenerateCount || 0))}/{chapterQuestionLimit} câu</span></div></div>
+            <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="analytics" size={18} /></span><div><b>Tỷ lệ {difficultyEasy}/{difficultyMedium}/{difficultyHard}</b><span>Dễ / Trung bình / Khó</span></div></div>
+            <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="layers" size={18} /></span><div><b>Loại câu {questionTypeSingle}% / {questionTypeMulti}%</b><span>Một đáp án / Nhiều đáp án</span></div></div>
           </div>
-        </div>
+        </section>
+        <section className="chapter-generate-form" aria-label="Cấu hình sinh câu hỏi">
+          <label className="chapter-generate-count-field"><span>Số câu muốn tạo thêm</span><input className="input" type="number" min={1} max={remainingQuota || 1} value={generateCount} onChange={(event) => setGenerateCount(event.target.value)} placeholder="Ví dụ: 10" data-dialog-autofocus /></label>
+          <div className="chapter-generate-difficulty-grid">
+            <label><span>Dễ %</span><div className="chapter-percent-input"><input className="input" type="number" min={0} max={100} value={difficultyEasy} onChange={(event) => setDifficultyEasy(event.target.value)} /><b>%</b></div></label>
+            <label><span>Trung bình %</span><div className="chapter-percent-input"><input className="input" type="number" min={0} max={100} value={difficultyMedium} onChange={(event) => setDifficultyMedium(event.target.value)} /><b>%</b></div></label>
+            <label><span>Khó %</span><div className="chapter-percent-input"><input className="input" type="number" min={0} max={100} value={difficultyHard} onChange={(event) => setDifficultyHard(event.target.value)} /><b>%</b></div></label>
+          </div>
+          <div className={`chapter-generate-validation${invalidDifficulty ? ' is-invalid' : ''}`} role="status"><AppIcon name={invalidDifficulty ? 'alert' : 'info'} size={17} /><span>Tổng tỷ lệ Dễ + Trung bình + Khó phải bằng 100%.</span></div>
+          <div className="chapter-generate-difficulty-grid question-type-mix-grid">
+            <label><span>Một đáp án %</span><div className="chapter-percent-input"><input className="input" type="number" min={0} max={100} value={questionTypeSingle} onChange={(event) => setQuestionTypeSingle(event.target.value)} /><b>%</b></div></label>
+            <label><span>Nhiều đáp án %</span><div className="chapter-percent-input"><input className="input" type="number" min={0} max={100} value={questionTypeMulti} onChange={(event) => setQuestionTypeMulti(event.target.value)} /><b>%</b></div></label>
+          </div>
+          <div className={`chapter-generate-validation${invalidQuestionTypeMix ? ' is-invalid' : ''}`} role="status"><AppIcon name={invalidQuestionTypeMix ? 'alert' : 'info'} size={17} /><span>Tổng tỷ lệ Một đáp án + Nhiều đáp án phải bằng 100%.</span></div>
+          {!materials.length ? <div className="alert warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</div> : null}
+          {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
+          {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu. Không thể tạo thêm.</div> : null}
+        </section>
       </div>
-    </Modal>
+    </AccessibleDialog>
 
     <Modal open={Boolean(generatePreview)} title="Xác nhận tạo câu hỏi" onClose={() => setGeneratePreview(null)}>
       {generatePreview ? <div className="generate-confirm-box">
@@ -555,6 +1285,8 @@ ${chunk.content}`).join('\n\n')
           <div><span>Dễ</span><b>{generatePreview.difficulty_counts.easy || 0}</b></div>
           <div><span>Trung bình</span><b>{generatePreview.difficulty_counts.medium || 0}</b></div>
           <div><span>Khó</span><b>{generatePreview.difficulty_counts.hard || 0}</b></div>
+          <div><span>Một đáp án</span><b>{generatePreview.question_type_counts?.single_select || 0}</b></div>
+          <div><span>Nhiều đáp án</span><b>{generatePreview.question_type_counts?.multi_select || 0}</b></div>
           <div><span>Đã có trong bài</span><b>{generatePreview.current_question_count}/{generatePreview.chapter_question_limit}</b></div>
           <div><span>Còn lại sau lần này</span><b>{Math.max(0, generatePreview.remaining_quota - generatePreview.question_count)}</b></div>
         </div>
@@ -563,50 +1295,131 @@ ${chunk.content}`).join('\n\n')
           <div><span>Token dự kiến</span><b>{Number(generatePreview.estimated_input_tokens + generatePreview.estimated_output_tokens).toLocaleString('vi-VN')}</b><small>Input {generatePreview.estimated_input_tokens.toLocaleString('vi-VN')} · Output {generatePreview.estimated_output_tokens.toLocaleString('vi-VN')}</small></div>
         </div>
         <p className="helper">{generatePreview.message}</p>
-        <div className="button-row"><button className="btn secondary" disabled={busy} onClick={() => setGeneratePreview(null)}>Hủy</button><button className="btn" disabled={chapterPublished || busy} onClick={confirmGenerateQuestions}>Xác nhận tạo câu hỏi</button></div>
+        <div className="button-row"><button className="btn secondary" disabled={isActionBusy('generate_enqueue')} onClick={() => setGeneratePreview(null)}>Hủy</button><button className="btn" disabled={chapterPublished || generateOperationBusy || materialOperationBusy || isActionBusy('generate_enqueue')} onClick={confirmGenerateQuestions}>{isActionBusy('generate_enqueue') ? <BusyLabel text="Đang gửi yêu cầu" /> : 'Xác nhận tạo câu hỏi'}</button></div>
       </div> : null}
     </Modal>
 
+
+
+    <ConfirmDialog
+      open={Boolean(confirmation)}
+      title={confirmation === 'bulk_reject' ? `Bỏ ${selectedQuestionCount.toLocaleString('vi-VN')} câu hỏi?` : confirmation === 'release_publish' ? `Đưa Release ${latestRelease?.release_code || ''} lên CMS?` : 'Chốt bộ đề thành Release?'}
+      description={confirmation === 'bulk_reject' ? <p>Các câu được chọn sẽ chuyển sang trạng thái Đã bỏ và được ghi Audit. Câu đã publish sẽ không bị thay đổi.</p> : confirmation === 'release_publish' ? <p>Hệ thống sẽ tạo/cập nhật thư viện Open edX từ snapshot Release. Hãy kiểm tra preview và QA bộ đề trước khi tiếp tục.</p> : <p>Release sẽ đóng băng toàn bộ câu đã duyệt hiện tại của bài. Sau khi publish, nội dung không chỉnh trực tiếp trên version này.</p>}
+      confirmLabel={confirmation === 'bulk_reject' ? 'Xác nhận bỏ câu' : confirmation === 'release_publish' ? 'Đưa lên CMS' : 'Chốt bộ đề'}
+      danger={confirmation === 'bulk_reject'}
+      busy={Boolean(actionBusy)}
+      onClose={() => setConfirmation(null)}
+      onConfirm={confirmDangerousAction}
+    />
+
+    <Modal open={Boolean(releasePreview)} title="Xem trước Release đã chốt" onClose={() => setReleasePreview(null)} wide>
+      {releasePreview ? <div className="bank-release-preview">
+        <div className="summary-grid compact-summary">
+          <div><span>Mã Release</span><b>{releasePreview.release.release_code}</b></div>
+          <div><span>Trạng thái</span><b>{releasePreview.release.status}</b></div>
+          <div><span>Tổng câu snapshot</span><b>{releasePreview.total_questions}</b></div>
+          <div><span>Dễ / TB / Khó</span><b>{releasePreview.counts.easy || 0} / {releasePreview.counts.medium || 0} / {releasePreview.counts.hard || 0}</b></div>
+        </div>
+        <div className="alert info"><b>Snapshot đã chốt.</b> Danh sách dưới đây lấy từ `ai_bank_release_questions`, không lấy theo bộ lọc câu hỏi đang xem.</div>
+        <div className="bank-release-preview-list">{releasePreview.questions.map((item, index) => <article key={item.release_question_id} className="bank-release-preview-question">
+          <div className="question-main-head"><span className="soft-tag">Câu {index + 1}</span><span className="soft-tag">{item.difficulty}</span>{item.concept_title ? <span className="soft-tag">{item.concept_title}</span> : null}</div>
+          <b>{item.question_text}</b>
+          <QuestionResponsePreview questionType={item.question_type} content={item.question_content_json} legacyOptions={[item.option_a || '', item.option_b || '', item.option_c || '', item.option_d || '']} legacyCorrectAnswer={item.correct_answer} media={item.media || []} mediaUrl={(media) => bankQuestionMediaContentUrl(releasePreview.release.bank_version_id, item.question_id, media.id)} />
+        </article>)}</div>
+        <div className="modal-actions"><button className="btn secondary" onClick={() => setReleasePreview(null)}>Đóng</button></div>
+      </div> : null}
+    </Modal>
+
+    {selectedBankVersion ? <BankQuestionImportModal
+      open={importOpen}
+      headers={headers}
+      bankVersionId={selectedBankVersion.id}
+      onClose={() => setImportOpen(false)}
+      onQueued={(text) => { setMessage(text); setPopupMessage({ type: 'success', text }); loadDetail(selectedBankVersion.id).catch(() => null) }}
+    /> : null}
+
+    {selectedBankVersion ? <BankOpenEdxImportModal
+      open={openEdxImportOpen}
+      headers={headers}
+      bankVersionId={selectedBankVersion.id}
+      disabled={chapterPublished || Boolean(actionBusy)}
+      onClose={() => setOpenEdxImportOpen(false)}
+      onImported={async (text) => { setMessage(text); setPopupMessage({ type: 'success', text }); await loadDetail(selectedBankVersion.id) }}
+    /> : null}
+
+    <AccessibleDialog
+      open={Boolean(previewQuestion)}
+      title={previewQuestion ? `Câu ${(questions.findIndex((item) => item.id === previewQuestion.id) + 1) || '—'} / ${questions.length}` : 'Duyệt câu hỏi'}
+      description="Đọc đầy đủ nội dung, đáp án, giải thích và bằng chứng trước khi duyệt."
+      onClose={() => setPreviewQuestion(null)}
+      size="xlarge"
+      className="question-review-dialog"
+      bodyClassName="question-review-dialog-body"
+      footer={previewQuestion ? <div className="question-review-dialog-footer">
+        <div className="question-review-navigation">
+          <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) <= 0} onClick={() => moveQuestionPreview(-1)}>← Câu trước</button>
+          <button className="btn small secondary" type="button" disabled={questions.findIndex((item) => item.id === previewQuestion.id) >= questions.length - 1} onClick={() => moveQuestionPreview(1)}>Câu sau →</button>
+        </div>
+        {!chapterPublished && canReviewQuestions && previewQuestion.status !== 'published' ? <div className="question-review-primary-actions">
+          <button className="btn secondary" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); startEditQuestion(item) }}>Sửa</button>
+          {!['rejected', 'published'].includes(previewQuestion.status) ? <button className="btn danger secondary-danger" type="button" onClick={() => { const item = previewQuestion; setPreviewQuestion(null); openRejectQuestion(item) }}>Từ chối</button> : null}
+          {['pending_review', 'needs_review', 'rejected'].includes(previewQuestion.status) ? <button className="btn success" data-dialog-autofocus type="button" onClick={approvePreviewQuestion}>{previewQuestion.status === 'rejected' ? 'Duyệt lại' : 'Duyệt câu'}</button> : null}
+        </div> : null}
+        <small className="question-review-shortcuts">Phím tắt: J/K chuyển câu · A duyệt · R từ chối · E sửa · Esc đóng</small>
+      </div> : null}
+    >
+      {previewQuestion ? <>
+        <div className="question-review-drawer__meta question-review-dialog-meta">
+          <span className={statusClass(previewQuestion.status)}>{statusLabel(previewQuestion.status)}</span>
+          <span className="soft-tag">{previewQuestion.difficulty === 'easy' ? 'Dễ' : previewQuestion.difficulty === 'hard' ? 'Khó' : previewQuestion.difficulty === 'medium' ? 'Trung bình' : '—'}</span>
+          <span className="soft-tag">Quality {Math.round(Number(previewQuestion.quality_score || 0) * 100)}%</span>
+        </div>
+        <div className="question-review-drawer__body question-review-dialog-content">
+          <section className="question-review-block"><span className="question-review-label">Nội dung câu hỏi</span><div className="question-prompt">{previewQuestion.question_text || 'Câu hỏi chưa có nội dung'}</div></section>
+          <section className="question-review-block"><span className="question-review-label">Cách trả lời · {previewQuestion.question_type === 'multi_select' ? 'Nhiều đáp án' : previewQuestion.question_type === 'dropdown_fill' ? 'Chọn và điền ô trống' : previewQuestion.question_type === 'text_input' ? 'Trả lời ngắn' : previewQuestion.question_type === 'numerical_input' ? 'Trả lời số' : 'Một đáp án'}</span><QuestionResponsePreview questionType={previewQuestion.question_type} content={previewQuestion.question_content_json} legacyOptions={[previewQuestion.option_a || '', previewQuestion.option_b || '', previewQuestion.option_c || '', previewQuestion.option_d || '']} legacyCorrectAnswer={previewQuestion.correct_answer} media={previewQuestion.media || []} mediaUrl={(media) => selectedBankVersion ? bankQuestionMediaContentUrl(selectedBankVersion.id, previewQuestion.id, media.id) : ''} /></section>
+          {previewQuestion.explanation ? <section className="question-review-block"><span className="question-review-label">Giải thích</span><p>{previewQuestion.explanation}</p></section> : null}
+          {previewQuestion.source_evidence ? <section className="question-review-block"><span className="question-review-label">Bằng chứng nguồn</span><p>{previewQuestion.source_evidence}</p></section> : null}
+          <section className="question-review-metadata">
+            <div><span>Concept</span><b>{previewQuestion.concept_title || 'Chưa gắn'}</b></div>
+            <div><span>Family</span><b>{previewQuestion.question_family_id || '—'}</b></div>
+            <div><span>Nguồn</span><b>{previewQuestion.source_type || (previewQuestion.is_carry_over ? 'Clone kỳ trước' : 'AI/Bank')}</b></div>
+          </section>
+          {previewQuestion.status === 'draft_error' ? <div className="draft-error-reason"><b>Lý do lỗi:</b> {bankQuestionErrorMessage(previewQuestion) || 'Không rõ'}</div> : null}
+        </div>
+      </> : null}
+    </AccessibleDialog>
 
     <Modal open={Boolean(rejectingQuestion)} title={rejectingQuestion?.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ câu hỏi'} onClose={() => { setRejectingQuestion(null); setRejectReason('') }}>
       <div className="mini-form">
         <p className="helper">Nhập lý do hủy/bỏ câu. Lý do này được lưu lại để biết ai làm gì và dùng làm dữ liệu fine-tune AI sau này.</p>
         {rejectingQuestion ? <div className="reject-question-preview"><b>{rejectingQuestion.question_text || 'Câu lỗi chưa có nội dung'}</b>{rejectingQuestion.status === 'draft_error' ? <small>Lý do lỗi: {bankQuestionErrorMessage(rejectingQuestion) || 'Không rõ'}</small> : null}</div> : null}
         <textarea className="input" rows={4} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Ví dụ: Câu hỏi không đúng tài liệu, đáp án sai, câu lỗi không sửa được..." />
-        <div className="modal-actions"><button className="btn secondary" disabled={busy} onClick={() => { setRejectingQuestion(null); setRejectReason('') }}>Hủy</button><button className="btn danger" disabled={chapterPublished || busy || !rejectReason.trim()} onClick={confirmRejectQuestion}>Xác nhận bỏ câu</button></div>
+        <div className="modal-actions"><button className="btn secondary" disabled={Boolean(actionBusy)} onClick={() => { setRejectingQuestion(null); setRejectReason('') }}>Hủy</button><button className="btn danger" disabled={chapterPublished || isActionBusy('question_reject') || !rejectReason.trim()} onClick={confirmRejectQuestion}>Xác nhận bỏ câu</button></div>
       </div>
     </Modal>
 
-    <Modal open={Boolean(editingQuestion && editForm)} title="Sửa câu hỏi" onClose={() => { setEditingQuestion(null); setEditForm(null) }} wide>
-      {editingQuestion && editForm ? <div className="bank-question-edit-form">
-        <p className="helper">Sửa nội dung câu hỏi giống trang /review. Sau khi sửa, giáo viên chọn trạng thái phù hợp rồi lưu.</p>
-        <div className="grid grid-3">
-          <label>Độ khó<select className="input" value={editForm.difficulty} onChange={(event) => updateEditForm('difficulty', event.target.value)}><option value="easy">Dễ</option><option value="medium">Trung bình</option><option value="hard">Khó</option></select></label>
-          <label>Mức nhận thức<select className="input" value={editForm.cognitive_level} onChange={(event) => updateEditForm('cognitive_level', event.target.value)}><option value="remember">Ghi nhớ</option><option value="understand">Hiểu</option><option value="recognize_example">Nhận diện ví dụ</option><option value="simple_apply">Áp dụng đơn giản</option></select></label>
-          <label>Trạng thái sau khi lưu<select className="input" value={editForm.target_status} onChange={(event) => updateEditForm('target_status', event.target.value)}><option value="pending_review">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Đã bỏ</option></select></label>
-        </div>
-        <label>Mục tiêu học tập<input className="input" value={editForm.learning_objective} onChange={(event) => updateEditForm('learning_objective', event.target.value)} /></label>
-        <label>Câu hỏi<textarea className="input" rows={3} value={editForm.question_text} onChange={(event) => updateEditForm('question_text', event.target.value)} /></label>
-        <div className="grid grid-2">
-          <label>A<input className="input" value={editForm.option_a} onChange={(event) => updateEditForm('option_a', event.target.value)} /></label>
-          <label>B<input className="input" value={editForm.option_b} onChange={(event) => updateEditForm('option_b', event.target.value)} /></label>
-          <label>C<input className="input" value={editForm.option_c} onChange={(event) => updateEditForm('option_c', event.target.value)} /></label>
-          <label>D<input className="input" value={editForm.option_d} onChange={(event) => updateEditForm('option_d', event.target.value)} /></label>
-        </div>
-        <div className="grid grid-3">
-          <label>Đáp án đúng<select className="input" value={editForm.correct_answer} onChange={(event) => updateEditForm('correct_answer', event.target.value)}><option>A</option><option>B</option><option>C</option><option>D</option></select></label>
-          <label>Concept<input className="input" value={editForm.concept_title} onChange={(event) => updateEditForm('concept_title', event.target.value)} /></label>
-          <label>Family<input className="input" value={editForm.question_family_id} onChange={(event) => updateEditForm('question_family_id', event.target.value)} /></label>
-        </div>
-        <label>Giải thích<textarea className="input" rows={2} value={editForm.explanation} onChange={(event) => updateEditForm('explanation', event.target.value)} /></label>
-        <div className="grid grid-2">
-          <label>Nguồn tham chiếu<input className="input" value={editForm.source_ref} onChange={(event) => updateEditForm('source_ref', event.target.value)} /></label>
-          <label>Loại nguồn<input className="input" value={editForm.source_type} onChange={(event) => updateEditForm('source_type', event.target.value)} /></label>
-        </div>
-        <label>Trích đoạn nguồn<textarea className="input" rows={2} value={editForm.source_excerpt} onChange={(event) => updateEditForm('source_excerpt', event.target.value)} /></label>
-        <label>Bằng chứng nguồn<textarea className="input" rows={2} value={editForm.source_evidence} onChange={(event) => updateEditForm('source_evidence', event.target.value)} /></label>
-        <div className="button-row"><button className="btn" disabled={chapterPublished || busy || !editForm.question_text.trim() || !editForm.option_a.trim() || !editForm.option_b.trim() || !editForm.option_c.trim() || !editForm.option_d.trim()} onClick={saveEditedQuestion}>Lưu chỉnh sửa</button><button className="btn secondary" onClick={() => { setEditingQuestion(null); setEditForm(null) }}>Hủy</button></div>
-      </div> : null}
+    <Modal open={Boolean(createForm)} title="Thêm câu hỏi thủ công" onClose={() => { if (!isActionBusy('question_create')) { setCreateForm(null); setCreatePendingMedia([]) } }} wide>
+      {createForm ? <>
+        <p className="helper">Câu tạo thủ công luôn bắt đầu ở trạng thái Chờ duyệt. Ảnh là media của đề bài và có thể kết hợp với mọi kiểu trả lời.</p>
+        <QuestionAuthoringEditor form={createForm} onChange={setCreateForm} pendingMedia={createPendingMedia} onPendingMediaChange={setCreatePendingMedia} showReviewStatus={false} disabled={isActionBusy('question_create')} />
+        <div className="button-row"><button className="btn" disabled={chapterPublished || isActionBusy('question_create') || Boolean(questionFormValidationError(createForm))} onClick={saveCreatedQuestion}>{isActionBusy('question_create') ? <BusyLabel text="Đang lưu" /> : 'Lưu & chờ duyệt'}</button><button className="btn secondary" disabled={isActionBusy('question_create')} onClick={() => { setCreateForm(null); setCreatePendingMedia([]) }}>Hủy</button></div>
+      </> : null}
+    </Modal>
+
+    <Modal open={Boolean(editingQuestion && editForm)} title="Sửa câu hỏi" onClose={() => { if (!isActionBusy('question_edit')) { setEditingQuestion(null); setEditForm(null); setEditPendingMedia([]); setEditDeletedMediaIds(new Set()) } }} wide>
+      {editingQuestion && editForm ? <>
+        <QuestionAuthoringEditor
+          form={editForm}
+          onChange={setEditForm}
+          existingMedia={(editingQuestion.media || []).filter((media) => !editDeletedMediaIds.has(media.id))}
+          pendingMedia={editPendingMedia}
+          onPendingMediaChange={setEditPendingMedia}
+          mediaUrl={(media: BankQuestionMedia) => selectedBankVersion ? bankQuestionMediaContentUrl(selectedBankVersion.id, editingQuestion.id, media.id) : ''}
+          onDeleteMedia={(media: BankQuestionMedia) => setEditDeletedMediaIds((current) => new Set([...Array.from(current), media.id]))}
+          disabled={isActionBusy('question_edit')}
+        />
+        <div className="button-row"><button className="btn" disabled={chapterPublished || isActionBusy('question_edit') || Boolean(questionFormValidationError(editForm))} onClick={saveEditedQuestion}>{isActionBusy('question_edit') ? <BusyLabel text="Đang lưu" /> : 'Lưu chỉnh sửa'}</button><button className="btn secondary" disabled={isActionBusy('question_edit')} onClick={() => { setEditingQuestion(null); setEditForm(null); setEditPendingMedia([]); setEditDeletedMediaIds(new Set()) }}>Hủy</button></div>
+      </> : null}
     </Modal>
 
     <Modal open={Boolean(materialView)} title={materialView?.material.title || 'Tài liệu'} onClose={() => setMaterialView(null)} wide>
@@ -620,21 +1433,35 @@ ${chunk.content}`).join('\n\n')
       </div>
     </Modal>
 
-    <Modal open={Boolean(diffPreview)} title="Kết quả kiểm tra thay đổi tài liệu" onClose={() => setDiffPreview(null)}>
+    <Modal open={Boolean(diffPreview)} title="Kết quả kiểm tra thay đổi tài liệu" onClose={() => { setDiffPreview(null); setMaterialRecheckResult(null) }} wide>
       {diffPreview ? <div className="diff-result-box">
         <div className="summary-grid compact-summary">
           <div><span>Tài liệu giống nhau</span><b>{Math.round(Number(diffPreview.summary.material_similarity ?? diffPreview.material_similarity ?? 0) * 100)}%</b></div>
           <div><span>Câu có thể giữ</span><b>{diffPreview.summary.carry_over_candidate_count}</b></div>
           <div><span>Câu nên bỏ</span><b>{diffPreview.summary.retire_candidate_count}</b></div>
           <div><span>Câu cần xem lại</span><b>{diffPreview.summary.review_candidate_count}</b></div>
+          <div><span>Concept mới</span><b>{diffPreview.summary.new_concept_count}</b></div>
+          <div><span>Concept bị xóa</span><b>{diffPreview.summary.removed_concept_count}</b></div>
         </div>
-        <p className="helper">Giáo viên chỉ cần chọn cách xử lý. Hệ thống sẽ tự cập nhật danh sách câu hỏi.</p>
+        {(() => {
+          const impact = diffImpactGroups(diffPreview)
+          return <div className="diff-impact-panel">
+            {impact.critical.length ? <div className="diff-impact-section danger"><b>Ảnh hưởng nghiêm trọng</b><ul>{impact.critical.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+            {impact.warning.length ? <div className="diff-impact-section warning"><b>Cần xử lý</b><ul>{impact.warning.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+            {impact.info.length ? <div className="diff-impact-section"><b>Thông tin</b><ul>{impact.info.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+          </div>
+        })()}
+        {diffPreview.summary.changed_concepts?.length ? <div className="diff-chip-group"><b>Concept đổi:</b>{diffPreview.summary.changed_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
+        {diffPreview.summary.new_concepts?.length ? <div className="diff-chip-group"><b>Concept mới:</b>{diffPreview.summary.new_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
+        {diffPreview.summary.removed_concepts?.length ? <div className="diff-chip-group danger"><b>Concept bị xóa:</b>{diffPreview.summary.removed_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
+        <div className="alert warning"><b>Gợi ý xử lý:</b> {diffActionHint(diffPreview)}</div>
+        {materialRecheckResult ? <div className="alert success"><b>Đã áp dụng xử lý tự động.</b> Giữ {materialRecheckResult.kept_count + materialRecheckResult.safe_skipped_count} câu, tự loại {materialRecheckResult.retired_count} câu, gỡ {materialRecheckResult.release_removed_count || 0} mapping release.</div> : null}
         <div className="button-row">
-          <button className="btn" disabled={busy} onClick={() => run(keepReusableOnly, 'Đã giữ câu phù hợp và bỏ câu không còn chắc phù hợp')}>Giữ câu còn phù hợp</button>
-          <button className="btn secondary" disabled={busy} onClick={() => run(rejectAllCarryOver, 'Đã bỏ các câu clone từ tài liệu cũ')}>Không giữ câu cũ</button>
+          <button className="btn" disabled={Boolean(actionBusy)} onClick={() => runAction('diff_apply', applyMaterialRecheck, 'Đã áp dụng xử lý tự động sau khi kiểm tra thay đổi tài liệu.', undefined, 'Không áp dụng được xử lý tự động. Vui lòng thử lại.')}>Áp dụng xử lý tự động</button>
+          <button className="btn secondary" disabled={Boolean(actionBusy)} onClick={() => run(keepReusableOnly, 'Đã giữ câu phù hợp và bỏ câu không còn chắc phù hợp')}>Giữ câu còn phù hợp</button>
+          <button className="btn secondary" disabled={Boolean(actionBusy)} onClick={() => run(rejectAllCarryOver, 'Đã bỏ các câu clone từ tài liệu cũ')}>Không giữ câu cũ</button>
         </div>
       </div> : null}
     </Modal>
-  </div>
+  </PageRoot>
 }
-

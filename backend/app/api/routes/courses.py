@@ -4,6 +4,8 @@ from sqlalchemy import func
 from datetime import datetime
 import hashlib
 import uuid
+from app.core.errors import public_http_exception
+from app.core.openedx_ids import normalize_openedx_course_id, openedx_course_id_candidates
 from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.models.course import ContentChunk, CourseSyncState, Topic
@@ -208,16 +210,17 @@ def list_synced_courses(
 
 @router.post('/sync', response_model=SyncCourseResponse)
 async def sync_course(payload: SyncCourseRequest, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('sync_course'))):
-    ensure_course_access(user, payload.course_id)
+    course_id = normalize_openedx_course_id(payload.course_id, required=True)
+    ensure_course_access(user, course_id)
     client = OpenEdxClient()
     try:
-        blocks = await client.get_course_blocks(payload.course_id)
-        seen, changed = CourseSyncService(db).sync_blocks(payload.course_id, blocks, payload.force)
-        log_audit(db, action='course.sync', status='success', message='Đồng bộ học liệu thành công', user=user, course_id=payload.course_id, target_type='course', metadata={'blocks_seen': seen, 'changed_blocks': changed, 'force': payload.force})
-    except Exception as exc:
-        log_audit(db, action='course.sync', status='failed', error_type='external', message=str(exc), user=user, course_id=payload.course_id, target_type='course', metadata={'force': payload.force})
+        blocks = await client.get_course_blocks(course_id)
+        seen, changed = CourseSyncService(db).sync_blocks(course_id, blocks, payload.force)
+        log_audit(db, action='course.sync', status='success', message='Đồng bộ học liệu thành công', user=user, course_id=course_id, target_type='course', metadata={'blocks_seen': seen, 'changed_blocks': changed, 'force': payload.force, 'submitted_course_id': payload.course_id})
+    except Exception:
+        log_audit(db, action='course.sync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=course_id, target_type='course', metadata={'force': payload.force, 'submitted_course_id': payload.course_id})
         raise
-    return SyncCourseResponse(course_id=payload.course_id, blocks_seen=seen, changed_blocks=changed, status='completed')
+    return SyncCourseResponse(course_id=course_id, blocks_seen=seen, changed_blocks=changed, status='completed')
 
 
 @router.post('/{course_id}/clean-resync', response_model=CourseCleanResyncResponse)
@@ -233,26 +236,28 @@ async def clean_resync_course(
     states, content chunks and deprecated topics. It does not delete the question
     bank, generated jobs, approved questions, or Open edX Studio content.
     """
-    ensure_course_access(user, course_id)
+    canonical_course_id = normalize_openedx_course_id(course_id, required=True)
+    ensure_course_access(user, canonical_course_id)
+    course_id_candidates = openedx_course_id_candidates(canonical_course_id)
     if confirm != _CLEAN_RESYNC_CONFIRM_TEXT:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Thiếu xác nhận. Vui lòng nhập RESET_COURSE_SYNC để xóa dữ liệu đồng bộ cũ và đồng bộ lại.')
 
     try:
-        deleted_chunks = db.query(ContentChunk).filter(ContentChunk.course_id == course_id).delete(synchronize_session=False)
-        deleted_nodes = db.query(CourseSyncState).filter(CourseSyncState.course_id == course_id).delete(synchronize_session=False)
-        deleted_topics = db.query(Topic).filter(Topic.course_id == course_id).delete(synchronize_session=False)
+        deleted_chunks = db.query(ContentChunk).filter(ContentChunk.course_id.in_(course_id_candidates)).delete(synchronize_session=False)
+        deleted_nodes = db.query(CourseSyncState).filter(CourseSyncState.course_id.in_(course_id_candidates)).delete(synchronize_session=False)
+        deleted_topics = db.query(Topic).filter(Topic.course_id.in_(course_id_candidates)).delete(synchronize_session=False)
         db.commit()
 
         client = OpenEdxClient()
-        blocks = await client.get_course_blocks(course_id)
-        seen, changed = CourseSyncService(db).sync_blocks(course_id, blocks, True)
+        blocks = await client.get_course_blocks(canonical_course_id)
+        seen, changed = CourseSyncService(db).sync_blocks(canonical_course_id, blocks, True)
         log_audit(
             db,
             action='course.clean_resync',
             status='success',
             message='Xóa dữ liệu học liệu cũ trong AI Server và đồng bộ lại từ CMS thành công',
             user=user,
-            course_id=course_id,
+            course_id=canonical_course_id,
             target_type='course',
             metadata={
                 'deleted_chunks': deleted_chunks,
@@ -265,11 +270,11 @@ async def clean_resync_course(
         )
     except Exception as exc:
         db.rollback()
-        log_audit(db, action='course.clean_resync', status='failed', error_type='external', message=str(exc), user=user, course_id=course_id, target_type='course', metadata={'confirm': confirm})
+        log_audit(db, action='course.clean_resync', status='failed', error_type='external', message='Không thể hoàn tất thao tác khóa học.', user=user, course_id=canonical_course_id, target_type='course', metadata={'confirm': confirm})
         raise
 
     return CourseCleanResyncResponse(
-        course_id=course_id,
+        course_id=canonical_course_id,
         deleted_chunks=deleted_chunks,
         deleted_nodes=deleted_nodes,
         deleted_topics=deleted_topics,
@@ -388,9 +393,14 @@ async def upload_file_to_node(
             'strict': True,
         }, parent_block_id=upload_node_id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise public_http_exception(status_code=status.HTTP_400_BAD_REQUEST, code='COURSE_OPERATION_FAILED', message='Không thể hoàn tất thao tác khóa học.', logger_name=__name__) from exc
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'Không đọc được file {filename}: {exc}')
+        raise public_http_exception(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code='COURSE_FILE_EXTRACT_FAILED',
+            message=f'Không đọc được file {filename}.',
+            logger_name=__name__,
+        ) from exc
 
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'File {filename} không tách được text. Nếu là ảnh scan, cần OCR/transcript riêng trước khi đưa vào AI.')
@@ -647,13 +657,20 @@ def list_topics(course_id: str, refresh: bool = Query(default=False), db: Sessio
     labels for real Vietnamese/Open edX courses. Use /courses/{course_id}/nodes
     and /courses/{course_id}/tree instead.
     """
-    topics = db.query(Topic).filter(Topic.course_id == course_id).order_by(Topic.importance_score.desc()).all()
-    counts = {}
-    token_counts = {}
-    for chunk in db.query(ContentChunk).filter(ContentChunk.course_id == course_id).all():
-        if chunk.topic_id:
-            counts[chunk.topic_id] = counts.get(chunk.topic_id, 0) + 1
-            token_counts[chunk.topic_id] = token_counts.get(chunk.topic_id, 0) + chunk.token_count
+    topics = db.query(Topic).filter(Topic.course_id == course_id).order_by(Topic.importance_score.desc()).limit(300).all()
+    topic_stats = {
+        row.topic_id: row
+        for row in db.query(
+            ContentChunk.topic_id.label('topic_id'),
+            func.count(ContentChunk.id).label('chunk_count'),
+            func.coalesce(func.sum(ContentChunk.token_count), 0).label('token_count'),
+        )
+        .filter(ContentChunk.course_id == course_id, ContentChunk.topic_id.isnot(None))
+        .group_by(ContentChunk.topic_id)
+        .all()
+    }
+    counts = {topic_id: int(getattr(row, 'chunk_count', 0) or 0) for topic_id, row in topic_stats.items()}
+    token_counts = {topic_id: int(getattr(row, 'token_count', 0) or 0) for topic_id, row in topic_stats.items()}
     return [TopicResponse(
         id=t.id,
         course_id=t.course_id,

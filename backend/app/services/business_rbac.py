@@ -2,26 +2,33 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.rbac import RBACPermission, RBACRole, RBACRolePermission, UserRoleAssignment
 from app.models.question_bank import Department, Subject, SubjectChapter, SubjectOffering, QuestionBankRelease, QuestionBankVersion
+from app.core.config import settings
 
 SYSTEM_ADMIN = 'SYSTEM_ADMIN'
 DEPARTMENT_HEAD = 'DEPARTMENT_HEAD'
 SUBJECT_OWNER = 'SUBJECT_OWNER'
 QUESTION_REVIEWER = 'QUESTION_REVIEWER'
+CAMPUS_MANAGER = 'CAMPUS_MANAGER'  # legacy alias kept for existing assignments
+CAMPUS_OWNER = 'CAMPUS_OWNER'
+TEACHER_ASSIGNED = 'TEACHER_ASSIGNED'
 
 ROLE_RANK = {
     SYSTEM_ADMIN: 100,
     DEPARTMENT_HEAD: 70,
     SUBJECT_OWNER: 50,
     QUESTION_REVIEWER: 20,
+    CAMPUS_MANAGER: 60,
+    CAMPUS_OWNER: 60,
+    TEACHER_ASSIGNED: 10,
 }
 
 ROLE_LABELS = {
@@ -29,32 +36,44 @@ ROLE_LABELS = {
     DEPARTMENT_HEAD: 'Trưởng bộ môn',
     SUBJECT_OWNER: 'Chủ môn',
     QUESTION_REVIEWER: 'Người duyệt câu hỏi',
+    CAMPUS_MANAGER: 'Chủ cơ sở (legacy)',
+    CAMPUS_OWNER: 'Chủ cơ sở',
+    TEACHER_ASSIGNED: 'Giáo viên được phân công AP',
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     SYSTEM_ADMIN: {
-        'user.manage_all', 'department.manage_all', 'department.assign_head', 'subject.create', 'subject.update',
+        'user.manage_all', 'department.manage_all', 'department.update', 'department.assign_head', 'subject.create', 'subject.update',
         'subject.assign_owner', 'reviewer.assign', 'course.sync', 'document.manage', 'question.generate',
         'question.edit', 'question.approve', 'question.reject', 'bank.release.create', 'bank.release.publish',
         'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view', 'bank.view',
+        'academic.view', 'academic.manage_campus', 'view_training_reports',
+        'jobs.view', 'ops.readiness.view', 'rbac.view',
     },
+    # QUIZ_BANK domain: question bank / quiz roles only. They do not grant
+    # Student Ops visibility unless the user is separately assigned there.
     DEPARTMENT_HEAD: {
-        'bank.view', 'subject.create', 'subject.update', 'subject.assign_owner', 'reviewer.assign', 'course.sync',
+        'bank.view', 'department.update', 'subject.create', 'subject.update', 'subject.assign_owner', 'reviewer.assign', 'course.sync',
         'document.manage', 'question.generate', 'question.edit', 'question.approve', 'question.reject',
         'bank.release.create', 'bank.release.publish', 'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view',
+        'jobs.view', 'rbac.view',
     },
     SUBJECT_OWNER: {
         'bank.view', 'subject.update', 'reviewer.assign', 'course.sync', 'document.manage', 'question.generate',
         'question.edit', 'question.approve', 'question.reject', 'bank.release.create', 'bank.release.publish',
-        'quiz.preview', 'quiz.create_openedx', 'audit.view',
+        'quiz.preview', 'quiz.create_openedx', 'audit.view', 'jobs.view', 'rbac.view',
     },
-    QUESTION_REVIEWER: {'bank.view', 'question.edit', 'question.approve', 'question.reject', 'audit.view'},
+    QUESTION_REVIEWER: {'bank.view', 'question.edit', 'question.approve', 'question.reject', 'audit.view', 'jobs.view'},
+    # STUDENT_OPS domain: campus/class/student operations only. These roles do
+    # not grant Question Bank/Quiz permissions.
+    CAMPUS_OWNER: {'academic.view', 'academic.manage_campus', 'view_training_reports', 'jobs.view'},
+    CAMPUS_MANAGER: {'academic.view', 'academic.manage_campus', 'view_training_reports', 'jobs.view'},
+    TEACHER_ASSIGNED: {'academic.view', 'view_training_reports'},
 }
 
 LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
-    'view_dashboard': {'bank.view', 'audit.view'},
+    'view_dashboard': {'bank.view', 'audit.view', 'academic.view', 'view_training_reports'},
     'view_questions': {'bank.view', 'question.edit', 'question.approve', 'question.reject'},
-    'view_jobs': {'bank.view', 'audit.view'},
     'sync_course': {'course.sync'},
     'estimate_cost': {'question.generate', 'document.manage', 'bank.view'},
     'generate_questions': {'question.generate'},
@@ -66,14 +85,28 @@ LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
     'publish_to_openedx': {'bank.release.publish', 'quiz.create_openedx'},
     'manage_budget': {'quota.manage'},
     'manage_settings': {'user.manage_all', 'department.manage_all', 'department.assign_head'},
+    'manage_department': {'department.manage_all', 'department.update'},
     'view_user_analytics': {'user.manage_all'},
+    'view_training_reports': {'academic.view', 'view_training_reports'},
+    'manage_training_deadlines': {'academic.manage_campus'},
+    'view_jobs': {'jobs.view'},
+    'view_ops_readiness': {'ops.readiness.view'},
+    'view_rbac': {'rbac.view', 'user.manage_all', 'subject.assign_owner', 'reviewer.assign'},
 }
 
+
 ROLE_TO_LEGACY = {
+    # v25.9.16.7.2.64.13: do not elevate business roles into legacy teacher/admin.
+    # Frontend and backend must use business_permissions for access. Legacy role
+    # only remains for SYSTEM_ADMIN so old admin-only UI keeps working for real
+    # Open edX superusers / explicit system admins.
     SYSTEM_ADMIN: 'admin',
-    DEPARTMENT_HEAD: 'teacher',
-    SUBJECT_OWNER: 'teacher',
-    QUESTION_REVIEWER: 'reviewer',
+    DEPARTMENT_HEAD: 'viewer',
+    SUBJECT_OWNER: 'viewer',
+    QUESTION_REVIEWER: 'viewer',
+    CAMPUS_OWNER: 'viewer',
+    CAMPUS_MANAGER: 'viewer',
+    TEACHER_ASSIGNED: 'viewer',
 }
 LEGACY_RANK = {'viewer': 0, 'reviewer': 20, 'teacher': 50, 'admin': 100}
 
@@ -86,6 +119,7 @@ class EntityScope:
     subject_id: str | None = None
     subject_offering_id: str | None = None
     chapter_id: str | None = None
+    class_id: str | None = None
     course_id: str | None = None
 
 
@@ -119,6 +153,7 @@ class BusinessRBACService:
         permission_names = {
             'user.manage_all': 'Quản lý toàn bộ người dùng',
             'department.manage_all': 'Quản lý toàn bộ bộ môn',
+            'department.update': 'Cập nhật bộ môn trong phạm vi được giao',
             'department.assign_head': 'Gán Trưởng bộ môn',
             'subject.create': 'Tạo môn',
             'subject.update': 'Cập nhật môn',
@@ -137,6 +172,12 @@ class BusinessRBACService:
             'quota.manage': 'Quản lý quota',
             'audit.view': 'Xem audit',
             'bank.view': 'Xem ngân hàng đề',
+            'academic.view': 'Xem báo cáo giáo viên/lớp trong cơ sở',
+            'academic.manage_campus': 'Quản lý vận hành đào tạo theo cơ sở',
+            'view_training_reports': 'Xem báo cáo quản lý giáo viên',
+            'jobs.view': 'Xem tác vụ trong phạm vi được phân quyền',
+            'ops.readiness.view': 'Xem readiness toàn hệ thống',
+            'rbac.view': 'Xem và gán quyền trong phạm vi được phép',
         }
         for code, name in permission_names.items():
             perm = self.db.get(RBACPermission, code)
@@ -179,11 +220,30 @@ class BusinessRBACService:
         )
 
     def is_legacy_system_admin(self, user: Any) -> bool:
-        return str(getattr(user, 'role', '') or '').lower() == 'admin'
+        if str(getattr(user, 'role', '') or '').lower() != 'admin':
+            return False
+        raw_claims = getattr(user, 'raw_claims', None) or {}
+        # Production SSO rule: only Open edX superuser/super_admin may become AI
+        # SYSTEM_ADMIN through the CMS session bridge. `is_staff` alone is never
+        # enough and AI_ADMIN group bootstrap is intentionally not trusted here.
+        if raw_claims.get('is_superuser') is True or raw_claims.get('is_super_admin') is True:
+            return True
+        # Explicit AI system-admin tokens issued by trusted server-side flows can
+        # set this claim, but generic role=admin without proof is rejected.
+        if raw_claims.get('ai_system_admin') is True:
+            return True
+        # Keep local demo/dev usable without accidentally weakening production.
+        if str(settings.app_env or '').lower() not in {'prod', 'production'} and not raw_claims:
+            return True
+        return False
 
     def is_system_admin(self, user: Any) -> bool:
         if self.is_legacy_system_admin(user):
             return True
+        raw_claims = getattr(user, 'raw_claims', None) or {}
+        # Open edX bridge tokens are intentionally governed by edX superuser only.
+        if raw_claims.get('auth_source') == 'openedx_cms_session_bridge' and not (raw_claims.get('is_superuser') or raw_claims.get('is_super_admin')):
+            return False
         return any(a.role_code == SYSTEM_ADMIN for a in self.active_assignments_for_actor(user))
 
     def effective_legacy_role_for_user(self, user_id: str, base_role: str = 'viewer', email: str | None = None, username: str | None = None) -> str:
@@ -197,16 +257,52 @@ class BusinessRBACService:
                 best_rank = rank
         return best
 
+    def _has_ap_teacher_assignment(self, user: Any) -> bool:
+        """Return whether the authenticated identity is an active AP-assigned teacher.
+
+        AP is the source of truth for teacher-to-class assignment. A teacher must not
+        need a duplicated TEACHER_ASSIGNED row merely to make the training pages visible.
+        """
+        raw_claims = getattr(user, 'raw_claims', None) or {}
+        values = {
+            getattr(user, 'user_id', None),
+            getattr(user, 'username', None),
+            getattr(user, 'email', None),
+            raw_claims.get('username'),
+            raw_claims.get('preferred_username'),
+            raw_claims.get('email'),
+        }
+        names = {str(value).strip().lower() for value in values if str(value or '').strip()}
+        if not names:
+            return False
+        try:
+            from app.models.academic import AcademicTeacher, AcademicTeacherAssignment
+            return self.db.query(AcademicTeacherAssignment.id).join(
+                AcademicTeacher, AcademicTeacher.id == AcademicTeacherAssignment.teacher_id,
+            ).filter(
+                AcademicTeacher.active.is_(True),
+                or_(
+                    func.lower(AcademicTeacher.username).in_(sorted(names)),
+                    func.lower(AcademicTeacher.email).in_(sorted(names)),
+                ),
+            ).first() is not None
+        except Exception:
+            return False
+
     def effective_permissions_for_user(self, user: Any) -> set[str]:
         permissions: set[str] = set()
-        if self.is_legacy_system_admin(user):
+        if self.is_system_admin(user):
             permissions.update(ROLE_PERMISSIONS[SYSTEM_ADMIN])
         for assignment in self.active_assignments_for_actor(user):
+            if assignment.role_code == SYSTEM_ADMIN and not self.is_system_admin(user):
+                continue
             permissions.update(ROLE_PERMISSIONS.get(assignment.role_code, set()))
+        if self._has_ap_teacher_assignment(user):
+            permissions.update(ROLE_PERMISSIONS[TEACHER_ASSIGNED])
         return permissions
 
     def has_any_business_permission(self, user: Any, permission: str) -> bool:
-        if self.is_legacy_system_admin(user):
+        if self.is_system_admin(user):
             return True
         wanted = LEGACY_PERMISSION_BRIDGE.get(permission, {permission})
         user_permissions = self.effective_permissions_for_user(user)
@@ -258,6 +354,10 @@ class BusinessRBACService:
             if scope:
                 return scope
             return EntityScope('CHAPTER', scope_id, chapter_id=scope_id)
+        if normalized == 'CAMPUS':
+            return EntityScope('CAMPUS', scope_id)
+        if normalized == 'CLASS':
+            return EntityScope('CLASS', scope_id, class_id=scope_id)
         if normalized == 'COURSE':
             return EntityScope('COURSE', scope_id, course_id=scope_id)
         if normalized == 'BANK_VERSION':
@@ -288,13 +388,19 @@ class BusinessRBACService:
             return bool(target.chapter_id and target.chapter_id == assignment_scope.chapter_id)
         if assignment_scope.scope_type == 'COURSE':
             return bool(target.course_id and target.course_id == assignment_scope.course_id)
+        if assignment_scope.scope_type == 'CAMPUS':
+            return target.scope_type == 'CAMPUS' and (assignment_scope.scope_id == '*' or assignment_scope.scope_id.lower() == target.scope_id.lower())
+        if assignment_scope.scope_type == 'CLASS':
+            return bool(target.class_id and target.class_id == assignment_scope.scope_id)
         return assignment_scope.scope_type == target.scope_type and assignment_scope.scope_id == target.scope_id
 
     def has_permission(self, user: Any, permission: str, target: EntityScope | None = None) -> bool:
-        if self.is_legacy_system_admin(user):
+        if self.is_system_admin(user):
             return True
         target = target or EntityScope('SYSTEM', '*')
         for assignment in self.active_assignments_for_actor(user):
+            if assignment.role_code == SYSTEM_ADMIN and not self.is_system_admin(user):
+                continue
             if permission not in ROLE_PERMISSIONS.get(assignment.role_code, set()):
                 continue
             if self._assignment_covers(assignment, target):
@@ -321,6 +427,8 @@ class BusinessRBACService:
             return self.has_permission(actor, 'subject.assign_owner', target)
         if role_code == QUESTION_REVIEWER:
             return self.has_permission(actor, 'reviewer.assign', target)
+        if role_code in {CAMPUS_MANAGER, CAMPUS_OWNER, TEACHER_ASSIGNED}:
+            return self.is_system_admin(actor)
         return False
 
     def _validate_assignment_scope(self, role_code: str, scope_type: str, scope_id: str) -> None:
@@ -333,7 +441,25 @@ class BusinessRBACService:
             raise HTTPException(status_code=400, detail='SUBJECT_OWNER chỉ được gán ở scope SUBJECT hoặc SUBJECT_VERSION')
         if role_code == QUESTION_REVIEWER and scope_type not in {'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'}:
             raise HTTPException(status_code=400, detail='QUESTION_REVIEWER chỉ được gán ở scope SUBJECT/SUBJECT_VERSION/CHAPTER')
+        if role_code in {CAMPUS_MANAGER, CAMPUS_OWNER} and scope_type not in {'CAMPUS', 'SYSTEM'}:
+            raise HTTPException(status_code=400, detail='CAMPUS_OWNER/CAMPUS_MANAGER chỉ được gán ở scope CAMPUS hoặc SYSTEM')
+        if role_code == TEACHER_ASSIGNED and scope_type not in {'CLASS', 'CAMPUS', 'SYSTEM'}:
+            raise HTTPException(status_code=400, detail='TEACHER_ASSIGNED chỉ được gán ở scope CLASS/CAMPUS/SYSTEM; AP assignment vẫn là nguồn lớp chính')
         if scope_type == 'SYSTEM':
+            return
+        if scope_type == 'CAMPUS':
+            if scope_id == '*':
+                return
+            from app.models.academic import AcademicCampus
+            exists = self.db.query(AcademicCampus.id).filter(AcademicCampus.campus_code.ilike(scope_id)).first()
+            if not exists:
+                raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở để gán quyền')
+            return
+        if scope_type == 'CLASS':
+            from app.models.academic import AcademicClass
+            exists = self.db.get(AcademicClass, scope_id)
+            if not exists:
+                raise HTTPException(status_code=404, detail='Không tìm thấy lớp để gán quyền')
             return
         if scope_type == 'DEPARTMENT' and not self.db.get(Department, scope_id):
             raise HTTPException(status_code=404, detail='Không tìm thấy bộ môn để gán quyền')
@@ -346,6 +472,8 @@ class BusinessRBACService:
 
     def create_assignment(self, *, actor: Any, user_id: str, email: str | None, role_code: str, scope_type: str, scope_id: str = '*', grant_reason: str = '', sync_openedx: bool = False) -> UserRoleAssignment:
         role_code = role_code.strip().upper()
+        if role_code == CAMPUS_MANAGER:
+            raise HTTPException(status_code=400, detail='CAMPUS_MANAGER là role legacy; dùng CAMPUS_OWNER cho gán mới')
         scope_type = scope_type.strip().upper()
         scope_id = (scope_id or '*').strip() or '*'
         self._validate_assignment_scope(role_code, scope_type, scope_id)
@@ -383,13 +511,84 @@ class BusinessRBACService:
         self.db.refresh(item)
         return item
 
+    def create_assignments_batch(
+        self,
+        *,
+        actor: Any,
+        user_id: str,
+        email: str | None,
+        role_code: str,
+        scope_type: str,
+        scope_ids: list[str],
+        grant_reason: str = '',
+        sync_openedx: bool = False,
+    ) -> tuple[list[UserRoleAssignment], int, int]:
+        role_code = role_code.strip().upper()
+        if role_code == CAMPUS_MANAGER:
+            raise HTTPException(status_code=400, detail='CAMPUS_MANAGER là role legacy; dùng CAMPUS_OWNER cho gán mới')
+        scope_type = scope_type.strip().upper()
+        normalized_ids = list(dict.fromkeys(((value or '*').strip() or '*') for value in scope_ids))
+        if not normalized_ids:
+            raise HTTPException(status_code=400, detail='Cần chọn ít nhất một phạm vi')
+        if len(normalized_ids) > 200:
+            raise HTTPException(status_code=400, detail='Mỗi lần chỉ được gán tối đa 200 phạm vi')
+
+        # Validate the whole request before adding anything so the operation is atomic.
+        for scope_id in normalized_ids:
+            self._validate_assignment_scope(role_code, scope_type, scope_id)
+            if not self.can_grant(actor, role_code, scope_type, scope_id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f'Bạn không được gán role này trong scope {scope_id}')
+
+        existing_rows = self.active_assignments_query().filter(
+            UserRoleAssignment.user_id == user_id,
+            UserRoleAssignment.role_code == role_code,
+            UserRoleAssignment.scope_type == scope_type,
+            UserRoleAssignment.scope_id.in_(normalized_ids),
+        ).all()
+        existing_by_scope = {item.scope_id: item for item in existing_rows}
+        items: list[UserRoleAssignment] = []
+        created_count = 0
+        reused_count = 0
+        for scope_id in normalized_ids:
+            item = existing_by_scope.get(scope_id)
+            if item is not None:
+                if email and not item.email:
+                    item.email = email
+                if grant_reason:
+                    item.grant_reason = grant_reason
+                item.metadata_json = {**(item.metadata_json or {}), 'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True}
+                reused_count += 1
+            else:
+                item = UserRoleAssignment(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    email=email,
+                    role_code=role_code,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                    granted_by=getattr(actor, 'user_id', None),
+                    grant_reason=grant_reason or '',
+                    metadata_json={'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True},
+                )
+                created_count += 1
+            self.db.add(item)
+            items.append(item)
+        try:
+            self.db.commit()
+            for item in items:
+                self.db.refresh(item)
+        except Exception:
+            self.db.rollback()
+            raise
+        return items, created_count, reused_count
+
     def revoke_assignment(self, assignment_id: str, actor: Any, revoke_reason: str = '') -> UserRoleAssignment:
         item = self.db.get(UserRoleAssignment, assignment_id)
         if not item or item.revoked_at is not None:
             raise HTTPException(status_code=404, detail='Không tìm thấy assignment đang hiệu lực')
         if not self.can_grant(actor, item.role_code, item.scope_type, item.scope_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được thu hồi assignment này')
-        item.revoked_at = datetime.utcnow()
+        item.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
         item.revoked_by = getattr(actor, 'user_id', None)
         item.revoke_reason = revoke_reason or ''
         self.db.add(item)
@@ -445,6 +644,15 @@ class BusinessRBACService:
         if scope_type == 'CHAPTER':
             item = self.db.get(SubjectChapter, scope_id)
             return item.title if item else scope_id
+        if scope_type == 'CAMPUS':
+            if scope_id == '*':
+                return 'Tất cả cơ sở'
+            try:
+                from app.models.academic import AcademicCampus
+                item = self.db.query(AcademicCampus).filter(AcademicCampus.campus_code.ilike(scope_id)).first()
+                return f'{str(item.campus_code).upper()} · {item.campus_name}' if item else str(scope_id).upper()
+            except Exception:
+                return str(scope_id).upper()
         return scope_id
 
     def serialize_assignment(self, item: UserRoleAssignment) -> dict[str, Any]:
@@ -454,6 +662,7 @@ class BusinessRBACService:
             'email': item.email,
             'role_code': item.role_code,
             'role_name': ROLE_LABELS.get(item.role_code, item.role_code),
+            'permission_codes': sorted(ROLE_PERMISSIONS.get(item.role_code, set())),
             'scope_type': item.scope_type,
             'scope_id': item.scope_id,
             'scope_label': self.scope_label(item.scope_type, item.scope_id),
@@ -490,6 +699,8 @@ class BusinessRBACService:
             return bool(child.chapter_id and child.chapter_id == parent.chapter_id)
         if parent.scope_type == 'COURSE':
             return bool(child.course_id and child.course_id == parent.course_id)
+        if parent.scope_type == 'CAMPUS':
+            return child.scope_type == 'CAMPUS' and (parent.scope_id == '*' or parent.scope_id.lower() == child.scope_id.lower())
         return False
 
     def is_visible_scope(self, user: Any, scope_type: str, scope_id: str | None = '*') -> bool:
@@ -515,6 +726,154 @@ class BusinessRBACService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f'Bạn không được xem scope {target.scope_type}:{target.scope_id}',
             )
+
+
+    def accessible_campus_codes(self, user: Any) -> set[str] | None:
+        """Academic campus visibility for teacher-management.
+
+        None means all campuses. Empty set means no campus-level grant; the
+        academic service may still expose AP-assigned teacher classes.
+        """
+        if self.is_system_admin(user):
+            return None
+        codes: set[str] = set()
+        for assignment in self.active_assignments_for_actor(user):
+            if assignment.role_code == SYSTEM_ADMIN:
+                return None
+            if assignment.role_code in {CAMPUS_MANAGER, CAMPUS_OWNER} and assignment.scope_type.upper() in {'SYSTEM', 'CAMPUS'}:
+                scope_id = str(assignment.scope_id or '*').strip()
+                if assignment.scope_type.upper() == 'SYSTEM' or scope_id == '*':
+                    return None
+                codes.add(scope_id.lower())
+        return codes
+
+    def can_manage_assignment_scores_for_campus(self, user: Any, campus_code: str | None) -> bool:
+        """Deprecated in v25.9.16.7.2.64.13.
+
+        Assignment/defense score entry is owned by an external system. AI Server
+        may display read-only assignment status from snapshots/imports, but must
+        not grant UI/API permission to enter or edit assignment scores.
+        """
+        return False
+
+    @staticmethod
+    def normalize_campus_code(value: Any) -> str:
+        """Normalize campus codes for security comparisons.
+
+        Campus scope checks must not depend on display casing from AP/FEID/UI.
+        Empty values are never treated as wildcard; wildcard is only literal '*'.
+        """
+        return str(value or '').strip().lower()
+
+    def campus_scope_for_user(self, user: Any) -> dict[str, Any]:
+        """Return a compact campus-scope object for audit/health/UI.
+
+        Shape:
+        - unrestricted=True means all campuses.
+        - campus_codes is a normalized set for CAMPUS_MANAGER scoped grants.
+        - enforced_by_backend is always true to make UI copy explicit.
+        """
+        codes = self.accessible_campus_codes(user)
+        if codes is None:
+            return {
+                'unrestricted': True,
+                'campus_codes': [],
+                'label': 'Toàn bộ cơ sở',
+                'enforced_by_backend': True,
+            }
+        clean = sorted({self.normalize_campus_code(code) for code in codes if self.normalize_campus_code(code)})
+        return {
+            'unrestricted': False,
+            'campus_codes': clean,
+            'label': ', '.join(code.upper() for code in clean) if clean else 'Không có scope cơ sở trực tiếp',
+            'enforced_by_backend': True,
+        }
+
+    def can_access_campus(self, user: Any, campus_code: str | None, *, allow_empty_for_self: bool = False) -> bool:
+        if self.is_system_admin(user):
+            return True
+        wanted = self.normalize_campus_code(campus_code)
+        if not wanted:
+            return bool(allow_empty_for_self)
+        codes = self.accessible_campus_codes(user)
+        if codes is None:
+            return True
+        return wanted in {self.normalize_campus_code(code) for code in codes if self.normalize_campus_code(code)}
+
+    def require_campus_access(self, user: Any, campus_code: str | None, *, action: str = 'xem dữ liệu cơ sở') -> None:
+        if self.can_access_campus(user, campus_code):
+            return
+        wanted = self.normalize_campus_code(campus_code) or '(trống)'
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f'Bạn không được {action} trong cơ sở {wanted.upper()}',
+        )
+
+    def ensure_requested_campus_filter_allowed(self, user: Any, campus: str | None, *, require_filter_when_scoped: bool = False, action: str = 'xem dữ liệu cơ sở') -> None:
+        """Validate a request-level campus filter before running/exporting broad jobs.
+
+        For limited CAMPUS_MANAGER scopes, all-campus jobs can leak data in async
+        workers because they may materialize/export rows outside the actor scope.
+        Use require_filter_when_scoped=True for report/export/cache jobs.
+        """
+        if self.is_system_admin(user):
+            return
+        campus_value = self.normalize_campus_code(campus)
+        codes = self.accessible_campus_codes(user)
+        if codes is None:
+            return
+        allowed = {self.normalize_campus_code(code) for code in codes if self.normalize_campus_code(code)}
+        if campus_value:
+            if campus_value not in allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f'Bạn không được {action} trong cơ sở {campus_value.upper()}',
+                )
+            return
+        if require_filter_when_scoped and allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='Scope cơ sở giới hạn phải chọn một cơ sở cụ thể trước khi tạo job/export để tránh mở rộng dữ liệu ngoài quyền.',
+            )
+
+    def can_access_academic_scope(self, user: Any, *, campus: str | None = None, requested_by: str | None = None, request_json: dict[str, Any] | None = None) -> bool:
+        """Conservative visibility check for durable async academic jobs.
+
+        Jobs with campus=None are considered broad. Limited campus users may see
+        only their own broad jobs, because the job payload was originally created
+        from their authorized scope. Other broad jobs are hidden.
+        """
+        if self.is_system_admin(user):
+            return True
+        actor_ids = {str(v).strip() for v in [getattr(user, 'user_id', None), getattr(user, 'username', None), getattr(user, 'email', None)] if str(v or '').strip()}
+        data = request_json or {}
+        # A durable job that was created by this actor after backend scope validation
+        # remains visible/downloadable to that actor even when the job stores a
+        # concrete campus. This is required for AP-assigned teachers exporting their
+        # own class without granting them campus-wide visibility.
+        if requested_by and str(requested_by).strip() in actor_ids and isinstance(data, dict) and data.get('scope_enforced_by_backend') is True:
+            return True
+        if campus and self.can_access_campus(user, campus):
+            return True
+        if not campus and requested_by and str(requested_by).strip() in actor_ids:
+            return True
+        # Jobs created after v25.9.16.7.2.64.13 can persist approved campus scope in
+        # request_json. Treat it as additional defense but never as an allow-all.
+        approved_campuses = data.get('approved_campus_codes') if isinstance(data, dict) else None
+        if isinstance(approved_campuses, list) and approved_campuses:
+            codes = self.accessible_campus_codes(user)
+            if codes is None:
+                return True
+            allowed = {self.normalize_campus_code(code) for code in codes if self.normalize_campus_code(code)}
+            requested = {self.normalize_campus_code(code) for code in approved_campuses if self.normalize_campus_code(code)}
+            if requested and requested.issubset(allowed):
+                return True
+        return False
+
+    def require_academic_scope(self, user: Any, *, campus: str | None = None, requested_by: str | None = None, request_json: dict[str, Any] | None = None, action: str = 'xem tác vụ học vụ') -> None:
+        if self.can_access_academic_scope(user, campus=campus, requested_by=requested_by, request_json=request_json):
+            return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f'Bạn không được {action} ngoài phạm vi cơ sở/lớp được phân quyền')
 
     def _empty_visibility(self) -> ScopeVisibility:
         return ScopeVisibility(

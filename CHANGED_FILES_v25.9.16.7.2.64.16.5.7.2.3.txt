@@ -1,0 +1,67 @@
+# Changed files from v25.9.16.7.2.64.16.5.7.2.2
+Files .env.example and .env.example differ
+Files .env.production.example and .env.production.example differ
+Files .env.uat-http.example and .env.uat-http.example differ
+Files .github/workflows/ci.yml and .github/workflows/ci.yml differ
+Only in /mnt/data/work_5723/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2_2: AI_SERVER_PROJECT_HANDOFF_V25_9_16_7_2_64_16_5_7_2_3.md
+Only in /mnt/data/work_5723/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2_2: CHANGED_FILES_v25.9.16.7.2.64.16.5.7.2.3.txt
+Files CHANGELOG.md and CHANGELOG.md differ
+Files README.md and README.md differ
+Only in /mnt/data/work_5723/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2_2: RELEASE_v25.9.16.7.2.64.16.5.7.2.3_FRONTEND_VISUAL_ERGONOMICS_NAVIGATION.md
+Files RUN_CURRENT.md and RUN_CURRENT.md differ
+Only in /mnt/data/work_5723/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2_2: RUN_V25_9_16_7_2_64_16_5_7_2_3.md
+Only in /mnt/data/work_5723/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2_2: VERIFICATION_v25.9.16.7.2.64.16.5.7.2.3.md
+Only in backend: .pytest_cache
+Only in backend/app: __pycache__
+Only in backend/app/algorithms: __pycache__
+Only in backend/app/api: __pycache__
+Only in backend/app/api/routes: __pycache__
+Only in backend/app/core: __pycache__
+Files backend/app/core/config.py and backend/app/core/config.py differ
+Only in backend/app/db: __pycache__
+Only in backend/app/models: __pycache__
+Only in backend/app/modules: __pycache__
+Only in backend/app/modules/analytics: __pycache__
+Only in backend/app/modules/auth: __pycache__
+Only in backend/app/modules/cost_control: __pycache__
+Only in backend/app/modules/jobs: __pycache__
+Only in backend/app/modules/model_gateway: __pycache__
+Only in backend/app/modules/openedx_connector: __pycache__
+Only in backend/app/modules/publisher: __pycache__
+Only in backend/app/modules/questions: __pycache__
+Only in backend/app/schemas: __pycache__
+Only in backend/app/services: __pycache__
+Only in backend/app/services/academic: __pycache__
+Only in backend/app/services/learning_analytics: __pycache__
+Only in backend/app/services/question_bank: __pycache__
+Only in backend/app/tests: __pycache__
+Only in backend/app/tests/integration: __pycache__
+Files backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_1_public_npm_registry.py and backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_1_public_npm_registry.py differ
+Files backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_2_cors_request_id_hotfix.py and backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_2_cors_request_id_hotfix.py differ
+Only in backend/app/tests: test_v25_9_16_7_2_64_16_5_7_2_3_frontend_visual_ergonomics.py
+Files docker-compose.prod.yml and docker-compose.prod.yml differ
+Files e2e/package-lock.json and e2e/package-lock.json differ
+Files e2e/package.json and e2e/package.json differ
+Only in frontend: .next
+Files frontend/Dockerfile and frontend/Dockerfile differ
+Files frontend/app/bank/_components/pages/BankHistoryPage.tsx and frontend/app/bank/_components/pages/BankHistoryPage.tsx differ
+Files frontend/app/bank/_components/pages/ChapterWorkspacePage.tsx and frontend/app/bank/_components/pages/ChapterWorkspacePage.tsx differ
+Files frontend/app/bank/_components/pages/DepartmentSubjectsPage.tsx and frontend/app/bank/_components/pages/DepartmentSubjectsPage.tsx differ
+Files frontend/app/bank/_components/pages/SubjectVersionChaptersPage.tsx and frontend/app/bank/_components/pages/SubjectVersionChaptersPage.tsx differ
+Files frontend/app/bank/_components/pages/SubjectVersionsPage.tsx and frontend/app/bank/_components/pages/SubjectVersionsPage.tsx differ
+Files frontend/app/bank/quiz/page.tsx and frontend/app/bank/quiz/page.tsx differ
+Files frontend/app/layout.tsx and frontend/app/layout.tsx differ
+Files frontend/app/teacher-management/page.tsx and frontend/app/teacher-management/page.tsx differ
+Files frontend/components/layout/AppShell.tsx and frontend/components/layout/AppShell.tsx differ
+Files frontend/components/layout/PageHeader.tsx and frontend/components/layout/PageHeader.tsx differ
+Files frontend/components/layout/PageShellContext.tsx and frontend/components/layout/PageShellContext.tsx differ
+Only in frontend: node_modules
+Files frontend/package-lock.json and frontend/package-lock.json differ
+Files frontend/package.json and frontend/package.json differ
+Only in frontend/styles: frontend-visual-ergonomics-hotfix.css
+Only in frontend: tsconfig.tsbuildinfo
+Files scripts/claude-code-review-pack.sh and scripts/claude-code-review-pack.sh differ
+Files scripts/frontend-build-verify.sh and scripts/frontend-build-verify.sh differ
+Only in scripts: frontend-visual-ergonomics-report.sh
+Files scripts/npm-public-registry-lockfile-report.sh and scripts/npm-public-registry-lockfile-report.sh differ
+Files scripts/uat-runtime-verify.sh and scripts/uat-runtime-verify.sh differ

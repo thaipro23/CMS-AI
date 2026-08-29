@@ -15,7 +15,13 @@ branch_labels = None
 depends_on = None
 
 
+def _table_exists(name: str) -> bool:
+    return sa.inspect(op.get_bind()).has_table(name)
+
+
 def upgrade() -> None:
+    if _table_exists('ai_bank_operation_jobs'):
+        return
     op.create_table(
         'ai_bank_operation_jobs',
         sa.Column('id', sa.String(), primary_key=True),

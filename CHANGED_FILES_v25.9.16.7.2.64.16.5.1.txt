@@ -1,0 +1,50 @@
+v25.9.16.7.2.64.16.5.1 — changed files from .64.16.5
+Added: 6
+Modified: 34
+Deleted: 0
+
+[ADDED]
+AI_SERVER_PROJECT_CONTEXT_V25_9_16_7_2_64_16_5_1.md
+RELEASE_v25.9.16.7.2.64.16.5.1_PRODUCTION_BROWSER_HOTFIX.md
+RUN_V25_9_16_7_2_64_16_5_1.md
+VERIFICATION_v25.9.16.7.2.64.16.5.1.md
+backend/app/tests/test_v25_9_16_7_2_64_16_5_1_production_browser_hotfix.py
+frontend/styles/production-ux-browser-hotfix.css
+
+[MODIFIED]
+.env.example
+.env.production.example
+README.md
+RUN_CURRENT.md
+backend/app/core/config.py
+backend/app/services/question_bank/quiz_creation.py
+backend/app/services/ux_acceptance.py
+docker-compose.prod.yml
+frontend/Dockerfile
+frontend/app/bank/_components/pages/ChapterWorkspacePage.tsx
+frontend/app/bank/_components/pages/DepartmentSubjectsPage.tsx
+frontend/app/bank/_components/pages/DepartmentsPage.tsx
+frontend/app/bank/_components/pages/SubjectVersionChaptersPage.tsx
+frontend/app/bank/_components/pages/SubjectVersionsPage.tsx
+frontend/app/layout.tsx
+frontend/components/layout/AppShell.tsx
+frontend/components/table/EnterpriseDataTable.tsx
+frontend/package-lock.json
+frontend/package.json
+scripts/claude-code-review-pack.sh
+scripts/frontend-build-verify.sh
+scripts/load-test-hot-endpoints.sh
+scripts/maintainability-contract-report.sh
+scripts/openedx-publish-verify.sh
+scripts/performance-readiness-report.sh
+scripts/pilot-operations-runbook.sh
+scripts/pilot-release-candidate-report.sh
+scripts/production-pilot-final-gate.sh
+scripts/production-ux-acceptance-report.sh
+scripts/query-hotspot-report.sh
+scripts/security-attack-simulation-report.sh
+scripts/security-readiness-report.sh
+scripts/uat-build-gate.sh
+scripts/uat-runtime-verify.sh
+
+[DELETED]

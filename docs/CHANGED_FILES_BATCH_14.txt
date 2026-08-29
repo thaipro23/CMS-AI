@@ -1,0 +1,7 @@
+frontend/app/student-management/classes/[classId]/page.tsx
+frontend/app/teacher-management/teachers/[teacherId]/classes/page.tsx
+frontend/app/users/page.tsx
+frontend/app/semesters/page.tsx
+frontend/styles/student-operations-visual-hotfix.css
+docs/STUDENT_TEACHER_RBAC_SEMESTER_VISUAL_FIX_BATCH_14.md
+docs/CHANGED_FILES_BATCH_14.txt

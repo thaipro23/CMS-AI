@@ -1,0 +1,62 @@
+{
+  "batch": "16",
+  "baseline": "v25.9.16.7.2.64.16.5.7.2.3",
+  "scope": [
+    "campus update",
+    "AP sync",
+    "Open edX course tree and quiz creation",
+    "release snapshot and publish",
+    "worker result integrity"
+  ],
+  "results": {
+    "backend_compileall": "PASS",
+    "connector_plugin_compileall": "PASS",
+    "ruff_F821": "PASS",
+    "focused_cross_layer_and_api_contract": {
+      "result": "PASS",
+      "passed": 18
+    },
+    "frontend_typecheck": "PASS",
+    "frontend_eslint": "PASS",
+    "frontend_production_build": {
+      "result": "PASS",
+      "routes": 30
+    },
+    "batch9_full_static_api_contract": {
+      "result": "PASS",
+      "backend_operations": 282,
+      "frontend_api_calls": 224,
+      "missing_method_or_path": 0,
+      "required_body_mismatch": 0
+    },
+    "legacy_mixed_pack": {
+      "passed": 24,
+      "skipped": 2,
+      "failed": 14,
+      "classification": "STALE_LITERAL_TEST_DEBT",
+      "release_blocking": false
+    }
+  },
+  "key_guards": {
+    "canonical_course_id": "course-v1:ORG+COURSE+RUN",
+    "legacy_course_id_read_compatibility": true,
+    "course_blocks_profiles": 3,
+    "course_sync_cache_fallback": true,
+    "single_global_course_tree_blocker": true,
+    "quiz_partial_creation_compensation": true,
+    "release_snapshot_membership_hash": true,
+    "release_component_verify_before_reuse": true,
+    "publish_partial_import_compensation": true,
+    "worker_requires_result_ok": true,
+    "ap_request_fingerprint": true,
+    "ap_postgresql_advisory_enqueue_lock": true,
+    "rolling_upgrade_old_ap_jobs_supported": true,
+    "global_ap_and_campus_mutation_admin_only": true
+  },
+  "database": {
+    "migration_added": false,
+    "alembic_head": "0053_v25_9_16_7_2_64_16_5_4_diff_idempotency.py"
+  },
+  "uat_verified": false,
+  "uat_limitation": "No access from execution environment to internal SSO/AP/Open edX/Redis/PostgreSQL UAT services."
+}

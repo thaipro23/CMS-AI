@@ -1,0 +1,24 @@
+{
+  "result": "PASS",
+  "flow": "Frontend api.ts compiled runtime -> HTTP -> FastAPI -> SQLAlchemy SQLite -> JSON envelope -> frontend ApiRequestError",
+  "success_create_chain": [
+    "department: 200",
+    "subject: 200",
+    "chapter: 200"
+  ],
+  "error_contracts": {
+    "duplicate": {
+      "status": 409,
+      "code": "BANK_OPERATION_CONFLICT"
+    },
+    "validation": {
+      "status": 422,
+      "code": "VALIDATION_ERROR"
+    },
+    "missing_parent": {
+      "status": 404,
+      "code": "BANK_OPERATION_NOT_FOUND"
+    }
+  },
+  "database": "ephemeral local SQLite; no production/UAT data used"
+}

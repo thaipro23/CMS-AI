@@ -1,0 +1,47 @@
+v25.9.16.7.2.64.16.5.7.1.1 — UAT Build & Backend Health Hotfix
+
+Total changed files: 43
+
+MODIFIED	.env.example
+MODIFIED	.env.production.example
+MODIFIED	.env.uat-http.example
+MODIFIED	.github/workflows/ci.yml
+ADDED	AI_SERVER_PROJECT_CONTEXT_V25_9_16_7_2_64_16_5_7_1_1.md
+MODIFIED	CHANGELOG.md
+MODIFIED	README.md
+ADDED	RELEASE_v25.9.16.7.2.64.16.5.7.1.1_UAT_BUILD_BACKEND_HEALTH_HOTFIX.md
+MODIFIED	RUN_CURRENT.md
+ADDED	RUN_V25_9_16_7_2_64_16_5_7_1_1.md
+ADDED	VERIFICATION_v25.9.16.7.2.64.16.5.7.1.1.md
+MODIFIED	backend/app/core/config.py
+MODIFIED	backend/app/services/runtime_settings.py
+ADDED	backend/app/tests/test_v25_9_16_7_2_64_16_5_7_1_1_uat_build_backend_health.py
+MODIFIED	backend/app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py
+MODIFIED	docker-compose.prod.yml
+MODIFIED	e2e/package-lock.json
+MODIFIED	e2e/package.json
+MODIFIED	frontend/Dockerfile
+MODIFIED	frontend/package-lock.json
+MODIFIED	frontend/package.json
+MODIFIED	frontend/styles/frontend-runtime-contracts.css
+MODIFIED	scripts/ci-e2e-container-hardening-report.sh
+MODIFIED	scripts/claude-code-review-pack.sh
+MODIFIED	scripts/frontend-build-verify.sh
+MODIFIED	scripts/frontend-runtime-contracts-report.sh
+MODIFIED	scripts/global-visual-polish-report.sh
+MODIFIED	scripts/load-test-hot-endpoints.sh
+MODIFIED	scripts/maintainability-contract-report.sh
+MODIFIED	scripts/openedx-publish-verify.sh
+MODIFIED	scripts/performance-readiness-report.sh
+MODIFIED	scripts/performance-worker-reliability-report.sh
+MODIFIED	scripts/pilot-operations-runbook.sh
+MODIFIED	scripts/pilot-release-candidate-report.sh
+MODIFIED	scripts/production-pilot-final-gate.sh
+MODIFIED	scripts/production-security-closure-report.sh
+MODIFIED	scripts/production-ux-acceptance-report.sh
+MODIFIED	scripts/query-hotspot-report.sh
+MODIFIED	scripts/security-attack-simulation-report.sh
+MODIFIED	scripts/security-readiness-report.sh
+ADDED	scripts/uat-build-backend-health-hotfix-report.sh
+MODIFIED	scripts/uat-build-gate.sh
+MODIFIED	scripts/uat-runtime-verify.sh

@@ -1,11 +1,48 @@
+# Dependency/build caches
 **/node_modules
 **/.next
 **/.turbo
 **/dist
 **/build
-.git
-*.log
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/coverage
+**/htmlcov
+**/playwright-report
+**/test-results
 
+# VCS / CI / browser tests
+.git
+.github
+e2e
+frontend-app-learning-patch
+
+# Tests are retained in the source package but never copied into production images
+backend/app/tests
+
+# Documentation/evidence/history must not enter Docker build contexts
+docs
+AI_SERVER_PROJECT_CONTEXT_*.md
+AI_SERVER_PROJECT_HANDOFF_*.md
+UX_UI_CONTEXT_*.md
+RELEASE_*.md
+RUN_*.md
+VERIFICATION_*.md
+CHANGED_FILES_*.txt
+CHANGELOG.md
+README.md
+
+# Local infra/deployment descriptors are not runtime image content
+infra
+deploy
+docker-compose.yml
+docker-compose.prod.yml
+
+# Runtime/user secrets and data
 .env
 .env.*
 !.env.example
@@ -16,13 +53,7 @@
 *.p12
 *.sqlite
 *.db
-__pycache__/
-*.pyc
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-coverage/
-htmlcov/
+*.log
 *.zip
 *.tar
 *.tar.gz

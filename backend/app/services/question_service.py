@@ -8,6 +8,7 @@ from app.services.quality_checker import QualityChecker
 from app.services.duplicate_detector import DuplicateDetector
 from app.services.generation_cache import question_fingerprint
 from app.services.answer_randomizer import normalize_and_shuffle_options
+from app.services.pedagogy import normalize_pedagogy, remap_pedagogy_after_shuffle
 from app.services.question_diversity import diversity_report
 from app.services.question_family import build_question_family_id, normalize_family_id, reconcile_question_families
 from app.services.source_chunk_refs import first_existing_content_chunk, join_source_chunk_ids, split_source_chunk_ids
@@ -86,6 +87,9 @@ class QuestionService:
         for index, raw_item in enumerate(items):
             item = dict(raw_item or {})
             randomized = normalize_and_shuffle_options(item, index=index, force_shuffle=True)
+            item['pedagogy'] = remap_pedagogy_after_shuffle(
+                item.get('pedagogy'), randomized.source_label_by_new_label, randomized.correct_answer
+            )
             item['options'] = randomized.options
             item['correct_answer'] = randomized.correct_answer
 
@@ -100,12 +104,17 @@ class QuestionService:
             options = item.get('options') or {}
             source = item.get('source') or {}
             source_chunk_id = join_source_chunk_ids(split_source_chunk_ids(item.get('source_chunk_id') or source.get('chunk_id')))
+            source_chunk = first_existing_content_chunk(self.db, source_chunk_id) if source_chunk_id else None
             source_node_id = item.get('source_node_id') or item.get('block_id') or source.get('block_id')
             source_node_title = item.get('source_node_title') or item.get('node_title')
-            if not source_node_id and source_chunk_id:
-                chunk = first_existing_content_chunk(self.db, source_chunk_id)
-                if chunk:
-                    source_node_id = chunk.block_id
+            if not source_node_id and source_chunk:
+                source_node_id = source_chunk.block_id
+            source_ref = item.get('source_ref') or source.get('ref') or (source_chunk.source_ref if source_chunk else '') or ''
+            source_type = item.get('source_type') or source.get('type') or (source_chunk.source_type if source_chunk else '') or 'course_component'
+            source_page = item.get('source_page') or source.get('page') or (source_chunk.page_number if source_chunk else None)
+            source_timestamp_start = item.get('source_timestamp_start') or source.get('timestamp_start') or (source_chunk.timestamp_start if source_chunk else None)
+            source_timestamp_end = item.get('source_timestamp_end') or source.get('timestamp_end') or (source_chunk.timestamp_end if source_chunk else None)
+            source_excerpt = item.get('source_excerpt') or source.get('excerpt') or item.get('source_evidence') or ''
             item_difficulty = item.get('difficulty') or 'easy'
             target = ChapterLibraryService(self.db).resolve_target(course_id, source_node_id, source_node_title, item_difficulty)
             if target:
@@ -157,6 +166,11 @@ class QuestionService:
                 difficulty=item_difficulty,
                 cognitive_level=item.get('cognitive_level') or item.get('level') or 'remember',
                 learning_objective=item.get('learning_objective') or item.get('learning_purpose') or '',
+                pedagogy_json=normalize_pedagogy(
+                    item.get('pedagogy'),
+                    correct_answer=item.get('correct_answer'),
+                    options=options,
+                ),
                 question_type=item.get('question_type') or 'single_choice',
                 question_text=question_text,
                 question_hash=question_hash,
@@ -166,11 +180,11 @@ class QuestionService:
                 option_d=options.get('D', ''),
                 correct_answer=item.get('correct_answer') or 'A',
                 explanation=item.get('explanation') or quality.reason,
-                source_ref=item.get('source_ref') or source.get('ref') or '',
-                source_type=item.get('source_type') or source.get('type') or 'course_component',
-                source_page=item.get('source_page') or source.get('page'),
-                source_timestamp_start=item.get('source_timestamp_start') or source.get('timestamp_start'),
-                source_timestamp_end=item.get('source_timestamp_end') or source.get('timestamp_end'),
+                source_ref=source_ref,
+                source_type=source_type,
+                source_page=source_page,
+                source_timestamp_start=source_timestamp_start,
+                source_timestamp_end=source_timestamp_end,
                 source_chunk_id=source_chunk_id,
                 source_node_id=source_node_id,
                 source_node_title=source_node_title,
@@ -178,9 +192,13 @@ class QuestionService:
                 chapter_title=target.chapter_title if target else None,
                 target_library_id=target.library.id if target else None,
                 target_library_key=target.library.library_key if target else None,
-                source_excerpt=item.get('source_excerpt') or source.get('excerpt') or '',
+                source_excerpt=source_excerpt,
                 tags=item.get('tags') or [],
-                ai_rationale=item.get('ai_rationale') or item.get('rationale') or '',
+                ai_rationale=(
+                    item.get('ai_rationale') or item.get('rationale')
+                    or item.get('source_evidence')
+                    or item.get('learning_objective') or ''
+                ),
                 quality_score=quality.score,
                 quality_flags=flags if quality.passed else (flags or [quality.reason]),
                 draft_error_reason=draft_reason,
@@ -226,6 +244,7 @@ class QuestionService:
             'difficulty': q.difficulty,
             'cognitive_level': q.cognitive_level,
             'learning_objective': q.learning_objective,
+            'pedagogy_json': q.pedagogy_json or {},
             'question_type': q.question_type,
             'question_text': q.question_text,
             'question_hash': q.question_hash,
@@ -265,7 +284,7 @@ class QuestionService:
         self._snapshot(q, actor=actor, note=payload.note)
 
         editable_fields = [
-            'lesson_title', 'block_id', 'topic', 'concept_id', 'concept_title', 'concept_key', 'source_evidence', 'difficulty', 'cognitive_level', 'learning_objective',
+            'lesson_title', 'block_id', 'topic', 'concept_id', 'concept_title', 'concept_key', 'source_evidence', 'difficulty', 'cognitive_level', 'learning_objective', 'pedagogy_json',
             'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation',
             'source_ref', 'source_type', 'source_page', 'source_timestamp_start', 'source_timestamp_end',
             'source_chunk_id', 'source_node_id', 'source_node_title', 'source_excerpt', 'tags'
@@ -413,6 +432,9 @@ class QuestionService:
             'difficulty': q.difficulty,
         }
         randomized = normalize_and_shuffle_options(item, index=q.repair_attempt_count + 1, force_shuffle=True)
+        q.pedagogy_json = remap_pedagogy_after_shuffle(
+            q.pedagogy_json, randomized.source_label_by_new_label, randomized.correct_answer
+        )
         q.option_a = randomized.options['A']
         q.option_b = randomized.options['B']
         q.option_c = randomized.options['C']

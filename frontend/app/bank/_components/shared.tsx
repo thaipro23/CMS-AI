@@ -1,9 +1,14 @@
 'use client'
 
 import Link from 'next/link'
+import { Breadcrumbs } from '../../../components/navigation/Breadcrumbs'
+import { AppIcon } from '../../../components/icons/AppIcon'
+import type { ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
+import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
+import { FilterToolbar } from '../../../components/ui/FilterToolbar'
 import {
   BankRelease,
   BankDashboardOverview,
@@ -17,6 +22,7 @@ import {
   BankVersion,
   BankVersionDiffPreview,
   BankVersionQuestion,
+  BankQuestionContent,
   CourseQuizInstance,
   AuditLogRow,
   Job,
@@ -90,20 +96,29 @@ export function chapterDisplayName(chapter?: SubjectChapter | null) {
 }
 
 export function normalizeLessonInput(value: string) {
-  const raw = value.trim().replace(/^bài\s*/i, '').trim()
-  return raw
+  const raw = value.trim()
+  if (!raw) return ''
+  const withoutBai = raw.replace(/^bài\s*/i, '').trim()
+  if (/^final\s*test$/i.test(withoutBai)) return 'Final test'
+  if (/^assignment$/i.test(withoutBai)) return 'Assignment'
+  return withoutBai
 }
 
 export function buildChapterTitle(value: string) {
   const raw = normalizeLessonInput(value)
-  return raw ? `Bài ${raw}` : ''
+  if (!raw) return ''
+  if (/^final\s*test$/i.test(raw)) return 'Final test'
+  if (/^assignment$/i.test(raw)) return 'Assignment'
+  if (/^[0-9]+(?:\.[0-9]+)*$/.test(raw)) return `Bài ${raw}`
+  if (/^bài\s+/i.test(raw)) return raw
+  return raw
 }
 
 export function statusLabel(status?: string | null) {
   const value = status || 'draft'
   const labels: Record<string, string> = {
-    active: 'Đang dùng', draft: 'Bản nháp', approved: 'Đã duyệt', published: 'Đã publish', ready: 'Sẵn sàng',
-    pending_review: 'Chờ duyệt', rejected: 'Đã bỏ', failed: 'Lỗi', created: 'Đã tạo', rolled_back: 'Đã rollback', indexed: 'Đã xử lý', deleted: 'Đã xóa',
+    active: 'Đang dùng', draft: 'Bản nháp', approved: 'Đã duyệt', published: 'Đã đưa lên CMS', ready: 'Sẵn sàng',
+    pending_review: 'Chờ duyệt', rejected: 'Đã bỏ', failed: 'Lỗi', created: 'Đã tạo', rolled_back: 'Đã khôi phục', indexed: 'Đã xử lý', deleted: 'Đã xóa',
   }
   return labels[value] || value
 }
@@ -117,41 +132,40 @@ export function statusClass(status?: string | null) {
 }
 
 export function useBankData() {
-  const { authHeaders, can, authReady } = useAppContext()
+  const { authHeaders, can, canScope, authReady } = useAppContext()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
-  return { headers, can, authReady }
+  return { headers, can, canScope, authReady }
 }
 
 export function useAsyncMessage() {
   const [message, setMessage] = useState('')
+  const [messageTone, setMessageTone] = useState<'success' | 'error'>('success')
   const [busy, setBusy] = useState(false)
   const [busyLabel, setBusyLabel] = useState('Đang xử lý, vui lòng chờ...')
   const run = async (work: () => Promise<unknown>, ok: string, after?: () => Promise<void>, loadingText = 'Đang xử lý, vui lòng chờ...') => {
     setBusy(true)
     setBusyLabel(loadingText)
     setMessage('')
+    setMessageTone('success')
     try {
       const result = await work()
       if (after) await after()
       const record = result && typeof result === 'object' ? result as Record<string, unknown> : null
       const userMessage = typeof record?.user_message === 'string' ? record.user_message : typeof record?.message === 'string' ? record.message : ''
+      setMessageTone('success')
       setMessage(userMessage || ok)
     } catch (error) {
+      setMessageTone('error')
       setMessage(error instanceof Error ? error.message : 'Thao tác thất bại')
     } finally {
       setBusy(false)
     }
   }
-  return { message, setMessage, busy, busyLabel, run }
+  return { message, setMessage, messageTone, busy, busyLabel, run }
 }
 
 export function Breadcrumb({ items }: { items: Array<{ label: string; href?: string }> }) {
-  return <div className="breadcrumb-row">
-    {items.map((item, index) => <span key={`${item.label}-${index}`}>
-      {item.href ? <Link href={item.href}>{item.label}</Link> : <b>{item.label}</b>}
-      {index < items.length - 1 ? <em>›</em> : null}
-    </span>)}
-  </div>
+  return <Breadcrumbs items={items} ariaLabel="Điều hướng Ngân hàng câu hỏi" />
 }
 
 export function Toolbar({ title, helper, action }: { title: string; helper?: string; action?: React.ReactNode }) {
@@ -167,73 +181,178 @@ export function Toolbar({ title, helper, action }: { title: string; helper?: str
 
 export function SearchActionBar({ search, setSearch, placeholder, action }: { search: string; setSearch: (value: string) => void; placeholder: string; action?: React.ReactNode }) {
   return <div className="search-action-bar">
-    <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
+    <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
     {action}
   </div>
 }
 
-export function Modal({ open, title, children, onClose, wide = false }: { open: boolean; title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
-  useEffect(() => {
-    if (!open) return undefined
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.body.style.overflow = previousOverflow
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open, onClose])
+export type BankTableStatusFilter = 'all' | 'published' | 'ready' | 'needs_work' | 'empty'
 
-  if (!open) return null
-  return <div className="modal-backdrop bank-popup-backdrop" onMouseDown={onClose}>
-    <div className={`modal-card bank-modal${wide ? ' bank-modal-wide' : ''}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-      <div className="section-head bank-modal-head">
-        <div><h2>{title}</h2></div>
-        <button className="btn small secondary" type="button" onClick={onClose}>Đóng</button>
-      </div>
-      <div className="bank-modal-body">{children}</div>
-    </div>
-  </div>
-}
-export function EntityActions({ canManage, onEdit, onDelete }: { canManage: boolean; onEdit: () => void; onDelete: () => void }) {
-  const [open, setOpen] = useState(false)
-  if (!canManage) return null
-
-  const stop = (event: React.MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-
-  const runAction = (event: React.MouseEvent, action: () => void) => {
-    stop(event)
-    setOpen(false)
-    action()
-  }
-
-  return <div className={`entity-actions${open ? ' open' : ''}`} onClick={stop} onMouseDown={stop}>
-    <button
-      type="button"
-      className="entity-actions-trigger"
-      aria-label="Hành động"
-      aria-expanded={open}
-      title="Hành động"
-      onClick={(event) => { stop(event); setOpen((current) => !current) }}
-    >
-      ⋮
-    </button>
-    {open ? <div className="entity-actions-menu" role="menu">
-      <button type="button" role="menuitem" onClick={(event) => runAction(event, onEdit)}>Sửa thông tin</button>
-      <button type="button" role="menuitem" className="danger" onClick={(event) => runAction(event, onDelete)}>Xóa</button>
-    </div> : null}
-  </div>
+export function bankStatusBucket(stats?: Record<string, any> | null): BankTableStatusFilter | 'done' {
+  const s = stats || {}
+  const status = String(s.status || '')
+  const isPublished = Boolean(s.is_published || s.release_status === 'published' || Number(s.published_release_count || 0) > 0 || status === 'published')
+  if (isPublished) return 'published'
+  if (Boolean(s.ready_to_release) || Number(s.ready_to_release_chapter_count || 0) > 0 || status === 'ready') return 'ready'
+  const hasAnyData = Boolean(
+    Number(s.total_questions || 0) ||
+    Number(s.approved_count || 0) ||
+    Number(s.pending_review_count || 0) ||
+    Number(s.draft_error_count || 0) ||
+    Number(s.unresolved_count || 0) ||
+    Number(s.material_count || 0) ||
+    Number(s.subject_count || 0) ||
+    Number(s.subject_version_count || 0) ||
+    Number(s.chapter_count || 0) ||
+    Number(s.release_count || 0) ||
+    status && status !== 'empty'
+  )
+  if (!hasAnyData || status === 'empty') return 'empty'
+  if (
+    status === 'needs_review' ||
+    status === 'needs_fix' ||
+    status === 'not_ready' ||
+    Number(s.pending_review_count || 0) > 0 ||
+    Number(s.draft_error_count || 0) > 0 ||
+    Number(s.unresolved_count || 0) > 0 ||
+    Number(s.review_not_done_subject_count || 0) > 0 ||
+    Number(s.review_not_done_version_count || 0) > 0 ||
+    Number(s.review_not_done_chapter_count || 0) > 0
+  ) return 'needs_work'
+  return 'done'
 }
 
-export function promptText(label: string, current: string) {
-  const value = window.prompt(label, current || '')
-  return value === null ? null : value.trim()
+export function bankStatusMatches(stats: Record<string, any> | null | undefined, filter: BankTableStatusFilter) {
+  if (filter === 'all') return true
+  return bankStatusBucket(stats) === filter
+}
+
+export function BankTableToolbar({
+  search,
+  setSearch,
+  placeholder,
+  statusFilter,
+  setStatusFilter,
+  resultCount,
+  totalCount,
+  action,
+}: {
+  search: string
+  setSearch: (value: string) => void
+  placeholder: string
+  statusFilter: BankTableStatusFilter
+  setStatusFilter: (value: BankTableStatusFilter) => void
+  resultCount: number
+  totalCount: number
+  action?: React.ReactNode
+}) {
+  const hasFilter = Boolean(search.trim()) || statusFilter !== 'all'
+  return <FilterToolbar
+    className="bank-table-toolbar"
+    ariaLabel="Bộ lọc bảng ngân hàng đề"
+    actions={<>
+      <span className="bank-table-result-count" aria-live="polite">Hiện <b>{resultCount}</b>/<b>{totalCount}</b></span>
+      {hasFilter ? <button className="btn small secondary" type="button" onClick={() => { setSearch(''); setStatusFilter('all') }}>Xóa lọc</button> : null}
+      {action}
+    </>}
+  >
+    <label className="bank-table-filter-field bank-table-search-field">
+      <span>Tìm kiếm</span>
+      <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
+    </label>
+    <label className="bank-table-filter-field bank-table-status-field">
+      <span>Trạng thái</span>
+      <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as BankTableStatusFilter)} aria-label="Lọc trạng thái ngân hàng đề">
+        <option value="all">Tất cả</option>
+        <option value="published">Đã đưa lên CMS</option>
+        <option value="ready">Sẵn sàng chốt</option>
+        <option value="needs_work">Cần xử lý</option>
+        <option value="empty">Chưa có dữ liệu</option>
+      </select>
+    </label>
+  </FilterToolbar>
+}
+
+export function Modal({
+  open,
+  title,
+  description,
+  children,
+  footer,
+  onClose,
+  wide = false,
+  busy = false,
+}: {
+  open: boolean
+  title: string
+  description?: ReactNode
+  children: ReactNode
+  footer?: ReactNode
+  onClose: () => void
+  wide?: boolean
+  busy?: boolean
+}) {
+  return <AccessibleDialog
+    open={open}
+    title={title}
+    description={description}
+    footer={footer}
+    onClose={onClose}
+    busy={busy}
+    size={wide ? 'xlarge' : 'medium'}
+    className={`bank-modal${wide ? ' bank-modal-wide' : ''}`}
+    bodyClassName="bank-modal-body"
+  >
+    {children}
+  </AccessibleDialog>
+}
+
+
+export function ConfirmDialog({ open, title, description, confirmLabel = 'Xác nhận', cancelLabel = 'Hủy', danger = false, busy = false, onClose, onConfirm }: {
+  open: boolean
+  title: string
+  description?: ReactNode
+  confirmLabel?: string
+  cancelLabel?: string
+  danger?: boolean
+  busy?: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return <Modal
+    open={open}
+    title={title}
+    description={description}
+    busy={busy}
+    onClose={onClose}
+    footer={<div className="modal-actions">
+      <button className="btn secondary" type="button" disabled={busy} onClick={onClose}>{cancelLabel}</button>
+      <button className={`btn${danger ? ' danger' : ''}`} type="button" disabled={busy} onClick={onConfirm}>{busy ? 'Đang xử lý...' : confirmLabel}</button>
+    </div>}
+  >
+    <div className={`confirmation-impact${danger ? ' is-danger' : ''}`} aria-hidden="true" />
+  </Modal>
+}
+
+export function EntityActions({
+  canManage,
+  onEdit,
+  onDelete,
+  lockedLabel = '—',
+}: {
+  canManage: boolean
+  onEdit: () => void
+  onDelete: () => void
+  lockedLabel?: string
+}) {
+  if (!canManage) {
+    return <span className="entity-actions-placeholder" title={lockedLabel}>{lockedLabel}</span>
+  }
+
+  return <div className="entity-actions-inline" aria-label="Thao tác dòng">
+    <button type="button" className="btn small secondary" onClick={onEdit}><AppIcon name="edit" size={17} /> Sửa</button>
+    <button type="button" className="btn small danger-soft" onClick={onDelete}><AppIcon name="trash" size={17} /> Xóa</button>
+  </div>
 }
 
 
@@ -245,24 +364,42 @@ export function matchesSearch(text: string, search: string) {
 
 
 export function reviewStatusText(status?: string | null) {
+  const value = status || 'empty'
   const labels: Record<string, string> = {
-    published: 'Đã publish',
-    ready: 'Đã xử lý xong',
-    needs_review: 'Còn câu cần duyệt',
-    needs_fix: 'Có câu lỗi',
+    published: 'Đã đưa lên CMS',
+    ready: 'Sẵn sàng chốt',
+    needs_review: 'Cần xử lý tiếp',
+    needs_fix: 'Cần sửa câu hỏi',
     empty: 'Chưa có dữ liệu',
-    not_ready: 'Chưa sẵn sàng',
+    not_ready: 'Cần hoàn thiện',
   }
-  return labels[status || ''] || 'Chưa sẵn sàng'
+  return labels[value] || 'Cần hoàn thiện'
 }
 
 export function reviewStatusClass(status?: string | null) {
-  if (status === 'published') return 'bank-status-card status-ready'
-  if (status === 'ready') return 'bank-status-card status-ready'
-  if (status === 'needs_fix') return 'bank-status-card status-danger'
-  if (status === 'needs_review') return 'bank-status-card status-warning'
-  if (status === 'empty') return 'bank-status-card status-empty'
-  return 'bank-status-card status-warning'
+  const value = status || 'empty'
+  if (value === 'published') return 'bank-status-card status-published'
+  if (value === 'ready') return 'bank-status-card status-ready'
+  if (value === 'needs_fix') return 'bank-status-card status-danger'
+  if (value === 'empty') return 'bank-status-card status-empty'
+  return 'bank-status-card status-incomplete'
+}
+
+export function emptyReviewStats(extra: Record<string, unknown> = {}) {
+  return {
+    total_questions: 0,
+    approved_count: 0,
+    pending_review_count: 0,
+    draft_error_count: 0,
+    unresolved_count: 0,
+    rejected_count: 0,
+    is_review_done: false,
+    has_questions: false,
+    status: 'empty',
+    published_release_count: 0,
+    ready_to_release_chapter_count: 0,
+    ...extra,
+  }
 }
 
 export function StatLine({ label, value }: { label: string; value: React.ReactNode }) {
@@ -284,7 +421,7 @@ export function QuickSearchBox({ compact = false }: { compact?: boolean }) {
     return () => window.clearTimeout(timer)
   }, [q, headers])
   return <div className={compact ? 'quick-search quick-search-compact' : 'quick-search'}>
-    <input className="input" value={q} onChange={(event) => setQ(event.target.value)} placeholder="Tìm nhanh bộ môn / môn / version / bài / câu hỏi..." />
+    <input className="input" value={q} onChange={(event) => setQ(event.target.value)} aria-label="Tìm nhanh bộ môn, môn, phiên bản, bài hoặc câu hỏi" placeholder="Tìm nhanh bộ môn, môn, phiên bản, bài hoặc câu hỏi..." />
     {q.trim().length >= 2 ? <div className="quick-search-results">
       {loading ? <div className="quick-search-row muted">Đang tìm...</div> : null}
       {!loading && results.map((item) => <Link key={`${item.type}-${item.href}`} className="quick-search-row" href={item.href}>
@@ -310,7 +447,7 @@ export function questionStats(questions: BankVersionQuestion[]) {
 }
 
 export function nextReleaseText(release?: BankRelease | null) {
-  if (!release) return 'Chưa có Release'
+  if (!release) return 'Chưa chốt bộ đề'
   return `${release.release_code} · ${statusLabel(release.status)} · ${release.approved_question_count} câu`
 }
 
@@ -352,12 +489,9 @@ export type BankQuestionEditForm = {
   difficulty: string
   cognitive_level: string
   learning_objective: string
+  question_type: string
+  question_content_json: BankQuestionContent
   question_text: string
-  option_a: string
-  option_b: string
-  option_c: string
-  option_d: string
-  correct_answer: string
   explanation: string
   concept_title: string
   question_family_id: string
@@ -368,25 +502,34 @@ export type BankQuestionEditForm = {
   target_status: string
 }
 
+export function defaultQuestionContent(type: string = 'single_select'): BankQuestionContent {
+  if (type === 'multi_select') return { schema_version: 2, response: { type: 'multi_select', options: [
+    { id: 'opt-1', text: '', correct: true, feedback: '' }, { id: 'opt-2', text: '', correct: true, feedback: '' }, { id: 'opt-3', text: '', correct: false, feedback: '' },
+  ] } }
+  if (type === 'dropdown_fill') return { schema_version: 2, response: { type: 'dropdown_fill', options: [
+    { id: 'opt-1', text: '', correct: true, feedback: '' }, { id: 'opt-2', text: '', correct: false, feedback: '' }, { id: 'opt-3', text: '', correct: false, feedback: '' },
+  ], correct_option_ids: ['opt-1'] } }
+  if (type === 'text_input') return { schema_version: 2, response: { type: 'text_input', accepted_answers: [{ text: '', case_sensitive: false }], case_sensitive: false } }
+  if (type === 'numerical_input') return { schema_version: 2, response: { type: 'numerical_input', answer: '', tolerance: '0', tolerance_type: 'absolute' } }
+  return { schema_version: 2, response: { type: 'single_select', options: [
+    { id: 'opt-1', text: '', correct: true, feedback: '' }, { id: 'opt-2', text: '', correct: false, feedback: '' }, { id: 'opt-3', text: '', correct: false, feedback: '' }, { id: 'opt-4', text: '', correct: false, feedback: '' },
+  ] } }
+}
+
+function legacyQuestionContent(question: BankVersionQuestion): BankQuestionContent {
+  const values=[question.option_a || '', question.option_b || '', question.option_c || '', question.option_d || '']
+  const correct=String(question.correct_answer || 'A').toUpperCase()
+  return { schema_version: 1, response: { type: 'single_select', options: values.map((text,index)=>({id:`legacy-${index+1}`,text,correct:correct===String.fromCharCode(65+index),feedback:''})) } }
+}
+
 export function toBankQuestionEditForm(question: BankVersionQuestion): BankQuestionEditForm {
+  const rawType = question.question_type === 'single_choice' ? 'single_select' : (question.question_type || 'single_select')
   return {
-    difficulty: question.difficulty || 'easy',
-    cognitive_level: question.cognitive_level || 'remember',
-    learning_objective: question.learning_objective || '',
-    question_text: question.question_text || '',
-    option_a: question.option_a || '',
-    option_b: question.option_b || '',
-    option_c: question.option_c || '',
-    option_d: question.option_d || '',
-    correct_answer: question.correct_answer || 'A',
-    explanation: question.explanation || '',
-    concept_title: question.concept_title || '',
-    question_family_id: question.question_family_id || '',
-    source_ref: question.source_ref || '',
-    source_type: question.source_type || 'bank_material',
-    source_excerpt: question.source_excerpt || '',
-    source_evidence: question.source_evidence || '',
-    target_status: ['pending_review', 'approved', 'rejected'].includes(question.status) ? question.status : 'pending_review',
+    difficulty: question.difficulty || 'easy', cognitive_level: question.cognitive_level || 'remember', learning_objective: question.learning_objective || '',
+    question_type: rawType, question_content_json: question.question_content_json || legacyQuestionContent(question), question_text: question.question_text || '',
+    explanation: question.explanation || '', concept_title: question.concept_title || '', question_family_id: question.question_family_id || '', source_ref: question.source_ref || '',
+    source_type: question.source_type || 'manual', source_excerpt: question.source_excerpt || '', source_evidence: question.source_evidence || '',
+    target_status: ['pending_review','approved','rejected'].includes(question.status) ? question.status : 'pending_review',
   }
 }
 
@@ -435,15 +578,14 @@ export function countRows<T>(items: T[], getter: (item: T) => string | null | un
 
 export function auditActionText(action?: string | null) {
   const map: Record<string, string> = {
-    'question_bank.release.quiz.create': 'Tạo Quiz Open edX',
-    'question_bank.course_quiz.rollback': 'Rollback Quiz',
-    'question_bank.release.publish_openedx': 'Publish Release',
+    'question_bank.release.quiz.create': 'Tạo Quiz trên CMS',
+    'question_bank.course_quiz.rollback': 'Khôi phục Quiz',
+    'question_bank.release.publish_openedx': 'Đưa bộ đề lên CMS',
     'question_bank.version.question.review': 'Duyệt câu hỏi',
     'question_bank.version.question.bulk_review': 'Duyệt hàng loạt',
     'question_bank.bank_version.generate': 'Tạo câu hỏi',
-    'question_bank.material.upload': 'Upload tài liệu',
-    'question_bank.quiz.auto_map.apply': 'Lưu cấu hình map Quiz',
+    'question_bank.material.upload': 'Tải tài liệu lên',
+    'question_bank.quiz.auto_map.apply': 'Lưu cấu hình tạo Quiz',
   }
   return map[action || ''] || action || '—'
 }
-

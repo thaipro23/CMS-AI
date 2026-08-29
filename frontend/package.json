@@ -1,13 +1,16 @@
 {
   "name": "ai-openedx-dashboard",
-  "version": "25.9.15.6-38.8.4",
+  "version": "25.9.16.7.2.64.16.5.7.2.18",
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start -H 0.0.0.0",
-    "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "lint": "next lint --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "npm --prefix ../e2e run test",
+    "test:e2e:ci": "npm --prefix ../e2e run test:ci",
+    "ci": "npm run lint && npm run typecheck && npm run build && npm run test:e2e:ci"
   },
   "dependencies": {
     "@types/node": "^20.11.30",
@@ -18,5 +21,9 @@
     "react-dom": "^18.2.0",
     "typescript": "^5.4.2"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "eslint": "8.57.1",
+    "eslint-config-next": "14.2.35"
+  },
+  "packageManager": "npm@10.9.2"
 }

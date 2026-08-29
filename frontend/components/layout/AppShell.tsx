@@ -1,147 +1,472 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
+import { logoutAuthSession, buildCmsSessionBridgeUrl, clearCmsSessionBridgeAttempt, markCmsSessionBridgeStarted } from '../../lib/api'
+import { SHOW_DIAGNOSTICS_UI } from '../../lib/runtime'
 import { ROLE_LABELS } from '../../types'
-import { buildCmsSessionBridgeUrl } from '../../lib/api'
+import { AppIcon, type AppIconName } from '../icons/AppIcon'
+import { PageShellProvider, type PageChrome } from './PageShellContext'
+import { VisualIcon } from '../ui/VisualIcon'
+import { useFeedback } from '../ui/FeedbackProvider'
+
+type NavGroupKey = 'overview' | 'bank' | 'training' | 'operations' | 'catalog' | 'admin'
 
 type NavItem = {
   href: string
   label: string
-  desc: string
-  icon: string
-  group: 'work' | 'operations' | 'admin'
+  icon: AppIconName
+  group: NavGroupKey
   permission?: string
+  diagnostic?: boolean
+  exact?: boolean
+  matchPrefixes?: string[]
+  platform?: 'cms' | 'udemy'
 }
 
-const navItems: NavItem[] = [
-  { href: '/bank', label: 'Tổng quan', desc: 'Dashboard', icon: '⌁', group: 'work' },
-  { href: '/bank/departments', label: 'Ngân hàng đề', desc: 'Bộ môn, môn, bài', icon: '▦', group: 'work' },
-  { href: '/bank/quiz', label: 'Tạo Quiz', desc: 'Map Open edX', icon: '◈', group: 'work' },
-  { href: '/bank/history', label: 'Lịch sử Quiz', desc: 'Release & rollback', icon: '◷', group: 'work' },
-  { href: '/jobs', label: 'Tiến trình', desc: 'Job đang chạy', icon: '⚙', group: 'operations' },
-  { href: '/audit', label: 'Nhật ký', desc: 'Theo dõi thao tác', icon: '☷', group: 'operations' },
-  { href: '/users', label: 'Phân quyền', desc: 'Gán quyền theo scope', icon: '◎', group: 'admin', permission: 'view_questions' },
-  { href: '/settings', label: 'Cấu hình', desc: 'Chính sách hệ thống', icon: '◇', group: 'admin', permission: 'manage_settings' },
-]
+const SIDEBAR_STORAGE_KEY = 'ai-shell-sidebar'
+const GROUP_STORAGE_KEY = 'ai-shell-nav-groups'
+const SHELL_MOBILE_QUERY = '(max-width: 1023px)'
 
-const navGroups: Array<{ key: NavItem['group']; label: string }> = [
-  { key: 'work', label: 'Công việc chính' },
-  { key: 'operations', label: 'Vận hành' },
+const navGroups: Array<{ key: NavGroupKey; label: string }> = [
+  { key: 'overview', label: 'Tổng quan' },
+  { key: 'bank', label: 'Ngân hàng đề' },
+  { key: 'training', label: 'Vận hành đào tạo' },
+  { key: 'operations', label: 'Vận hành hệ thống' },
+  { key: 'catalog', label: 'Danh mục' },
   { key: 'admin', label: 'Quản trị' },
 ]
 
-function pageTitle(pathname: string) {
-  const exact = navItems.find((item) => pathname === item.href)
-  if (exact) return exact.label
-  const nested = navItems
-    .filter((item) => pathname.startsWith(`${item.href}/`))
-    .sort((a, b) => b.href.length - a.href.length)[0]
-  return nested ? nested.label : 'AI Server'
+const navItems: NavItem[] = [
+  { href: '/bank', label: 'Chi phí AI', icon: 'money', group: 'overview', permission: 'view_questions', exact: true, matchPrefixes: ['/bank/search'] },
+  {
+    href: '/bank/departments',
+    label: 'Ngân hàng đề',
+    icon: 'bank',
+    group: 'bank',
+    permission: 'view_questions',
+    matchPrefixes: ['/bank/departments', '/bank/subjects', '/bank/subject-versions', '/bank/chapters'],
+  },
+  { href: '/import-quiz-cms-old', label: 'Import Quiz CMS cũ', icon: 'upload', group: 'bank', permission: 'edit_questions' },
+  { href: '/bank/quiz', label: 'Tạo Quiz', icon: 'quiz', group: 'bank', permission: 'publish_questions' },
+  { href: '/bank/history', label: 'Lịch sử Quiz', icon: 'release', group: 'bank', permission: 'publish_questions' },
+  { href: '/student-management/cms', label: 'Quản lý sinh viên CMS', icon: 'students', group: 'training', permission: 'view_training_reports', platform: 'cms', matchPrefixes: ['/student-management/cms', '/student-management/subjects', '/student-management/classes'] },
+  { href: '/teacher-management/cms', label: 'Quản lý giảng viên CMS', icon: 'teachers', group: 'training', permission: 'view_training_reports', platform: 'cms', matchPrefixes: ['/teacher-management/cms', '/teacher-management/teachers'] },
+  { href: '/student-management/udemy', label: 'Quản lý sinh viên Udemy', icon: 'students', group: 'training', permission: 'view_training_reports', platform: 'udemy', matchPrefixes: ['/student-management/udemy', '/student-management/subjects', '/student-management/classes'] },
+  { href: '/teacher-management/udemy', label: 'Quản lý giảng viên Udemy', icon: 'teachers', group: 'training', permission: 'view_training_reports', platform: 'udemy', matchPrefixes: ['/teacher-management/udemy', '/teacher-management/teachers'] },
+  { href: '/analytics/learning', label: 'Phân tích học tập', icon: 'analytics', group: 'training', permission: 'view_training_reports' },
+  { href: '/jobs', label: 'Tác vụ nền', icon: 'jobs', group: 'operations', permission: 'view_jobs' },
+  { href: '/audit', label: 'Nhật ký hoạt động', icon: 'audit', group: 'operations', permission: 'view_jobs' },
+  { href: '/ap-sync', label: 'Đồng bộ AP', icon: 'sync', group: 'operations', permission: 'manage_settings' },
+  { href: '/ops/readiness', label: 'Kiểm tra vận hành', icon: 'readiness', group: 'operations', permission: 'view_ops_readiness', diagnostic: true },
+  { href: '/premises', label: 'Cơ sở', icon: 'campus', group: 'catalog', permission: 'manage_settings' },
+  { href: '/semesters', label: 'Học kỳ', icon: 'semester', group: 'catalog', permission: 'manage_settings' },
+  { href: '/subject-management', label: 'Quản lý môn học', icon: 'book', group: 'catalog', permission: 'manage_settings' },
+  { href: '/users', label: 'Người dùng & phân quyền', icon: 'users', group: 'admin', permission: 'view_rbac' },
+  { href: '/settings', label: 'Cài đặt', icon: 'settings', group: 'admin', permission: 'manage_settings' },
+]
+
+function navMatchScore(pathname: string, item: NavItem, activePlatform: 'cms' | 'udemy') {
+  if (item.exact && pathname === item.href) return 10_000 + item.href.length
+  if (pathname === item.href) return 10_000 + item.href.length
+  if (item.platform && item.platform !== activePlatform) return -1
+  const prefixes = item.matchPrefixes?.length ? item.matchPrefixes : item.exact ? [] : [item.href]
+  const matches = prefixes.filter((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+  return matches.reduce((score, prefix) => Math.max(score, prefix.length), -1)
 }
 
-function AppFooter() {
-  return <footer className="app-footer app-footer-compact product-footer">
-    <div><b>Open edX AI Server</b><span>Ngân hàng đề · Phân quyền · Quiz Open edX</span></div>
-    <div className="footer-links"><span>v25.9.15.6.38.8.4</span></div>
-  </footer>
+function bestNavItem(pathname: string, items: NavItem[], activePlatform: 'cms' | 'udemy' = 'cms') {
+  return items
+    .map((item) => ({ item, score: navMatchScore(pathname, item, activePlatform) }))
+    .filter(({ score }) => score >= 0)
+    .sort((a, b) => b.score - a.score)[0]?.item
+}
+
+function requiredPermissionForPath(pathname: string): string | null {
+  const rules: Array<[RegExp, string]> = [
+    [/^\/import-quiz-cms-old(?:\/|$)/, 'edit_questions'],
+    [/^\/bank\/(?:quiz|history)(?:\/|$)/, 'publish_questions'],
+    [/^\/bank(?:\/|$)/, 'view_questions'],
+    [/^\/(?:question-bank|review|generate|workflow)(?:\/|$)/, 'view_questions'],
+    [/^\/export(?:\/|$)/, 'publish_questions'],
+    [/^\/(?:student-management|teacher-management|training-management|analytics)(?:\/|$)/, 'view_training_reports'],
+    [/^\/premises(?:\/|$)/, 'manage_settings'],
+    [/^\/semesters(?:\/|$)/, 'manage_settings'],
+    [/^\/subject-management(?:\/|$)/, 'manage_settings'],
+    [/^\/ap-sync(?:\/|$)/, 'manage_settings'],
+    [/^\/ops\/readiness(?:\/|$)/, 'view_ops_readiness'],
+    [/^\/(?:jobs|audit)(?:\/|$)/, 'view_jobs'],
+    [/^\/users(?:\/|$)/, 'view_rbac'],
+    [/^\/settings(?:\/|$)/, 'manage_settings'],
+  ]
+  return rules.find(([pattern]) => pattern.test(pathname))?.[1] || null
+}
+
+function pageLabel(pathname: string, activePlatform: 'cms' | 'udemy') {
+  return bestNavItem(pathname, navItems, activePlatform)?.label || 'AI Server'
+}
+
+function fallbackPageLayoutClass(pathname: string) {
+  const classes = ['page-stack']
+  if (/^\/(?:import-quiz-cms-old|student-management|teacher-management|analytics|jobs|audit|ap-sync|premises|semesters|subject-management|users)(?:\/|$)/.test(pathname)) classes.push('enterprise-standard-page')
+  if (pathname.startsWith('/import-quiz-cms-old')) classes.push('legacy-quiz-import-page')
+  if (pathname.startsWith('/bank')) classes.push('bank-multipage', 'bank-contract-page')
+  if (pathname === '/bank') classes.push('dashboard-modern-page')
+  if (pathname.startsWith('/bank/quiz')) classes.push('bank-quiz-page', 'quiz-creation-workbench')
+  if (pathname.startsWith('/bank/history')) classes.push('bank-history-page', 'history-console')
+  if (pathname.startsWith('/bank/search')) classes.push('dashboard-search-page')
+  if (pathname.startsWith('/student-management')) classes.push('student-management-page', 'academic-flow-page', 'training-operations-page')
+  if (pathname.startsWith('/teacher-management')) classes.push('training-management-page', 'teacher-management-page', 'training-operations-page')
+  if (pathname.startsWith('/analytics')) classes.push('learning-analytics-page', 'academic-flow-page', 'training-operations-page')
+  if (pathname.startsWith('/jobs')) classes.push('ops-console', 'jobs-console', 'ux-enterprise-page')
+  if (pathname.startsWith('/audit')) classes.push('ops-console', 'audit-console', 'ux-enterprise-page')
+  if (pathname.startsWith('/ap-sync')) classes.push('ap-sync-page')
+  if (pathname.startsWith('/premises')) classes.push('premises-page')
+  if (pathname.startsWith('/semesters')) classes.push('semesters-page')
+  if (pathname.startsWith('/subject-management')) classes.push('subject-management-page')
+  if (pathname.startsWith('/settings')) classes.push('settings-page')
+  if (pathname.startsWith('/users')) classes.push('access-console', 'access-console-v2')
+  return classes.join(' ')
+}
+
+function loadGroupPreference(): Record<NavGroupKey, boolean> {
+  const defaults = Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(GROUP_STORAGE_KEY) || '{}') as Partial<Record<NavGroupKey, boolean>>
+    return { ...defaults, ...parsed }
+  } catch {
+    return defaults
+  }
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const {
-    courseId,
-    role,
-    userId,
-    accessToken,
-    can,
-    isAuthenticated,
-    authReady,
-  } = useAppContext()
-  const [autoLoginMessage, setAutoLoginMessage] = useState('')
+  const router = useRouter()
+  const drawerRef = useRef<HTMLElement>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const userMenuRef = useRef<HTMLDetailsElement>(null)
+  const mainContentRef = useRef<HTMLElement>(null)
+  const layoutRegistrationRef = useRef<string | null>(null)
+  const cmsBridgeAttemptRef = useRef<string | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
+  const [mobile, setMobile] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>(() => Object.fromEntries(navGroups.map((group) => [group.key, true])) as Record<NavGroupKey, boolean>)
+  const [pageChrome, setPageChrome] = useState<PageChrome | null>(null)
+  const [activePlatform, setActivePlatform] = useState<'cms' | 'udemy'>('cms')
+  const [pageLayoutClass, setPageLayoutClass] = useState(() => fallbackPageLayoutClass(pathname))
+  const { courseId, role, userId, can, isAuthenticated, authReady, clearAuthSession } = useAppContext()
+  const { notify } = useFeedback()
 
-  const visibleItems = useMemo(() => navItems.filter((item) => !item.permission || can(item.permission)), [can])
-  const currentTitle = pageTitle(pathname)
+  const registerChrome = useCallback((value: PageChrome) => {
+    setPageChrome(value)
+    return () => setPageChrome((current) => current?.registrationId === value.registrationId ? null : current)
+  }, [])
 
-  const loginWithCms = () => {
-    try {
-      window.location.href = buildCmsSessionBridgeUrl(courseId)
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Không tạo được CMS login URL')
+  const registerLayout = useCallback((registrationId: string, className: string) => {
+    layoutRegistrationRef.current = registrationId
+    setPageLayoutClass(className)
+    return () => {
+      if (layoutRegistrationRef.current !== registrationId) return
+      layoutRegistrationRef.current = null
+      setPageLayoutClass(fallbackPageLayoutClass(pathname))
     }
-  }
+  }, [pathname])
+
+  const pageShellRegistration = useMemo(() => ({ registerChrome, registerLayout }), [registerChrome, registerLayout])
+
+  const availableItems = useMemo(() => navItems.filter((item) => !item.diagnostic || SHOW_DIAGNOSTICS_UI), [])
+  const visibleItems = useMemo(() => authReady ? availableItems.filter((item) => !item.permission || can(item.permission)) : [], [authReady, availableItems, can])
+  const activeNavItem = useMemo(() => bestNavItem(pathname, availableItems, activePlatform), [activePlatform, availableItems, pathname])
+  const currentGroup = activeNavItem?.group
+  const routePermission = requiredPermissionForPath(pathname)
+  const diagnosticsRouteBlocked = pathname.startsWith('/ops/readiness') && !SHOW_DIAGNOSTICS_UI
+  const routeAllowed = !diagnosticsRouteBlocked && (!routePermission || (authReady && can(routePermission)))
+  const fallbackHref = visibleItems[0]?.href || '/bank'
+  const isBankHierarchyRoute = pathname === '/bank/departments' || pathname.startsWith('/bank/departments/') || pathname.startsWith('/bank/subjects/') || pathname.startsWith('/bank/subject-versions/') || pathname.startsWith('/bank/chapters/')
+
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (!authReady) return
-    if (isAuthenticated) {
-      window.sessionStorage.removeItem('ai_openedx_cms_bridge_started_at')
-      return
+    const queryPlatform = new URLSearchParams(window.location.search).get('platform')
+    const nextPlatform: 'cms' | 'udemy' = pathname.includes('/udemy') || queryPlatform === 'udemy' ? 'udemy' : pathname.includes('/cms') || queryPlatform === 'cms' ? 'cms' : (window.sessionStorage.getItem('ai-training-platform') === 'udemy' ? 'udemy' : 'cms')
+    setActivePlatform(nextPlatform)
+    window.sessionStorage.setItem('ai-training-platform', nextPlatform)
+  }, [pathname])
+
+  useEffect(() => {
+    const media = window.matchMedia(SHELL_MOBILE_QUERY)
+    const updateMobile = () => setMobile(media.matches)
+    updateMobile()
+    if (typeof media.addEventListener === 'function') media.addEventListener('change', updateMobile)
+    else media.addListener(updateMobile)
+    const sidebarPreference = window.localStorage.getItem(SIDEBAR_STORAGE_KEY)
+    const nextCollapsed = sidebarPreference ? sidebarPreference !== 'expanded' : false
+    setCollapsed(nextCollapsed)
+    document.documentElement.dataset.sidebar = nextCollapsed ? 'collapsed' : 'expanded'
+    setOpenGroups(loadGroupPreference())
+    document.documentElement.dataset.theme = 'light'
+    document.documentElement.dataset.aiTheme = 'light'
+    return () => {
+      if (typeof media.removeEventListener === 'function') media.removeEventListener('change', updateMobile)
+      else media.removeListener(updateMobile)
     }
-    if (pathname.startsWith('/auth/cms-callback')) return
-    const autoLoginEnabled = (process.env.NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN || 'true').toLowerCase() !== 'false'
-    if (!autoLoginEnabled) return
-    const startedAtRaw = window.sessionStorage.getItem('ai_openedx_cms_bridge_started_at')
-    const startedAt = startedAtRaw ? Number(startedAtRaw) : 0
-    const now = Date.now()
-    if (startedAt && now - startedAt < 30000) {
-      setAutoLoginMessage('Đang chờ CMS trả phiên đăng nhập...')
-      return
+  }, [])
+
+  useEffect(() => {
+    if (!currentGroup) return
+    setOpenGroups((current) => current[currentGroup] ? current : { ...current, [currentGroup]: true })
+  }, [currentGroup])
+
+  useEffect(() => {
+    setDrawerOpen(false)
+
+    // Route changes must never inherit a stale dialog/body scroll lock. This can
+    // happen when a page is replaced while a modal is closing or when an older
+    // route leaves inline overflow styles behind. The AppShell owns the scroll
+    // container, so recover it whenever no dialog is actually mounted.
+    const main = mainContentRef.current
+    const dialogMounted = Boolean(document.querySelector('[data-dialog-backdrop]'))
+    if (!dialogMounted) {
+      delete document.documentElement.dataset.dialogOpen
+      main?.style.removeProperty('overflow')
+      main?.style.removeProperty('overflow-x')
+      main?.style.removeProperty('overflow-y')
+      main?.style.removeProperty('overscroll-behavior')
+      document.body.style.removeProperty('overflow')
+      document.body.style.removeProperty('padding-right')
     }
+    window.requestAnimationFrame(() => main?.scrollTo({ top: 0, left: 0, behavior: 'auto' }))
+  }, [pathname])
+
+  useEffect(() => {
+    document.documentElement.dataset.mobileNav = drawerOpen ? 'open' : 'closed'
+    const drawer = drawerRef.current
+    if (drawer) {
+      const shouldDisable = mobile && !drawerOpen
+      if ('inert' in drawer) drawer.inert = shouldDisable
+      drawer.toggleAttribute('inert', shouldDisable)
+      const controls = drawer.querySelectorAll<HTMLElement>('a[href], button, summary, input, select, textarea, [tabindex]')
+      controls.forEach((control) => {
+        if (shouldDisable) {
+          if (!control.hasAttribute('data-shell-tabindex')) control.setAttribute('data-shell-tabindex', control.getAttribute('tabindex') ?? '')
+          control.setAttribute('tabindex', '-1')
+        } else if (control.hasAttribute('data-shell-tabindex')) {
+          const previous = control.getAttribute('data-shell-tabindex') || ''
+          if (previous) control.setAttribute('tabindex', previous)
+          else control.removeAttribute('tabindex')
+          control.removeAttribute('data-shell-tabindex')
+        }
+      })
+    }
+    document.body.style.overflow = drawerOpen && mobile ? 'hidden' : ''
+    if (!drawerOpen || !mobile) return () => { document.body.style.overflow = '' }
+    const focusable = drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), summary, input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    const first = focusable?.[0]
+    const last = focusable?.[focusable.length - 1]
+    first?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setDrawerOpen(false)
+        menuButtonRef.current?.focus()
+        return
+      }
+      if (event.key !== 'Tab' || !first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = ''
+    }
+  }, [drawerOpen, mobile])
+
+  useEffect(() => {
+    const details = userMenuRef.current
+    if (!details) return undefined
+    const close = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key !== 'Escape') return
+      if (event instanceof MouseEvent && details.contains(event.target as Node)) return
+      details.open = false
+    }
+    document.addEventListener('keydown', close)
+    document.addEventListener('pointerdown', close)
+    return () => {
+      document.removeEventListener('keydown', close)
+      document.removeEventListener('pointerdown', close)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authReady || routeAllowed || pathname.startsWith('/auth/')) return
+    if (fallbackHref !== pathname) router.replace(fallbackHref)
+  }, [authReady, fallbackHref, pathname, routeAllowed, router])
+
+  useEffect(() => {
+    if (!authReady || isAuthenticated || pathname.startsWith('/auth/')) return
+    const enabled = (process.env.NEXT_PUBLIC_AUTO_CMS_SESSION_LOGIN || 'true').toLowerCase() !== 'false'
+    if (!enabled) return
+
+    // Do not use a sessionStorage time lock here. A stale marker from a cancelled
+    // or interrupted CMS navigation previously prevented the root route from
+    // starting SSO until the user opened another page. The ref only suppresses
+    // duplicate effects for the same client render while allowing a fresh page
+    // load or a different intended route to start the bridge immediately.
+    const returnPath = pathname === '/' ? '/bank' : `${window.location.pathname}${window.location.search}`
+    if (cmsBridgeAttemptRef.current === returnPath) return
+    cmsBridgeAttemptRef.current = returnPath
+
     try {
-      setAutoLoginMessage('Đang chuyển sang CMS để lấy phiên đăng nhập...')
-      window.sessionStorage.setItem('ai_openedx_cms_bridge_started_at', String(now))
-      window.location.href = buildCmsSessionBridgeUrl(courseId)
+      clearCmsSessionBridgeAttempt()
+      markCmsSessionBridgeStarted()
+      window.location.replace(buildCmsSessionBridgeUrl(courseId, returnPath))
     } catch (error) {
-      setAutoLoginMessage(error instanceof Error ? error.message : 'Không tạo được CMS session bridge URL')
+      cmsBridgeAttemptRef.current = null
+      clearCmsSessionBridgeAttempt()
+      console.error('Không tạo được liên kết CMS', error)
     }
   }, [authReady, courseId, isAuthenticated, pathname])
 
-  return <div className="app-layout product-shell">
-    <a className="skip-link" href="#main-content">Bỏ qua menu, tới nội dung chính</a>
-    <aside className="sidebar product-sidebar" aria-label="Điều hướng chính">
-      <Link href="/bank" className="brand product-brand" aria-label="Open edX AI Server">
-        <div className="brand-mark product-brand-mark">AI</div>
-        <div><b>AI Server</b><small>Question Bank · Open edX</small></div>
-      </Link>
+  const toggleSidebar = () => {
+    if (mobile) {
+      setDrawerOpen((value) => !value)
+      return
+    }
+    const next = !collapsed
+    setCollapsed(next)
+    document.documentElement.dataset.sidebar = next ? 'collapsed' : 'expanded'
+    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next ? 'collapsed' : 'expanded')
+  }
 
-      <nav className="side-nav grouped-side-nav product-nav">
+  const toggleGroup = (key: NavGroupKey) => {
+    if (currentGroup === key) return
+    setOpenGroups((current) => {
+      const next = { ...current, [key]: !current[key] }
+      window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const signOut = async () => {
+    try {
+      await logoutAuthSession()
+    } catch (error) {
+      console.error('Không thể thu hồi phiên đăng nhập', error)
+    } finally {
+      clearAuthSession()
+      if (userMenuRef.current) userMenuRef.current.open = false
+      window.location.assign('/auth/logged-out')
+    }
+  }
+
+  const reconnectCms = () => {
+    try {
+      window.location.href = buildCmsSessionBridgeUrl(courseId)
+    } catch (error) {
+      notify({ tone: 'danger', title: 'Không kết nối lại được CMS', message: error instanceof Error ? error.message : 'Không tạo được liên kết CMS.' })
+    }
+  }
+
+  const topbarBreadcrumbs = useMemo(() => pageChrome?.breadcrumbs || [], [pageChrome])
+
+  const guardedChildren = routeAllowed ? children : <section className="card empty-state permission-hidden-state">
+    <h2>{authReady ? 'Bạn không có quyền truy cập chức năng này' : 'Đang kiểm tra quyền truy cập'}</h2>
+    <p>{authReady ? 'Hệ thống đang chuyển về màn hình phù hợp với phạm vi được phân công.' : 'Vui lòng chờ trong khi hệ thống xác định quyền từ phiên CMS.'}</p>
+  </section>
+
+  return <PageShellProvider value={pageShellRegistration}><div className={`enterprise-app-shell enterprise-unified-shell${isBankHierarchyRoute ? ' bank-hierarchy-shell' : ''}`}>
+    <a className="skip-link" href="#main-content">Bỏ qua điều hướng</a>
+    {drawerOpen && mobile && <button className="enterprise-sidebar-overlay" aria-label="Đóng menu" type="button" onClick={() => setDrawerOpen(false)} />}
+
+    <aside ref={drawerRef} className={`enterprise-sidebar${drawerOpen ? ' mobile-open' : ''}`} aria-label="Điều hướng chính" aria-hidden={mobile && !drawerOpen ? true : undefined} role={mobile ? 'dialog' : undefined} aria-modal={mobile && drawerOpen ? true : undefined}>
+      <div className="enterprise-sidebar-header">
+        <Link href="/bank" className="enterprise-brand" aria-label="AI Server ACMS">
+          <span className="enterprise-brand-mark">AI</span>
+          <span className="enterprise-brand-copy"><b>AI Server ACMS</b></span>
+        </Link>
+        {mobile && <button className="enterprise-icon-button sidebar-mobile-close" type="button" aria-label="Đóng menu" onClick={() => setDrawerOpen(false)}><AppIcon name="close" /></button>}
+      </div>
+
+      <nav className="enterprise-navigation" aria-label="Chức năng hệ thống">
+        {!authReady && <div className="enterprise-nav-skeleton" aria-label="Đang tải quyền"><span/><span/><span/><span/></div>}
         {navGroups.map((group) => {
           const items = visibleItems.filter((item) => item.group === group.key)
           if (!items.length) return null
-          return <div className="nav-group" key={group.key}>
-            <div className="nav-group-title">{group.label}</div>
-            <div className="nav-group-items">
+          const activeGroup = group.key === currentGroup
+          const expanded = activeGroup || openGroups[group.key] || collapsed
+          return <section className={`enterprise-nav-group${activeGroup ? ' active-group' : ''}`} key={group.key}>
+            <button className="enterprise-nav-group-toggle" type="button" aria-expanded={expanded} onClick={() => toggleGroup(group.key)} disabled={collapsed || activeGroup}>
+              <span>{group.label}</span><AppIcon name="chevron-down" size={14}/>
+            </button>
+            {expanded && <div className="enterprise-nav-items">
               {items.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(`${item.href}/`)
-                return <Link key={item.href} href={item.href} className={active ? 'nav-link active' : 'nav-link'} aria-current={active ? 'page' : undefined}>
-                  <span className="nav-icon" aria-hidden="true">{item.icon}</span>
-                  <span className="nav-text"><b>{item.label}</b><small>{item.desc}</small></span>
+                const active = activeNavItem?.href === item.href
+                return <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`enterprise-nav-link${active ? ' active' : ''}`}
+                  onClick={() => { if (item.platform) { setActivePlatform(item.platform); window.sessionStorage.setItem('ai-training-platform', item.platform) } }}
+                  aria-current={active ? 'page' : undefined}
+                  data-tooltip={item.label}
+                >
+                  <span className="enterprise-nav-icon"><AppIcon name={item.icon}/></span>
+                  <span className="enterprise-nav-copy"><b>{item.label}</b></span>
                 </Link>
               })}
-            </div>
-          </div>
+            </div>}
+          </section>
         })}
       </nav>
+      {!mobile ? <button
+        className="enterprise-sidebar-collapse-button"
+        type="button"
+        aria-label={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+        title={collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'}
+        onClick={toggleSidebar}
+      ><AppIcon name={collapsed ? 'chevron-right' : 'panel-left-close'} size={19} /></button> : null}
 
-      <div className="sidebar-note product-session-card">
-        <span className={accessToken.trim() ? 'session-dot ok' : 'session-dot wait'} />
-        <div><b>{accessToken.trim() ? 'Đã đăng nhập' : 'Đang lấy phiên CMS'}</b><span>{accessToken.trim() ? `${userId || 'user'} · ${ROLE_LABELS[role]}` : (autoLoginMessage || 'AI Server sẽ tự nhận phiên từ CMS khi có thể.')}</span></div>
-        <button className="btn small secondary" type="button" onClick={loginWithCms}>{accessToken.trim() ? 'Làm mới' : 'Đăng nhập CMS'}</button>
-      </div>
     </aside>
 
-    <div className="main-area product-main">
-      <header className="workspace-topbar workspace-topbar-minimal">
-        <div>
-          <h1>{currentTitle}</h1>
+    <div className="enterprise-workspace">
+      <header className="enterprise-topbar">
+        <div className="enterprise-topbar-start">
+          <button ref={menuButtonRef} className="enterprise-icon-button" type="button" aria-label={mobile ? 'Mở menu' : collapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'} aria-expanded={mobile ? drawerOpen : !collapsed} onClick={toggleSidebar}>
+            <AppIcon name={mobile ? 'menu' : collapsed ? 'panel-left-open' : 'panel-left-close'} />
+          </button>
+          <div className="enterprise-topbar-page-heading" aria-live="polite">
+            {pageChrome?.icon ? <VisualIcon label={pageChrome.title} icon={pageChrome.icon} tone={pageChrome.tone} size={17} className="enterprise-topbar-page-icon" /> : null}
+            <div className="enterprise-topbar-page-copy">
+              {topbarBreadcrumbs.length ? <nav className="enterprise-topbar-breadcrumbs" aria-label="Đường dẫn trang"><ol>{topbarBreadcrumbs.map((item, index) => <li key={`${item.label}-${index}`}>{item.href ? <Link href={item.href}>{item.label}</Link> : <span>{item.label}</span>}</li>)}</ol></nav> : pageChrome?.eyebrow ? <small>{pageChrome.eyebrow}</small> : null}
+              {!topbarBreadcrumbs.length ? <h1>{pageChrome?.title || pageLabel(pathname, activePlatform)}</h1> : null}
+            </div>
+          </div>
+        </div>
+        <div className="enterprise-topbar-end">
+          <span className={`enterprise-cms-pill ${isAuthenticated ? 'ok' : 'wait'}`} role="status" aria-live="polite"><span aria-hidden="true" />{isAuthenticated ? 'CMS OK' : 'Đang kết nối'}</span>
+          <details ref={userMenuRef} className="enterprise-user-menu">
+            <summary aria-label="Mở menu tài khoản">
+              <span className="enterprise-avatar">{String(userId || 'U').slice(0, 2).toUpperCase()}</span>
+              <span className="enterprise-user-summary"><b>{ROLE_LABELS[role]}</b></span>
+              <AppIcon name="chevron-down" size={14}/>
+            </summary>
+            <div className="enterprise-user-popover">
+              <div className="enterprise-user-popover-head"><AppIcon name="user"/><span><b>{userId || 'Người dùng'}</b><small>{ROLE_LABELS[role]}</small></span></div>
+              <button type="button" onClick={reconnectCms}><AppIcon name="sync"/> Kết nối lại CMS</button>
+              <button type="button" onClick={signOut}><AppIcon name="logout"/> Đăng xuất</button>
+            </div>
+          </details>
         </div>
       </header>
 
-      <main id="main-content" className="content-shell compact-content-shell product-content" tabIndex={-1}>{children}</main>
-      <AppFooter />
+      <main ref={mainContentRef} id="main-content" data-scroll-owner="workspace" className={`enterprise-content ${pageLayoutClass}`.trim()} tabIndex={-1}>{guardedChildren}</main>
     </div>
-  </div>
+  </div></PageShellProvider>
 }

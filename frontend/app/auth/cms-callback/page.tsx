@@ -1,57 +1,60 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { exchangeOpenEdxSessionTicket } from '../../../lib/api'
+import { clearCmsSessionBridgeAttempt, consumeCmsPostAuthReturnPath, exchangeOpenEdxSessionTicket, normalizeInternalReturnPath } from '../../../lib/api'
 import { useAppContext } from '../../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../../components/ui/ActionMessage'
+import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
 
 function CmsCallbackContent() {
   const router = useRouter()
   const params = useSearchParams()
-  const { applyAuthSession } = useAppContext()
+  const { applyAuthSession, refreshAuthSession } = useAppContext()
+  const processedTicketRef = useRef<string | null>(null)
   const [message, setMessage] = useState<ActionMessageData | null>({ type: 'info', body: 'Đang nhận phiên đăng nhập từ CMS...' })
 
   useEffect(() => {
     const ticket = params.get('ticket') || ''
     if (!ticket) {
+      clearCmsSessionBridgeAttempt()
       setMessage({ type: 'warning', title: 'Thiếu CMS session ticket', body: 'CMS không trả về ticket. Hãy đăng nhập CMS rồi thử lại.' })
       return
     }
-    exchangeOpenEdxSessionTicket(ticket)
-      .then((session) => {
-        applyAuthSession(session)
-        setMessage({ type: 'success', title: 'Đăng nhập CMS thành công', body: `Đã nhận quyền ${session.role} cho user ${session.user_id}. Đang chuyển về dashboard...` })
-        window.setTimeout(() => router.push('/dashboard'), 700)
-      })
-      .catch((error) => setMessage(toUserError(error)))
-  }, [params, applyAuthSession, router])
+    if (processedTicketRef.current === ticket) return
+    processedTicketRef.current = ticket
 
-  return <div className="page-stack">
-    <section className="card page-intro">
-      <div>
-        <div className="eyebrow">CMS SSO</div>
-        <h2>Đăng nhập bằng phiên CMS/Open edX</h2>
-        <p className="helper">Nếu bạn đã đăng nhập CMS, AI Server sẽ đổi session bridge ticket thành token nội bộ ngắn hạn.</p>
-      </div>
-      <Link className="btn secondary" href="/dashboard">Về dashboard</Link>
-    </section>
+    exchangeOpenEdxSessionTicket(ticket)
+      .then(async (session) => {
+        applyAuthSession(session)
+        const sessionReady = await refreshAuthSession(session.access_token)
+        if (!sessionReady) {
+          throw new Error('Đã nhận phiên từ CMS nhưng chưa xác nhận được quyền truy cập. Vui lòng thử kết nối lại CMS.')
+        }
+        clearCmsSessionBridgeAttempt()
+        const storedTarget = consumeCmsPostAuthReturnPath('/bank')
+        const target = normalizeInternalReturnPath(params.get('next'), storedTarget)
+        setMessage({ type: 'success', title: 'Đăng nhập CMS thành công', body: `Đã nhận quyền ${session.role} cho user ${session.user_id}. Đang chuyển về màn hình yêu cầu...` })
+        window.setTimeout(() => router.replace(target), 350)
+      })
+      .catch((error) => {
+        processedTicketRef.current = null
+        clearCmsSessionBridgeAttempt()
+        setMessage(toUserError(error))
+      })
+  }, [params, applyAuthSession, refreshAuthSession, router])
+
+  return <PageRoot className="page-stack">
+    <PageHeader eyebrow="CMS SSO" title="Đăng nhập bằng phiên CMS/Open edX" icon="shield" primaryAction={<Link className="btn secondary" href="/dashboard">Về dashboard</Link>} />
     <ActionMessage message={message} onClose={() => setMessage(null)} />
-  </div>
+  </PageRoot>
 }
 
 function CmsCallbackFallback() {
-  return <div className="page-stack">
-    <section className="card page-intro">
-      <div>
-        <div className="eyebrow">CMS SSO</div>
-        <h2>Đang chuẩn bị nhận phiên CMS...</h2>
-        <p className="helper">Vui lòng chờ trong giây lát.</p>
-      </div>
-      <Link className="btn secondary" href="/dashboard">Về dashboard</Link>
-    </section>
-  </div>
+  return <PageRoot className="page-stack">
+    <PageHeader eyebrow="CMS SSO" title="Đang chuẩn bị nhận phiên CMS..." icon="shield" primaryAction={<Link className="btn secondary" href="/dashboard">Về dashboard</Link>} />
+  </PageRoot>
 }
 
 export default function CmsCallbackPage() {

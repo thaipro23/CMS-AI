@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 from sqlalchemy.orm import Session
 from app.core.rbac import UserContext
 from app.models.audit import AuditLog
@@ -57,9 +60,19 @@ def _redact_metadata(value: Any) -> Any:
             else:
                 result[key] = _redact_metadata(item)
         return result
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple, set)):
         return [_redact_metadata(item) for item in value]
-    return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def log_audit(
@@ -83,6 +96,12 @@ def log_audit(
     Older calls using user/system/external are still accepted and normalized.
     """
     try:
+        # A failed flush/commit leaves SQLAlchemy's Session inactive. Route
+        # handlers still record a best-effort failure audit, so recover the
+        # transaction before adding the audit row instead of producing a second
+        # PendingRollbackError that hides the original API failure.
+        if not db.is_active:
+            db.rollback()
         row = AuditLog(
             course_id=course_id,
             actor_id=user.user_id if user else 'system',

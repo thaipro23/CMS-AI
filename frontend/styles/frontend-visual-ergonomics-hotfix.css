@@ -1,0 +1,242 @@
+/* v25.9.16.7.2.64.16.5.7.2.3 — visual ergonomics, topbar navigation and scroll fixes.
+   Imported last so legacy 750/800/900 weights and sticky overrides cannot win. */
+
+/* Readable enterprise typography: reserve strong weight for true emphasis. */
+.enterprise-content {
+  color: var(--ui-text, #172033);
+  font-weight: 400;
+  line-height: 1.5;
+}
+.enterprise-content h1,
+.enterprise-content h2,
+.enterprise-content h3,
+.enterprise-content h4,
+.enterprise-content h5,
+.enterprise-content h6 {
+  font-weight: 600 !important;
+  letter-spacing: -.018em;
+}
+.enterprise-content b,
+.enterprise-content strong,
+.enterprise-data-table b,
+.enterprise-data-table strong,
+.card b,
+.card strong {
+  font-weight: 600;
+}
+.enterprise-content .eyebrow,
+.enterprise-content label,
+.enterprise-content .status,
+.enterprise-content .status-pill,
+.enterprise-content .status-badge,
+.enterprise-content .badge,
+.enterprise-content .soft-tag,
+.enterprise-content .enterprise-table-summary,
+.enterprise-content .bank-table-result-count,
+.enterprise-content .bank-table-filter-field > span,
+.enterprise-content .question-review-label {
+  font-weight: 600 !important;
+}
+.btn,
+button,
+.enterprise-content .btn {
+  font-weight: 600 !important;
+}
+
+/* Question review should read like the Release preview, not like a bold poster. */
+.question-review-dialog .question-review-drawer__body,
+.question-review-dialog .question-review-block,
+.question-review-dialog .answer-option {
+  font-weight: 400;
+}
+.question-review-dialog .question-prompt {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  line-height: 1.55 !important;
+}
+.question-review-dialog .answer-option,
+.question-review-dialog .answer-option > span:last-child {
+  font-weight: 400 !important;
+  line-height: 1.45;
+}
+.question-review-dialog .answer-option.correct,
+.question-review-dialog .answer-option.correct > span:last-child {
+  font-weight: 600 !important;
+}
+.question-review-dialog .question-review-label {
+  color: #2563eb;
+  font-size: 11px;
+  letter-spacing: .045em;
+}
+.question-review-dialog .question-review-metadata b { font-weight: 500 !important; }
+
+/* Clickable route context belongs in the fixed topbar. */
+.enterprise-topbar-page-copy { gap: 2px; }
+.enterprise-topbar-breadcrumbs {
+  min-width: 0;
+  max-width: min(760px, 58vw);
+  overflow: hidden;
+  color: var(--ui-text-muted, #64748b);
+  font-size: 10px;
+  line-height: 1.25;
+}
+.enterprise-topbar-breadcrumbs ol {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  white-space: nowrap;
+}
+.enterprise-topbar-breadcrumbs li {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.enterprise-topbar-breadcrumbs li + li::before {
+  content: '/';
+  margin-right: 5px;
+  color: #94a3b8;
+}
+.enterprise-topbar-breadcrumbs a,
+.enterprise-topbar-breadcrumbs span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  text-overflow: ellipsis;
+}
+.enterprise-topbar-breadcrumbs a:hover,
+.enterprise-topbar-breadcrumbs a:focus-visible {
+  color: var(--ui-accent, #2563eb);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.enterprise-topbar-breadcrumbs li:last-child span { color: #475569; }
+
+/* Chapter commands carry the useful counts; no duplicate KPI strip. */
+.chapter-command-bar {
+  display: block !important;
+  padding: 14px !important;
+}
+.chapter-command-bar .chapter-primary-actions {
+  width: 100%;
+  max-width: none;
+  justify-content: flex-start;
+}
+.chapter-command-bar .chapter-action-button,
+.chapter-command-bar .btn {
+  min-height: 40px;
+}
+.chapter-command-summary,
+.bank-release-audit-panel,
+.bank-release-audit-stats { display: none !important; }
+
+/* Quiz creation keeps Quiz and Final configuration side-by-side on desktop. */
+.quiz-config-modal { width: min(1180px, calc(100vw - 48px)) !important; }
+.quiz-modal-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  align-items: stretch;
+  gap: 16px;
+}
+.quiz-modal-grid > * { min-width: 0; }
+.quiz-config-modal .popup-action-panel { height: 100%; }
+
+/* Main-content is always the vertical scroll owner. */
+.enterprise-content,
+.enterprise-content.student-management-page,
+.enterprise-content.teacher-management-page,
+.enterprise-content.training-management-page {
+  min-height: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.enterprise-content.student-management-page > *,
+.enterprise-content.teacher-management-page > * {
+  flex: 0 0 auto;
+}
+.student-management-page .enterprise-table-shell,
+.student-management-page .enterprise-table-scroll,
+.student-management-page .academic-unified-card {
+  touch-action: pan-x pan-y;
+}
+
+/* Teacher filters remain in normal document flow; no floating/overlap while scrolling. */
+.teacher-management-page .teacher-workspace-card,
+.teacher-management-page .academic-filter-bar,
+.teacher-management-page .teacher-filter-bar,
+.teacher-management-page .ux-filter-grid {
+  position: static !important;
+  inset: auto !important;
+  top: auto !important;
+  z-index: auto !important;
+}
+.teacher-management-page > .enterprise-page-header {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 !important;
+}
+.teacher-management-page > .enterprise-page-header + .teacher-workspace-card {
+  margin-top: 0 !important;
+}
+.teacher-management-page .enterprise-page-actions {
+  position: static !important;
+  align-self: auto;
+}
+.teacher-management-page .teacher-identity,
+.teacher-management-page .teacher-identity-text-only {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 3px !important;
+  align-items: start;
+}
+.teacher-management-page .teacher-avatar { display: none !important; }
+.teacher-management-page .teacher-identity b,
+.teacher-management-page .teacher-identity small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.teacher-management-page .teacher-identity b { font-size: 13px; font-weight: 600; }
+.teacher-management-page .teacher-identity small { font-size: 11px; line-height: 1.35; }
+.teacher-management-page .inline-notice,
+.teacher-management-page .alert,
+.teacher-management-page .academic-inline-error,
+.teacher-management-page .academic-inline-notice {
+  position: static !important;
+  inset: auto !important;
+  z-index: auto !important;
+  min-height: 0;
+}
+.teacher-management-page .teacher-row-action,
+.teacher-management-page .enterprise-kind-actions .btn {
+  position: relative;
+  z-index: 1;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.teacher-management-page .enterprise-kind-actions {
+  min-width: 112px;
+  overflow: visible;
+}
+
+@media (max-width: 900px) {
+  .enterprise-topbar-breadcrumbs { max-width: 48vw; }
+  .quiz-modal-grid { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
+@media (max-width: 767px) {
+  .enterprise-topbar-breadcrumbs { display: none; }
+  .teacher-management-page > .enterprise-page-header { min-height: 0; }
+}

@@ -1,0 +1,31 @@
+Batch 31 — Udemy Subject Management
+Baseline: Batch 30
+
+NEW
+backend/alembic/versions/0054_v25_9_16_7_2_64_31_subject_delivery.py
+backend/app/services/academic/subject_delivery.py
+backend/app/tests/test_v25_9_16_7_2_64_31_udemy_subject_management.py
+frontend/app/subject-management/page.tsx
+frontend/styles/subject-management-udemy.css
+docs/UDEMY_SUBJECT_MANAGEMENT_BATCH_31.md
+docs/CHANGED_FILES_UDEMY_SUBJECT_MANAGEMENT_BATCH_31.txt
+
+MODIFIED
+backend/app/models/academic.py
+backend/app/schemas/academic.py
+backend/app/api/routes/academic.py
+backend/app/worker.py
+backend/app/services/academic_service.py
+backend/app/api/routes/learning_analytics.py
+backend/app/services/learning_analytics/analytics_core_service.py
+frontend/app/layout.tsx
+frontend/components/layout/AppShell.tsx
+frontend/types/index.ts
+frontend/lib/api.ts
+frontend/app/jobs/page.tsx
+
+NOT CHANGED
+openedx-connector-plugin/**
+openedx-unit-reset-plugin/**
+frontend-app-learning-patch/**
+docker-compose.prod.yml

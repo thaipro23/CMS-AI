@@ -1,0 +1,23 @@
+BATCH 35.3.1 CHANGED FILES
+Target: v25.9.16.7.2.64.16.5.7.2.8
+
+M frontend/app/student-management/cms/page.tsx
+M frontend/app/student-management/udemy/page.tsx
+M backend/app/tests/test_v25_9_16_7_2_64_35_3_training_platform_operations_split.py
+M backend/app/tests/test_v25_9_16_7_2_64_35_2_term_subject_management.py
+M backend/app/core/config.py
+M frontend/package.json
+M frontend/package-lock.json
+M e2e/package.json
+M e2e/package-lock.json
+M frontend/Dockerfile
+M docker-compose.prod.yml
+M .env.example
+M .env.production.example
+M README.md
+M CHANGELOG.md
+M RUN_CURRENT.md
+A RELEASE_v25.9.16.7.2.64.16.5.7.2.8_STUDENT_ROUTE_STATIC_EXPORT_HOTFIX.md
+A VERIFICATION_v25.9.16.7.2.64.16.5.7.2.8.md
+A RUN_V25_9_16_7_2_64_16_5_7_2_8.md
+A CHANGED_FILES_v25.9.16.7.2.64.16.5.7.2.8.txt

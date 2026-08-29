@@ -1,0 +1,51 @@
+v25.9.16.7.2.64.16.5.7.2.1 — Public npm Lockfile & Project Handoff Hotfix
+
+Files .env.example and .env.example differ
+Files .env.production.example and .env.production.example differ
+Files .env.uat-http.example and .env.uat-http.example differ
+Files .github/workflows/ci.yml and .github/workflows/ci.yml differ
+Only in /mnt/data/work_5712_lockfix/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2: AI_SERVER_PROJECT_HANDOFF_V25_9_16_7_2_64_16_5_7_2_1.md
+Only in /mnt/data/work_5712_lockfix/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2: CHANGED_FILES_v25.9.16.7.2.64.16.5.7.2.1.txt
+Files CHANGELOG.md and CHANGELOG.md differ
+Files README.md and README.md differ
+Only in /mnt/data/work_5712_lockfix/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2: RELEASE_v25.9.16.7.2.64.16.5.7.2.1_PUBLIC_NPM_LOCKFILE_PROJECT_HANDOFF.md
+Files RUN_CURRENT.md and RUN_CURRENT.md differ
+Only in /mnt/data/work_5712_lockfix/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2: RUN_V25_9_16_7_2_64_16_5_7_2_1.md
+Only in /mnt/data/work_5712_lockfix/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2: VERIFICATION_v25.9.16.7.2.64.16.5.7.2.1.md
+Files backend/app/core/config.py and backend/app/core/config.py differ
+Only in backend/app/tests: test_v25_9_16_7_2_64_16_5_7_2_1_public_npm_registry.py
+Files docker-compose.prod.yml and docker-compose.prod.yml differ
+Only in e2e: .npmrc
+Files e2e/package-lock.json and e2e/package-lock.json differ
+Files e2e/package.json and e2e/package.json differ
+Only in frontend: .npmrc
+Files frontend/Dockerfile and frontend/Dockerfile differ
+Files frontend/components/navigation/Breadcrumbs.tsx and frontend/components/navigation/Breadcrumbs.tsx differ
+Files frontend/package-lock.json and frontend/package-lock.json differ
+Files frontend/package.json and frontend/package.json differ
+Files frontend/styles/frontend-runtime-contracts.css and frontend/styles/frontend-runtime-contracts.css differ
+Files frontend/styles/full-frontend-design-contract.css and frontend/styles/full-frontend-design-contract.css differ
+Files scripts/ci-e2e-container-hardening-report.sh and scripts/ci-e2e-container-hardening-report.sh differ
+Files scripts/claude-code-review-pack.sh and scripts/claude-code-review-pack.sh differ
+Files scripts/frontend-build-verify.sh and scripts/frontend-build-verify.sh differ
+Files scripts/frontend-runtime-contracts-report.sh and scripts/frontend-runtime-contracts-report.sh differ
+Files scripts/full-frontend-design-contract-report.sh and scripts/full-frontend-design-contract-report.sh differ
+Files scripts/global-visual-polish-report.sh and scripts/global-visual-polish-report.sh differ
+Files scripts/load-test-hot-endpoints.sh and scripts/load-test-hot-endpoints.sh differ
+Files scripts/maintainability-contract-report.sh and scripts/maintainability-contract-report.sh differ
+Only in scripts: npm-public-registry-lockfile-report.sh
+Files scripts/openedx-publish-verify.sh and scripts/openedx-publish-verify.sh differ
+Files scripts/performance-readiness-report.sh and scripts/performance-readiness-report.sh differ
+Files scripts/performance-worker-reliability-report.sh and scripts/performance-worker-reliability-report.sh differ
+Files scripts/pilot-operations-runbook.sh and scripts/pilot-operations-runbook.sh differ
+Files scripts/pilot-release-candidate-report.sh and scripts/pilot-release-candidate-report.sh differ
+Files scripts/production-pilot-final-gate.sh and scripts/production-pilot-final-gate.sh differ
+Files scripts/production-security-closure-report.sh and scripts/production-security-closure-report.sh differ
+Files scripts/production-ux-acceptance-report.sh and scripts/production-ux-acceptance-report.sh differ
+Files scripts/query-hotspot-report.sh and scripts/query-hotspot-report.sh differ
+Files scripts/security-attack-simulation-report.sh and scripts/security-attack-simulation-report.sh differ
+Files scripts/security-readiness-report.sh and scripts/security-readiness-report.sh differ
+Files scripts/uat-build-backend-health-hotfix-report.sh and scripts/uat-build-backend-health-hotfix-report.sh differ
+Files scripts/uat-build-gate.sh and scripts/uat-build-gate.sh differ
+Files scripts/uat-runtime-verify.sh and scripts/uat-runtime-verify.sh differ
+Only in /tmp/base_5712_original/ai_server_openedx_v25_9_16_7_2_64_16_5_7_2: work6416

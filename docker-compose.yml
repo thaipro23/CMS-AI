@@ -37,6 +37,8 @@ services:
   backend:
     build: ./backend
     env_file: .env
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     ports:
       - "8000:8000"
     depends_on:
@@ -53,6 +55,8 @@ services:
   worker:
     build: ./backend
     env_file: .env
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
     depends_on:
       - backend
       - redis

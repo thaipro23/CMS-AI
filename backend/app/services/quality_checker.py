@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.course import ContentChunk
 from app.services.source_chunk_refs import get_existing_content_chunks, get_missing_content_chunk_ids, split_source_chunk_ids
+from app.services.question_content import normalize_question_type
 
 FORBIDDEN_PATTERNS = [
     'không phải là không',
@@ -44,7 +45,9 @@ class QualityChecker:
             'C': item.get('option_c'),
             'D': item.get('option_d'),
         }
+        qtype = normalize_question_type(item.get('question_type') or ('multi_select' if item.get('correct_answers') else 'single_select'))
         correct = item.get('correct_answer')
+        correct_answers = item.get('correct_answers')
         source_ref = item.get('source_ref') or (item.get('source') or {}).get('ref')
         source_chunk_id = item.get('source_chunk_id') or (item.get('source') or {}).get('chunk_id')
 
@@ -52,8 +55,17 @@ class QualityChecker:
             return self._fail('missing_question', 'Thiếu câu hỏi hoặc câu hỏi quá ngắn.')
         if len([v for v in options.values() if str(v or '').strip()]) != 4:
             return self._fail('missing_options', 'Thiếu câu hỏi hoặc không đủ 4 đáp án.', detail={'non_empty_options': len([v for v in options.values() if str(v or '').strip()])})
-        if correct not in {'A', 'B', 'C', 'D'}:
-            return self._fail('invalid_answer', 'Đáp án đúng không hợp lệ.', detail={'correct_answer': correct})
+        if qtype == 'single_select':
+            if correct not in {'A', 'B', 'C', 'D'}:
+                return self._fail('invalid_answer', 'Đáp án đúng không hợp lệ.', detail={'correct_answer': correct})
+        elif qtype == 'multi_select':
+            if not isinstance(correct_answers, list):
+                return self._fail('invalid_answers', 'Câu nhiều đáp án phải có correct_answers dạng danh sách.')
+            normalized_correct = [str(value or '').strip().upper() for value in correct_answers]
+            if len(set(normalized_correct)) != len(normalized_correct) or not 2 <= len(normalized_correct) <= 3 or any(value not in {'A', 'B', 'C', 'D'} for value in normalized_correct):
+                return self._fail('invalid_answers', 'Câu nhiều đáp án phải có 2–3 đáp án đúng khác nhau trong A/B/C/D.', detail={'correct_answers': normalized_correct})
+        else:
+            return self._fail('unsupported_ai_question_type', f'QualityChecker AI chưa hỗ trợ loại {qtype}.')
         if not item.get('explanation'):
             flags.append('missing_explanation')
         if not source_ref and not source_chunk_id:

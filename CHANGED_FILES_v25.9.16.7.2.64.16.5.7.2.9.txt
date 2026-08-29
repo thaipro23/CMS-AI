@@ -1,0 +1,11 @@
+Batch 35.3.2 — Udemy External ID / CSV compatibility
+
+Core changes:
+- backend/app/services/academic/udemy_progress.py
+- backend/app/api/routes/academic.py
+- backend/app/tests/test_v25_9_16_7_2_64_35_3_2_udemy_external_id_compat.py
+- frontend/components/subject-management/UdemyProgressImportDialog.tsx
+- version-bearing deployment/package files
+- release/run/verification documentation
+
+No database migration.

@@ -19,6 +19,7 @@ class QuestionOut(BaseModel):
     difficulty: str
     cognitive_level: str
     learning_objective: str
+    pedagogy_json: dict | None = None
     question_type: str
     question_text: str
     option_a: str
@@ -96,6 +97,7 @@ class QuestionUpdateRequest(BaseModel):
     difficulty: str | None = Field(default=None, pattern='^(easy|medium|hard)$')
     cognitive_level: str | None = Field(default=None, pattern='^(remember|understand|recognize_example|simple_apply)$')
     learning_objective: str | None = None
+    pedagogy_json: dict | None = None
     question_text: str | None = None
     option_a: str | None = None
     option_b: str | None = None

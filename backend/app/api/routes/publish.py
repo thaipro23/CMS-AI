@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from app.core.errors import public_http_exception
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.db.session import get_db
 from app.models.question import Question
@@ -51,8 +52,8 @@ async def dry_run_publish_question_to_openedx(question_id: str, mode: str = Quer
         log_audit(db, action='openedx.publish_dry_run.question', status='success', message='Kiểm tra publish câu hỏi sang Open edX thành công', user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'target_library_key': question.target_library_key, 'difficulty': question.difficulty, 'result': result, 'mode': mode})
         return result
     except ValueError as exc:
-        log_audit(db, action='openedx.publish_dry_run.question', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='openedx.publish_dry_run.question', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=question.course_id, target_type='question', target_id=question_id)
+        raise public_http_exception(status_code=400, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
 
 
 @router.post('/questions/{question_id}/openedx', response_model=QuestionOut)
@@ -92,12 +93,12 @@ async def publish_question_to_openedx(question_id: str, mode: str = Query('publi
     except ValueError as exc:
         if 'single_batch' in locals() and single_batch:
             single_batch.status = 'failed'; single_batch.failed_count = 1; single_batch.errors_json = [{'question_id': question_id, 'error': str(exc)}]; db.commit()
-        log_audit(db, action='openedx.publish.question', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='openedx.publish.question', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=question.course_id, target_type='question', target_id=question_id)
+        raise public_http_exception(status_code=400, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
     except Exception as exc:
         if 'single_batch' in locals() and single_batch:
             single_batch.status = 'failed'; single_batch.failed_count = 1; single_batch.errors_json = [{'question_id': question_id, 'error': str(exc)}]; db.commit()
-        log_audit(db, action='openedx.publish.question', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'target_library_key': question.target_library_key})
+        log_audit(db, action='openedx.publish.question', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=question.course_id, target_type='question', target_id=question_id, metadata={'target_library_key': question.target_library_key})
         raise HTTPException(status_code=502, detail=f'Open edX publish failed: {exc}') from exc
 
 
@@ -127,10 +128,10 @@ async def publish_course_to_openedx(course_id: str, mode: str = Query('publish_n
     except HTTPException:
         raise
     except ValueError as exc:
-        log_audit(db, action='openedx.publish.course', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course', target_id=course_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='openedx.publish.course', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=course_id, target_type='course', target_id=course_id)
+        raise public_http_exception(status_code=400, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
     except Exception as exc:
-        log_audit(db, action='openedx.publish.course', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course', target_id=course_id)
+        log_audit(db, action='openedx.publish.course', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=course_id, target_type='course', target_id=course_id)
         raise HTTPException(status_code=502, detail=f'Open edX publish failed: {exc}') from exc
 
 
@@ -151,8 +152,8 @@ async def rollback_publish_batch(batch_id: str, level: str = Query('ai_server'),
         log_audit(db, action='openedx.publish.rollback', status='success', message='Rollback batch publish thành công', user=user, course_id=batch.course_id, target_type='publish_batch', target_id=batch_id, metadata={'result': result, 'level': level})
         return result
     except Exception as exc:
-        log_audit(db, action='openedx.publish.rollback', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=batch.course_id, target_type='publish_batch', target_id=batch_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='openedx.publish.rollback', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=batch.course_id, target_type='publish_batch', target_id=batch_id)
+        raise public_http_exception(status_code=502, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
 
 
 @router.post('/courses/{course_id}/family-bank-plan/preview')
@@ -187,7 +188,12 @@ async def preview_family_bank_plan(course_id: str, payload: FamilyBankPlanPrevie
         return result
     except Exception as exc:
         log_audit(db, action='openedx.family_bank_plan.preview', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=f'{type(exc).__name__}: {exc}', user=user, course_id=course_id, target_type='course', target_id=course_id)
-        raise HTTPException(status_code=400, detail=f'{type(exc).__name__}: {exc}') from exc
+        raise public_http_exception(
+            status_code=400,
+            code='PUBLISH_PLAN_PREVIEW_FAILED',
+            message='Không thể tính kế hoạch bộ câu hỏi để xuất bản.',
+            logger_name=__name__,
+        ) from exc
 
 
 @router.post('/courses/{course_id}/family-bank-plan/publish')
@@ -205,8 +211,8 @@ async def publish_family_bank_plan(course_id: str, payload: FamilyBankPlanPublis
         log_audit(db, action='openedx.family_bank_plan.publish', status=status, message='Publish Family Slot Plan sang Open edX hoàn tất', user=user, course_id=course_id, target_type='course', target_id=course_id, metadata={'result': result})
         return result
     except Exception as exc:
-        log_audit(db, action='openedx.family_bank_plan.publish', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course', target_id=course_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='openedx.family_bank_plan.publish', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=course_id, target_type='course', target_id=course_id)
+        raise public_http_exception(status_code=502, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
 
 
 @router.post('/courses/{course_id}/cms-quiz-node/create')
@@ -235,11 +241,11 @@ async def create_cms_quiz_node(course_id: str, payload: CmsQuizNodeCreateRequest
         )
         return result
     except ValueError as exc:
-        log_audit(db, action='openedx.cms_quiz_node.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.parent_node_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='openedx.cms_quiz_node.create', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=course_id, target_type='course_node', target_id=payload.parent_node_id)
+        raise public_http_exception(status_code=400, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
     except Exception as exc:
-        log_audit(db, action='openedx.cms_quiz_node.create', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.parent_node_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='openedx.cms_quiz_node.create', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=course_id, target_type='course_node', target_id=payload.parent_node_id)
+        raise public_http_exception(status_code=502, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
 
 
 
@@ -269,8 +275,8 @@ async def insert_cms_problem_banks(course_id: str, payload: CmsProblemBankInsert
         )
         return result
     except ValueError as exc:
-        log_audit(db, action='openedx.cms_problem_banks.insert', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.unit_node_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        log_audit(db, action='openedx.cms_problem_banks.insert', status='failed', error_type=AuditErrorType.VALIDATION_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=course_id, target_type='course_node', target_id=payload.unit_node_id)
+        raise public_http_exception(status_code=400, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc
     except Exception as exc:
-        log_audit(db, action='openedx.cms_problem_banks.insert', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=user, course_id=course_id, target_type='course_node', target_id=payload.unit_node_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        log_audit(db, action='openedx.cms_problem_banks.insert', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message='Không thể hoàn tất thao tác xuất bản.', user=user, course_id=course_id, target_type='course_node', target_id=payload.unit_node_id)
+        raise public_http_exception(status_code=502, code='PUBLISH_OPERATION_FAILED', message='Không thể hoàn tất thao tác xuất bản.', logger_name=__name__) from exc

@@ -1,0 +1,10 @@
+frontend/components/layout/AppShell.tsx
+frontend/components/ui/InlineNotice.tsx
+frontend/components/ui/ActionMessage.tsx
+frontend/app/bank/_components/pages/BankHistoryPage.tsx
+frontend/app/analytics/learning/page.tsx
+frontend/app/globals.css
+frontend/app/layout.tsx
+frontend/styles/global-workspace-scroll-notice-hotfix.css
+docs/GLOBAL_SCROLL_NOTICE_STRUCTURE_HOTFIX_BATCH_12.md
+docs/CHANGED_FILES_GLOBAL_SCROLL_NOTICE_BATCH_12.txt

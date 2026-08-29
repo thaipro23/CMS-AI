@@ -1,0 +1,279 @@
+/*
+ * Batch 12 — global workspace scroll owner and non-overlapping feedback contract.
+ * This file is intentionally imported last. It closes legacy route-specific
+ * overflow and broad span selectors without changing feature behavior.
+ */
+
+/* The AppShell is one viewport. Topbar/sidebar stay fixed and main is the only
+   vertical scroll owner on Bank, Student, Teacher, Analytics and Operations. */
+.enterprise-app-shell.enterprise-unified-shell,
+.enterprise-app-shell.enterprise-unified-shell > .enterprise-workspace {
+  min-height: 0 !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell > .enterprise-workspace {
+  display: grid !important;
+  grid-template-rows: var(--acms-shell-topbar-height, 64px) minmax(0, 1fr) !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content[data-scroll-owner='workspace'] {
+  box-sizing: border-box;
+  align-self: stretch !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-x: none !important;
+  overscroll-behavior-y: contain !important;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+html[data-dialog-open='true'] .enterprise-app-shell.enterprise-unified-shell .enterprise-content[data-scroll-owner='workspace'] {
+  overflow: hidden !important;
+  touch-action: none;
+}
+
+/* Page stacks must preserve each section's natural height so the workspace,
+   not its children, receives the vertical overflow. The shared page contract
+   renders .enterprise-content.page-stack as flex; without flex-shrink: 0 the
+   browser compresses long Bank tables to the viewport and no scrollbar is
+   created even though content is visually clipped. */
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack {
+  align-content: start !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack > * {
+  min-width: 0;
+  max-width: 100%;
+  align-self: start;
+  flex-shrink: 0 !important;
+}
+
+/* Explicitly close the routes that previously inherited page-level scroll locks. */
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content:is(
+  .bank-history-page,
+  .student-management-page,
+  .teacher-management-page,
+  .training-management-page,
+  .learning-analytics-page,
+  .analytics-learning-page,
+  .jobs-console,
+  .audit-console,
+  .ap-sync-page,
+  .premises-page,
+  .semesters-page,
+  .access-console
+) {
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow-y: auto !important;
+}
+
+/* Icons are structural columns, never decorative absolute layers. */
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-page-identity__main,
+  .enterprise-section-heading,
+  .visual-section-heading
+) {
+  min-width: 0;
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-page-identity__icon,
+  .enterprise-section-icon,
+  .visual-section-heading > .visual-icon,
+  .workspace-section-head .visual-icon,
+  .section-head .visual-icon,
+  .compact-section-head .visual-icon
+) {
+  position: static !important;
+  inset: auto !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: none !important;
+  margin: 0 !important;
+  z-index: auto !important;
+  flex-shrink: 0 !important;
+  align-self: flex-start !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-page-identity__copy,
+  .enterprise-section-copy,
+  .visual-section-heading > div,
+  .notice-copy
+) {
+  min-width: 0 !important;
+}
+
+/* Shared feedback structure. The legacy rule targeted every span, including
+   VisualIcon's span; these component classes make icon/copy/action independent. */
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-inline-notice,
+  .enterprise-action-message,
+  .academic-inline-notice:has(> .notice-copy),
+  .notice:has(> .notice-copy)
+) {
+  position: relative !important;
+  isolation: isolate;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  display: grid !important;
+  grid-template-columns: 32px minmax(0, 1fr) auto !important;
+  align-items: start !important;
+  column-gap: 10px !important;
+  row-gap: 3px !important;
+  padding: 10px 12px !important;
+  margin: 0 !important;
+  overflow: visible !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-inline-notice,
+  .enterprise-action-message,
+  .academic-inline-notice:has(> .notice-copy),
+  .notice:has(> .notice-copy)
+) > .notice-visual-icon {
+  position: static !important;
+  inset: auto !important;
+  transform: none !important;
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  margin: 0 !important;
+  flex: 0 0 32px !important;
+  align-self: start !important;
+  z-index: auto !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-inline-notice,
+  .enterprise-action-message,
+  .academic-inline-notice:has(> .notice-copy),
+  .notice:has(> .notice-copy)
+) > .notice-visual-icon svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-inline-notice,
+  .enterprise-action-message,
+  .academic-inline-notice:has(> .notice-copy),
+  .notice:has(> .notice-copy)
+) > .notice-copy {
+  grid-column: 2;
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 3px !important;
+  align-self: center;
+}
+
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-inline-notice,
+  .enterprise-action-message,
+  .academic-inline-notice:has(> .notice-copy),
+  .notice:has(> .notice-copy)
+) > .notice-copy > * {
+  min-width: 0 !important;
+  max-width: 100%;
+  margin: 0 !important;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.enterprise-app-shell.enterprise-unified-shell :is(
+  .enterprise-inline-notice,
+  .enterprise-action-message,
+  .academic-inline-notice:has(> .notice-copy),
+  .notice:has(> .notice-copy)
+) > :is(.notice-action-btn, .notice-close) {
+  position: static !important;
+  grid-column: 3;
+  align-self: center;
+  margin: 0 !important;
+  z-index: auto !important;
+}
+
+/* Legacy text-only errors still use one content column and cannot overlap. */
+.enterprise-app-shell.enterprise-unified-shell .enterprise-standard-page .academic-inline-error:not(:has(> .notice-copy)) {
+  position: static !important;
+  min-width: 0;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: 3px !important;
+  padding: 10px 12px !important;
+  margin: 0 !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell .enterprise-standard-page .academic-inline-error:not(:has(> .notice-copy)) > * {
+  min-width: 0 !important;
+  margin: 0 !important;
+  overflow-wrap: anywhere;
+}
+
+/* Feedback is a distinct page row; the next section must not touch it. */
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack > :is(
+  .enterprise-inline-notice,
+  .enterprise-action-message,
+  .academic-inline-error,
+  .academic-inline-notice,
+  .notice,
+  .alert
+) {
+  align-self: stretch;
+}
+
+@media (max-width: 640px) {
+  .enterprise-app-shell.enterprise-unified-shell :is(
+    .enterprise-inline-notice,
+    .enterprise-action-message,
+    .academic-inline-notice:has(> .notice-copy),
+    .notice:has(> .notice-copy)
+  ) {
+    grid-template-columns: 30px minmax(0, 1fr) !important;
+  }
+
+  .enterprise-app-shell.enterprise-unified-shell :is(
+    .enterprise-inline-notice,
+    .enterprise-action-message,
+    .academic-inline-notice:has(> .notice-copy),
+    .notice:has(> .notice-copy)
+  ) > .notice-visual-icon {
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    max-width: 30px !important;
+    flex-basis: 30px !important;
+  }
+
+  .enterprise-app-shell.enterprise-unified-shell :is(
+    .enterprise-inline-notice,
+    .enterprise-action-message,
+    .academic-inline-notice:has(> .notice-copy),
+    .notice:has(> .notice-copy)
+  ) > :is(.notice-action-btn, .notice-close) {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    width: 100%;
+  }
+}

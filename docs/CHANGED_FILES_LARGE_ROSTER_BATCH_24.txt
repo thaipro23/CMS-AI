@@ -1,0 +1,7 @@
+.env.example
+.env.production.example
+backend/app/core/config.py
+backend/app/services/academic/sync_enrollment.py
+openedx-connector-plugin/openedx_ai_connector/student_insight.py
+docs/LARGE_ROSTER_LEGACY_IDENTITY_BATCH_24.md
+docs/CHANGED_FILES_LARGE_ROSTER_BATCH_24.txt

@@ -1,4 +1,9 @@
+import csv
+import io
+
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.db.session import get_db
@@ -76,6 +81,14 @@ def _visible_audit_row(db: Session, service: BusinessRBACService, user: UserCont
     return False
 
 
+def _csv_cell(value: object | None) -> str:
+    """Neutralize spreadsheet formulas while preserving readable audit text."""
+    text = str(value or '')
+    if text[:1] in {'=', '+', '-', '@'}:
+        return "'" + text
+    return text
+
+
 def _serialize(row: AuditLog):
     return {
         'id': row.id,
@@ -93,21 +106,7 @@ def _serialize(row: AuditLog):
     }
 
 
-
-@router.get('')
-async def list_audit_logs(
-    course_id: str | None = Query(default=None),
-    status: str | None = Query(default=None),
-    error_type: str | None = Query(default=None),
-    actor_id: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
-    user: UserContext = Depends(require_permission('view_jobs')),
-):
-    if course_id:
-        ensure_course_access(user, course_id)
-    query = db.query(AuditLog)
+def _apply_audit_filters(query, *, course_id: str | None, status: str | None, error_type: str | None, actor_id: str | None, search: str | None):
     if course_id:
         query = query.filter(AuditLog.course_id == course_id)
     if status and status != 'all':
@@ -115,7 +114,51 @@ async def list_audit_logs(
     if error_type and error_type != 'all':
         query = query.filter(AuditLog.error_type == error_type)
     if actor_id:
-        query = query.filter(AuditLog.actor_id.ilike(f'%{actor_id}%'))
+        query = query.filter(AuditLog.actor_id.ilike(f'%{actor_id.strip()}%'))
+    needle = (search or '').strip()
+    if needle:
+        pattern = f'%{needle}%'
+        query = query.filter(or_(
+            AuditLog.action.ilike(pattern),
+            AuditLog.actor_id.ilike(pattern),
+            AuditLog.actor_role.ilike(pattern),
+            AuditLog.target_type.ilike(pattern),
+            AuditLog.target_id.ilike(pattern),
+            AuditLog.message.ilike(pattern),
+            AuditLog.error_type.ilike(pattern),
+        ))
+    return query
+
+
+def _visible_rows(db: Session, service: BusinessRBACService, user: UserContext, ordered, *, limit: int) -> list[AuditLog]:
+    if service.is_system_admin(user):
+        return ordered.limit(limit).all()
+    candidates = ordered.limit(min(500, limit)).all()
+    return [row for row in candidates if _visible_audit_row(db, service, user, row)]
+
+
+@router.get('')
+async def list_audit_logs(
+    course_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    error_type: str | None = Query(default=None),
+    actor_id: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_jobs')),
+):
+    if course_id:
+        ensure_course_access(user, course_id)
+    query = _apply_audit_filters(
+        db.query(AuditLog),
+        course_id=course_id,
+        status=status,
+        error_type=error_type,
+        actor_id=actor_id,
+        search=search,
+    )
     service = BusinessRBACService(db)
     ordered = query.order_by(AuditLog.created_at.desc())
     if service.is_system_admin(user):
@@ -132,7 +175,7 @@ async def list_audit_logs(
     # Non-admin audit is fail-closed. We intentionally do not expose global logs.
     # Pull a bounded window and filter by RBAC/actor server-side so users only see
     # their own actions or actions inside their assigned Bank scope.
-    candidate_rows = ordered.limit(max(1000, page * page_size * 10)).all()
+    candidate_rows = ordered.limit(min(500, max(100, page * page_size * 5))).all()
     visible = [row for row in candidate_rows if _visible_audit_row(db, service, user, row)]
     total = len(visible)
     rows = visible[(page - 1) * page_size: page * page_size]
@@ -143,3 +186,45 @@ async def list_audit_logs(
         'page_size': page_size,
         'total_pages': max(1, (total + page_size - 1) // page_size),
     }
+
+
+@router.get('/export.csv')
+def export_audit_logs_csv(
+    course_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    error_type: str | None = Query(default=None),
+    actor_id: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=50000, ge=1, le=50000),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_jobs')),
+):
+    """Export the same bounded, RBAC-filtered audit scope shown in the UI."""
+    if course_id:
+        ensure_course_access(user, course_id)
+    query = _apply_audit_filters(
+        db.query(AuditLog),
+        course_id=course_id,
+        status=status,
+        error_type=error_type,
+        actor_id=actor_id,
+        search=search,
+    )
+    service = BusinessRBACService(db)
+    rows = _visible_rows(db, service, user, query.order_by(AuditLog.created_at.desc()), limit=limit)
+
+    buffer = io.StringIO(newline='')
+    buffer.write('\ufeff')
+    writer = csv.writer(buffer)
+    writer.writerow(['Thời điểm', 'Người thực hiện', 'Vai trò', 'Hành động', 'Kết quả', 'Nguồn lỗi', 'Loại đối tượng', 'Mã đối tượng', 'Nội dung'])
+    for row in rows:
+        writer.writerow([
+            _csv_cell(row.created_at.isoformat() if row.created_at else ''), _csv_cell(row.actor_id), _csv_cell(row.actor_role),
+            _csv_cell(row.action), _csv_cell(row.status), _csv_cell(row.error_type), _csv_cell(row.target_type), _csv_cell(row.target_id), _csv_cell(row.message),
+        ])
+    payload = buffer.getvalue().encode('utf-8')
+    return StreamingResponse(
+        iter([payload]),
+        media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': 'attachment; filename="audit-current-filter.csv"'},
+    )

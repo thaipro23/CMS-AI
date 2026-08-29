@@ -1,0 +1,35 @@
+# Changed files — v25.9.16.7.2.64.16.5.7.2.6
+
+Compared with Batch 35.1 canonical source.
+
+ADDED	CHANGED_FILES_v25.9.16.7.2.64.16.5.7.2.6.txt
+MODIFIED	.env.example
+MODIFIED	.env.production.example
+ADDED	AI_SERVER_PROJECT_HANDOFF_V25_9_16_7_2_64_16_5_7_2_6.md
+MODIFIED	CHANGELOG.md
+MODIFIED	README.md
+ADDED	RELEASE_v25.9.16.7.2.64.16.5.7.2.6_TERM_SUBJECT_MANAGEMENT_BATCH35_2.md
+MODIFIED	RUN_CURRENT.md
+ADDED	RUN_V25_9_16_7_2_64_16_5_7_2_6.md
+ADDED	VERIFICATION_v25.9.16.7.2.64.16.5.7.2.6.md
+MODIFIED	backend/app/api/routes/academic.py
+MODIFIED	backend/app/core/config.py
+MODIFIED	backend/app/schemas/academic.py
+MODIFIED	backend/app/services/academic/subject_delivery.py
+MODIFIED	backend/app/tests/test_v25_9_16_7_2_64_35_1_udemy_ui_ux_contract.py
+ADDED	backend/app/tests/test_v25_9_16_7_2_64_35_2_term_subject_management.py
+MODIFIED	backend/app/tests/test_v25_9_16_7_2_64_35_udemy_production_hardening.py
+MODIFIED	backend/app/worker.py
+MODIFIED	docker-compose.prod.yml
+ADDED	docs/BATCH35_2_FIX_REPORT_2026-08-06.md
+ADDED	docs/SUBJECT_MANAGEMENT_TERM_SCOPE_BATCH_35_2.md
+MODIFIED	e2e/package-lock.json
+MODIFIED	e2e/package.json
+ADDED	e2e/tests/subject-management-term.spec.ts
+MODIFIED	frontend/Dockerfile
+MODIFIED	frontend/app/subject-management/page.tsx
+MODIFIED	frontend/lib/api.ts
+MODIFIED	frontend/package-lock.json
+MODIFIED	frontend/package.json
+MODIFIED	frontend/styles/subject-management-udemy.css
+MODIFIED	frontend/types/index.ts

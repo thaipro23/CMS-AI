@@ -1,0 +1,49 @@
+BATCH 35.3 CHANGED FILES
+Baseline: v25.9.16.7.2.64.16.5.7.2.6
+Target: v25.9.16.7.2.64.16.5.7.2.7
+
+ADDED (13)
++ AI_SERVER_PROJECT_HANDOFF_V25_9_16_7_2_64_16_5_7_2_7.md
++ CHANGED_FILES_v25.9.16.7.2.64.16.5.7.2.7.txt
++ RELEASE_v25.9.16.7.2.64.16.5.7.2.7_TRAINING_PLATFORM_OPERATIONS_BATCH35_3.md
++ RUN_V25_9_16_7_2_64_16_5_7_2_7.md
++ VERIFICATION_v25.9.16.7.2.64.16.5.7.2.7.md
++ backend/app/tests/test_v25_9_16_7_2_64_35_3_training_platform_operations_split.py
++ docs/TRAINING_PLATFORM_OPERATIONS_BATCH_35_3.md
++ frontend/app/student-management/StudentManagementPlatformPage.tsx
++ frontend/app/student-management/cms/page.tsx
++ frontend/app/student-management/udemy/page.tsx
++ frontend/app/teacher-management/TeacherManagementPlatformPage.tsx
++ frontend/app/teacher-management/cms/page.tsx
++ frontend/app/teacher-management/udemy/page.tsx
+
+MODIFIED (27)
+~ .env.example
+~ .env.production.example
+~ CHANGELOG.md
+~ README.md
+~ RUN_CURRENT.md
+~ backend/app/api/routes/academic.py
+~ backend/app/core/config.py
+~ backend/app/schemas/academic.py
+~ backend/app/services/academic/teacher_report.py
+~ backend/app/services/academic_service.py
+~ backend/app/tests/test_v25_9_16_7_2_64_35_2_term_subject_management.py
+~ backend/app/worker.py
+~ docker-compose.prod.yml
+~ e2e/package-lock.json
+~ e2e/package.json
+~ frontend/Dockerfile
+~ frontend/app/student-management/classes/[classId]/page.tsx
+~ frontend/app/student-management/page.tsx
+~ frontend/app/student-management/subjects/[subjectId]/classes/page.tsx
+~ frontend/app/teacher-management/page.tsx
+~ frontend/app/teacher-management/teachers/[teacherId]/classes/page.tsx
+~ frontend/app/training-management/page.tsx
+~ frontend/components/layout/AppShell.tsx
+~ frontend/lib/api.ts
+~ frontend/package-lock.json
+~ frontend/package.json
+~ frontend/types/index.ts
+
+DELETED (0)

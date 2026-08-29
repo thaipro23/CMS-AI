@@ -1,0 +1,57 @@
+.env.example
+.env.production.example
+CHANGELOG.md
+Jenkinsfile
+Only in /mnt/data/acms_sync_selected: RELEASE_v25.9.16.7.2.64.16.5.7.2.16_AP_SYNC_SELECTED_SUBJECT_SCOPE.md
+Only in /mnt/data/acms_sync_selected: RUN_V25_9_16_7_2_64_16_5_7_2_16.md
+Only in /mnt/data/acms_sync_selected: VERIFICATION_v25.9.16.7.2.64.16.5.7.2.16.md
+Only in /mnt/data/acms_sync_selected: VERSION
+README.md
+RUN_CURRENT.md
+backend/app/core/config.py
+backend/app/schemas/academic.py
+backend/app/services/academic/ap_sync.py
+backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_12_multi_org_shared_library.py
+backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_15_sonar_worker_bank_kpi.py
+backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_16_ap_sync_selected_subject_scope.py
+backend/app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py
+backend/app/tests/test_v25_9_16_7_2_64_35_2_term_subject_management.py
+backend/app/tests/test_v25_9_16_7_2_64_35_3_3_udemy_bulk_zip_import.py
+backend/app/worker.py
+deploy/k8s/base/kustomization.yaml
+deploy/k8s/jobs/kustomization.yaml
+deploy/k8s/jobs/migrate.yaml
+docker-compose.prod.yml
+docs/CHANGED_FILES_AP_SYNC_SELECTED_SUBJECT_SCOPE_V16.txt
+e2e/package-lock.json
+e2e/package.json
+frontend/Dockerfile
+frontend/app/ap-sync/page.tsx
+frontend/package-lock.json
+frontend/package.json
+frontend/types/index.ts
+scripts/build-k8s-images.sh
+scripts/ci-e2e-container-hardening-report.sh
+scripts/claude-code-review-pack.sh
+scripts/frontend-build-verify.sh
+scripts/frontend-runtime-contracts-report.sh
+scripts/full-frontend-design-contract-report.sh
+scripts/global-visual-polish-report.sh
+scripts/load-test-hot-endpoints.sh
+scripts/maintainability-contract-report.sh
+scripts/npm-public-registry-lockfile-report.sh
+scripts/openedx-publish-verify.sh
+scripts/performance-readiness-report.sh
+scripts/performance-worker-reliability-report.sh
+scripts/pilot-operations-runbook.sh
+scripts/pilot-release-candidate-report.sh
+scripts/production-pilot-final-gate.sh
+scripts/production-security-closure-report.sh
+scripts/production-ux-acceptance-report.sh
+scripts/query-hotspot-report.sh
+scripts/security-attack-simulation-report.sh
+scripts/security-readiness-report.sh
+scripts/uat-build-backend-health-hotfix-report.sh
+scripts/uat-build-gate.sh
+scripts/uat-runtime-verify.sh
+scripts/version-contract-check.py

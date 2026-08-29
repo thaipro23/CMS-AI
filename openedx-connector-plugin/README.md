@@ -101,3 +101,48 @@ Use it when AI Server and Open edX run separately and you do not want to maintai
 ```text
 docs/TUTOR_PLUGIN_AI_CONNECTOR_ENV.md
 ```
+
+
+## v25.9.16.5.8 - Unified Open edX Connector academic endpoints
+
+The connector also exposes API-first Student Management endpoints under the canonical connector namespace for AI Server:
+
+```http
+POST /api/ai-connector/v1/users/resolve
+POST /api/ai-connector/v1/courses/search
+```
+
+Security uses HMAC headers from AI Server:
+
+```text
+X-AI-Connector-Timestamp
+X-AI-Connector-Nonce
+X-AI-Connector-Signature
+```
+
+Use the same connector secret as AI Server `OPENEDX_CONNECTOR_HMAC_SECRET`:
+
+```env
+AI_CONNECTOR_HMAC_SECRET=<same-secret-as-AI-server>
+AI_CONNECTOR_MAX_BATCH_SIZE=5000
+```
+
+`users/resolve` intentionally matches only by exact username (`AP username = CMS/Open edX username`). It does not fuzzy-match by name or email.
+
+## v25.9.16.4.0 - Student Progress Dashboard component grades
+
+`POST /api/ai-connector/v1/class-analytics` now returns best-effort component/subsection grade breakdown when the Open edX deployment has `PersistentSubsectionGrade` rows for the requested users and course.
+
+Response fields per student may include:
+
+```json
+{
+  "grade_percent": 78.5,
+  "component_scores": [
+    {"key":"...", "name":"Quiz 1", "earned":8.0, "possible":10.0, "percent":80.0, "category":"subsection"}
+  ],
+  "grade": {"percent": 78.5, "components": []}
+}
+```
+
+If component grades are not available, the endpoint still returns user/enrollment/progress/course-grade data and leaves `component_scores` empty.

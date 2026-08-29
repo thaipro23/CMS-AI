@@ -3,237 +3,159 @@
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { useBankData, Breadcrumb, QuickSearchBox, Modal } from '../shared'
-import { getBankDashboardAnalytics } from '../../../../lib/api'
-import type { DashboardAnalytics, DashboardChart, DashboardChartItem, DashboardDrilldown, DashboardKpi } from '../../../../types'
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: '#64748b',
-  pending_review: '#f59e0b',
-  approved: '#10b981',
-  rejected: '#ef4444',
-  draft_error: '#dc2626',
-  easy: '#22c55e',
-  medium: '#f59e0b',
-  hard: '#ef4444',
-  single_choice: '#2563eb',
-  multiple_choice: '#0891b2',
-  essay: '#7c3aed',
-  short_answer: '#0f766e',
-  unknown: '#64748b',
-}
+import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
+import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
+import { InlineNotice, noticeError, noticeInfo } from '../../../../components/ui/InlineNotice'
+import { VisualIcon } from '../../../../components/ui/VisualIcon'
+import { useUrlTableState } from '../../../../hooks/useUrlTableState'
+import { getBankCostAnalytics } from '../../../../lib/api'
+import { daysAgoVNISODate, formatVNDateTime, todayVNISODate } from '../../../../lib/time'
+import type { BankCostAnalytics, BankCostAnalyticsRow } from '../../../../types'
+import { BankPageIdentity, BankSection } from '../BankDesignContract'
+import { useBankData } from '../shared'
 
 function formatNumber(value?: number | null) {
   return new Intl.NumberFormat('vi-VN').format(Number(value || 0))
 }
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10)
+function formatVnd(value?: number | null) {
+  return `${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value || 0))} ₫`
+}
+
+function formatUsd(value?: number | null) {
+  return `$${new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(Number(value || 0))}`
 }
 
 function buildDateRange(days: number) {
-  const end = new Date()
-  const start = new Date()
-  start.setDate(end.getDate() - days + 1)
-  return { fromDate: start.toISOString().slice(0, 10), toDate: end.toISOString().slice(0, 10) }
+  return { fromDate: daysAgoVNISODate(Math.max(0, days - 1)), toDate: todayVNISODate() }
 }
 
-function drilldownUrl(drilldown?: DashboardDrilldown | null) {
-  if (!drilldown?.route) return '/bank'
-  const params = new URLSearchParams()
-  Object.entries(drilldown.query || {}).forEach(([key, value]) => {
-    if (value === null || value === undefined || value === '') return
-    params.set(key, String(value))
-  })
-  const qs = params.toString()
-  return qs ? `${drilldown.route}?${qs}` : drilldown.route
+function deltaLabel(value?: number | null) {
+  if (value === null || value === undefined) return 'Chưa có kỳ trước để so sánh'
+  if (value === 0) return 'Không đổi so với kỳ trước'
+  return `${value > 0 ? '+' : ''}${value}% so với kỳ trước`
 }
 
-function SkeletonBlock({ height = 120 }: { height?: number }) {
-  return <div className="dashboard-skeleton" style={{ minHeight: height }} />
+function CostMetricCard({
+  label,
+  value,
+  helper,
+  icon,
+  tone,
+  emphasis,
+}: {
+  label: string
+  value: string
+  helper: string
+  icon: 'money' | 'database' | 'sparkles' | 'sync'
+  tone: 'blue' | 'green' | 'amber' | 'violet'
+  emphasis?: string
+}) {
+  return <article className={`bank-cost-metric is-${tone}`}>
+    <VisualIcon label={label} icon={icon} tone={tone} size={22} className="bank-cost-metric__icon" />
+    <div className="bank-cost-metric__copy">
+      <span>{label}</span>
+      <b>{value}</b>
+      <small>{helper}</small>
+      {emphasis ? <em>{emphasis}</em> : null}
+    </div>
+  </article>
 }
 
-function DashboardEmptyState({ role }: { role?: string }) {
-  return <div className="dashboard-empty-state">
-    <b>Chưa có dữ liệu trong phạm vi này.</b>
-    <p>{role === 'QUESTION_REVIEWER' ? 'Bạn chưa được giao câu hỏi hoặc chapter nào để duyệt, hoặc chapter được giao chưa có dữ liệu.' : 'Hãy upload tài liệu hoặc tạo câu hỏi đầu tiên trong phạm vi được phân quyền.'}</p>
-    <Link className="btn secondary small" href="/bank/departments">Đi tới Ngân hàng đề</Link>
+function CostTrendChart({ items }: { items: BankCostAnalytics['daily'] }) {
+  const width = 760
+  const height = 230
+  const padX = 48
+  const padY = 28
+  const max = Math.max(1, ...items.map((item) => Number(item.cost_vnd || 0)))
+  const points = items.map((item, index) => ({
+    item,
+    x: items.length <= 1 ? width / 2 : padX + (index * (width - padX * 2)) / (items.length - 1),
+    y: height - padY - (Number(item.cost_vnd || 0) / max) * (height - padY * 2),
+  }))
+  const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+  const area = points.length ? `${path} L ${points[points.length - 1].x} ${height - padY} L ${points[0].x} ${height - padY} Z` : ''
+  const visibleLabels = items.length <= 10 ? items : items.filter((_, index) => index === 0 || index === items.length - 1 || index % Math.ceil(items.length / 6) === 0)
+
+  return <div className="bank-cost-trend">
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Chi phí thực tế theo ngày">
+      {[0, .25, .5, .75, 1].map((ratio) => {
+        const y = padY + ratio * (height - padY * 2)
+        const value = Math.round(max * (1 - ratio))
+        return <g key={ratio}>
+          <line x1={padX} x2={width - padX} y1={y} y2={y} className="bank-cost-grid-line" />
+          <text x={padX - 8} y={y + 4} textAnchor="end" className="bank-cost-axis-label">{formatNumber(value)}</text>
+        </g>
+      })}
+      {area ? <path d={area} className="bank-cost-area" /> : null}
+      {path ? <path d={path} className="bank-cost-line" /> : null}
+      {points.map((point) => <g key={point.item.date}>
+        <circle cx={point.x} cy={point.y} r="4.5" className="bank-cost-point" />
+        <title>{point.item.label}: {formatVnd(point.item.cost_vnd)} · {formatNumber(point.item.total_tokens)} token</title>
+      </g>)}
+      {visibleLabels.map((item) => {
+        const point = points.find((candidate) => candidate.item.date === item.date)
+        return point ? <text key={item.date} x={point.x} y={height - 5} textAnchor="middle" className="bank-cost-axis-label">{item.label}</text> : null
+      })}
+    </svg>
   </div>
 }
 
-function DashboardErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return <div className="dashboard-error-state">
-    <b>Không tải được dashboard.</b>
-    <p>{message || 'API trả về lỗi. Vui lòng thử lại hoặc kiểm tra backend logs.'}</p>
-    <button className="btn small" type="button" onClick={onRetry}>Thử lại</button>
+function CostTrendSummary({ items }: { items: BankCostAnalytics['daily'] }) {
+  const total = items.reduce((sum, item) => sum + Number(item.cost_vnd || 0), 0)
+  const average = items.length ? total / items.length : 0
+  const peak = items.reduce((max, item) => Math.max(max, Number(item.cost_vnd || 0)), 0)
+  return <div className="bank-cost-trend-summary">
+    <div className="bank-cost-trend-legend"><i /> Chi phí thực tế (VND)</div>
+    <div className="bank-cost-trend-stats">
+      <span>Tổng kỳ hiện tại: <b>{formatVnd(total)}</b></span>
+      <span>Trung bình/ngày: <b>{formatVnd(average)}</b></span>
+      <span>Cao nhất trong kỳ: <b>{formatVnd(peak)}</b></span>
+    </div>
   </div>
 }
 
-function KpiCard({ item, tone }: { item: DashboardKpi; tone?: string }) {
-  return <Link className={`dashboard-kpi-card ${tone || ''}`} href={drilldownUrl(item.drilldown)}>
-    <span>{item.label}</span>
-    <b>{formatNumber(item.value)}</b>
-    <small>{item.overdue ? `${formatNumber(item.overdue)} quá hạn · ` : ''}{item.percent !== undefined ? `${item.percent}% trong tổng số` : item.delta_label}</small>
-  </Link>
-}
-
-function ChartCard({ title, children, empty }: { title: string; children: React.ReactNode; empty?: boolean }) {
-  return <section className="card dashboard-chart-card">
-    <div className="section-head compact-section-head"><div><h2>{title}</h2></div></div>
-    {empty ? <div className="dashboard-chart-empty">Chưa có dữ liệu phù hợp.</div> : children}
-  </section>
-}
-
-function DonutChart({ chart }: { chart: DashboardChart }) {
-  const router = useRouter()
-  const items = (chart.items || []).filter((item) => Number(item.value || 0) > 0)
-  const total = items.reduce((sum, item) => sum + Number(item.value || 0), 0)
-  let offset = (2 * Math.PI * 34) * 0.25
-  const radius = 34
-  const circumference = 2 * Math.PI * radius
-  return <ChartCard title={chart.title} empty={!items.length}>
-    <div className="dashboard-donut-layout">
-      <svg className="dashboard-donut" viewBox="0 0 100 100" role="img" aria-label={chart.title}>
-        <circle cx="50" cy="50" r={radius} fill="none" stroke="#e5e7eb" strokeWidth="14" />
-        {items.map((item, index) => {
-          const value = Number(item.value || 0)
-          const dash = total ? (value / total) * circumference : 0
-          const segmentOffset = offset
-          offset -= dash
-          return <circle
-            key={`${item.key || item.label}-${index}`}
-            cx="50"
-            cy="50"
-            r={radius}
-            fill="none"
-            stroke={STATUS_COLORS[String(item.key)] || `hsl(${(index * 67) % 360} 70% 45%)`}
-            strokeWidth="14"
-            strokeDasharray={`${dash} ${circumference - dash}`}
-            strokeDashoffset={segmentOffset}
-            className="dashboard-clickable-segment"
-            onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))}
-          />
-        })}
-        <text x="50" y="49" textAnchor="middle" className="dashboard-donut-value">{formatNumber(total)}</text>
-        <text x="50" y="61" textAnchor="middle" className="dashboard-donut-label">tổng</text>
-      </svg>
-      <div className="dashboard-legend-list">
-        {items.map((item, index) => <button key={`${item.key || item.label}-${index}`} type="button" className="dashboard-legend-row" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))} title={`${item.label}: ${formatNumber(item.value)} (${item.percent || 0}%)`}>
-          <i style={{ background: STATUS_COLORS[String(item.key)] || `hsl(${(index * 67) % 360} 70% 45%)` }} />
-          <span>{item.label}</span>
-          <b>{formatNumber(item.value)}</b>
-          <em>{item.percent || 0}%</em>
-        </button>)}
+function TokenComposition({ totals }: { totals: BankCostAnalytics['totals'] }) {
+  const input = Number(totals.uncached_input_tokens || 0)
+  const cached = Number(totals.cached_input_tokens || 0)
+  const output = Number(totals.output_tokens || 0)
+  const actualTotal = input + cached + output
+  const safeTotal = Math.max(1, actualTotal)
+  const inputPercent = input * 100 / safeTotal
+  const cachedPercent = cached * 100 / safeTotal
+  const outputPercent = output * 100 / safeTotal
+  const gradient = actualTotal
+    ? `conic-gradient(var(--bank-cost-blue) 0 ${inputPercent}%, var(--bank-cost-violet) ${inputPercent}% ${inputPercent + cachedPercent}%, var(--bank-cost-green) ${inputPercent + cachedPercent}% 100%)`
+    : 'conic-gradient(#dfe5ed 0 100%)'
+  const parts = [
+    { label: 'Input chưa cache', value: input, percent: inputPercent, className: 'is-input' },
+    { label: 'Input cache', value: cached, percent: cachedPercent, className: 'is-cached' },
+    { label: 'Output', value: output, percent: outputPercent, className: 'is-output' },
+  ]
+  return <div className="bank-token-composition">
+    <div className="bank-token-donut-area">
+      <div className="bank-token-donut" style={{ background: gradient }} aria-label={`Tổng ${formatNumber(actualTotal)} token`}>
+        <div className="bank-token-donut__center">{actualTotal ? <><b>{formatNumber(actualTotal)}</b><small>token</small></> : null}</div>
       </div>
+      {!actualTotal ? <div className="bank-token-empty-copy"><b>Chưa có dữ liệu token trong khoảng thời gian đã chọn.</b><span>Hãy thử mở rộng khoảng thời gian để xem dữ liệu.</span></div> : null}
     </div>
-  </ChartCard>
+    <div className="bank-token-legend">
+      {parts.map((part) => <div key={part.label}><i className={part.className} /><span>{part.label}</span><b>{formatNumber(part.value)}</b><small>{part.percent.toFixed(1)}%</small></div>)}
+    </div>
+    <div className="bank-token-total"><span>Tổng token</span><b>{formatNumber(actualTotal)}</b></div>
+  </div>
 }
 
-function LineChart({ chart }: { chart: DashboardChart }) {
-  const router = useRouter()
-  const items = chart.items || []
-  const max = Math.max(1, ...items.map((item) => Number(item.value || 0)))
-  const width = 520
-  const height = 190
-  const padX = 28
-  const padY = 24
-  const points = items.map((item, index) => {
-    const x = items.length <= 1 ? width / 2 : padX + (index * (width - padX * 2)) / (items.length - 1)
-    const y = height - padY - (Number(item.value || 0) / max) * (height - padY * 2)
-    return { x, y, item }
-  })
-  const path = points.map((p, index) => `${index === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
-  return <ChartCard title={chart.title} empty={!items.length}>
-    <div className="dashboard-line-wrap">
-      <svg className="dashboard-line" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title}>
-        {[0, .25, .5, .75, 1].map((ratio) => {
-          const y = padY + ratio * (height - padY * 2)
-          const value = Math.round(max * (1 - ratio))
-          return <g key={ratio}>
-            <line x1={padX + 20} x2={width - padX} y1={y} y2={y} stroke="#e5e7eb" strokeWidth="1" />
-            <text x={padX + 14} y={y + 4} textAnchor="end" className="dashboard-y-axis-label">{formatNumber(value)}</text>
-          </g>
-        })}
-        <path d={path} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        {points.map((point, index) => <g key={`${point.item.date || index}-${index}`} className="dashboard-line-point" onClick={() => point.item.drilldown && router.push(drilldownUrl(point.item.drilldown))}>
-          <circle cx={point.x} cy={point.y} r="5" fill="#2563eb" />
-          <title>{point.item.label || point.item.date}: {formatNumber(point.item.value)}</title>
-        </g>)}
-      </svg>
-      <div className="dashboard-line-axis"><span>{items[0]?.label || items[0]?.date}</span><span>{items[items.length - 1]?.label || items[items.length - 1]?.date}</span></div>
-    </div>
-  </ChartCard>
-}
-
-function HorizontalBarChart({ chart }: { chart: DashboardChart }) {
-  const router = useRouter()
-  const items = chart.items || []
-  const max = Math.max(1, ...items.map((item) => Number(item.value || 0)))
-  return <ChartCard title={chart.title} empty={!items.length}>
-    <div className="dashboard-bar-list">
-      {items.map((item, index) => <button key={`${item.subject_id || item.label}-${index}`} type="button" className="dashboard-horizontal-bar" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))} title={`${item.label}: ${formatNumber(item.value)}`}>
-        <span>{item.label}</span>
-        <div><i style={{ width: `${Math.max(4, (Number(item.value || 0) / max) * 100)}%` }} /></div>
-        <b>{formatNumber(item.value)}</b>
-      </button>)}
-    </div>
-  </ChartCard>
-}
-
-function GroupedBarChart({ chart }: { chart: DashboardChart }) {
-  const router = useRouter()
-  const items = chart.items || []
-  const max = Math.max(1, ...items.flatMap((item) => [Number(item.current || 0), Number(item.previous || 0)]))
-  return <ChartCard title={chart.title} empty={!items.length}>
-    <div className="dashboard-grouped-legend"><span><i className="current" />{chart.current_term || 'Kỳ này'}</span><span><i className="previous" />{chart.previous_term || 'Kỳ trước'}</span></div>
-    <div className="dashboard-grouped-list">
-      {items.map((item, index) => <button key={`${item.subject_id || item.label}-${index}`} type="button" className="dashboard-grouped-row" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))}>
-        <span>{item.label}</span>
-        <div className="dashboard-group-pair">
-          <i className="current" style={{ width: `${Math.max(3, (Number(item.current || 0) / max) * 100)}%` }} />
-          <i className="previous" style={{ width: `${Math.max(3, (Number(item.previous || 0) / max) * 100)}%` }} />
-        </div>
-        <b>{formatNumber(item.current)} / {formatNumber(item.previous)}</b>
-      </button>)}
-    </div>
-  </ChartCard>
-}
-
-function AlertPanel({ alerts }: { alerts: DashboardAnalytics['alerts'] }) {
-  const router = useRouter()
-  return <section className="card dashboard-alert-panel">
-    <div className="section-head compact-section-head"><div><h2>Cảnh báo cần xử lý</h2><p className="helper">Ưu tiên các việc đang chậm hoặc có nguy cơ thiếu dữ liệu.</p></div></div>
-    <div className="dashboard-alert-list">
-      {alerts.length ? alerts.map((alert) => <button key={alert.id} type="button" className={`dashboard-alert-item ${alert.severity}`} onClick={() => alert.drilldown && router.push(drilldownUrl(alert.drilldown))}>
-        <span>{alert.severity === 'critical' ? '🔴' : alert.severity === 'warning' ? '🟡' : '🔵'}</span>
-        <div><b>{alert.title}</b>{alert.description ? <small>{alert.description}</small> : null}</div>
-      </button>) : <div className="dashboard-chart-empty">Chưa có cảnh báo trong scope này.</div>}
-    </div>
-  </section>
-}
-
-function ActivityFeed({ items }: { items: DashboardAnalytics['activity_feed'] }) {
-  const router = useRouter()
-  return <section className="card dashboard-activity-panel">
-    <div className="section-head compact-section-head"><div><h2>Hoạt động gần đây</h2><p className="helper">10 thao tác mới nhất trong phạm vi bạn được xem.</p></div></div>
-    <div className="dashboard-activity-list">
-      {items.length ? items.map((item) => <button key={item.id} type="button" className="dashboard-activity-item" onClick={() => item.drilldown && router.push(drilldownUrl(item.drilldown))}>
-        <span>{item.status === 'failed' ? '⚠️' : '•'}</span>
-        <div><b>{item.message}</b><small>{item.relative_time || item.created_at || ''}</small></div>
-      </button>) : <div className="dashboard-chart-empty">Chưa có hoạt động gần đây.</div>}
-    </div>
-  </section>
-}
-
-function DateFilters({ dateRange, fromDate, toDate, onPreset, onCustom }: { dateRange: string; fromDate: string; toDate: string; onPreset: (preset: string) => void; onCustom: (from: string, to: string) => void }) {
-  const [from, setFrom] = useState(fromDate)
-  const [to, setTo] = useState(toDate)
-  useEffect(() => { setFrom(fromDate); setTo(toDate) }, [fromDate, toDate])
-  return <div className="dashboard-filter-row">
-    {['today', '7d', '30d'].map((preset) => <button key={preset} className={`btn small ${dateRange === preset ? '' : 'secondary'}`} type="button" onClick={() => onPreset(preset)}>{preset === 'today' ? 'Hôm nay' : preset === '7d' ? '7 ngày' : '30 ngày'}</button>)}
-    <input className="input dashboard-date-input" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-    <input className="input dashboard-date-input" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-    <button className={`btn small ${dateRange === 'custom' ? '' : 'secondary'}`} type="button" onClick={() => onCustom(from, to)}>Áp dụng</button>
+function SubjectCostBars({ items }: { items: BankCostAnalytics['subjects'] }) {
+  const max = Math.max(1, ...items.map((item) => Number(item.cost_vnd || 0)))
+  if (!items.length) return <div className="bank-cost-empty">Chưa có chi phí thực tế theo môn trong khoảng thời gian này.</div>
+  return <div className="bank-subject-cost-list">
+    {items.map((item) => <div className="bank-subject-cost-row" key={item.subject_id}>
+      <div><b>{item.subject_code}</b><small>{item.subject_name}</small></div>
+      <div className="bank-subject-cost-track"><i style={{ width: `${Math.max(3, Number(item.cost_vnd || 0) * 100 / max)}%` }} /></div>
+      <div><b>{formatVnd(item.cost_vnd)}</b><small>{formatNumber(item.questions_generated)} câu · {formatNumber(item.total_tokens)} token</small></div>
+    </div>)}
   </div>
 }
 
@@ -241,23 +163,31 @@ export function BankDashboardPage() {
   const { headers, authReady } = useBankData()
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { state: tableState, update: updateTableState } = useUrlTableState({ pageSize: 20, density: 'compact', sort: 'cost_vnd:desc' })
   const initialRange = searchParams.get('range') || '30d'
   const initialFrom = searchParams.get('from') || buildDateRange(30).fromDate
-  const initialTo = searchParams.get('to') || todayIso()
-  const [dateRange, setDateRange] = useState(initialRange)
-  const [fromDate, setFromDate] = useState(initialFrom)
-  const [toDate, setToDate] = useState(initialTo)
-  const [data, setData] = useState<DashboardAnalytics | null>(null)
+  const initialTo = searchParams.get('to') || todayVNISODate()
+  const [appliedFilter, setAppliedFilter] = useState({ dateRange: initialRange, fromDate: initialFrom, toDate: initialTo })
+  const [draftFromDate, setDraftFromDate] = useState(initialFrom)
+  const [draftToDate, setDraftToDate] = useState(initialTo)
+  const [searchDraft, setSearchDraft] = useState(tableState.q)
+  const [data, setData] = useState<BankCostAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [alertsOpen, setAlertsOpen] = useState(false)
-  const [activityOpen, setActivityOpen] = useState(false)
+  const [filterError, setFilterError] = useState('')
+  const [showUsageNotice, setShowUsageNotice] = useState(true)
 
-  const updateUrl = (range: string, from?: string, to?: string) => {
-    const params = new URLSearchParams()
+  const [sortKey, sortDirection] = useMemo(() => {
+    const [key, direction] = (tableState.sort || 'cost_vnd:desc').split(':')
+    return [key || 'cost_vnd', direction === 'asc' ? 'asc' : 'desc'] as const
+  }, [tableState.sort])
+
+  const updateDateUrl = (range: string, from: string, to: string) => {
+    const params = new URLSearchParams(searchParams.toString())
     params.set('range', range)
-    if (from) params.set('from', from)
-    if (to) params.set('to', to)
+    params.set('from', from)
+    params.set('to', to)
+    params.delete('page')
     router.replace(`/bank?${params.toString()}`, { scroll: false })
   }
 
@@ -266,97 +196,173 @@ export function BankDashboardPage() {
     setLoading(true)
     setError('')
     try {
-      const payload = await getBankDashboardAnalytics(headers, { dateRange, fromDate, toDate })
+      const payload = await getBankCostAnalytics(headers, {
+        dateRange: appliedFilter.dateRange,
+        fromDate: appliedFilter.fromDate,
+        toDate: appliedFilter.toDate,
+        q: tableState.q,
+        page: tableState.page,
+        pageSize: tableState.pageSize,
+        sortBy: sortKey,
+        sortDir: sortDirection,
+      })
       setData(payload)
     } catch (err: any) {
-      setError(err?.message || 'Không tải được dashboard')
+      setError(err?.message || 'Không tải được thống kê chi phí và token')
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => { load() }, [authReady, headers, dateRange, fromDate, toDate]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [authReady, headers, appliedFilter.dateRange, appliedFilter.fromDate, appliedFilter.toDate, tableState.q, tableState.page, tableState.pageSize, sortKey, sortDirection]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setSearchDraft(tableState.q) }, [tableState.q])
 
-  const hasData = useMemo(() => data ? Object.values(data.kpis || {}).some((item) => Number(item.value || 0) > 0) : false, [data])
-
-  const onPreset = (preset: string) => {
-    const range = preset === 'today' ? { fromDate: todayIso(), toDate: todayIso() } : preset === '7d' ? buildDateRange(7) : buildDateRange(30)
-    setDateRange(preset)
-    setFromDate(range.fromDate)
-    setToDate(range.toDate)
-    updateUrl(preset, range.fromDate, range.toDate)
-  }
-  const onCustom = (from: string, to: string) => {
-    setDateRange('custom')
-    setFromDate(from)
-    setToDate(to)
-    updateUrl('custom', from, to)
+  const applyPreset = (preset: string) => {
+    const range = preset === 'today' ? { fromDate: todayVNISODate(), toDate: todayVNISODate() } : preset === '7d' ? buildDateRange(7) : buildDateRange(30)
+    setDraftFromDate(range.fromDate)
+    setDraftToDate(range.toDate)
+    setAppliedFilter({ dateRange: preset, fromDate: range.fromDate, toDate: range.toDate })
+    setFilterError('')
+    updateDateUrl(preset, range.fromDate, range.toDate)
   }
 
-  return <div className="page-stack bank-multipage dashboard-analytics-page">
-    <Breadcrumb items={[{ label: 'Ngân hàng đề' }]} />
+  const applyCustom = () => {
+    if (!draftFromDate || !draftToDate) {
+      setFilterError('Vui lòng chọn đầy đủ Từ ngày và Đến ngày.')
+      return
+    }
+    if (draftFromDate > draftToDate) {
+      setFilterError('Từ ngày không được lớn hơn Đến ngày.')
+      return
+    }
+    setFilterError('')
+    setAppliedFilter({ dateRange: 'custom', fromDate: draftFromDate, toDate: draftToDate })
+    updateDateUrl('custom', draftFromDate, draftToDate)
+  }
 
-    <section className="dashboard-command-hero">
-      <div className="dashboard-hero-glow" />
-      <div className="dashboard-hero-copy">
-        <h1>Tổng quan Ngân hàng đề</h1>
-        <div className="dashboard-scope-strip">
-          <span className="dashboard-scope-chip">Phạm vi: <b>{data?.scope?.label || 'Đang xác định...'}</b></span>
-          {data?.cache ? <span className="dashboard-scope-chip subtle">Cache: {data.cache.hit ? 'hit' : 'fresh'} · TTL {data.cache.ttl_seconds}s</span> : null}
-          {data?.generated_at ? <span className="dashboard-scope-chip subtle">Cập nhật: {new Date(data.generated_at).toLocaleString('vi-VN')}</span> : null}
-        </div>
+  const emptyTotals = useMemo<BankCostAnalytics['totals']>(() => ({
+    cost_usd: 0,
+    cost_vnd: 0,
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    uncached_input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    calls: 0,
+    questions_generated: 0,
+    avg_cost_per_question_vnd: 0,
+    cache_ratio_percent: 0,
+  }), [])
+
+  const columns = useMemo<EnterpriseTableColumn<BankCostAnalyticsRow>[]>(() => [
+    { key: 'stt', header: 'STT', kind: 'index', width: 58, hideable: false, render: (_row, index) => (data?.rows.page ? (data.rows.page - 1) * data.rows.page_size : 0) + index + 1 },
+    { key: 'subject_code', header: 'Môn / phiên bản / bài', kind: 'identity', minWidth: 310, sticky: 'left', hideable: false, sortable: true, render: (row) => <Link href={row.href} className="bank-cost-identity"><b>{row.subject_code} · {row.chapter_title}</b><span>{row.subject_name}</span><small>{row.subject_offering_code || row.version_code}{row.term ? ` · ${row.term}` : ''}</small></Link> },
+    { key: 'calls', header: 'Lượt gọi', kind: 'number', width: 88, sortable: true, render: (row) => formatNumber(row.calls) },
+    { key: 'questions_generated', header: 'Câu AI tạo', kind: 'number', width: 104, sortable: true, render: (row) => formatNumber(row.questions_generated) },
+    { key: 'input_tokens', header: 'Input token', kind: 'number', width: 118, sortable: true, render: (row) => formatNumber(row.input_tokens) },
+    { key: 'cached_input_tokens', header: 'Token cache', kind: 'number', width: 118, sortable: true, render: (row) => <div className="bank-cost-token-cell"><b>{formatNumber(row.cached_input_tokens)}</b><small>{row.cache_ratio_percent}% input</small></div> },
+    { key: 'output_tokens', header: 'Output token', kind: 'number', width: 120, sortable: true, render: (row) => formatNumber(row.output_tokens) },
+    { key: 'cost_vnd', header: 'Chi phí thực tế', kind: 'number', width: 150, sortable: true, render: (row) => <div className="bank-cost-money-cell"><b>{formatVnd(row.cost_vnd)}</b><small>{formatUsd(row.cost_usd)}</small></div> },
+    { key: 'avg_cost_per_question_vnd', header: 'Bình quân/câu', kind: 'number', width: 128, sortable: true, defaultVisible: false, render: (row) => row.questions_generated ? formatVnd(row.avg_cost_per_question_vnd) : '—' },
+    { key: 'latest_at', header: 'Gần nhất', kind: 'date', width: 148, sortable: true, defaultVisible: false, render: (row) => row.latest_at ? formatVNDateTime(row.latest_at) : '—' },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 98, sticky: 'right', hideable: false, render: (row) => <Link className="btn small secondary" href={row.href}>Mở bài</Link> },
+  ], [data?.rows.page, data?.rows.page_size])
+
+  return <PageRoot className="page-stack bank-multipage bank-contract-page bank-cost-dashboard-page">
+    <PageHeader eyebrow="Ngân hàng đề" title="Chi phí & Token" icon="money" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Chi phí & Token' }]} />
+    <BankPageIdentity
+      title="Chi phí & Token ngân hàng đề"
+      description="Theo dõi chi phí GPT thực tế, lượng token và hiệu suất tạo câu hỏi theo môn, phiên bản môn và bài học trong phạm vi được phân quyền."
+      icon="money"
+      tone="amber"
+    />
+
+    <section className="dashboard-control-bar bank-cost-filter-bar" aria-label="Bộ lọc thời gian và phạm vi">
+      <div className="bank-cost-presets">
+        {['today', '7d', '30d'].map((preset) => <button key={preset} type="button" className={`btn small ${appliedFilter.dateRange === preset ? '' : 'secondary'}`} onClick={() => applyPreset(preset)}>{preset === 'today' ? 'Hôm nay' : preset === '7d' ? '7 ngày' : '30 ngày'}</button>)}
       </div>
-      <div className="dashboard-hero-actions">
-        <DateFilters dateRange={dateRange} fromDate={fromDate} toDate={toDate} onPreset={onPreset} onCustom={onCustom} />
+      <label><span>Từ ngày</span><input className="input" type="date" value={draftFromDate} onChange={(event) => { setDraftFromDate(event.target.value); setFilterError('') }} /></label>
+      <label><span>Đến ngày</span><input className="input" type="date" value={draftToDate} onChange={(event) => { setDraftToDate(event.target.value); setFilterError('') }} /></label>
+      <button className="btn small" type="button" onClick={applyCustom}>Áp dụng</button>
+      <div className="bank-cost-filter-meta">
+        {data?.scope?.label ? <span>Phạm vi <b>{data.scope.label}</b></span> : null}
+        <span>Nguồn <b>Usage thực tế</b></span>
+        {data?.generated_at ? <span>Cập nhật <b>{formatVNDateTime(data.generated_at)}</b></span> : null}
+        <button type="button" className="bank-cost-refresh-button" onClick={load} aria-label="Tải lại thống kê" disabled={loading}>
+          <VisualIcon icon="sync" tone="blue" label="Tải lại thống kê" size={15} />
+        </button>
       </div>
     </section>
 
-    {loading ? <>
-      <section className="dashboard-kpi-grid"><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /><SkeletonBlock height={112} /></section>
-      <section className="dashboard-chart-grid"><SkeletonBlock height={260} /><SkeletonBlock height={260} /><SkeletonBlock height={260} /><SkeletonBlock height={260} /></section>
-    </> : error ? <DashboardErrorState message={error} onRetry={load} /> : data ? <>
-      {!hasData ? <DashboardEmptyState role={data.scope?.role} /> : null}
+    {filterError ? <InlineNotice notice={noticeError(filterError, 'Khoảng thời gian chưa hợp lệ')} /> : null}
 
-      <section className="dashboard-kpi-grid">
-        <KpiCard item={data.kpis.total_questions} />
-        <KpiCard item={data.kpis.pending_review} tone={Number(data.kpis.pending_review.value || 0) > 0 ? 'warning' : 'success'} />
-        <KpiCard item={data.kpis.approved} tone="success" />
-        <KpiCard item={data.kpis.rejected} tone={Number(data.kpis.rejected.value || 0) > 0 ? 'danger' : ''} />
-      </section>
+    {showUsageNotice ? <div className="bank-cost-notice-wrap">
+      <button type="button" className="bank-cost-notice-close" aria-label="Đóng thông báo" onClick={() => setShowUsageNotice(false)}>×</button>
+    </div> : null}
 
-      <section className="dashboard-tech-strip">
-        <span><b>{formatNumber(Number(data.meta?.departments_total || 0))}</b> bộ môn</span>
-        <span><b>{formatNumber(Number(data.meta?.subjects_total || 0))}</b> môn</span>
-        <span><b>{formatNumber(Number(data.meta?.subject_versions_total || 0))}</b> version</span>
-        <span><b>{formatNumber(Number(data.meta?.chapters_total || 0))}</b> bài/chapter</span>
-      </section>
+    {error ? <InlineNotice notice={{ ...noticeError(error, 'Không tải được thống kê chi phí và token.'), title: 'Không tải được thống kê', onRetry: load }} /> : null}
 
-      <section className="card bank-search-card">
-        <div className="section-head">
-          <div><h2>Tìm nhanh</h2><p className="helper">Tìm bộ môn, môn, version, bài hoặc câu hỏi trong scope được giao.</p></div>
-          <div className="button-row compact">
-            <button className="btn small secondary" type="button" onClick={() => setAlertsOpen(true)}>Cảnh báo ({formatNumber((data.alerts || []).length)})</button>
-            <button className="btn small secondary" type="button" onClick={() => setActivityOpen(true)}>Hoạt động ({formatNumber((data.activity_feed || []).length)})</button>
-          </div>
-        </div>
-        <QuickSearchBox />
-      </section>
+    <section className="bank-cost-metric-grid" aria-label="Chỉ số chi phí và token">
+      <CostMetricCard label="Chi phí thực tế" value={loading ? '…' : formatVnd(data?.totals.cost_vnd)} helper={loading ? 'Đang tải dữ liệu' : formatUsd(data?.totals.cost_usd)} emphasis={loading ? undefined : deltaLabel(data?.deltas.cost_percent)} icon="money" tone="amber" />
+      <CostMetricCard label="Tổng token" value={loading ? '…' : formatNumber(data?.totals.total_tokens)} helper={loading ? 'Đang tải dữ liệu' : `${formatNumber(data?.totals.input_tokens)} input · ${formatNumber(data?.totals.output_tokens)} output`} emphasis={loading ? undefined : deltaLabel(data?.deltas.tokens_percent)} icon="database" tone="blue" />
+      <CostMetricCard label="Câu hỏi AI đã tạo" value={loading ? '…' : formatNumber(data?.totals.questions_generated)} helper={loading ? 'Đang tải dữ liệu' : `${formatVnd(data?.totals.avg_cost_per_question_vnd)} / câu`} emphasis={loading ? undefined : `${formatNumber(data?.totals.calls)} lượt gọi model`} icon="sparkles" tone="green" />
+      <CostMetricCard label="Token dùng cache" value={loading ? '…' : formatNumber(data?.totals.cached_input_tokens)} helper={loading ? 'Đang tải dữ liệu' : `${data?.totals.cache_ratio_percent || 0}% tổng input token`} emphasis={loading ? undefined : `${formatNumber(data?.totals.uncached_input_tokens)} input chưa cache`} icon="sync" tone="violet" />
+    </section>
 
-      <section className="dashboard-chart-grid">
-        <DonutChart chart={data.charts.question_status} />
-        <LineChart chart={data.charts.new_questions_by_day} />
-        <HorizontalBarChart chart={data.charts.questions_by_subject} />
-        <DonutChart chart={data.charts.difficulty_distribution} />
-        <DonutChart chart={data.charts.question_type_distribution} />
-        <GroupedBarChart chart={data.charts.term_comparison} />
-      </section>
+    <section className="bank-cost-insight-grid">
+      <BankSection
+        title="Chi phí theo ngày"
+        description="Chi phí VND thực tế phát sinh từ các lượt tạo câu hỏi AI."
+        icon="analytics"
+        tone="blue"
+        className="bank-cost-trend-section"
+        actions={<select className="bank-cost-currency-select" aria-label="Đơn vị chi phí" defaultValue="VND"><option>VND</option></select>}
+      >
+        {loading ? <div className="bank-cost-loading" /> : <><CostTrendChart items={data?.daily || []} /><CostTrendSummary items={data?.daily || []} /></>}
+      </BankSection>
+      <BankSection title="Cơ cấu token" description="Tách input chưa cache, input cache và output token." icon="database" tone="blue">
+        {loading ? <div className="bank-cost-loading" /> : <TokenComposition totals={data?.totals || emptyTotals} />}
+      </BankSection>
+    </section>
 
-      <Modal open={alertsOpen} title="Cảnh báo cần xử lý" wide onClose={() => setAlertsOpen(false)}>
-        <AlertPanel alerts={data.alerts || []} />
-      </Modal>
-      <Modal open={activityOpen} title="Hoạt động gần đây" wide onClose={() => setActivityOpen(false)}>
-        <ActivityFeed items={data.activity_feed || []} />
-      </Modal>
-    </> : null}
-  </div>
+    <BankSection title="Môn học sử dụng chi phí nhiều nhất" description="Xếp theo chi phí thực tế trong khoảng thời gian đang chọn." icon="book" tone="amber">
+      {loading ? <div className="bank-cost-loading is-short" /> : <SubjectCostBars items={data?.subjects || []} />}
+    </BankSection>
+
+    <BankSection
+      title="Chi tiết chi phí theo bộ đề"
+      description="Mỗi dòng là một Bank Version gắn với môn, phiên bản môn và bài học."
+      icon="money"
+      tone="amber"
+      meta={<span className="soft-tag">{formatNumber(data?.rows.total)} bộ đề có usage</span>}
+      actions={<form className="bank-cost-search" onSubmit={(event) => { event.preventDefault(); updateTableState({ q: searchDraft }, { resetPage: true }) }}><input className="input" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Tìm mã môn, phiên bản hoặc bài..." /><button className="btn small secondary" type="submit">Tìm</button>{tableState.q ? <button className="btn small ghost" type="button" onClick={() => { setSearchDraft(''); updateTableState({ q: '' }, { resetPage: true }) }}>Xóa lọc</button> : null}</form>}
+      bodyClassName="bank-cost-table-section"
+    >
+      <EnterpriseDataTable
+        tableId="bank-cost-analytics"
+        caption="Chi tiết chi phí và token theo bộ đề"
+        rows={data?.rows.items || []}
+        columns={columns}
+        rowKey={(row) => row.bank_version_id}
+        density={tableState.density}
+        onDensityChange={(density) => updateTableState({ density }, { resetPage: false })}
+        loading={loading}
+        error={error}
+        onRetry={load}
+        emptyTitle="Chưa có chi phí thực tế"
+        emptyDescription="Chưa có lượt tạo câu hỏi AI được ghi nhận trong thời gian hoặc phạm vi đang chọn."
+        page={data?.rows.page || tableState.page}
+        pageSize={data?.rows.page_size || tableState.pageSize}
+        total={data?.rows.total || 0}
+        totalPages={data?.rows.total_pages || 0}
+        onPageChange={(page) => updateTableState({ page }, { resetPage: false })}
+        onPageSizeChange={(pageSize) => updateTableState({ pageSize, page: 1 }, { resetPage: false })}
+        sortKey={sortKey}
+        sortDirection={sortDirection}
+        onSortChange={(key, direction) => updateTableState({ sort: `${key}:${direction}`, page: 1 }, { resetPage: false })}
+        label="bộ đề"
+        showSummary={false}
+      />
+    </BankSection>
+  </PageRoot>
 }

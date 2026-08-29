@@ -1,0 +1,63 @@
+# Changed files — v25.9.16.7.2.64.16
+
+Added: 9
+Modified: 43
+Deleted: 0
+
+## Added
+A  AI_SERVER_PROJECT_CONTEXT_V25_9_16_7_2_64_16.md
+A  RELEASE_v25.9.16.7.2.64.16_APP_SHELL_ENTERPRISE_UI_PRODUCTION.md
+A  RUN_V25_9_16_7_2_64_16.md
+A  VERIFICATION_v25.9.16.7.2.64.16.md
+A  backend/app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py
+A  frontend/components/icons/AppIcon.tsx
+A  frontend/components/layout/PageHeader.tsx
+A  frontend/lib/runtime.ts
+A  frontend/styles/production-ui.css
+
+## Modified
+M  .env.example
+M  .env.production.example
+M  CHANGELOG.md
+M  README.md
+M  RUN_CURRENT.md
+M  backend/app/core/config.py
+M  backend/app/services/ux_acceptance.py
+M  docker-compose.prod.yml
+M  frontend/Dockerfile
+M  frontend/app/analytics/learning/page.tsx
+M  frontend/app/ap-sync/page.tsx
+M  frontend/app/audit/page.tsx
+M  frontend/app/bank/quiz/page.tsx
+M  frontend/app/globals.css
+M  frontend/app/jobs/page.tsx
+M  frontend/app/layout.tsx
+M  frontend/app/ops/readiness/page.tsx
+M  frontend/app/premises/page.tsx
+M  frontend/app/semesters/page.tsx
+M  frontend/app/settings/page.tsx
+M  frontend/app/student-management/classes/[classId]/page.tsx
+M  frontend/app/student-management/page.tsx
+M  frontend/app/teacher-management/page.tsx
+M  frontend/components/layout/AppShell.tsx
+M  frontend/components/navigation/Breadcrumbs.tsx
+M  frontend/context/AppContext.tsx
+M  frontend/package-lock.json
+M  frontend/package.json
+M  frontend/styles/enterprise-ui.css
+M  scripts/claude-code-review-pack.sh
+M  scripts/frontend-build-verify.sh
+M  scripts/load-test-hot-endpoints.sh
+M  scripts/maintainability-contract-report.sh
+M  scripts/openedx-publish-verify.sh
+M  scripts/performance-readiness-report.sh
+M  scripts/pilot-operations-runbook.sh
+M  scripts/pilot-release-candidate-report.sh
+M  scripts/production-pilot-final-gate.sh
+M  scripts/query-hotspot-report.sh
+M  scripts/security-attack-simulation-report.sh
+M  scripts/security-readiness-report.sh
+M  scripts/uat-build-gate.sh
+M  scripts/uat-runtime-verify.sh
+
+## Deleted

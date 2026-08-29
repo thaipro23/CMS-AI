@@ -135,10 +135,17 @@ class LearningMaterialVersion(Base):
     change_type: Mapped[str] = mapped_column(String(50), default='initial')
     uploaded_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default='active', index=True)
+    # v25.9.16.3.6: material deletion is now policy-based. Draft/unused
+    # materials are hard-deleted immediately, while audit-sensitive materials are
+    # kept as lightweight tombstones with deleted_at/deleted_by so admins can
+    # purge them after the retention window.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         Index('ix_ai_material_versions_bank_hash', 'bank_version_id', 'content_hash'),
+        Index('ix_ai_material_versions_status_deleted', 'status', 'deleted_at'),
     )
 
 
@@ -256,6 +263,7 @@ class BankVersionDiff(Base):
     to_bank_version_id: Mapped[str] = mapped_column(String, ForeignKey('ai_question_bank_versions.id'), index=True)
     status: Mapped[str] = mapped_column(String(50), default='preview', index=True)  # preview | applied | archived
     material_similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     applied_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -264,6 +272,7 @@ class BankVersionDiff(Base):
 
     __table_args__ = (
         Index('ix_ai_bank_version_diffs_pair_status', 'from_bank_version_id', 'to_bank_version_id', 'status'),
+        UniqueConstraint('from_bank_version_id', 'to_bank_version_id', 'idempotency_key', name='uq_ai_bank_version_diff_idempotency'),
     )
 
 
@@ -355,6 +364,10 @@ class QuizBlueprint(Base):
     difficulty_easy: Mapped[int] = mapped_column(Integer, default=50)
     difficulty_medium: Mapped[int] = mapped_column(Integer, default=30)
     difficulty_hard: Mapped[int] = mapped_column(Integer, default=20)
+    single_select_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    multi_select_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    text_input_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    numerical_input_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_families_per_bank: Mapped[int] = mapped_column(Integer, default=2)
     pick_count_per_slot: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(50), default='active', index=True)
@@ -409,6 +422,7 @@ class BankChapterStats(Base):
     draft_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retired_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    carry_over_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     duplicate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     easy_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     medium_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

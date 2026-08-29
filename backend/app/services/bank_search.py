@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.question import Question, QuestionReviewLog
+from app.core.timezone import to_vn_naive_datetime
 from app.models.question_bank import (
     Department,
     QuestionBankVersion,
@@ -109,7 +110,6 @@ class BankSearchService:
         if question.bank_version_id:
             # Avoid a relationship/migration; this read is cheap and keeps the
             # document scoped to the exact subject version for future filters.
-            from app.models.question_bank import QuestionBankVersion
             version = self.db.get(QuestionBankVersion, question.bank_version_id)
             doc.subject_offering_id = version.subject_offering_id if version else None
         doc.chapter_id = question.subject_chapter_id
@@ -371,15 +371,18 @@ class BankSearchService:
             query = query.filter(func.coalesce(Question.question_type, 'unknown') == question_type)
         if created_from:
             try:
-                query = query.filter(Question.created_at >= datetime.fromisoformat(created_from))
+                parsed_from = to_vn_naive_datetime(created_from)
+                if parsed_from:
+                    query = query.filter(Question.created_at >= parsed_from)
             except Exception:
                 pass
         if created_to:
             try:
-                end = datetime.fromisoformat(created_to)
-                if len(created_to) <= 10:
+                end = to_vn_naive_datetime(created_to)
+                if end and len(str(created_to)) <= 10:
                     end = end.replace(hour=23, minute=59, second=59)
-                query = query.filter(Question.created_at <= end)
+                if end:
+                    query = query.filter(Question.created_at <= end)
             except Exception:
                 pass
         rows = query.order_by(QuestionSearchDocument.updated_at.desc(), QuestionSearchDocument.question_id.asc()).limit(safe_limit).all()

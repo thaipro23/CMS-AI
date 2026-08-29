@@ -22,8 +22,16 @@ class ParsedProblemChoice:
 @dataclass(frozen=True)
 class ParsedProblemQuestion:
     question: str
+    question_type: str = 'single_select'
     choices: list[ParsedProblemChoice] = field(default_factory=list)
+    accepted_answers: list[str] = field(default_factory=list)
+    case_sensitive: bool = False
+    string_response_type: str = 'ci'
+    numerical_answer: str | None = None
+    numerical_tolerance: str = '0'
+    numerical_tolerance_type: str = 'absolute'
     solution: str = ''
+    warnings: list[str] = field(default_factory=list)
 
 
 def normalize_problem_text(text: str) -> str:
@@ -172,82 +180,110 @@ def _question_text_from_response(response: Tag) -> str:
 
 
 def _response_containers(soup: BeautifulSoup) -> list[Tag]:
-    """Return one parse container per question, avoiding duplicate choicegroup parse."""
-    responses = soup.find_all(['multiplechoiceresponse', 'choiceresponse'])
+    responses = soup.find_all(['multiplechoiceresponse', 'choiceresponse', 'stringresponse', 'numericalresponse'])
     if responses:
         return responses
-
-    # Fallback for non-standard fragments where choicegroup is the top-level block.
     groups = soup.find_all(['choicegroup', 'checkboxgroup'])
     if groups:
         return groups
     return [soup]
 
 
-def parse_problem_xml(problem_xml: str) -> list[ParsedProblemQuestion]:
-    """Parse old Open edX problem XML into teacher-readable question data.
+def _solution_for_container(container: Tag) -> str:
+    solution_tag = container.find('solution')
+    if solution_tag:
+        return _clean_fragment_text(solution_tag)
+    parent = container.parent if isinstance(container.parent, Tag) else None
+    if parent:
+        solution_tag = parent.find('solution')
+    return _clean_fragment_text(solution_tag)
 
-    Supports common CAPA shapes and FPT/Poly quizzes where each question prompt
-    is stored in a ``div.poly`` immediately before ``multiplechoiceresponse``.
-    When the XML is malformed, BeautifulSoup still gives a best-effort tree; if
-    we cannot find choices, callers should fall back to plain text.
-    """
+
+def _parse_tolerance(value: object) -> tuple[str, str]:
+    text = str(value or '').strip()
+    if not text:
+        return '0', 'absolute'
+    if text.endswith('%'):
+        return text[:-1].strip() or '0', 'percent'
+    return text, 'absolute'
+
+
+def parse_problem_xml(problem_xml: str) -> list[ParsedProblemQuestion]:
     raw = remove_openedx_filename_metadata(problem_xml or '')
     if not raw.strip():
         return []
-
     soup = BeautifulSoup(raw, 'html.parser')
     questions: list[ParsedProblemQuestion] = []
-    seen: set[tuple[str, tuple[str, ...]]] = set()
-
+    seen: set[tuple] = set()
     for container in _response_containers(soup):
-        choices = []
-        for choice in container.find_all('choice'):
-            text = _clean_fragment_text(choice)
-            if not text:
-                continue
-            choices.append(ParsedProblemChoice(text=text, correct=_is_correct(choice.get('correct'))))
-
-        if len(choices) < 2:
-            continue
-
+        tag_name = str(getattr(container, 'name', '') or '').lower()
         question_text = _question_text_from_response(container)
-        solution_tag = container.find('solution')
-        solution = _clean_fragment_text(solution_tag)
-
-        fingerprint = (question_text, tuple(choice.text for choice in choices))
-        if not question_text or fingerprint in seen:
+        if not question_text:
             continue
-        seen.add(fingerprint)
-        questions.append(ParsedProblemQuestion(question=question_text, choices=choices, solution=solution))
-
+        solution = _solution_for_container(container)
+        warnings: list[str] = []
+        if tag_name in {'multiplechoiceresponse','choiceresponse','choicegroup','checkboxgroup'} or container.find(['choicegroup','checkboxgroup']):
+            checkbox = tag_name == 'checkboxgroup' or container.find('checkboxgroup') is not None
+            choices = [ParsedProblemChoice(text=_clean_fragment_text(choice), correct=_is_correct(choice.get('correct'))) for choice in container.find_all('choice') if _clean_fragment_text(choice)]
+            if len(choices) < 2:
+                continue
+            correct_count = sum(1 for choice in choices if choice.correct)
+            if checkbox or correct_count > 1:
+                qtype = 'multi_select'
+                if correct_count < 2: warnings.append('checkboxgroup có ít hơn 2 đáp án được đánh dấu đúng.')
+            else:
+                qtype = 'single_select'
+                if correct_count != 1: warnings.append('single-select không có đúng 1 đáp án được đánh dấu đúng.')
+            fingerprint=(qtype,question_text,tuple((c.text,c.correct) for c in choices))
+            if fingerprint in seen: continue
+            seen.add(fingerprint)
+            questions.append(ParsedProblemQuestion(question=question_text,question_type=qtype,choices=choices,solution=solution,warnings=warnings)); continue
+        if tag_name == 'stringresponse':
+            response_mode=str(container.get('type') or 'ci').strip().lower(); answers=[]
+            primary=_clean_fragment_text(container.get('answer'))
+            if primary: answers.append(primary)
+            for node in container.find_all('additional_answer'):
+                value=_clean_fragment_text(node.get('answer') or node)
+                if value and value not in answers: answers.append(value)
+            if not answers: warnings.append('stringresponse không có đáp án chấp nhận.')
+            if response_mode not in {'ci','cs'}: warnings.append(f'stringresponse type={response_mode} chưa được canonical editor hỗ trợ.')
+            fingerprint=('text_input',question_text,tuple(answers),response_mode)
+            if fingerprint in seen: continue
+            seen.add(fingerprint)
+            questions.append(ParsedProblemQuestion(question=question_text,question_type='text_input',accepted_answers=answers,case_sensitive=response_mode=='cs',string_response_type=response_mode,solution=solution,warnings=warnings)); continue
+        if tag_name == 'numericalresponse':
+            answer=_clean_fragment_text(container.get('answer')); tolerance='0'; tolerance_type='absolute'
+            for param in container.find_all('responseparam'):
+                if str(param.get('type') or '').strip().lower() == 'tolerance':
+                    tolerance,tolerance_type=_parse_tolerance(param.get('default') or param.get('value')); break
+            if not answer: warnings.append('numericalresponse không có answer.')
+            fingerprint=('numerical_input',question_text,answer,tolerance,tolerance_type)
+            if fingerprint in seen: continue
+            seen.add(fingerprint)
+            questions.append(ParsedProblemQuestion(question=question_text,question_type='numerical_input',numerical_answer=answer or None,numerical_tolerance=tolerance,numerical_tolerance_type=tolerance_type,solution=solution,warnings=warnings))
     return questions
 
 
 def build_ai_text_from_problem(problem_xml: str) -> str:
-    """Convert an old CMS/Open edX problem into source text for teacher UI and AI.
-
-    The correct answer marker is intentional: it helps teachers inspect the old
-    quiz and helps the model understand the canonical concept when a problem
-    node/chunk is used as source.  This text is only shown in AI Server
-    teacher/admin screens, not in learner-facing CMS views.
-    """
     questions = parse_problem_xml(problem_xml)
     if not questions:
         return ''
-
-    parts: list[str] = [
-        '[SOURCE TYPE: EXISTING OPEN EDX PROBLEM]',
-        'Tài liệu nguồn là quiz/câu hỏi cũ trong CMS. Được dùng làm nguồn kiến thức, nhưng câu hỏi AI sinh ra phải đổi cách hỏi/diễn đạt và không copy nguyên văn.',
-    ]
+    parts = ['[SOURCE TYPE: EXISTING OPEN EDX PROBLEM]','Tài liệu nguồn là quiz/câu hỏi cũ trong CMS. Được dùng làm nguồn kiến thức, nhưng câu hỏi AI sinh ra phải đổi cách hỏi/diễn đạt và không copy nguyên văn.']
+    labels={'single_select':'MỘT ĐÁP ÁN','multi_select':'NHIỀU ĐÁP ÁN','text_input':'TRẢ LỜI NGẮN','numerical_input':'TRẢ LỜI SỐ'}
     for index, question in enumerate(questions, start=1):
-        # If the source already contains "CÂU 1", avoid rendering "Câu 1: CÂU 1".
-        prefix = '' if re.match(r'^(câu|question)\s*\d+', question.question, flags=re.IGNORECASE) else f'Câu {index}: '
-        parts.append(f'{prefix}{question.question}'.strip())
-        for choice_index, choice in enumerate(question.choices):
-            letter = chr(ord('A') + choice_index)
-            marker = ' [ĐÁP ÁN ĐÚNG]' if choice.correct else ''
-            parts.append(f'{letter}. {choice.text}{marker}')
-        if question.solution:
-            parts.append(f'Giải thích: {question.solution}')
+        prefix='' if re.match(r'^(câu|question)\s*\d+',question.question,flags=re.IGNORECASE) else f'Câu {index}: '
+        parts.append(f'{prefix}{question.question} [{labels.get(question.question_type, question.question_type)}]'.strip())
+        if question.question_type in {'single_select','multi_select'}:
+            for choice_index,choice in enumerate(question.choices):
+                letter=chr(ord('A')+choice_index); marker=' [ĐÁP ÁN ĐÚNG]' if choice.correct else ''
+                parts.append(f'{letter}. {choice.text}{marker}')
+        elif question.question_type=='text_input':
+            for answer in question.accepted_answers: parts.append(f'[ĐÁP ÁN CHẤP NHẬN] {answer}')
+            parts.append('Phân biệt hoa/thường: '+('Có' if question.case_sensitive else 'Không'))
+        elif question.question_type=='numerical_input':
+            parts.append(f'[ĐÁP ÁN SỐ] {question.numerical_answer or ""}')
+            parts.append(f'[SAI SỐ] {question.numerical_tolerance}{"%" if question.numerical_tolerance_type=="percent" else ""}')
+        if question.solution: parts.append(f'Giải thích: {question.solution}')
+        for warning in question.warnings: parts.append(f'[CẢNH BÁO PARSER] {warning}')
     return '\n'.join(parts).strip()
+

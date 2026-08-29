@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import traceback
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,40 @@ from app.models.question_bank import BankOperationJob
 
 TERMINAL_STATUSES = {'completed', 'failed', 'canceled'}
 
+_TRANSIENT_OPENEDX_STATUS_RE = re.compile(r'HTTP\s+(429|502|503|504)\b', re.IGNORECASE)
+
+
+def bank_operation_error_code(error: Exception | str) -> str:
+    message = str(error or '')
+    lowered = message.lower()
+    if 'openedx_library_org_missing' in lowered or ('organization' in lowered and ('chưa tồn tại' in lowered or 'does not exist' in lowered)):
+        return 'OPENEDX_LIBRARY_ORG_MISSING'
+    if _TRANSIENT_OPENEDX_STATUS_RE.search(message) or 'origin_bad_gateway' in lowered:
+        return 'OPENEDX_TEMPORARILY_UNAVAILABLE'
+    if '403' in message and ('hmac' in lowered or 'connector' in lowered or 'forbidden' in lowered):
+        return 'OPENEDX_CONNECTOR_AUTH_REJECTED'
+    if 'verify' in lowered or 'verification' in lowered or 'xác minh' in lowered:
+        return 'OPENEDX_VERIFICATION_FAILED'
+    if isinstance(error, ValueError):
+        return 'VALIDATION_ERROR'
+    return 'BANK_OPERATION_FAILED'
+
+
+def bank_operation_user_message(error: Exception | str) -> str:
+    message = str(error or '').strip()
+    code = bank_operation_error_code(error)
+    if code == 'OPENEDX_LIBRARY_ORG_MISSING':
+        return 'Open edX chưa có Organization sở hữu Content Library. Hãy kiểm tra OPENEDX_LIBRARY_ORG và Organization tương ứng.'
+    if code == 'OPENEDX_TEMPORARILY_UNAVAILABLE':
+        return 'Open edX đang tạm thời không phản hồi ổn định. Hệ thống đã dừng thao tác an toàn; hãy thử lại sau.'
+    if code == 'OPENEDX_CONNECTOR_AUTH_REJECTED':
+        return 'Open edX từ chối xác thực connector. Hãy kiểm tra HMAC server-to-server.'
+    if code == 'OPENEDX_VERIFICATION_FAILED':
+        return 'Không xác minh được kết quả trên Open edX nên hệ thống không đánh dấu thao tác là thành công.'
+    if isinstance(error, ValueError) and message and len(message) <= 500 and not any(token in message.lower() for token in ('traceback', 'http://', 'https://', '{"', "{'")):
+        return message
+    return 'Thao tác không hoàn tất. Xem Audit/worker log bằng mã job để biết chi tiết kỹ thuật.'
+
 
 def operation_pending_dir() -> Path:
     root = Path(settings.local_storage_path or '/app/.runtime')
@@ -23,6 +57,10 @@ def operation_pending_dir() -> Path:
 
 
 def serialize_job(job: BankOperationJob) -> dict[str, Any]:
+    result_json = job.result_json or {}
+    enqueue = result_json.get('enqueue') if isinstance(result_json, dict) else None
+    enqueue = enqueue if isinstance(enqueue, dict) else {}
+
     return {
         'id': job.id,
         'operation_type': job.operation_type,
@@ -40,7 +78,12 @@ def serialize_job(job: BankOperationJob) -> dict[str, Any]:
         'progress_percent': round((int(job.progress_current or 0) / max(int(job.progress_total or 1), 1)) * 100, 2),
         'progress_label': job.progress_label,
         'request': job.request_json or {},
-        'result': job.result_json or {},
+        'result': result_json,
+        'celery_task_id': enqueue.get('celery_task_id'),
+        'task_name': enqueue.get('task_name'),
+        'enqueued_at': enqueue.get('enqueued_at'),
+        'retry_token': enqueue.get('retry_token'),
+        'enqueue_history': result_json.get('enqueue_history') or [],
         'error_message': job.error_message,
         'created_at': job.created_at,
         'started_at': job.started_at,
@@ -137,11 +180,23 @@ class BankOperationJobService:
         return job
 
     def fail(self, job: BankOperationJob, *, error: Exception | str, result: dict | None = None) -> BankOperationJob:
-        message = str(error)
+        try:
+            self.db.rollback()
+        except Exception:
+            pass
+        error_code = bank_operation_error_code(error)
+        safe_message = bank_operation_user_message(error)
+        safe_result: dict[str, Any] = {}
+        if isinstance(result, dict):
+            for key, value in result.items():
+                if key in {'error', 'user_message', 'traceback', 'traceback_tail', 'exception', 'raw_error', 'raw_response'}:
+                    continue
+                safe_result[key] = value
+        safe_result.update({'ok': False, 'error_code': error_code, 'error': safe_message, 'user_message': safe_message})
         job.status = 'failed'
-        job.error_message = message[:4000]
+        job.error_message = safe_message[:1000]
         job.progress_label = 'Thất bại'
-        job.result_json = result or {'error': message, 'user_message': message, 'traceback_tail': traceback.format_exc(limit=8)}
+        job.result_json = safe_result
         job.finished_at = datetime.utcnow()
         job.updated_at = datetime.utcnow()
         self.db.commit()

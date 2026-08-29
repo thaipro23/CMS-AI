@@ -5,9 +5,10 @@ import hashlib
 import hmac
 import json
 import time
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 from jose import jwt
 from pydantic import BaseModel
@@ -15,8 +16,14 @@ from pydantic import BaseModel
 from app.core.rbac import ROLE_LABELS, ROLE_PERMISSIONS, UserContext, get_user_context
 from app.db.session import get_db
 from app.services.business_rbac import BusinessRBACService
-from app.core.config import settings
+from app.core.config import is_production, settings
 from app.core.security import _normalize_role
+from app.core.session_security import (
+    claim_bridge_ticket_once,
+    enforce_fixed_window_rate_limit,
+    revoke_session,
+    ticket_fingerprint,
+)
 
 router = APIRouter()
 
@@ -26,8 +33,8 @@ class OpenEdxSessionExchangeRequest(BaseModel):
 
 
 class OpenEdxSessionExchangeResponse(BaseModel):
-    access_token: str
-    token_type: str = 'bearer'
+    access_token: str | None = None
+    token_type: str = 'cookie'
     expires_in: int
     user_id: str
     email: str | None = None
@@ -62,8 +69,18 @@ def _decode_bridge_ticket(ticket: str) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid CMS session ticket payload') from exc
     now = int(time.time())
-    if int(payload.get('exp') or 0) < now:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='CMS session ticket expired')
+    issued_at = int(payload.get('iat') or 0)
+    expires_at = int(payload.get('exp') or 0)
+    max_age = max(30, min(int(settings.openedx_session_bridge_max_age_seconds or 60), 120))
+    if not issued_at or not expires_at or not payload.get('jti'):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={'code': 'CMS_TICKET_CLAIMS_INVALID', 'message': 'CMS session ticket thiếu claim bảo mật bắt buộc.'},
+        )
+    if expires_at < now:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={'code': 'CMS_TICKET_EXPIRED', 'message': 'CMS session ticket đã hết hạn.'})
+    if issued_at > now + 10 or now - issued_at > max_age or expires_at - issued_at > max_age:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={'code': 'CMS_TICKET_TOO_OLD', 'message': 'CMS session ticket không còn trong thời gian cho phép.'})
     if payload.get('aud') != settings.openedx_session_bridge_audience:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='CMS session ticket audience mismatch')
     if payload.get('iss') != settings.openedx_session_bridge_issuer:
@@ -106,8 +123,8 @@ def roles():
     ]
 
 
-@router.post('/openedx-session/exchange', response_model=OpenEdxSessionExchangeResponse)
-def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: Response, db: Session = Depends(get_db)):
+@router.post('/openedx-session/exchange', response_model=OpenEdxSessionExchangeResponse, response_model_exclude_none=True)
+def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Exchange a CMS/Studio session bridge ticket for an AI Server JWT.
 
     The ticket is created by the Open edX CMS connector while the browser is
@@ -115,16 +132,32 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
     second password or manually pasting a JWT. The ticket itself is short-lived
     and signed with the shared AI_CONNECTOR_HMAC_SECRET/OPENEDX_CONNECTOR_HMAC_SECRET.
     """
+    client_ip = str(getattr(request.client, 'host', '') or 'unknown')
+    fingerprint = ticket_fingerprint(payload.ticket)
+    enforce_fixed_window_rate_limit(
+        key=f'auth-exchange-ip:{client_ip}',
+        limit=int(settings.auth_exchange_rate_limit_per_minute or 20),
+        window_seconds=60,
+    )
+    enforce_fixed_window_rate_limit(
+        key=f'auth-exchange-ticket:{fingerprint}',
+        limit=int(settings.auth_exchange_ticket_rate_limit_per_minute or 3),
+        window_seconds=60,
+    )
     data = _decode_bridge_ticket(payload.ticket)
-    base_role = _normalize_role(str(data.get('role') or 'viewer'))
+    now = int(time.time())
+    claim_bridge_ticket_once(jti=str(data.get('jti') or ''), ttl_seconds=max(1, int(data.get('exp') or now) - now))
+    is_super_admin = bool(data.get('is_superuser') or data.get('is_super_admin'))
+    # v25.9.16.7.2.64.13: Open edX staff/course author is not an AI legacy role.
+    # Only Open edX superuser/super_admin may receive legacy role=admin. All
+    # other users receive viewer and are authorized through business RBAC/AP
+    # assignments only.
+    base_role = 'admin' if is_super_admin else 'viewer'
     course_ids = _normalize_courses(data.get('course_ids') or data.get('courses'))
-    ttl = int(settings.auth_session_token_ttl_seconds or 28800)
+    ttl = max(900, min(int(settings.auth_session_token_ttl_seconds or 7200), 2 * 60 * 60))
     now = int(time.time())
     user_id = str(data.get('sub') or data.get('user_id') or data.get('username') or 'openedx-user')
-    # Business RBAC can intentionally upgrade the UI/API legacy role after the
-    # user has been assigned SYSTEM_ADMIN/DEPARTMENT_HEAD/SUBJECT_OWNER/etc.
-    # Open edX is_staff alone is still not trusted as AI admin.
-    role = _normalize_role(BusinessRBACService(db).effective_legacy_role_for_user(user_id, base_role, email=data.get('email'), username=data.get('username')))
+    role = _normalize_role(base_role)
     claims = {
         'sub': user_id,
         'user_id': user_id,
@@ -137,8 +170,13 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
         'aud': settings.jwt_audience,
         'token_type': 'ai_session',
         'auth_source': 'openedx_cms_session_bridge',
+        'is_staff': bool(data.get('is_staff')),
+        'is_superuser': bool(data.get('is_superuser')),
+        'is_super_admin': bool(data.get('is_super_admin') or data.get('is_superuser')),
+        'ai_system_admin': bool(is_super_admin),
         'iat': now,
         'exp': now + ttl,
+        'jti': str(uuid.uuid4()),
     }
     token = jwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
@@ -156,7 +194,8 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
     response.set_cookie(**cookie_kwargs)
 
     return OpenEdxSessionExchangeResponse(
-        access_token=token,
+        access_token=None if is_production() else token,
+        token_type='cookie' if is_production() else 'bearer',
         expires_in=ttl,
         user_id=user_id,
         email=data.get('email'),
@@ -165,3 +204,29 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, response: R
         username=data.get('username'),
         name=data.get('name'),
     )
+
+
+@router.post('/logout')
+def logout(request: Request, response: Response):
+    token = request.cookies.get('ai_openedx_access_token')
+    if token:
+        try:
+            claims = jwt.decode(
+                token,
+                settings.jwt_secret,
+                algorithms=[settings.jwt_algorithm],
+                issuer=settings.jwt_issuer,
+                audience=settings.jwt_audience,
+                options={'verify_exp': False},
+            )
+            revoke_session(jti=str(claims.get('jti') or '') or None, expires_at=int(claims.get('exp') or 0))
+        except HTTPException:
+            raise
+        except Exception:
+            # Invalid/expired cookies are still cleared; never expose token details.
+            pass
+    delete_kwargs: dict[str, Any] = {'key': 'ai_openedx_access_token', 'path': '/'}
+    if settings.auth_cookie_domain:
+        delete_kwargs['domain'] = settings.auth_cookie_domain
+    response.delete_cookie(**delete_kwargs)
+    return {'ok': True, 'ui_status': 'success', 'ui_title': 'Đã đăng xuất', 'ui_message': 'Phiên đăng nhập đã được thu hồi.'}

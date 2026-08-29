@@ -117,7 +117,7 @@ export function NodePreviewText({ content }: { content: string }) {
     <div className="node-full-content rendered">
       {content.split("\n").map((line, index) => {
         const isCorrect = line.includes("[ĐÁP ÁN ĐÚNG]");
-        const display = line.replace("[ĐÁP ÁN ĐÚNG]", "✓ Đáp án đúng");
+        const display = line.replace("[ĐÁP ÁN ĐÚNG]", "Đáp án đúng");
         if (!display.trim())
           return (
             <div key={index} className="node-content-line blank">

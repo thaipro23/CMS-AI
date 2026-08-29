@@ -1,153 +1,23 @@
+# AI Server Open edX — v25.9.16.7.2.64.16.5.7.2.18
 
-## v25.9.15.0 - Versioned Question Bank First
+Current feature branch: **SU26 Legacy Quiz Import & Fast Subject Search**.
 
-AI Server now has a bank-first model for managing question banks before an Open edX course exists:
+This branch extends the known-good `.16` baseline without replacing Open edX core. Question Bank has a canonical response schema for **Một đáp án**, **Nhiều đáp án**, **Chọn và điền ô trống**, **Trả lời ngắn**, and **Trả lời số**. The Department screen includes fast subject lookup, while `/import-quiz-cms-old` validates legacy multi-sheet Excel workbooks and imports them into the subject's **SU26** version. Every imported question records the importer and starts in **Chờ duyệt**.
 
-```text
-Department → Subject → Chapter → Bank Version → Bank Release → Open edX Course Mapping
-```
+## Runtime scope
 
-Production rule: `1 Bank Release = 1 Open edX Library`. When learning material changes, create a new Bank Version and Release. Old courses keep their old release until an admin explicitly maps them to a newer release.
+- Question authoring/review/release: `/bank`
+- Fast subject lookup: `/bank/departments`
+- Legacy Excel preview/import: `/import-quiz-cms-old`
+- Quiz/Final test planner: `/bank/quiz`
+- Open edX publish continues through the connector/worker flow; no Open edX core patch is required.
+- AP synchronization remains scoped to subjects selected CMS/Udemy in `/subject-management` from `.16`.
+- Heavy generation/publish/quiz operations remain persistent Celery jobs.
+- Database schema head: `0061_v25_9_16_7_2_64_39`.
 
-Main UI: `/bank`
+Release notes: `RELEASE_v25.9.16.7.2.64.16.5.7.2.18_QUESTION_TYPES_ERROR_HARDENING.md`.
+Verification: `VERIFICATION_v25.9.16.7.2.64.16.5.7.2.18.md`.
+Deploy: `RUN_V25_9_16_7_2_64_16_5_7_2_18.md`.
 
-Main API prefix: `/api/question-bank-v2`
-
-See `docs/V25_9_15_0_VERSIONED_QUESTION_BANK_FIRST.md`.
-
-# AI Learning Server for Open edX CMS — v25.9.14.6 Native Ulmo ItemBank
-
-Bản này giữ Stable Family + Hard Duplicate Guard, đồng thời tạo đúng native Problem Bank Beta (`itembank`) trên Open edX Ulmo.3. Mỗi Library V2 problem được đồng bộ thành course-local ProblemBlock bằng luồng Studio native và được xác minh trước khi báo hoàn tất.
-
-Starter implementation for an Open edX AI Learning Check system.
-
-This release includes the full roadmap implementation from **v9 to v15**:
-
-- Modular backend foundation
-- Alembic migration setup
-- Real/mock Open edX connector adapter
-- Production-ready RBAC path
-- GPT-5 mini / local OpenAI-compatible model gateway
-- Question Bank + Review workflow
-- Open edX OLX export and publish endpoint
-- Cost governance: estimate, quota, hard stop, usage log
-- Multi-page Next.js UI
-- Tests, CI, monitoring hooks and production compose
-
-## Run local demo
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-Open:
-
-- Frontend: http://localhost:3000
-- API docs: http://localhost:8000/docs
-- MinIO console: http://localhost:9001 (dev/demo only)
-
-## Important modes
-
-### Demo mode
-
-```env
-USE_MOCK_OPENEDX=true
-MOCK_LLM=true
-AUTH_MODE=demo
-AUTO_CREATE_TABLES=true
-```
-
-### Real API-first mode
-
-```env
-USE_MOCK_OPENEDX=false
-MOCK_LLM=false
-AUTH_MODE=jwt
-AUTO_CREATE_TABLES=false
-OPENAI_API_KEY=...
-OPENEDX_BASE_URL=https://your-openedx.example.edu
-OPENEDX_CLIENT_ID=...
-OPENEDX_CLIENT_SECRET=...
-```
-
-Then run:
-
-```bash
-cd backend
-alembic -c alembic.ini upgrade head
-```
-
-## Pages
-
-- `/dashboard` — statistics, governance, cost summary
-- `/sync` — sync course content from Open edX
-- `/generate` — manual/chunk generation mode
-- `/review` — Teacher Review Queue
-- `/question-bank` — all questions + filter/search/sort/edit
-- `/export` — OLX preview/download and publish-to-Open-edX action
-- `/jobs` — job monitor
-- `/settings` — demo role/course settings
-
-## Docs
-
-- `docs/V9_TO_V15_RELEASE_NOTES.md`
-- `docs/PRODUCTION_DEPLOYMENT.md`
-- `docs/OPENEDX_REAL_INTEGRATION.md`
-- `docs/AUTH_RBAC_PRODUCTION.md`
-- `docs/API.md`
-- `docs/FRONTEND_STRUCTURE.md`
-- `docs/OPENEDX_EXPORT.md`
-
-## Commit suggestion
-
-```bash
-git add .
-git commit -m "feat: upgrade AI Open edX server from v9 to v15 production foundation"
-```
-
-
-## v16-v19 status
-
-This version adds production-oriented algorithms from the 10/10 plan:
-
-- Course tree traversal from Open edX blocks
-- HTML/transcript/PDF/PPTX extraction layer
-- Hash-based changed content detection
-- Chunking with source references
-- Topic extraction and topic coverage allocation
-- Batch generation with topic allocation
-- Source grounding and duplicate detection hooks
-- Friendlier multi-page UI for Sync and Generate
-
-See `docs/V16_TO_V19_RELEASE_NOTES.md`.
-
-
-## v24 - Chapter/Module Libraries
-
-Course tạo nhiều Library theo Chapter/Module. Khi AI sinh câu hỏi ở Unit/PDF/Video/HTML, backend tìm Chapter cha, import câu hỏi vào Library của Chapter đó và giữ `source_node_id` để Problem Bank trong Unit random/filter đúng nguồn. Xem `docs/V24_CHAPTER_LIBRARIES.md`.
-
-## v24.2 - Responses API Gateway
-
-Bản này mặc định dùng OpenAI Responses API cho GPT thật.
-
-Cấu hình nhanh trong `.env` hoặc `/settings`:
-
-```env
-MODEL_PROVIDER=openai
-OPENAI_MODEL=gpt-5-mini
-OPENAI_API_MODE=responses
-MOCK_LLM=false
-OPENAI_API_KEY=sk-...
-```
-
-Trong `/settings`, admin có thể bấm **Test GPT**. Nếu OK, kết quả sẽ hiển thị `openai_responses/gpt-5-mini qua responses`.
-
-Chat Completions cũ vẫn giữ dưới mode `chat_legacy` để fallback/local compatible.
-
-## v24.3 Accurate Cost Metering
-
-- Estimate trước khi chạy dùng `/v1/responses/input_tokens` cho payload Responses thật.
-- Safety factor chỉ áp dụng cho Estimate/Hard Stop.
-- Actual cost dùng usage thật và không nhân safety factor.
-- Có API `GET /api/cost/pricing/realtime?model=...&refresh=true` để fetch/cache giá OpenAI realtime-ish.
+Feature specification and operations guide: [`docs/IMPORT_QUIZ_CMS_OLD_SU26.md`](docs/IMPORT_QUIZ_CMS_OLD_SU26.md).
+Verification report: [`docs/VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md`](docs/VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md).

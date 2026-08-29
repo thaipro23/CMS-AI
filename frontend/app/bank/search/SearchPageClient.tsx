@@ -1,11 +1,16 @@
 'use client'
 
+import { formatVNDateTime } from '../../../lib/time'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { getBankDashboardDrilldown, searchBankDashboard } from '../../../lib/api'
 import type { BankSearchResult } from '../../../types'
+import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
+import { VisualIcon } from '../../../components/ui/VisualIcon'
+import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
+import { BankPageIdentity } from '../_components/BankDesignContract'
 
 function labelStatus(value?: string | null) {
   const labels: Record<string, string> = {
@@ -15,7 +20,7 @@ function labelStatus(value?: string | null) {
     approved: 'Đã duyệt',
     rejected: 'Bị từ chối',
     draft_error: 'Câu lỗi',
-    published: 'Đã publish',
+    published: 'Đã đưa lên CMS',
   }
   return labels[String(value || '')] || value || 'Tất cả'
 }
@@ -47,7 +52,7 @@ function resultTypeLabel(type?: string | null) {
 
 function formatDate(value?: string | null) {
   if (!value) return '—'
-  try { return new Date(value).toLocaleString('vi-VN') } catch { return value }
+  try { return formatVNDateTime(value) } catch { return value }
 }
 
 function truncate(value?: string | null, max = 180) {
@@ -61,54 +66,20 @@ function Chip({ children }: { children: React.ReactNode }) {
 }
 
 function SearchResultTable({ items }: { items: BankSearchResult[] }) {
-  return <div className="responsive-table-wrap drilldown-table-wrap">
-    <table className="ops-data-table drilldown-question-table">
-      <thead>
-        <tr>
-          <th>Câu hỏi</th>
-          <th>Trạng thái</th>
-          <th>Độ khó</th>
-          <th>Người xử lý</th>
-          <th>Lý do / ghi chú</th>
-          <th>Phạm vi</th>
-          <th>Thời điểm</th>
-          <th>Thao tác</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((item, index) => {
-          const actionName = item.action_by_name || item.reviewer_name || item.reviewed_by || item.action_by || '—'
-          const isRejected = item.status === 'rejected'
-          const note = isRejected ? (item.reject_reason || item.review_note) : item.review_note
-          return <tr key={`${item.type}-${item.id || item.question_id || index}`} className={`row-${item.status || 'draft'}`}>
-            <td className="question-cell">
-              <b>{truncate(item.title, 220)}</b>
-              <small>ID: {item.question_id || item.id || '—'}</small>
-            </td>
-            <td><span className={`status ${statusClass(item.status)}`}>{labelStatus(item.status)}</span></td>
-            <td><span className="pill-soft">{labelDifficulty(item.difficulty)}</span></td>
-            <td>
-              <b>{actionName}</b>
-              <small>{isRejected ? 'Người từ chối' : item.status === 'approved' ? 'Người duyệt' : 'Người xử lý gần nhất'}</small>
-            </td>
-            <td className="note-cell">
-              {note ? <span>{truncate(note, 180)}</span> : <span className="muted-text">Không có ghi chú</span>}
-            </td>
-            <td>
-              <b>{item.subject_label || item.subtitle?.split(' · ')[2] || '—'}</b>
-              <small>{item.chapter_title || (item.chapter_id ? `Chapter: ${item.chapter_id}` : '—')}</small>
-            </td>
-            <td>
-              <b>{formatDate(item.reviewed_at)}</b>
-              <small>Tạo: {formatDate(item.created_at)}</small>
-            </td>
-            <td><Link className="btn secondary small" href={item.href || '/bank'}>Mở</Link></td>
-          </tr>
-        })}
-      </tbody>
-    </table>
-  </div>
+  const columns: EnterpriseTableColumn<BankSearchResult>[] = [
+    { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_item, index) => index + 1 },
+    { key: 'question', header: 'Câu hỏi', kind: 'identity', minWidth: 300, hideable: false, render: (item) => <div className="question-cell"><b>{truncate(item.title, 220)}</b><small>ID: {item.question_id || item.id || '—'}</small></div> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 126, hideable: true, render: (item) => <span className={`status ${statusClass(item.status)}`}>{labelStatus(item.status)}</span> },
+    { key: 'difficulty', header: 'Độ khó', kind: 'status', width: 112, hideable: true, render: (item) => <span className="pill-soft">{labelDifficulty(item.difficulty)}</span> },
+    { key: 'actor', header: 'Người xử lý', kind: 'identity', minWidth: 180, hideable: true, render: (item) => { const actionName = item.action_by_name || item.reviewer_name || item.reviewed_by || item.action_by || '—'; return <div><b>{actionName}</b><small>{item.status === 'rejected' ? 'Người từ chối' : item.status === 'approved' ? 'Người duyệt' : 'Người xử lý gần nhất'}</small></div> } },
+    { key: 'note', header: 'Lý do / ghi chú', kind: 'text', minWidth: 220, hideable: true, defaultVisible: false, render: (item) => { const note = item.status === 'rejected' ? (item.reject_reason || item.review_note) : item.review_note; return note ? truncate(note, 180) : <span className="muted-text">Không có ghi chú</span> } },
+    { key: 'scope', header: 'Phạm vi', kind: 'text', minWidth: 180, hideable: true, render: (item) => <div><b>{item.subject_label || item.subtitle?.split(' · ')[2] || '—'}</b><small>{item.chapter_title || (item.chapter_id ? `Chapter: ${item.chapter_id}` : '—')}</small></div> },
+    { key: 'date', header: 'Thời điểm', kind: 'date', minWidth: 160, hideable: true, defaultVisible: false, render: (item) => <div><b>{formatDate(item.reviewed_at)}</b><small>Tạo: {formatDate(item.created_at)}</small></div> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 84, hideable: false, render: (item) => <Link className="btn secondary small" href={item.href || '/bank'}>Mở</Link> },
+  ]
+  return <EnterpriseDataTable tableId="bank-search-results" caption="Kết quả tìm kiếm câu hỏi" rows={items} columns={columns} rowKey={(item) => `${item.type}-${item.id || item.question_id || item.href}`} density="compact" label="kết quả" showSummary={false} />
 }
+
 
 function SearchResultCards({ items }: { items: BankSearchResult[] }) {
   return <div className="dashboard-search-list">
@@ -186,12 +157,11 @@ export default function SearchPageClient() {
 
   const isQuestionTable = hasQuestionFilters && items.every((item) => item.type === 'question')
 
-  return <div className="page-stack bank-multipage dashboard-search-page">
-    <div className="dashboard-search-hero card">
-      <div>
-        <span className="eyebrow">Danh sách</span>
-        <h1>Câu hỏi trong phạm vi được giao</h1>
-        <p>Kết quả lấy theo quyền hiện tại của tài khoản, dùng để kiểm tra nhanh các chỉ số trên Dashboard.</p>
+  return <PageRoot className="page-stack bank-multipage bank-contract-page dashboard-search-page">
+    <PageHeader eyebrow="Ngân hàng đề" title="Tìm kiếm ngân hàng đề" icon="search" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Tìm kiếm' }]} />
+    <BankPageIdentity title="Tìm kiếm ngân hàng đề" description="Tra cứu nhanh bộ môn, môn học, phiên bản, bài và câu hỏi trong đúng phạm vi được phân quyền." icon="search" tone="blue" actions={<Link className="btn secondary" href="/bank">Về Chi phí & Token</Link>} />
+    <section className="card visual-section-card dashboard-search-filter-card">
+      <div className="visual-section-heading"><VisualIcon label="Bộ lọc đang áp dụng" icon="filter" tone="blue" /><div><h2>Bộ lọc đang áp dụng</h2><p className="helper">Các điều kiện được lấy trực tiếp từ URL hiện tại.</p></div></div>
         <div className="dashboard-filter-row">
           {q ? <Chip>Từ khóa: {q}</Chip> : null}
           {status ? <Chip>Trạng thái: {labelStatus(status)}</Chip> : null}
@@ -202,28 +172,26 @@ export default function SearchPageClient() {
           {chapterId ? <Chip>Chapter: {chapterId}</Chip> : null}
           {subjectId ? <Chip>Môn: {subjectId}</Chip> : null}
         </div>
-      </div>
-      <Link className="btn secondary" href="/bank">Về Dashboard</Link>
-    </div>
+    </section>
 
     {loading ? <div className="dashboard-search-list">
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
       <div className="dashboard-skeleton" style={{ minHeight: 96 }} />
-    </div> : error ? <div className="dashboard-error-state">
+    </div> : error ? <div className="dashboard-error-state visual-state"><VisualIcon label="Không tải được dữ liệu" icon="alert" tone="red" /><div>
       <b>Không tải được dữ liệu.</b>
       <p>{error}</p>
-      <button className="btn small" onClick={load} type="button">Thử lại</button>
+      <button className="btn small" onClick={load} type="button">Thử lại</button></div>
     </div> : items.length ? <>
       <div className="dashboard-search-count">
         Đang hiển thị <b>{returned || items.length}</b>{total ? <> / <b>{total}</b></> : null} kết quả phù hợp
         {source === 'search_index' ? <small> · Dữ liệu lấy từ chỉ mục tìm kiếm</small> : null}
       </div>
       {isQuestionTable ? <SearchResultTable items={items} /> : <SearchResultCards items={items} />}
-    </> : <div className="dashboard-empty-state">
+    </> : <div className="dashboard-empty-state visual-state"><VisualIcon label="Không có kết quả" icon="database" tone="slate" /><div>
       <b>Không có kết quả trong phạm vi của bạn.</b>
       <p>Dữ liệu có thể chưa được tạo hoặc bạn không có quyền trong phạm vi đó.</p>
-      <Link className="btn secondary small" href="/bank">Quay lại Dashboard</Link>
+      <Link className="btn secondary small" href="/bank">Quay lại Chi phí & Token</Link></div>
     </div>}
-  </div>
+  </PageRoot>
 }

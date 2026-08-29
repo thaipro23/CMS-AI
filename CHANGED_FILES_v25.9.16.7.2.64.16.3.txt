@@ -1,0 +1,42 @@
+# Changed files — v25.9.16.7.2.64.16.3
+
+Total: 38
+
+M	.env.production.example
+A	AI_SERVER_PROJECT_CONTEXT_V25_9_16_7_2_64_16_3.md
+M	CHANGELOG.md
+M	README.md
+A	RELEASE_v25.9.16.7.2.64.16.3_TRAINING_OPERATIONS_ANALYTICS_UX.md
+M	RUN_CURRENT.md
+A	RUN_V25_9_16_7_2_64_16_3.md
+A	VERIFICATION_v25.9.16.7.2.64.16.3.md
+M	backend/app/core/config.py
+A	backend/app/tests/test_v25_9_16_7_2_64_16_3_training_analytics_ux.py
+M	docker-compose.prod.yml
+M	frontend/Dockerfile
+M	frontend/app/analytics/learning/page.tsx
+M	frontend/app/layout.tsx
+M	frontend/app/student-management/classes/[classId]/page.tsx
+M	frontend/app/student-management/page.tsx
+M	frontend/app/student-management/subjects/[subjectId]/classes/page.tsx
+M	frontend/app/teacher-management/page.tsx
+M	frontend/app/teacher-management/teachers/[teacherId]/classes/page.tsx
+A	frontend/components/training/TrainingWorkspace.tsx
+M	frontend/hooks/useAcademicTableState.ts
+M	frontend/package-lock.json
+M	frontend/package.json
+A	frontend/styles/training-analytics-ux.css
+M	scripts/claude-code-review-pack.sh
+M	scripts/frontend-build-verify.sh
+M	scripts/load-test-hot-endpoints.sh
+M	scripts/maintainability-contract-report.sh
+M	scripts/openedx-publish-verify.sh
+M	scripts/performance-readiness-report.sh
+M	scripts/pilot-operations-runbook.sh
+M	scripts/pilot-release-candidate-report.sh
+M	scripts/production-pilot-final-gate.sh
+M	scripts/query-hotspot-report.sh
+M	scripts/security-attack-simulation-report.sh
+M	scripts/security-readiness-report.sh
+M	scripts/uat-build-gate.sh
+M	scripts/uat-runtime-verify.sh

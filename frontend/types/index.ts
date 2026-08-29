@@ -1,3 +1,14 @@
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | undefined | JsonValue[] | { [key: string]: JsonValue }
+export type JsonObject = { [key: string]: JsonValue }
+
+export type UiStatus = 'success' | 'error' | 'warning' | 'info'
+export type BackendUiNotice = {
+  ui_status?: UiStatus | string | null
+  ui_title?: string | null
+  ui_message?: string | null
+}
+
 export type Role = 'admin' | 'teacher' | 'reviewer' | 'viewer'
 
 export type Permission =
@@ -47,6 +58,27 @@ export type CursorPaginatedResponse<T> = {
   has_next: boolean
   next_cursor?: { created_at?: string | null; id?: string | null } | null
   total?: number | null
+}
+
+export type CostEstimateOutputCalibration = {
+  strategy?: string | null
+  multiplier?: number | null
+  sample_size?: number | null
+}
+
+export type CostEstimateLike = {
+  estimated_input_tokens?: number | null
+  estimated_cached_input_tokens?: number | null
+  estimated_output_tokens?: number | null
+  estimated_output_tokens_per_question?: number | null
+  estimated_raw_cost_usd?: number | null
+  estimated_cost_usd?: number | null
+  estimated_cost_vnd?: number | null
+  model_name?: string | null
+  token_source?: string | null
+  estimate_token_source?: string | null
+  quota_message?: string | null
+  output_calibration?: CostEstimateOutputCalibration | null
 }
 
 export type QuestionStatus = 'pending_review' | 'approved' | 'rejected' | 'published' | 'draft_error' | string
@@ -174,6 +206,11 @@ export type BankOperationJob = {
   progress_label: string
   request?: Record<string, unknown>
   result?: Record<string, unknown>
+  celery_task_id?: string | null
+  task_name?: string | null
+  enqueued_at?: string | null
+  retry_token?: string | null
+  enqueue_history?: Array<Record<string, unknown>>
   error_message?: string | null
   created_at?: string | null
   started_at?: string | null
@@ -938,6 +975,30 @@ export type MaterialVersion = {
   created_at: string
 }
 
+
+export type BankReleasePublishAudit = {
+  ok: boolean
+  audit_status: string
+  release_id: string
+  release_code?: string
+  release_status?: string
+  bank_version_id?: string
+  chapter_id?: string
+  subject_id?: string
+  openedx_library_key?: string | null
+  expected_openedx_library_key?: string | null
+  published_at?: string | null
+  message: string
+  counts: Record<string, number>
+  checks: Array<{ code: string; status: string; message: string; blocking?: boolean; detail?: Record<string, any> }>
+  blockers?: Array<{ code: string; status: string; message: string; blocking?: boolean; detail?: Record<string, any> }>
+  warnings?: Array<{ code: string; status: string; message: string; blocking?: boolean; detail?: Record<string, any> }>
+  next_actions?: string[]
+  quiz_instances?: Array<{ id: string; openedx_course_id?: string; status?: string; openedx_unit_node_id?: string | null; openedx_quiz_node_id?: string | null; created_at?: string | null; updated_at?: string | null }>
+  read_only?: boolean
+  mutation_performed?: boolean
+}
+
 export type BankReleasePublishResult = {
   ok: boolean
   release_id: string
@@ -947,6 +1008,8 @@ export type BankReleasePublishResult = {
   question_count: number
   imported_now_count: number
   skipped_existing_count: number
+  verified_existing_count?: number
+  verification_warnings?: Array<Record<string, any>>
   library_result?: Record<string, any> | null
   imported?: any[]
   errors?: any[]
@@ -991,6 +1054,32 @@ export type BankRelease = {
   updated_at: string
 }
 
+export type BankReleasePreviewQuestion = {
+  release_question_id: string
+  question_id: string
+  question_text: string
+  question_type?: BankQuestionType | string | null
+  question_content_json?: BankQuestionContent | null
+  media?: BankQuestionMedia[]
+  option_a?: string | null
+  option_b?: string | null
+  option_c?: string | null
+  option_d?: string | null
+  correct_answer: string
+  difficulty: string
+  concept_title?: string | null
+  question_family_id?: string | null
+  included_at?: string | null
+}
+
+export type BankReleasePreview = {
+  release: BankRelease
+  frozen_snapshot: boolean
+  total_questions: number
+  counts: Record<string, number>
+  questions: BankReleasePreviewQuestion[]
+}
+
 export type EdxCourseMapping = {
   id: string
   openedx_course_id: string
@@ -1025,11 +1114,16 @@ export type QuizBlueprint = {
   id: string
   subject_id: string
   chapter_id: string
+  subject_offering_id?: string | null
   title: string
   total_questions: number
   difficulty_easy: number
   difficulty_medium: number
   difficulty_hard: number
+  single_select_count?: number | null
+  multi_select_count?: number | null
+  text_input_count?: number | null
+  numerical_input_count?: number | null
   max_families_per_bank: number
   pick_count_per_slot: number
   status: string
@@ -1082,6 +1176,7 @@ export type MaterialUploadResult = {
   diff_required?: boolean
   diff_base_bank_version_id?: string | null
   document_change_state?: string | null
+  auto_retire_result?: Record<string, any> | null
   message: string
 }
 
@@ -1091,6 +1186,8 @@ export type BankGeneratePreview = {
   chapter_id: string
   question_count: number
   difficulty_counts: Record<string, number>
+  question_type_counts: Record<string, number>
+  material_balancing?: Array<Record<string, any>>
   current_question_count: number
   chapter_question_limit: number
   remaining_quota: number
@@ -1117,12 +1214,116 @@ export type BankGenerateResult = {
   input_chunks: number
   input_tokens: number
   difficulty_counts: Record<string, number>
+  question_type_counts: Record<string, number>
+  material_balancing?: Array<Record<string, any>>
   questions: string[]
   usage: Record<string, any>[]
   errors: Record<string, any>[]
   message: string
 }
 
+
+export type BankQuestionType = 'single_select' | 'multi_select' | 'dropdown_fill' | 'text_input' | 'numerical_input'
+
+export type BankQuestionOption = {
+  id: string
+  text: string
+  correct: boolean
+  feedback?: string
+}
+
+export type BankQuestionContent = {
+  schema_version: number
+  response:
+    | { type: 'single_select' | 'multi_select'; options: BankQuestionOption[] }
+    | { type: 'dropdown_fill'; options: BankQuestionOption[]; correct_option_ids: string[] }
+    | { type: 'text_input'; accepted_answers: Array<{ text: string; case_sensitive: boolean }>; case_sensitive?: boolean }
+    | { type: 'numerical_input'; answer: string; tolerance: string; tolerance_type: 'absolute' | 'percent' }
+}
+
+export type BankQuestionMedia = {
+  id: string
+  question_id: string
+  media_role: string
+  file_name: string
+  mime_type: string
+  size_bytes: number
+  sha256: string
+  width?: number | null
+  height?: number | null
+  alt_text: string
+  sort_order: number
+  created_at: string
+}
+
+export type LegacyQuizCmsOldImportPreview = {
+  ok: boolean
+  preview_token: string
+  target_term: string
+  workbook_count: number
+  sheet_count: number
+  question_count: number
+  type_counts: Record<string, number>
+  difficulty_counts: Record<string, number>
+  image_count: number
+  workbooks: Array<{
+    filename: string
+    subject_id?: string | null
+    subject_code?: string | null
+    subject_name?: string | null
+    sheet_count: number
+    question_count: number
+    type_counts: Record<string, number>
+    difficulty_counts: Record<string, number>
+    image_reference_count: number
+    embedded_image_count: number
+    warning_count: number
+    error_count: number
+    sheets: Array<{
+      sheet_name: string
+      chapter_no: number
+      chapter_title: string
+      question_count: number
+      type_counts: Record<string, number>
+      difficulty_counts: Record<string, number>
+      warning_count: number
+      error_count: number
+    }>
+  }>
+  warnings: string[]
+  errors: Array<{
+    code?: string
+    message?: string
+    workbook?: string
+    sheet?: string
+    row?: number | null
+    field?: string
+  }>
+  can_commit: boolean
+  message: string
+}
+
+export type BankOpenEdxImportPreview = {
+  ok: boolean
+  total_parsed: number
+  valid_count: number
+  invalid_count: number
+  questions: Array<Record<string, any>>
+  errors: Array<Record<string, any>>
+  warnings: string[]
+  message: string
+}
+
+export type BankOpenEdxImportResult = {
+  ok: boolean
+  bank_version_id: string
+  created_count: number
+  skipped_count: number
+  created_question_ids: string[]
+  skipped: Array<Record<string, any>>
+  warnings: string[]
+  message: string
+}
 
 export type BankQuestionListItem = {
   id: string
@@ -1131,6 +1332,10 @@ export type BankQuestionListItem = {
   subject_chapter_id?: string | null
   difficulty: string
   status: string
+  question_type?: BankQuestionType | string | null
+  authoring_mode?: string | null
+  question_schema_version?: number | null
+  media_count?: number
   question_text_preview: string
   option_a_preview?: string | null
   option_b_preview?: string | null
@@ -1151,6 +1356,20 @@ export type BankQuestionListItem = {
   created_at: string
 }
 
+
+
+export type BankQuestionImportPreview = {
+  ok: boolean
+  preview_token: string
+  total_rows: number
+  valid_count: number
+  error_count: number
+  preview_rows: Array<Record<string, any>>
+  errors: Array<{ row?: number; field?: string; code?: string; message?: string }>
+  can_commit: boolean
+  message: string
+}
+
 export type BankVersionQuestion = {
   id: string
   bank_version_id?: string | null
@@ -1164,7 +1383,13 @@ export type BankVersionQuestion = {
   difficulty: string
   cognitive_level?: string | null
   learning_objective?: string | null
-  question_type?: string | null
+  question_type?: BankQuestionType | string | null
+  question_schema_version?: number | null
+  authoring_mode?: string | null
+  created_by?: string | null
+  question_content_json?: BankQuestionContent | null
+  media?: BankQuestionMedia[]
+  media_count?: number
   question_text: string
   option_a?: string | null
   option_b?: string | null
@@ -1230,6 +1455,21 @@ export type BankVersionDiffPreview = {
   message: string
 }
 
+
+export type BankMaterialRecheckResult = {
+  ok: boolean
+  bank_version_id?: string | null
+  candidate_count: number
+  kept_count: number
+  safe_skipped_count: number
+  retired_count: number
+  release_removed_count?: number
+  current_material_chunk_count?: number
+  message: string
+  user_message?: string | null
+  [key: string]: any
+}
+
 export type BankCarryOverResult = {
   ok: boolean
   created_count: number
@@ -1251,7 +1491,7 @@ export type BankRetireResult = {
 }
 
 
-export type BankReleaseQuizPlan = {
+export type BankReleaseQuizPlan = BackendUiNotice & {
   ok: boolean
   planner_engine?: string | null
   uses_llm: boolean
@@ -1262,6 +1502,9 @@ export type BankReleaseQuizPlan = {
   total_questions: number
   target_counts: Record<string, number>
   effective_target_counts: Record<string, number>
+  question_type_target_counts: Record<string, number>
+  question_type_coverage: Record<string, any>[]
+  matrix_target_counts: Record<string, number>
   coverage: Record<string, any>[]
   slots: Record<string, any>[]
   warnings: string[]
@@ -1271,7 +1514,7 @@ export type BankReleaseQuizPlan = {
   message: string
 }
 
-export type BankReleaseQuizCreateResult = {
+export type BankReleaseQuizCreateResult = BackendUiNotice & {
   ok: boolean
   status: string
   course_quiz_instance_id: string
@@ -1343,6 +1586,13 @@ export type CourseQuizInstance = {
 
 
 
+export type QuizChapterAction = 'quiz' | 'skip' | 'assignment' | 'final_test'
+
+export type QuizChapterPlanItem = {
+  chapter_id: string
+  action: QuizChapterAction
+}
+
 export type QuizAutoMapCandidate = {
   offering_id: string
   offering_code: string
@@ -1357,9 +1607,10 @@ export type QuizAutoMapCandidate = {
   ready_chapter_count: number
   missing_chapters: string[]
   disabled_reason?: string | null
+  selection_note?: string | null
 }
 
-export type QuizAutoMapResult = {
+export type QuizAutoMapResult = BackendUiNotice & {
   ok: boolean
   openedx_course_id: string
   mode: 'preview' | 'applied' | string
@@ -1367,6 +1618,7 @@ export type QuizAutoMapResult = {
   offering?: { id: string; code: string; name?: string | null; term?: string | null; version_code?: string | null } | null
   course_mapping?: { id: string; openedx_course_id: string; status?: string } | null
   summary: Record<string, any> & { candidates?: QuizAutoMapCandidate[]; selected_subject_offering_id?: string | null }
+  course_tree?: { source: 'direct' | 'cached' | 'unavailable' | string; course_id?: string; error_code?: string | null; direct_error?: string | null; cached_block_count?: number }
   sections: Array<{ openedx_section_id: string; title: string; type: string }>
   mappings: Array<{
     chapter_id: string
@@ -1378,7 +1630,24 @@ export type QuizAutoMapResult = {
     openedx_section_title?: string | null
     match_score: number
     match_reason: string
+    action?: QuizChapterAction
+    action_label?: string
+    assessment_type?: 'quiz' | 'final_test' | 'skip' | string
+    requires_quiz?: boolean
+    requires_release?: boolean
+    requires_section?: boolean
+    skipped?: boolean
     ready: boolean
+    can_create?: boolean
+    production_ready?: boolean
+    status_code?: string | null
+    status_label?: string | null
+    status_severity?: 'success' | 'warning' | 'danger' | 'info' | string | null
+    missing_requirements?: string[]
+    recommended_action?: string | null
+    recommended_quiz_title?: string | null
+    recommended_unit_title?: string | null
+    mapping_status?: string | null
     course_chapter_mapping_id?: string | null
   }>
   warnings: string[]
@@ -1387,7 +1656,7 @@ export type QuizAutoMapResult = {
   message: string
 }
 
-export type CourseQuizRollbackResult = {
+export type CourseQuizRollbackResult = BackendUiNotice & {
   ok: boolean
   course_quiz_instance_id: string
   status: string
@@ -1579,8 +1848,8 @@ export type SubjectSummary = { subject: Subject; stats: BankReviewStatusStats }
 export type SubjectVersionSummary = { subject_version: SubjectOffering; stats: BankReviewStatusStats }
 export type ChapterSummary = { chapter: SubjectChapter; stats: BankReviewStatusStats }
 
-export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER'
-export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE'
+export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER' | 'CAMPUS_OWNER' | 'CAMPUS_MANAGER' | 'TEACHER_ASSIGNED'
+export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE' | 'CAMPUS' | 'CLASS'
 
 export type RBACRole = {
   code: BusinessRoleCode | string
@@ -1630,6 +1899,24 @@ export type RoleAssignmentListResponse = {
   total: number
 }
 
+export type RoleAssignmentBatchCreate = {
+  user_id: string
+  email?: string | null
+  role_code: BusinessRoleCode | string
+  scope_type: BusinessScopeType | string
+  scope_ids: string[]
+  grant_reason?: string
+  sync_openedx?: boolean
+}
+
+export type RoleAssignmentBatchResponse = {
+  items: RoleAssignment[]
+  created_count: number
+  reused_count: number
+  total: number
+}
+
+
 export type EffectiveRBAC = {
   user_id: string
   legacy_role: string
@@ -1661,4 +1948,2004 @@ export type RoleAssignmentImportResponse = {
   skipped_count: number
   failed_count: number
   rows: RoleAssignmentImportRow[]
+}
+
+// v25.9.16 Academic AP / Student Management types
+export type AcademicTerm = {
+  id: string
+  ap_term_id?: string | null
+  term_code: string
+  term_name: string
+  branch?: string | null
+  learning_platform?: 'cms' | 'udemy'
+  subject_delivery_id?: string | null
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  exam_cutoff_date?: string | null
+  exam_cutoff_source?: 'class_end_date' | 'block_end_date' | 'missing_final_day' | string | null
+  active: boolean
+  metadata_json?: Record<string, any> | null
+}
+
+export type AcademicBlock = {
+  id: string
+  term_id: string
+  ap_block_id?: string | null
+  block_code: string
+  block_name: string
+  start_date?: string | null
+  end_date?: string | null
+  sort_order: number
+  active: boolean
+  metadata_json?: Record<string, any> | null
+}
+
+export type AcademicSubject = {
+  id: string
+  ap_subject_id?: string | null
+  subject_code: string
+  subject_name: string
+  subject_name_en?: string | null
+  skill_code?: string | null
+  branch?: string | null
+  active: boolean
+}
+
+export type AcademicLearningPlatform = 'cms' | 'udemy' | null
+
+export type AcademicSubjectDeliveryBlock = {
+  id: string
+  block_id: string
+  block_name: string
+  learning_platform: AcademicLearningPlatform
+  class_count: number
+  campus_count: number
+  has_udemy_plan: boolean
+  udemy_plan_version?: number | null
+  udemy_milestone_count?: number
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  last_udemy_import_at?: string | null
+}
+
+export type AcademicSubjectDelivery = {
+  id: string
+  subject_id: string
+  ap_subject_id?: string | null
+  subject_code: string
+  subject_name: string
+  subject_name_en?: string | null
+  skill_code?: string | null
+  term_id: string
+  term_name: string
+  block_id: string
+  block_name: string
+  branch: string
+  learning_platform: AcademicLearningPlatform
+  active: boolean
+  configuration_source: string
+  configured_by?: string | null
+  configured_at?: string | null
+  catalog_refreshed_at?: string | null
+  class_count: number
+  campus_count: number
+  has_udemy_plan: boolean
+  udemy_plan_id?: string | null
+  udemy_plan_version?: number | null
+  udemy_item_count?: number | null
+  udemy_milestone_count?: number
+  udemy_plan_updated_at?: string | null
+  last_udemy_import_at?: string | null
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  metadata_json?: Record<string, any> | null
+  delivery_ids?: string[]
+  block_count?: number
+  block_names?: string[]
+  platform_consistent?: boolean
+  platform_values?: AcademicLearningPlatform[]
+  management_scope?: 'delivery' | 'term'
+  block_deliveries?: AcademicSubjectDeliveryBlock[]
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicSubjectDeliveryListResponse = {
+  items: AcademicSubjectDelivery[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  has_next: boolean
+  summary: {
+    total: number
+    cms_count: number
+    udemy_count: number
+    unassigned_count: number
+    mixed_count?: number
+    class_count: number
+    scope_label: string
+  }
+}
+
+export type AcademicSubjectCatalogRefreshResult = {
+  ok: boolean
+  message: string
+  job_id: string
+  status: string
+  term_id: string
+  block_id?: string | null
+  branch: string
+}
+
+export type AcademicSubjectPlatformMutationResult = {
+  ok: boolean
+  message: string
+  updated: number
+  items: AcademicSubjectDelivery[]
+}
+
+export type UdemyPlanMilestone = {
+  id?: string | null
+  week_number: number
+  deadline_date: string
+  required_progress_percent: number
+  metadata_json?: Record<string, any> | null
+}
+
+export type UdemySubjectPlan = {
+  id: string
+  subject_delivery_id: string
+  version: number
+  item_count: number
+  active: boolean
+  source: string
+  source_file_name?: string | null
+  source_file_hash?: string | null
+  imported_by?: string | null
+  imported_at?: string | null
+  note?: string | null
+  metadata_json?: Record<string, any> | null
+  created_at?: string | null
+  updated_at?: string | null
+  milestones: UdemyPlanMilestone[]
+}
+
+export type UdemyPlanDelivery = {
+  id: string
+  subject_id: string
+  subject_code: string
+  subject_name: string
+  term_id: string
+  term_name: string
+  block_id: string
+  block_name: string
+  branch: string
+  learning_platform: AcademicLearningPlatform
+}
+
+export type UdemyPlanDetail = {
+  delivery: UdemyPlanDelivery
+  active_plan?: UdemySubjectPlan | null
+}
+
+export type UdemyPlanImportIssue = {
+  row?: number | null
+  subject_code?: string | null
+  code: string
+  message: string
+}
+
+export type UdemyPlanImportPreviewRow = {
+  row_no: number
+  delivery_id?: string | null
+  term_name: string
+  block_name: string
+  branch: string
+  subject_code: string
+  subject_name?: string | null
+  item_count: number
+  current_version?: number | null
+  next_version: number
+  action: string
+  milestones: UdemyPlanMilestone[]
+  errors: string[]
+  warnings: string[]
+}
+
+export type UdemyPlanImportPreview = {
+  ok: boolean
+  preview_token: string
+  filename: string
+  file_sha256: string
+  branch: string
+  total_rows: number
+  valid_count: number
+  error_count: number
+  warning_count: number
+  can_commit: boolean
+  rows: UdemyPlanImportPreviewRow[]
+  errors: UdemyPlanImportIssue[]
+  warnings: UdemyPlanImportIssue[]
+  message: string
+}
+
+export type UdemyPlanMutationResult = {
+  ok: boolean
+  message: string
+  created_count: number
+  plans: UdemySubjectPlan[]
+}
+
+
+export type UdemyProgressImportBatch = {
+  id: string
+  parent_job_id?: string | null
+  subject_delivery_id: string
+  subject_code?: string | null
+  subject_name?: string | null
+  duplicate_of_batch_id?: string | null
+  file_name: string
+  file_hash: string
+  file_size_bytes: number
+  parser_format?: string | null
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | string
+  force_reimport: boolean
+  total_rows: number
+  processed_rows: number
+  matched_rows: number
+  outside_roster_rows: number
+  unmatched_rows: number
+  ambiguous_rows: number
+  failed_rows: number
+  requested_by?: string | null
+  result_json?: Record<string, any> | null
+  error_message?: string | null
+  error_report_available: boolean
+  started_at?: string | null
+  finished_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type UdemyProgressImportRejectedFile = {
+  file_name: string
+  source_archive?: string | null
+  reason_code: string
+  message: string
+  detected_subject_code?: string | null
+  detected_term_code?: string | null
+}
+
+export type UdemyProgressImportJobResult = {
+  ok: boolean
+  message: string
+  job_id: string
+  status: string
+  queued_count: number
+  duplicate_count: number
+  rejected_count: number
+  rejected_files: UdemyProgressImportRejectedFile[]
+  batches: UdemyProgressImportBatch[]
+}
+
+export type UdemyProgressSummary = {
+  subject_delivery_id: string
+  total_students: number
+  matched_students: number
+  outside_roster_students: number
+  ambiguous_students: number
+  unmatched_students: number
+  late_students: number
+  on_track_students: number
+  no_plan_students: number
+  average_progress_percent?: number | null
+  required_progress_percent?: number | null
+  current_plan_week?: number | null
+  current_deadline_date?: string | null
+  last_imported_at?: string | null
+  class_count: number
+  scope_label: string
+}
+
+export type UdemyProgressClassOption = {
+  id: string
+  class_code: string
+  class_name?: string | null
+  campus?: string | null
+}
+
+export type UdemyProgressStudent = {
+  id: string
+  student_id?: string | null
+  student_code?: string | null
+  student_username?: string | null
+  display_name: string
+  email: string
+  class_id?: string | null
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  teacher_names: string[]
+  progress_percent: number
+  required_progress_percent?: number | null
+  variance_percent?: number | null
+  is_late?: boolean | null
+  status: 'on_track' | 'late' | 'no_plan' | 'unmatched' | 'ambiguous' | 'outside_roster' | string
+  status_label: string
+  match_status: string
+  current_plan_week?: number | null
+  current_deadline_date?: string | null
+  last_import_batch_id: string
+  source_format: string
+  last_imported_at: string
+  diagnostic?: string | null
+}
+
+export type UdemyProgressStudentList = {
+  items: UdemyProgressStudent[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  has_next: boolean
+}
+
+export type UdemyProgressDashboard = {
+  delivery: UdemyPlanDelivery
+  summary: UdemyProgressSummary
+  active_plan?: { id: string; version: number; item_count: number; source: string; imported_at?: string | null } | null
+  classes: UdemyProgressClassOption[]
+  recent_imports: UdemyProgressImportBatch[]
+}
+
+
+export type AcademicLearningComponentScore = {
+  key?: string | null
+  name: string
+  category?: string | null
+  earned?: number | null
+  possible?: number | null
+  percent?: number | null
+  weight?: number | null
+  source?: string | null
+  planned?: boolean | null
+  order?: number | null
+  quiz_number?: number | null
+  submitted_at?: string | null
+  available_from?: string | null
+  deadline_date?: string | null
+  deadline_mode?: string | null
+  schedule_warning?: string | null
+  quiz_status?: string | null
+}
+
+export type AcademicQuizDeadlineOverride = {
+  id?: string
+  class_id?: string
+  course_id?: string | null
+  component_key?: string | null
+  component_label?: string | null
+  quiz_number?: number | null
+  start_date?: string | null
+  deadline_date?: string | null
+  reason?: string | null
+  created_by?: string | null
+  updated_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicAssignmentDefenseScore = {
+  id?: string
+  class_id?: string
+  student_id: string
+  student_code?: string | null
+  student_username?: string | null
+  student_name?: string | null
+  course_id?: string | null
+  assignment_key?: string | null
+  assignment_label?: string | null
+  score_10?: number | null
+  defense_status?: string | null
+  graded_by?: string | null
+  graded_at?: string | null
+  note?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicSubjectManagement = AcademicSubject & {
+  learning_platform: 'cms' | 'udemy'
+  subject_delivery_ids?: string[]
+  class_count: number
+  campus_count: number
+  teacher_count: number
+  student_count: number
+  relearn_student_count?: number
+  total_relearn_count?: number
+  cms_synced_count: number
+  cms_unsynced_count: number
+  course_mapping_status: string
+  course_mapping_label: string
+  openedx_course_id?: string | null
+  openedx_org?: string | null
+  openedx_course_ids?: string[]
+  openedx_orgs?: string[]
+  openedx_course_title?: string | null
+  openedx_mapping_id?: string | null
+  suggested_openedx_course_id?: string | null
+  learning_enrolled_count?: number
+  learning_active_count?: number
+  learning_synced_count?: number
+  learning_not_enrolled_count?: number
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_last_synced_at?: string | null
+  learning_component_summaries?: AcademicLearningComponentScore[]
+  learning_alerts?: string[]
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
+}
+
+export type AcademicSubjectManagementSummary = {
+  learning_platform?: 'cms' | 'udemy'
+  subject_count: number
+  class_count: number
+  cms_class_count?: number
+  udemy_class_count?: number
+  student_count: number
+  cms_student_count?: number
+  udemy_student_count?: number
+  teacher_count: number
+  cms_synced_count: number
+  cms_unsynced_count: number
+  course_mapped_count: number
+  course_missing_count: number
+  learning_enrolled_count: number
+  learning_active_count: number
+  learning_synced_count: number
+  alert_subject_count: number
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_unmatched_count?: number
+  udemy_progress_average_percent?: number | null
+  scope_label: string
+}
+
+export type AcademicClass = {
+  id: string
+  ap_class_id?: string | null
+  term_id: string
+  term_name?: string | null
+  block_id?: string | null
+  block_name?: string | null
+  subject_id: string
+  subject_code?: string | null
+  subject_name?: string | null
+  class_code: string
+  class_name: string
+  campus?: string | null
+  branch?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  exam_cutoff_date?: string | null
+  exam_cutoff_source?: 'class_end_date' | 'block_end_date' | 'missing_final_day' | string | null
+  active: boolean
+  teacher_username?: string | null
+  teacher_name?: string | null
+  student_count: number
+  cms_synced_count?: number
+  cms_unsynced_count?: number
+  openedx_course_id?: string | null
+  openedx_cohort_name?: string | null
+  openedx_mapping_source?: string | null
+  openedx_mapping_validation_status?: string | null
+  quiz_count?: number | null
+  learning_enrolled_count?: number
+  learning_active_count?: number
+  learning_synced_count?: number
+  learning_not_enrolled_count?: number
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_last_synced_at?: string | null
+  learning_component_summaries?: AcademicLearningComponentScore[]
+  learning_alerts?: string[]
+  learning_platform?: AcademicLearningPlatform
+  subject_delivery_id?: string | null
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
+}
+
+
+export type AcademicTrainingPolicy = {
+  policy_version?: string | null
+  quiz_rule?: string | null
+  final_test_rule?: string | null
+  quiz_total?: number
+  quiz_passed_count?: number
+  quiz_failed_count?: number
+  quiz_late_count?: number
+  quiz_not_attempted_count?: number
+  quiz_early_count?: number
+  quiz_missing_deadline_count?: number
+  all_quizzes_eligible?: boolean
+  assignment_expected?: boolean
+  assignment_status?: string | null
+  assignment_score_10?: number | null
+  assignment_note?: string | null
+  exam_eligible?: boolean
+  exam_status?: string | null
+  exam_status_label?: string | null
+  exam_reasons?: string[]
+  exam_notes?: string[]
+  quiz_results?: Array<Record<string, any>>
+  deadline_mode?: string | null
+  deadline_mode_note?: string | null
+}
+
+export type AcademicStudent = {
+  id: string
+  class_id?: string
+  student_code?: string | null
+  username: string
+  email?: string | null
+  full_name: string
+  phone?: string | null
+  total_relearn?: number
+  campus?: string | null
+  branch?: string | null
+  active: boolean
+  synced_at?: string | null
+  mapping_id?: string | null
+  openedx_user_id?: string | null
+  openedx_username?: string | null
+  openedx_email?: string | null
+  openedx_is_active?: boolean | null
+  match_status?: string
+  match_method?: string
+  mapping_confidence?: number
+  mapping_note?: string
+  last_resolved_at?: string | null
+  learning_snapshot_id?: string | null
+  learning_enrollment_status?: string | null
+  learning_enrollment_mode?: string | null
+  learning_progress_percent?: number | null
+  learning_progress_source?: string | null
+  learning_grade_percent?: number | null
+  learning_passed?: boolean | null
+  learning_completed_blocks?: number | null
+  learning_total_blocks?: number | null
+  learning_last_activity_at?: string | null
+  learning_last_synced_at?: string | null
+  learning_enrollment_synced_at?: string | null
+  learning_status?: string
+  learning_sync_note?: string | null
+  learning_diagnostics?: Record<string, any> | null
+  learning_component_scores?: AcademicLearningComponentScore[]
+  training_policy?: AcademicTrainingPolicy | null
+  exam_eligible?: boolean | null
+  exam_status?: string | null
+  exam_status_label?: string | null
+  exam_reasons?: string[]
+  assignment_defense_status?: string | null
+  assignment_score_10?: number | null
+}
+
+export type AcademicLearningSummary = {
+  class_id: string
+  openedx_course_id?: string | null
+  total: number
+  counts: Record<string, number>
+  active_count?: number
+  avg_progress_percent?: number | null
+  avg_grade_percent?: number | null
+  last_synced_at?: string | null
+  component_summaries?: AcademicLearningComponentScore[]
+  status_counts?: Record<string, number>
+  alert_counts?: Record<string, number>
+  diagnostic_counts?: Record<string, number>
+  source_counts?: Record<string, number>
+  diagnostic_note?: string | null
+}
+
+export type AcademicIdentityReconciliationItem = {
+  student_id: string
+  student_code?: string | null
+  full_name: string
+  email?: string | null
+  ap_username?: string | null
+  canonical_username: string
+  openedx_username?: string | null
+  openedx_user_id?: string | null
+  openedx_is_active?: boolean | null
+  match_status: string
+  match_method: string
+  status: string
+  severity: 'blocker' | 'warning' | 'info' | string
+  can_enroll: boolean
+  recommended_action: string
+  blockers: string[]
+  warnings: string[]
+  duplicate_rollnumber_count: number
+  duplicate_canonical_mapping_count: number
+}
+
+export type AcademicIdentityReconciliationReport = {
+  ok: boolean
+  class_id: string
+  class_code?: string | null
+  status: 'ready' | 'needs_sync' | 'blocked' | string
+  message: string
+  policy: string
+  dry_run: boolean
+  mutation_performed: boolean
+  counts: Record<string, number>
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  has_next: boolean
+  items: AcademicIdentityReconciliationItem[]
+  next_actions: string[]
+}
+
+
+export type AcademicIdentityCleanupResult = {
+  ok: boolean
+  class_id: string
+  class_code?: string | null
+  dry_run: boolean
+  mutation_performed: boolean
+  destructive_allowed: boolean
+  confirm_phrase_required: string
+  policy: string
+  counts: Record<string, number>
+  deleted_mapping_ids: string[]
+  deleted_snapshot_ids: string[]
+  skipped: Array<Record<string, unknown>>
+  items: AcademicIdentityReconciliationItem[]
+  message: string
+  next_actions: string[]
+}
+
+
+export type AcademicLearningSyncResult = AcademicLearningSummary & {
+  ok: boolean
+  updated: number
+  message: string
+  connector_counts?: Record<string, number>
+  connector_diagnostics?: Record<string, any> | null
+}
+
+export type AcademicEnrollmentSyncResult = {
+  ok: boolean
+  class_id: string
+  openedx_course_id?: string | null
+  total: number
+  updated: number
+  counts: Record<string, number>
+  message: string
+  learning_summary?: AcademicLearningSummary | null
+  teachers?: { total?: number; updated?: number; counts?: Record<string, number> } | null
+}
+
+export type AcademicMappingSummary = {
+  class_id: string
+  total: number
+  counts: Record<string, number>
+}
+
+export type AcademicMappingResolveResult = {
+  ok: boolean
+  class_id: string
+  total: number
+  updated: number
+  counts: Record<string, number>
+  message: string
+  enrollment?: AcademicEnrollmentSyncResult | null
+  teachers?: { total?: number; updated?: number; counts?: Record<string, number> } | null
+}
+
+export type AcademicClassSyncJob = {
+  id: string
+  job_type: 'cms_sync_check' | 'cms_enrollment_sync' | 'learning_sync' | string
+  status: 'queued' | 'running' | 'completed' | 'failed' | string
+  class_id: string
+  requested_by?: string | null
+  force?: boolean
+  limit?: number
+  mode?: string | null
+  progress_current?: number
+  progress_total?: number
+  progress_label?: string
+  request_json?: Record<string, any> | null
+  result_json?: Record<string, any> | null
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicManualMappingImportResult = {
+  ok: boolean
+  total: number
+  counters: Record<string, number>
+  errors: Array<Record<string, any>>
+}
+
+export type AcademicTrainingClassReport = {
+  class_id: string
+  class_code: string
+  class_name?: string | null
+  term_id?: string | null
+  term_name?: string | null
+  block_id?: string | null
+  block_name?: string | null
+  subject_id?: string | null
+  subject_code?: string | null
+  subject_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  learning_platform?: 'cms' | 'udemy' | string | null
+  subject_delivery_id?: string | null
+  student_count: number
+  relearn_student_count?: number
+  total_relearn_count?: number
+  cms_synced_count: number
+  cms_unsynced_count: number
+  openedx_course_id?: string | null
+  openedx_mapping_source?: string | null
+  learning_enrolled_count: number
+  learning_active_count: number
+  learning_synced_count: number
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_avg_grade_10?: number | null
+  learning_last_synced_at?: string | null
+  learning_component_summaries?: AcademicLearningComponentScore[]
+  status_counts?: Record<string, number>
+  learning_alerts?: string[]
+  risk_student_count?: number | null
+  deadline_quiz_count?: number | null
+  deadline_due_quiz_count?: number | null
+  deadline_completed_due_quiz_count?: number | null
+  deadline_late_student_count?: number | null
+  deadline_late_quiz_count?: number | null
+  deadline_next_quiz_label?: string | null
+  deadline_next_quiz_from_date?: string | null
+  deadline_next_quiz_due_date?: string | null
+  deadline_schedule_note?: string | null
+  exam_eligible_student_count?: number | null
+  exam_not_eligible_student_count?: number | null
+  exam_insufficient_data_student_count?: number | null
+  quiz_failed_count?: number | null
+  quiz_late_count?: number | null
+  quiz_not_attempted_count?: number | null
+  quiz_missing_deadline_count?: number | null
+  assignment_not_graded_count?: number | null
+  udemy_progress_student_count?: number | null
+  udemy_progress_late_count?: number | null
+  udemy_progress_average_percent?: number | null
+  udemy_progress_required_percent?: number | null
+  udemy_progress_current_week?: number | null
+  udemy_progress_deadline_date?: string | null
+  udemy_progress_last_imported_at?: string | null
+}
+
+export type AcademicTrainingTeacherReport = {
+  learning_platform?: 'cms' | 'udemy' | 'all'
+  teacher_id: string
+  teacher_code?: string | null
+  teacher_username: string
+  teacher_name: string
+  teacher_email?: string | null
+  campus?: string | null
+  branch?: string | null
+  subject_count: number
+  subject_codes: string[]
+  class_count: number
+  cms_class_count?: number
+  udemy_class_count?: number
+  student_count: number
+  cms_student_count?: number
+  udemy_student_count?: number
+  unique_student_count: number
+  relearn_student_count?: number
+  total_relearn_count?: number
+  cms_synced_count: number
+  cms_unsynced_count: number
+  learning_enrolled_count: number
+  learning_active_count: number
+  learning_synced_count: number
+  classes_without_course_count: number
+  deadline_late_student_count?: number | null
+  deadline_late_quiz_count?: number | null
+  deadline_due_quiz_count?: number | null
+  exam_eligible_student_count?: number | null
+  exam_not_eligible_student_count?: number | null
+  exam_insufficient_data_student_count?: number | null
+  quiz_failed_count?: number | null
+  assignment_not_graded_count?: number | null
+  udemy_progress_student_count?: number | null
+  udemy_progress_late_count?: number | null
+  udemy_progress_average_percent?: number | null
+  udemy_progress_last_imported_at?: string | null
+  learning_avg_progress_percent?: number | null
+  learning_avg_grade_percent?: number | null
+  learning_avg_grade_10?: number | null
+  risk_student_count: number
+  status_counts: Record<string, number>
+  learning_alerts: string[]
+  last_synced_at?: string | null
+  classes?: AcademicTrainingClassReport[]
+}
+
+export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTrainingTeacherReport> & {
+  summary_scope?: 'current_page' | 'filtered' | 'cached_filtered' | string
+  cache?: { status?: string; scope_key?: string | null; built_at?: string | null; row_count?: number | null }
+  summary: {
+    teacher_count: number
+    class_count: number
+    subject_count: number
+    student_count: number
+    unique_student_count: number
+    relearn_student_count: number
+    total_relearn_count: number
+    cms_class_count?: number
+    udemy_class_count?: number
+    cms_student_count?: number
+    udemy_student_count?: number
+    cms_synced_count: number
+    udemy_progress_student_count?: number
+    udemy_progress_late_count?: number
+    udemy_progress_average_percent?: number | null
+    learning_enrolled_count: number
+    learning_active_count: number
+    risk_student_count: number
+    classes_without_course_count: number
+    deadline_late_student_count: number
+    deadline_late_quiz_count: number
+    exam_eligible_student_count?: number
+    exam_not_eligible_student_count?: number
+    exam_insufficient_data_student_count?: number
+    quiz_failed_count?: number
+    assignment_not_graded_count?: number
+  }
+}
+
+
+export type AcademicBulkOperationJob = {
+  id: string
+  job_type: string
+  status: string
+  term_id?: string | null
+  branch?: string | null
+  campus?: string | null
+  requested_by?: string | null
+  progress_current: number
+  progress_total: number
+  progress_label: string
+  request_json?: Record<string, any> | null
+  result_json?: Record<string, any> | null
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicTeacherReportJob = {
+  id: string
+  job_type: string
+  status: string
+  term_id?: string | null
+  branch?: string | null
+  campus?: string | null
+  requested_by?: string | null
+  progress_current: number
+  progress_total: number
+  progress_label: string
+  request_json?: Record<string, any> | null
+  result_json?: Record<string, any> | null
+  file_path?: string | null
+  file_name?: string | null
+  error_message?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicClassListSummary = {
+  class_count?: number
+  student_count?: number
+  cms_synced_count?: number
+  cms_unsynced_count?: number
+  learning_enrolled_count?: number
+  learning_synced_count?: number
+  learning_active_count?: number
+  course_mapped_count?: number
+  course_missing_count?: number
+  alert_class_count?: number
+  learning_platform?: 'cms' | 'udemy'
+  udemy_progress_student_count?: number
+  udemy_progress_late_count?: number
+  udemy_progress_average_percent?: number | null
+  scope_label?: string
+}
+
+export type AcademicClassListResponse = PaginatedResponse<AcademicClass> & { summary?: AcademicClassListSummary }
+
+
+export type AnalyticsLearningBehaviorClassification =
+  | 'LIKELY_REAL_LEARNING'
+  | 'POSSIBLE_IDLE'
+  | 'POSSIBLE_ANOMALY'
+  | 'POSSIBLE_CHEATING'
+  | 'INSUFFICIENT_DATA'
+  | 'NORMAL'
+  | string
+
+
+export type AnalyticsClassResultDoctor = {
+  status: 'ready' | 'partial' | 'waiting' | 'blocked' | 'needs_recalculate' | string
+  data_gap: 'READY' | 'PARTIAL_SNAPSHOT' | 'HAS_ACTIVITY_NO_SNAPSHOT' | 'NO_TRACKING_EVENTS' | 'NO_COURSE_MAPPING' | 'AMBIGUOUS_COURSE_MAPPING' | 'NO_ROSTER' | 'CLASS_NOT_FOUND' | string
+  message?: string | null
+  recommended_action?: string | null
+  class?: {
+    class_id?: string | null
+    class_code?: string | null
+    class_name?: string | null
+    campus?: string | null
+    branch?: string | null
+    term_id?: string | null
+    term_name?: string | null
+    subject_id?: string | null
+    subject_code?: string | null
+  }
+  course_mapping?: {
+    status?: string | null
+    resolved_course_id?: string | null
+    mapping_source?: string | null
+    candidate_count?: number
+    mapped_course_ids?: string[]
+    candidates?: Array<Record<string, any>>
+    message?: string | null
+  }
+  resolved_course_id?: string | null
+  roster_count: number
+  snapshot_count: number
+  missing_snapshot_count: number
+  tracking_event_count: number
+  tracking_user_count?: number
+  latest_tracking_event_at?: string | null
+  video_progress_count?: number
+  video_user_count?: number
+  session_progress_count?: number
+  session_user_count?: number
+  session_structure_count?: number
+  latest_behavior_calculated_at?: string | null
+  last_recalculate_job?: Record<string, any> | null
+  active_recalculate_job?: Record<string, any> | null
+  recalculate?: {
+    can_enqueue?: boolean
+    course_id?: string | null
+    disabled_reasons?: string[]
+    guard?: Record<string, any>
+  }
+  safe_policy?: string
+}
+
+export type AnalyticsLearningBehaviorSummary = {
+  total_students: number
+  roster_count?: number
+  snapshot_count?: number
+  missing_snapshot_count?: number
+  data_status?: 'ready' | 'partial' | 'not_calculated' | string
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  data_quality_breakdown?: Record<string, number>
+  current_week?: number | null
+  due_sessions_this_week?: number[] | null
+  overdue_sessions?: number[] | null
+  diagnostics?: AnalyticsClassResultDoctor | null
+  disclaimer?: string
+}
+
+export type AnalyticsLearningBehaviorRow = {
+  username: string
+  student_code?: string | null
+  full_name?: string | null
+  user_id?: string | null
+  course_id: string
+  class_id?: string | null
+  classification: AnalyticsLearningBehaviorClassification
+  display_label?: string | null
+  confidence_score: number
+  real_learning_score: number
+  idle_score: number
+  suspicious_score: number
+  deadline_compliance_percent?: number | null
+  crammed_session_count?: number
+  quiz_before_video_count?: number
+  reason_codes?: string[]
+  human_readable_summary?: string | null
+  recommended_action?: string | null
+  data_quality?: string | null
+  calculated_at?: string | null
+  last_activity_at?: string | null
+}
+
+
+export type AnalyticsClassBehaviorOverviewItem = {
+  class_id: string
+  class_code: string
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  openedx_course_id?: string | null
+  openedx_org?: string | null
+  openedx_mapping_source?: string | null
+  student_count: number
+  roster_count?: number
+  snapshot_count: number
+  missing_snapshot_count?: number
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  focus_count: number
+  dominant_classification: AnalyticsLearningBehaviorClassification
+  dominant_label?: string | null
+  data_status: 'ready' | 'not_calculated' | string
+  last_activity_at?: string | null
+  calculated_at?: string | null
+}
+
+export type AnalyticsClassBehaviorOverviewSummary = {
+  total_classes: number
+  total_students: number
+  roster_count?: number
+  snapshot_count: number
+  missing_snapshot_count?: number
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  not_calculated_class_count: number
+}
+
+export type AnalyticsLearningPermissionScope = {
+  mode?: 'all' | 'scoped' | string
+  unrestricted?: boolean
+  teacher_ids?: string[]
+  subject_codes?: string[]
+  campus_codes?: string[]
+  enforced_by_backend?: boolean
+  label?: string
+}
+
+export type AnalyticsClassBehaviorOverviewResponse = {
+  total: number
+  items: AnalyticsClassBehaviorOverviewItem[]
+  summary: AnalyticsClassBehaviorOverviewSummary
+  classification_filter: string
+  safe_policy?: string
+  permission_scope?: AnalyticsLearningPermissionScope
+}
+
+export type AnalyticsLearningBehaviorListResponse = {
+  total: number
+  items: AnalyticsLearningBehaviorRow[]
+  roster_fallback?: boolean
+  diagnostics?: AnalyticsClassResultDoctor | null
+}
+
+export type AnalyticsClassWorkspaceResponse = {
+  class_id: string
+  course_id?: string | null
+  summary: AnalyticsLearningBehaviorSummary
+  rows: AnalyticsLearningBehaviorListResponse
+  doctor: AnalyticsClassResultDoctor
+  permission_scope?: AnalyticsLearningPermissionScope
+  read_only?: boolean
+}
+
+
+export type AnalyticsStudentSessionProgress = {
+  session_index: number
+  session_title?: string | null
+  week_index?: number | null
+  deadline_at?: string | null
+  deadline_source?: string | null
+  total_videos: number
+  videos_seen: number
+  videos_completed: number
+  avg_video_completion_percent?: number | null
+  estimated_watch_seconds?: number | null
+  quiz_attempted?: boolean
+  quiz_completed?: boolean
+  quiz_score?: number | null
+  started_at?: string | null
+  last_activity_at?: string | null
+  completed_before_deadline?: boolean | null
+  completed_late?: boolean | null
+  session_learning_status?: string | null
+  reason_codes?: string[]
+  evidence?: Record<string, any>
+}
+
+export type AnalyticsStudentVideoProgress = {
+  video_id: string
+  video_code?: string | null
+  session_index?: number | null
+  component_title?: string | null
+  duration_seconds?: number | null
+  max_position_seconds?: number | null
+  completion_percent?: number | null
+  estimated_watch_seconds?: number | null
+  estimated_watch_percent?: number | null
+  play_count?: number
+  pause_count?: number
+  stop_count?: number
+  seek_count?: number
+  is_completed?: boolean
+  is_suspicious?: boolean
+  suspicious_reason?: string | null
+  first_played_at?: string | null
+  last_event_at?: string | null
+}
+
+export type AnalyticsStudentLearningBehaviorDetail = {
+  behavior?: AnalyticsLearningBehaviorRow | null
+  sessions: AnalyticsStudentSessionProgress[]
+  videos: AnalyticsStudentVideoProgress[]
+  timeline_weeks?: { week_index: number; sessions: number[] }[]
+  disclaimer?: string
+}
+
+
+
+export type AnalyticsDataQualityIssue = {
+  severity: 'BLOCKER' | 'WARNING' | 'INFO' | 'error' | 'warning' | 'info' | string
+  code: string
+  category?: string | null
+  message: string
+  action?: string | null
+  command?: string | null
+  source?: string | null
+  blocking?: boolean
+  details?: Record<string, any>
+}
+
+export type AnalyticsDataQualityReport = {
+  status: string
+  version?: string
+  readiness: 'READY' | 'NEEDS_BACKFILL' | 'CONFIG_NEEDED' | 'NO_SCOPE' | string
+  class_id?: string | null
+  course_id?: string | null
+  counts?: Record<string, number>
+  deadline_sources?: Record<string, number>
+  latest_behavior_calculated_at?: string | null
+  ingest?: Record<string, any>
+  issues?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  safe_policy?: string
+  disclaimer?: string
+}
+
+export type AnalyticsProductionReadinessSection = {
+  category: string
+  status: 'OK' | 'BLOCKED' | 'WARNING' | 'INFO' | string
+  blocker_count: number
+  warning_count: number
+  issues?: AnalyticsDataQualityIssue[]
+}
+
+export type AnalyticsProductionReadinessReport = {
+  version?: string
+  ready_for_production: boolean
+  readiness: 'PRODUCTION_READY' | 'PRODUCTION_READY_WITH_WARNINGS' | 'NOT_READY' | string
+  stage_status?: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  message?: string
+  blocker_count: number
+  warning_count: number
+  info_count?: number
+  issue_count: number
+  primary_blocker?: AnalyticsDataQualityIssue | null
+  blockers?: AnalyticsDataQualityIssue[]
+  warnings?: AnalyticsDataQualityIssue[]
+  infos?: AnalyticsDataQualityIssue[]
+  issues?: AnalyticsDataQualityIssue[]
+  sections?: AnalyticsProductionReadinessSection[]
+  checks?: Record<string, any>
+  next_actions?: string[]
+  can_pilot?: boolean
+  can_broad_rollout?: boolean
+  safe_policy?: string
+  disclaimer?: string
+}
+
+
+export type AnalyticsSlaClassGap = {
+  class_id: string
+  class_code?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count: number
+  snapshot_count: number
+  missing_snapshot_count: number
+  latest_snapshot_at?: string | null
+  snapshot_age_seconds?: number | null
+  gap_status: 'NO_SNAPSHOT' | 'PARTIAL_SNAPSHOT' | 'STALE_SNAPSHOT' | string
+}
+
+export type AnalyticsSlaSection = {
+  key: string
+  title: string
+  status: 'OK' | 'WARNING' | 'BLOCKED' | string
+  target_seconds?: number | null
+  actual_seconds?: number | null
+  metrics?: Record<string, any>
+}
+
+export type AnalyticsSlaReport = {
+  version?: string
+  sla_status: 'OK' | 'WARNING' | 'BLOCKED' | string
+  summary_label?: string
+  generated_at?: string
+  targets?: Record<string, number>
+  counters?: Record<string, number>
+  latency?: Record<string, number | null>
+  ingest?: Record<string, any>
+  post_ingest_recalculate?: Record<string, any>
+  sections?: AnalyticsSlaSection[]
+  issues?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  classes_needing_snapshot?: AnalyticsSlaClassGap[]
+  safe_policy?: string
+  disclaimer?: string
+}
+
+export type AnalyticsOpsStatus = Record<string, unknown> & {
+  ingest?: Record<string, unknown>
+  events?: Record<string, unknown>
+  snapshots?: Record<string, unknown>
+  status?: string
+}
+
+export type AnalyticsIngestJobResponse = {
+  status: string
+  task_name?: string
+  celery_task_id?: string | null
+  max_lines?: number
+  message?: string
+  safe_policy?: string
+}
+
+
+
+export type AnalyticsRolloutClass = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count?: number
+  session_count?: number
+  behavior_snapshot_count?: number
+  in_rollout: boolean
+  rollout_reasons?: string[]
+  recommended_action?: string | null
+}
+
+export type AnalyticsRolloutControlReport = {
+  version?: string
+  rollout_status: 'READY' | 'READY_WITH_WARNINGS' | 'DISABLED' | string
+  enabled: boolean
+  mode: string
+  allow_backfill: boolean
+  allow_export: boolean
+  scope?: Record<string, string[]>
+  counters?: Record<string, number>
+  blocker_count: number
+  warning_count: number
+  issues?: AnalyticsDataQualityIssue[]
+  items?: AnalyticsRolloutClass[]
+  next_actions?: string[]
+  safe_policy?: string
+  disclaimer?: string
+}
+
+export type AnalyticsMonitoringReport = {
+  version?: string
+  monitoring_status: 'OK' | 'WARNING' | 'BLOCKED' | string
+  ready_for_rollout: boolean
+  scheduler_enabled: boolean
+  seconds_since_last_ingest?: number | null
+  active_analytics_jobs: number
+  stuck_analytics_job_count: number
+  stuck_jobs?: { id: string; class_id?: string | null; status?: string | null; created_at?: string | null; progress_label?: string | null }[]
+  snapshot_count: number
+  stale_snapshot_count: number
+  latest_behavior_calculated_at?: string | null
+  ingest?: Record<string, any>
+  issue_count: number
+  blocker_count: number
+  warning_count: number
+  issues?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  safe_policy?: string
+}
+
+export type AnalyticsPilotAcceptanceClass = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count: number
+  behavior_snapshot_count: number
+  session_count: number
+  session_progress_count: number
+  video_progress_count: number
+  classification_breakdown?: Record<string, number>
+  data_quality_breakdown?: Record<string, number>
+  latest_behavior_calculated_at?: string | null
+  acceptance_status: 'PASS' | 'WARN' | 'FAIL' | string
+  reasons?: string[]
+  recommended_action?: string | null
+}
+
+export type AnalyticsPilotAcceptanceStudent = {
+  class_id: string
+  course_id: string
+  username: string
+  classification?: string | null
+  display_label?: string | null
+  confidence_score?: number | null
+  real_learning_score?: number | null
+  idle_score?: number | null
+  suspicious_score?: number | null
+  reason_codes?: string[]
+  summary?: string | null
+  recommended_action?: string | null
+  data_quality?: string | null
+  calculated_at?: string | null
+}
+
+export type AnalyticsPilotAcceptanceReport = {
+  version?: string
+  pilot_status: 'PASS' | 'PASS_WITH_WARNINGS' | 'FAIL' | string
+  ready_for_pilot: boolean
+  ready_for_broad_production: boolean
+  blocker_count: number
+  warning_count: number
+  blocker_codes?: string[]
+  warning_codes?: string[]
+  filters?: Record<string, any>
+  checks?: Record<string, any>
+  checklist?: { key: string; label: string; passed: boolean }[]
+  classes?: AnalyticsPilotAcceptanceClass[]
+  sample_students?: AnalyticsPilotAcceptanceStudent[]
+  next_actions?: string[]
+  production_readiness?: AnalyticsProductionReadinessReport
+  data_quality?: AnalyticsDataQualityReport
+  backfill_plan?: AnalyticsBackfillPlanResponse
+  safe_policy?: string
+  disclaimer?: string
+}
+
+
+export type AnalyticsEvidencePackReport = {
+  version?: string
+  artifact_type?: string
+  evidence_status: 'PASS' | 'PASS_WITH_WARNINGS' | 'FAIL' | string
+  generated_at?: string | null
+  filters?: Record<string, any>
+  summary?: {
+    ready_for_production?: boolean
+    ready_for_pilot?: boolean
+    ready_for_broad_production?: boolean
+    sla_status?: string | null
+    pilot_status?: string | null
+    blocker_count?: number
+    warning_count?: number
+    pilot_class_count?: number
+    sample_student_count?: number
+  }
+  blockers?: AnalyticsDataQualityIssue[]
+  warnings?: AnalyticsDataQualityIssue[]
+  next_actions?: string[]
+  reports?: Record<string, any>
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+export type AnalyticsCourseClassMappingItem = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  term_id?: string | null
+  term_name?: string | null
+  subject_id?: string | null
+  subject_code?: string | null
+  subject_name?: string | null
+  mapping_status: string
+  reliability_status: string
+  resolved_course_id?: string | null
+  mapping_source?: string | null
+  candidate_count: number
+  confidence_score: number
+  roster_count: number
+  tracking_event_count: number
+  tracking_user_count: number
+  latest_tracking_event_at?: string | null
+  course_session_count: number
+  video_progress_count: number
+  session_progress_count: number
+  snapshot_count: number
+  latest_snapshot_at?: string | null
+  missing_snapshot_count: number
+  reasons?: string[]
+  recommended_action?: string | null
+  mapping?: Record<string, any>
+}
+
+export type AnalyticsCourseClassMappingReport = {
+  version?: string
+  report_type?: string
+  status: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  generated_at?: string | null
+  filters?: Record<string, any>
+  dry_run: boolean
+  read_only: boolean
+  mutation_performed: boolean
+  total_scope_classes: number
+  returned_classes: number
+  blocker_count: number
+  warning_count: number
+  counts?: Record<string, number>
+  resolved_course_count?: number
+  courses_with_events_without_class_mapping_count?: number
+  courses_with_events_without_class_mapping?: Array<{ course_id: string; event_count: number; user_count: number; latest_event_at?: string | null; recommended_action?: string | null }>
+  items?: AnalyticsCourseClassMappingItem[]
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+export type AnalyticsBackfillPlanItem = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  student_count: number
+  session_count: number
+  behavior_snapshot_count: number
+  latest_behavior_calculated_at?: string | null
+  can_enqueue: boolean
+  reasons?: string[]
+  recommended_action?: string | null
+}
+
+export type AnalyticsBackfillPlanResponse = {
+  status: string
+  version?: string
+  filters?: Record<string, any>
+  total: number
+  counters?: Record<string, number>
+  items: AnalyticsBackfillPlanItem[]
+  safe_policy?: string
+}
+
+export type AnalyticsBackfillJobsResponse = {
+  status: string
+  queued_jobs: number
+  skipped_count: number
+  jobs: Array<{ job_id: string; class_id?: string | null; course_id?: string | null; status?: string | null; progress_label?: string | null }>
+  skipped: Array<{ class_id?: string | null; class_code?: string | null; reasons?: string[] }>
+  safe_policy?: string
+}
+
+export type AnalyticsLearningDashboardStudent = AnalyticsLearningBehaviorRow & {
+  class_code?: string | null
+  campus?: string | null
+}
+
+export type AnalyticsLearningDashboardClassItem = {
+  class_id: string
+  class_code?: string | null
+  class_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  course_id?: string | null
+  total_students: number
+  likely_real_learning_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  insufficient_data_count: number
+  normal_count: number
+  avg_confidence_score?: number | null
+  avg_deadline_compliance_percent?: number | null
+}
+
+export type AnalyticsLearningDashboardResponse = AnalyticsLearningBehaviorSummary & {
+  filters?: Record<string, any>
+  class_items?: AnalyticsLearningDashboardClassItem[]
+  top_possible_suspicious?: AnalyticsLearningDashboardStudent[]
+  top_possible_idle?: AnalyticsLearningDashboardStudent[]
+  deadline_attention?: AnalyticsLearningDashboardStudent[]
+}
+
+export type AnalyticsClassVideoSummary = {
+  class_id?: string | null
+  course_id?: string | null
+  total_students: number
+  students_with_video_activity: number
+  students_without_video_activity: number
+  avg_completion_percent?: number | null
+  avg_watch_seconds?: number | null
+  completed_video_count: number
+  low_activity_student_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  likely_real_learning_count: number
+  insufficient_data_count: number
+  disclaimer?: string
+}
+
+export type AnalyticsClassSessionProgressItem = {
+  session_index: number
+  session_title?: string | null
+  week_index?: number | null
+  deadline_at?: string | null
+  deadline_source?: string | null
+  total_students: number
+  completed_before_deadline_count: number
+  completed_late_count: number
+  not_started_count: number
+  possible_idle_count: number
+  possible_suspicious_count: number
+  avg_video_completion_percent?: number | null
+  avg_watch_seconds?: number | null
+}
+
+export type AnalyticsClassSessionProgressResponse = {
+  class_id?: string | null
+  course_id?: string | null
+  total: number
+  items: AnalyticsClassSessionProgressItem[]
+}
+
+export type AcademicStudentListResponse = PaginatedResponse<AcademicStudent>
+
+
+
+export type AcademicCampus = {
+  id: string
+  campus_code: string
+  campus_name: string
+  branch?: string | null
+  active: boolean
+  sort_order: number
+  metadata_json?: Record<string, any> | null
+}
+
+export type AcademicAPOption = {
+  value: string
+  label: string
+  description?: string | null
+  meta?: Record<string, any>
+}
+
+export type AcademicAPSyncOptions = {
+  branches: AcademicAPOption[]
+  campuses: AcademicAPOption[]
+  terms: AcademicAPOption[]
+  subjects: AcademicAPOption[]
+  warnings: string[]
+  selected_subject_codes: string[]
+  selected_subject_count: number
+  cms_subject_count: number
+  udemy_subject_count: number
+}
+
+export type AcademicSyncRun = {
+  id: string
+  source: string
+  mode: string
+  status: string
+  requested_by?: string | null
+  term_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  counters_json?: Record<string, any> | null
+  error_message?: string | null
+  started_at: string
+  finished_at?: string | null
+  created_at: string
+}
+
+export type AcademicSyncResult = {
+  ok: boolean
+  message: string
+  sync_run: AcademicSyncRun
+  counters: Record<string, number>
+}
+
+
+export type AcademicCourseMappingValidation = {
+  ok: boolean
+  can_save: boolean
+  risk_level: 'low' | 'medium' | 'high' | string
+  message: string
+  checks: Array<Record<string, any>>
+  suggested_openedx_course_id?: string | null
+  parsed_course?: Record<string, any> | null
+}
+
+export type AcademicCourseMapping = {
+  id: string
+  term_id: string
+  term_name?: string | null
+  block_id?: string | null
+  block_name?: string | null
+  subject_id: string
+  subject_code?: string | null
+  subject_name?: string | null
+  campus?: string | null
+  branch?: string | null
+  openedx_course_id: string
+  openedx_course_title?: string | null
+  validation_status: string
+  validation_json?: Record<string, any> | null
+  validated_at?: string | null
+  note?: string
+  active: boolean
+  created_by?: string | null
+  updated_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type AcademicClassCourseMapping = {
+  id: string
+  class_id: string
+  class_code?: string | null
+  openedx_course_id: string
+  openedx_cohort_name?: string | null
+  openedx_course_title?: string | null
+  mapping_source: string
+  validation_status: string
+  validation_json?: Record<string, any> | null
+  validated_at?: string | null
+  note?: string
+  active: boolean
+  previous_course_cleanup?: Record<string, any> | null
+  next_effective_openedx_course_id?: string | null
+  learning_snapshots_cleared?: boolean | null
+  cache_invalidated?: Record<string, any> | null
+}
+
+export type AcademicClassCourseMappingProposal = {
+  class_id: string
+  class_code: string
+  suggested_openedx_course_id: string
+  suggested_cohort_name: string
+  inherited_course_mapping?: AcademicCourseMapping | null
+  effective_openedx_course_id?: string | null
+  effective_openedx_cohort_name?: string | null
+  effective_mapping_source: string
+  checks: Array<Record<string, any>>
+}
+
+export type AcademicCourseMappingListResponse = PaginatedResponse<AcademicCourseMapping>
+export type AcademicSubjectManagementListResponse = PaginatedResponse<AcademicSubjectManagement> & { summary?: AcademicSubjectManagementSummary }
+
+
+export type AcademicSubjectAutoMapAllSyncResult = {
+  ok: boolean
+  message: string
+  job_id?: string | null
+  status?: string | null
+  term_id: string
+  branch?: string | null
+  campus?: string | null
+  subject_total: number
+  subject_mapped: number
+  subject_already_mapped: number
+  subject_failed: number
+  class_total: number
+  jobs_queued: number
+  jobs_reused: number
+  jobs_skipped: number
+  capped?: boolean
+  subject_results?: Array<Record<string, any>>
+  job_ids?: string[]
+}
+
+export type AcademicSubjectCourseAutoMapResult = {
+  ok: boolean
+  status: string
+  message: string
+  suggested_openedx_course_id?: string | null
+  mapping?: AcademicCourseMapping | null
+}
+
+
+
+export type SecurityReadinessCheck = {
+  category?: string
+  code?: string
+  severity?: 'BLOCKER' | 'WARNING' | 'INFO' | string
+  ok?: boolean
+  message?: string
+  action?: string
+  actual?: any
+  target?: string
+}
+
+export type SecurityReadinessReport = {
+  version?: string
+  report_type?: string
+  generated_at?: string | null
+  app_env?: string
+  status: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  blocker_count: number
+  warning_count: number
+  info_count?: number
+  can_pilot?: boolean
+  can_broad_production?: boolean
+  primary_blocker?: SecurityReadinessCheck | null
+  checks?: SecurityReadinessCheck[]
+  sections?: Array<{ key: string; title?: string; status?: string; blocker_count?: number; warning_count?: number; check_count?: number }>
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+
+
+export type ReleaseCandidateGate = {
+  key: string
+  title?: string
+  status?: 'OK' | 'WARNING' | 'BLOCKED' | string
+  blocker_count?: number
+  warning_count?: number
+  message?: string
+  report_endpoint?: string
+}
+
+export type ReleaseCandidateIssue = {
+  source?: string
+  severity?: 'BLOCKER' | 'WARNING' | 'INFO' | string
+  code?: string
+  message?: string
+  action?: string
+}
+
+export type ReleaseCandidateReport = {
+  version?: string
+  report_type?: string
+  release_candidate?: string
+  generated_at?: string | null
+  status: 'PASS' | 'PASS_WITH_WARNINGS' | 'FAIL' | string
+  go_no_go?: 'GO_PILOT' | 'GO_PILOT_WITH_MONITORING' | 'GO_BROAD_PRODUCTION' | 'HOLD' | string
+  summary_label?: string
+  ready_for_pilot?: boolean
+  ready_for_broad_production?: boolean
+  blocker_count?: number
+  warning_count?: number
+  filters?: Record<string, any>
+  gates?: ReleaseCandidateGate[]
+  blockers?: ReleaseCandidateIssue[]
+  warnings?: ReleaseCandidateIssue[]
+  next_actions?: string[]
+  reports?: Record<string, any>
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+
+
+export type PilotOperationsPhase = {
+  key: string
+  title?: string
+  status?: string
+  checks?: string[]
+}
+
+export type PilotOperationsTrigger = {
+  code?: string
+  severity?: string
+  condition?: string
+  action?: string
+}
+
+export type PilotOperationsReport = {
+  version?: string
+  report_type?: string
+  release_candidate?: string
+  generated_at?: string | null
+  status: 'PILOT_READY' | 'PILOT_WITH_MONITORING' | 'HOLD' | string
+  decision?: 'GO_PILOT' | 'GO_CONTROLLED_PILOT' | 'NO_GO' | string
+  summary_label?: string
+  ready_for_pilot?: boolean
+  ready_for_broad_production?: boolean
+  blocker_count?: number
+  warning_count?: number
+  filters?: Record<string, any>
+  release_candidate_summary?: Record<string, any>
+  gates?: ReleaseCandidateGate[]
+  phases?: PilotOperationsPhase[]
+  monitoring_cadence?: Array<{ window?: string; frequency?: string; check?: string }>
+  rollback_triggers?: PilotOperationsTrigger[]
+  evidence_required?: string[]
+  signoff?: Record<string, any>
+  blockers?: ReleaseCandidateIssue[]
+  warnings?: ReleaseCandidateIssue[]
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+export type PerformanceReadinessCheck = {
+  category?: string
+  code?: string
+  severity?: 'BLOCKER' | 'WARNING' | 'INFO' | string
+  ok?: boolean
+  message?: string
+  action?: string
+  actual?: any
+  target?: string
+  table?: string
+  missing_indexes?: string[]
+}
+
+export type PerformanceReadinessReport = {
+  version?: string
+  report_type?: string
+  generated_at?: string | null
+  status: 'READY' | 'READY_WITH_WARNINGS' | 'BLOCKED' | string
+  summary_label?: string
+  blocker_count: number
+  warning_count: number
+  checks?: PerformanceReadinessCheck[]
+  sections?: Array<{ key: string; title?: string; status?: string; blocker_count?: number; warning_count?: number; check_count?: number }>
+  table_estimates?: { source?: string; items?: Array<{ table: string; estimated_rows?: number }>; error_type?: string }
+  queue_pressure?: Record<string, any>
+  limits?: Record<string, any>
+  next_actions?: string[]
+  safe_policy?: string
+  read_only_guarantees?: string[]
+  disclaimer?: string
+}
+
+export type BankCostAnalyticsRow = {
+  bank_version_id: string
+  version_code: string
+  version_status: string
+  chapter_id: string
+  chapter_title: string
+  chapter_no: number
+  subject_id: string
+  subject_code: string
+  subject_name: string
+  subject_offering_id?: string | null
+  subject_offering_code?: string
+  term?: string
+  department_id?: string | null
+  department_code?: string
+  department_name?: string
+  cost_usd: number
+  cost_vnd: number
+  input_tokens: number
+  cached_input_tokens: number
+  uncached_input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  calls: number
+  questions_generated: number
+  avg_cost_per_question_vnd: number
+  cache_ratio_percent: number
+  latest_at?: string | null
+  href: string
+}
+
+export type BankCostAnalytics = {
+  scope: { role: string; label: string; scope_type: string; scope_id: string }
+  filters: { date_range: string; from_date: string; to_date: string }
+  totals: {
+    cost_usd: number
+    cost_vnd: number
+    input_tokens: number
+    cached_input_tokens: number
+    uncached_input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    calls: number
+    questions_generated: number
+    avg_cost_per_question_vnd: number
+    cache_ratio_percent: number
+  }
+  previous: Record<string, number>
+  deltas: { cost_percent?: number | null; tokens_percent?: number | null; calls_percent?: number | null }
+  daily: Array<{
+    date: string
+    label: string
+    cost_usd: number
+    cost_vnd: number
+    input_tokens: number
+    cached_input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    calls: number
+  }>
+  models: Array<{
+    provider: string
+    model: string
+    cost_usd: number
+    cost_vnd: number
+    input_tokens: number
+    output_tokens: number
+    calls: number
+  }>
+  subjects: Array<{
+    subject_id: string
+    subject_code: string
+    subject_name: string
+    cost_usd: number
+    cost_vnd: number
+    total_tokens: number
+    calls: number
+    questions_generated: number
+  }>
+  rows: {
+    items: BankCostAnalyticsRow[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }
+  meta: {
+    visible_bank_versions: number
+    usd_to_vnd: number
+    data_source: string
+    actual_usage_only: boolean
+  }
+  generated_at?: string
 }

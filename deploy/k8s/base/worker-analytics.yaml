@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-server-worker-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-server-worker-analytics
+  template:
+    metadata:
+      labels:
+        app: ai-server-worker-analytics
+    spec:
+      imagePullSecrets:
+        - name: harbor-regcred
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: worker-analytics
+          image: ai-server-backend
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - >-
+              exec celery -A app.worker.celery_app worker
+              --loglevel=INFO --queues=analytics --concurrency=${CELERY_ANALYTICS_CONCURRENCY:-1}
+              --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+              --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}
+              --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
+              --hostname=worker-analytics@%h
+          envFrom:
+            - secretRef: {name: ai-server-env}
+          env:
+            - {name: LOCAL_STORAGE_PATH, value: /app/.runtime}
+            - {name: HOME, value: /tmp}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "2", memory: 3Gi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: runtime, mountPath: /app/.runtime}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: runtime
+          persistentVolumeClaim: {claimName: ai-server-runtime}
+        - name: tmp
+          emptyDir: {sizeLimit: 512Mi}

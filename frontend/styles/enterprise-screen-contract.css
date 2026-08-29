@@ -1,0 +1,319 @@
+/* Shared six-layer screen contract for all enterprise modules. */
+
+.enterprise-content.enterprise-standard-page {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  align-content: start;
+  gap: 14px !important;
+  padding: 18px 20px 28px !important;
+}
+
+.enterprise-page-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 4px 4px 6px;
+  background: transparent;
+  border: 0;
+}
+
+.enterprise-page-identity__main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.enterprise-page-identity__icon {
+  width: 46px !important;
+  height: 46px !important;
+  min-width: 46px !important;
+  flex: 0 0 46px !important;
+  margin: 0 !important;
+  border-radius: 13px !important;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: none;
+}
+
+.enterprise-page-identity__copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.enterprise-page-identity__title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.enterprise-page-identity h1 {
+  margin: 0;
+  color: #0f172a;
+  font-size: clamp(22px, 1.65vw, 28px);
+  line-height: 1.16;
+  font-weight: 650;
+  letter-spacing: -.025em;
+}
+
+.enterprise-page-identity p {
+  max-width: 980px;
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.enterprise-page-identity__meta,
+.enterprise-page-identity__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.enterprise-page-identity__actions .btn { min-height: 40px; }
+
+.enterprise-contract-section,
+.enterprise-standard-page .workspace-section,
+.enterprise-standard-page > section.card,
+.enterprise-standard-page .academic-unified-card,
+.enterprise-standard-page .teacher-workspace-card,
+.enterprise-standard-page .training-workspace-section,
+.enterprise-standard-page .online-learning-card,
+.enterprise-standard-page .student-list-card {
+  min-width: 0;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .045);
+}
+
+.enterprise-contract-section > .enterprise-section-header,
+.enterprise-contract-section__header,
+.enterprise-standard-page .workspace-section-head,
+.enterprise-standard-page .section-head,
+.enterprise-standard-page .compact-section-head {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.enterprise-standard-page .workspace-section-head .visual-section-heading,
+.enterprise-standard-page .section-head > div:first-child,
+.enterprise-standard-page .compact-section-head > div:first-child {
+  min-width: 0;
+}
+
+.enterprise-standard-page .workspace-section-head h2,
+.enterprise-standard-page .section-head h2,
+.enterprise-standard-page .compact-section-head h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.enterprise-standard-page .workspace-section-head p,
+.enterprise-standard-page .section-head p,
+.enterprise-standard-page .compact-section-head p {
+  max-width: 900px;
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.enterprise-contract-section__body,
+.enterprise-standard-page .workspace-section-body { min-width: 0; }
+
+.enterprise-standard-page .operations-filter-bar,
+.enterprise-standard-page .academic-filter-panel,
+.enterprise-standard-page .academic-filter-bar,
+.enterprise-standard-page .training-compact-filter {
+  min-width: 0;
+}
+
+.enterprise-standard-page .operations-filter-bar,
+.enterprise-standard-page .academic-filter-panel {
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .035);
+}
+
+.enterprise-standard-page .academic-filter-panel { padding: 14px 16px; }
+
+.enterprise-standard-page .academic-filter-bar,
+.enterprise-standard-page .operations-filter-fields,
+.enterprise-standard-page .training-compact-filter {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  align-items: end;
+  gap: 10px 12px;
+}
+
+.enterprise-standard-page label {
+  min-width: 0;
+}
+
+.enterprise-standard-page .input,
+.enterprise-standard-page select,
+.enterprise-standard-page input[type='text'],
+.enterprise-standard-page input[type='search'] {
+  min-height: 40px;
+  border-radius: 10px;
+}
+
+.enterprise-standard-page .enterprise-table-shell,
+.enterprise-standard-page .enterprise-table-scroll,
+.enterprise-standard-page .enterprise-table-viewport {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.enterprise-standard-page .enterprise-table-scroll,
+.enterprise-standard-page .enterprise-table-viewport {
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.enterprise-standard-page .operations-kpi-strip,
+.enterprise-standard-page .training-kpi-strip {
+  min-width: 0;
+}
+
+.enterprise-standard-page .toolbar-actions,
+.enterprise-standard-page .workspace-section-actions,
+.enterprise-standard-page .operations-filter-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.enterprise-standard-page .academic-inline-notice,
+.enterprise-standard-page .action-message,
+.enterprise-standard-page > .alert,
+.enterprise-standard-page > .form-message {
+  margin: 0;
+}
+
+.enterprise-standard-page .card + .card,
+.enterprise-standard-page .workspace-section + .workspace-section {
+  margin-top: 0;
+}
+
+@media (max-width: 1023px) {
+  .enterprise-content.enterprise-standard-page {
+    padding: 14px 14px 24px !important;
+    gap: 12px !important;
+  }
+
+  .enterprise-page-identity {
+    align-items: flex-start;
+  }
+
+  .enterprise-page-identity__actions {
+    max-width: 48%;
+  }
+
+  .enterprise-standard-page .academic-filter-bar,
+  .enterprise-standard-page .operations-filter-fields,
+  .enterprise-standard-page .training-compact-filter {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .enterprise-content.enterprise-standard-page {
+    padding: 12px 10px 22px !important;
+  }
+
+  .enterprise-page-identity {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding-inline: 2px;
+  }
+
+  .enterprise-page-identity__main {
+    align-items: flex-start;
+  }
+
+  .enterprise-page-identity__icon {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    flex-basis: 42px !important;
+  }
+
+  .enterprise-page-identity h1 { font-size: 22px; }
+
+  .enterprise-page-identity__actions {
+    width: 100%;
+    max-width: none;
+    justify-content: stretch;
+  }
+
+  .enterprise-page-identity__actions .btn {
+    flex: 1 1 150px;
+  }
+
+  .enterprise-contract-section > .enterprise-section-header,
+  .enterprise-standard-page .workspace-section-head,
+  .enterprise-standard-page .section-head,
+  .enterprise-standard-page .compact-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .enterprise-standard-page .workspace-section-actions,
+  .enterprise-standard-page .section-head .toolbar-actions,
+  .enterprise-standard-page .compact-section-head .toolbar-actions {
+    width: 100%;
+  }
+
+  .enterprise-standard-page .workspace-section-actions .btn,
+  .enterprise-standard-page .section-head .toolbar-actions .btn,
+  .enterprise-standard-page .compact-section-head .toolbar-actions .btn {
+    flex: 1 1 140px;
+  }
+
+  .enterprise-standard-page .academic-filter-bar,
+  .enterprise-standard-page .operations-filter-fields,
+  .enterprise-standard-page .training-compact-filter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .enterprise-standard-page .operations-filter-bar {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .enterprise-standard-page .operations-filter-actions {
+    width: 100%;
+  }
+
+  .enterprise-standard-page .operations-filter-actions .btn {
+    width: 100%;
+  }
+}

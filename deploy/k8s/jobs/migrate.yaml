@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ai-server-migrate
+  namespace: openedx
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      imagePullSecrets:
+        - name: harbor-regcred
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: registry.example.com/ai-server-backend:25.9.16.7.2.64.16.5.7.2.18
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+          envFrom:
+            - secretRef: {name: ai-server-env}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}

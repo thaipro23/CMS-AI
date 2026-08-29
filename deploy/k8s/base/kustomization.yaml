@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: openedx
+resources:
+  - runtime-pvc.yaml
+  - backend.yaml
+  - worker.yaml
+  - worker-heavy.yaml
+  - worker-analytics.yaml
+  - beat.yaml
+  - frontend.yaml
+images:
+  - name: ai-server-backend
+    newName: registry.example.com/ai-server-backend
+    newTag: 25.9.16.7.2.64.16.5.7.2.18
+  - name: ai-server-frontend
+    newName: registry.example.com/ai-server-frontend
+    newTag: 25.9.16.7.2.64.16.5.7.2.18

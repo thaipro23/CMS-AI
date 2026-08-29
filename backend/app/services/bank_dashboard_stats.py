@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, case, distinct, func
+from sqlalchemy import and_, case, distinct, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -25,6 +25,7 @@ from app.models.question_bank import (
 BANK_PENDING_STATUSES = {'pending_review', 'needs_review'}
 BANK_ERROR_STATUSES = {'draft_error'}
 BANK_APPROVED_STATUSES = {'approved', 'published'}
+BANK_RESOLVED_STATUSES = BANK_APPROVED_STATUSES | {'rejected'}
 DIFFICULTY_EASY = {'easy', 'EASY'}
 DIFFICULTY_MEDIUM = {'medium', 'MEDIUM'}
 DIFFICULTY_HARD = {'hard', 'HARD'}
@@ -150,6 +151,7 @@ class BankDashboardStatsService:
             'approved_count': 0,
             'pending_review_count': 0,
             'draft_error_count': 0,
+            'unknown_status_count': 0,
             'rejected_count': 0,
             'retired_count': 0,
             'duplicate_count': 0,
@@ -181,6 +183,7 @@ class BankDashboardStatsService:
         unresolved = int(stat.unresolved_count or 0)
         draft_error = int(stat.draft_error_count or 0)
         pending = int(stat.pending_review_count or 0)
+        unknown_status = max(0, unresolved - pending - draft_error)
         approved = int(stat.approved_count or 0)
         published = int(stat.published_release_count or 0)
         release_status = 'published' if published else ('ready_to_release' if bool(stat.ready_to_release) else ('has_release' if int(stat.release_count or 0) else 'none'))
@@ -197,8 +200,10 @@ class BankDashboardStatsService:
             'approved_count': approved,
             'pending_review_count': pending,
             'draft_error_count': draft_error,
+            'unknown_status_count': unknown_status,
             'rejected_count': int(stat.rejected_count or 0),
             'retired_count': int(stat.retired_count or 0),
+            'carry_over_count': int(getattr(stat, 'carry_over_count', 0) or 0),
             'duplicate_count': int(stat.duplicate_count or 0),
             'easy_count': int(stat.easy_count or 0),
             'medium_count': int(stat.medium_count or 0),
@@ -238,13 +243,17 @@ class BankDashboardStatsService:
         chapter_stats = chapter_stats or self.chapter_stats_map()
         offerings = self.db.query(SubjectOffering).all()
         chapters = self.db.query(SubjectChapter).all()
+        chapters_by_offering: dict[str, list[SubjectChapter]] = {}
+        for chapter in chapters:
+            if chapter.subject_offering_id:
+                chapters_by_offering.setdefault(chapter.subject_offering_id, []).append(chapter)
         chapter_limit = self.chapter_question_limit_default()
         out: dict[str, dict[str, Any]] = {}
         for offering in offerings:
-            own = [c for c in chapters if c.subject_offering_id == offering.id]
+            own = chapters_by_offering.get(offering.id, [])
             stats = [chapter_stats.get(c.id, {}) for c in own]
             chapter_count = len(own)
-            done = len([s for s in stats if s.get('is_review_done')])
+            done = sum(1 for s in stats if s.get('is_review_done'))
             unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
             draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
             pending = sum(int(s.get('pending_review_count') or 0) for s in stats)
@@ -284,12 +293,15 @@ class BankDashboardStatsService:
         offering_stats = offering_stats or self.offering_summary_map()
         subjects = self.db.query(Subject).all()
         offerings = self.db.query(SubjectOffering).all()
+        offerings_by_subject: dict[str, list[SubjectOffering]] = {}
+        for offering in offerings:
+            offerings_by_subject.setdefault(offering.subject_id, []).append(offering)
         out: dict[str, dict[str, Any]] = {}
         for subject in subjects:
-            own = [o for o in offerings if o.subject_id == subject.id]
+            own = offerings_by_subject.get(subject.id, [])
             stats = [offering_stats.get(o.id, {}) for o in own]
             version_count = len(own)
-            done = len([s for s in stats if s.get('is_review_done')])
+            done = sum(1 for s in stats if s.get('is_review_done'))
             unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
             draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
             total = sum(int(s.get('total_questions') or 0) for s in stats)
@@ -328,12 +340,15 @@ class BankDashboardStatsService:
         subject_stats = subject_stats or self.subject_summary_map()
         departments = self.db.query(Department).all()
         subjects = self.db.query(Subject).all()
+        subjects_by_department: dict[str, list[Subject]] = {}
+        for subject in subjects:
+            subjects_by_department.setdefault(subject.department_id, []).append(subject)
         out: dict[str, dict[str, Any]] = {}
         for department in departments:
-            own = [s for s in subjects if s.department_id == department.id]
+            own = subjects_by_department.get(department.id, [])
             stats = [subject_stats.get(s.id, {}) for s in own]
             subject_count = len(own)
-            done = len([s for s in stats if s.get('is_review_done')])
+            done = sum(1 for s in stats if s.get('is_review_done'))
             unresolved = sum(int(s.get('unresolved_count') or 0) for s in stats)
             draft_error = sum(int(s.get('draft_error_count') or 0) for s in stats)
             total = sum(int(s.get('total_questions') or 0) for s in stats)
@@ -408,6 +423,22 @@ class BankDashboardStatsService:
         self._cache_set(cache_key, payload)
         return payload
 
+    @staticmethod
+    def _dashboard_next_action(stat: dict[str, Any], chapter: SubjectChapter, label: str) -> dict[str, Any] | None:
+        href = f'/bank/chapters/{chapter.id}'
+        draft_errors = int(stat.get('draft_error_count') or 0)
+        pending = int(stat.get('pending_review_count') or 0)
+        unknown = int(stat.get('unknown_status_count') or 0)
+        if draft_errors > 0:
+            return {'type': 'fix_errors', 'title': label, 'message': f'Còn {draft_errors} câu lỗi cần sửa hoặc bỏ.', 'href': href, 'priority': 1}
+        if pending > 0:
+            return {'type': 'review_questions', 'title': label, 'message': f'Còn {pending} câu chưa duyệt.', 'href': href, 'priority': 2}
+        if unknown > 0:
+            return {'type': 'repair_legacy_status', 'title': label, 'message': f'Có {unknown} câu dữ liệu cũ cần chuẩn hóa trạng thái.', 'href': href, 'priority': 2}
+        if stat.get('ready_to_release'):
+            return {'type': 'create_release', 'title': label, 'message': 'Đã duyệt xong, có thể chốt bộ đề.', 'href': href, 'priority': 3}
+        return None
+
     def build_dashboard_next_actions(self, chapter_stats: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         chapters = {c.id: c for c in self.db.query(SubjectChapter).all()}
         offerings = {o.id: o for o in self.db.query(SubjectOffering).all()}
@@ -419,13 +450,10 @@ class BankDashboardStatsService:
                 continue
             offering = offerings.get(chapter.subject_offering_id or '')
             subject = subjects.get(chapter.subject_id)
-            label = ' / '.join([x for x in [subject.code if subject else None, offering.code if offering else None, chapter.title] if x])
-            if int(stat.get('draft_error_count') or 0) > 0:
-                actions.append({'type': 'fix_errors', 'title': label, 'message': f"Còn {stat.get('draft_error_count')} câu lỗi cần sửa hoặc bỏ.", 'href': f"/bank/chapters/{chapter.id}", 'priority': 1})
-            elif int(stat.get('pending_review_count') or 0) > 0:
-                actions.append({'type': 'review_questions', 'title': label, 'message': f"Còn {stat.get('pending_review_count')} câu chưa duyệt.", 'href': f"/bank/chapters/{chapter.id}", 'priority': 2})
-            elif stat.get('ready_to_release'):
-                actions.append({'type': 'create_release', 'title': label, 'message': 'Đã duyệt xong, có thể chốt bộ đề.', 'href': f"/bank/chapters/{chapter.id}", 'priority': 3})
+            label = ' / '.join(x for x in [subject.code if subject else None, offering.code if offering else None, chapter.title] if x)
+            action = self._dashboard_next_action(stat, chapter, label)
+            if action:
+                actions.append(action)
         return sorted(actions, key=lambda x: (x['priority'], x['title']))[:12]
 
     def rebuild_chapter_stats(self, *, chapter_id: str | None = None, commit: bool = True) -> dict[str, Any]:
@@ -456,7 +484,12 @@ class BankDashboardStatsService:
             func.sum(case((and_(active, Question.status.in_(BANK_PENDING_STATUSES)), 1), else_=0)).label('pending_review_count'),
             func.sum(case((and_(active, Question.status.in_(BANK_ERROR_STATUSES)), 1), else_=0)).label('draft_error_count'),
             func.sum(case((and_(active, Question.status == 'rejected'), 1), else_=0)).label('rejected_count'),
+            # Anything active that is not approved/published/rejected is unresolved.
+            # This deliberately includes NULL/blank/legacy statuses so stale data
+            # can never make a chapter look ready to release.
+            func.sum(case((and_(active, or_(Question.status.is_(None), ~Question.status.in_(BANK_RESOLVED_STATUSES))), 1), else_=0)).label('unresolved_count'),
             func.sum(case((Question.is_retired.is_(True), 1), else_=0)).label('retired_count'),
+            func.sum(case((and_(active, Question.is_carry_over.is_(True)), 1), else_=0)).label('carry_over_count'),
             func.sum(case((and_(active, Question.is_duplicate.is_(True)), 1), else_=0)).label('duplicate_count'),
             func.sum(case((and_(active, Question.difficulty.in_(DIFFICULTY_EASY)), 1), else_=0)).label('easy_count'),
             func.sum(case((and_(active, Question.difficulty.in_(DIFFICULTY_MEDIUM)), 1), else_=0)).label('medium_count'),
@@ -493,7 +526,7 @@ class BankDashboardStatsService:
             approved = int(getattr(q, 'approved_count', 0) or 0)
             pending = int(getattr(q, 'pending_review_count', 0) or 0)
             draft_error = int(getattr(q, 'draft_error_count', 0) or 0)
-            unresolved = pending + draft_error
+            unresolved = int(getattr(q, 'unresolved_count', 0) or 0)
             rel = release_rows.get(chapter.id, {'release_count': 0, 'published_release_count': 0})
             published = int(rel.get('published_release_count') or 0)
             row = self.db.get(BankChapterStats, chapter.id)
@@ -509,6 +542,7 @@ class BankDashboardStatsService:
             row.draft_error_count = draft_error
             row.rejected_count = int(getattr(q, 'rejected_count', 0) or 0)
             row.retired_count = int(getattr(q, 'retired_count', 0) or 0)
+            row.carry_over_count = int(getattr(q, 'carry_over_count', 0) or 0)
             row.duplicate_count = int(getattr(q, 'duplicate_count', 0) or 0)
             row.easy_count = int(getattr(q, 'easy_count', 0) or 0)
             row.medium_count = int(getattr(q, 'medium_count', 0) or 0)

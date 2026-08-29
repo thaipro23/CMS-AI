@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.core.rbac import UserContext, ensure_course_access, require_permission, restrict_query_to_courses
@@ -15,6 +16,31 @@ def list_jobs(course_id: str | None = None, db: Session = Depends(get_db), user:
     if course_id:
         query = query.filter(GenerationJob.course_id == course_id)
     jobs = query.order_by(GenerationJob.created_at.desc()).limit(100).all()
+    job_ids = [j.id for j in jobs]
+    batch_summaries = {job_id: {'total': 0, 'queued': 0, 'running': 0, 'completed': 0, 'partial': 0, 'failed': 0, 'tail': 0} for job_id in job_ids}
+    if job_ids:
+        batch_counts = (
+            db.query(GenerationBatch.job_id, GenerationBatch.status, GenerationBatch.phase, func.count(GenerationBatch.id))
+            .filter(GenerationBatch.job_id.in_(job_ids))
+            .group_by(GenerationBatch.job_id, GenerationBatch.status, GenerationBatch.phase)
+            .all()
+        )
+        for job_id, status, phase, count in batch_counts:
+            summary = batch_summaries.setdefault(job_id, {'total': 0, 'queued': 0, 'running': 0, 'completed': 0, 'partial': 0, 'failed': 0, 'tail': 0})
+            count = int(count or 0)
+            summary['total'] += count
+            if status == 'queued':
+                summary['queued'] += count
+            if status == 'running':
+                summary['running'] += count
+            if status in {'completed', 'cache_hit'}:
+                summary['completed'] += count
+            if status == 'partial_completed':
+                summary['partial'] += count
+            if status in {'failed', 'parse_failed'}:
+                summary['failed'] += count
+            if phase == 'tail':
+                summary['tail'] += count
     rows = []
     for j in jobs:
         estimated_raw = j.estimated_raw_cost_usd or 0
@@ -27,16 +53,7 @@ def list_jobs(course_id: str | None = None, db: Session = Depends(get_db), user:
             input_accuracy = 100.0
         actual_output_per_question = j.actual_output_tokens_per_question or (round((j.actual_output_tokens or 0) / max((j.completed_question_count or 0), 1), 2) if (j.completed_question_count or 0) else 0)
         estimated_output_per_question = j.estimated_output_tokens_per_question or (round((j.estimated_output_tokens or 0) / max((j.question_count or 0), 1), 2) if (j.question_count or 0) else 0)
-        batch_rows = db.query(GenerationBatch).filter(GenerationBatch.job_id == j.id).all()
-        batch_summary = {
-            'total': len(batch_rows),
-            'queued': sum(1 for b in batch_rows if b.status == 'queued'),
-            'running': sum(1 for b in batch_rows if b.status == 'running'),
-            'completed': sum(1 for b in batch_rows if b.status in {'completed', 'cache_hit'}),
-            'partial': sum(1 for b in batch_rows if b.status == 'partial_completed'),
-            'failed': sum(1 for b in batch_rows if b.status in {'failed', 'parse_failed'}),
-            'tail': sum(1 for b in batch_rows if b.phase == 'tail'),
-        }
+        batch_summary = batch_summaries.get(j.id, {'total': 0, 'queued': 0, 'running': 0, 'completed': 0, 'partial': 0, 'failed': 0, 'tail': 0})
         rows.append({
             'id': j.id,
             'course_id': j.course_id,

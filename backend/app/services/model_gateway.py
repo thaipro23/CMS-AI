@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.services.prompt_builder import build_question_prompt
 from app.services.runtime_settings import apply_runtime_settings
 from app.services.token_counter import count_tokens
+from app.services.question_content import normalize_question_type
 
 logger = logging.getLogger(__name__)
 
@@ -134,31 +135,80 @@ class ModelGateway:
         difficulty_counts: dict[str, int] | None = None,
         provider: str = 'auto',
         prompt_cache_key: str | None = None,
+        target_question_type: str = 'single_select',
     ) -> tuple[list[dict], dict]:
         # Runtime settings can be changed from the admin Settings page.
         # Backend and worker are different containers, so always reload the
         # shared runtime config immediately before a model call.
         apply_runtime_settings()
-        prompt = build_question_prompt(content, question_count, scope_title, target_difficulty, difficulty_counts=difficulty_counts)
+        qtype = normalize_question_type(target_question_type)
+        if qtype not in {'single_select', 'multi_select'}:
+            raise ValueError(f'AI generation chưa hỗ trợ loại câu hỏi {qtype}.')
+        if not 1 <= int(question_count or 0) <= 100:
+            raise ValueError('question_count phải nằm trong khoảng 1..100.')
+        prompt = build_question_prompt(
+            content, question_count, scope_title, target_difficulty,
+            difficulty_counts=difficulty_counts, target_question_type=qtype,
+        )
         input_tokens = count_tokens(prompt, settings.openai_model)
         provider = provider or settings.model_provider
 
         if settings.mock_llm or (provider != 'local' and not settings.openai_api_key):
-            questions = self._mock_questions(question_count, scope_title or 'Nội dung bài học', content, target_difficulty, difficulty_counts)
+            questions = self._mock_questions(
+                question_count, scope_title or 'Nội dung bài học', content, target_difficulty, difficulty_counts,
+                target_question_type=qtype,
+            )
             output_tokens = count_tokens(json.dumps({'questions': questions}, ensure_ascii=False), settings.openai_model)
-            return questions, {'input_tokens': input_tokens, 'cached_input_tokens': 0, 'output_tokens': output_tokens, 'provider': 'mock', 'model': settings.openai_model, 'token_source': 'local_tiktoken', 'prompt_cache_key': prompt_cache_key}
+            return self._validate_generated_questions(questions, question_count=question_count, target_question_type=qtype), {'input_tokens': input_tokens, 'cached_input_tokens': 0, 'output_tokens': output_tokens, 'provider': 'mock', 'model': settings.openai_model, 'token_source': 'local_tiktoken', 'prompt_cache_key': prompt_cache_key, 'question_type': qtype}
 
         # Routing policy: API-first in phase 1, hybrid/local-ready in phase 2/3.
         providers = self._provider_order(provider)
         last_error: Exception | None = None
         for selected in providers:
             try:
-                return await self._call_openai_compatible(prompt, selected, input_tokens, prompt_cache_key=prompt_cache_key)
+                items, usage = await self._call_openai_compatible(
+                    prompt, selected, input_tokens, prompt_cache_key=prompt_cache_key, target_question_type=qtype,
+                )
+                usage = {**(usage or {}), 'question_type': qtype}
+                return self._validate_generated_questions(items, question_count=question_count, target_question_type=qtype), usage
             except Exception as exc:
                 last_error = exc
                 if selected == providers[-1]:
                     raise
         raise RuntimeError(f'Model gateway failed: {last_error}')
+
+    def _validate_generated_questions(self, items: object, *, question_count: int, target_question_type: str) -> list[dict]:
+        qtype = normalize_question_type(target_question_type)
+        if not isinstance(items, list):
+            raise RuntimeError('Model output questions phải là một danh sách.')
+        if len(items) != int(question_count):
+            raise RuntimeError(f'Model trả về sai số lượng câu hỏi: {len(items)}/{int(question_count)}.')
+        validated: list[dict] = []
+        for index, raw in enumerate(items):
+            if not isinstance(raw, dict):
+                raise RuntimeError(f'Model output câu #{index + 1} không phải object.')
+            item = dict(raw)
+            item['question_type'] = qtype
+            options = item.get('options')
+            if not isinstance(options, dict) or set(options) != {'A', 'B', 'C', 'D'}:
+                raise RuntimeError(f'Model output câu #{index + 1} phải có đúng options A/B/C/D.')
+            if any(not str(options.get(letter) or '').strip() for letter in ('A', 'B', 'C', 'D')):
+                raise RuntimeError(f'Model output câu #{index + 1} có đáp án trống.')
+            if qtype == 'single_select':
+                if item.get('correct_answer') not in {'A', 'B', 'C', 'D'}:
+                    raise RuntimeError(f'Model output câu #{index + 1} có correct_answer không hợp lệ.')
+                item.pop('correct_answers', None)
+            else:
+                raw_correct = item.get('correct_answers')
+                if not isinstance(raw_correct, list):
+                    raise RuntimeError(f'Model output câu #{index + 1} thiếu correct_answers.')
+                answers = [str(value).strip().upper() for value in raw_correct]
+                if len(set(answers)) != len(answers) or not 2 <= len(answers) <= 3 or any(value not in {'A', 'B', 'C', 'D'} for value in answers):
+                    raise RuntimeError(f'Model output câu #{index + 1} có correct_answers không hợp lệ.')
+                item['correct_answers'] = answers
+                item.pop('correct_answer', None)
+            validated.append(item)
+        return validated
 
     def _provider_order(self, provider: str) -> list[str]:
         if provider == 'auto':
@@ -168,7 +218,7 @@ class ModelGateway:
             return ['local', 'openai']
         return ['openai']
 
-    async def _call_openai_compatible(self, prompt: str, provider: str, fallback_input_tokens: int, *, prompt_cache_key: str | None = None) -> tuple[list[dict], dict]:
+    async def _call_openai_compatible(self, prompt: str, provider: str, fallback_input_tokens: int, *, prompt_cache_key: str | None = None, target_question_type: str = 'single_select') -> tuple[list[dict], dict]:
         """Call the configured real model provider.
 
         v24.2 defaults OpenAI to the Responses API because it is the newer API
@@ -183,10 +233,35 @@ class ModelGateway:
         # /responses. Keep them on the legacy path unless the team later verifies
         # their local gateway supports the Responses API.
         if provider == 'openai' and settings.openai_api_mode == 'responses':
-            return await self._call_openai_responses(prompt, fallback_input_tokens, prompt_cache_key=prompt_cache_key)
+            return await self._call_openai_responses(prompt, fallback_input_tokens, prompt_cache_key=prompt_cache_key, target_question_type=target_question_type)
         return await self._call_chat_legacy(prompt, provider, fallback_input_tokens, prompt_cache_key=prompt_cache_key)
 
-    def _question_json_schema(self) -> dict[str, Any]:
+    def _question_json_schema(self, target_question_type: str = 'single_select') -> dict[str, Any]:
+        """Strict, token-conscious question contract.
+
+        Backend-owned/redundant fields are deliberately absent: family/variant,
+        concept_key, question_type, source ref/type/page/timestamps/node,
+        source_excerpt, tags and ai_rationale. This pays for the
+        compact pedagogy payload with only one short learner hint and misconception labels.
+        """
+        qtype = normalize_question_type(target_question_type)
+        if qtype not in {'single_select', 'multi_select'}:
+            raise ValueError(f'Structured Output chưa hỗ trợ loại câu hỏi {qtype}.')
+        short_string = {'type': 'string'}
+        pedagogy = {
+            'type': 'object',
+            'additionalProperties': False,
+            'properties': {
+                'hint': short_string,
+                'misconceptions': {
+                    'type': 'object',
+                    'additionalProperties': False,
+                    'properties': {letter: short_string for letter in ['A', 'B', 'C', 'D']},
+                    'required': ['A', 'B', 'C', 'D'],
+                },
+            },
+            'required': ['hint', 'misconceptions'],
+        }
         question = {
             'type': 'object',
             'additionalProperties': False,
@@ -194,14 +269,10 @@ class ModelGateway:
                 'topic': {'type': 'string'},
                 'concept_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
                 'concept_title': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
-                'concept_key': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
-                'question_family_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
-                'variant_no': {'anyOf': [{'type': 'integer'}, {'type': 'null'}]},
                 'source_evidence': {'type': 'string'},
                 'difficulty': {'type': 'string', 'enum': ['easy', 'medium', 'hard']},
                 'cognitive_level': {'type': 'string', 'enum': ['remember', 'understand', 'recognize_example', 'simple_apply']},
                 'learning_objective': {'type': 'string'},
-                'question_type': {'type': 'string', 'enum': ['single_choice']},
                 'question': {'type': 'string'},
                 'options': {
                     'type': 'object',
@@ -214,24 +285,21 @@ class ModelGateway:
                     },
                     'required': ['A', 'B', 'C', 'D'],
                 },
-                'correct_answer': {'type': 'string', 'enum': ['A', 'B', 'C', 'D']},
+                **({'correct_answer': {'type': 'string', 'enum': ['A', 'B', 'C', 'D']}} if qtype == 'single_select' else {
+                    'correct_answers': {
+                        'type': 'array', 'items': {'type': 'string', 'enum': ['A', 'B', 'C', 'D']},
+                        'minItems': 2, 'maxItems': 3, 'uniqueItems': True,
+                    }
+                }),
                 'explanation': {'type': 'string'},
-                'source_ref': {'type': 'string'},
-                'source_type': {'type': 'string'},
-                'source_page': {'anyOf': [{'type': 'integer'}, {'type': 'null'}]},
-                'source_timestamp_start': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
-                'source_timestamp_end': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
+                'pedagogy': pedagogy,
                 'source_chunk_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
-                'source_node_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
-                'source_excerpt': {'type': 'string'},
-                'tags': {'type': 'array', 'items': {'type': 'string'}},
-                'ai_rationale': {'type': 'string'},
             },
             'required': [
-                'topic', 'concept_id', 'concept_title', 'concept_key', 'question_family_id', 'variant_no', 'source_evidence', 'difficulty', 'cognitive_level', 'learning_objective', 'question_type',
-                'question', 'options', 'correct_answer', 'explanation', 'source_ref', 'source_type',
-                'source_page', 'source_timestamp_start', 'source_timestamp_end', 'source_chunk_id',
-                'source_node_id', 'source_excerpt', 'tags', 'ai_rationale'
+                'topic', 'concept_id', 'concept_title', 'source_evidence',
+                'difficulty', 'cognitive_level', 'learning_objective', 'question',
+                'options', ('correct_answer' if qtype == 'single_select' else 'correct_answers'), 'explanation', 'pedagogy',
+                'source_chunk_id',
             ],
         }
         return {
@@ -249,12 +317,12 @@ class ModelGateway:
     def _system_instruction(self) -> str:
         return 'Bạn là AI Learning Check Generator. Trả về đúng JSON theo schema, không markdown.'
 
-    def _structured_output_config(self) -> dict[str, Any]:
+    def _structured_output_config(self, target_question_type: str = 'single_select') -> dict[str, Any]:
         return {
             'format': {
                 'type': 'json_schema',
-                'name': 'learning_check_questions',
-                'schema': self._question_json_schema(),
+                'name': f'learning_check_{normalize_question_type(target_question_type)}_questions',
+                'schema': self._question_json_schema(target_question_type),
                 'strict': True,
             }
         }
@@ -267,12 +335,12 @@ class ModelGateway:
             return text
         return 'pc_' + hashlib.sha256(str(prompt_cache_key).encode('utf-8')).hexdigest()[:61]
 
-    def _responses_payload(self, prompt: str, prompt_cache_key: str | None = None) -> dict[str, Any]:
+    def _responses_payload(self, prompt: str, prompt_cache_key: str | None = None, *, target_question_type: str = 'single_select') -> dict[str, Any]:
         payload = {
             'model': settings.openai_model,
             'instructions': self._system_instruction(),
             'input': prompt,
-            'text': self._structured_output_config(),
+            'text': self._structured_output_config(target_question_type),
             'store': False,
         }
         safe_prompt_cache_key = self._safe_prompt_cache_key(prompt_cache_key)
@@ -377,8 +445,8 @@ class ModelGateway:
         cached_input_tokens = self._cached_tokens_from_usage(usage)
         return {'input_tokens': int(input_tokens), 'cached_input_tokens': int(cached_input_tokens or 0)}
 
-    async def _call_openai_responses(self, prompt: str, fallback_input_tokens: int, *, prompt_cache_key: str | None = None) -> tuple[list[dict], dict]:
-        payload = self._responses_payload(prompt, prompt_cache_key)
+    async def _call_openai_responses(self, prompt: str, fallback_input_tokens: int, *, prompt_cache_key: str | None = None, target_question_type: str = 'single_select') -> tuple[list[dict], dict]:
+        payload = self._responses_payload(prompt, prompt_cache_key, target_question_type=target_question_type)
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             response = await client.post('https://api.openai.com/v1/responses', headers=self._auth_headers(), json=payload)
             if response.status_code == 400 and prompt_cache_key and 'prompt_cache_key' in payload:
@@ -541,7 +609,10 @@ class ModelGateway:
 
         raise RuntimeError(f'Model did not return valid questions JSON. First 500 chars: {cleaned[:500]}') from last_error
 
-    def _mock_questions(self, n: int, scope_title: str, content: str = '', target_difficulty: str | None = None, difficulty_counts: dict[str, int] | None = None) -> list[dict]:
+    def _mock_questions(self, n: int, scope_title: str, content: str = '', target_difficulty: str | None = None, difficulty_counts: dict[str, int] | None = None, *, target_question_type: str = 'single_select') -> list[dict]:
+        qtype = normalize_question_type(target_question_type)
+        if qtype not in {'single_select', 'multi_select'}:
+            raise ValueError(f'Mock AI generation chưa hỗ trợ loại câu hỏi {qtype}.')
         sources = self._extract_mock_sources(content)
         if not sources:
             sources = [{
@@ -578,7 +649,7 @@ class ModelGateway:
                 'difficulty': difficulties[i - 1] if i - 1 < len(difficulties) else template.get('difficulty', 'easy'),
                 'cognitive_level': template.get('cognitive_level', 'remember'),
                 'learning_objective': template['learning_objective'],
-                'question_type': 'single_choice',
+                'question_type': qtype,
                 'question': template['question'] if i <= len(templates) else f"Câu {i}: Theo nội dung về {local_topic}, nhận định nào đúng?",
                 'options': template['options'] if i <= len(templates) else {
                     'A': template['correct_text'],
@@ -586,7 +657,7 @@ class ModelGateway:
                     'C': 'Đây là lựa chọn trái với nội dung bài học',
                     'D': 'Đây là một thao tác không liên quan đến chủ đề',
                 },
-                'correct_answer': template.get('correct_answer', 'A'),
+                **({'correct_answer': template.get('correct_answer', 'A')} if qtype == 'single_select' else {'correct_answers': ['A', 'B']}),
                 'explanation': template['explanation'],
                 'source_ref': source['source_ref'],
                 'source_type': source['source_type'],
@@ -598,6 +669,9 @@ class ModelGateway:
                 'block_id': source.get('source_node_id'),
                 'source_excerpt': source['source_excerpt'],
                 'tags': template.get('tags', [local_topic]),
+                'pedagogy': {
+                    'misconceptions': {'A': '', 'B': 'nhầm với khái niệm gần', 'C': 'áp dụng sai quy tắc', 'D': 'suy luận ngoài nguồn'},
+                },
                 'ai_rationale': 'Mock v20 tạo câu hỏi Learning Check dựa trên Open edX node/chunk đã sync, có source reference hợp lệ để test source grounding.',
             })
         return questions
