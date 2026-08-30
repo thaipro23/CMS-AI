@@ -8,7 +8,7 @@ This branch extends the known-good `.16` baseline without replacing Open edX cor
 
 - Question authoring/review/release: `/bank`
 - Fast subject lookup: `/bank/departments`
-- Legacy Excel preview/import: `/import-quiz-cms-old`
+- Legacy Excel preview/import: `/import-quiz-cms-old` (bổ sung ảnh thiếu hoặc loại câu lỗi trước khi import)
 - Quiz/Final test planner: `/bank/quiz`
 - Open edX publish continues through the connector/worker flow; no Open edX core patch is required.
 - AP synchronization remains scoped to subjects selected CMS/Udemy in `/subject-management` from `.16`.

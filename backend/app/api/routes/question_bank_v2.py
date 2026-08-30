@@ -126,10 +126,12 @@ from app.services.question_bank.legacy_quiz_import import (
     MAX_TOTAL_ASSET_BYTES,
     MAX_WORKBOOKS,
     build_legacy_quiz_preview,
+    discard_invalid_legacy_quiz_questions,
     legacy_preview_reference,
     load_legacy_quiz_preview,
     persist_legacy_quiz_preview,
     public_legacy_quiz_preview,
+    replace_legacy_quiz_preview,
 )
 from app.services.business_rbac import BusinessRBACService
 from app.services.bank_dashboard_stats import BankDashboardStatsService
@@ -1735,6 +1737,69 @@ async def preview_legacy_quiz_cms_old_import(
 
 
 @router.post(
+    '/import-quiz-cms-old/skip-errors',
+    response_model=LegacyQuizCmsOldImportPreviewOut,
+)
+def skip_legacy_quiz_cms_old_errors(
+    payload: LegacyQuizCmsOldImportConfirmRequest,
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('edit_questions')),
+):
+    _preview_reference, preview = _load_owned_legacy_quiz_preview(
+        preview_token=payload.preview_token,
+        user=user,
+    )
+    existing_job = (
+        db.query(BankOperationJob)
+        .filter(
+            BankOperationJob.operation_type == 'legacy_quiz_import',
+            BankOperationJob.target_type == 'legacy_quiz_import_preview',
+            BankOperationJob.target_id == payload.preview_token,
+        )
+        .first()
+    )
+    if existing_job:
+        raise HTTPException(
+            status_code=409,
+            detail='Preview đã có tác vụ import nên không thể thay đổi danh sách câu hỏi.',
+        )
+
+    before_count = int(preview.get('skipped_invalid_question_count') or 0)
+    filtered = discard_invalid_legacy_quiz_questions(preview)
+    skipped_now = int(filtered.get('skipped_invalid_question_count') or 0) - before_count
+    if skipped_now <= 0:
+        raise HTTPException(status_code=400, detail='Preview không có câu lỗi có thể bỏ qua.')
+    try:
+        replace_legacy_quiz_preview(payload.preview_token, filtered)
+    except (ValueError, StorageError) as exc:
+        raise public_http_exception(
+            status_code=400,
+            code='LEGACY_QUIZ_SKIP_ERRORS_FAILED',
+            message=str(exc),
+            logger_name=__name__,
+        ) from exc
+
+    response = public_legacy_quiz_preview(filtered)
+    log_audit(
+        db,
+        action='question_bank.legacy_quiz_import.skip_errors',
+        status='success',
+        message=f'Đã bỏ qua {skipped_now} câu lỗi trong preview quiz CMS cũ',
+        user=user,
+        target_type='legacy_quiz_import_preview',
+        target_id=payload.preview_token,
+        metadata={
+            'skipped_now': skipped_now,
+            'skipped_total': response['skipped_invalid_question_count'],
+            'remaining_question_count': response['question_count'],
+            'remaining_error_count': len(response['errors']),
+            'can_commit': response['can_commit'],
+        },
+    )
+    return response
+
+
+@router.post(
     '/import-quiz-cms-old/jobs',
     response_model=BankOperationJobQueuedOut,
     status_code=status.HTTP_202_ACCEPTED,
@@ -1790,6 +1855,7 @@ def enqueue_legacy_quiz_cms_old_import(
             'workbook_count': preview.get('workbook_count'),
             'sheet_count': preview.get('sheet_count'),
             'question_count': preview.get('question_count'),
+            'skipped_invalid_question_count': preview.get('skipped_invalid_question_count'),
             'subject_ids': subject_ids,
         },
         progress_total=max(1, int(preview.get('sheet_count') or 1)),
@@ -1812,6 +1878,7 @@ def enqueue_legacy_quiz_cms_old_import(
         metadata={
             'preview_token': payload.preview_token,
             'question_count': preview.get('question_count'),
+            'skipped_invalid_question_count': preview.get('skipped_invalid_question_count'),
             'subject_ids': subject_ids,
         },
     )

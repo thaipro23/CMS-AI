@@ -1808,6 +1808,21 @@ export async function enqueueLegacyQuizCmsOldImport(
   );
 }
 
+export async function skipInvalidLegacyQuizCmsOldQuestions(
+  headers: HeadersInit,
+  previewToken: string,
+): Promise<LegacyQuizCmsOldImportPreview> {
+  return parseResponse<LegacyQuizCmsOldImportPreview>(
+    await apiFetch(`${API}/question-bank-v2/import-quiz-cms-old/skip-errors`, {
+      method: "POST",
+      credentials: "include",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ preview_token: previewToken }),
+      timeoutMs: 60_000,
+    }),
+  );
+}
+
 export async function searchSubjects(
   headers: HeadersInit,
   options: { query?: string; departmentId?: string; signal?: AbortSignal } = {},

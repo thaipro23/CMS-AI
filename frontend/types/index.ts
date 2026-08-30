@@ -1263,6 +1263,19 @@ export type LegacyQuizCmsOldImportPreview = {
   workbook_count: number
   sheet_count: number
   question_count: number
+  original_question_count: number
+  invalid_question_count: number
+  missing_image_question_count: number
+  skipped_invalid_question_count: number
+  skipped_invalid_questions: Array<{
+    workbook?: string | null
+    sheet?: string | null
+    row?: number | null
+    question_no?: string | null
+    error_codes?: string[]
+    image_refs?: string[]
+  }>
+  can_skip_invalid_questions: boolean
   type_counts: Record<string, number>
   difficulty_counts: Record<string, number>
   image_count: number

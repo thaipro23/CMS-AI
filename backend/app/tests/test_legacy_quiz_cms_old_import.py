@@ -22,9 +22,13 @@ from app.services.object_storage import ObjectStorage
 from app.services.openedx_exporter import question_to_openedx_olx, validate_question_for_olx
 from app.services.question_bank.legacy_quiz_import import (
     build_legacy_quiz_preview,
+    discard_invalid_legacy_quiz_questions,
     import_legacy_quiz_preview,
+    load_legacy_quiz_preview,
     parse_legacy_quiz_workbook,
     persist_legacy_quiz_preview,
+    public_legacy_quiz_preview,
+    replace_legacy_quiz_preview,
 )
 from app.services.question_content import apply_canonical_content
 
@@ -77,6 +81,16 @@ def _storage(tmp_path: Path) -> ObjectStorage:
     return ObjectStorage(SimpleNamespace(storage_provider='local', local_storage_path=str(tmp_path)))
 
 
+def _png_bytes() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    output = BytesIO()
+    Image.new('RGB', (2, 2), color=(20, 80, 160)).save(output, format='PNG')
+    return output.getvalue()
+
+
 def test_type_and_threshold_are_independent_columns() -> None:
     raw = _workbook_bytes([
         {'question': 'Một đáp án?', 'type': 0, 'threshold': 3, 'correct': 'A'},
@@ -116,8 +130,9 @@ def test_duplicate_prompts_are_warnings_and_preserved() -> None:
     assert any('vẫn giữ từng dòng' in warning for warning in parsed['warnings'])
 
 
-def test_preview_fails_closed_for_unknown_subject_and_missing_image() -> None:
+def test_missing_image_requires_upload_or_explicit_question_discard(tmp_path: Path) -> None:
     db = _session()
+    storage = _storage(tmp_path)
     try:
         department = Department(code='MEC', name='Cơ khí', status='active')
         db.add(department)
@@ -132,6 +147,7 @@ def test_preview_fails_closed_for_unknown_subject_and_missing_image() -> None:
         db.commit()
         raw = _workbook_bytes([
             {'question': '[QN12.png] Câu có hình?', 'type': 0, 'threshold': 2},
+            {'question': 'Câu hợp lệ không có hình?', 'type': 0, 'threshold': 1},
         ])
         missing = build_legacy_quiz_preview(
             db,
@@ -141,6 +157,46 @@ def test_preview_fails_closed_for_unknown_subject_and_missing_image() -> None:
         )
         assert not missing['can_commit']
         assert {item['code'] for item in missing['errors']} == {'MISSING_IMAGE'}
+        public_missing = public_legacy_quiz_preview(missing)
+        assert public_missing['invalid_question_count'] == 1
+        assert public_missing['missing_image_question_count'] == 1
+        assert public_missing['can_skip_invalid_questions']
+
+        completed_with_image = build_legacy_quiz_preview(
+            db,
+            workbooks=[('MEC229 - Đồ gá.xlsx', raw)],
+            assets=[('QN12.png', _png_bytes())],
+            visible_subject_ids={subject.id},
+            actor='teacher@example.com',
+        )
+        assert completed_with_image['can_commit']
+        assert public_legacy_quiz_preview(completed_with_image)[
+            'missing_image_question_count'
+        ] == 0
+        assert completed_with_image['image_count'] == 1
+
+        token, _reference = persist_legacy_quiz_preview(missing, storage=storage)
+        stored = load_legacy_quiz_preview(token, storage=storage)
+        filtered = discard_invalid_legacy_quiz_questions(stored)
+        assert filtered['can_commit']
+        assert filtered['question_count'] == 1
+        assert filtered['skipped_invalid_question_count'] == 1
+        assert not filtered['errors']
+        assert filtered['workbooks'][0]['sheets'][0]['question_count'] == 1
+        replace_legacy_quiz_preview(token, filtered, storage=storage)
+        reloaded = load_legacy_quiz_preview(token, storage=storage)
+        assert reloaded['can_commit']
+        assert reloaded['skipped_invalid_questions'][0]['image_refs'] == ['QN12.png']
+
+        imported = import_legacy_quiz_preview(
+            db,
+            preview_token=token,
+            actor='teacher@example.com',
+            storage=storage,
+        )
+        assert imported['created_question_count'] == 1
+        assert imported['skipped_invalid_question_count'] == 1
+        assert db.query(Question).one().question_text == 'Câu hợp lệ không có hình?'
 
         unknown = build_legacy_quiz_preview(
             db,
@@ -148,7 +204,9 @@ def test_preview_fails_closed_for_unknown_subject_and_missing_image() -> None:
             visible_subject_ids={subject.id},
             actor='teacher@example.com',
         )
-        assert 'SUBJECT_NOT_FOUND' in {item['code'] for item in unknown['errors']}
+        filtered_unknown = discard_invalid_legacy_quiz_questions(unknown)
+        assert not filtered_unknown['can_commit']
+        assert {item['code'] for item in filtered_unknown['errors']} == {'SUBJECT_NOT_FOUND'}
     finally:
         db.close()
 
@@ -201,6 +259,7 @@ def test_cross_layer_contract_contains_route_type_and_navigation() -> None:
         root / 'frontend/app/bank/_components/pages/DepartmentsPage.tsx'
     ).read_text(encoding='utf-8')
     assert "'/import-quiz-cms-old/preview'" in route_source
+    assert "'/import-quiz-cms-old/skip-errors'" in route_source
     assert "'/import-quiz-cms-old/jobs'" in route_source
     assert "name='bank_legacy_quiz_import_task'" in worker_source
     assert "'dropdown_fill'" in types_source
@@ -208,6 +267,11 @@ def test_cross_layer_contract_contains_route_type_and_navigation() -> None:
     assert 'searchSubjects(headers' in departments_source
     assert '}, 250)' in departments_source
     assert '/bank/subjects/${subject.id}/versions' in departments_source
+    import_page_source = (root / 'frontend/app/import-quiz-cms-old/page.tsx').read_text(
+        encoding='utf-8'
+    )
+    assert 'Bổ sung ảnh và kiểm tra lại' in import_page_source
+    assert 'Bỏ qua ${preview.invalid_question_count} câu lỗi' in import_page_source
 
 
 def test_end_to_end_import_creates_su26_audit_and_is_retry_idempotent(tmp_path: Path) -> None:

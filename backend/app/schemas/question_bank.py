@@ -858,6 +858,12 @@ class LegacyQuizCmsOldImportPreviewOut(BaseModel):
     workbook_count: int
     sheet_count: int
     question_count: int
+    original_question_count: int
+    invalid_question_count: int
+    missing_image_question_count: int
+    skipped_invalid_question_count: int
+    skipped_invalid_questions: list[dict] = Field(default_factory=list)
+    can_skip_invalid_questions: bool
     type_counts: dict = Field(default_factory=dict)
     difficulty_counts: dict = Field(default_factory=dict)
     image_count: int

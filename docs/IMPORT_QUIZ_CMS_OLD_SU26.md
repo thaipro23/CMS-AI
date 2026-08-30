@@ -46,7 +46,8 @@ Với `dropdown_fill`, số ký hiệu `[_____]` phải bằng số nhãn trong 
 - Người dùng có thể tải ảnh trực tiếp hoặc một ZIP chứa ảnh; khớp theo basename Unicode NFC, không phân biệt hoa/thường.
 - Ảnh nhúng thực sự trong workbook cũng được đọc theo vị trí neo dòng.
 - Chỉ nhận PNG/JPEG/WebP hợp lệ, tối đa 4 MB/ảnh và 4 ảnh/câu.
-- Thiếu ảnh, ảnh lỗi, tên ảnh trùng nhưng khác nội dung, ZIP có path traversal hoặc vượt giới hạn giải nén đều chặn import.
+- Câu thiếu hoặc lỗi ảnh bị chặn riêng. Người dùng phải bổ sung ảnh và preview lại, hoặc xác nhận **Bỏ qua câu lỗi** để loại câu đó khỏi ngân hàng đề.
+- Tên ảnh trùng nhưng khác nội dung, ZIP có path traversal hoặc vượt giới hạn giải nén là lỗi cấp file và không thể vượt qua bằng nút Bỏ qua.
 - File MEC229 mẫu chỉ chứa 36 tham chiếu tên ảnh, không chứa binary ảnh nhúng; cần cung cấp ảnh/ZIP đi kèm.
 
 ## Preview và quy tắc lỗi
@@ -58,7 +59,14 @@ Preview có thời hạn 2 giờ và không thay đổi dữ liệu môn học. 
 - TYPE, NGƯỠNG, nhãn/correct key không hợp lệ;
 - lựa chọn rỗng/trùng, sai số lượng đáp án đúng;
 - số ô trống không khớp thứ tự đáp án;
-- thiếu hoặc lỗi ảnh.
+- thiếu hoặc lỗi ảnh trên từng câu.
+
+Khi preview có lỗi gắn với câu hỏi, giao diện đưa ra hai lựa chọn rõ ràng:
+
+1. **Bổ sung ảnh và kiểm tra lại**: cộng thêm ảnh/ZIP vào danh sách đã chọn và chạy lại preview.
+2. **Bỏ qua N câu lỗi**: backend loại chính xác các câu có lỗi, tính lại toàn bộ số câu/loại/độ khó và ghi audit người xác nhận. File Excel gốc vẫn được lưu làm tài liệu đối chiếu.
+
+Nút Bỏ qua không loại lỗi cấp môn, workbook hoặc sheet. Ví dụ `SUBJECT_NOT_FOUND`, thiếu header và trùng số bài vẫn chặn import.
 
 Câu hỏi trùng nội dung trong chính nguồn cũ **không bị loại**. Mỗi dòng vẫn được bảo toàn bằng source identity riêng, gắn cờ `duplicate_in_legacy_source` và bắt buộc người duyệt xử lý.
 
@@ -80,6 +88,7 @@ Retry dùng bộ ba `bank_version_id + source_node_id + source_ref`, không dùn
 | Endpoint | Chức năng |
 |---|---|
 | `POST /api/question-bank-v2/import-quiz-cms-old/preview` | Multipart `workbooks` và `assets`; phân tích, lưu preview tạm |
+| `POST /api/question-bank-v2/import-quiz-cms-old/skip-errors` | JSON `{ "preview_token": "..." }`; loại các câu lỗi sau xác nhận, nhưng giữ nguyên lỗi cấp file/môn/sheet |
 | `POST /api/question-bank-v2/import-quiz-cms-old/jobs` | JSON `{ "preview_token": "..." }`; tạo job nền |
 | `GET /api/question-bank-v2/operation-jobs/{job_id}` | Theo dõi tiến độ/kết quả |
 

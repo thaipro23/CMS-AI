@@ -8833,7 +8833,7 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
 .subject-quick-search-code { display: inline-flex; justify-content: center; padding: 5px 8px; border-radius: 7px; color: #1e40af; background: #dbeafe; font-weight: 800; }
 
 .legacy-quiz-import-page { max-width: 1380px; margin-inline: auto; }
-.legacy-import-intro, .legacy-import-upload-card, .legacy-import-action-bar, .legacy-import-workbooks, .legacy-import-confirm, .legacy-import-job, .legacy-import-issues { border: 1px solid #dbe3ef; border-radius: 14px; background: #fff; }
+.legacy-import-intro, .legacy-import-upload-card, .legacy-import-action-bar, .legacy-import-workbooks, .legacy-import-confirm, .legacy-import-job, .legacy-import-issues, .legacy-import-resolution { border: 1px solid #dbe3ef; border-radius: 14px; background: #fff; }
 .legacy-import-intro { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(330px, .8fr); gap: 24px; padding: 24px; background: linear-gradient(135deg, #eff6ff, #fff 62%); }
 .legacy-import-intro h2 { margin: 8px 0; color: #172554; font-size: clamp(20px, 2vw, 28px); }
 .legacy-import-intro p { margin: 0; color: #475569; line-height: 1.6; }
@@ -8857,12 +8857,13 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
 .legacy-import-action-bar, .legacy-import-confirm { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 16px 20px; }
 .legacy-import-action-bar > div, .legacy-import-confirm > div { display: grid; gap: 3px; }
 .legacy-import-action-bar span, .legacy-import-confirm p { color: #64748b; }
-.legacy-import-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.legacy-import-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .legacy-import-summary > div { display: grid; gap: 5px; padding: 14px; border: 1px solid #dbe3ef; border-radius: 11px; background: #f8fafc; }
 .legacy-import-summary span { color: #64748b; font-size: 12px; }
 .legacy-import-summary b { color: #0f172a; font-size: 22px; }
 .legacy-import-summary .is-ready { border-color: #86efac; background: #f0fdf4; }
 .legacy-import-summary .has-errors { border-color: #fecaca; background: #fef2f2; }
+.legacy-import-summary .is-warning { border-color: #fde68a; background: #fffbeb; }
 .legacy-import-breakdown { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .legacy-import-breakdown > div { padding: 16px; border: 1px solid #dbe3ef; border-radius: 12px; background: #fff; }
 .legacy-import-breakdown h3 { margin: 0 0 8px; }
@@ -8882,6 +8883,14 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
 .legacy-import-issues > p { margin: 0; padding: 8px; border-radius: 8px; background: #fffbeb; }
 .legacy-import-issues span { color: #64748b; font-size: 12px; }
 .legacy-import-issues p { margin: 0; }
+.legacy-import-resolution { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 18px 20px; border-color: #f59e0b; background: #fffbeb; }
+.legacy-import-resolution > div:first-child { display: grid; gap: 5px; }
+.legacy-import-resolution > div:first-child > span { color: #b45309; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.legacy-import-resolution h2, .legacy-import-resolution p { margin: 0; }
+.legacy-import-resolution p, .legacy-import-resolution small { color: #78350f; }
+.legacy-import-resolution .button-row { flex: 0 0 auto; }
+.legacy-import-issues.skipped-list > div { background: #fffbeb; }
+.legacy-import-issues.skipped-list > div > b { color: #92400e; }
 .legacy-import-confirm { border-color: #93c5fd; background: #eff6ff; }
 .legacy-import-confirm h2 { margin: 0; }
 .legacy-import-confirm p { margin: 4px 0 0; }
@@ -8904,7 +8913,7 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
   .legacy-import-issues > div { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
-  .subject-quick-search-heading, .legacy-import-action-bar, .legacy-import-confirm, .dropdown-blank-toolbar { align-items: stretch; flex-direction: column; }
+  .subject-quick-search-heading, .legacy-import-action-bar, .legacy-import-confirm, .legacy-import-resolution, .dropdown-blank-toolbar { align-items: stretch; flex-direction: column; }
   .subject-quick-search-results > a { grid-template-columns: 78px minmax(0, 1fr); }
   .subject-quick-search-results > a strong { grid-column: 2; }
   .legacy-import-rules, .legacy-import-summary { grid-template-columns: 1fr; }

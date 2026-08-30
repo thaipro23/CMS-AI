@@ -888,7 +888,7 @@ def build_legacy_quiz_preview(
                 image_count += len(question.get('media_asset_keys') or [])
 
     return {
-        'preview_version': 1,
+        'preview_version': 2,
         'created_at': _utcnow_iso(),
         'requested_by': actor,
         'target_term': LEGACY_IMPORT_TERM,
@@ -897,6 +897,9 @@ def build_legacy_quiz_preview(
         'workbook_count': len(parsed_workbooks),
         'sheet_count': sheet_count,
         'question_count': total_questions,
+        'original_question_count': total_questions,
+        'skipped_invalid_question_count': 0,
+        'skipped_invalid_questions': [],
         'type_counts': dict(type_counts),
         'difficulty_counts': dict(difficulty_counts),
         'image_count': image_count,
@@ -906,11 +909,161 @@ def build_legacy_quiz_preview(
     }
 
 
+def _legacy_error_identity(error: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        str(error.get(field) or '')
+        for field in ('code', 'message', 'workbook', 'sheet', 'row', 'field')
+    )
+
+
+def _legacy_question_stats(preview: dict[str, Any]) -> dict[str, int]:
+    invalid_count = 0
+    missing_image_count = 0
+    for workbook in preview.get('workbooks') or []:
+        for sheet in workbook.get('sheets') or []:
+            for question in sheet.get('questions') or []:
+                question_errors = list(question.get('errors') or [])
+                if not question_errors:
+                    continue
+                invalid_count += 1
+                if any(str(error.get('code') or '') == 'MISSING_IMAGE' for error in question_errors):
+                    missing_image_count += 1
+    return {
+        'invalid_question_count': invalid_count,
+        'missing_image_question_count': missing_image_count,
+    }
+
+
+def _legacy_question_counts(questions: Iterable[dict[str, Any]]) -> tuple[dict[str, int], dict[str, int]]:
+    question_list = list(questions)
+    return (
+        dict(Counter(str(item.get('question_type') or '') for item in question_list)),
+        dict(Counter(str(item.get('difficulty') or '') for item in question_list)),
+    )
+
+
+def discard_invalid_legacy_quiz_questions(preview: dict[str, Any]) -> dict[str, Any]:
+    """Remove question-scoped failures while preserving every non-question blocker."""
+    payload = deepcopy(preview)
+    discarded = list(payload.get('skipped_invalid_questions') or [])
+    discarded_error_ids: set[tuple[str, ...]] = set()
+    discarded_now: list[dict[str, Any]] = []
+
+    for workbook in payload.get('workbooks') or []:
+        retained_sheets: list[dict[str, Any]] = []
+        workbook_questions: list[dict[str, Any]] = []
+        for sheet in workbook.get('sheets') or []:
+            retained_questions: list[dict[str, Any]] = []
+            sheet_error_ids: set[tuple[str, ...]] = set()
+            for question in sheet.get('questions') or []:
+                question_errors = list(question.get('errors') or [])
+                if not question_errors:
+                    retained_questions.append(question)
+                    continue
+                identities = {_legacy_error_identity(error) for error in question_errors}
+                sheet_error_ids.update(identities)
+                discarded_error_ids.update(identities)
+                discarded_now.append({
+                    'workbook': workbook.get('filename'),
+                    'sheet': sheet.get('sheet_name'),
+                    'row': question.get('source_row'),
+                    'question_no': question.get('question_no'),
+                    'error_codes': list(dict.fromkeys(
+                        str(error.get('code') or 'INVALID_QUESTION')
+                        for error in question_errors
+                    )),
+                    'image_refs': list(question.get('image_refs') or []),
+                })
+
+            sheet['questions'] = retained_questions
+            sheet['errors'] = [
+                error
+                for error in sheet.get('errors') or []
+                if _legacy_error_identity(error) not in sheet_error_ids
+            ]
+            sheet['question_count'] = len(retained_questions)
+            sheet['type_counts'], sheet['difficulty_counts'] = _legacy_question_counts(
+                retained_questions
+            )
+            retained_sheets.append(sheet)
+            workbook_questions.extend(retained_questions)
+
+        workbook['sheets'] = retained_sheets
+        workbook['sheet_count'] = len(retained_sheets)
+        workbook['question_count'] = len(workbook_questions)
+        workbook['type_counts'], workbook['difficulty_counts'] = _legacy_question_counts(
+            workbook_questions
+        )
+        workbook['image_reference_count'] = sum(
+            len(question.get('image_refs') or []) for question in workbook_questions
+        )
+        workbook['errors'] = [
+            error
+            for error in workbook.get('errors') or []
+            if _legacy_error_identity(error) not in discarded_error_ids
+        ]
+
+    payload['errors'] = [
+        error
+        for error in payload.get('errors') or []
+        if _legacy_error_identity(error) not in discarded_error_ids
+    ]
+    discarded.extend(discarded_now)
+    payload['skipped_invalid_questions'] = discarded
+    payload['skipped_invalid_question_count'] = len(discarded)
+
+    remaining_questions = [
+        question
+        for workbook in payload.get('workbooks') or []
+        for sheet in workbook.get('sheets') or []
+        for question in sheet.get('questions') or []
+    ]
+    payload['question_count'] = len(remaining_questions)
+    payload['sheet_count'] = sum(
+        int(workbook.get('sheet_count') or 0) for workbook in payload.get('workbooks') or []
+    )
+    payload['type_counts'], payload['difficulty_counts'] = _legacy_question_counts(
+        remaining_questions
+    )
+    payload['image_count'] = sum(
+        len(question.get('media_asset_keys') or []) for question in remaining_questions
+    )
+    payload['can_commit'] = bool(remaining_questions) and not payload['errors']
+    payload['preview_version'] = 2
+    payload['updated_at'] = _utcnow_iso()
+    if discarded_now:
+        payload['warnings'] = list(dict.fromkeys([
+            *(payload.get('warnings') or []),
+            (
+                f'Đã bỏ qua {len(discarded_now)} câu lỗi theo xác nhận của người dùng; '
+                'các câu này không được tạo trong ngân hàng đề.'
+            ),
+        ]))
+    return payload
+
+
+def _legacy_preview_key(token: str) -> str:
+    if not re.fullmatch(r'[0-9a-f]{32}', str(token or '')):
+        raise ValueError('Preview token không hợp lệ.')
+    return f'question-bank/_pending-operation-files/legacy-quiz-{token}/preview.json'
+
+
 def legacy_preview_reference(token: str, storage: ObjectStorage | None = None) -> str:
     target = storage or get_object_storage()
-    return target.reference_for_key(
-        f'question-bank/_pending-operation-files/legacy-quiz-{token}/preview.json'
-    )
+    return target.reference_for_key(_legacy_preview_key(token))
+
+
+def replace_legacy_quiz_preview(
+    token: str,
+    preview: dict[str, Any],
+    *,
+    storage: ObjectStorage | None = None,
+) -> str:
+    target = storage or get_object_storage()
+    payload = deepcopy(preview)
+    payload['preview_token'] = token
+    payload['updated_at'] = _utcnow_iso()
+    return target.put_json(_legacy_preview_key(token), payload)
 
 
 def persist_legacy_quiz_preview(
@@ -971,6 +1124,7 @@ def load_legacy_quiz_preview(
 
 
 def public_legacy_quiz_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    question_stats = _legacy_question_stats(preview)
     workbooks: list[dict[str, Any]] = []
     for workbook in preview.get('workbooks') or []:
         sheets = []
@@ -1001,6 +1155,21 @@ def public_legacy_quiz_preview(preview: dict[str, Any]) -> dict[str, Any]:
             'sheets': sheets,
         })
     can_commit = bool(preview.get('can_commit'))
+    skipped_invalid_count = int(preview.get('skipped_invalid_question_count') or 0)
+    if can_commit and skipped_invalid_count:
+        message = (
+            f'Đã loại {skipped_invalid_count} câu lỗi khỏi lần import. '
+            'Các câu còn lại có thể được import vào SU26.'
+        )
+    elif can_commit:
+        message = 'Preview hợp lệ. Có thể tạo job import vào SU26.'
+    elif question_stats['invalid_question_count']:
+        message = (
+            'Có câu hỏi lỗi. Hãy bổ sung ảnh/điều chỉnh file rồi kiểm tra lại, '
+            'hoặc bỏ qua toàn bộ câu lỗi.'
+        )
+    else:
+        message = 'Preview còn lỗi cấp file, môn hoặc sheet và chưa thể import.'
     return {
         'ok': True,
         'preview_token': str(preview.get('preview_token') or ''),
@@ -1008,6 +1177,13 @@ def public_legacy_quiz_preview(preview: dict[str, Any]) -> dict[str, Any]:
         'workbook_count': int(preview.get('workbook_count') or 0),
         'sheet_count': int(preview.get('sheet_count') or 0),
         'question_count': int(preview.get('question_count') or 0),
+        'original_question_count': int(
+            preview.get('original_question_count') or preview.get('question_count') or 0
+        ),
+        **question_stats,
+        'skipped_invalid_question_count': skipped_invalid_count,
+        'skipped_invalid_questions': list(preview.get('skipped_invalid_questions') or []),
+        'can_skip_invalid_questions': question_stats['invalid_question_count'] > 0,
         'type_counts': preview.get('type_counts') or {},
         'difficulty_counts': preview.get('difficulty_counts') or {},
         'image_count': int(preview.get('image_count') or 0),
@@ -1015,11 +1191,7 @@ def public_legacy_quiz_preview(preview: dict[str, Any]) -> dict[str, Any]:
         'warnings': list(preview.get('warnings') or []),
         'errors': list(preview.get('errors') or []),
         'can_commit': can_commit,
-        'message': (
-            'Preview hợp lệ. Có thể tạo job import vào SU26.'
-            if can_commit
-            else 'Preview có lỗi chặn. Hãy sửa file hoặc bổ sung ảnh rồi tải lại.'
-        ),
+        'message': message,
     }
 
 
@@ -1190,6 +1362,7 @@ def import_legacy_quiz_preview(
     created_chapters = 0
     created_bank_versions = 0
     created_materials = 0
+    skipped_invalid_questions = int(payload.get('skipped_invalid_question_count') or 0)
     bank_version_ids: set[str] = set()
     permanent_workbooks: dict[str, str] = {}
 
@@ -1454,6 +1627,7 @@ def import_legacy_quiz_preview(
         'requested_by': actor,
         'created_question_count': created_questions,
         'skipped_question_count': skipped_questions,
+        'skipped_invalid_question_count': skipped_invalid_questions,
         'pending_review_count': created_questions,
         'created_offering_count': created_offerings,
         'created_chapter_count': created_chapters,
@@ -1462,7 +1636,15 @@ def import_legacy_quiz_preview(
         'bank_version_ids': sorted(bank_version_ids),
         'workbook_references': permanent_workbooks,
         'message': (
-            f'Đã import {created_questions} câu vào {LEGACY_IMPORT_TERM}; '
-            'tất cả câu mới đang chờ duyệt.'
+            (
+                f'Đã import {created_questions} câu vào {LEGACY_IMPORT_TERM}; '
+                f'đã loại {skipped_invalid_questions} câu lỗi; '
+                'tất cả câu mới đang chờ duyệt.'
+            )
+            if skipped_invalid_questions
+            else (
+                f'Đã import {created_questions} câu vào {LEGACY_IMPORT_TERM}; '
+                'tất cả câu mới đang chờ duyệt.'
+            )
         ),
     }
