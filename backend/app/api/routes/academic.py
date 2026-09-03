@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 40584)
+Total output lines: 3560
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -64,6 +67,8 @@ from app.schemas.academic import (
     AcademicLearningSyncIn,
     AcademicLearningSyncOut,
     AcademicLearningSummaryOut,
+    AcademicProgressEmailJobIn,
+    AcademicProgressEmailPreviewOut,
     AcademicImportResultOut,
     AcademicIdentityCleanupIn,
     AcademicIdentityCleanupOut,
@@ -113,6 +118,7 @@ from app.services.academic.udemy_plan import UdemyPlanService
 from app.services.academic.udemy_progress import UdemyProgressService
 from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
 from app.services.academic.assignment_external import AcademicAssignmentExternalWorkflowService
+from app.services.academic.progress_email import AcademicProgressEmailService
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
 from app.core.json_safe import json_safe_value
@@ -537,6 +543,142 @@ def _enqueue_class_sync_job(
     db.refresh(job)
     from app.worker import academic_class_sync_task
     academic_class_sync_task.delay(job.id)
+    return job
+
+
+def _enqueue_progress_email_job(
+    *,
+    db: Session,
+    user: UserContext,
+    class_id: str,
+    payload: AcademicProgressEmailJobIn,
+) -> AcademicBulkOperationJob:
+    if payload.class_id and str(payload.class_id).strip() != str(class_id):
+        raise HTTPException(status_code=422, detail='class_id trong URL và nội dung gửi không khớp.')
+    progress_service = AcademicProgressEmailService(db)
+    if not progress_service.mail_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                'code': 'MAILSEND_NOT_CONFIGURED',
+                'message': 'AI Server chưa được cấu hình Mail Send ProxyKey.',
+            },
+        )
+    preview = progress_service.preview(user, class_id)
+    selected_ids = set(payload.student_ids)
+    allowed_ids = {
+        str(item.get('student_id'))
+        for item in (preview.get('recipients') or [])
+        if isinstance(item, dict) and item.get('deliverable') is True
+    }
+    rejected_ids = selected_ids - allowed_ids
+    if rejected_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'PROGRESS_EMAIL_SELECTION_STALE',
+                'message': (
+                    f'{len(rejected_ids)} sinh viên không còn đủ điều kiện hoặc không có email hợp lệ. '
+                    'Hãy làm mới danh sách trước khi gửi.'
+                ),
+            },
+        )
+    max_recipients = max(1, min(1000, int(settings.mailsend_max_recipients or 1000)))
+    if len(selected_ids) > max_recipients:
+        raise HTTPException(
+            status_code=422,
+            detail=f'Mỗi lần gửi chỉ chọn tối đa {max_recipients} sinh viên.',
+        )
+    actor_id = str(user.user_id or user.username or '').strip()
+    enforce_operation_rate_limit(
+        namespace='academic-progress-email',
+        actor_id=actor_id or 'unknown',
+        limit=max(1, int(settings.academic_progress_email_rate_limit_per_minute or 3)),
+        code='PROGRESS_EMAIL_RATE_LIMITED',
+        message='Bạn tạo yêu cầu gửi mail quá nhanh. Vui lòng đợi rồi thử lại.',
+    )
+    class_row = db.get(AcademicClass, class_id)
+    if not class_row:
+        raise HTTPException(status_code=404, detail='Không tìm thấy lớp.')
+    signature_payload = {
+        'class_id': class_id,
+        'student_ids': sorted(selected_ids),
+        'subject': payload.subject,
+        'body_template': payload.body_template,
+        'request_key': payload.request_key,
+        'requested_by': actor_id,
+    }
+    signature = hashlib.sha256(
+        json.dumps(signature_payload, sort_keys=True, ensure_ascii=False).encode('utf-8')
+    ).hexdigest()
+    # Only one reminder session may be created for a class at a time, even when
+    # two authorized teachers/admins confirm concurrently.
+    _advisory_xact_lock_for_key(db, f'academic-progress-email:{class_id}')
+    active_jobs = (
+        db.query(AcademicBulkOperationJob)
+        .filter(
+            AcademicBulkOperationJob.job_type == 'progress_reminder_email',
+            AcademicBulkOperationJob.status.in_(['queued', 'running']),
+        )
+        .order_by(AcademicBulkOperationJob.created_at.desc())
+        .all()
+    )
+    for existing in active_jobs:
+        request = existing.request_json if isinstance(existing.request_json, dict) else {}
+        if str(request.get('class_id') or '') != str(class_id):
+            continue
+        if request.get('request_signature') == signature and existing.requested_by == actor_id:
+            return existing
+        raise HTTPException(
+            status_code=409,
+            detail='Lớp đang có một tác vụ gửi nhắc tiến độ. Hãy chờ tác vụ đó hoàn tất.',
+        )
+    job = AcademicBulkOperationJob(
+        job_type='progress_reminder_email',
+        status='queued',
+        term_id=class_row.term_id,
+        branch=str(class_row.branch or '').strip().lower() or None,
+        campus=str(class_row.campus or '').strip().lower() or None,
+        requested_by=actor_id,
+        progress_current=0,
+        progress_total=100,
+        progress_label=f'Đã xếp hàng nhắc tiến độ cho {len(selected_ids)} sinh viên',
+        request_json=json_safe_value({
+            'class_id': class_id,
+            'student_ids': sorted(selected_ids),
+            'subject': payload.subject,
+            'body_template': payload.body_template,
+            'request_key': payload.request_key,
+            'request_signature': signature,
+            'requester_context': _requester_context_json(user),
+            'approved_class_id': class_id,
+            'approved_campus_codes': [str(class_row.campus or '').strip().lower()] if class_row.campus else [],
+            'approved_branch': str(class_row.branch or '').strip().lower() or None,
+            'scope_enforced_by_backend': True,
+            'policy_version': 'progress-reminder-email/v1',
+        }),
+        result_json=json_safe_value({'selected_count': len(selected_ids), 'mail_send_status': 'NOT_CREATED'}),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    from app.worker import academic_progress_email_task
+    academic_progress_email_task.delay(job.id)
+    log_audit(
+        db,
+        action='academic.progress_email.enqueue',
+        status='queued',
+        message=f'Đã xếp hàng gửi nhắc tiến độ cho {len(selected_ids)} sinh viên.',
+        user=user,
+        target_type='academic_bulk_operation_job',
+        target_id=job.id,
+        metadata=json_safe_value({
+            'class_id': class_id,
+            'selected_count': len(selected_ids),
+            'request_signature': signature,
+            'recipient_addresses_logged': False,
+        }),
+    )
     return job
 
 
@@ -1559,47 +1701,7 @@ async def create_udemy_progress_import_job(
                         {'key': f'udemy-progress:{item["delivery"].id}:{item["hash"]}'},
                     )
             except Exception:
-                # The unique idempotency key remains the final protection when the
-                # database user cannot acquire advisory locks.
-                pass
-            prior = db.query(UdemyProgressImportBatch).filter(
-                UdemyProgressImportBatch.subject_delivery_id == item['delivery'].id,
-                UdemyProgressImportBatch.file_hash == item['hash'],
-                UdemyProgressImportBatch.status.in_(['queued', 'running', 'completed']),
-            ).order_by(UdemyProgressImportBatch.created_at.desc()).first()
-            is_duplicate = bool(prior and not force_reimport)
-            batch = UdemyProgressImportBatch(
-                parent_job_id=parent.id,
-                subject_delivery_id=item['delivery'].id,
-                duplicate_of_batch_id=prior.id if is_duplicate else None,
-                idempotency_key=(
-                    f'duplicate:{item["delivery"].id}:{item["hash"]}:{parent.id}'
-                    if is_duplicate else
-                    (f'force:{item["delivery"].id}:{item["hash"]}:{parent.id}' if force_reimport else f'{item["delivery"].id}:{item["hash"]}')
-                ),
-                file_name=item['filename'],
-                file_hash=item['hash'],
-                file_size_bytes=len(item['raw']),
-                status='skipped' if is_duplicate else 'queued',
-                force_reimport=bool(force_reimport),
-                requested_by=user.user_id,
-                request_json=json_safe_value({
-                    'term_id': term_id,
-                    'block_id': block_id,
-                    'branch': branch_value,
-                    'subject_code': item['subject'].subject_code,
-                    'source_archive': item.get('source_archive'),
-                    'report_identity': item.get('report_identity') or {},
-                    'requester_context': _requester_context_json(user),
-                    'policy_version': 'udemy-progress-import/batch35.3.3',
-                }),
-                result_json=(
-                    {'ok': True, 'skipped': True, 'message': 'File trùng đã được import trước đó.', 'duplicate_of_batch_id': prior.id}
-                    if is_duplicate else {}
-                ),
-                finished_at=datetime.utcnow() if is_duplicate else None,
-            )
-            db.add(batch)
+ …584 tokens truncated…h)
             db.flush()
             if is_duplicate:
                 duplicate_count += 1
@@ -2774,6 +2876,48 @@ def enqueue_class_learning_sync(
     db: Session = Depends(get_db),
 ):
     return _enqueue_class_sync_job(db=db, user=user, class_id=class_id, job_type='learning_sync', force=payload.force, limit=payload.limit)
+
+
+@router.get('/classes/{class_id}/progress-email/preview', response_model=AcademicProgressEmailPreviewOut)
+def preview_class_progress_email(
+    class_id: str,
+    user: UserContext = Depends(_require_training_write_permission),
+    db: Session = Depends(get_db),
+):
+    return AcademicProgressEmailService(db).preview(user, class_id)
+
+
+@router.post('/classes/{class_id}/progress-email/jobs', response_model=AcademicBulkOperationJobOut)
+def enqueue_class_progress_email(
+    class_id: str,
+    payload: AcademicProgressEmailJobIn,
+    user: UserContext = Depends(_require_training_write_permission),
+    db: Session = Depends(get_db),
+):
+    return _enqueue_progress_email_job(db=db, user=user, class_id=class_id, payload=payload)
+
+
+# Backward-compatible training-management aliases retained for the earlier
+# teacher-report design. The class-scoped endpoints above are used by the new UI.
+@router.get('/training/students/progress-email/preview', response_model=AcademicProgressEmailPreviewOut)
+def preview_training_student_progress_email(
+    class_id: str = Query(...),
+    user: UserContext = Depends(_require_training_write_permission),
+    db: Session = Depends(get_db),
+):
+    return AcademicProgressEmailService(db).preview(user, class_id)
+
+
+@router.post('/training/students/progress-email/jobs', response_model=AcademicBulkOperationJobOut)
+def enqueue_training_student_progress_email(
+    payload: AcademicProgressEmailJobIn,
+    user: UserContext = Depends(_require_training_write_permission),
+    db: Session = Depends(get_db),
+):
+    class_id = str(payload.class_id or '').strip()
+    if not class_id:
+        raise HTTPException(status_code=422, detail='Thiếu class_id để gửi nhắc tiến độ.')
+    return _enqueue_progress_email_job(db=db, user=user, class_id=class_id, payload=payload)
 
 
 @router.post('/classes/{class_id}/full-cms-sync/jobs', response_model=AcademicClassSyncJobOut)

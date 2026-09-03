@@ -2864,6 +2864,44 @@ export type AcademicBulkOperationJob = {
   updated_at?: string | null
 }
 
+export type AcademicProgressEmailRecipient = {
+  student_id: string
+  student_code?: string | null
+  full_name: string
+  masked_email?: string | null
+  progress_percent?: number | null
+  grade_percent?: number | null
+  overdue_quiz_count: number
+  overdue_quizzes: string[]
+  last_synced_at?: string | null
+  deliverable: boolean
+  delivery_issue?: string | null
+  total_relearn: number
+}
+
+export type AcademicProgressEmailPreview = {
+  class_id: string
+  class_code?: string | null
+  subject_code?: string | null
+  subject_name?: string | null
+  openedx_course_id: string
+  generated_at: string
+  mail_configured: boolean
+  max_recipients: number
+  roster_total: number
+  candidate_count: number
+  deliverable_count: number
+  missing_email_count: number
+  inactive_student_count: number
+  duplicate_email_count: number
+  no_learning_data_count: number
+  recipients: AcademicProgressEmailRecipient[]
+  default_subject: string
+  default_body_template: string
+  refresh_before_send: boolean
+  policy_note: string
+}
+
 export type AcademicTeacherReportJob = {
   id: string
   job_type: string

@@ -109,6 +109,7 @@ import {
   AcademicClassListResponse,
   AcademicClassSyncJob,
   AcademicBulkOperationJob,
+  AcademicProgressEmailPreview,
   AcademicStudentListResponse,
   AcademicSyncResult,
   AcademicSyncRun,
@@ -4193,6 +4194,46 @@ export async function getAcademicClassLearningSummary(
     await apiFetch(
       `${API}/academic/classes/${encodeURIComponent(classId)}/learning-summary`,
       { credentials: "include", headers },
+    ),
+  );
+}
+
+export async function getAcademicClassProgressEmailPreview(
+  headers: HeadersInit,
+  classId: string,
+): Promise<AcademicProgressEmailPreview> {
+  return parseResponse(
+    await apiFetch(
+      `${API}/academic/classes/${encodeURIComponent(classId)}/progress-email/preview`,
+      { credentials: "include", headers },
+    ),
+  );
+}
+
+export async function enqueueAcademicClassProgressEmailJob(
+  headers: HeadersInit,
+  classId: string,
+  payload: {
+    studentIds: string[];
+    subject: string;
+    bodyTemplate: string;
+    requestKey?: string;
+  },
+): Promise<AcademicBulkOperationJob> {
+  return parseResponse(
+    await apiFetch(
+      `${API}/academic/classes/${encodeURIComponent(classId)}/progress-email/jobs`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify({
+          student_ids: payload.studentIds,
+          subject: payload.subject,
+          body_template: payload.bodyTemplate,
+          request_key: payload.requestKey || null,
+        }),
+      },
     ),
   );
 }

@@ -831,6 +831,76 @@ class AcademicLearningSyncIn(BaseModel):
     limit: int = Field(500, ge=1, le=500)
 
 
+class AcademicProgressEmailRecipientOut(BaseModel):
+    student_id: str
+    student_code: str | None = None
+    full_name: str = ''
+    masked_email: str | None = None
+    progress_percent: float | None = None
+    grade_percent: float | None = None
+    overdue_quiz_count: int = 0
+    overdue_quizzes: list[str] = Field(default_factory=list)
+    last_synced_at: datetime | None = None
+    deliverable: bool = False
+    delivery_issue: str | None = None
+    total_relearn: int = 0
+
+
+class AcademicProgressEmailPreviewOut(BaseModel):
+    class_id: str
+    class_code: str | None = None
+    subject_code: str | None = None
+    subject_name: str | None = None
+    openedx_course_id: str
+    generated_at: datetime
+    mail_configured: bool = False
+    max_recipients: int = 1000
+    roster_total: int = 0
+    candidate_count: int = 0
+    deliverable_count: int = 0
+    missing_email_count: int = 0
+    inactive_student_count: int = 0
+    duplicate_email_count: int = 0
+    no_learning_data_count: int = 0
+    recipients: list[AcademicProgressEmailRecipientOut] = Field(default_factory=list)
+    default_subject: str
+    default_body_template: str
+    refresh_before_send: bool = True
+    policy_note: str
+
+
+class AcademicProgressEmailJobIn(BaseModel):
+    class_id: str | None = Field(None, max_length=255)
+    student_ids: list[str] = Field(..., min_length=1, max_length=1000)
+    subject: str = Field(..., min_length=1, max_length=200)
+    body_template: str = Field(..., min_length=1, max_length=12000)
+    request_key: str | None = Field(None, max_length=128)
+
+    @field_validator('student_ids')
+    @classmethod
+    def _unique_student_ids(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(value or '').strip() for value in values if str(value or '').strip()))
+        if not normalized:
+            raise ValueError('Phải chọn ít nhất một sinh viên.')
+        return normalized
+
+    @field_validator('subject')
+    @classmethod
+    def _safe_subject(cls, value: str) -> str:
+        normalized = ' '.join(str(value or '').replace('\r', ' ').replace('\n', ' ').split())
+        if not normalized:
+            raise ValueError('Tiêu đề email không được để trống.')
+        return normalized
+
+    @field_validator('body_template')
+    @classmethod
+    def _safe_body_template(cls, value: str) -> str:
+        normalized = str(value or '').strip()
+        if not normalized:
+            raise ValueError('Nội dung email không được để trống.')
+        return normalized
+
+
 class AcademicFullCmsSyncIn(BaseModel):
     force: bool = False
     limit: int = Field(500, ge=1, le=500)

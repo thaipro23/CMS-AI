@@ -8,12 +8,16 @@ import {
   getAcademicClass,
   getAcademicClassMappingSummary,
   getAcademicClassLearningSummary,
+  getAcademicClassProgressEmailPreview,
   getAcademicClassStudents,
   getAcademicClassAssignmentDefenseScores,
   enqueueAcademicClassFullCmsSyncJob,
   enqueueAcademicClassLearningSyncJob,
   getAcademicClassSyncJob,
   getAcademicClassSyncJobs,
+  enqueueAcademicClassProgressEmailJob,
+  getAcademicBulkOperationJob,
+  getAcademicBulkOperationJobs,
   createAcademicTrainingClassExportJob,
   getAcademicTrainingTeacherReportJob,
   getAcademicTrainingTeacherReportJobs,
@@ -23,7 +27,7 @@ import {
   enqueueAnalyticsClassLearningBehaviorJob,
   getAnalyticsStudentLearningBehaviorDetail,
 } from '../../../../lib/api'
-import { AcademicAssignmentDefenseScore, AcademicClass, AcademicClassSyncJob, AcademicTeacherReportJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent, AnalyticsLearningBehaviorRow, AnalyticsLearningBehaviorSummary, AnalyticsStudentLearningBehaviorDetail, AnalyticsStudentSessionProgress } from '../../../../types'
+import { AcademicAssignmentDefenseScore, AcademicBulkOperationJob, AcademicClass, AcademicClassSyncJob, AcademicProgressEmailPreview, AcademicTeacherReportJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent, AnalyticsLearningBehaviorRow, AnalyticsLearningBehaviorSummary, AnalyticsStudentLearningBehaviorDetail, AnalyticsStudentSessionProgress } from '../../../../types'
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
@@ -299,6 +303,14 @@ function defenseStatusClass(value?: string | null) {
   if (['absent', 'needs_regrade'].includes(status)) return 'status-pill danger'
   return 'status-pill neutral'
 }
+
+function progressEmailIssueLabel(value?: string | null) {
+  if (value === 'missing_email') return 'Thiếu email'
+  if (value === 'inactive_student') return 'Sinh viên inactive'
+  if (value === 'duplicate_email') return 'Trùng email'
+  if (value === 'stale_after_refresh') return 'Dữ liệu CMS chưa mới'
+  return value ? 'Không thể gửi' : 'Sẵn sàng gửi'
+}
 const DEFENSE_STATUS_OPTIONS = [
   { value: 'not_graded', label: 'Chưa có điểm' },
   { value: 'submitted', label: 'Đã nộp' },
@@ -316,6 +328,7 @@ function ClassDetailContent() {
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const canRunFullCmsSync = can('manage_training_deadlines') || can('manage_settings')
+  const canSendProgressEmail = can('view_training_reports') || can('manage_training_deadlines') || can('manage_settings')
   const canManageAssignmentScores = false // v25.9.16.7.2.64.13: Assignment score entry is handled by an external system.
   const [classInfo, setClassInfo] = useState<AcademicClass | null>(null)
   const [students, setStudents] = useState<AcademicStudent[]>([])
@@ -337,6 +350,14 @@ function ClassDetailContent() {
   const [classExportJob, setClassExportJob] = useState<AcademicTeacherReportJob | null>(null)
   const [exportingClass, setExportingClass] = useState(false)
   const [recoveringJob, setRecoveringJob] = useState(false)
+  const [progressEmailOpen, setProgressEmailOpen] = useState(false)
+  const [progressEmailLoading, setProgressEmailLoading] = useState(false)
+  const [progressEmailSubmitting, setProgressEmailSubmitting] = useState(false)
+  const [progressEmailPreview, setProgressEmailPreview] = useState<AcademicProgressEmailPreview | null>(null)
+  const [progressEmailSelected, setProgressEmailSelected] = useState<Set<string>>(new Set())
+  const [progressEmailSubject, setProgressEmailSubject] = useState('')
+  const [progressEmailBody, setProgressEmailBody] = useState('')
+  const [progressEmailJob, setProgressEmailJob] = useState<AcademicBulkOperationJob | null>(null)
   const [selectedQuiz, setSelectedQuiz] = useState<{ student: AcademicStudent; column: GradeColumn; score: AcademicLearningComponentScore | null } | null>(null)
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false)
   const [assignmentRows, setAssignmentRows] = useState<AcademicAssignmentDefenseScore[]>([])
@@ -606,6 +627,111 @@ function ClassDetailContent() {
     return Math.min(100, Math.max(0, Math.round((current / total) * 100)))
   }
 
+  const bulkJobProgressPercent = (job?: AcademicBulkOperationJob | null) => {
+    if (!job) return 0
+    const current = Number(job.progress_current || 0)
+    const total = Math.max(1, Number(job.progress_total || 100))
+    return Math.min(100, Math.max(0, Math.round((current / total) * 100)))
+  }
+
+  const loadProgressEmailPreview = async () => {
+    setProgressEmailLoading(true)
+    try {
+      const preview = await getAcademicClassProgressEmailPreview(headers, classId)
+      setProgressEmailPreview(preview)
+      setProgressEmailSelected(new Set(preview.recipients.filter((item) => item.deliverable).slice(0, preview.max_recipients).map((item) => item.student_id)))
+      setProgressEmailSubject(preview.default_subject)
+      setProgressEmailBody(preview.default_body_template)
+    } catch (error) {
+      setProgressEmailOpen(false)
+      setErrorModal(error instanceof Error ? error.message : 'Không tải được danh sách sinh viên chậm tiến độ')
+    } finally {
+      setProgressEmailLoading(false)
+    }
+  }
+
+  const openProgressEmailDialog = () => {
+    setProgressEmailPreview(null)
+    setProgressEmailSelected(new Set())
+    setProgressEmailOpen(true)
+    loadProgressEmailPreview().catch(() => undefined)
+  }
+
+  const toggleProgressEmailRecipient = (studentId: string) => {
+    setProgressEmailSelected((current) => {
+      const next = new Set(current)
+      if (next.has(studentId)) next.delete(studentId)
+      else next.add(studentId)
+      return next
+    })
+  }
+
+  const toggleAllProgressEmailRecipients = () => {
+    if (!progressEmailPreview) return
+    const deliverableIds = progressEmailPreview.recipients.filter((item) => item.deliverable).slice(0, progressEmailPreview.max_recipients).map((item) => item.student_id)
+    const allSelected = deliverableIds.length > 0 && deliverableIds.every((id) => progressEmailSelected.has(id))
+    setProgressEmailSelected(allSelected ? new Set() : new Set(deliverableIds))
+  }
+
+  const sendProgressEmail = async () => {
+    if (!progressEmailPreview?.mail_configured || progressEmailSelected.size === 0) return
+    setProgressEmailSubmitting(true)
+    try {
+      const requestKey = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `progress-email-${Date.now()}`
+      const queued = await enqueueAcademicClassProgressEmailJob(jsonHeaders, classId, {
+        studentIds: Array.from(progressEmailSelected),
+        subject: progressEmailSubject,
+        bodyTemplate: progressEmailBody,
+        requestKey,
+      })
+      setProgressEmailJob(queued)
+      setProgressEmailOpen(false)
+      setMessage(`Đã xếp hàng gửi nhắc tiến độ cho ${progressEmailSelected.size} sinh viên. Hệ thống đang cập nhật lại tiến độ CMS trước khi gửi.`)
+    } catch (error) {
+      setErrorModal(error instanceof Error ? error.message : 'Không tạo được tác vụ gửi nhắc tiến độ')
+    } finally {
+      setProgressEmailSubmitting(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!canSendProgressEmail || isUdemyClass) return
+    let cancelled = false
+    getAcademicBulkOperationJobs(headers, { status: 'active', limit: 100 })
+      .then((jobs) => {
+        if (cancelled) return
+        const active = jobs.find((job) => job.job_type === 'progress_reminder_email' && String(job.request_json?.class_id || '') === classId)
+        if (active) setProgressEmailJob(active)
+      })
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [headers, classId, canSendProgressEmail, isUdemyClass])
+
+  useEffect(() => {
+    if (!progressEmailJob?.id || !['queued', 'running'].includes(String(progressEmailJob.status || '').toLowerCase())) return
+    let cancelled = false
+    const timer = window.setInterval(() => {
+      getAcademicBulkOperationJob(headers, progressEmailJob.id)
+        .then((job) => {
+          if (cancelled) return
+          setProgressEmailJob(job)
+          if (job.status === 'completed') {
+            const result = job.result_json || {}
+            const sent = typeof result.sent_count === 'number' ? `${result.sent_count} email` : 'session email'
+            const removed = Number(result.caught_up_or_no_longer_late_count || 0)
+            setMessage(`Đã hoàn tất ${sent}.${removed > 0 ? ` Tự loại ${removed} sinh viên đã bắt kịp tiến độ.` : ''}`)
+            refreshAfterDataChange().catch(() => undefined)
+          }
+          if (job.status === 'failed') setErrorModal(job.error_message || 'Gửi nhắc tiến độ thất bại')
+        })
+        .catch(() => undefined)
+    }, 1500)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headers, progressEmailJob?.id, progressEmailJob?.status])
+
   const exportClassExcel = async () => {
     if (!classId || isUdemyClass) return
     setExportingClass(true)
@@ -751,21 +877,25 @@ function ClassDetailContent() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
-      if (selectedQuiz) setSelectedQuiz(null)
+      if (progressEmailOpen && !progressEmailSubmitting) setProgressEmailOpen(false)
+      else if (selectedQuiz) setSelectedQuiz(null)
       else if (selectedBehavior) { setSelectedBehavior(null); setSelectedBehaviorDetail(null) }
       else if (assignmentModalOpen) setAssignmentModalOpen(false)
       else if (errorModal) setErrorModal('')
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedQuiz, selectedBehavior, assignmentModalOpen, errorModal])
+  }, [progressEmailOpen, progressEmailSubmitting, selectedQuiz, selectedBehavior, assignmentModalOpen, errorModal])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const counts = summary?.counts || {}
   const matched = counts.matched || 0
   const needsCmsAction = Math.max(0, (summary?.total || 0) - matched)
   const activeJobRunning = isJobActive(activeJob)
-  const actionBusy = activeJobRunning || syncingFullFlow || syncingScoreUpdate || recoveringJob || isReportJobActive(classExportJob)
+  const progressEmailJobActive = ['queued', 'running'].includes(String(progressEmailJob?.status || '').toLowerCase())
+  const progressEmailDeliverable = progressEmailPreview?.recipients.filter((item) => item.deliverable).slice(0, progressEmailPreview.max_recipients) || []
+  const progressEmailAllSelected = progressEmailDeliverable.length > 0 && progressEmailDeliverable.every((item) => progressEmailSelected.has(item.student_id))
+  const actionBusy = activeJobRunning || syncingFullFlow || syncingScoreUpdate || recoveringJob || isReportJobActive(classExportJob) || progressEmailJobActive
   const debugMode = searchParams.get('debug') === '1'
 
   const componentColumns = useMemo<GradeColumn[]>(() => {
@@ -897,6 +1027,7 @@ function ClassDetailContent() {
         <div className="toolbar-actions">
           {!isUdemyClass && canRunFullCmsSync && <button className="btn primary class-action-button action-full-sync" type="button" disabled={actionBusy} onClick={runFullCmsSync}><AppIcon name="sync" size={16} />{syncingFullFlow ? 'Đang đồng bộ full CMS...' : 'Đồng bộ full CMS'}</button>}
           {!isUdemyClass && canRunFullCmsSync && <button className="btn secondary class-action-button action-score-update" type="button" disabled={actionBusy} onClick={runScoreUpdate}><AppIcon name="analytics" size={16} />{syncingScoreUpdate ? 'Đang cập nhật điểm...' : 'Cập nhật điểm'}</button>}
+          {!isUdemyClass && canSendProgressEmail && <button className="btn secondary class-action-button action-progress-email" type="button" disabled={actionBusy || !effectiveCourseId} onClick={openProgressEmailDialog}><AppIcon name="alert" size={16} />{progressEmailJobActive ? 'Đang gửi nhắc tiến độ...' : 'Gửi nhắc tiến độ'}</button>}
           {!isUdemyClass && <button className="btn secondary class-action-button action-class-export" type="button" disabled={actionBusy || exportingClass} onClick={exportClassExcel}><AppIcon name="download" size={16} />{isReportJobActive(classExportJob) ? `Đang xuất Excel ${reportJobProgressPercent(classExportJob)}%` : 'Xuất Excel lớp'}</button>}
           {!isUdemyClass && classExportJob?.status === 'completed' && <button className="btn secondary class-action-button action-class-download" type="button" onClick={downloadClassExcel}><AppIcon name="download" size={16} />Tải Excel lớp</button>}
           {can('manage_settings') && <Link className="btn secondary class-action-button action-week-settings" href="/semesters"><AppIcon name="calendar" size={16} />Cấu hình tuần học</Link>}
@@ -921,6 +1052,20 @@ function ClassDetailContent() {
           <button className="btn secondary small" type="button" onClick={() => getAcademicClassSyncJob(headers, classId, activeJob.id).then((job) => { setActiveJob(job); setSyncJobs((items) => [job, ...items.filter((item) => item.id !== job.id)].slice(0, 10)) }).catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được tiến trình'))}>Làm mới</button>
         </div>
         <div className="progress-track"><span style={{ width: `${jobProgressPercent(activeJob)}%` }} /></div>
+      </div>}
+      {progressEmailJob && <div className={`sync-job-status persistent-sync-job-status progress-email-job-status is-${String(progressEmailJob.status || 'queued').toLowerCase()}`}>
+        <div className="sync-job-main-row">
+          <div>
+            <b>{progressEmailJob.progress_label || 'Đang xử lý gửi nhắc tiến độ...'}</b>
+            <small>
+              Gửi nhắc tiến độ · {jobStatusLabel(progressEmailJob.status)} · {bulkJobProgressPercent(progressEmailJob)}%
+              {typeof progressEmailJob.result_json?.sent_count === 'number' ? ` · ${progressEmailJob.result_json.sent_count} đã gửi` : ''}
+              {Number(progressEmailJob.result_json?.caught_up_or_no_longer_late_count || 0) > 0 ? ` · ${progressEmailJob.result_json?.caught_up_or_no_longer_late_count} đã bắt kịp được loại` : ''}
+            </small>
+          </div>
+          <button className="btn secondary small" type="button" onClick={() => getAcademicBulkOperationJob(headers, progressEmailJob.id).then(setProgressEmailJob).catch((error) => setErrorModal(error instanceof Error ? error.message : 'Không làm mới được tiến trình gửi mail'))}>Làm mới</button>
+        </div>
+        <div className="progress-track"><span style={{ width: `${bulkJobProgressPercent(progressEmailJob)}%` }} /></div>
       </div>}
       {message && <p className="form-message">{message}</p>}
 
@@ -1015,6 +1160,82 @@ function ClassDetailContent() {
     </> : null}
 
 
+
+    <AccessibleDialog
+      open={progressEmailOpen}
+      title="Gửi nhắc sinh viên chậm tiến độ"
+      description={classInfo ? `${classInfo.subject_code || 'Môn học'} · ${classInfo.class_code || 'Lớp học'}` : 'Mail Send AI Server'}
+      onClose={() => { if (!progressEmailSubmitting) setProgressEmailOpen(false) }}
+      size="xlarge"
+      busy={progressEmailSubmitting}
+      className="progress-email-dialog"
+      bodyClassName="progress-email-dialog-body"
+      footer={<div className="progress-email-dialog-footer">
+        <div>
+          <b>{progressEmailSelected.size} sinh viên được chọn</b>
+          <small>Hệ thống sẽ cập nhật lại CMS và tự loại người đã bắt kịp trước khi gửi.</small>
+        </div>
+        <div className="dialog-action-row">
+          <button className="btn secondary" type="button" disabled={progressEmailSubmitting} onClick={() => setProgressEmailOpen(false)}>Hủy</button>
+          <button
+            className="btn primary"
+            data-dialog-autofocus
+            type="button"
+            disabled={progressEmailLoading || progressEmailSubmitting || !progressEmailPreview?.mail_configured || progressEmailSelected.size === 0 || !progressEmailSubject.trim() || !progressEmailBody.trim() || progressEmailSelected.size > Number(progressEmailPreview?.max_recipients || 1000)}
+            onClick={sendProgressEmail}
+          >
+            <AppIcon name="alert" size={16} />{progressEmailSubmitting ? 'Đang tạo tác vụ...' : `Gửi cho ${progressEmailSelected.size} sinh viên`}
+          </button>
+        </div>
+      </div>}
+    >
+      {progressEmailLoading ? <div className="progress-email-loading"><span className="spinner" aria-hidden="true" /><b>Đang xác định sinh viên chậm tiến độ...</b></div> : null}
+      {!progressEmailLoading && progressEmailPreview ? <>
+        {!progressEmailPreview.mail_configured ? <InlineNotice notice={{
+          type: 'warning',
+          title: 'AI Server chưa có Mail Send ProxyKey',
+          body: 'Quản trị viên cần bật MAILSEND_ENABLED và khai báo MAILSEND_PROXY_API_KEY cho backend và worker-heavy. Danh sách vẫn xem được nhưng chưa thể gửi.',
+        }} /> : null}
+        <div className="progress-email-policy-note">
+          <AppIcon name="info" size={18} />
+          <div><b>Chỉ nhắc người đang trễ mốc Quiz</b><p>{progressEmailPreview.policy_note}</p></div>
+        </div>
+        <div className="progress-email-summary">
+          <div><span>Roster lớp</span><b>{progressEmailPreview.roster_total}</b></div>
+          <div className="is-warning"><span>Đang chậm tiến độ</span><b>{progressEmailPreview.candidate_count}</b></div>
+          <div className="is-ready"><span>Có thể gửi</span><b>{progressEmailPreview.deliverable_count}</b></div>
+          <div><span>Thiếu email / inactive</span><b>{progressEmailPreview.missing_email_count + progressEmailPreview.inactive_student_count}</b></div>
+        </div>
+
+        <section className="progress-email-recipients">
+          <div className="progress-email-section-head">
+            <div><h3>Người nhận</h3><p>Email được che trên giao diện; địa chỉ thật chỉ dùng bên trong worker gửi mail.</p></div>
+            <button className="btn secondary small" type="button" disabled={!progressEmailDeliverable.length} onClick={toggleAllProgressEmailRecipients}>{progressEmailAllSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả có thể gửi'}</button>
+          </div>
+          <div className="progress-email-recipient-table" role="table" aria-label="Sinh viên chậm tiến độ">
+            <div className="progress-email-recipient-head" role="row">
+              <span role="columnheader">Chọn</span><span role="columnheader">Sinh viên</span><span role="columnheader">Tiến độ</span><span role="columnheader">Quiz đang trễ</span><span role="columnheader">Trạng thái gửi</span>
+            </div>
+            <div className="progress-email-recipient-body">
+              {progressEmailPreview.recipients.map((recipient) => <label key={recipient.student_id} className={`progress-email-recipient-row ${recipient.deliverable ? '' : 'is-disabled'}`} role="row">
+                <span role="cell"><input type="checkbox" checked={progressEmailSelected.has(recipient.student_id)} disabled={!recipient.deliverable} onChange={() => toggleProgressEmailRecipient(recipient.student_id)} aria-label={`Chọn ${recipient.student_code || recipient.full_name}`} /></span>
+                <span role="cell" className="progress-email-student"><b>{recipient.student_code || 'Chưa có mã SV'} · {recipient.full_name}</b><small>{recipient.masked_email || 'Chưa có email hợp lệ'}</small></span>
+                <span role="cell"><b>{percentLabel(recipient.progress_percent)}</b><small>{recipient.last_synced_at ? `CMS ${formatVNTimeDate(recipient.last_synced_at)}` : 'Chưa đồng bộ'}</small></span>
+                <span role="cell"><b>{recipient.overdue_quiz_count} Quiz</b><small title={recipient.overdue_quizzes.join(', ')}>{recipient.overdue_quizzes.slice(0, 3).join(', ')}{recipient.overdue_quizzes.length > 3 ? '…' : ''}</small></span>
+                <span role="cell"><span className={`status-pill ${recipient.deliverable ? 'success' : 'warning'}`}>{progressEmailIssueLabel(recipient.delivery_issue)}</span></span>
+              </label>)}
+              {!progressEmailPreview.recipients.length ? <div className="progress-email-empty"><AppIcon name="check" size={22} /><b>Không có sinh viên đang chậm mốc Quiz</b><span>Hiện chưa cần gửi thông báo cho lớp này.</span></div> : null}
+            </div>
+          </div>
+        </section>
+
+        <section className="progress-email-compose">
+          <div className="progress-email-section-head"><div><h3>Nội dung thông báo</h3><p>Có thể dùng <code>{'{{maHs}}'}</code> để Mail Send điền mã sinh viên theo từng người nhận.</p></div></div>
+          <label><span>Tiêu đề</span><input className="input" maxLength={200} value={progressEmailSubject} onChange={(event) => setProgressEmailSubject(event.target.value)} /></label>
+          <label><span>Nội dung</span><textarea className="input" rows={9} maxLength={12000} value={progressEmailBody} onChange={(event) => setProgressEmailBody(event.target.value)} /></label>
+        </section>
+      </> : null}
+    </AccessibleDialog>
 
     <AccessibleDialog
       open={Boolean(selectedBehavior)}

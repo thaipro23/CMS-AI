@@ -234,6 +234,19 @@ class Settings(BaseSettings):
     academic_class_sync_max_students: int = 5000
     academic_learning_low_progress_threshold_percent: float = 50.0
     academic_learning_low_grade_threshold_percent: float = 50.0
+    # Teacher progress reminders are delivered by the Polytechnic Mail Send
+    # ProxyKey API. AI Server never opens a direct SMTP connection and the
+    # ProxyKey must remain an environment/Kubernetes secret.
+    mailsend_enabled: bool = False
+    mailsend_proxy_base_url: str = 'https://mailsend.poly.edu.vn'
+    mailsend_proxy_create_path: str = '/api/proxy/bulk-sessions/with-files'
+    mailsend_proxy_status_path: str = '/api/proxy/bulk-sessions/{session_id}'
+    mailsend_proxy_api_key: str | None = None
+    mailsend_request_timeout_seconds: int = 30
+    mailsend_poll_interval_seconds: float = 3.0
+    mailsend_poll_timeout_seconds: int = 600
+    mailsend_max_recipients: int = 1000
+    academic_progress_email_rate_limit_per_minute: int = 3
     # v25.9.16.7.2.64.14 UAT-only destructive cleanup for wrong RollNumber identity mapping.
     # Keep this disabled in real production. Mutation also requires the exact
     # confirmation phrase in the request body.

@@ -21,3 +21,4 @@ Deploy: `RUN_V25_9_16_7_2_64_16_5_7_2_18.md`.
 
 Feature specification and operations guide: [`docs/IMPORT_QUIZ_CMS_OLD_SU26.md`](docs/IMPORT_QUIZ_CMS_OLD_SU26.md).
 Verification report: [`docs/VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md`](docs/VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md).
+Teacher progress reminder and Mail Send setup: [`docs/ACADEMIC_PROGRESS_EMAIL_MAILSEND.md`](docs/ACADEMIC_PROGRESS_EMAIL_MAILSEND.md).
