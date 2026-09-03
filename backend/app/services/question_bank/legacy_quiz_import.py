@@ -223,7 +223,24 @@ def _difficulty(raw_threshold: object, raw_difficulty: object) -> str:
         if explicit not in mapping:
             raise ValueError('Độ khó chỉ chấp nhận easy/medium/hard hoặc Dễ/Trung bình/Khó.')
         return mapping[explicit]
+    # Keep a non-null compatibility value for the legacy Question column. The
+    # separate difficulty_classified flag remains authoritative for Quiz planning.
     return 'medium'
+
+
+def _difficulty_is_classified(raw_threshold: object, raw_difficulty: object) -> bool:
+    return bool(str(raw_threshold or '').strip() or str(raw_difficulty or '').strip())
+
+
+def _difficulty_count_key(question: dict[str, Any]) -> str:
+    classified = question.get('difficulty_classified')
+    if classified is None:
+        classified = _difficulty_is_classified(
+            question.get('threshold_raw'), question.get('difficulty_raw')
+        )
+    if not bool(classified):
+        return 'unclassified'
+    return str(question.get('difficulty') or '')
 
 
 def _chapter_number(sheet_name: str, sheet_index: int) -> tuple[int, str | None]:
@@ -399,6 +416,9 @@ def _parse_sheet(
             question_errors.append(_error(
                 'INVALID_TYPE', str(exc), workbook=workbook_name, sheet=worksheet.title, row=row, field='TYPE'
             ))
+        difficulty_classified = _difficulty_is_classified(
+            group.get('threshold_raw'), group.get('difficulty_raw')
+        )
         try:
             difficulty = _difficulty(group.get('threshold_raw'), group.get('difficulty_raw'))
         except ValueError as exc:
@@ -502,6 +522,7 @@ def _parse_sheet(
             'threshold_raw': str(group.get('threshold_raw') or ''),
             'difficulty_raw': str(group.get('difficulty_raw') or ''),
             'difficulty': difficulty,
+            'difficulty_classified': difficulty_classified,
             'correct_key': ''.join(labels),
             'content': content,
             'image_refs': image_refs,
@@ -514,7 +535,7 @@ def _parse_sheet(
         errors.extend(question_errors)
 
     type_counts = Counter(item['question_type'] for item in questions)
-    difficulty_counts = Counter(item['difficulty'] for item in questions)
+    difficulty_counts = Counter(_difficulty_count_key(item) for item in questions)
     return ({
         'sheet_name': worksheet.title,
         'chapter_no': chapter_no,
@@ -591,7 +612,13 @@ def parse_legacy_quiz_workbook(raw: bytes, *, filename: str) -> dict[str, Any]:
 
     all_questions = [question for sheet in sheets for question in sheet['questions']]
     type_counts = Counter(item['question_type'] for item in all_questions)
-    difficulty_counts = Counter(item['difficulty'] for item in all_questions)
+    difficulty_counts = Counter(_difficulty_count_key(item) for item in all_questions)
+    unclassified_difficulty_count = int(difficulty_counts.get('unclassified') or 0)
+    if unclassified_difficulty_count:
+        warnings.append(
+            f'{unclassified_difficulty_count} câu không có NGƯỠNG/độ khó; vẫn được import '
+            'và sẽ được phân bổ linh hoạt khi tạo Quiz sau khi duyệt.'
+        )
     image_reference_count = sum(len(item['image_refs']) for item in all_questions)
     embedded_image_count = sum(len(item['embedded_media']) for item in all_questions)
     return {
@@ -938,7 +965,7 @@ def _legacy_question_counts(questions: Iterable[dict[str, Any]]) -> tuple[dict[s
     question_list = list(questions)
     return (
         dict(Counter(str(item.get('question_type') or '') for item in question_list)),
-        dict(Counter(str(item.get('difficulty') or '') for item in question_list)),
+        dict(Counter(_difficulty_count_key(item) for item in question_list)),
     )
 
 
@@ -1477,11 +1504,18 @@ def import_legacy_quiz_preview(
                         'type_raw': question_data.get('question_type_raw'),
                         'threshold_raw': question_data.get('threshold_raw'),
                         'difficulty_raw': question_data.get('difficulty_raw'),
+                        'difficulty_classified': bool(question_data.get('difficulty_classified')),
+                        'concept_classified': False,
                         'correct_key': question_data.get('correct_key'),
                         'imported_by': actor,
                         'duplicate_in_legacy_source': bool(question_data.get('duplicate_in_source')),
                     }
                     family_digest = hashlib.sha256(source_node_id.encode('utf-8')).hexdigest()[:32]
+                    quality_flags = ['legacy_import_requires_review', 'legacy_import_unclassified_concept']
+                    if not bool(question_data.get('difficulty_classified')):
+                        quality_flags.append('legacy_import_unclassified_difficulty')
+                    if question_data.get('duplicate_in_source'):
+                        quality_flags.append('duplicate_in_legacy_source')
                     question = Question(
                         course_id=f'bank:{bank_version.id}',
                         department_id=subject.department_id,
@@ -1525,11 +1559,7 @@ def import_legacy_quiz_preview(
                         tags=['legacy_quiz_import', LEGACY_IMPORT_TERM.lower()],
                         ai_rationale='',
                         quality_score=0.0,
-                        quality_flags=(
-                            ['legacy_import_requires_review', 'duplicate_in_legacy_source']
-                            if question_data.get('duplicate_in_source')
-                            else ['legacy_import_requires_review']
-                        ),
+                        quality_flags=quality_flags,
                         is_duplicate=bool(question_data.get('duplicate_in_source')),
                         model_provider='manual',
                         model_name='legacy_quiz_import',

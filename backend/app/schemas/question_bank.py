@@ -951,6 +951,10 @@ class BankReleaseQuizPlanOut(BackendUiStatusMixin):
     warnings: list[str] = Field(default_factory=list)
     assigned_question_count: int = 0
     assigned_component_count: int = 0
+    classification_policy: str = 'strict'
+    unclassified_difficulty_question_count: int = 0
+    unclassified_concept_question_count: int = 0
+    flexibly_assigned_question_count: int = 0
     hard_guard: dict = Field(default_factory=dict)
     message: str = ''
 

@@ -2,7 +2,7 @@
 
 Current feature branch: **SU26 Legacy Quiz Import & Fast Subject Search**.
 
-This branch extends the known-good `.16` baseline without replacing Open edX core. Question Bank has a canonical response schema for **Một đáp án**, **Nhiều đáp án**, **Chọn và điền ô trống**, **Trả lời ngắn**, and **Trả lời số**. The Department screen includes fast subject lookup, while `/import-quiz-cms-old` validates legacy multi-sheet Excel workbooks and imports them into the subject's **SU26** version. Every imported question records the importer and starts in **Chờ duyệt**.
+This branch extends the known-good `.16` baseline without replacing Open edX core. Question Bank has a canonical response schema for **Một đáp án**, **Nhiều đáp án**, **Chọn và điền ô trống**, **Trả lời ngắn**, and **Trả lời số**. The Department screen includes fast subject lookup, while `/import-quiz-cms-old` validates legacy multi-sheet Excel workbooks and imports them into the subject's **SU26** version. Every imported question records the importer and starts in **Chờ duyệt**. Legacy questions without concept/difficulty remain eligible after review: Quiz planning treats missing concepts independently and missing difficulties as flexible quota inventory.
 
 ## Runtime scope
 

@@ -36,7 +36,7 @@ Mỗi sheet ánh xạ thành một bài. Số bài được lấy từ số ở 
 | `2` | Trung bình (`medium`) |
 | `3` | Khó (`hard`) |
 
-Nếu file không có cột `TYPE`, hệ thống suy luận từ `CORRECT`: một ký tự là câu một đáp án, nhiều ký tự là câu nhiều đáp án; câu có `[_____]` là câu chọn/điền ô trống. Nếu không có cả `NGƯỠNG` lẫn cột độ khó tương đương, mặc định là Trung bình.
+Nếu file không có cột `TYPE`, hệ thống suy luận từ `CORRECT`: một ký tự là câu một đáp án, nhiều ký tự là câu nhiều đáp án; câu có `[_____]` là câu chọn/điền ô trống. Nếu không có cả `NGƯỠNG` lẫn cột độ khó tương đương, preview hiển thị **Chưa phân loại**. Trường `difficulty` cũ trong database vẫn dùng giá trị tương thích không-null, nhưng cờ `difficulty_classified=false` mới là dữ kiện chuẩn và planner không coi giá trị tương thích đó là độ khó do người dùng cung cấp.
 
 Với `dropdown_fill`, số ký hiệu `[_____]` phải bằng số nhãn trong `CORRECT`, và thứ tự nhãn là thứ tự đáp án cho từng ô. Ví dụ hai ô với `CORRECT=BA` có đáp án ô 1 là B, ô 2 là A. Canonical JSON lưu `correct_option_ids` theo thứ tự và exporter tạo native Open edX `optionresponse`/`optioninput`.
 
@@ -70,6 +70,18 @@ Nút Bỏ qua không loại lỗi cấp môn, workbook hoặc sheet. Ví dụ `S
 
 Câu hỏi trùng nội dung trong chính nguồn cũ **không bị loại**. Mỗi dòng vẫn được bảo toàn bằng source identity riêng, gắn cờ `duplicate_in_legacy_source` và bắt buộc người duyệt xử lý.
 
+## Ngoại lệ khi tạo Quiz từ dữ liệu CMS cũ
+
+Câu import không bắt buộc có concept hoặc độ khó, nhưng vẫn phải được duyệt rồi đi qua Release đã publish như mọi câu khác.
+
+- Nếu có `NGƯỠNG`/độ khó hợp lệ, planner giữ đúng mapping `1 = easy`, `2 = medium`, `3 = hard`.
+- Nếu thiếu độ khó, câu được xem là **linh hoạt** và có thể bù vào bất kỳ quota Easy/Medium/Hard còn thiếu, nhưng vẫn giữ nguyên loại câu hỏi.
+- Nếu thiếu concept, mỗi câu CMS cũ trở thành một nhóm độc lập trong planner; thiếu concept không làm preview/tạo Quiz thất bại.
+- Mỗi câu/component chỉ được đưa vào đúng một Problem Bank. Sau khi đủ quota tối thiểu, các câu linh hoạt còn lại vẫn được rải cân bằng vào các slot để tham gia random, không bị bỏ phí.
+- Ngoại lệ chỉ áp dụng cho `source_type=legacy_quiz_excel`. Câu AI hoặc câu tạo tay thông thường không được dùng như kho độ khó linh hoạt và vẫn giữ nguyên quy tắc planner hiện có.
+
+Preview quota trên màn **Tạo Quiz** hiển thị số câu được xếp linh hoạt và cảnh báo rõ khi Release có câu chưa phân loại.
+
 ## Ghi dữ liệu và khả năng retry
 
 Job import khóa môn/chapter trong lúc bảo đảm cấu trúc đích:
@@ -98,9 +110,9 @@ Người dùng cần quyền legacy `edit_questions`; trước khi enqueue, back
 
 | File | Sheet | Câu | Loại câu | Độ khó | Ghi chú |
 |---|---:|---:|---|---|---|
-| HOS2032 | 11 | 308 | 165 đơn, 61 nhiều, 82 ô trống | 308 Trung bình | Hợp lệ theo cấu trúc |
-| MEC129 | 8 | 406 | 350 đơn suy luận, 56 nhiều suy luận | 312 Dễ, 94 Trung bình | 6 nhóm prompt trùng, chỉ cảnh báo |
-| MEC229 | 8 | 224 | 171 đơn, 53 nhiều | 224 Trung bình | 36 tham chiếu ảnh; 6 nhóm prompt trùng; 1 câu lỗi đáp án trùng tại `Quiz 01`, dòng Excel 238 |
+| HOS2032 | 11 | 308 | 165 đơn, 61 nhiều, 82 ô trống | 308 chưa phân loại | Hợp lệ theo cấu trúc; planner dùng chế độ linh hoạt |
+| MEC129 | 8 | 406 | 350 đơn suy luận, 56 nhiều suy luận | 312 Dễ, 93 Trung bình, 1 chưa phân loại | 6 nhóm prompt trùng, chỉ cảnh báo |
+| MEC229 | 8 | 224 | 171 đơn, 53 nhiều | 224 chưa phân loại | 36 tham chiếu ảnh; 6 nhóm prompt trùng; 1 câu lỗi đáp án trùng tại `Quiz 01`, dòng Excel 238 |
 
 ## Triển khai
 
@@ -110,6 +122,6 @@ Kiểm tra tối thiểu trước deploy:
 
 ```bash
 PYTHONPATH=backend pytest -q backend/app/tests/test_legacy_quiz_cms_old_import.py
-ruff check backend/app/services/question_bank/legacy_quiz_import.py backend/app/services/question_content.py backend/app/services/openedx_exporter.py backend/app/api/routes/question_bank_v2.py backend/app/worker.py
+ruff check backend/app/services/question_bank/legacy_quiz_import.py backend/app/services/question_bank/quiz_creation.py backend/app/services/question_type_quota.py backend/app/services/question_content.py backend/app/services/openedx_exporter.py backend/app/api/routes/question_bank_v2.py backend/app/worker.py
 cd frontend && npm run typecheck && npm run lint && npm run build
 ```

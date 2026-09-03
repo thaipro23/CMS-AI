@@ -13,8 +13,10 @@ from app.db.session import Base
 from app.models import audit, cost, course, job, question, question_bank, rbac  # noqa: F401
 from app.models.question import Question, QuestionReviewLog
 from app.models.question_bank import (
+    BankReleaseQuestion,
     Department,
     LearningMaterialVersion,
+    QuestionBankRelease,
     Subject,
     SubjectOffering,
 )
@@ -30,6 +32,7 @@ from app.services.question_bank.legacy_quiz_import import (
     public_legacy_quiz_preview,
     replace_legacy_quiz_preview,
 )
+from app.services.question_bank.quiz_creation import QuestionBankQuizCreationWorkflowService
 from app.services.question_content import apply_canonical_content
 
 
@@ -115,6 +118,18 @@ def test_missing_type_is_inferred_from_correct_key() -> None:
     parsed = parse_legacy_quiz_workbook(raw, filename='MEC002.xlsx')
     assert parsed['type_counts'] == {'single_select': 1, 'multi_select': 1}
     assert parsed['difficulty_counts'] == {'easy': 1, 'medium': 1}
+
+
+def test_missing_difficulty_is_unclassified_instead_of_real_medium() -> None:
+    raw = _workbook_bytes([
+        {'question': 'Câu CMS cũ chưa có độ khó?', 'type': 0, 'correct': 'A'},
+    ], include_threshold=False)
+    parsed = parse_legacy_quiz_workbook(raw, filename='MEC004.xlsx')
+    imported = parsed['sheets'][0]['questions'][0]
+    assert imported['difficulty'] == 'medium'
+    assert imported['difficulty_classified'] is False
+    assert parsed['difficulty_counts'] == {'unclassified': 1}
+    assert any('phân bổ linh hoạt khi tạo Quiz' in item for item in parsed['warnings'])
 
 
 def test_duplicate_prompts_are_warnings_and_preserved() -> None:
@@ -290,8 +305,8 @@ def test_end_to_end_import_creates_su26_audit_and_is_retry_idempotent(tmp_path: 
         db.add(subject)
         db.commit()
         raw = _workbook_bytes([
-            {'question': 'Điền [_____] vào câu.', 'type': 2, 'correct': 'A', 'threshold': 2},
-        ])
+            {'question': 'Điền [_____] vào câu.', 'type': 2, 'correct': 'A'},
+        ], include_threshold=False)
         preview = build_legacy_quiz_preview(
             db,
             workbooks=[('HOS2032 - Nghiệp vụ Bar.xlsx', raw)],
@@ -313,7 +328,12 @@ def test_end_to_end_import_creates_su26_audit_and_is_retry_idempotent(tmp_path: 
         assert imported.status == 'pending_review'
         assert imported.created_by == 'importer@example.com'
         assert imported.question_type == 'dropdown_fill'
-        assert imported.quality_flags == ['legacy_import_requires_review']
+        assert imported.quality_flags == [
+            'legacy_import_requires_review',
+            'legacy_import_unclassified_concept',
+            'legacy_import_unclassified_difficulty',
+        ]
+        assert '"difficulty_classified":false' in imported.source_evidence
         assert db.query(QuestionReviewLog).filter_by(
             question_id=imported.id,
             actor='importer@example.com',
@@ -337,5 +357,135 @@ def test_end_to_end_import_creates_su26_audit_and_is_retry_idempotent(tmp_path: 
         assert second['skipped_question_count'] == 1
         assert db.query(Question).count() == 1
         assert db.query(LearningMaterialVersion).count() == 1
+    finally:
+        db.close()
+
+
+def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -> None:
+    db = _session()
+    try:
+        release = QuestionBankRelease(
+            id='release-flexible-legacy',
+            bank_version_id='version-flexible-legacy',
+            subject_id='subject-flexible-legacy',
+            chapter_id='chapter-flexible-legacy',
+            release_code='MEC004-SU26-B1-v1',
+            status='published',
+            openedx_library_key='lib:FPT:mec004-su26-b1-v1',
+            metadata_json={'verification_complete': True},
+        )
+        db.add(release)
+        for index in range(5):
+            question_id = f'legacy-unclassified-{index}'
+            imported = Question(
+                id=question_id,
+                course_id='bank:version-flexible-legacy',
+                bank_version_id='version-flexible-legacy',
+                difficulty='medium',
+                learning_objective='',
+                question_text=f'Câu CMS cũ {index + 1}?',
+                option_a='Đúng',
+                option_b='Sai',
+                option_c='',
+                option_d='',
+                correct_answer='A',
+                question_type='single_select',
+                source_type='legacy_quiz_excel',
+                source_evidence=(
+                    '{"difficulty_classified":false,"threshold_raw":"",'
+                    '"difficulty_raw":""}'
+                ),
+                quality_flags=[
+                    'legacy_import_requires_review',
+                    'legacy_import_unclassified_concept',
+                    'legacy_import_unclassified_difficulty',
+                ],
+                status='published',
+            )
+            db.add(imported)
+            db.add(BankReleaseQuestion(
+                bank_release_id=release.id,
+                question_id=question_id,
+                question_family_id=None,
+                difficulty='medium',
+                openedx_library_problem_id=f'lb:problem:{question_id}',
+            ))
+        db.commit()
+
+        workflow = QuestionBankQuizCreationWorkflowService(SimpleNamespace(db=db))
+        plan = workflow._build_release_quiz_plan(
+            release=release,
+            total_questions=3,
+            difficulty_easy=34,
+            difficulty_medium=33,
+            difficulty_hard=33,
+            single_select_count=3,
+            multi_select_count=0,
+            text_input_count=0,
+            numerical_input_count=0,
+        )
+        assert plan['classification_policy'] == 'legacy_flexible_fallback'
+        assert plan['unclassified_difficulty_question_count'] == 5
+        assert plan['unclassified_concept_question_count'] == 5
+        assert plan['flexibly_assigned_question_count'] == 5
+        assert plan['target_counts'] == {'EASY': 1, 'MEDIUM': 1, 'HARD': 1}
+        assert len(plan['slots']) == 3
+        assigned = [question_id for slot in plan['slots'] for question_id in slot['question_ids']]
+        assert len(assigned) == len(set(assigned)) == 5
+        assert all(
+            family['unclassified_concept']
+            for slot in plan['slots']
+            for family in slot['families']
+        )
+
+        strict_release = QuestionBankRelease(
+            id='release-strict-manual',
+            bank_version_id='version-strict-manual',
+            subject_id='subject-strict-manual',
+            chapter_id='chapter-strict-manual',
+            release_code='MEC004-SU26-B2-v1',
+            status='published',
+            openedx_library_key='lib:FPT:mec004-su26-b2-v1',
+            metadata_json={'verification_complete': True},
+        )
+        strict_question = Question(
+            id='manual-medium-no-concept',
+            course_id='bank:version-strict-manual',
+            bank_version_id='version-strict-manual',
+            difficulty='medium',
+            learning_objective='',
+            question_text='Câu tạo tay không có concept?',
+            option_a='Đúng',
+            option_b='Sai',
+            option_c='',
+            option_d='',
+            correct_answer='A',
+            question_type='single_select',
+            source_type='manual',
+            status='published',
+        )
+        db.add_all([
+            strict_release,
+            strict_question,
+            BankReleaseQuestion(
+                bank_release_id=strict_release.id,
+                question_id=strict_question.id,
+                difficulty='medium',
+                openedx_library_problem_id='lb:problem:manual-medium-no-concept',
+            ),
+        ])
+        db.commit()
+        with pytest.raises(ValueError, match='không đủ tổ hợp'):
+            workflow._build_release_quiz_plan(
+                release=strict_release,
+                total_questions=1,
+                difficulty_easy=100,
+                difficulty_medium=0,
+                difficulty_hard=0,
+                single_select_count=1,
+                multi_select_count=0,
+                text_input_count=0,
+                numerical_input_count=0,
+            )
     finally:
         db.close()

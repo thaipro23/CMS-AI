@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
-from difflib import SequenceMatcher
+import json
 import re
 import uuid
+from datetime import datetime
+from difflib import SequenceMatcher
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -26,15 +27,17 @@ from app.models.question_bank import (
 from app.modules.openedx_connector.factory import get_openedx_connector
 from app.services.question_family import normalize_difficulty
 from app.services.question_content import normalize_question_type
-from app.services.question_type_quota import exact_type_counts, feasible_type_difficulty_matrix
+from app.services.question_type_quota import (
+    exact_type_counts,
+    feasible_type_difficulty_matrix,
+    feasible_type_difficulty_matrix_with_flexible,
+)
 from app.services.question_bank.helpers import (
-    _check,
     _ui_notice,
     extract_chapter_number,
     normalize_code,
     normalize_title_match,
     parse_openedx_course_id,
-    title_similarity,
 )
 
 
@@ -682,16 +685,69 @@ class QuestionBankQuizCreationWorkflowService:
             remaining -= 1
         return counts
 
-    def _resolve_quiz_blueprint_config(self, *, release: QuestionBankRelease, quiz_blueprint_id: str | None, total_questions: int, difficulty_easy: int, difficulty_medium: int, difficulty_hard: int, max_families_per_bank: int, single_select_count: int | None, multi_select_count: int | None, text_input_count: int | None, numerical_input_count: int | None) -> dict:
-        config={'total_questions':int(total_questions),'difficulty_easy':int(difficulty_easy),'difficulty_medium':int(difficulty_medium),'difficulty_hard':int(difficulty_hard),'max_families_per_bank':int(max_families_per_bank),'single_select_count':single_select_count,'multi_select_count':multi_select_count,'text_input_count':text_input_count,'numerical_input_count':numerical_input_count,'quiz_blueprint_id':None}
-        if not quiz_blueprint_id: return config
-        blueprint=self.db.get(QuizBlueprint,quiz_blueprint_id)
-        if not blueprint: raise ValueError('Không tìm thấy Quiz Blueprint.')
-        if blueprint.status!='active': raise ValueError(f'Quiz Blueprint hiện là {blueprint.status}; chỉ dùng Blueprint active.')
-        if str(blueprint.subject_id)!=str(release.subject_id) or str(blueprint.chapter_id)!=str(release.chapter_id): raise ValueError('Quiz Blueprint không thuộc Subject/Chapter của Release.')
-        if blueprint.subject_offering_id and release.subject_offering_id and str(blueprint.subject_offering_id)!=str(release.subject_offering_id): raise ValueError('Quiz Blueprint không thuộc version/offering của Release.')
-        if int(blueprint.pick_count_per_slot or 1)!=1: raise ValueError('Question-type planner yêu cầu pick_count_per_slot=1 để bảo đảm quota chính xác.')
-        return {'total_questions':int(blueprint.total_questions),'difficulty_easy':int(blueprint.difficulty_easy),'difficulty_medium':int(blueprint.difficulty_medium),'difficulty_hard':int(blueprint.difficulty_hard),'max_families_per_bank':int(blueprint.max_families_per_bank),'single_select_count':blueprint.single_select_count,'multi_select_count':blueprint.multi_select_count,'text_input_count':blueprint.text_input_count,'numerical_input_count':blueprint.numerical_input_count,'quiz_blueprint_id':blueprint.id}
+    def _resolve_quiz_blueprint_config(
+        self,
+        *,
+        release: QuestionBankRelease,
+        quiz_blueprint_id: str | None,
+        total_questions: int,
+        difficulty_easy: int,
+        difficulty_medium: int,
+        difficulty_hard: int,
+        max_families_per_bank: int,
+        single_select_count: int | None,
+        multi_select_count: int | None,
+        text_input_count: int | None,
+        numerical_input_count: int | None,
+    ) -> dict:
+        config = {
+            'total_questions': int(total_questions),
+            'difficulty_easy': int(difficulty_easy),
+            'difficulty_medium': int(difficulty_medium),
+            'difficulty_hard': int(difficulty_hard),
+            'max_families_per_bank': int(max_families_per_bank),
+            'single_select_count': single_select_count,
+            'multi_select_count': multi_select_count,
+            'text_input_count': text_input_count,
+            'numerical_input_count': numerical_input_count,
+            'quiz_blueprint_id': None,
+        }
+        if not quiz_blueprint_id:
+            return config
+        blueprint = self.db.get(QuizBlueprint, quiz_blueprint_id)
+        if not blueprint:
+            raise ValueError('Không tìm thấy Quiz Blueprint.')
+        if blueprint.status != 'active':
+            raise ValueError(
+                f'Quiz Blueprint hiện là {blueprint.status}; chỉ dùng Blueprint active.'
+            )
+        if (
+            str(blueprint.subject_id) != str(release.subject_id)
+            or str(blueprint.chapter_id) != str(release.chapter_id)
+        ):
+            raise ValueError('Quiz Blueprint không thuộc Subject/Chapter của Release.')
+        if (
+            blueprint.subject_offering_id
+            and release.subject_offering_id
+            and str(blueprint.subject_offering_id) != str(release.subject_offering_id)
+        ):
+            raise ValueError('Quiz Blueprint không thuộc version/offering của Release.')
+        if int(blueprint.pick_count_per_slot or 1) != 1:
+            raise ValueError(
+                'Question-type planner yêu cầu pick_count_per_slot=1 để bảo đảm quota chính xác.'
+            )
+        return {
+            'total_questions': int(blueprint.total_questions),
+            'difficulty_easy': int(blueprint.difficulty_easy),
+            'difficulty_medium': int(blueprint.difficulty_medium),
+            'difficulty_hard': int(blueprint.difficulty_hard),
+            'max_families_per_bank': int(blueprint.max_families_per_bank),
+            'single_select_count': blueprint.single_select_count,
+            'multi_select_count': blueprint.multi_select_count,
+            'text_input_count': blueprint.text_input_count,
+            'numerical_input_count': blueprint.numerical_input_count,
+            'quiz_blueprint_id': blueprint.id,
+        }
 
     def _published_release_question_rows(self, release: QuestionBankRelease) -> tuple[list[BankReleaseQuestion], dict[str, Question]]:
         rows = self.db.query(BankReleaseQuestion).filter(BankReleaseQuestion.bank_release_id == release.id).all()
@@ -737,22 +793,73 @@ class QuestionBankQuizCreationWorkflowService:
         if duplicate_components:
             raise ValueError(f'Release chứa component Open edX bị trùng: {duplicate_components[:5]}')
 
-        # Shared-library slot planner v3:
+        # Shared-library slot planner v4:
         # - learner-visible question count is exact per difficulty (one ItemBank slot = one visible question)
         # - a Library component/question is assigned to exactly one slot
         # - a concept/family stays in exactly one slot when there are enough concepts
         # - when concepts/families are more than slots, whole concepts are bin-packed so slot candidate counts are balanced
         # - when concepts/families are fewer than slots, the planner splits large concepts only as a last-resort soft mode
         #   to still satisfy the requested EASY/MEDIUM/HARD counts.
+        def is_legacy_quiz_question(question: Question) -> bool:
+            return str(getattr(question, 'source_type', '') or '').strip().lower() == 'legacy_quiz_excel'
+
+        def legacy_difficulty_is_unclassified(question: Question) -> bool:
+            if not is_legacy_quiz_question(question):
+                return False
+            flags = {
+                str(item or '').strip().lower()
+                for item in (getattr(question, 'quality_flags', None) or [])
+            }
+            if 'legacy_import_unclassified_difficulty' in flags:
+                return True
+            try:
+                evidence = json.loads(str(getattr(question, 'source_evidence', '') or '{}'))
+            except (TypeError, ValueError):
+                evidence = {}
+            if isinstance(evidence, dict):
+                classified = evidence.get('difficulty_classified')
+                if isinstance(classified, bool):
+                    return not classified
+                if 'threshold_raw' in evidence or 'difficulty_raw' in evidence:
+                    return not bool(
+                        str(evidence.get('threshold_raw') or '').strip()
+                        or str(evidence.get('difficulty_raw') or '').strip()
+                    )
+            # A legacy row without provenance must not pretend that the model
+            # default is a teacher-supplied difficulty.
+            return True
+
+        def legacy_concept_is_unclassified(question: Question) -> bool:
+            if not is_legacy_quiz_question(question):
+                return False
+            return not any(
+                str(value or '').strip()
+                for value in (
+                    getattr(question, 'concept_id', None),
+                    getattr(question, 'concept_key', None),
+                    getattr(question, 'concept_title', None),
+                    getattr(question, 'learning_objective', None),
+                )
+            )
+
         grouped_rows: dict[tuple[str, str], list[BankReleaseQuestion]] = {}
+        flexible_rows: dict[str, list[BankReleaseQuestion]] = {}
+        unclassified_concept_question_ids: set[str] = set()
         for row in rows:
             question = questions[row.question_id]
-            diff = normalize_difficulty(row.difficulty or question.difficulty)
             qtype = normalize_question_type(getattr(question, 'question_type', None))
-            grouped_rows.setdefault((diff, qtype), []).append(row)
+            if legacy_difficulty_is_unclassified(question):
+                flexible_rows.setdefault(qtype, []).append(row)
+            else:
+                diff = normalize_difficulty(row.difficulty or question.difficulty)
+                grouped_rows.setdefault((diff, qtype), []).append(row)
+            if legacy_concept_is_unclassified(question):
+                unclassified_concept_question_ids.add(question.id)
 
         def concept_key_for(row: BankReleaseQuestion) -> str:
             question = questions[row.question_id]
+            if legacy_concept_is_unclassified(question):
+                return f'legacy-unclassified-{question.id}'
             key = (
                 getattr(question, 'concept_id', None)
                 or row.question_family_id
@@ -765,6 +872,8 @@ class QuestionBankQuizCreationWorkflowService:
 
         def concept_name_for(row: BankReleaseQuestion, key: str) -> str:
             question = questions[row.question_id]
+            if legacy_concept_is_unclassified(question):
+                return f'Câu CMS cũ chưa phân loại {str(question.id)[:8]}'
             return str(
                 getattr(question, 'concept_title', None)
                 or getattr(question, 'topic', None)
@@ -782,6 +891,7 @@ class QuestionBankQuizCreationWorkflowService:
                 'family_name': name,
                 'concept_id': getattr(question, 'concept_id', None),
                 'concept_title': getattr(question, 'concept_title', None),
+                'unclassified_concept': legacy_concept_is_unclassified(question),
                 'variant_count': 0,
                 'question_ids': [],
                 'split_across_slots': bool(split),
@@ -976,30 +1086,108 @@ class QuestionBankQuizCreationWorkflowService:
             for diff in ('easy', 'medium', 'hard')
             for qtype in requested_types
         }
-        matrix = feasible_type_difficulty_matrix(difficulty_targets=requested, type_targets=requested_types, availability=availability)
+        flexible_availability = {
+            qtype: len(flexible_rows.get(qtype, []))
+            for qtype in requested_types
+        }
+        if any(flexible_availability.values()):
+            matrix, flexible_matrix = feasible_type_difficulty_matrix_with_flexible(
+                difficulty_targets=requested,
+                type_targets=requested_types,
+                availability=availability,
+                flexible_availability=flexible_availability,
+            )
+        else:
+            matrix = feasible_type_difficulty_matrix(
+                difficulty_targets=requested,
+                type_targets=requested_types,
+                availability=availability,
+            )
+            flexible_matrix = {
+                (diff, qtype): 0
+                for diff in ('easy', 'medium', 'hard')
+                for qtype in requested_types
+            }
+        allocated_flexible_rows: dict[tuple[str, str], list[BankReleaseQuestion]] = {}
+        for qtype in requested_types:
+            candidates = sorted(
+                flexible_rows.get(qtype, []),
+                key=lambda item: (
+                    str(getattr(questions[item.question_id], 'created_at', '') or ''),
+                    str(item.question_id),
+                ),
+            )
+            offset = 0
+            for diff in ('easy', 'medium', 'hard'):
+                count = int(flexible_matrix.get((diff, qtype), 0) or 0)
+                allocated_flexible_rows[(diff, qtype)] = candidates[offset:offset + count]
+                offset += count
+            eligible_difficulties = [
+                diff
+                for diff in ('easy', 'medium', 'hard')
+                if int(matrix.get((diff, qtype), 0) or 0) > 0
+            ]
+            for row in candidates[offset:]:
+                if not eligible_difficulties:
+                    break
+                target_diff = min(
+                    eligible_difficulties,
+                    key=lambda diff: (
+                        len(grouped_rows.get((diff, qtype), []))
+                        + len(allocated_flexible_rows.get((diff, qtype), [])),
+                        ('easy', 'medium', 'hard').index(diff),
+                    ),
+                )
+                allocated_flexible_rows[(target_diff, qtype)].append(row)
         slots: list[dict] = []
         coverage: list[dict] = []
         warnings: list[str] = []
+        unclassified_difficulty_count = sum(len(items) for items in flexible_rows.values())
+        flexibly_assigned_count = sum(len(items) for items in allocated_flexible_rows.values())
+        if unclassified_difficulty_count:
+            warnings.append(
+                f'{unclassified_difficulty_count} câu CMS cũ chưa có NGƯỠNG/độ khó; '
+                f'{flexibly_assigned_count} câu được phân bổ linh hoạt vào quota Easy/Medium/Hard.'
+            )
+        if unclassified_concept_question_ids:
+            warnings.append(
+                f'{len(unclassified_concept_question_ids)} câu CMS cũ chưa có concept; '
+                'hệ thống coi mỗi câu là một nhóm độc lập nên không chặn tạo Quiz.'
+            )
         assigned_question_ids: set[str] = set()
         assigned_components: set[str] = set()
         slot_no = 1
         for diff in ('easy', 'medium', 'hard'):
             for qtype in requested_types:
                 target_count = int(matrix.get((diff, qtype), 0) or 0)
-                cell_slots, cell_coverage, cell_warnings = build_balanced_slots_for_cell(diff, qtype, list(grouped_rows.get((diff, qtype)) or []), target_count)
+                cell_rows = [
+                    *(grouped_rows.get((diff, qtype)) or []),
+                    *(allocated_flexible_rows.get((diff, qtype)) or []),
+                ]
+                cell_slots, cell_coverage, cell_warnings = build_balanced_slots_for_cell(
+                    diff, qtype, cell_rows, target_count
+                )
+                cell_coverage['flexibly_assigned_questions'] = len(
+                    allocated_flexible_rows.get((diff, qtype)) or []
+                )
                 warnings.extend(cell_warnings)
                 for slot in cell_slots:
                     slot['slot_no'] = slot_no
                     slot_no += 1
-                    unique_questions=[]; unique_components=[]
+                    unique_questions = []
+                    unique_components = []
                     for question_id, component in zip(slot.get('question_ids') or [], slot.get('openedx_problem_ids') or []):
                         if question_id in assigned_question_ids:
                             raise ValueError(f'Câu hỏi {question_id} bị đưa vào nhiều Problem Bank; hệ thống từ chối tạo quiz.')
                         if component in assigned_components:
                             raise ValueError(f'Open edX component {component} bị đưa vào nhiều Problem Bank; hệ thống từ chối tạo quiz.')
-                        assigned_question_ids.add(question_id); assigned_components.add(component)
-                        unique_questions.append(question_id); unique_components.append(component)
-                    slot['question_ids']=unique_questions; slot['openedx_problem_ids']=unique_components; slots.append(slot)
+                        assigned_question_ids.add(question_id)
+                        assigned_components.add(component)
+                        unique_questions.append(question_id)
+                        unique_components.append(component)
+                    slot['question_ids'] = unique_questions
+                    slot['openedx_problem_ids'] = unique_components
+                    slots.append(slot)
                 coverage.append(cell_coverage)
         if not slots:
             raise ValueError('Không có mức độ nào được chọn để tạo Problem Bank.')
@@ -1009,7 +1197,7 @@ class QuestionBankQuizCreationWorkflowService:
             )
         plan = {
             'ok': True,
-            'planner_engine': 'bank_release_difficulty_question_type_itembank_v3',
+            'planner_engine': 'bank_release_difficulty_question_type_itembank_v4',
             'uses_llm': False,
             'release_id': release.id,
             'release_code': release.release_code,
@@ -1020,7 +1208,7 @@ class QuestionBankQuizCreationWorkflowService:
             'effective_target_counts': {k.upper(): requested[k] for k in requested},
             'question_type_target_counts': requested_types,
             'question_type_coverage': [
-                {'question_type': qtype, 'target_questions': int(requested_types[qtype]), 'available_questions': sum(availability.get((diff, qtype), 0) for diff in ('easy','medium','hard')), 'selected_slots': sum(int(matrix.get((diff,qtype),0) or 0) for diff in ('easy','medium','hard'))}
+                {'question_type': qtype, 'target_questions': int(requested_types[qtype]), 'available_questions': sum(availability.get((diff, qtype), 0) for diff in ('easy','medium','hard')) + flexible_availability.get(qtype, 0), 'selected_slots': sum(int(matrix.get((diff,qtype),0) or 0) for diff in ('easy','medium','hard'))}
                 for qtype in requested_types
             ],
             'matrix_target_counts': {f'{diff}:{qtype}': int(value) for (diff, qtype), value in matrix.items()},
@@ -1029,6 +1217,10 @@ class QuestionBankQuizCreationWorkflowService:
             'warnings': list(dict.fromkeys(warnings)),
             'assigned_question_count': len(assigned_question_ids),
             'assigned_component_count': len(assigned_components),
+            'classification_policy': 'legacy_flexible_fallback' if unclassified_difficulty_count or unclassified_concept_question_ids else 'strict',
+            'unclassified_difficulty_question_count': unclassified_difficulty_count,
+            'unclassified_concept_question_count': len(unclassified_concept_question_ids),
+            'flexibly_assigned_question_count': flexibly_assigned_count,
             'hard_guard': {'valid': True, 'summary': 'Release plan hợp lệ: đúng quota difficulty × loại câu hỏi; không trùng question_id hoặc Open edX component giữa các bank.'},
             'message': f'Tạo kế hoạch {len(slots)} Problem Bank theo quota difficulty × loại câu hỏi, learner thấy {int(total_questions)} câu.',
             **_ui_notice('success', f'Tạo kế hoạch {len(slots)} Problem Bank theo quota difficulty × loại câu hỏi, learner thấy {int(total_questions)} câu.'),
@@ -1051,10 +1243,26 @@ class QuestionBankQuizCreationWorkflowService:
         quiz_blueprint_id: str | None = None,
     ) -> dict:
         release = self.db.get(QuestionBankRelease, bank_release_id)
-        if not release: raise ValueError('Không tìm thấy Bank Release')
-        config=self._resolve_quiz_blueprint_config(release=release,quiz_blueprint_id=quiz_blueprint_id,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank,single_select_count=single_select_count,multi_select_count=multi_select_count,text_input_count=text_input_count,numerical_input_count=numerical_input_count)
-        plan=self._build_release_quiz_plan(release=release,**{key:value for key,value in config.items() if key!='quiz_blueprint_id'})
-        plan['quiz_blueprint_id']=config.get('quiz_blueprint_id')
+        if not release:
+            raise ValueError('Không tìm thấy Bank Release')
+        config = self._resolve_quiz_blueprint_config(
+            release=release,
+            quiz_blueprint_id=quiz_blueprint_id,
+            total_questions=total_questions,
+            difficulty_easy=difficulty_easy,
+            difficulty_medium=difficulty_medium,
+            difficulty_hard=difficulty_hard,
+            max_families_per_bank=max_families_per_bank,
+            single_select_count=single_select_count,
+            multi_select_count=multi_select_count,
+            text_input_count=text_input_count,
+            numerical_input_count=numerical_input_count,
+        )
+        plan = self._build_release_quiz_plan(
+            release=release,
+            **{key: value for key, value in config.items() if key != 'quiz_blueprint_id'},
+        )
+        plan['quiz_blueprint_id'] = config.get('quiz_blueprint_id')
         return plan
 
     async def create_quiz_from_release(

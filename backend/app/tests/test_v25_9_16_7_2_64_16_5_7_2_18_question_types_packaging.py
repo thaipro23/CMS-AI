@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import importlib.util
 import json
 import sys
 import types
@@ -29,6 +28,7 @@ from app.services.question_type_quota import (
     allocate_column_counts_to_rows,
     exact_type_counts,
     feasible_type_difficulty_matrix,
+    feasible_type_difficulty_matrix_with_flexible,
     proportional_counts,
 )
 
@@ -109,6 +109,26 @@ def test_quiz_type_quota_fails_closed_when_matrix_is_impossible() -> None:
             type_targets={'single_select': 0, 'multi_select': 2},
             availability={('easy', 'single_select'): 2, ('easy', 'multi_select'): 0},
         )
+
+
+def test_quiz_matrix_uses_each_unclassified_legacy_question_only_once() -> None:
+    matrix, flexible = feasible_type_difficulty_matrix_with_flexible(
+        difficulty_targets={'easy': 1, 'medium': 1, 'hard': 1},
+        type_targets={'single_select': 3},
+        availability={
+            ('easy', 'single_select'): 1,
+            ('medium', 'single_select'): 0,
+            ('hard', 'single_select'): 0,
+        },
+        flexible_availability={'single_select': 2},
+    )
+    assert matrix == {
+        ('easy', 'single_select'): 1,
+        ('medium', 'single_select'): 1,
+        ('hard', 'single_select'): 1,
+    }
+    assert sum(flexible.values()) == 2
+    assert flexible[('easy', 'single_select')] == 0
 
 
 def test_canonical_question_content_validates_all_four_response_types() -> None:

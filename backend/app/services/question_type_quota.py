@@ -206,5 +206,128 @@ def feasible_type_difficulty_matrix(*, difficulty_targets: Mapping[str, int], ty
     return matrix
 
 
+def feasible_type_difficulty_matrix_with_flexible(
+    *,
+    difficulty_targets: Mapping[str, int],
+    type_targets: Mapping[str, int],
+    availability: Mapping[tuple[str, str], int],
+    flexible_availability: Mapping[str, int],
+) -> tuple[dict[tuple[str, str], int], dict[tuple[str, str], int]]:
+    """Solve exact Quiz quotas while allowing unclassified rows to fill any difficulty.
+
+    Flexible rows still keep their canonical question type. The extra inventory
+    node per type is important: simply adding the same flexible capacity to all
+    difficulty cells could assign one question to multiple difficulty buckets.
+    """
+    difficulties = tuple(str(key) for key in difficulty_targets)
+    normalized_type_targets: dict[str, int] = {}
+    for key, value in type_targets.items():
+        qtype = normalize_question_type(key)
+        if qtype in normalized_type_targets:
+            raise ValueError(f'Quota loại câu hỏi bị trùng sau chuẩn hóa: {qtype}.')
+        normalized_type_targets[qtype] = int(value or 0)
+    qtypes = tuple(normalized_type_targets)
+    row_total = sum(int(difficulty_targets[key] or 0) for key in difficulties)
+    col_total = sum(normalized_type_targets.values())
+    if row_total != col_total:
+        raise ValueError(f'Quota difficulty ({row_total}) và loại câu hỏi ({col_total}) không cùng tổng.')
+    if any(int(value or 0) < 0 for value in difficulty_targets.values()):
+        raise ValueError('Quota Quiz không được âm.')
+    if any(value < 0 for value in normalized_type_targets.values()):
+        raise ValueError('Quota Quiz không được âm.')
+
+    normalized_flexible = {
+        qtype: max(0, int(flexible_availability.get(qtype, 0) or 0))
+        for qtype in qtypes
+    }
+    source, sink = '__source__', '__sink__'
+    graph: dict[str, dict[str, int]] = {}
+
+    def add_edge(left: str, right: str, capacity: int) -> None:
+        graph.setdefault(left, {})[right] = max(0, int(capacity or 0))
+        graph.setdefault(right, {}).setdefault(left, 0)
+
+    for qtype in qtypes:
+        type_node = f'type:{qtype}'
+        add_edge(source, type_node, normalized_type_targets[qtype])
+        flexible_node = f'flex:{qtype}'
+        add_edge(type_node, flexible_node, normalized_flexible[qtype])
+        for diff in difficulties:
+            classified_node = f'classified:{qtype}:{diff}'
+            capacity = int(availability.get((diff, qtype), 0) or 0)
+            add_edge(type_node, classified_node, capacity)
+            add_edge(classified_node, f'difficulty:{diff}', capacity)
+            add_edge(flexible_node, f'difficulty:{diff}', normalized_flexible[qtype])
+    for diff in difficulties:
+        add_edge(f'difficulty:{diff}', sink, int(difficulty_targets[diff] or 0))
+
+    residual = {node: dict(edges) for node, edges in graph.items()}
+    flow = 0
+    while True:
+        parent: dict[str, str | None] = {source: None}
+        queue = [source]
+        for node in queue:
+            for nxt in sorted(residual.get(node, {})):
+                if nxt in parent or residual[node][nxt] <= 0:
+                    continue
+                parent[nxt] = node
+                queue.append(nxt)
+                if nxt == sink:
+                    break
+            if sink in parent:
+                break
+        if sink not in parent:
+            break
+        path_capacity = 10**9
+        node = sink
+        while parent[node] is not None:
+            prev = parent[node]
+            path_capacity = min(path_capacity, residual[prev][node])
+            node = prev
+        node = sink
+        while parent[node] is not None:
+            prev = parent[node]
+            residual[prev][node] -= path_capacity
+            residual[node][prev] = residual[node].get(prev, 0) + path_capacity
+            node = prev
+        flow += path_capacity
+
+    if flow != row_total:
+        available_by_diff = {
+            diff: sum(int(availability.get((diff, qtype), 0) or 0) for qtype in qtypes)
+            for diff in difficulties
+        }
+        available_by_type = {
+            qtype: (
+                sum(int(availability.get((diff, qtype), 0) or 0) for diff in difficulties)
+                + normalized_flexible[qtype]
+            )
+            for qtype in qtypes
+        }
+        raise ValueError(
+            'Release không đủ tổ hợp difficulty × loại câu hỏi để đáp ứng quota chính xác, '
+            'kể cả các câu CMS cũ chưa phân loại. '
+            f'Cần difficulty={dict(difficulty_targets)}, type={normalized_type_targets}; '
+            f'hiện có difficulty đã phân loại={available_by_diff}, '
+            f'câu linh hoạt={normalized_flexible}, type tổng={available_by_type}.'
+        )
+
+    matrix: dict[tuple[str, str], int] = {}
+    flexible_matrix: dict[tuple[str, str], int] = {}
+    for diff in difficulties:
+        for qtype in qtypes:
+            classified_node = f'classified:{qtype}:{diff}'
+            diff_node = f'difficulty:{diff}'
+            classified_capacity = int(availability.get((diff, qtype), 0) or 0)
+            classified_flow = classified_capacity - residual[classified_node][diff_node]
+            flexible_capacity = normalized_flexible[qtype]
+            flexible_flow = flexible_capacity - residual[f'flex:{qtype}'][diff_node]
+            matrix[(diff, qtype)] = classified_flow + flexible_flow
+            flexible_matrix[(diff, qtype)] = flexible_flow
+    if any(value < 0 for value in matrix.values()) or any(value < 0 for value in flexible_matrix.values()):
+        raise ValueError('Lỗi nội bộ khi giải quota Quiz có câu chưa phân loại.')
+    return matrix, flexible_matrix
+
+
 def type_counts_from_payload(payload: Mapping[str, Any], *, total: int) -> dict[str, int]:
     return exact_type_counts(total=total, single_select_count=payload.get('single_select_count'), multi_select_count=payload.get('multi_select_count'), text_input_count=payload.get('text_input_count'), numerical_input_count=payload.get('numerical_input_count'))

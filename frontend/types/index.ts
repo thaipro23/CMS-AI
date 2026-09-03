@@ -1523,6 +1523,10 @@ export type BankReleaseQuizPlan = BackendUiNotice & {
   warnings: string[]
   assigned_question_count: number
   assigned_component_count: number
+  classification_policy: 'strict' | 'legacy_flexible_fallback'
+  unclassified_difficulty_question_count: number
+  unclassified_concept_question_count: number
+  flexibly_assigned_question_count: number
   hard_guard: Record<string, any>
   message: string
 }

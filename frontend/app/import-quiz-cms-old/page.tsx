@@ -29,7 +29,12 @@ function typeLabel(value: string) {
 }
 
 function difficultyLabel(value: string) {
-  return ({ easy: 'Dễ', medium: 'Trung bình', hard: 'Khó' } as Record<string, string>)[value] || value
+  return ({
+    easy: 'Dễ',
+    medium: 'Trung bình',
+    hard: 'Khó',
+    unclassified: 'Chưa phân loại',
+  } as Record<string, string>)[value] || value
 }
 
 function mergeFiles(current: File[], incoming: File[]) {
@@ -171,7 +176,7 @@ export default function ImportQuizCmsOldPage() {
 
       <section className="legacy-import-breakdown">
         <div><h3>Loại câu hỏi</h3>{Object.entries(preview.type_counts).map(([key, count]) => <p key={key}><span>{typeLabel(key)}</span><b>{count}</b></p>)}</div>
-        <div><h3>Độ khó</h3>{['easy', 'medium', 'hard'].map((key) => <p key={key}><span>{difficultyLabel(key)}</span><b>{preview.difficulty_counts[key] || 0}</b></p>)}</div>
+        <div><h3>Độ khó</h3>{['easy', 'medium', 'hard', 'unclassified'].map((key) => <p key={key}><span>{difficultyLabel(key)}</span><b>{preview.difficulty_counts[key] || 0}</b></p>)}</div>
       </section>
 
       <section className="legacy-import-workbooks">
@@ -200,7 +205,7 @@ export default function ImportQuizCmsOldPage() {
       {preview.warnings.length ? <section className="legacy-import-issues warning-list"><h2>Cảnh báo ({preview.warnings.length})</h2>{preview.warnings.slice(0, 100).map((warning, index) => <p key={`${warning}-${index}`}>{warning}</p>)}</section> : null}
 
       <section className="legacy-import-confirm">
-        <div><h2>{preview.can_commit ? 'Sẵn sàng import vào SU26' : 'Chưa thể import'}</h2><p>{preview.message} Câu trùng vẫn được giữ riêng và gắn cờ; tất cả câu mới đều ghi nhận người import và bắt buộc duyệt.</p></div>
+        <div><h2>{preview.can_commit ? 'Sẵn sàng import vào SU26' : 'Chưa thể import'}</h2><p>{preview.message} Câu thiếu concept hoặc độ khó vẫn được nhận và sẽ được tạo Quiz theo chế độ linh hoạt; tất cả câu mới đều ghi nhận người import và bắt buộc duyệt.</p></div>
         <button className="btn" type="button" disabled={busy || !preview.can_commit || Boolean(job)} onClick={startImport}>{busyAction === 'enqueue' ? 'Đang tạo tác vụ...' : 'Import vào SU26'}</button>
       </section>
     </> : null}
