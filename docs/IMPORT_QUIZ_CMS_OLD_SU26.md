@@ -138,6 +138,6 @@ cd frontend && npm run typecheck && npm run lint && npm run build
 
 ## Email và thông báo duyệt
 
-Importer ACMS hiện **không gửi email**. Sau import, hệ thống ghi người import vào audit, đặt câu ở trạng thái `pending_review` và hiển thị trong luồng duyệt. Backend AI Server hiện chưa có mail service hoặc cấu hình SMTP; chỉ thêm biến SMTP vào Secret sẽ không tự phát sinh email.
+Importer ACMS hiện **không gửi email báo duyệt**. Sau import, hệ thống ghi người import vào audit, đặt câu ở trạng thái `pending_review` và hiển thị trong luồng duyệt. AI Server đã có Mail Send ProxyKey cho tính năng giảng viên nhắc sinh viên chậm tiến độ, nhưng luồng đó độc lập và chưa được nối vào thông báo câu hỏi chờ duyệt.
 
-Email tài khoản/quên mật khẩu của Open edX là cấu hình riêng của LMS/CMS thông qua Tutor. Nếu cần email báo “có câu mới chờ duyệt” từ ACMS, phải bổ sung một tính năng riêng gồm mail service, tác vụ Celery, chính sách chọn người nhận và chống gửi lặp khi retry job.
+Email tài khoản/quên mật khẩu của Open edX là cấu hình riêng của LMS/CMS thông qua Tutor. Nếu cần email báo “có câu mới chờ duyệt” từ ACMS, phải bổ sung workflow riêng gồm chính sách chọn người duyệt, template, tác vụ nền và chống gửi lặp; không dùng nhầm danh sách người nhận của luồng nhắc tiến độ.
