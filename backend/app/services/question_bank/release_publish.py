@@ -390,16 +390,35 @@ class QuestionBankReleasePublishWorkflowService:
         }
         missing = [item for item in question_ids if item not in questions_by_id]
         if missing:
-            raise ValueError(f'Snapshot Release thiếu {len(missing)} câu hỏi trong database.')
-        questions = [questions_by_id[item] for item in question_ids]
-        invalid = [
-            item.id for item in questions
-            if item.status not in {'approved', 'published'} or bool(item.is_retired) or bool(item.is_duplicate)
-        ]
-        if invalid:
+            sample = ', '.join(missing[:20])
+            suffix = ' ...' if len(missing) > 20 else ''
             raise ValueError(
-                f'Snapshot Release có {len(invalid)} câu không còn hợp lệ. '
-                'Không tự thay membership; hãy xử lý và chốt Release mới.'
+                f'Snapshot Release thiếu {len(missing)} câu hỏi trong database. '
+                f'Question ID: {sample}{suffix}'
+            )
+        questions = [questions_by_id[item] for item in question_ids]
+        invalid_details: list[str] = []
+        for item in questions:
+            reasons: list[str] = []
+            if item.status not in {'approved', 'published'}:
+                reasons.append(f'trạng thái={item.status}')
+            if bool(item.is_retired):
+                reasons.append('đã retire')
+            if bool(item.is_duplicate):
+                reasons.append('đánh dấu trùng')
+            if not reasons:
+                continue
+            question_preview = re.sub(r'\s+', ' ', str(item.question_text or '')).strip()[:140]
+            invalid_details.append(
+                f'{item.id} · {question_preview or "(không có nội dung)"} · {", ".join(reasons)}'
+            )
+        if invalid_details:
+            sample = ' | '.join(invalid_details[:20])
+            suffix = ' | ...' if len(invalid_details) > 20 else ''
+            raise ValueError(
+                f'Snapshot Release có {len(invalid_details)} câu không còn hợp lệ. '
+                'Không tự thay membership; hãy xử lý và chốt Release mới. '
+                f'Câu cần xử lý: {sample}{suffix}'
             )
         expected_hash = str((release.metadata_json or {}).get('membership_sha256') or '')
         actual_hash = self._release_membership_hash(question_ids)

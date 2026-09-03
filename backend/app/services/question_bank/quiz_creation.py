@@ -136,6 +136,57 @@ class QuestionBankQuizCreationWorkflowService:
     def _quiz_action_requires_release(action: str | None) -> bool:
         return str(action or '').lower() in {'quiz', 'final_test'}
 
+    def _final_test_release_info_for_plan(
+        self,
+        *,
+        chapters: list[SubjectChapter],
+        chapter_actions: dict[str, str],
+        release_by_chapter: dict[str, dict],
+    ) -> dict:
+        """Resolve Final test input from every chapter currently configured as Quiz.
+
+        Final test is not backed by a dedicated Bank Release. Its question pool is
+        the union of the published, verified Releases of the normal Quiz chapters.
+        One source Release is kept as an API/mapping anchor for backward-compatible
+        routes; source_release_ids is the authoritative aggregate membership.
+        """
+        sources: list[dict] = []
+        missing: list[str] = []
+        for chapter in chapters:
+            if str(chapter_actions.get(chapter.id) or '').lower() != 'quiz':
+                continue
+            info = release_by_chapter.get(chapter.id) or {}
+            title = self._chapter_display_name(chapter)
+            if not info.get('ready'):
+                missing.append(title)
+                continue
+            sources.append({
+                'chapter_id': chapter.id,
+                'chapter_title': title,
+                'release_id': info.get('release_id'),
+                'release_code': info.get('release_code'),
+                'openedx_library_key': info.get('openedx_library_key'),
+                'question_count': int(info.get('question_count') or 0),
+                'component_ready_count': int(info.get('component_ready_count') or 0),
+            })
+        anchor = sources[0] if sources else {}
+        ready = bool(sources) and not missing
+        return {
+            'aggregate': True,
+            'ready': ready,
+            'release_id': anchor.get('release_id'),
+            'release_code': anchor.get('release_code'),
+            'openedx_library_key': anchor.get('openedx_library_key'),
+            'question_count': sum(int(item.get('question_count') or 0) for item in sources),
+            'component_ready_count': sum(int(item.get('component_ready_count') or 0) for item in sources),
+            'source_release_ids': [str(item['release_id']) for item in sources if item.get('release_id')],
+            'source_release_codes': [str(item['release_code']) for item in sources if item.get('release_code')],
+            'source_chapter_ids': [str(item['chapter_id']) for item in sources],
+            'source_chapter_titles': [str(item['chapter_title']) for item in sources],
+            'missing_chapters': missing,
+            'source_release_count': len(sources),
+        }
+
     @staticmethod
     def _quiz_action_label(action: str | None) -> str:
         labels = {
@@ -416,9 +467,18 @@ class QuestionBankQuizCreationWorkflowService:
             SubjectChapter.subject_offering_id == offering.id,
             SubjectChapter.status == 'active',
         ).order_by(SubjectChapter.sort_order.asc(), SubjectChapter.chapter_no.asc()).all()
+        chapter_actions = {
+            chapter.id: plan_by_chapter.get(chapter.id) or self._quiz_action_for_chapter_title(self._chapter_display_name(chapter))
+            for chapter in chapters
+        }
+        final_release_info = self._final_test_release_info_for_plan(
+            chapters=chapters,
+            chapter_actions=chapter_actions,
+            release_by_chapter=release_by_chapter,
+        )
         for chapter in chapters:
             chapter_title = self._chapter_display_name(chapter)
-            action = plan_by_chapter.get(chapter.id) or self._quiz_action_for_chapter_title(chapter_title)
+            action = chapter_actions[chapter.id]
             requires_release = self._quiz_action_requires_release(action)
             saved_section_id = saved_sections.get(chapter.id)
             section = section_by_id.get(saved_section_id or '') if saved_section_id not in used_sections else None
@@ -428,7 +488,7 @@ class QuestionBankQuizCreationWorkflowService:
                 section, score, reason = self._match_chapter_to_section(chapter, sections, used_sections)
             if section:
                 used_sections.add(str(section.get('block_id') or ''))
-            release_info = release_by_chapter.get(chapter.id) or {}
+            release_info = final_release_info if action == 'final_test' else (release_by_chapter.get(chapter.id) or {})
             ready = bool(requires_release and section and release_info.get('ready'))
             production_status = self._quiz_production_status_for_mapping(action=action, section=section, release_info=release_info)
             if tree_unavailable and requires_release:
@@ -447,7 +507,19 @@ class QuestionBankQuizCreationWorkflowService:
             if requires_release and not section and not tree_unavailable:
                 blocking_errors.append(f'{chapter_title} đang chọn {self._quiz_action_label(action)} nhưng chưa tìm thấy Section cùng tên trong course.')
             if requires_release and not release_info.get('ready'):
-                blocking_errors.append(f'{chapter_title} đang chọn {self._quiz_action_label(action)} nhưng chưa có Release published đủ component.')
+                if action == 'final_test':
+                    missing_source_chapters = list(release_info.get('missing_chapters') or [])
+                    if missing_source_chapters:
+                        blocking_errors.append(
+                            f'{chapter_title} cần Release published của tất cả Bài đang chọn Tạo Quiz. '
+                            f'Thiếu: {", ".join(missing_source_chapters)}.'
+                        )
+                    else:
+                        blocking_errors.append(
+                            f'{chapter_title} chưa có Bài nào chọn Tạo Quiz với Release published để làm nguồn.'
+                        )
+                else:
+                    blocking_errors.append(f'{chapter_title} đang chọn {self._quiz_action_label(action)} nhưng chưa có Release published đủ component.')
             if not requires_release and not section and not tree_unavailable:
                 warnings.append(f'{chapter_title} đang để Không tạo; chưa tìm thấy Section cùng tên nên chỉ lưu course/version, không lưu mapping tạo bài kiểm tra.')
             mappings.append({
@@ -475,6 +547,10 @@ class QuestionBankQuizCreationWorkflowService:
                 'status_severity': production_status.get('severity'),
                 'missing_requirements': production_status.get('missing_requirements') or [],
                 'recommended_action': production_status.get('recommended_action'),
+                'source_release_ids': list(release_info.get('source_release_ids') or []),
+                'source_release_codes': list(release_info.get('source_release_codes') or []),
+                'source_chapter_ids': list(release_info.get('source_chapter_ids') or []),
+                'source_chapter_titles': list(release_info.get('source_chapter_titles') or []),
                 'course_chapter_mapping_id': None,
                 'recommended_quiz_title': 'Final test' if action == 'final_test' else f'Quiz {self._chapter_quiz_suffix(chapter)}'.strip(),
                 'recommended_unit_title': 'Final test' if action == 'final_test' else 'Quiz',
@@ -594,6 +670,19 @@ class QuestionBankQuizCreationWorkflowService:
         saved_mappings: list[dict] = []
         for item in preview.get('mappings') or []:
             if not item.get('requires_quiz'):
+                stale = self.db.query(EdxCourseChapterMapping).filter(
+                    EdxCourseChapterMapping.course_mapping_id == mapping.id,
+                    EdxCourseChapterMapping.subject_chapter_id == item['chapter_id'],
+                ).first()
+                if stale:
+                    stale.enabled = False
+                    stale.validation_json = {
+                        **(stale.validation_json or {}),
+                        'auto_map_action': item.get('action') or 'skip',
+                        'disabled_by_quiz_auto_map': True,
+                    }
+                    stale.updated_at = datetime.utcnow()
+                    self.db.add(stale)
                 saved_mappings.append({**item, 'course_chapter_mapping_id': None, 'mapping_status': 'skipped_no_quiz'})
                 continue
             if not item.get('ready'):
@@ -602,13 +691,38 @@ class QuestionBankQuizCreationWorkflowService:
                 EdxCourseChapterMapping.course_mapping_id == mapping.id,
                 EdxCourseChapterMapping.subject_chapter_id == item['chapter_id'],
             ).first()
-            validation = self._chapter_mapping_validation(
-                course_mapping_id=mapping.id,
-                subject_chapter_id=item['chapter_id'],
-                bank_release_id=item['release_id'],
-                openedx_parent_node_id=item['openedx_section_id'],
-                openedx_node_title=item.get('openedx_section_title'),
-            )
+            if item.get('action') == 'final_test':
+                source_release_ids = list(item.get('source_release_ids') or [])
+                if not source_release_ids:
+                    raise ValueError('Final test chưa có Release nguồn từ các Bài Quiz.')
+                validation = {
+                    'ok': True,
+                    'risk_level': 'low',
+                    'can_create_mapping': True,
+                    'message': 'Final test dùng bundle Release của các Bài Quiz; Release trên mapping chỉ là anchor tương thích API.',
+                    'checks': [{
+                        'code': 'final_test_release_bundle',
+                        'status': 'pass',
+                        'blocking': False,
+                        'message': f'Final test dùng {len(source_release_ids)} Release nguồn.',
+                        'detail': {
+                            'source_release_ids': source_release_ids,
+                            'source_chapter_ids': list(item.get('source_chapter_ids') or []),
+                        },
+                    }],
+                    'auto_map_action': 'final_test',
+                    'source_release_ids': source_release_ids,
+                    'source_chapter_ids': list(item.get('source_chapter_ids') or []),
+                }
+            else:
+                validation = self._chapter_mapping_validation(
+                    course_mapping_id=mapping.id,
+                    subject_chapter_id=item['chapter_id'],
+                    bank_release_id=item['release_id'],
+                    openedx_parent_node_id=item['openedx_section_id'],
+                    openedx_node_title=item.get('openedx_section_title'),
+                )
+                validation = {**validation, 'auto_map_action': item.get('action') or 'quiz'}
             # The validation method flags existing mapping as fail. For idempotent auto-map,
             # ignore only that specific check when we are updating the same row.
             blocking = [check for check in validation.get('checks', []) if check.get('status') == 'fail' and check.get('code') != 'existing_chapter_mapping']
@@ -747,6 +861,388 @@ class QuestionBankQuizCreationWorkflowService:
             'text_input_count': blueprint.text_input_count,
             'numerical_input_count': blueprint.numerical_input_count,
             'quiz_blueprint_id': blueprint.id,
+        }
+
+    def _final_test_source_releases(
+        self,
+        *,
+        course_mapping_id: str,
+        final_chapter_id: str,
+    ) -> tuple[list[QuestionBankRelease], list[dict]]:
+        rows = self.db.query(EdxCourseChapterMapping).filter(
+            EdxCourseChapterMapping.course_mapping_id == course_mapping_id,
+            EdxCourseChapterMapping.enabled.is_(True),
+            EdxCourseChapterMapping.subject_chapter_id != final_chapter_id,
+        ).all()
+        sources: list[tuple[int, int, SubjectChapter, QuestionBankRelease]] = []
+        errors: list[str] = []
+        for row in rows:
+            chapter = self.db.get(SubjectChapter, row.subject_chapter_id)
+            if not chapter:
+                continue
+            validation_json = row.validation_json or {}
+            action = str(validation_json.get('auto_map_action') or '').lower()
+            if not action:
+                action = self._quiz_action_for_chapter_title(self._chapter_display_name(chapter))
+            if action != 'quiz':
+                continue
+            release = self.db.get(QuestionBankRelease, row.bank_release_id) if row.bank_release_id else None
+            title = self._chapter_display_name(chapter)
+            component_ready, _component_total, _component_ready_count = self._release_component_ready(release)
+            if not release:
+                errors.append(f'{title}: chưa gắn Release')
+                continue
+            if release.status != 'published' or not release.openedx_library_key or not component_ready:
+                errors.append(f'{title}: Release chưa published/verify đủ component')
+                continue
+            sources.append((int(chapter.sort_order or 0), int(chapter.chapter_no or 0), chapter, release))
+        if errors:
+            raise ValueError('Final test cần Release hợp lệ của tất cả Bài Quiz. ' + '; '.join(errors[:20]))
+        sources.sort(key=lambda item: (item[0], item[1], str(item[2].id)))
+        releases: list[QuestionBankRelease] = []
+        details: list[dict] = []
+        seen: set[str] = set()
+        for _sort_order, _chapter_no, chapter, release in sources:
+            if str(release.id) in seen:
+                continue
+            seen.add(str(release.id))
+            releases.append(release)
+            details.append({
+                'chapter_id': chapter.id,
+                'chapter_title': self._chapter_display_name(chapter),
+                'release_id': release.id,
+                'release_code': release.release_code,
+                'openedx_library_key': release.openedx_library_key,
+            })
+        if not releases:
+            raise ValueError('Final test chưa có Bài Quiz nào với Release published để làm nguồn câu hỏi.')
+        return releases, details
+
+    @staticmethod
+    def _legacy_final_difficulty_is_unclassified(question: Question) -> bool:
+        if str(getattr(question, 'source_type', '') or '').strip().lower() != 'legacy_quiz_excel':
+            return False
+        flags = {str(item or '').strip().lower() for item in (getattr(question, 'quality_flags', None) or [])}
+        if 'legacy_import_unclassified_difficulty' in flags:
+            return True
+        try:
+            evidence = json.loads(str(getattr(question, 'source_evidence', '') or '{}'))
+        except (TypeError, ValueError):
+            evidence = {}
+        if isinstance(evidence, dict):
+            classified = evidence.get('difficulty_classified')
+            if isinstance(classified, bool):
+                return not classified
+            if 'threshold_raw' in evidence or 'difficulty_raw' in evidence:
+                return not bool(str(evidence.get('threshold_raw') or '').strip() or str(evidence.get('difficulty_raw') or '').strip())
+        return True
+
+    def _build_final_test_plan(
+        self,
+        *,
+        source_releases: list[QuestionBankRelease],
+        source_details: list[dict] | None,
+        total_questions: int,
+        difficulty_easy: int,
+        difficulty_medium: int,
+        difficulty_hard: int,
+        max_families_per_bank: int = 2,
+        single_select_count: int | None = None,
+        multi_select_count: int | None = None,
+        text_input_count: int | None = None,
+        numerical_input_count: int | None = None,
+    ) -> dict:
+        del max_families_per_bank  # Final groups by source Library to satisfy native ItemBank boundaries.
+        if not source_releases:
+            raise ValueError('Final test chưa có Release nguồn.')
+        if int(total_questions or 0) < len(source_releases):
+            raise ValueError(
+                f'Final test cần ít nhất {len(source_releases)} câu để mỗi Bài nguồn đóng góp ít nhất 1 câu; '
+                f'hiện cấu hình {int(total_questions or 0)} câu.'
+            )
+
+        requested = self._target_counts_for_quiz(total_questions, difficulty_easy, difficulty_medium, difficulty_hard)
+        requested_types = exact_type_counts(
+            total=total_questions,
+            single_select_count=single_select_count,
+            multi_select_count=multi_select_count,
+            text_input_count=text_input_count,
+            numerical_input_count=numerical_input_count,
+        )
+        release_by_id = {str(item.id): item for item in source_releases}
+        grouped: dict[tuple[str, str], list[dict]] = {}
+        flexible: dict[str, list[dict]] = {}
+        seen_questions: set[str] = set()
+        seen_components: set[str] = set()
+        invalid_details: list[str] = []
+        source_question_counts: dict[str, int] = {str(item.id): 0 for item in source_releases}
+
+        for release in source_releases:
+            if release.status != 'published' or not release.openedx_library_key:
+                raise ValueError(f'Release {release.release_code or release.id} chưa published đầy đủ cho Final test.')
+            if not bool((release.metadata_json or {}).get('verification_complete')):
+                raise ValueError(f'Release {release.release_code or release.id} chưa verify đầy đủ trên Open edX.')
+            rows, questions = self._published_release_question_rows(release)
+            for row in rows:
+                question = questions[row.question_id]
+                reasons: list[str] = []
+                if question.status not in {'approved', 'published'}:
+                    reasons.append(f'status={question.status}')
+                if bool(question.is_retired):
+                    reasons.append('retired')
+                if bool(question.is_duplicate):
+                    reasons.append('duplicate')
+                if reasons:
+                    preview = re.sub(r'\s+', ' ', str(question.question_text or '')).strip()[:100]
+                    invalid_details.append(f'{question.id} · {preview} · {", ".join(reasons)}')
+                    continue
+                component = str(row.openedx_library_problem_id or '').strip().strip('"\'')
+                if not component:
+                    raise ValueError(f'Release question {row.question_id} chưa có Open edX Library component.')
+                if str(question.id) in seen_questions or component in seen_components:
+                    continue
+                seen_questions.add(str(question.id))
+                seen_components.add(component)
+                source_question_counts[str(release.id)] = source_question_counts.get(str(release.id), 0) + 1
+                qtype = normalize_question_type(getattr(question, 'question_type', None))
+                entry = {'release_id': str(release.id), 'row': row, 'question': question, 'component': component}
+                if self._legacy_final_difficulty_is_unclassified(question):
+                    flexible.setdefault(qtype, []).append(entry)
+                else:
+                    diff = normalize_difficulty(row.difficulty or question.difficulty)
+                    grouped.setdefault((diff, qtype), []).append(entry)
+
+        if invalid_details:
+            sample = ' | '.join(invalid_details[:20])
+            suffix = ' | ...' if len(invalid_details) > 20 else ''
+            raise ValueError(
+                f'Final test gặp {len(invalid_details)} câu không còn hợp lệ trong các Release nguồn. '
+                f'Câu cần xử lý: {sample}{suffix}'
+            )
+        empty_sources = [rid for rid, count in source_question_counts.items() if count <= 0]
+        if empty_sources:
+            labels = [
+                str(next((item.get('chapter_title') for item in (source_details or []) if str(item.get('release_id')) == rid), rid))
+                for rid in empty_sources
+            ]
+            raise ValueError(f'Final test có Bài nguồn không còn câu hợp lệ: {", ".join(labels)}.')
+
+        availability = {
+            (diff, qtype): len(grouped.get((diff, qtype), []))
+            for diff in ('easy', 'medium', 'hard')
+            for qtype in requested_types
+        }
+        flexible_availability = {qtype: len(flexible.get(qtype, [])) for qtype in requested_types}
+        if any(flexible_availability.values()):
+            matrix, flexible_matrix = feasible_type_difficulty_matrix_with_flexible(
+                difficulty_targets=requested,
+                type_targets=requested_types,
+                availability=availability,
+                flexible_availability=flexible_availability,
+            )
+        else:
+            matrix = feasible_type_difficulty_matrix(
+                difficulty_targets=requested,
+                type_targets=requested_types,
+                availability=availability,
+            )
+            flexible_matrix = {
+                (diff, qtype): 0
+                for diff in ('easy', 'medium', 'hard')
+                for qtype in requested_types
+            }
+
+        allocated_flexible: dict[tuple[str, str], list[dict]] = {
+            (diff, qtype): [] for diff in ('easy', 'medium', 'hard') for qtype in requested_types
+        }
+        for qtype in requested_types:
+            candidates = sorted(
+                flexible.get(qtype, []),
+                key=lambda item: (str(getattr(item['question'], 'created_at', '') or ''), str(item['question'].id)),
+            )
+            offset = 0
+            for diff in ('easy', 'medium', 'hard'):
+                count = int(flexible_matrix.get((diff, qtype), 0) or 0)
+                allocated_flexible[(diff, qtype)] = candidates[offset:offset + count]
+                offset += count
+            eligible = [diff for diff in ('easy', 'medium', 'hard') if int(matrix.get((diff, qtype), 0) or 0) > 0]
+            for entry in candidates[offset:]:
+                if not eligible:
+                    break
+                target_diff = min(
+                    eligible,
+                    key=lambda diff: (
+                        len(grouped.get((diff, qtype), [])) + len(allocated_flexible[(diff, qtype)]),
+                        ('easy', 'medium', 'hard').index(diff),
+                    ),
+                )
+                allocated_flexible[(target_diff, qtype)].append(entry)
+
+        cell_data: list[dict] = []
+        release_pick_totals = {str(item.id): 0 for item in source_releases}
+        for diff in ('easy', 'medium', 'hard'):
+            for qtype in requested_types:
+                target = int(matrix.get((diff, qtype), 0) or 0)
+                if target <= 0:
+                    continue
+                entries = [*(grouped.get((diff, qtype), [])), *(allocated_flexible.get((diff, qtype), []))]
+                by_release: dict[str, list[dict]] = {}
+                for entry in entries:
+                    by_release.setdefault(entry['release_id'], []).append(entry)
+                allocation = {rid: 0 for rid in by_release}
+                for _ in range(target):
+                    candidates = [rid for rid, items in by_release.items() if allocation[rid] < len(items)]
+                    if not candidates:
+                        raise ValueError(f'Final test không đủ câu {diff.upper()} · {qtype} cho quota {target}.')
+                    rid = min(
+                        candidates,
+                        key=lambda value: (
+                            release_pick_totals.get(value, 0),
+                            allocation[value],
+                            -len(by_release[value]),
+                            value,
+                        ),
+                    )
+                    allocation[rid] += 1
+                    release_pick_totals[rid] = release_pick_totals.get(rid, 0) + 1
+                cell_data.append({
+                    'difficulty': diff,
+                    'question_type': qtype,
+                    'target': target,
+                    'by_release': by_release,
+                    'allocation': allocation,
+                })
+
+        # Guarantee that every source lesson contributes at least one visible Final question.
+        for missing_rid in [rid for rid, count in release_pick_totals.items() if count <= 0]:
+            repaired = False
+            for cell in cell_data:
+                missing_items = cell['by_release'].get(missing_rid) or []
+                if not missing_items or int(cell['allocation'].get(missing_rid, 0)) >= len(missing_items):
+                    continue
+                donors = [
+                    rid for rid, count in cell['allocation'].items()
+                    if rid != missing_rid and count > 0 and release_pick_totals.get(rid, 0) > 1
+                ]
+                if not donors:
+                    continue
+                donor = max(donors, key=lambda rid: (release_pick_totals.get(rid, 0), cell['allocation'][rid], rid))
+                cell['allocation'][donor] -= 1
+                cell['allocation'][missing_rid] = int(cell['allocation'].get(missing_rid, 0)) + 1
+                release_pick_totals[donor] -= 1
+                release_pick_totals[missing_rid] += 1
+                repaired = True
+                break
+            if not repaired:
+                label = next((item.get('chapter_title') for item in (source_details or []) if str(item.get('release_id')) == missing_rid), missing_rid)
+                raise ValueError(
+                    f'Không thể đưa câu của {label} vào Final test với quota difficulty/loại hiện tại. '
+                    'Hãy tăng số câu Final hoặc điều chỉnh quota loại/độ khó.'
+                )
+
+        slots: list[dict] = []
+        assigned_questions: set[str] = set()
+        assigned_components: set[str] = set()
+        slot_no = 1
+        coverage: list[dict] = []
+        for cell in cell_data:
+            cell_slot_count = 0
+            candidate_count = 0
+            for rid, pick_count in sorted(cell['allocation'].items()):
+                if int(pick_count or 0) <= 0:
+                    continue
+                release = release_by_id[rid]
+                entries = sorted(
+                    cell['by_release'][rid],
+                    key=lambda entry: (str(getattr(entry['question'], 'created_at', '') or ''), str(entry['question'].id)),
+                )
+                question_ids = [str(entry['question'].id) for entry in entries]
+                problem_ids = [str(entry['component']) for entry in entries]
+                if int(pick_count) > len(problem_ids):
+                    raise ValueError(
+                        f'Release {release.release_code or release.id} chỉ có {len(problem_ids)} ứng viên '
+                        f'cho {cell["difficulty"].upper()} · {cell["question_type"]}, cần pick {pick_count}.'
+                    )
+                assigned_questions.update(question_ids)
+                assigned_components.update(problem_ids)
+                candidate_count += len(problem_ids)
+                cell_slot_count += 1
+                detail = next((item for item in (source_details or []) if str(item.get('release_id')) == rid), {})
+                chapter_title = str(detail.get('chapter_title') or release.release_code or rid)
+                slots.append({
+                    'slot_no': slot_no,
+                    'difficulty': cell['difficulty'].upper(),
+                    'question_type': cell['question_type'],
+                    'pick_count': int(pick_count),
+                    'max_count': int(pick_count),
+                    'library_key': release.openedx_library_key,
+                    'openedx_problem_ids': problem_ids,
+                    'question_ids': question_ids,
+                    'family_names': [chapter_title],
+                    'variant_count': len(question_ids),
+                    'source_release_id': release.id,
+                    'source_release_code': release.release_code,
+                    'source_chapter_id': detail.get('chapter_id'),
+                    'source_chapter_title': chapter_title,
+                    'rule': f'random {int(pick_count)}/{len(question_ids)} từ {chapter_title}',
+                })
+                slot_no += 1
+            coverage.append({
+                'difficulty': cell['difficulty'].upper(),
+                'question_type': cell['question_type'],
+                'target_questions': int(cell['target']),
+                'candidate_questions': candidate_count,
+                'source_library_slots': cell_slot_count,
+            })
+
+        actual_total = sum(int(slot.get('pick_count') or 0) for slot in slots)
+        if actual_total != int(total_questions):
+            raise ValueError(f'Final test planner tạo {actual_total}/{int(total_questions)} câu; từ chối tạo cấu hình lệch quota.')
+        warnings: list[str] = []
+        unclassified_count = sum(len(items) for items in flexible.values())
+        if unclassified_count:
+            warnings.append(
+                f'{unclassified_count} câu CMS cũ chưa có NGƯỠNG/độ khó được phân bổ linh hoạt vào quota Final test.'
+            )
+        source_ids = [str(item.id) for item in source_releases]
+        return {
+            'ok': True,
+            'planner_engine': 'final_test_all_chapter_releases_itembank_v1',
+            'uses_llm': False,
+            'release_id': source_ids[0],
+            'release_code': source_releases[0].release_code,
+            'openedx_library_key': source_releases[0].openedx_library_key,
+            'source_release_ids': source_ids,
+            'source_release_codes': [str(item.release_code or '') for item in source_releases],
+            'source_release_count': len(source_releases),
+            'source_chapters': list(source_details or []),
+            'requested_total_questions': int(total_questions),
+            'total_questions': int(total_questions),
+            'target_counts': {key.upper(): value for key, value in requested.items()},
+            'effective_target_counts': {key.upper(): requested[key] for key in requested},
+            'question_type_target_counts': requested_types,
+            'matrix_target_counts': {f'{diff}:{qtype}': int(value) for (diff, qtype), value in matrix.items()},
+            'coverage': coverage,
+            'slots': slots,
+            'warnings': warnings,
+            'assigned_question_count': len(assigned_questions),
+            'assigned_component_count': len(assigned_components),
+            'unclassified_difficulty_question_count': unclassified_count,
+            'flexibly_assigned_question_count': sum(len(items) for items in allocated_flexible.values()),
+            'source_release_pick_counts': release_pick_totals,
+            'classification_policy': 'legacy_flexible_fallback' if unclassified_count else 'strict',
+            'hard_guard': {
+                'valid': True,
+                'summary': 'Final test dùng toàn bộ Release nguồn làm candidate pool theo quota; mỗi ItemBank chỉ chứa component của đúng một Library.',
+            },
+            'message': (
+                f'Final test tổng hợp {len(assigned_questions)} câu ứng viên từ {len(source_releases)} Bài/Release; '
+                f'learner nhận đúng {int(total_questions)} câu theo quota.'
+            ),
+            **_ui_notice(
+                'success',
+                f'Final test dùng {len(source_releases)} Release nguồn và {len(assigned_questions)} câu ứng viên.',
+            ),
         }
 
     def _published_release_question_rows(self, release: QuestionBankRelease) -> tuple[list[BankReleaseQuestion], dict[str, Question]]:
@@ -1297,6 +1793,7 @@ class QuestionBankQuizCreationWorkflowService:
         course_mapping = self.db.get(EdxCourseMapping, chapter_mapping.course_mapping_id)
         if not course_mapping:
             raise ValueError('Không tìm thấy course mapping')
+        assessment_type = 'final_test' if str(assessment_type or '').lower() == 'final_test' else 'quiz'
         release_id = chapter_mapping.bank_release_id
         if expected_bank_release_id and release_id != expected_bank_release_id:
             raise ValueError('Release trên URL không khớp với chapter mapping. Hãy chọn lại mapping đúng Release.')
@@ -1311,14 +1808,56 @@ class QuestionBankQuizCreationWorkflowService:
             raise ValueError('Release chưa được Open edX verify đầy đủ; không tạo Quiz từ component chưa xác nhận.')
         if not chapter_mapping.openedx_parent_node_id:
             raise ValueError('Chapter mapping chưa có node Open edX để đặt Quiz')
-        resolved_quiz_config=self._resolve_quiz_blueprint_config(release=release,quiz_blueprint_id=quiz_blueprint_id,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank,single_select_count=single_select_count,multi_select_count=multi_select_count,text_input_count=text_input_count,numerical_input_count=numerical_input_count)
-        quiz_blueprint_id=resolved_quiz_config.get('quiz_blueprint_id')
-        validation = self._chapter_mapping_validation(
-            course_mapping_id=chapter_mapping.course_mapping_id,
-            subject_chapter_id=chapter_mapping.subject_chapter_id,
-            bank_release_id=release.id,
-            openedx_parent_node_id=chapter_mapping.openedx_parent_node_id,
-        )
+        final_source_releases: list[QuestionBankRelease] = []
+        final_source_details: list[dict] = []
+        if assessment_type == 'final_test':
+            if quiz_blueprint_id:
+                raise ValueError('Final test dùng cấu hình Final test tổng hợp, không dùng Blueprint của một Bài đơn lẻ.')
+            final_source_releases, final_source_details = self._final_test_source_releases(
+                course_mapping_id=chapter_mapping.course_mapping_id,
+                final_chapter_id=chapter_mapping.subject_chapter_id,
+            )
+            anchor_release = final_source_releases[0]
+            if str(release.id) != str(anchor_release.id):
+                raise ValueError('Anchor Release của Final test đã cũ. Hãy bấm Lưu cấu hình lại trước khi tạo Final test.')
+            resolved_quiz_config = {
+                'total_questions': int(total_questions),
+                'difficulty_easy': int(difficulty_easy),
+                'difficulty_medium': int(difficulty_medium),
+                'difficulty_hard': int(difficulty_hard),
+                'max_families_per_bank': int(max_families_per_bank),
+                'single_select_count': single_select_count,
+                'multi_select_count': multi_select_count,
+                'text_input_count': text_input_count,
+                'numerical_input_count': numerical_input_count,
+                'quiz_blueprint_id': None,
+            }
+            quiz_blueprint_id = None
+            validation = {
+                **(chapter_mapping.validation_json or {}),
+                'ok': True,
+                'risk_level': 'low',
+                'can_create_mapping': True,
+                'auto_map_action': 'final_test',
+                'source_release_ids': [str(item.id) for item in final_source_releases],
+                'message': f'Final test dùng {len(final_source_releases)} Release nguồn đã verify.',
+                'checks': [{
+                    'code': 'final_test_release_bundle',
+                    'status': 'pass',
+                    'blocking': False,
+                    'message': f'Đã xác minh {len(final_source_releases)} Release nguồn cho Final test.',
+                    'detail': {'source_release_ids': [str(item.id) for item in final_source_releases]},
+                }],
+            }
+        else:
+            resolved_quiz_config=self._resolve_quiz_blueprint_config(release=release,quiz_blueprint_id=quiz_blueprint_id,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank,single_select_count=single_select_count,multi_select_count=multi_select_count,text_input_count=text_input_count,numerical_input_count=numerical_input_count)
+            quiz_blueprint_id=resolved_quiz_config.get('quiz_blueprint_id')
+            validation = self._chapter_mapping_validation(
+                course_mapping_id=chapter_mapping.course_mapping_id,
+                subject_chapter_id=chapter_mapping.subject_chapter_id,
+                bank_release_id=release.id,
+                openedx_parent_node_id=chapter_mapping.openedx_parent_node_id,
+            )
         # _chapter_mapping_validation is also used before creating a new mapping,
         # so it intentionally flags an existing chapter mapping as a duplicate.
         # At quiz creation time we already receive a concrete
@@ -1334,17 +1873,23 @@ class QuestionBankQuizCreationWorkflowService:
             blocking_checks.append(check)
         if blocking_checks:
             raise ValueError(f'Mapping không an toàn để tạo Quiz: {blocking_checks[0].get("message") or validation.get("message")}')
-        plan=self._build_release_quiz_plan(release=release,**{key:value for key,value in resolved_quiz_config.items() if key!='quiz_blueprint_id'})
+        if assessment_type == 'final_test':
+            plan = self._build_final_test_plan(
+                source_releases=final_source_releases,
+                source_details=final_source_details,
+                **{key: value for key, value in resolved_quiz_config.items() if key != 'quiz_blueprint_id'},
+            )
+        else:
+            plan=self._build_release_quiz_plan(release=release,**{key:value for key,value in resolved_quiz_config.items() if key!='quiz_blueprint_id'})
         plan['quiz_blueprint_id']=quiz_blueprint_id
-        subject = self.db.get(Subject, release.subject_id)
-        chapter = self.db.get(SubjectChapter, release.chapter_id)
+        subject = self.db.get(Subject, course_mapping.subject_id or release.subject_id)
+        chapter = self.db.get(SubjectChapter, chapter_mapping.subject_chapter_id)
         connector = get_openedx_connector()
         course_id = normalize_openedx_course_id(course_mapping.openedx_course_id, required=True)
         if course_mapping.openedx_course_id != course_id:
             course_mapping.openedx_course_id = course_id
             course_mapping.updated_at = datetime.utcnow()
             self.db.add(course_mapping)
-        assessment_type = 'final_test' if str(assessment_type or '').lower() == 'final_test' else 'quiz'
         quiz_suffix = self._chapter_quiz_suffix(chapter)
         default_quiz_title = 'Final test' if assessment_type == 'final_test' else f'Quiz {quiz_suffix}'.strip()
         default_unit_title = 'Final test' if assessment_type == 'final_test' else 'Quiz'
@@ -1374,7 +1919,7 @@ class QuestionBankQuizCreationWorkflowService:
             self.db.query(CourseQuizInstance)
             .filter(
                 CourseQuizInstance.openedx_course_id == course_id,
-                CourseQuizInstance.chapter_id == release.chapter_id,
+                CourseQuizInstance.chapter_id == chapter.id,
                 CourseQuizInstance.status.in_(['creating', 'created', 'published', 'rollback_manual_required']),
             )
             .order_by(CourseQuizInstance.created_at.desc())
@@ -1396,9 +1941,9 @@ class QuestionBankQuizCreationWorkflowService:
         instance = CourseQuizInstance(
             id=str(uuid.uuid4()),
             openedx_course_id=course_id,
-            subject_id=release.subject_id,
-            chapter_id=release.chapter_id,
-            subject_offering_id=release.subject_offering_id,
+            subject_id=subject.id if subject else release.subject_id,
+            chapter_id=chapter.id,
+            subject_offering_id=course_mapping.subject_offering_id or release.subject_offering_id,
             bank_release_id=release.id,
             quiz_blueprint_id=quiz_blueprint_id,
             status='creating',
@@ -1406,9 +1951,11 @@ class QuestionBankQuizCreationWorkflowService:
                 'plan': plan,
                 'validation': validation,
                 'actor': actor,
-                'created_from': 'bank_release',
+                'created_from': 'final_test_release_bundle' if assessment_type == 'final_test' else 'bank_release',
                 'course_chapter_mapping_id': chapter_mapping.id,
                 'assessment_type': assessment_type,
+                'source_release_ids': [str(item.id) for item in final_source_releases] if assessment_type == 'final_test' else [str(release.id)],
+                'source_chapters': final_source_details if assessment_type == 'final_test' else [],
                 'timer_config': timer_config,
                 'quiz_idempotency_key': quiz_idempotency_key,
             },
@@ -1428,13 +1975,15 @@ class QuestionBankQuizCreationWorkflowService:
                 metadata={
                     'bank_release_id': release.id,
                     'bank_release_code': release.release_code,
+                    'source_release_ids': [str(item.id) for item in final_source_releases] if assessment_type == 'final_test' else [str(release.id)],
+                    'source_release_codes': [str(item.release_code or '') for item in final_source_releases] if assessment_type == 'final_test' else [str(release.release_code or '')],
                     'course_quiz_instance_id': instance.id,
                     'idempotency_key': quiz_idempotency_key,
                     'quiz_idempotency_key': quiz_idempotency_key,
                     'recover_empty_legacy_partial': True,
                     'subject_code': getattr(subject, 'code', None),
-                    'chapter_id': release.chapter_id,
-                    'source': 'ai_question_bank_release',
+                    'chapter_id': chapter.id,
+                    'source': 'ai_final_test_release_bundle' if assessment_type == 'final_test' else 'ai_question_bank_release',
                     'custom_timer_enabled': timer_config['custom_timer_enabled'],
                     'timer_config': timer_config,
                     'sequential_title': final_quiz_title,
@@ -1517,8 +2066,9 @@ class QuestionBankQuizCreationWorkflowService:
                     'bank_release_id': release.id,
                     'bank_release_code': release.release_code,
                     'openedx_library_key': release.openedx_library_key,
+                    'source_release_ids': [str(item.id) for item in final_source_releases] if assessment_type == 'final_test' else [str(release.id)],
                     'cleanup_legacy_ai_randomized_blocks': True,
-                    'source': 'bank_release_native_itembank',
+                    'source': 'final_test_release_bundle_native_itembank' if assessment_type == 'final_test' else 'bank_release_native_itembank',
                 },
             )
             if insert_result.get('ok') is not True:

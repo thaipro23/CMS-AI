@@ -1331,7 +1331,7 @@ def _ensure_chapter(
         subject_id=subject.id,
         subject_offering_id=offering.id,
         chapter_no=chapter_no,
-        title=str(sheet.get('chapter_title') or sheet.get('sheet_name') or f'Bài {chapter_no}')[:255],
+        title=f'Bài {chapter_no}'[:255],
         description=f'Khởi tạo từ sheet {sheet.get("sheet_name") or chapter_no} của quiz CMS cũ.',
         sort_order=chapter_no,
         status='active',

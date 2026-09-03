@@ -240,10 +240,11 @@ class BusinessRBACService:
     def is_system_admin(self, user: Any) -> bool:
         if self.is_legacy_system_admin(user):
             return True
-        raw_claims = getattr(user, 'raw_claims', None) or {}
-        # Open edX bridge tokens are intentionally governed by edX superuser only.
-        if raw_claims.get('auth_source') == 'openedx_cms_session_bridge' and not (raw_claims.get('is_superuser') or raw_claims.get('is_super_admin')):
-            return False
+        # A SYSTEM_ADMIN assignment is a server-side RBAC decision stored in ACMS.
+        # It must remain effective for identities authenticated through the Open edX
+        # session bridge. We still do NOT trust a generic client role=admin claim:
+        # is_legacy_system_admin() above only accepts Open edX superuser/super_admin
+        # or the explicit trusted ai_system_admin claim.
         return any(a.role_code == SYSTEM_ADMIN for a in self.active_assignments_for_actor(user))
 
     def effective_legacy_role_for_user(self, user_id: str, base_role: str = 'viewer', email: str | None = None, username: str | None = None) -> str:
