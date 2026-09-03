@@ -70,6 +70,16 @@ Nút Bỏ qua không loại lỗi cấp môn, workbook hoặc sheet. Ví dụ `S
 
 Câu hỏi trùng nội dung trong chính nguồn cũ **không bị loại**. Mỗi dòng vẫn được bảo toàn bằng source identity riêng, gắn cờ `duplicate_in_legacy_source` và bắt buộc người duyệt xử lý.
 
+## Giao diện vận hành
+
+Màn import dùng luồng ba bước **Chọn tệp → Kiểm tra & xử lý → Xác nhận import**. Kết quả preview được rút gọn thành bốn chỉ số chính: tổng câu nguồn, câu hợp lệ, câu cần xử lý và câu chưa có độ khó.
+
+- Bảng đối chiếu môn/sheet nằm bên trái; lỗi được gom theo mã lỗi ở cột bên phải thay vì hiển thị một danh sách phẳng dài.
+- Nhóm `MISSING_IMAGE` cho phép thêm ảnh hoặc ZIP và tự chạy lại preview.
+- Nút **Bỏ qua N câu lỗi** loại đúng các câu lỗi cấp câu; không che hoặc bỏ qua lỗi môn, workbook hay sheet.
+- Thanh xác nhận import bám cuối vùng nhìn và chỉ bật khi backend trả `can_commit=true`.
+- Màn Bộ môn có ô tìm môn riêng, debounce 250 ms, lọc thêm theo bộ môn và mở thẳng danh sách phiên bản của môn.
+
 ## Ngoại lệ khi tạo Quiz từ dữ liệu CMS cũ
 
 Câu import không bắt buộc có concept hoặc độ khó, nhưng vẫn phải được duyệt rồi đi qua Release đã publish như mọi câu khác.
@@ -125,3 +135,9 @@ PYTHONPATH=backend pytest -q backend/app/tests/test_legacy_quiz_cms_old_import.p
 ruff check backend/app/services/question_bank/legacy_quiz_import.py backend/app/services/question_bank/quiz_creation.py backend/app/services/question_type_quota.py backend/app/services/question_content.py backend/app/services/openedx_exporter.py backend/app/api/routes/question_bank_v2.py backend/app/worker.py
 cd frontend && npm run typecheck && npm run lint && npm run build
 ```
+
+## Email và thông báo duyệt
+
+Importer ACMS hiện **không gửi email**. Sau import, hệ thống ghi người import vào audit, đặt câu ở trạng thái `pending_review` và hiển thị trong luồng duyệt. Backend AI Server hiện chưa có mail service hoặc cấu hình SMTP; chỉ thêm biến SMTP vào Secret sẽ không tự phát sinh email.
+
+Email tài khoản/quên mật khẩu của Open edX là cấu hình riêng của LMS/CMS thông qua Tutor. Nếu cần email báo “có câu mới chờ duyệt” từ ACMS, phải bổ sung một tính năng riêng gồm mail service, tác vụ Celery, chính sách chọn người nhận và chống gửi lặp khi retry job.

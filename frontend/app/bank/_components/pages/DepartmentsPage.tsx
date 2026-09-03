@@ -7,7 +7,7 @@ import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { InlineNotice, type InlineNoticeData } from '../../../../components/ui/InlineNotice'
 import { LoadingButton } from '../../../../components/ui/LoadingButton'
 import { StatusBadge } from '../../../../components/ui/StatusBadge'
-import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
+import { BankPageIdentity } from '../BankDesignContract'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import type { Department, DepartmentSummary, Subject } from '../../../../types'
 import { createDepartment, deleteDepartment, getDepartmentSummaries, searchSubjects, updateDepartment } from '../../../../lib/api'
@@ -122,6 +122,7 @@ export function DepartmentsPage() {
   const [subjectResults, setSubjectResults] = useState<Subject[]>([])
   const [subjectSearching, setSubjectSearching] = useState(false)
   const [subjectSearchError, setSubjectSearchError] = useState('')
+  const [subjectDepartmentFilter, setSubjectDepartmentFilter] = useState('all')
 
   const canCreateDepartment = can('department.manage_all')
   const search = tableState.q
@@ -182,6 +183,9 @@ export function DepartmentsPage() {
   const departmentById = useMemo(() => new Map(
     summaries.map(({ department }) => [department.id, department]),
   ), [summaries])
+  const visibleSubjectResults = useMemo(() => subjectResults.filter((subject) => (
+    subjectDepartmentFilter === 'all' || subject.department_id === subjectDepartmentFilter
+  )), [subjectDepartmentFilter, subjectResults])
 
   const openEditDepartment = (department: Department) => {
     setEditing(department)
@@ -326,10 +330,11 @@ export function DepartmentsPage() {
       breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank' }, { label: 'Bộ môn' }]}
     />
 
-    <BankHierarchyPageIntro
+    <BankPageIdentity
       title="Bộ môn"
       description="Quản lý danh sách bộ môn, môn học và tiến độ duyệt trong phạm vi được phân quyền."
       icon="campus"
+      actions={canCreateDepartment ? <button className="btn" type="button" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined}
     />
 
     <InlineNotice notice={operationNotice} />
@@ -337,29 +342,40 @@ export function DepartmentsPage() {
 
     <section className="subject-quick-search" aria-label="Tìm nhanh môn học">
       <div className="subject-quick-search-heading">
-        <div><span>Tìm nhanh môn học</span><b>Đi thẳng tới phiên bản môn</b></div>
-        <small>Tìm theo mã hoặc tên môn trong phạm vi bạn được phân quyền.</small>
+        <div><span>Truy cập nhanh</span><b>Tìm môn học</b></div>
+        <small>Nhập mã hoặc tên môn để đi thẳng tới danh sách phiên bản.</small>
       </div>
-      <div className="subject-quick-search-box">
-        <span aria-hidden="true">⌕</span>
-        <input
-          className="input"
-          value={subjectQuery}
-          onChange={(event) => setSubjectQuery(event.target.value)}
-          placeholder="Nhập ít nhất 2 ký tự, ví dụ MEC229..."
-          aria-label="Mã hoặc tên môn học"
-          autoComplete="off"
-        />
-        {subjectSearching ? <span className="spinner tiny" aria-label="Đang tìm" /> : null}
-        {subjectQuery ? <button type="button" className="icon-button" aria-label="Xóa từ khóa" onClick={() => setSubjectQuery('')}>×</button> : null}
+      <div className="subject-quick-search-controls">
+        <div className="subject-quick-search-box">
+          <span aria-hidden="true">⌕</span>
+          <input
+            className="input"
+            value={subjectQuery}
+            onChange={(event) => setSubjectQuery(event.target.value)}
+            placeholder="Nhập ít nhất 2 ký tự, ví dụ MEC229 hoặc Nghiệp vụ Bar..."
+            aria-label="Mã hoặc tên môn học"
+            autoComplete="off"
+          />
+          {subjectSearching ? <span className="spinner tiny" aria-label="Đang tìm" /> : null}
+          {subjectQuery ? <button type="button" className="icon-button" aria-label="Xóa từ khóa" onClick={() => setSubjectQuery('')}>×</button> : null}
+        </div>
+        <label className="subject-quick-search-filter">
+          <span>Bộ môn</span>
+          <select className="input" aria-label="Lọc kết quả theo bộ môn" value={subjectDepartmentFilter} onChange={(event) => setSubjectDepartmentFilter(event.target.value)}>
+            <option value="all">Tất cả bộ môn</option>
+            {summaries.map(({ department }) => <option key={department.id} value={department.id}>{department.code} · {department.name}</option>)}
+          </select>
+        </label>
       </div>
       {subjectSearchError ? <div className="alert error">{subjectSearchError}</div> : null}
       {subjectQuery.trim().length >= 2 && !subjectSearching && !subjectSearchError ? <div className="subject-quick-search-results">
-        {subjectResults.length ? subjectResults.map((subject) => {
+        <div className="subject-quick-search-result-meta"><span>{visibleSubjectResults.length} môn phù hợp</span><small>Kết quả trong phạm vi được phân quyền</small></div>
+        {visibleSubjectResults.length ? visibleSubjectResults.map((subject) => {
           const department = departmentById.get(subject.department_id)
           return <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`}>
             <span className="subject-quick-search-code">{subject.code}</span>
             <span><b>{subject.name}</b><small>{department ? `${department.code} · ${department.name}` : 'Bộ môn trong phạm vi được phân quyền'}</small></span>
+            <StatusBadge status={subject.status} label={subject.status === 'active' ? 'Hoạt động' : 'Tạm khóa'} />
             <strong>Mở môn →</strong>
           </Link>
         }) : <p>Không tìm thấy môn phù hợp.</p>}
@@ -375,7 +391,6 @@ export function DepartmentsPage() {
         resultCount={visible.length}
         totalCount={summaries.length}
         placeholder="Tìm bộ môn..."
-        action={canCreateDepartment ? <button className="btn bank-hierarchy-create-button" type="button" onClick={() => setCreateOpen(true)}>+ Thêm bộ môn</button> : undefined}
       />
 
       <EnterpriseDataTable

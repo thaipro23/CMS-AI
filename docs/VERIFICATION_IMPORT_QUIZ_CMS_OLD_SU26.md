@@ -13,6 +13,8 @@ Ngày kiểm tra gần nhất: 2026-09-03.
 | Frontend TypeScript | PASS |
 | Frontend ESLint, zero warning | PASS |
 | Next.js production build | PASS, 36/36 static pages; route `/import-quiz-cms-old` có trong output |
+| UI contract import | PASS; quy trình 3 bước, lỗi gom nhóm, bổ sung ảnh và bỏ qua câu lỗi vẫn nối đúng API hiện có |
+| UI contract tìm môn | PASS; debounce 250 ms, lọc bộ môn và link mở thẳng phiên bản môn |
 | Legacy flexible Quiz planner regression | PASS; 5 câu chưa phân loại được dùng đúng một lần trong 3 slot Easy/Medium/Hard |
 | Import + exporter + quota + route security regression mới nhất | 39 passed |
 

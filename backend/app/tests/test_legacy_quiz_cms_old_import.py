@@ -282,11 +282,16 @@ def test_cross_layer_contract_contains_route_type_and_navigation() -> None:
     assert 'searchSubjects(headers' in departments_source
     assert '}, 250)' in departments_source
     assert '/bank/subjects/${subject.id}/versions' in departments_source
+    assert 'subjectDepartmentFilter' in departments_source
+    assert 'visibleSubjectResults' in departments_source
     import_page_source = (root / 'frontend/app/import-quiz-cms-old/page.tsx').read_text(
         encoding='utf-8'
     )
     assert 'Bổ sung ảnh và kiểm tra lại' in import_page_source
     assert 'Bỏ qua ${preview.invalid_question_count} câu lỗi' in import_page_source
+    assert 'BankWorkflowStepper' in import_page_source
+    assert 'errorGroups.map' in import_page_source
+    assert 'data-error-group={code}' in import_page_source
 
 
 def test_end_to_end_import_creates_su26_audit_and_is_retry_idempotent(tmp_path: Path) -> None:

@@ -11,9 +11,22 @@ import {
   skipInvalidLegacyQuizCmsOldQuestions,
 } from '../../lib/api'
 import type { BankOperationJob, LegacyQuizCmsOldImportPreview } from '../../types'
+import { BankPageIdentity, BankWorkflowStepper } from '../bank/_components/BankDesignContract'
 import { useBankData } from '../bank/_components/shared'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'canceled'])
+type LegacyImportError = LegacyQuizCmsOldImportPreview['errors'][number]
+
+const ERROR_LABELS: Record<string, string> = {
+  MISSING_IMAGE: 'Thiếu ảnh câu hỏi',
+  SUBJECT_NOT_FOUND: 'Không tìm thấy môn đích',
+  SUBJECT_AMBIGUOUS: 'Mã môn không duy nhất',
+  INVALID_QUESTION: 'Câu hỏi không hợp lệ',
+  INVALID_TYPE: 'TYPE không hợp lệ',
+  INVALID_DIFFICULTY: 'NGƯỠNG không hợp lệ',
+  INVALID_WORKBOOK: 'File Excel không hợp lệ',
+  INVALID_SHEET: 'Sheet không hợp lệ',
+}
 
 function fileSize(value: number) {
   if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`
@@ -67,6 +80,15 @@ export default function ImportQuizCmsOldPage() {
   }
   const workbookBytes = useMemo(() => workbooks.reduce((sum, file) => sum + file.size, 0), [workbooks])
   const assetBytes = useMemo(() => assets.reduce((sum, file) => sum + file.size, 0), [assets])
+  const errorGroups = useMemo(() => {
+    const groups = new Map<string, LegacyImportError[]>()
+    for (const item of preview?.errors || []) {
+      const code = item.code || 'INVALID_DATA'
+      groups.set(code, [...(groups.get(code) || []), item])
+    }
+    return Array.from(groups, ([code, items]) => ({ code, items }))
+      .sort((left, right) => right.items.length - left.items.length)
+  }, [preview])
 
   useEffect(() => {
     if (!job || TERMINAL_JOB_STATUSES.has(job.status)) return
@@ -129,8 +151,17 @@ export default function ImportQuizCmsOldPage() {
   }
 
   const result = (job?.result || {}) as Record<string, any>
+  const currentStep = job || preview?.can_commit ? 3 : preview ? 2 : 1
+  const readyQuestionCount = preview
+    ? Math.max(0, preview.question_count - preview.invalid_question_count)
+    : 0
+  const unclassifiedDifficultyCount = Number(preview?.difficulty_counts.unclassified || 0)
+  const targetSubjects = preview?.workbooks
+    .filter((workbook) => workbook.subject_code)
+    .map((workbook) => `${workbook.subject_code} · ${workbook.subject_name}`)
+    .join(', ')
 
-  return <PageRoot className="page-stack enterprise-standard-page legacy-quiz-import-page">
+  return <PageRoot className="page-stack bank-multipage bank-contract-page legacy-quiz-import-page">
     <PageHeader
       eyebrow="Ngân hàng đề"
       title="Import Quiz CMS cũ"
@@ -139,75 +170,119 @@ export default function ImportQuizCmsOldPage() {
       breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Import Quiz CMS cũ' }]}
     />
 
-    <section className="legacy-import-intro">
-      <div><span className="legacy-import-term">Đích cố định · SU26</span><h2>Đưa ngân hàng câu hỏi Excel cũ vào đúng môn và bài</h2><p>Mã môn phải nằm chính xác ở đầu tên file. Mỗi sheet được ánh xạ thành một bài; hệ thống tạo phiên bản SU26, bài và bản nháp ngân hàng câu hỏi nếu chưa có.</p></div>
-      <div className="legacy-import-rules">
-        <div><b>TYPE</b><span>0 · Một đáp án</span><span>1 · Nhiều đáp án</span><span>2 · Chọn/điền ô trống</span></div>
-        <div><b>NGƯỠNG</b><span>1 · Dễ</span><span>2 · Trung bình</span><span>3 · Khó</span></div>
-      </div>
-    </section>
+    <BankPageIdentity
+      title="Import Quiz CMS cũ"
+      description="Kiểm tra Excel, xử lý ảnh còn thiếu rồi đưa câu hỏi vào đúng môn, đúng bài của phiên bản SU26."
+      icon="upload"
+      tone="blue"
+      meta={<span className="legacy-import-term">Đích cố định · SU26</span>}
+      actions={<div className="legacy-import-rules">
+        <div><b>TYPE</b><span>0 Một đáp án · 1 Nhiều đáp án · 2 Điền ô trống</span></div>
+        <div><b>NGƯỠNG</b><span>1 Dễ · 2 Trung bình · 3 Khó</span></div>
+      </div>}
+    />
 
-    <section className="legacy-import-upload-grid">
-      <div className="legacy-import-upload-card">
-        <div><span>Bước 1</span><h3>File Excel câu hỏi</h3><p>Chọn tối đa 20 file .xlsx. Tên file bắt đầu bằng mã môn, ví dụ <code>MEC229 - Đồ gá.xlsx</code>.</p></div>
-        <label className="legacy-import-dropzone">Chọn file Excel<input hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple disabled={busy} onChange={(event) => { setWorkbooks(Array.from(event.target.files || [])); resetResult(); event.currentTarget.value = '' }} /></label>
-        <FileList files={workbooks} onRemove={(index) => { setWorkbooks((current) => current.filter((_, itemIndex) => itemIndex !== index)); resetResult() }} />
-        {workbooks.length ? <small>{workbooks.length} file · {fileSize(workbookBytes)}</small> : null}
-      </div>
-      <div className="legacy-import-upload-card">
-        <div><span>Bước 2 · Khi có ảnh</span><h3>Ảnh đi kèm</h3><p>Nếu câu hỏi chứa <code>[ten-anh.png]</code>, phải tải đủ ảnh trực tiếp hoặc trong ZIP. Ảnh nhúng sẵn trong Excel cũng được nhận diện.</p></div>
-        <label className="legacy-import-dropzone secondary">Chọn ảnh hoặc ZIP<input hidden type="file" accept=".png,.jpg,.jpeg,.webp,.zip,image/png,image/jpeg,image/webp,application/zip" multiple disabled={busy} onChange={(event) => { addAssets(Array.from(event.target.files || [])); event.currentTarget.value = '' }} /></label>
-        <FileList files={assets} onRemove={(index) => { setAssets((current) => current.filter((_, itemIndex) => itemIndex !== index)); resetResult() }} />
-        {assets.length ? <small>{assets.length} file · {fileSize(assetBytes)}</small> : null}
-      </div>
-    </section>
+    <BankWorkflowStepper
+      currentStep={currentStep}
+      steps={[
+        { title: 'Chọn tệp', description: 'Excel và ảnh đi kèm', icon: 'upload' },
+        { title: 'Kiểm tra & xử lý', description: 'Môn, sheet, đáp án, ảnh', icon: 'search' },
+        { title: 'Xác nhận import', description: 'Tạo câu Chờ duyệt', icon: 'check' },
+      ]}
+    />
 
-    <section className="legacy-import-action-bar">
-      <div><b>Preview không ghi dữ liệu môn học</b><span>Hệ thống kiểm tra loại câu, độ khó, đáp án, ảnh và môn đích trước khi cho phép import.</span></div>
-      <button className="btn" type="button" disabled={busy || !workbooks.length} onClick={() => void runPreview()}>{busyAction === 'preview' ? 'Đang kiểm tra...' : 'Kiểm tra file'}</button>
+    <section className="legacy-import-source-panel">
+      <div className="legacy-import-source-heading">
+        <div><span>Nguồn dữ liệu</span><h2>Chọn file cần import</h2></div>
+        <p>Tên file phải bắt đầu bằng mã môn. Mỗi sheet tương ứng một bài trong SU26.</p>
+      </div>
+      <div className="legacy-import-upload-grid">
+        <div className="legacy-import-upload-card">
+          <div className="legacy-import-upload-copy"><span className="legacy-import-upload-index">01</span><div><h3>File Excel câu hỏi</h3><p>Tối đa 20 file <code>.xlsx</code>.</p></div></div>
+          <label className="legacy-import-dropzone">+ Chọn file Excel<input hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple disabled={busy} onChange={(event) => { setWorkbooks(Array.from(event.target.files || [])); resetResult(); event.currentTarget.value = '' }} /></label>
+          <FileList files={workbooks} onRemove={(index) => { setWorkbooks((current) => current.filter((_, itemIndex) => itemIndex !== index)); resetResult() }} />
+          <small>{workbooks.length ? `${workbooks.length} file · ${fileSize(workbookBytes)}` : 'Ví dụ: MEC229 - Đồ gá.xlsx'}</small>
+        </div>
+        <div className="legacy-import-upload-card">
+          <div className="legacy-import-upload-copy"><span className="legacy-import-upload-index">02</span><div><h3>Ảnh đi kèm <em>Không bắt buộc</em></h3><p>Chọn ảnh trực tiếp hoặc một file ZIP.</p></div></div>
+          <label className="legacy-import-dropzone secondary">+ Chọn ảnh hoặc ZIP<input hidden type="file" accept=".png,.jpg,.jpeg,.webp,.zip,image/png,image/jpeg,image/webp,application/zip" multiple disabled={busy} onChange={(event) => { addAssets(Array.from(event.target.files || [])); event.currentTarget.value = '' }} /></label>
+          <FileList files={assets} onRemove={(index) => { setAssets((current) => current.filter((_, itemIndex) => itemIndex !== index)); resetResult() }} />
+          <small>{assets.length ? `${assets.length} file · ${fileSize(assetBytes)}` : 'Có thể bổ sung sau khi hệ thống báo thiếu ảnh'}</small>
+        </div>
+      </div>
+      <div className="legacy-import-action-bar">
+        <div><b>Kiểm tra trước, chưa ghi dữ liệu</b><span>Hệ thống chỉ tạo dữ liệu sau khi bạn xác nhận ở bước cuối.</span></div>
+        <button className="btn" type="button" disabled={busy || !workbooks.length} onClick={() => void runPreview()}>{busyAction === 'preview' ? 'Đang kiểm tra...' : preview ? 'Kiểm tra lại file' : 'Kiểm tra file'}</button>
+      </div>
     </section>
 
     {error ? <div className="alert error"><b>Không thể hoàn tất</b><span>{error}</span></div> : null}
 
     {preview ? <>
-      <section className="legacy-import-summary">
-        <div><span>File Excel</span><b>{preview.workbook_count}</b></div><div><span>Sheet / bài</span><b>{preview.sheet_count}</b></div><div><span>Câu sẽ import</span><b>{preview.question_count}</b></div><div><span>Ảnh gắn câu hỏi</span><b>{preview.image_count}</b></div><div className={preview.invalid_question_count ? 'has-errors' : preview.skipped_invalid_question_count ? 'is-warning' : ''}><span>{preview.skipped_invalid_question_count ? 'Câu đã bỏ qua' : 'Câu lỗi'}</span><b>{preview.skipped_invalid_question_count || preview.invalid_question_count}</b></div><div className={preview.can_commit ? 'is-ready' : 'has-errors'}><span>Trạng thái</span><b>{preview.can_commit ? 'Sẵn sàng' : 'Cần xử lý'}</b></div>
+      <section className="legacy-import-preview-heading">
+        <div><span>Kết quả kiểm tra</span><h2>{preview.workbook_count === 1 ? preview.workbooks[0]?.filename : `${preview.workbook_count} file Excel`}</h2><p>{targetSubjects || 'Chưa xác định được môn đích'} · {preview.sheet_count} sheet</p></div>
+        <StatusBadge status={preview.can_commit ? 'ready' : 'failed'} label={preview.can_commit ? 'Sẵn sàng import' : 'Cần xử lý'} />
       </section>
 
-      <section className="legacy-import-breakdown">
-        <div><h3>Loại câu hỏi</h3>{Object.entries(preview.type_counts).map(([key, count]) => <p key={key}><span>{typeLabel(key)}</span><b>{count}</b></p>)}</div>
-        <div><h3>Độ khó</h3>{['easy', 'medium', 'hard', 'unclassified'].map((key) => <p key={key}><span>{difficultyLabel(key)}</span><b>{preview.difficulty_counts[key] || 0}</b></p>)}</div>
+      <section className="legacy-import-summary" aria-label="Tổng quan kết quả kiểm tra">
+        <div><span>Tổng câu trong nguồn</span><b>{preview.original_question_count}</b><small>{preview.workbook_count} file · {preview.sheet_count} sheet</small></div>
+        <div className="is-ready"><span>Câu hợp lệ</span><b>{readyQuestionCount}</b><small>Sẽ đưa vào Chờ duyệt</small></div>
+        <div className={preview.invalid_question_count ? 'has-errors' : ''}><span>Câu cần xử lý</span><b>{preview.invalid_question_count}</b><small>{preview.missing_image_question_count ? `${preview.missing_image_question_count} câu thiếu ảnh` : 'Không còn lỗi cấp câu'}</small></div>
+        <div className={unclassifiedDifficultyCount ? 'is-warning' : ''}><span>Chưa có độ khó</span><b>{unclassifiedDifficultyCount}</b><small>Được xếp quota linh hoạt</small></div>
       </section>
 
-      <section className="legacy-import-workbooks">
-        <div className="section-head"><div><h2>Đối chiếu môn và sheet</h2><p>Mỗi dòng dưới đây sẽ tạo hoặc dùng lại Bài tương ứng trong phiên bản SU26.</p></div></div>
-        {preview.workbooks.map((workbook) => <details key={workbook.filename} open={preview.workbooks.length === 1}>
-          <summary><span><b>{workbook.filename}</b><small>{workbook.subject_code ? `${workbook.subject_code} · ${workbook.subject_name}` : 'Chưa khớp môn'}</small></span><span>{workbook.sheet_count} sheet · {workbook.question_count} câu</span><StatusBadge status={workbook.error_count ? 'failed' : 'ready'} label={workbook.error_count ? `${workbook.error_count} lỗi` : 'Hợp lệ'} /></summary>
-          <div className="legacy-import-sheet-table"><div className="legacy-import-sheet-head"><span>Sheet</span><span>Bài</span><span>Câu</span><span>Loại câu</span><span>Độ khó</span><span>Kiểm tra</span></div>{workbook.sheets.map((sheet) => <div key={sheet.sheet_name}><span><b>{sheet.sheet_name}</b></span><span>Bài {sheet.chapter_no}</span><span>{sheet.question_count}</span><span>{Object.entries(sheet.type_counts).map(([key, count]) => `${typeLabel(key)}: ${count}`).join(' · ')}</span><span>{Object.entries(sheet.difficulty_counts).map(([key, count]) => `${difficultyLabel(key)}: ${count}`).join(' · ')}</span><span>{sheet.error_count ? `${sheet.error_count} lỗi` : sheet.warning_count ? `${sheet.warning_count} cảnh báo` : 'Hợp lệ'}</span></div>)}</div>
-        </details>)}
-      </section>
+      <div className="legacy-import-review-grid">
+        <section className="legacy-import-workbooks legacy-import-review-main">
+          <div className="section-head"><div><span>Đối chiếu dữ liệu</span><h2>Môn và sheet sẽ được tạo</h2><p>Mỗi sheet tạo hoặc dùng lại đúng Bài tương ứng trong phiên bản SU26.</p></div></div>
+          {preview.workbooks.map((workbook) => <details key={workbook.filename} open={preview.workbooks.length === 1}>
+            <summary><span><b>{workbook.filename}</b><small>{workbook.subject_code ? `${workbook.subject_code} · ${workbook.subject_name}` : 'Chưa khớp môn'}</small></span><span>{workbook.sheet_count} sheet · {workbook.question_count} câu</span><StatusBadge status={workbook.error_count ? 'failed' : 'ready'} label={workbook.error_count ? `${workbook.error_count} lỗi` : 'Hợp lệ'} /></summary>
+            <div className="legacy-import-sheet-table"><div className="legacy-import-sheet-head"><span>Sheet</span><span>Bài</span><span>Câu</span><span>Loại câu</span><span>Độ khó</span><span>Kiểm tra</span></div>{workbook.sheets.map((sheet) => <div key={sheet.sheet_name}><span><b>{sheet.sheet_name}</b></span><span>Bài {sheet.chapter_no}</span><span>{sheet.question_count}</span><span>{Object.entries(sheet.type_counts).map(([key, count]) => `${typeLabel(key)}: ${count}`).join(' · ')}</span><span>{Object.entries(sheet.difficulty_counts).map(([key, count]) => `${difficultyLabel(key)}: ${count}`).join(' · ')}</span><span className={sheet.error_count ? 'legacy-import-cell-error' : ''}>{sheet.error_count ? `${sheet.error_count} lỗi` : sheet.warning_count ? `${sheet.warning_count} cảnh báo` : 'Hợp lệ'}</span></div>)}</div>
+          </details>)}
 
-      {preview.can_skip_invalid_questions ? <section className="legacy-import-resolution">
-        <div>
-          <span>Cần quyết định</span>
-          <h2>{preview.missing_image_question_count ? `${preview.missing_image_question_count} câu đang thiếu ảnh` : `${preview.invalid_question_count} câu đang lỗi`}</h2>
-          <p>Bổ sung đủ ảnh rồi hệ thống sẽ tự kiểm tra lại, hoặc bỏ qua để loại toàn bộ {preview.invalid_question_count} câu lỗi khỏi lần import này. Lỗi cấp môn, file hoặc sheet vẫn phải sửa.</p>
-          <small>File Excel gốc vẫn được lưu làm tài liệu đối chiếu; câu bị bỏ qua sẽ không được tạo trong ngân hàng đề.</small>
-        </div>
-        <div className="button-row">
-          {preview.missing_image_question_count ? <label className="btn secondary file-button">Bổ sung ảnh và kiểm tra lại<input hidden type="file" accept=".png,.jpg,.jpeg,.webp,.zip,image/png,image/jpeg,image/webp,application/zip" multiple disabled={busy} onChange={(event) => { addAssets(Array.from(event.target.files || []), true); event.currentTarget.value = '' }} /></label> : null}
-          <button className="btn danger" type="button" disabled={busy} onClick={skipInvalidQuestions}>{busyAction === 'skip' ? 'Đang loại câu lỗi...' : `Bỏ qua ${preview.invalid_question_count} câu lỗi`}</button>
-        </div>
+          <div className="legacy-import-breakdown">
+            <div><h3>Loại câu hỏi</h3>{Object.entries(preview.type_counts).map(([key, count]) => <p key={key}><span>{typeLabel(key)}</span><b>{count}</b></p>)}</div>
+            <div><h3>Độ khó</h3>{['easy', 'medium', 'hard', 'unclassified'].map((key) => <p key={key}><span>{difficultyLabel(key)}</span><b>{preview.difficulty_counts[key] || 0}</b></p>)}</div>
+          </div>
+        </section>
+
+        <aside className="legacy-import-review-sidebar" aria-label="Lỗi và cảnh báo import">
+          {preview.can_skip_invalid_questions ? <section className="legacy-import-resolution">
+            <div><span>Cần quyết định</span><h2>{preview.missing_image_question_count ? `${preview.missing_image_question_count} câu thiếu ảnh` : `${preview.invalid_question_count} câu đang lỗi`}</h2><p>Bổ sung ảnh để kiểm tra lại, hoặc bỏ qua để loại đúng các câu lỗi khỏi lần import này.</p></div>
+            <div className="legacy-import-resolution-actions">
+              {preview.missing_image_question_count ? <label className="btn secondary file-button">Bổ sung ảnh và kiểm tra lại<input hidden type="file" accept=".png,.jpg,.jpeg,.webp,.zip,image/png,image/jpeg,image/webp,application/zip" multiple disabled={busy} onChange={(event) => { addAssets(Array.from(event.target.files || []), true); event.currentTarget.value = '' }} /></label> : null}
+              <button className="btn danger" type="button" disabled={busy} onClick={skipInvalidQuestions}>{busyAction === 'skip' ? 'Đang loại câu lỗi...' : `Bỏ qua ${preview.invalid_question_count} câu lỗi`}</button>
+            </div>
+            <small>Chỉ câu lỗi bị xóa. File gốc vẫn được lưu làm tài liệu; lỗi cấp môn, file hoặc sheet vẫn phải sửa.</small>
+          </section> : null}
+
+          {errorGroups.length ? <section className="legacy-import-error-groups">
+            <div className="legacy-import-sidebar-heading"><div><span>Kiểm tra dữ liệu</span><h2>{preview.errors.length} lỗi chặn import</h2></div></div>
+            {errorGroups.map(({ code, items }, groupIndex) => <details key={code} open={groupIndex === 0} data-error-group={code}>
+              <summary><span><b>{ERROR_LABELS[code] || code}</b><small>{code}</small></span><strong>{items.length}</strong></summary>
+              <div className="legacy-import-error-items">
+                {items.slice(0, 12).map((item, index) => <div key={`${code}-${item.workbook}-${item.sheet}-${item.row}-${index}`}><span>{[item.workbook, item.sheet, item.row ? `dòng ${item.row}` : '', item.field].filter(Boolean).join(' · ')}</span><p>{item.message}</p></div>)}
+                {items.length > 12 ? <small>Còn {items.length - 12} lỗi cùng nhóm. Sửa theo hướng dẫn trên rồi kiểm tra lại file.</small> : null}
+              </div>
+              {code === 'MISSING_IMAGE' ? <label className="legacy-import-inline-file-action">+ Thêm ảnh/ZIP cho nhóm này<input hidden type="file" accept=".png,.jpg,.jpeg,.webp,.zip,image/png,image/jpeg,image/webp,application/zip" multiple disabled={busy} onChange={(event) => { addAssets(Array.from(event.target.files || []), true); event.currentTarget.value = '' }} /></label> : null}
+            </details>)}
+          </section> : <section className="legacy-import-ready-card"><span aria-hidden="true">✓</span><div><h2>Không còn lỗi chặn</h2><p>Bạn có thể xác nhận import ở thanh bên dưới.</p></div></section>}
+
+          {preview.skipped_invalid_questions.length ? <details className="legacy-import-skipped" open>
+            <summary><span><b>Câu đã bỏ qua</b><small>Không được tạo trong ngân hàng đề</small></span><strong>{preview.skipped_invalid_question_count}</strong></summary>
+            <div>{preview.skipped_invalid_questions.slice(0, 12).map((item, index) => <p key={`${item.workbook}-${item.sheet}-${item.row}-${index}`}><b>{item.error_codes?.join(', ') || 'INVALID_QUESTION'}</b><span>{[item.sheet, item.row ? `dòng ${item.row}` : ''].filter(Boolean).join(' · ')}</span></p>)}</div>
+          </details> : null}
+
+          {preview.warnings.length ? <details className="legacy-import-warning-box">
+            <summary><span><b>Cảnh báo</b><small>Không chặn import</small></span><strong>{preview.warnings.length}</strong></summary>
+            <div>{preview.warnings.slice(0, 20).map((warning, index) => <p key={`${warning}-${index}`}>{warning}</p>)}</div>
+          </details> : null}
+        </aside>
+      </div>
+
+      {!job ? <section className={`legacy-import-confirm${preview.can_commit ? ' is-ready' : ''}`}>
+        <div><span>Bước 3 · Xác nhận</span><h2>{preview.can_commit ? `Import ${preview.question_count} câu vào SU26` : 'Hoàn tất xử lý lỗi để import'}</h2><p>{preview.message} Câu thiếu concept/độ khó vẫn được nhận và xếp linh hoạt khi tạo Quiz; mọi câu mới đều ghi người import và bắt buộc duyệt.</p></div>
+        <button className="btn" type="button" disabled={busy || !preview.can_commit} onClick={startImport}>{busyAction === 'enqueue' ? 'Đang tạo tác vụ...' : 'Import vào SU26'}</button>
       </section> : null}
-
-      {preview.errors.length ? <section className="legacy-import-issues error-list"><h2>Lỗi chặn import ({preview.errors.length})</h2>{preview.errors.slice(0, 100).map((item, index) => <div key={`${item.code}-${index}`}><b>{item.code || 'INVALID_DATA'}</b><span>{[item.workbook, item.sheet, item.row ? `dòng ${item.row}` : '', item.field].filter(Boolean).join(' · ')}</span><p>{item.message}</p></div>)}</section> : null}
-      {preview.skipped_invalid_questions.length ? <section className="legacy-import-issues skipped-list"><h2>Câu đã bỏ qua ({preview.skipped_invalid_question_count})</h2>{preview.skipped_invalid_questions.slice(0, 100).map((item, index) => <div key={`${item.workbook}-${item.sheet}-${item.row}-${index}`}><b>{item.error_codes?.join(', ') || 'INVALID_QUESTION'}</b><span>{[item.workbook, item.sheet, item.row ? `dòng ${item.row}` : ''].filter(Boolean).join(' · ')}</span><p>{item.image_refs?.length ? `Ảnh tham chiếu: ${item.image_refs.join(', ')}` : 'Câu này sẽ không được tạo trong ngân hàng đề.'}</p></div>)}</section> : null}
-      {preview.warnings.length ? <section className="legacy-import-issues warning-list"><h2>Cảnh báo ({preview.warnings.length})</h2>{preview.warnings.slice(0, 100).map((warning, index) => <p key={`${warning}-${index}`}>{warning}</p>)}</section> : null}
-
-      <section className="legacy-import-confirm">
-        <div><h2>{preview.can_commit ? 'Sẵn sàng import vào SU26' : 'Chưa thể import'}</h2><p>{preview.message} Câu thiếu concept hoặc độ khó vẫn được nhận và sẽ được tạo Quiz theo chế độ linh hoạt; tất cả câu mới đều ghi nhận người import và bắt buộc duyệt.</p></div>
-        <button className="btn" type="button" disabled={busy || !preview.can_commit || Boolean(job)} onClick={startImport}>{busyAction === 'enqueue' ? 'Đang tạo tác vụ...' : 'Import vào SU26'}</button>
-      </section>
     </> : null}
 
     {job ? <section className={`legacy-import-job ${job.status}`}>
