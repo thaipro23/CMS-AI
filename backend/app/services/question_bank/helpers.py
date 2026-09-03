@@ -37,12 +37,34 @@ def normalize_title_match(value: str | None) -> str:
 
 
 def extract_chapter_number(value: str | None) -> str | None:
-    text = normalize_title_match(value)
-    match = re.search(r'\b(?:bai|chapter|section)\s*([0-9]+(?:\.[0-9]+)*)\b', text)
-    if match:
-        return match.group(1)
-    match = re.search(r'^([0-9]+(?:\.[0-9]+)*)\b', text)
-    return match.group(1) if match else None
+    """Extract a canonical chapter number from normal and legacy titles.
+
+    Legacy CMS Excel imports historically created chapter titles from sheet names
+    such as ``Q1``, ``Q2`` or ``Quiz 01``. Those releases may already be published
+    and must continue to map to Open edX Sections named ``Bài 1``, ``Bài 2`` etc.
+    New imports use canonical ``Bài N`` titles, but matching remains backward
+    compatible so an already-published Release never needs to be recreated only
+    because its old chapter title used the Q/Quiz convention.
+    """
+    raw = unicodedata.normalize('NFD', value or '')
+    raw = ''.join(ch for ch in raw if unicodedata.category(ch) != 'Mn')
+    raw = raw.lower().strip()
+    raw = re.sub(r'[_-]+', '.', raw)
+
+    match = re.search(
+        r'\b(?:bai|chapter|section|quiz|q)\s*([0-9]+(?:\s*\.\s*[0-9]+)*)\b',
+        raw,
+    )
+    if not match:
+        match = re.search(r'^\s*([0-9]+(?:\s*\.\s*[0-9]+)*)\b', raw)
+    if not match:
+        return None
+
+    parts = [part.strip() for part in re.split(r'\s*\.\s*', match.group(1))]
+    try:
+        return '.'.join(str(int(part)) for part in parts)
+    except ValueError:
+        return re.sub(r'\s+', '', match.group(1))
 
 def parse_openedx_course_id(course_id: str) -> dict[str, str | None]:
     normalized = normalize_openedx_course_id(course_id)
