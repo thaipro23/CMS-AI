@@ -1,4 +1,4 @@
-name: Temporary project UI and quiz fix v2
+name: Temporary project UI and quiz fix v3
 on:
   push:
     paths:
@@ -16,19 +16,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply scoped fixes v2
-        run: python .github/scripts/tmp_project_ui_quiz_fix_v2.py
+      - name: Apply safe scoped fixes v3
+        run: python .github/scripts/tmp_project_ui_quiz_fix_v3.py
       - name: Source contract checks
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE 'Loại câu hỏi|singleSelectCount|multiSelectCount|textInputCount|numericalInputCount|typeQuotas|TypeQuotaDraft|normalizeTypeQuotas|sumTypeQuotas' frontend/app/bank/quiz/page.tsx
-          ! grep -n 'Lớp đang vận hành trên Udemy' frontend/app/student-management/classes/'[classId]'/page.tsx
+          if grep -nE 'Loại câu hỏi|singleSelectCount|multiSelectCount|textInputCount|numericalInputCount|typeQuotas|TypeQuotaDraft|normalizeTypeQuotas|sumTypeQuotas' frontend/app/bank/quiz/page.tsx; then
+            echo 'Question type quota UI/config references remain in Quiz page'
+            exit 1
+          fi
+          if grep -n 'Lớp đang vận hành trên Udemy' frontend/app/student-management/classes/'[classId]'/page.tsx; then
+            echo 'Duplicate Udemy notice remains'
+            exit 1
+          fi
           grep -n "params = {'product': product}" backend/app/services/ap_academic_sync.py
           grep -n "params\['term_name'\] = normalized_term" backend/app/services/ap_academic_sync.py
           grep -n 'apitest.poly.edu.vn/api/cms/get-campus' backend/app/core/config.py
-          grep -n "requested_types = {'auto': int(total_questions)}" backend/app/services/question_bank/quiz_creation.py
-          grep -n "CAMPUS_OWNER:.*department.manage_all.*user.manage_all.*rbac.view" backend/app/services/business_rbac.py
+          test "$(grep -c "requested_types = {'auto': int(total_questions)}" backend/app/services/question_bank/quiz_creation.py)" -eq 2
+          grep -n "CAMPUS_OWNER:.*department.manage_all.*rbac.view" backend/app/services/business_rbac.py
           grep -n 'self.db.query(RBACPermission).all()' backend/app/services/business_rbac.py
           grep -n 'project-spacing-contract.css' frontend/app/layout.tsx
           grep -n 'Cập nhật cơ sở' frontend/app/ap-sync/page.tsx
