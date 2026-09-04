@@ -226,6 +226,24 @@ def test_missing_image_requires_upload_or_explicit_question_discard(tmp_path: Pa
         db.close()
 
 
+def test_bank_publish_preflight_failure_is_reported_before_import(monkeypatch) -> None:
+    raw = _workbook_bytes([
+        {'question': 'Câu hợp lệ về cấu trúc nhưng bị publish guard từ chối?', 'type': 0, 'threshold': 1, 'correct': 'A'},
+    ])
+
+    def reject_publish_contract(_question):
+        raise ValueError('publish contract rejected')
+
+    monkeypatch.setattr(
+        'app.services.question_bank.legacy_quiz_import.validate_question_for_olx',
+        reject_publish_contract,
+    )
+    parsed = parse_legacy_quiz_workbook(raw, filename='MEC005.xlsx')
+    question = parsed['sheets'][0]['questions'][0]
+    assert any(item['code'] == 'BANK_PREFLIGHT_FAILED' for item in question['errors'])
+    assert any(item['code'] == 'BANK_PREFLIGHT_FAILED' for item in parsed['errors'])
+
+
 def test_dropdown_olx_keeps_order_and_rejects_blank_mismatch() -> None:
     question_model = Question(
         course_id='bank:test',

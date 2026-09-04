@@ -28,6 +28,7 @@ from app.models.question_bank import (
 from app.services.bank_dashboard_stats import BankDashboardStatsService
 from app.services.generation_cache import question_fingerprint
 from app.services.object_storage import ObjectStorage, StorageError, get_object_storage
+from app.services.openedx_exporter import validate_question_for_olx
 from app.services.question_bank.helpers import safe_upload_filename
 from app.services.question_content import apply_canonical_content, normalize_question_content
 from app.services.question_media import validate_question_image
@@ -241,6 +242,38 @@ def _difficulty_count_key(question: dict[str, Any]) -> str:
     if not bool(classified):
         return 'unclassified'
     return str(question.get('difficulty') or '')
+
+
+def _preflight_legacy_question_for_bank(
+    *,
+    question_type: str,
+    question_text: str,
+    difficulty: str,
+    content: dict[str, Any],
+) -> None:
+    """Run the same structural guard used before Open edX publish during import preview.
+
+    Legacy Excel questions must fail while the teacher is still in the import
+    workflow, before any Question row is written to the bank. Bank/release
+    validation remains in place as defense in depth.
+    """
+    probe = Question(
+        course_id='bank:legacy-import-preflight',
+        difficulty=difficulty,
+        question_type=question_type,
+        question_text=question_text,
+        option_a='',
+        option_b='',
+        option_c='',
+        option_d='',
+        correct_answer='A',
+        explanation='',
+        source_ref='legacy_quiz_excel_preflight',
+        source_type='legacy_quiz_excel',
+        status='pending_review',
+    )
+    apply_canonical_content(probe, question_type, content)
+    validate_question_for_olx(probe)
 
 
 def _chapter_number(sheet_name: str, sheet_index: int) -> tuple[int, str | None]:
@@ -510,6 +543,24 @@ def _parse_sheet(
                 sheet=worksheet.title,
                 row=row,
             ))
+
+        if not question_errors:
+            try:
+                _preflight_legacy_question_for_bank(
+                    question_type=qtype,
+                    question_text=prompt,
+                    difficulty=difficulty,
+                    content=content,
+                )
+            except ValueError as exc:
+                question_errors.append(_error(
+                    'BANK_PREFLIGHT_FAILED',
+                    f'Câu chưa đạt kiểm tra cấu trúc kho đề/Open edX: {exc}',
+                    workbook=workbook_name,
+                    sheet=worksheet.title,
+                    row=row,
+                    field='QUESTION',
+                ))
 
         question = {
             'source_row': row,

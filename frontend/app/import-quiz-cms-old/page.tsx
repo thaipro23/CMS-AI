@@ -22,6 +22,7 @@ const ERROR_LABELS: Record<string, string> = {
   SUBJECT_NOT_FOUND: 'Không tìm thấy môn đích',
   SUBJECT_AMBIGUOUS: 'Mã môn không duy nhất',
   INVALID_QUESTION: 'Câu hỏi không hợp lệ',
+  BANK_PREFLIGHT_FAILED: 'Câu chưa đạt kiểm tra kho đề/CMS',
   INVALID_TYPE: 'TYPE không hợp lệ',
   INVALID_DIFFICULTY: 'NGƯỠNG không hợp lệ',
   INVALID_WORKBOOK: 'File Excel không hợp lệ',
