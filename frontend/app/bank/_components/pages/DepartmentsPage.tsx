@@ -118,7 +118,6 @@ export function DepartmentsPage() {
   const [editing, setEditing] = useState<Department | null>(null)
   const [editValue, setEditValue] = useState<DepartmentFormValue>({ code: '', name: '' })
   const [deleteTarget, setDeleteTarget] = useState<Department | null>(null)
-  const [subjectQuery, setSubjectQuery] = useState('')
   const [subjectResults, setSubjectResults] = useState<Subject[]>([])
   const [subjectSearching, setSubjectSearching] = useState(false)
   const [subjectSearchError, setSubjectSearchError] = useState('')
@@ -146,7 +145,7 @@ export function DepartmentsPage() {
   }, [load])
 
   useEffect(() => {
-    const query = subjectQuery.trim()
+    const query = search.trim()
     if (query.length < 2) {
       setSubjectResults([])
       setSubjectSearching(false)
@@ -171,7 +170,7 @@ export function DepartmentsPage() {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [headers, subjectQuery])
+  }, [headers, search])
 
   const visible = useMemo(() => summaries.filter(({ department, stats }) => (
     matchesSearch(`${department.code} ${department.name}`, search) && bankStatusMatches(stats, statusFilter)
@@ -340,24 +339,24 @@ export function DepartmentsPage() {
     <InlineNotice notice={operationNotice} />
     {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel}</div> : null}
 
-    <section className="subject-quick-search" aria-label="Tìm nhanh môn học">
+    <section className="subject-quick-search" aria-label="Tìm bộ môn hoặc môn học">
       <div className="subject-quick-search-heading">
-        <div><span>Truy cập nhanh</span><b>Tìm môn học</b></div>
-        <small>Nhập mã hoặc tên môn để đi thẳng tới danh sách phiên bản.</small>
+        <div><span>Tìm kiếm</span><b>Tìm bộ môn hoặc môn học</b></div>
+        <small>Một ô tìm kiếm cho cả bảng bộ môn và truy cập nhanh môn học.</small>
       </div>
       <div className="subject-quick-search-controls">
         <div className="subject-quick-search-box">
           <span aria-hidden="true">⌕</span>
           <input
             className="input"
-            value={subjectQuery}
-            onChange={(event) => setSubjectQuery(event.target.value)}
-            placeholder="Nhập ít nhất 2 ký tự, ví dụ MEC229 hoặc Nghiệp vụ Bar..."
-            aria-label="Mã hoặc tên môn học"
+            value={search}
+            onChange={(event) => updateTableState({ q: event.target.value })}
+            placeholder="Tìm bộ môn hoặc môn học, ví dụ CNTT, Cơ điện, MEC229..."
+            aria-label="Tìm bộ môn hoặc môn học"
             autoComplete="off"
           />
           {subjectSearching ? <span className="spinner tiny" aria-label="Đang tìm" /> : null}
-          {subjectQuery ? <button type="button" className="icon-button" aria-label="Xóa từ khóa" onClick={() => setSubjectQuery('')}>×</button> : null}
+          {search ? <button type="button" className="icon-button" aria-label="Xóa từ khóa" onClick={() => updateTableState({ q: '' })}>×</button> : null}
         </div>
         <label className="subject-quick-search-filter">
           <span>Bộ môn</span>
@@ -368,7 +367,7 @@ export function DepartmentsPage() {
         </label>
       </div>
       {subjectSearchError ? <div className="alert error">{subjectSearchError}</div> : null}
-      {subjectQuery.trim().length >= 2 && !subjectSearching && !subjectSearchError ? <div className="subject-quick-search-results">
+      {search.trim().length >= 2 && !subjectSearching && !subjectSearchError ? <div className="subject-quick-search-results">
         <div className="subject-quick-search-result-meta"><span>{visibleSubjectResults.length} môn phù hợp</span><small>Kết quả trong phạm vi được phân quyền</small></div>
         {visibleSubjectResults.length ? visibleSubjectResults.map((subject) => {
           const department = departmentById.get(subject.department_id)
@@ -390,7 +389,8 @@ export function DepartmentsPage() {
         setStatusFilter={(value) => updateTableState({ status: value })}
         resultCount={visible.length}
         totalCount={summaries.length}
-        placeholder="Tìm bộ môn..."
+        placeholder="Tìm bộ môn hoặc môn học..."
+        hideSearch
       />
 
       <EnterpriseDataTable

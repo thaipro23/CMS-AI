@@ -236,6 +236,7 @@ export function BankTableToolbar({
   resultCount,
   totalCount,
   action,
+  hideSearch = false,
 }: {
   search: string
   setSearch: (value: string) => void
@@ -245,6 +246,7 @@ export function BankTableToolbar({
   resultCount: number
   totalCount: number
   action?: React.ReactNode
+  hideSearch?: boolean
 }) {
   const hasFilter = Boolean(search.trim()) || statusFilter !== 'all'
   return <FilterToolbar
@@ -256,10 +258,10 @@ export function BankTableToolbar({
       {action}
     </>}
   >
-    <label className="bank-table-filter-field bank-table-search-field">
+    {!hideSearch ? <label className="bank-table-filter-field bank-table-search-field">
       <span>Tìm kiếm</span>
       <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />
-    </label>
+    </label> : null}
     <label className="bank-table-filter-field bank-table-status-field">
       <span>Trạng thái</span>
       <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as BankTableStatusFilter)} aria-label="Lọc trạng thái ngân hàng đề">
