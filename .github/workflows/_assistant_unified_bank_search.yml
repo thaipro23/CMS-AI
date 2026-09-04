@@ -28,40 +28,18 @@ jobs:
 
           page = Path('frontend/app/bank/_components/pages/DepartmentsPage.tsx')
           text = page.read_text()
-
           text = text.replace("  const [subjectQuery, setSubjectQuery] = useState('')\n", "")
           text = text.replace("    const query = subjectQuery.trim()", "    const query = search.trim()")
           text = text.replace("  }, [headers, subjectQuery])", "  }, [headers, search])")
-          text = text.replace(
-              '<section className="subject-quick-search" aria-label="Tìm nhanh môn học">',
-              '<section className="subject-quick-search" aria-label="Tìm bộ môn hoặc môn học">',
-          )
-          text = text.replace(
-              '<div><span>Truy cập nhanh</span><b>Tìm môn học</b></div>\n        <small>Nhập mã hoặc tên môn để đi thẳng tới danh sách phiên bản.</small>',
-              '<div><span>Tìm kiếm</span><b>Tìm bộ môn hoặc môn học</b></div>\n        <small>Một ô tìm kiếm cho cả bảng bộ môn và truy cập nhanh môn học.</small>',
-          )
+          text = text.replace('<section className="subject-quick-search" aria-label="Tìm nhanh môn học">', '<section className="subject-quick-search" aria-label="Tìm bộ môn hoặc môn học">')
+          text = text.replace('<div><span>Truy cập nhanh</span><b>Tìm môn học</b></div>\n        <small>Nhập mã hoặc tên môn để đi thẳng tới danh sách phiên bản.</small>', '<div><span>Tìm kiếm</span><b>Tìm bộ môn hoặc môn học</b></div>\n        <small>Một ô tìm kiếm cho cả bảng bộ môn và truy cập nhanh môn học.</small>')
           text = text.replace('            value={subjectQuery}', '            value={search}')
-          text = text.replace(
-              '            onChange={(event) => setSubjectQuery(event.target.value)}',
-              '            onChange={(event) => updateTableState({ q: event.target.value })}',
-          )
-          text = text.replace(
-              '            placeholder="Nhập ít nhất 2 ký tự, ví dụ MEC229 hoặc Nghiệp vụ Bar..."',
-              '            placeholder="Tìm bộ môn hoặc môn học, ví dụ CNTT, Cơ điện, MEC229..."',
-          )
+          text = text.replace('            onChange={(event) => setSubjectQuery(event.target.value)}', '            onChange={(event) => updateTableState({ q: event.target.value })}')
+          text = text.replace('            placeholder="Nhập ít nhất 2 ký tự, ví dụ MEC229 hoặc Nghiệp vụ Bar..."', '            placeholder="Tìm bộ môn hoặc môn học, ví dụ CNTT, Cơ điện, MEC229..."')
           text = text.replace('            aria-label="Mã hoặc tên môn học"', '            aria-label="Tìm bộ môn hoặc môn học"')
-          text = text.replace(
-              "          {subjectQuery ? <button type=\"button\" className=\"icon-button\" aria-label=\"Xóa từ khóa\" onClick={() => setSubjectQuery('')}>×</button> : null}",
-              "          {search ? <button type=\"button\" className=\"icon-button\" aria-label=\"Xóa từ khóa\" onClick={() => updateTableState({ q: '' })}>×</button> : null}",
-          )
-          text = text.replace(
-              '{subjectQuery.trim().length >= 2 && !subjectSearching && !subjectSearchError ?',
-              '{search.trim().length >= 2 && !subjectSearching && !subjectSearchError ?',
-          )
-          text = text.replace(
-              '        placeholder="Tìm bộ môn..."\n      />',
-              '        placeholder="Tìm bộ môn hoặc môn học..."\n        hideSearch\n      />',
-          )
+          text = text.replace("          {subjectQuery ? <button type=\"button\" className=\"icon-button\" aria-label=\"Xóa từ khóa\" onClick={() => setSubjectQuery('')}>×</button> : null}", "          {search ? <button type=\"button\" className=\"icon-button\" aria-label=\"Xóa từ khóa\" onClick={() => updateTableState({ q: '' })}>×</button> : null}")
+          text = text.replace('{subjectQuery.trim().length >= 2 && !subjectSearching && !subjectSearchError ?', '{search.trim().length >= 2 && !subjectSearching && !subjectSearchError ?')
+          text = text.replace('        placeholder="Tìm bộ môn..."\n      />', '        placeholder="Tìm bộ môn hoặc môn học..."\n        hideSearch\n      />')
           for token in ('subjectQuery', 'setSubjectQuery'):
               if token in text:
                   raise SystemExit(f'legacy duplicate search token remains: {token}')
@@ -86,8 +64,8 @@ jobs:
           if old not in s:
               raise SystemExit('BankTableToolbar search start marker not found')
           s = s.replace(old, new, 1)
-          old = '''      <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />\n    </label>'''
-          new = '''      <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />\n    </label> : null}'''
+          old = '''      <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />\n    </label>'''
+          new = '''      <input className="input" aria-label={placeholder} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={placeholder} />\n    </label> : null}'''
           if old not in s:
               raise SystemExit('BankTableToolbar search end marker not found')
           s = s.replace(old, new, 1)
@@ -121,4 +99,4 @@ jobs:
           git commit -m "fix: unify department and subject search"
           git push origin HEAD:feat/import-quiz-cms-old-su26
 
-# trigger retry after workflow registration
+# trigger 3
