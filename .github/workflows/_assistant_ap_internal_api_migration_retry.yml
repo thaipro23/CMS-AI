@@ -1,0 +1,86 @@
+name: Assistant AP internal API migration retry
+on:
+  push:
+    branches: [feat/import-quiz-cms-old-su26]
+    paths:
+      - '.github/workflows/_assistant_ap_internal_api_migration_retry.yml'
+permissions:
+  contents: write
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/import-quiz-cms-old-su26
+          fetch-depth: 0
+      - name: Repair config patch helper and apply migration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('_assistant_ap_internal_api_migration.py')
+          s = p.read_text()
+          old = "config = replace_once(config, old_config, new_config, 'config AP settings')"
+          new = '''config = replace_once(config, "    academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'", "    academic_ap_api_base_url: str = 'https://api.poly.edu.vn/api/cms'", 'AP base URL')
+          config = replace_once(
+              config,
+              "    academic_ap_get_course_endpoint: str = '/get-course'",
+              "    academic_ap_get_all_subject_endpoint: str = '/get-all-subject'\\n    academic_ap_get_campus_endpoint: str = '/get-campus'\\n    academic_ap_get_data_cms_endpoint: str = '/get-data-cms'\\n    # Deprecated rolling-upgrade alias; canonical code uses get-all-subject.\\n    academic_ap_get_course_endpoint: str = '/get-all-subject'",
+              'AP endpoint settings',
+          )
+          config = config.replace('/tmp/ai-server-ap-cache/get-course', '/tmp/ai-server-ap-cache/get-all-subject')'''
+          if old not in s:
+              raise SystemExit('helper config patch marker missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          python _assistant_ap_internal_api_migration.py
+      - name: Verify source contract and UI isolation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          client = Path('backend/app/services/ap_academic_sync.py').read_text()
+          config = Path('backend/app/core/config.py').read_text()
+          route = Path('backend/app/api/routes/academic.py').read_text()
+          assert "academic_ap_api_base_url: str = 'https://api.poly.edu.vn/api/cms'" in config
+          assert "academic_ap_get_all_subject_endpoint: str = '/get-all-subject'" in config
+          assert "academic_ap_get_campus_endpoint: str = '/get-campus'" in config
+          assert "academic_ap_get_data_cms_endpoint: str = '/get-data-cms'" in config
+          assert 'ACADEMIC_AP_API_KEY is required' not in config
+          assert "headers['Authorization']" not in client
+          assert "'Authorization':" not in client
+          assert 'def get_campuses' in client
+          assert "params={'product': product}" in client
+          assert 'api_v2.poly.edu.vn' not in client
+          assert 'get-campus theo POLY/PTCD' in route
+          for env_name in ('.env.example', '.env.production.example'):
+              env = Path(env_name).read_text()
+              assert 'ACADEMIC_AP_API_BASE_URL=https://api.poly.edu.vn/api/cms' in env
+              assert 'ACADEMIC_AP_GET_ALL_SUBJECT_ENDPOINT=/get-all-subject' in env
+              assert 'ACADEMIC_AP_GET_CAMPUS_ENDPOINT=/get-campus' in env
+              assert 'ACADEMIC_AP_GET_DATA_CMS_ENDPOINT=/get-data-cms' in env
+          PY
+          test -z "$(git diff -- frontend/app/globals.css frontend/styles/enterprise-ui.css)"
+          git diff --check
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -q -r backend/requirements.txt
+      - name: Backend compile
+        run: |
+          python -m py_compile backend/app/core/config.py backend/app/services/ap_academic_sync.py backend/app/api/routes/academic.py backend/app/tests/test_academic_ap_internal_api.py
+          python -m compileall -q backend/app
+      - name: AP internal API regression tests
+        working-directory: backend
+        run: pytest -q app/tests/test_academic_ap_internal_api.py
+      - name: Related academic contract tests
+        working-directory: backend
+        run: pytest -q app/tests/test_academic_connector_contract_compat.py
+      - name: Commit verified migration and remove helpers
+        run: |
+          rm -f _assistant_ap_internal_api_migration.py \
+            .github/workflows/_assistant_ap_internal_api_migration.yml \
+            .github/workflows/_assistant_ap_internal_api_migration_retry.yml
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: migrate academic sync to keyless internal CMS API'
+          git push origin HEAD:feat/import-quiz-cms-old-su26
