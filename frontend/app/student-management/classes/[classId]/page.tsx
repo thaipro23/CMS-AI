@@ -39,6 +39,7 @@ import { InlineNotice, noticeInfo } from '../../../../components/ui/InlineNotice
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { VisualIcon } from '../../../../components/ui/VisualIcon'
 import { AppIcon } from '../../../../components/icons/AppIcon'
+import { UdemyClassProgressPanel } from '../../../../components/student-management/UdemyClassProgressPanel'
 
 
 type GradeColumn = { key: string; name: string; quizNumber?: number | null; deadlineDate?: string | null; availableFrom?: string | null; deadlineMode?: string | null; scheduleWarning?: string | null }
@@ -1020,7 +1021,7 @@ function ClassDetailContent() {
         ? [{ label: 'Vận hành đào tạo' }, { label: `Quản lý giảng viên ${navigationPlatformLabel}`, href: `/teacher-management/${navigationPlatform}` }, { label: 'Lớp giảng viên', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]
         : [{ label: 'Vận hành đào tạo' }, { label: `Quản lý sinh viên ${navigationPlatformLabel}`, href: `/student-management/${navigationPlatform}` }, { label: 'Danh sách lớp', href: operationalBackHref }, { label: classInfo?.class_code || 'Chi tiết lớp' }]}
       secondaryActions={<Link className="btn secondary" href={operationalBackHref}>Quay lại danh sách lớp</Link>}
-      primaryAction={isUdemyClass ? <Link className="btn primary" href={udemyDashboardHref}>Xem tiến độ Udemy</Link> : <Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
+      primaryAction={isUdemyClass ? (classInfo?.subject_delivery_id ? <Link className="btn primary" href={udemyDashboardHref}>Import / kế hoạch Udemy</Link> : undefined) : <Link className="btn primary" href={behaviorHref}>Phân tích học tập</Link>}
     />
     <section className="card academic-unified-card training-workspace-section">
       <div className="class-action-row compact-sync-action-strip clean-sync-action-strip class-primary-actions">
@@ -1086,10 +1087,18 @@ function ClassDetailContent() {
         { key: 'progress', label: 'Hoàn thành TB', value: percentLabel(learningSummary?.avg_progress_percent) },
         { key: 'grade', label: 'Điểm tổng TB', value: grade10Label(learningSummary?.avg_grade_percent), hint: learningSummary?.last_synced_at ? `Cập nhật ${formatVNTimeDate(learningSummary.last_synced_at)}` : 'Chưa cập nhật' },
       ]} />
-      {isUdemyClass ? <InlineNotice notice={{ ...noticeInfo('Điểm và tiến độ lấy từ file Udemy. Full CMS, Enrollment và cập nhật điểm Open edX đã được ẩn để tránh chạy sai nền tảng.', 'Lớp đang vận hành trên Udemy'), actionHref: udemyDashboardHref, actionLabel: 'Mở quản lý Udemy' }} /> : null}
+      {isUdemyClass ? <InlineNotice notice={{ ...noticeInfo('Điểm và tiến độ lấy từ file Udemy. Tiến độ từng sinh viên được hiển thị ngay bên dưới; chỉ mở quản lý môn khi cần import file hoặc chỉnh kế hoạch.', 'Lớp đang vận hành trên Udemy'), actionHref: classInfo?.subject_delivery_id ? udemyDashboardHref : undefined, actionLabel: classInfo?.subject_delivery_id ? 'Import / kế hoạch Udemy' : undefined }} /> : null}
       {!isUdemyClass && !effectiveCourseId ? <TrainingMappingEmptyState action={canRunFullCmsSync ? <button className="btn secondary small" type="button" disabled={actionBusy} onClick={runFullCmsSync}>Đồng bộ full CMS</button> : undefined} /> : null}
 
     </section>
+
+    {isUdemyClass && classInfo?.subject_delivery_id ? <UdemyClassProgressPanel
+      headers={headers}
+      deliveryId={classInfo.subject_delivery_id}
+      classId={classId}
+      classCode={classInfo.class_code || 'Lớp'}
+      managementHref={udemyDashboardHref}
+    /> : null}
 
     {!isUdemyClass ? <>
     <section className="card academic-unified-card online-learning-card">

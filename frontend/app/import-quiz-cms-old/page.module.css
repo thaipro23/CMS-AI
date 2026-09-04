@@ -1,0 +1,390 @@
+.page {
+  min-width: 0;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.step {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #dbe3ee;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.step > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.step b {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.step small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stepNumber {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #475569;
+  background: #f1f5f9;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.stepCurrent {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+
+.stepCurrent .stepNumber {
+  color: #fff;
+  background: #2563eb;
+}
+
+.stepDone {
+  border-color: #bbf7d0;
+  background: #f7fef9;
+}
+
+.stepDone .stepNumber {
+  color: #fff;
+  background: #16a34a;
+}
+
+.ruleGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ruleGrid > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.ruleGrid span {
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .05em;
+}
+
+.ruleGrid b {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.ruleGrid small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.uploadGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.uploadCard {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dbe3ee;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.uploadCard > small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.uploadHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.uploadHeading > span {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.uploadHeading > div {
+  min-width: 0;
+}
+
+.uploadHeading h3,
+.uploadHeading p {
+  margin: 0;
+}
+
+.uploadHeading h3 {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.uploadHeading p {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.filePicker {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  cursor: pointer;
+}
+
+.fileList {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.fileRow {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.fileCopy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.fileCopy b {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileCopy small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.reviewGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(320px, .75fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.reviewGrid > * {
+  min-width: 0;
+}
+
+.tableScroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+}
+
+.sheetTable {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+}
+
+.sheetTable th,
+.sheetTable td {
+  padding: 9px 10px;
+  border-bottom: 1px solid #eef2f7;
+  text-align: left;
+  vertical-align: top;
+}
+
+.sheetTable th {
+  color: #475569;
+  background: #f8fafc;
+  font-size: 10px;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sheetTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.sheetTable td:first-child {
+  min-width: 190px;
+}
+
+.sheetTable td:first-child small {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+}
+
+.issueStack {
+  display: grid;
+  gap: 10px;
+}
+
+.issueActions {
+  display: grid;
+  gap: 8px;
+}
+
+.issueActions > * {
+  width: 100%;
+  margin: 0;
+  justify-content: center;
+  text-align: center;
+}
+
+.issueGroup {
+  overflow: hidden;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.issueGroup summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.issueGroup summary::-webkit-details-marker {
+  display: none;
+}
+
+.issueGroup summary > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.issueGroup summary small {
+  color: #64748b;
+  font-size: 9px;
+}
+
+.issueGroup summary strong {
+  min-width: 28px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #991b1b;
+  background: #fee2e2;
+  font-size: 11px;
+  text-align: center;
+}
+
+.issueItems {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 9px 10px 10px;
+  border-top: 1px solid #eef2f7;
+  background: #f8fafc;
+}
+
+.issueItem {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.issueItem p {
+  margin: 0;
+  color: #7f1d1d;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.issueItem small {
+  color: #64748b;
+  font-size: 9px;
+}
+
+.progress {
+  width: 100%;
+  height: 12px;
+}
+
+.progressText {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+@media (max-width: 1050px) {
+  .reviewGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .steps,
+  .ruleGrid,
+  .uploadGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .step small {
+    white-space: normal;
+  }
+}
