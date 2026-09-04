@@ -142,8 +142,8 @@ export default function BankQuizPage() {
   const [blueprints, setBlueprints] = useState<QuizBlueprint[]>([])
   const [selectedBlueprintId, setSelectedBlueprintId] = useState('')
   const [blueprintBusy, setBlueprintBusy] = useState(false)
-  const [quotaPreview, setQuotaPreview] = useState<BankReleaseQuizPlan | null>(null)
-  const [quotaPreviewBusy, setQuotaPreviewBusy] = useState(false)
+  const [planPreview, setPlanPreview] = useState<BankReleaseQuizPlan | null>(null)
+  const [planPreviewBusy, setPlanPreviewBusy] = useState(false)
   const [blueprintTitle, setBlueprintTitle] = useState('')
   const [blueprintSaveBusy, setBlueprintSaveBusy] = useState(false)
 
@@ -388,7 +388,7 @@ export default function BankQuizPage() {
       const next = { ...current, ...patch }
       return next
     }
-    setQuotaPreview(null)
+    setPlanPreview(null)
     if (kind === 'final') setFinalConfig(updater)
     else setQuizConfig(updater)
   }
@@ -493,19 +493,19 @@ export default function BankQuizPage() {
     }
   }
 
-  async function previewCurrentQuota() {
+  async function previewCurrentPlan() {
     if (!createModal || createModal.kind !== 'one') return
     const item = createModal.item
     if (item.action === 'final_test') {
-      setQuotaPreview(null)
+      setPlanPreview(null)
       setMessage({ tone: 'info', text: `Final test sẽ kiểm tra khả năng đáp ứng trên toàn bộ ${(item as any).source_release_ids?.length || 0} Release nguồn khi tạo, không kiểm tra riêng một Release.` })
       return
     }
     const releaseId = item.release_id
     if (!releaseId) return
     const config = configForAction(item.action)
-    setQuotaPreviewBusy(true)
-    setQuotaPreview(null)
+    setPlanPreviewBusy(true)
+    setPlanPreview(null)
     try {
       const result = await previewQuizFromBankRelease(headers, releaseId, {
         total_questions: config.totalQuestions,
@@ -515,16 +515,16 @@ export default function BankQuizPage() {
         max_families_per_bank: 2,
         quiz_blueprint_id: selectedBlueprintId || null,
       })
-      setQuotaPreview(result)
+      setPlanPreview(result)
     } catch (error) {
       setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Release không đáp ứng số câu/độ khó đã chọn.' })
     } finally {
-      setQuotaPreviewBusy(false)
+      setPlanPreviewBusy(false)
     }
   }
 
   useEffect(() => {
-    setQuotaPreview(null)
+    setPlanPreview(null)
     setSelectedBlueprintId('')
     setBlueprintTitle(createModal?.kind === 'one' ? `${createModal.item.action === 'final_test' ? 'Final test' : 'Quiz'} · ${createModal.item.chapter_title}` : '')
     loadBlueprintsForModal().catch(() => undefined)
@@ -767,7 +767,7 @@ export default function BankQuizPage() {
             <label>Quiz Blueprint<select className="input" disabled={blueprintBusy || busy || Boolean(creatingKey)} value={selectedBlueprintId} onChange={(event) => {
               const next = event.target.value
               setSelectedBlueprintId(next)
-              setQuotaPreview(null)
+              setPlanPreview(null)
               const blueprint = blueprints.find((item) => item.id === next)
               if (blueprint) applyBlueprintToConfig(blueprint, createModal.item.action)
             }}><option value="">Cấu hình thủ công</option>{blueprints.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.total_questions} câu</option>)}</select></label>
@@ -777,9 +777,9 @@ export default function BankQuizPage() {
           <div className="quiz-modal-grid">{(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} /> : null}{(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} /> : null}</div>
           <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : createModal.item.action === 'final_test' ? `Final test sẽ lấy candidate pool từ toàn bộ ${(createModal.item as any).source_release_ids?.length || 0} Release của các Bài đang chọn Tạo Quiz.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {normalizeOpenEdxCourseId(courseId) || '—'} · Quiz {quizConfig.totalQuestions} câu · độ khó {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.totalQuestions} câu · độ khó {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
           {(quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100) ? <div className="alert warning">Tổng tỷ lệ Easy/Medium/Hard của mỗi loại phải bằng 100%.</div> : null}
-          {createModal.kind === 'one' ? <div className="quota-preview-panel">
-            {createModal.item.action === 'final_test' ? <div className="alert info"><b>Final test dùng bộ câu hỏi tổng hợp.</b> Hệ thống sẽ kiểm tra khả năng đáp ứng trên toàn bộ {(createModal.item as any).source_release_ids?.length || 0} Release nguồn ngay trước khi tạo và chặn nếu thiếu câu.</div> : <><button className="btn secondary" type="button" disabled={quotaPreviewBusy || busy || Boolean(creatingKey)} onClick={previewCurrentQuota}>{quotaPreviewBusy ? 'Đang kiểm tra...' : 'Kiểm tra khả năng đáp ứng'}</button>
-            {quotaPreview ? <><div className="alert success"><b>Release đáp ứng cấu hình.</b> {quotaPreview.assigned_question_count} câu được phân vào {quotaPreview.slots.length} Problem Bank slot.{quotaPreview.flexibly_assigned_question_count ? ` Có ${quotaPreview.flexibly_assigned_question_count} câu CMS cũ được xếp linh hoạt vì chưa có độ khó.` : ''}</div>{quotaPreview.warnings?.length ? <div className="alert info"><b>Ngoại lệ cho dữ liệu CMS cũ</b><ul>{quotaPreview.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}<div className="quiz-matrix-preview"><table><thead><tr><th>Độ khó</th><th>Số câu</th></tr></thead><tbody>{Object.entries(quotaPreview.matrix_target_counts || {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => <tr key={key}><td>{key.replace(':auto', '').toUpperCase()}</td><td>{value}</td></tr>)}</tbody></table></div></> : null}</>}
+          {createModal.kind === 'one' ? <div className="quiz-plan-preview-panel">
+            {createModal.item.action === 'final_test' ? <div className="alert info"><b>Final test dùng bộ câu hỏi tổng hợp.</b> Hệ thống sẽ kiểm tra khả năng đáp ứng trên toàn bộ {(createModal.item as any).source_release_ids?.length || 0} Release nguồn ngay trước khi tạo và chặn nếu thiếu câu.</div> : <><button className="btn secondary" type="button" disabled={planPreviewBusy || busy || Boolean(creatingKey)} onClick={previewCurrentPlan}>{planPreviewBusy ? 'Đang kiểm tra...' : 'Kiểm tra khả năng đáp ứng'}</button>
+            {planPreview ? <><div className="alert success"><b>Release đáp ứng cấu hình.</b> {planPreview.assigned_question_count} câu được phân vào {planPreview.slots.length} Problem Bank slot.{planPreview.flexibly_assigned_question_count ? ` Có ${planPreview.flexibly_assigned_question_count} câu CMS cũ được xếp linh hoạt vì chưa có độ khó.` : ''}</div>{planPreview.warnings?.length ? <div className="alert info"><b>Ngoại lệ cho dữ liệu CMS cũ</b><ul>{planPreview.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}<div className="quiz-matrix-preview"><table><thead><tr><th>Độ khó</th><th>Số câu</th></tr></thead><tbody>{Object.entries(planPreview.matrix_target_counts || {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => <tr key={key}><td>{key.replace(':auto', '').toUpperCase()}</td><td>{value}</td></tr>)}</tbody></table></div></> : null}</>}
           </div> : null}
           <div className="modal-actions"><button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button><button className="btn" type="button" disabled={busy || Boolean(creatingKey) || (createModal.kind === 'all' ? (quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100 || !readyRows.length) : (createModal.item.action === 'final_test' ? finalDifficultyTotal !== 100 : quizDifficultyTotal !== 100))} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button></div>
       </> : null}

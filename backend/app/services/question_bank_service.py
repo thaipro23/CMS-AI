@@ -2671,11 +2671,11 @@ class VersionedQuestionBankService:
     def _published_release_question_rows(self, release: QuestionBankRelease) -> tuple[list[BankReleaseQuestion], dict[str, Question]]:
         return self._quiz_creation_workflow()._published_release_question_rows(release)
 
-    def _build_release_quiz_plan(self, *, release: QuestionBankRelease, total_questions: int = 15, difficulty_easy: int = 50, difficulty_medium: int = 30, difficulty_hard: int = 20, max_families_per_bank: int = 2, single_select_count: int | None = None, multi_select_count: int | None = None, text_input_count: int | None = None, numerical_input_count: int | None = None) -> dict:
-        return self._quiz_creation_workflow()._build_release_quiz_plan(release=release,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank,single_select_count=single_select_count,multi_select_count=multi_select_count,text_input_count=text_input_count,numerical_input_count=numerical_input_count)
+    def _build_release_quiz_plan(self, *, release: QuestionBankRelease, total_questions: int = 15, difficulty_easy: int = 50, difficulty_medium: int = 30, difficulty_hard: int = 20, max_families_per_bank: int = 2) -> dict:
+        return self._quiz_creation_workflow()._build_release_quiz_plan(release=release,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank)
 
-    def preview_quiz_from_release(self, *, bank_release_id: str, total_questions: int = 15, difficulty_easy: int = 50, difficulty_medium: int = 30, difficulty_hard: int = 20, max_families_per_bank: int = 2, single_select_count: int | None = None, multi_select_count: int | None = None, text_input_count: int | None = None, numerical_input_count: int | None = None, quiz_blueprint_id: str | None = None) -> dict:
-        return self._quiz_creation_workflow().preview_quiz_from_release(bank_release_id=bank_release_id,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank,single_select_count=single_select_count,multi_select_count=multi_select_count,text_input_count=text_input_count,numerical_input_count=numerical_input_count,quiz_blueprint_id=quiz_blueprint_id)
+    def preview_quiz_from_release(self, *, bank_release_id: str, total_questions: int = 15, difficulty_easy: int = 50, difficulty_medium: int = 30, difficulty_hard: int = 20, max_families_per_bank: int = 2, quiz_blueprint_id: str | None = None) -> dict:
+        return self._quiz_creation_workflow().preview_quiz_from_release(bank_release_id=bank_release_id,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank,quiz_blueprint_id=quiz_blueprint_id)
 
     async def create_quiz_from_release(
         self,
@@ -2688,10 +2688,6 @@ class VersionedQuestionBankService:
         difficulty_medium: int = 30,
         difficulty_hard: int = 20,
         max_families_per_bank: int = 2,
-        single_select_count: int | None = None,
-        multi_select_count: int | None = None,
-        text_input_count: int | None = None,
-        numerical_input_count: int | None = None,
         quiz_blueprint_id: str | None = None,
         custom_timer_enabled: bool = True,
         time_limit_minutes: int = 15,
@@ -2718,10 +2714,6 @@ class VersionedQuestionBankService:
             difficulty_medium=difficulty_medium,
             difficulty_hard=difficulty_hard,
             max_families_per_bank=max_families_per_bank,
-            single_select_count=single_select_count,
-            multi_select_count=multi_select_count,
-            text_input_count=text_input_count,
-            numerical_input_count=numerical_input_count,
             quiz_blueprint_id=quiz_blueprint_id,
             custom_timer_enabled=custom_timer_enabled,
             time_limit_minutes=time_limit_minutes,
@@ -2735,7 +2727,7 @@ class VersionedQuestionBankService:
         )
 
 
-    def create_quiz_blueprint(self, *, subject_id: str, chapter_id: str, subject_offering_id: str | None = None, title: str, total_questions: int, difficulty_easy: int, difficulty_medium: int, difficulty_hard: int, max_families_per_bank: int = 2, pick_count_per_slot: int = 1, single_select_count: int | None = None, multi_select_count: int | None = None, text_input_count: int | None = None, numerical_input_count: int | None = None) -> QuizBlueprint:
+    def create_quiz_blueprint(self, *, subject_id: str, chapter_id: str, subject_offering_id: str | None = None, title: str, total_questions: int, difficulty_easy: int, difficulty_medium: int, difficulty_hard: int, max_families_per_bank: int = 2, pick_count_per_slot: int = 1) -> QuizBlueprint:
         if difficulty_easy + difficulty_medium + difficulty_hard != 100:
             raise ValueError('Tỷ lệ EASY/MEDIUM/HARD phải bằng 100')
         subject=self.db.get(Subject,subject_id); chapter=self.db.get(SubjectChapter,chapter_id)

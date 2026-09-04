@@ -1,5 +1,12 @@
-/* ACMS project-wide spacing/layout contract. Loaded last intentionally.
-   Structural only: spacing, flow, overflow and responsive behavior. */
+/*
+ * Project-wide spacing safety contract.
+ *
+ * This file is loaded last, but intentionally uses :where() so it has zero
+ * selector specificity. Feature/page CSS can always override it normally.
+ * Keep only layout safety and spacing defaults here; page-specific
+ * dimensions, columns, sticky positioning and visual styling belong beside the
+ * owning page/component.
+ */
 :root {
   --acms-space-1: 4px;
   --acms-space-2: 8px;
@@ -7,49 +14,108 @@
   --acms-space-4: 16px;
   --acms-space-5: 20px;
   --acms-space-6: 24px;
+  --acms-page-gap: var(--layout-section-gap, 18px);
+  --acms-control-gap: var(--acms-space-3);
 }
 
-*, *::before, *::after { box-sizing: border-box; }
+:where(.enterprise-app-shell, .enterprise-workspace, .enterprise-content),
+:where(.enterprise-content.page-stack > *),
+:where(.workspace-section, .workspace-section-body, .enterprise-panel, .enterprise-table-shell),
+:where(.accessible-dialog-surface, .accessible-dialog-body) {
+  min-width: 0;
+}
 
-.app-main, .app-content, .enterprise-content, .page-root, .page-stack,
-.enterprise-standard-page, .bank-contract-page, .workspace-section,
-.popup-action-panel, .enterprise-panel, .academic-unified-card,
-.training-workspace-section, .bank-section-body { min-width: 0; }
+/* One spacing owner between top-level page regions. Child components own their
+   internal padding; this rule does not restyle cards or sections. */
+:where(.enterprise-content.page-stack) {
+  display: flex;
+  flex-direction: column;
+  row-gap: var(--acms-page-gap);
+}
 
-.page-stack, .bank-multipage, .enterprise-standard-page,
-.quiz-creation-workbench, .ap-sync-page { gap: var(--acms-space-5); }
+:where(
+  .enterprise-page-actions,
+  .workspace-section-actions,
+  .toolbar,
+  .toolbar-actions,
+  .section-actions,
+  .header-actions,
+  .button-row,
+  .filter-actions,
+  .settings-actions,
+  .class-action-row,
+  .dialog-action-row,
+  .modal-actions,
+  .accessible-dialog-footer
+) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--acms-control-gap);
+}
 
-.section-heading, .enterprise-section-heading, .workspace-section-header,
-.enterprise-content-section-head, .toolbar, .toolbar-actions, .section-actions,
-.header-actions, .button-row, .filter-actions, .settings-actions,
-.class-action-row { gap: var(--acms-space-3); }
-
-.toolbar, .toolbar-actions, .section-actions, .header-actions,
-.button-row, .filter-actions, .settings-actions, .class-action-row,
-.accessible-dialog-footer { flex-wrap: wrap; }
-
-.settings-form-grid, .quiz-small-grid, .option-grid,
-.compact-filter-grid, .filter-grid, .form-grid, .quiz-modal-grid {
+:where(
+  .settings-form-grid,
+  .quiz-small-grid,
+  .option-grid,
+  .compact-filter-grid,
+  .filter-grid,
+  .form-grid,
+  .quiz-modal-grid
+) {
+  min-width: 0;
   column-gap: var(--acms-space-4);
   row-gap: var(--acms-space-3);
 }
 
-.table-scroll, .enterprise-table-scroll, .data-table-scroll,
-.enterprise-data-table-scroll { max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; }
+:where(.table-scroll, .enterprise-table-scroll, .data-table-scroll, .enterprise-data-table-scroll) {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
 
-.accessible-dialog-surface { max-width: min(96vw, 1180px); max-height: min(92vh, 960px); min-width: 0; }
-.accessible-dialog-header, .accessible-dialog-footer { gap: var(--acms-space-3); }
-.accessible-dialog-body { min-width: 0; overflow: auto; overscroll-behavior: contain; }
-.quiz-modal-grid { align-items: start; }
-.quiz-timer-subhead { margin-top: var(--acms-space-4); }
+/* Dialog safety only. Width, padding and presentation remain owned by the
+   shared AccessibleDialog stylesheet or a dialog-specific class. */
+:where(.accessible-dialog-surface) {
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+}
+
+:where(.accessible-dialog-body) {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+:where(.quiz-modal-grid) { align-items: start; }
+:where(.quiz-timer-subhead) { margin-top: var(--acms-space-4); }
 
 @media (max-width: 960px) {
-  .quiz-modal-grid, .settings-form-grid, .form-grid { grid-template-columns: minmax(0, 1fr) !important; }
-  .page-stack, .bank-multipage, .enterprise-standard-page { gap: var(--acms-space-4); }
+  :where(.quiz-modal-grid, .settings-form-grid, .form-grid) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :where(.enterprise-content.page-stack) {
+    --acms-page-gap: var(--acms-space-4);
+  }
 }
 
 @media (max-width: 640px) {
-  .toolbar, .toolbar-actions, .section-actions, .header-actions,
-  .button-row, .filter-actions, .settings-actions, .class-action-row,
-  .accessible-dialog-footer { width: 100%; }
+  :where(
+    .enterprise-page-actions,
+    .workspace-section-actions,
+    .toolbar,
+    .toolbar-actions,
+    .section-actions,
+    .header-actions,
+    .button-row,
+    .filter-actions,
+    .settings-actions,
+    .class-action-row,
+    .dialog-action-row,
+    .modal-actions,
+    .accessible-dialog-footer
+  ) {
+    width: 100%;
+  }
 }

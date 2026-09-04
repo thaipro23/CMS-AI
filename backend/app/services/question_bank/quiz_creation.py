@@ -26,10 +26,6 @@ from app.models.question_bank import (
 )
 from app.modules.openedx_connector.factory import get_openedx_connector
 from app.services.question_family import normalize_difficulty
-from app.services.question_type_quota import (
-    feasible_type_difficulty_matrix,
-    feasible_type_difficulty_matrix_with_flexible,
-)
 from app.services.question_bank.helpers import (
     _ui_notice,
     extract_chapter_number,
@@ -797,6 +793,53 @@ class QuestionBankQuizCreationWorkflowService:
             remaining -= 1
         return counts
 
+    @staticmethod
+    def _difficulty_capacity_matrix(
+        *,
+        difficulty_targets: dict[str, int],
+        classified_capacity: dict[str, int],
+        flexible_capacity: int = 0,
+        label: str = 'Release',
+    ) -> tuple[dict[tuple[str, str], int], dict[tuple[str, str], int]]:
+        """Allocate only by difficulty; response types remain whatever the Release contains.
+
+        The synthetic ``auto`` column is retained only for rolling compatibility
+        with the Open edX slot shape. The planner never inspects or constrains
+        ``Question.question_type``.
+        """
+        order = ('easy', 'medium', 'hard')
+        remaining_flexible = max(0, int(flexible_capacity or 0))
+        flexible_by_difficulty = {diff: 0 for diff in order}
+        shortages: dict[str, int] = {}
+        for diff in order:
+            target = max(0, int(difficulty_targets.get(diff, 0) or 0))
+            available = max(0, int(classified_capacity.get(diff, 0) or 0))
+            shortage = max(0, target - available)
+            allocated = min(shortage, remaining_flexible)
+            flexible_by_difficulty[diff] = allocated
+            remaining_flexible -= allocated
+            if allocated < shortage:
+                shortages[diff] = shortage - allocated
+        if shortages:
+            available_summary = {
+                diff: max(0, int(classified_capacity.get(diff, 0) or 0))
+                for diff in order
+            }
+            raise ValueError(
+                f'{label} không đủ câu theo độ khó để đáp ứng cấu hình. '
+                f'Cần={difficulty_targets}; hiện có={available_summary}; '
+                f'chưa phân loại={max(0, int(flexible_capacity or 0))}.'
+            )
+        matrix = {
+            (diff, 'auto'): max(0, int(difficulty_targets.get(diff, 0) or 0))
+            for diff in order
+        }
+        flexible_matrix = {
+            (diff, 'auto'): flexible_by_difficulty[diff]
+            for diff in order
+        }
+        return matrix, flexible_matrix
+
     def _resolve_quiz_blueprint_config(
         self,
         *,
@@ -807,10 +850,6 @@ class QuestionBankQuizCreationWorkflowService:
         difficulty_medium: int,
         difficulty_hard: int,
         max_families_per_bank: int,
-        single_select_count: int | None,
-        multi_select_count: int | None,
-        text_input_count: int | None,
-        numerical_input_count: int | None,
     ) -> dict:
         config = {
             'total_questions': int(total_questions),
@@ -818,10 +857,6 @@ class QuestionBankQuizCreationWorkflowService:
             'difficulty_medium': int(difficulty_medium),
             'difficulty_hard': int(difficulty_hard),
             'max_families_per_bank': int(max_families_per_bank),
-            'single_select_count': single_select_count,
-            'multi_select_count': multi_select_count,
-            'text_input_count': text_input_count,
-            'numerical_input_count': numerical_input_count,
             'quiz_blueprint_id': None,
         }
         if not quiz_blueprint_id:
@@ -846,7 +881,7 @@ class QuestionBankQuizCreationWorkflowService:
             raise ValueError('Quiz Blueprint không thuộc version/offering của Release.')
         if int(blueprint.pick_count_per_slot or 1) != 1:
             raise ValueError(
-                'Question-type planner yêu cầu pick_count_per_slot=1 để bảo đảm quota chính xác.'
+                'Quiz Blueprint yêu cầu pick_count_per_slot=1 để giữ đúng tổng số câu.'
             )
         return {
             'total_questions': int(blueprint.total_questions),
@@ -854,10 +889,6 @@ class QuestionBankQuizCreationWorkflowService:
             'difficulty_medium': int(blueprint.difficulty_medium),
             'difficulty_hard': int(blueprint.difficulty_hard),
             'max_families_per_bank': int(blueprint.max_families_per_bank),
-            'single_select_count': blueprint.single_select_count,
-            'multi_select_count': blueprint.multi_select_count,
-            'text_input_count': blueprint.text_input_count,
-            'numerical_input_count': blueprint.numerical_input_count,
             'quiz_blueprint_id': blueprint.id,
         }
 
@@ -945,10 +976,6 @@ class QuestionBankQuizCreationWorkflowService:
         difficulty_medium: int,
         difficulty_hard: int,
         max_families_per_bank: int = 2,
-        single_select_count: int | None = None,
-        multi_select_count: int | None = None,
-        text_input_count: int | None = None,
-        numerical_input_count: int | None = None,
     ) -> dict:
         del max_families_per_bank  # Final groups by source Library to satisfy native ItemBank boundaries.
         if not source_releases:
@@ -1059,30 +1086,15 @@ class QuestionBankQuizCreationWorkflowService:
                 )
             legacy_rebalanced = effective != requested_original
             requested = effective
-        availability = {
-            (diff, qtype): len(grouped.get((diff, qtype), []))
-            for diff in ('easy', 'medium', 'hard')
-            for qtype in requested_types
-        }
-        flexible_availability = {qtype: len(flexible.get(qtype, [])) for qtype in requested_types}
-        if any(flexible_availability.values()):
-            matrix, flexible_matrix = feasible_type_difficulty_matrix_with_flexible(
-                difficulty_targets=requested,
-                type_targets=requested_types,
-                availability=availability,
-                flexible_availability=flexible_availability,
-            )
-        else:
-            matrix = feasible_type_difficulty_matrix(
-                difficulty_targets=requested,
-                type_targets=requested_types,
-                availability=availability,
-            )
-            flexible_matrix = {
-                (diff, qtype): 0
+        matrix, flexible_matrix = self._difficulty_capacity_matrix(
+            difficulty_targets=requested,
+            classified_capacity={
+                diff: len(grouped.get((diff, 'auto'), []))
                 for diff in ('easy', 'medium', 'hard')
-                for qtype in requested_types
-            }
+            },
+            flexible_capacity=len(flexible.get('auto', [])),
+            label='Final test',
+        )
 
         allocated_flexible: dict[tuple[str, str], list[dict]] = {
             (diff, qtype): [] for diff in ('easy', 'medium', 'hard') for qtype in requested_types
@@ -1257,7 +1269,6 @@ class QuestionBankQuizCreationWorkflowService:
             'total_questions': int(total_questions),
             'target_counts': {key.upper(): value for key, value in requested_original.items()},
             'effective_target_counts': {key.upper(): requested[key] for key in requested},
-            'question_type_target_counts': {},
             'matrix_target_counts': {diff.upper(): int(requested.get(diff, 0) or 0) for diff in ('easy', 'medium', 'hard')},
             'coverage': coverage,
             'slots': slots,
@@ -1302,10 +1313,6 @@ class QuestionBankQuizCreationWorkflowService:
         difficulty_medium: int,
         difficulty_hard: int,
         max_families_per_bank: int = 2,
-        single_select_count: int | None = None,
-        multi_select_count: int | None = None,
-        text_input_count: int | None = None,
-        numerical_input_count: int | None = None,
     ) -> dict:
         if release.status != 'published':
             raise ValueError(f'Release hiện là {release.status}; chỉ tạo quiz từ Release đã published.')
@@ -1644,33 +1651,15 @@ class QuestionBankQuizCreationWorkflowService:
                 )
             legacy_rebalanced = effective != requested_original
             requested = effective
-        availability = {
-            (diff, qtype): len(grouped_rows.get((diff, qtype), []))
-            for diff in ('easy', 'medium', 'hard')
-            for qtype in requested_types
-        }
-        flexible_availability = {
-            qtype: len(flexible_rows.get(qtype, []))
-            for qtype in requested_types
-        }
-        if any(flexible_availability.values()):
-            matrix, flexible_matrix = feasible_type_difficulty_matrix_with_flexible(
-                difficulty_targets=requested,
-                type_targets=requested_types,
-                availability=availability,
-                flexible_availability=flexible_availability,
-            )
-        else:
-            matrix = feasible_type_difficulty_matrix(
-                difficulty_targets=requested,
-                type_targets=requested_types,
-                availability=availability,
-            )
-            flexible_matrix = {
-                (diff, qtype): 0
+        matrix, flexible_matrix = self._difficulty_capacity_matrix(
+            difficulty_targets=requested,
+            classified_capacity={
+                diff: len(grouped_rows.get((diff, 'auto'), []))
                 for diff in ('easy', 'medium', 'hard')
-                for qtype in requested_types
-            }
+            },
+            flexible_capacity=len(flexible_rows.get('auto', [])),
+            label='Release',
+        )
         allocated_flexible_rows: dict[tuple[str, str], list[BankReleaseQuestion]] = {}
         for qtype in requested_types:
             candidates = sorted(
@@ -1774,8 +1763,6 @@ class QuestionBankQuizCreationWorkflowService:
             'total_questions': int(total_questions),
             'target_counts': {k.upper(): v for k, v in requested_original.items()},
             'effective_target_counts': {k.upper(): requested[k] for k in requested},
-            'question_type_target_counts': {},
-            'question_type_coverage': [],
             'matrix_target_counts': {diff.upper(): int(requested.get(diff, 0) or 0) for diff in ('easy', 'medium', 'hard')},
             'coverage': coverage,
             'slots': slots,
@@ -1801,10 +1788,6 @@ class QuestionBankQuizCreationWorkflowService:
         difficulty_medium: int = 30,
         difficulty_hard: int = 20,
         max_families_per_bank: int = 2,
-        single_select_count: int | None = None,
-        multi_select_count: int | None = None,
-        text_input_count: int | None = None,
-        numerical_input_count: int | None = None,
         quiz_blueprint_id: str | None = None,
     ) -> dict:
         release = self.db.get(QuestionBankRelease, bank_release_id)
@@ -1818,10 +1801,6 @@ class QuestionBankQuizCreationWorkflowService:
             difficulty_medium=difficulty_medium,
             difficulty_hard=difficulty_hard,
             max_families_per_bank=max_families_per_bank,
-            single_select_count=single_select_count,
-            multi_select_count=multi_select_count,
-            text_input_count=text_input_count,
-            numerical_input_count=numerical_input_count,
         )
         plan = self._build_release_quiz_plan(
             release=release,
@@ -1841,10 +1820,6 @@ class QuestionBankQuizCreationWorkflowService:
         difficulty_medium: int = 30,
         difficulty_hard: int = 20,
         max_families_per_bank: int = 2,
-        single_select_count: int | None = None,
-        multi_select_count: int | None = None,
-        text_input_count: int | None = None,
-        numerical_input_count: int | None = None,
         quiz_blueprint_id: str | None = None,
         custom_timer_enabled: bool = True,
         time_limit_minutes: int = 15,
@@ -1895,10 +1870,6 @@ class QuestionBankQuizCreationWorkflowService:
                 'difficulty_medium': int(difficulty_medium),
                 'difficulty_hard': int(difficulty_hard),
                 'max_families_per_bank': int(max_families_per_bank),
-                'single_select_count': single_select_count,
-                'multi_select_count': multi_select_count,
-                'text_input_count': text_input_count,
-                'numerical_input_count': numerical_input_count,
                 'quiz_blueprint_id': None,
             }
             quiz_blueprint_id = None
@@ -1919,7 +1890,7 @@ class QuestionBankQuizCreationWorkflowService:
                 }],
             }
         else:
-            resolved_quiz_config=self._resolve_quiz_blueprint_config(release=release,quiz_blueprint_id=quiz_blueprint_id,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank,single_select_count=single_select_count,multi_select_count=multi_select_count,text_input_count=text_input_count,numerical_input_count=numerical_input_count)
+            resolved_quiz_config=self._resolve_quiz_blueprint_config(release=release,quiz_blueprint_id=quiz_blueprint_id,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,max_families_per_bank=max_families_per_bank)
             quiz_blueprint_id=resolved_quiz_config.get('quiz_blueprint_id')
             validation = self._chapter_mapping_validation(
                 course_mapping_id=chapter_mapping.course_mapping_id,

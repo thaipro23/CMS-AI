@@ -1120,10 +1120,6 @@ export type QuizBlueprint = {
   difficulty_easy: number
   difficulty_medium: number
   difficulty_hard: number
-  single_select_count?: number | null
-  multi_select_count?: number | null
-  text_input_count?: number | null
-  numerical_input_count?: number | null
   max_families_per_bank: number
   pick_count_per_slot: number
   status: string
@@ -1515,8 +1511,6 @@ export type BankReleaseQuizPlan = BackendUiNotice & {
   total_questions: number
   target_counts: Record<string, number>
   effective_target_counts: Record<string, number>
-  question_type_target_counts: Record<string, number>
-  question_type_coverage: Record<string, any>[]
   matrix_target_counts: Record<string, number>
   coverage: Record<string, any>[]
   slots: Record<string, any>[]

@@ -163,6 +163,10 @@ export function DepartmentsPage() {
     () => new Set(subjectResults.map((subject) => subject.department_id)),
     [subjectResults],
   )
+  const departmentById = useMemo(
+    () => new Map(summaries.map(({ department }) => [department.id, department])),
+    [summaries],
+  )
   const visible = useMemo(() => summaries.filter(({ department, stats }) => (
     (
       matchesSearch(`${department.code} ${department.name}`, search)
@@ -338,6 +342,23 @@ export function DepartmentsPage() {
         totalCount={summaries.length}
         placeholder="Tìm bộ môn hoặc môn học..."
       />
+
+      {search.trim().length >= 2 && subjectResults.length ? <div className="bank-subject-search-results" aria-live="polite">
+        <div className="bank-subject-search-results__head">
+          <b>Môn học phù hợp</b>
+          <span>{subjectResults.length} kết quả · bấm để mở phiên bản môn</span>
+        </div>
+        <div className="bank-subject-search-results__list">
+          {subjectResults.slice(0, 8).map((subject) => {
+            const department = departmentById.get(subject.department_id)
+            return <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`}>
+              <span className="bank-subject-search-results__code">{subject.code}</span>
+              <span><b>{subject.name}</b><small>{department ? `${department.code} · ${department.name}` : 'Mở danh sách phiên bản môn'}</small></span>
+              <strong>Mở môn →</strong>
+            </Link>
+          })}
+        </div>
+      </div> : null}
 
       <EnterpriseDataTable
         tableId="bank-departments"

@@ -220,7 +220,7 @@ def test_public_error_mapper_keeps_domain_errors_and_sanitizes_unexpected_failur
     assert 'secret upstream' not in json.dumps(exc.detail)
 
 
-def test_frontend_workflows_expose_authoring_import_and_type_quota() -> None:
+def test_frontend_workflows_expose_authoring_mix_but_quiz_has_no_type_quota() -> None:
     chapter = read('frontend/app/bank/_components/pages/ChapterWorkspacePage.tsx')
     quiz = read('frontend/app/bank/quiz/page.tsx')
     api = read('frontend/lib/api.ts')
@@ -230,8 +230,8 @@ def test_frontend_workflows_expose_authoring_import_and_type_quota() -> None:
     assert 'question_type_single_select' in chapter and 'question_type_multi_select' in chapter
     assert 'BankOpenEdxImportModal' in chapter
     for marker in ('singleSelectCount', 'multiSelectCount', 'textInputCount', 'numericalInputCount'):
-        assert marker in quiz
-    assert 'Kiểm tra quota với Release' in quiz
+        assert marker not in quiz
+    assert 'Kiểm tra khả năng đáp ứng' in quiz
     assert 'previewBankOpenEdxImport' in api and 'importBankOpenEdxQuestions' in api
 
 
@@ -346,7 +346,7 @@ def test_model_gateway_rejects_wrong_count_and_bad_multi_answer_sets_before_db()
         gateway._validate_generated_questions(bad, question_count=1, target_question_type='multi_select')
 
 
-def test_legacy_quiz_type_quota_remains_all_single_select() -> None:
+def test_generation_type_count_helper_keeps_legacy_default() -> None:
     assert exact_type_counts(total=7) == {
         'single_select': 7,
         'multi_select': 0,

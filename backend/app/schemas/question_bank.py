@@ -926,8 +926,6 @@ class BankReleaseQuizPlanOut(BackendUiStatusMixin):
     total_questions: int
     target_counts: dict = Field(default_factory=dict)
     effective_target_counts: dict = Field(default_factory=dict)
-    question_type_target_counts: dict = Field(default_factory=dict)
-    question_type_coverage: list[dict] = Field(default_factory=list)
     matrix_target_counts: dict = Field(default_factory=dict)
     coverage: list[dict] = Field(default_factory=list)
     slots: list[dict] = Field(default_factory=list)
@@ -1007,7 +1005,7 @@ class QuizAutoMapRequest(BaseModel):
     chapter_plan: list[QuizChapterPlanItem] = Field(default_factory=list)
 
     @model_validator(mode='after')
-    def validate_auto_map_quota(self):
+    def validate_auto_map_difficulty_mix(self):
         if self.difficulty_easy + self.difficulty_medium + self.difficulty_hard != 100:
             raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%.')
         return self

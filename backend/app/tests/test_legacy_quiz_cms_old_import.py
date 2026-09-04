@@ -300,16 +300,47 @@ def test_cross_layer_contract_contains_route_type_and_navigation() -> None:
     assert 'searchSubjects(headers' in departments_source
     assert '}, 250)' in departments_source
     assert '/bank/subjects/${subject.id}/versions' in departments_source
-    assert 'subjectDepartmentFilter' in departments_source
-    assert 'visibleSubjectResults' in departments_source
+    assert 'subjectDepartmentIds' in departments_source
+    assert 'bank-subject-search-results' in departments_source
     import_page_source = (root / 'frontend/app/import-quiz-cms-old/page.tsx').read_text(
         encoding='utf-8'
     )
     assert 'Bổ sung ảnh và kiểm tra lại' in import_page_source
     assert 'Bỏ qua ${preview.invalid_question_count} câu lỗi' in import_page_source
-    assert 'BankWorkflowStepper' in import_page_source
-    assert 'errorGroups.map' in import_page_source
-    assert 'data-error-group={code}' in import_page_source
+    assert 'WorkspaceSection' in import_page_source
+    assert 'errorGroups.length ? errorGroups.map' in import_page_source
+
+
+def test_quiz_creation_contract_has_no_question_type_quota_and_spacing_is_scoped() -> None:
+    root = Path(__file__).resolve().parents[3]
+    runtime_paths = [
+        root / 'backend/app/schemas/question_bank.py',
+        root / 'backend/app/services/question_bank/quiz_creation.py',
+        root / 'backend/app/worker.py',
+        root / 'frontend/app/bank/quiz/page.tsx',
+        root / 'frontend/lib/api.ts',
+    ]
+    forbidden = (
+        'single_select_count',
+        'multi_select_count',
+        'text_input_count',
+        'numerical_input_count',
+        'question_type_target_counts',
+        'question_type_coverage',
+    )
+    for path in runtime_paths:
+        source = path.read_text(encoding='utf-8')
+        for token in forbidden:
+            assert token not in source, f'{token} vẫn còn trong runtime tạo Quiz: {path}'
+
+    spacing = (root / 'frontend/styles/project-spacing-contract.css').read_text(encoding='utf-8')
+    globals_css = (root / 'frontend/app/globals.css').read_text(encoding='utf-8')
+    bank_css = (root / 'frontend/styles/bank-design-contract.css').read_text(encoding='utf-8')
+    assert ':where(.enterprise-content.page-stack)' in spacing
+    assert '!important' not in spacing
+    assert '.page-stack, .bank-multipage, .enterprise-standard-page' not in spacing
+    assert '.subject-quick-search' not in globals_css
+    assert '.bank-departments-page .bank-subject-search-results' in bank_css
 
 
 def test_end_to_end_import_creates_su26_audit_and_is_retry_idempotent(tmp_path: Path) -> None:
@@ -412,7 +443,7 @@ def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -
                 option_c='',
                 option_d='',
                 correct_answer='A',
-                question_type='single_select',
+                question_type='multi_select' if index % 2 else 'single_select',
                 source_type='legacy_quiz_excel',
                 source_evidence=(
                     '{"difficulty_classified":false,"threshold_raw":"",'
@@ -442,10 +473,6 @@ def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -
             difficulty_easy=34,
             difficulty_medium=33,
             difficulty_hard=33,
-            single_select_count=3,
-            multi_select_count=0,
-            text_input_count=0,
-            numerical_input_count=0,
         )
         assert plan['classification_policy'] == 'legacy_flexible_fallback'
         assert plan['unclassified_difficulty_question_count'] == 5
@@ -498,17 +525,85 @@ def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -
             ),
         ])
         db.commit()
-        with pytest.raises(ValueError, match='không đủ tổ hợp'):
+        with pytest.raises(ValueError, match='không đủ câu theo độ khó'):
             workflow._build_release_quiz_plan(
                 release=strict_release,
                 total_questions=1,
                 difficulty_easy=100,
                 difficulty_medium=0,
                 difficulty_hard=0,
-                single_select_count=1,
-                multi_select_count=0,
-                text_input_count=0,
-                numerical_input_count=0,
             )
+    finally:
+        db.close()
+
+
+def test_legacy_quiz_rebalances_missing_hard_without_question_type_quota() -> None:
+    db = _session()
+    try:
+        release = QuestionBankRelease(
+            id='release-legacy-mixed-types-no-hard',
+            bank_version_id='version-legacy-mixed-types-no-hard',
+            subject_id='subject-legacy-mixed-types-no-hard',
+            chapter_id='chapter-legacy-mixed-types-no-hard',
+            release_code='AUT218-FA26-B1-v1',
+            status='published',
+            openedx_library_key='lib:FPT:aut218-fa26-b1-v1',
+            metadata_json={'verification_complete': True},
+        )
+        db.add(release)
+        for index in range(18):
+            difficulty = 'easy' if index < 12 else 'medium'
+            question_id = f'legacy-mixed-no-hard-{index}'
+            db.add(Question(
+                id=question_id,
+                course_id='bank:version-legacy-mixed-types-no-hard',
+                bank_version_id='version-legacy-mixed-types-no-hard',
+                difficulty=difficulty,
+                learning_objective=f'LO {index + 1}',
+                topic=f'Chủ đề {index + 1}',
+                question_text=f'Câu legacy hỗn hợp {index + 1}?',
+                option_a='Đúng',
+                option_b='Sai',
+                option_c='',
+                option_d='',
+                correct_answer='A' if index % 3 else 'AB',
+                question_type='multi_select' if index % 3 == 0 else 'single_select',
+                source_type='legacy_quiz_excel',
+                source_evidence='{"difficulty_classified":true,"threshold_raw":"1"}',
+                status='published',
+            ))
+            db.add(BankReleaseQuestion(
+                bank_release_id=release.id,
+                question_id=question_id,
+                difficulty=difficulty,
+                openedx_library_problem_id=f'lb:problem:{question_id}',
+            ))
+        db.commit()
+
+        workflow = QuestionBankQuizCreationWorkflowService(SimpleNamespace(db=db))
+        plan = workflow._build_release_quiz_plan(
+            release=release,
+            total_questions=15,
+            difficulty_easy=50,
+            difficulty_medium=30,
+            difficulty_hard=20,
+        )
+
+        assert plan['target_counts'] == {'EASY': 7, 'MEDIUM': 5, 'HARD': 3}
+        assert plan['effective_target_counts'] == {'EASY': 9, 'MEDIUM': 6, 'HARD': 0}
+        assert len(plan['slots']) == 15
+        assert sum(int(slot['pick_count']) for slot in plan['slots']) == 15
+        assigned_ids = {
+            question_id
+            for slot in plan['slots']
+            for question_id in slot['question_ids']
+        }
+        assigned_types = {
+            db.get(Question, question_id).question_type
+            for question_id in assigned_ids
+        }
+        assert assigned_types == {'single_select', 'multi_select'}
+        assert 'question_type_target_counts' not in plan
+        assert any('tự cân lại' in warning for warning in plan['warnings'])
     finally:
         db.close()

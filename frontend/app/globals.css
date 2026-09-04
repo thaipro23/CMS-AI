@@ -8816,31 +8816,6 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
 .quiz-blueprint-save-row { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 8px; align-items: center; }
 @media (max-width: 680px) { .quiz-blueprint-save-row { grid-template-columns: 1fr; } }
 
-/* Subject quick search + legacy CMS quiz import */
-.subject-quick-search { display: grid; gap: 12px; padding: 16px; border: 1px solid #cbdcf4; border-radius: 14px; background: linear-gradient(135deg, #f5f9ff, #fff 72%); box-shadow: 0 8px 24px rgba(30, 64, 175, .045); }
-.subject-quick-search-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
-.subject-quick-search-heading > div { display: grid; gap: 1px; }
-.subject-quick-search-heading span { color: #2563eb; font-size: 10px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
-.subject-quick-search-heading small { color: #64748b; font-size: 12px; }
-.subject-quick-search-heading b { color: #172554; font-size: 17px; }
-.subject-quick-search-controls { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(220px, 300px); gap: 10px; }
-.subject-quick-search-box { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 48px; padding: 3px 8px 3px 12px; border: 1px solid #93b5e8; border-radius: 11px; background: #fff; box-shadow: 0 2px 8px rgba(30, 64, 175, .045); }
-.subject-quick-search-box:focus-within { border-color: #2563eb; box-shadow: var(--od-focus); }
-.subject-quick-search-box > .input { min-height: 40px; border: 0; box-shadow: none; }
-.subject-quick-search-filter { position: relative; min-width: 0; }
-.subject-quick-search-filter > span { position: absolute; z-index: 1; top: 6px; left: 12px; color: #64748b; font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
-.subject-quick-search-filter > .input { width: 100%; min-height: 48px; padding: 19px 34px 5px 11px; border-color: #cbd5e1; background: #fff; font-weight: 650; }
-.subject-quick-search-results { display: grid; gap: 6px; max-height: 370px; overflow: auto; padding: 2px; }
-.subject-quick-search-result-meta { display: flex; justify-content: space-between; gap: 12px; padding: 3px 2px 5px; color: #64748b; font-size: 11px; }
-.subject-quick-search-result-meta span { color: #334155; font-weight: 750; }
-.subject-quick-search-results > a { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; min-height: 56px; padding: 9px 12px; border: 1px solid #e2e8f0; border-radius: 10px; color: #0f172a; background: #fff; text-decoration: none; transition: border-color .14s ease, background .14s ease, transform .14s ease; }
-.subject-quick-search-results > a:hover { border-color: #7aa5e8; background: #f8fbff; transform: translateY(-1px); }
-.subject-quick-search-results > a > span:nth-child(2) { display: grid; gap: 2px; }
-.subject-quick-search-results small { color: #64748b; }
-.subject-quick-search-results strong { color: #1d4ed8; font-size: 12px; white-space: nowrap; }
-.subject-quick-search-code { display: inline-flex; justify-content: center; padding: 6px 8px; border-radius: 7px; color: #1e40af; background: #dbeafe; font-weight: 850; }
-
-
 .dropdown-blank-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: 9px; background: #eff6ff; }
 .dropdown-blank-toolbar > div { display: flex; gap: 6px; }
 .dropdown-choice-index { display: inline-flex; place-content: center; min-width: 25px; padding: 3px; border-radius: 6px; color: #1d4ed8; background: #dbeafe; font-weight: 800; }
@@ -8850,13 +8825,8 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
 .dropdown-fill-preview > div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 8px; padding: 8px; border-radius: 8px; background: #eff6ff; }
 .dropdown-fill-preview span { color: #64748b; }
 
-@media (max-width: 900px) {
-  .subject-quick-search-controls { grid-template-columns: 1fr; }
-}
 @media (max-width: 620px) {
-  .subject-quick-search-heading, .dropdown-blank-toolbar { align-items: stretch; flex-direction: column; }
-  .subject-quick-search-results > a { grid-template-columns: 78px minmax(0, 1fr) auto; }
-  .subject-quick-search-results > a strong { grid-column: 2 / 4; }
+  .dropdown-blank-toolbar { align-items: stretch; flex-direction: column; }
 }
 
 /* Teacher progress reminder — class-scoped Mail Send workflow. */

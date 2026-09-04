@@ -601,3 +601,74 @@
   background: #f8fbff;
   color: #1d4ed8;
 }
+
+/* Department search results belong only to the department page. Keeping this
+   scoped prevents subject-search spacing from leaking into other tables. */
+.bank-departments-page .bank-subject-search-results {
+  display: grid;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-block: 1px solid #e2e8f0;
+  background: #f8fbff;
+}
+
+.bank-departments-page .bank-subject-search-results__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.bank-departments-page .bank-subject-search-results__head b { color: #0f172a; }
+
+.bank-departments-page .bank-subject-search-results__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 8px;
+}
+
+.bank-departments-page .bank-subject-search-results__list > a {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  color: #0f172a;
+  background: #fff;
+  text-decoration: none;
+}
+
+.bank-departments-page .bank-subject-search-results__list > a:hover,
+.bank-departments-page .bank-subject-search-results__list > a:focus-visible {
+  border-color: #7aa5e8;
+  background: #f8fbff;
+}
+
+.bank-departments-page .bank-subject-search-results__list > a > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.bank-departments-page .bank-subject-search-results__list b,
+.bank-departments-page .bank-subject-search-results__list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bank-departments-page .bank-subject-search-results__list small { color: #64748b; }
+.bank-departments-page .bank-subject-search-results__list strong { color: #1d4ed8; font-size: 12px; white-space: nowrap; }
+.bank-departments-page .bank-subject-search-results__code { padding: 5px 7px; border-radius: 7px; color: #1e40af; background: #dbeafe; font-weight: 800; }
+
+@media (max-width: 640px) {
+  .bank-departments-page .bank-subject-search-results__list { grid-template-columns: minmax(0, 1fr); }
+  .bank-departments-page .bank-subject-search-results__list > a { grid-template-columns: auto minmax(0, 1fr); }
+  .bank-departments-page .bank-subject-search-results__list strong { grid-column: 2; }
+}
