@@ -1,0 +1,55 @@
+name: Temporary users RBAC scope fix
+on:
+  push:
+    paths:
+      - '.github/workflows/tmp-users-rbac-scope-fix.yml'
+      - '.github/scripts/tmp_users_rbac_scope_fix.py'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/import-quiz-cms-old-su26
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply users RBAC scope fix
+        run: python .github/scripts/tmp_users_rbac_scope_fix.py
+      - name: Contract checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -n "canLoadBankGrantScopes" frontend/app/users/page.tsx
+          grep -n "canLoadBankGrantScopes ? searchDepartments" frontend/app/users/page.tsx
+          grep -n "isSystemAdmin ? getAcademicCampuses" frontend/app/users/page.tsx
+          grep -n "CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS" backend/app/services/business_rbac.py
+          if sed -n '/CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS/,/^}/p' backend/app/services/business_rbac.py | grep -q "'user.manage_all'"; then
+            echo 'All-campus owner is overprivileged' >&2
+            exit 1
+          fi
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Frontend lint
+        working-directory: frontend
+        run: npm run lint -- --max-warnings=0
+      - name: Frontend production build
+        working-directory: frontend
+        run: npm run build
+      - name: Diff check
+        run: git diff --check
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add frontend/app/users/page.tsx
+          git diff --cached --check
+          git commit -m 'fix: keep all-campus RBAC page within granted scopes'
+          git push origin HEAD:feat/import-quiz-cms-old-su26
