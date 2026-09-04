@@ -119,9 +119,6 @@ export function DepartmentsPage() {
   const [editValue, setEditValue] = useState<DepartmentFormValue>({ code: '', name: '' })
   const [deleteTarget, setDeleteTarget] = useState<Department | null>(null)
   const [subjectResults, setSubjectResults] = useState<Subject[]>([])
-  const [subjectSearching, setSubjectSearching] = useState(false)
-  const [subjectSearchError, setSubjectSearchError] = useState('')
-  const [subjectDepartmentFilter, setSubjectDepartmentFilter] = useState('all')
 
   const canCreateDepartment = can('department.manage_all')
   const search = tableState.q
@@ -148,23 +145,13 @@ export function DepartmentsPage() {
     const query = search.trim()
     if (query.length < 2) {
       setSubjectResults([])
-      setSubjectSearching(false)
-      setSubjectSearchError('')
       return
     }
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
-      setSubjectSearching(true)
-      setSubjectSearchError('')
       searchSubjects(headers, { query, signal: controller.signal })
-        .then(setSubjectResults)
-        .catch((error) => {
-          if (controller.signal.aborted) return
-          setSubjectSearchError(error instanceof Error ? error.message : 'Không thể tìm môn học.')
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setSubjectSearching(false)
-        })
+        .then((rows) => { if (!controller.signal.aborted) setSubjectResults(rows) })
+        .catch(() => { if (!controller.signal.aborted) setSubjectResults([]) })
     }, 250)
     return () => {
       window.clearTimeout(timer)
@@ -172,19 +159,21 @@ export function DepartmentsPage() {
     }
   }, [headers, search])
 
+  const subjectDepartmentIds = useMemo(
+    () => new Set(subjectResults.map((subject) => subject.department_id)),
+    [subjectResults],
+  )
   const visible = useMemo(() => summaries.filter(({ department, stats }) => (
-    matchesSearch(`${department.code} ${department.name}`, search) && bankStatusMatches(stats, statusFilter)
-  )), [search, statusFilter, summaries])
+    (
+      matchesSearch(`${department.code} ${department.name}`, search)
+      || (search.trim().length >= 2 && subjectDepartmentIds.has(department.id))
+    )
+    && bankStatusMatches(stats, statusFilter)
+  )), [search, statusFilter, subjectDepartmentIds, summaries])
 
   const totalPages = Math.max(1, Math.ceil(visible.length / tableState.pageSize))
   const safePage = Math.min(tableState.page, totalPages)
   const pageRows = visible.slice((safePage - 1) * tableState.pageSize, safePage * tableState.pageSize)
-  const departmentById = useMemo(() => new Map(
-    summaries.map(({ department }) => [department.id, department]),
-  ), [summaries])
-  const visibleSubjectResults = useMemo(() => subjectResults.filter((subject) => (
-    subjectDepartmentFilter === 'all' || subject.department_id === subjectDepartmentFilter
-  )), [subjectDepartmentFilter, subjectResults])
 
   const openEditDepartment = (department: Department) => {
     setEditing(department)
@@ -339,48 +328,6 @@ export function DepartmentsPage() {
     <InlineNotice notice={operationNotice} />
     {busy ? <div className="inline-system-status" role="status" aria-live="polite"><span className="spinner tiny" aria-hidden="true" />{busyLabel}</div> : null}
 
-    <section className="subject-quick-search" aria-label="Tìm bộ môn hoặc môn học">
-      <div className="subject-quick-search-heading">
-        <div><span>Tìm kiếm</span><b>Tìm bộ môn hoặc môn học</b></div>
-        <small>Một ô tìm kiếm cho cả bảng bộ môn và truy cập nhanh môn học.</small>
-      </div>
-      <div className="subject-quick-search-controls">
-        <div className="subject-quick-search-box">
-          <span aria-hidden="true">⌕</span>
-          <input
-            className="input"
-            value={search}
-            onChange={(event) => updateTableState({ q: event.target.value })}
-            placeholder="Tìm bộ môn hoặc môn học, ví dụ CNTT, Cơ điện, MEC229..."
-            aria-label="Tìm bộ môn hoặc môn học"
-            autoComplete="off"
-          />
-          {subjectSearching ? <span className="spinner tiny" aria-label="Đang tìm" /> : null}
-          {search ? <button type="button" className="icon-button" aria-label="Xóa từ khóa" onClick={() => updateTableState({ q: '' })}>×</button> : null}
-        </div>
-        <label className="subject-quick-search-filter">
-          <span>Bộ môn</span>
-          <select className="input" aria-label="Lọc kết quả theo bộ môn" value={subjectDepartmentFilter} onChange={(event) => setSubjectDepartmentFilter(event.target.value)}>
-            <option value="all">Tất cả bộ môn</option>
-            {summaries.map(({ department }) => <option key={department.id} value={department.id}>{department.code} · {department.name}</option>)}
-          </select>
-        </label>
-      </div>
-      {subjectSearchError ? <div className="alert error">{subjectSearchError}</div> : null}
-      {search.trim().length >= 2 && !subjectSearching && !subjectSearchError ? <div className="subject-quick-search-results">
-        <div className="subject-quick-search-result-meta"><span>{visibleSubjectResults.length} môn phù hợp</span><small>Kết quả trong phạm vi được phân quyền</small></div>
-        {visibleSubjectResults.length ? visibleSubjectResults.map((subject) => {
-          const department = departmentById.get(subject.department_id)
-          return <Link key={subject.id} href={`/bank/subjects/${subject.id}/versions`}>
-            <span className="subject-quick-search-code">{subject.code}</span>
-            <span><b>{subject.name}</b><small>{department ? `${department.code} · ${department.name}` : 'Bộ môn trong phạm vi được phân quyền'}</small></span>
-            <StatusBadge status={subject.status} label={subject.status === 'active' ? 'Hoạt động' : 'Tạm khóa'} />
-            <strong>Mở môn →</strong>
-          </Link>
-        }) : <p>Không tìm thấy môn phù hợp.</p>}
-      </div> : null}
-    </section>
-
     <section className="bank-hierarchy-panel" aria-label="Danh sách bộ môn">
       <BankTableToolbar
         search={search}
@@ -390,7 +337,6 @@ export function DepartmentsPage() {
         resultCount={visible.length}
         totalCount={summaries.length}
         placeholder="Tìm bộ môn hoặc môn học..."
-        hideSearch
       />
 
       <EnterpriseDataTable

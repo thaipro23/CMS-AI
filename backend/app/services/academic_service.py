@@ -121,9 +121,9 @@ class AcademicService:
                 f'Open edX Connector đang thiếu hoặc cũ hơn {self.CONNECTOR_MIN_RUNTIME_VERSION} cho Course {course_id}. '
                 'Hãy cập nhật plugin, restart lms/cms/lms-worker/cms-worker, rồi kiểm tra CONNECTOR_VERSION trước khi Cập nhật điểm.'
             )
-        if contract and str(contract) != self.CONNECTOR_MIN_CONTRACT_VERSION:
+        if contract and not self._version_at_least(contract, self.CONNECTOR_MIN_CONTRACT_VERSION):
             raise RuntimeError(
-                f'Open edX Connector contract không khớp ({contract}). Yêu cầu {self.CONNECTOR_MIN_CONTRACT_VERSION}. '
+                f'Open edX Connector contract quá cũ ({contract}). Yêu cầu tối thiểu {self.CONNECTOR_MIN_CONTRACT_VERSION}. '
                 'Dừng ghi snapshot để tránh ghi đè dữ liệu đúng bằng payload sai contract.'
             )
         if not progress_contract:
