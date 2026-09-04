@@ -1,0 +1,66 @@
+name: Assistant restore clean globals
+
+on:
+  push:
+    branches:
+      - feat/import-quiz-cms-old-su26
+    paths:
+      - .github/workflows/_assistant_restore_globals_clean.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/import-quiz-cms-old-su26
+          fetch-depth: 0
+
+      - name: Restore globals.css from clean pre-UI-regression baseline
+        shell: bash
+        run: |
+          git checkout dfa3b5f049f621c24acc50b60567e19d5fc6d449 -- frontend/app/globals.css
+
+      - name: Verify requested behavior remains source-scoped
+        shell: bash
+        run: |
+          grep -q 'placeholder="Tìm bộ môn hoặc môn học..."' frontend/app/bank/_components/pages/DepartmentsPage.tsx
+          grep -q 'subjectDepartmentIds.has(department.id)' frontend/app/bank/_components/pages/DepartmentsPage.tsx
+          ! grep -q 'className="subject-quick-search"' frontend/app/bank/_components/pages/DepartmentsPage.tsx
+          grep -q 'Có sinh viên chưa ghi danh' frontend/app/student-management/StudentManagementPlatformPage.tsx
+          grep -q 'Có sinh viên chưa học' frontend/app/student-management/StudentManagementPlatformPage.tsx
+          grep -q 'Có sinh viên điểm thấp' frontend/app/student-management/StudentManagementPlatformPage.tsx
+          grep -q '_version_at_least(contract, self.CONNECTOR_MIN_CONTRACT_VERSION)' backend/app/services/academic_service.py
+          ! grep -q 'bank hierarchy + legacy import visual cleanup' frontend/app/globals.css
+          ! grep -q 'import overlay hard stop' frontend/app/globals.css
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Frontend production build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Commit clean globals and remove helper workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/_assistant_restore_globals_clean.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/app/globals.css .github/workflows/_assistant_restore_globals_clean.yml
+          git diff --cached --check
+          git commit -m "fix: restore clean global stylesheet baseline"
+          git push origin HEAD:feat/import-quiz-cms-old-su26
