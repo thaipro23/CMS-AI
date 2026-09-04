@@ -9032,3 +9032,199 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
   .progress-email-dialog-footer .dialog-action-row { width: 100%; }
   .progress-email-dialog-footer .btn { flex: 1; justify-content: center; }
 }
+
+/* v25.9.16.7.2.64.16.5.7.2.18 — bank hierarchy + legacy import visual cleanup */
+/* Page-scoped to avoid another global style regression. */
+.bank-departments-page,
+.legacy-quiz-import-page {
+  width: min(100%, 1240px);
+  margin-inline: auto;
+  gap: 14px;
+}
+
+.bank-departments-page .bank-page-identity,
+.legacy-quiz-import-page .bank-page-identity {
+  min-height: 0;
+  padding: 2px 2px 4px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bank-departments-page .bank-page-identity__copy h1,
+.legacy-quiz-import-page .bank-page-identity__copy h1 {
+  font-size: clamp(24px, 2.2vw, 30px);
+  letter-spacing: -.035em;
+}
+.bank-departments-page .bank-page-identity__copy p,
+.legacy-quiz-import-page .bank-page-identity__copy p {
+  margin-top: 3px;
+  max-width: 760px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.bank-departments-page .subject-quick-search {
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid #dbe4f0;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .03);
+}
+.bank-departments-page .subject-quick-search-heading { align-items: center; }
+.bank-departments-page .subject-quick-search-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.bank-departments-page .subject-quick-search-heading b {
+  font-size: 14px;
+  color: #0f172a;
+}
+.bank-departments-page .subject-quick-search-heading small {
+  margin-left: auto;
+  font-size: 11px;
+}
+.bank-departments-page .subject-quick-search-controls {
+  grid-template-columns: minmax(320px, 1fr) minmax(190px, 250px);
+  gap: 8px;
+}
+.bank-departments-page .subject-quick-search-box,
+.bank-departments-page .subject-quick-search-filter > .input { min-height: 42px; }
+.bank-departments-page .subject-quick-search-box {
+  padding-block: 0;
+  border-color: #cbd5e1;
+  box-shadow: none;
+}
+.bank-departments-page .subject-quick-search-box > .input {
+  min-height: 38px;
+  margin: 0;
+}
+.bank-departments-page .subject-quick-search-filter > .input {
+  margin: 0;
+  padding-top: 17px;
+}
+.bank-departments-page .subject-quick-search-results { max-height: 260px; }
+.bank-departments-page .subject-quick-search-results > a {
+  min-height: 48px;
+  padding: 8px 10px;
+  box-shadow: none;
+}
+.bank-departments-page .bank-hierarchy-panel {
+  overflow: hidden;
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, .035);
+}
+.bank-departments-page .bank-hierarchy-panel .bank-toolbar,
+.bank-departments-page .bank-hierarchy-panel .table-toolbar {
+  margin: 0;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid #e5eaf1;
+  border-radius: 0;
+  background: #fbfcfe;
+  box-shadow: none;
+}
+.bank-departments-page .bank-hierarchy-panel .enterprise-table-scroll {
+  border: 0;
+  border-radius: 0;
+}
+.bank-departments-page .enterprise-data-table th,
+.bank-departments-page .enterprise-data-table td { vertical-align: middle; }
+
+.legacy-quiz-import-page .bank-workflow-stepper {
+  gap: 8px;
+  padding: 10px;
+  border-radius: 13px;
+  box-shadow: none;
+}
+.legacy-quiz-import-page .bank-workflow-step {
+  min-height: 58px;
+  padding: 9px 11px;
+  border-radius: 10px;
+}
+.legacy-quiz-import-page .legacy-import-source-panel,
+.legacy-quiz-import-page .legacy-import-preview-heading,
+.legacy-quiz-import-page .legacy-import-workbooks,
+.legacy-quiz-import-page .legacy-import-confirm,
+.legacy-quiz-import-page .legacy-import-job {
+  border-color: #dbe4f0;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, .035);
+}
+.legacy-quiz-import-page .legacy-import-source-heading,
+.legacy-quiz-import-page .legacy-import-preview-heading { padding: 12px 14px; }
+.legacy-import-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.legacy-quiz-import-page .legacy-import-summary { gap: 8px; }
+.legacy-quiz-import-page .legacy-import-summary > div {
+  min-height: 78px;
+  padding: 11px 12px;
+  border-radius: 11px;
+  box-shadow: none;
+}
+.legacy-quiz-import-page .legacy-import-summary > div > b { font-size: 21px; }
+.legacy-quiz-import-page .legacy-import-review-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  gap: 12px;
+  align-items: start;
+}
+.legacy-quiz-import-page .legacy-import-review-sidebar {
+  position: sticky;
+  top: 86px;
+  gap: 10px;
+}
+.legacy-quiz-import-page .legacy-import-resolution,
+.legacy-quiz-import-page .legacy-import-error-groups,
+.legacy-quiz-import-page .legacy-import-breakdown,
+.legacy-quiz-import-page .legacy-import-warning-box,
+.legacy-quiz-import-page .legacy-import-skipped {
+  border-radius: 11px;
+  box-shadow: none;
+}
+.legacy-quiz-import-page .legacy-import-workbooks .section-head {
+  margin: 0;
+  padding: 13px 14px 10px;
+}
+.legacy-quiz-import-page .legacy-import-workbooks > details > summary {
+  min-height: 48px;
+  padding: 9px 12px;
+}
+.legacy-quiz-import-page .legacy-import-sheet-table { font-size: 11px; }
+.legacy-quiz-import-page .legacy-import-confirm {
+  position: static;
+  inset: auto;
+  margin: 0;
+  padding: 12px 14px;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+.legacy-quiz-import-page .legacy-import-confirm .btn { min-width: 142px; }
+
+@media (max-width: 980px) {
+  .bank-departments-page,
+  .legacy-quiz-import-page { width: 100%; }
+  .legacy-quiz-import-page .legacy-import-review-grid { grid-template-columns: 1fr; }
+  .legacy-quiz-import-page .legacy-import-review-sidebar { position: static; }
+}
+@media (max-width: 720px) {
+  .bank-departments-page .subject-quick-search-heading,
+  .bank-departments-page .subject-quick-search-heading > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .bank-departments-page .subject-quick-search-heading small { margin-left: 0; }
+  .bank-departments-page .subject-quick-search-controls { grid-template-columns: 1fr; }
+  .legacy-import-preview-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

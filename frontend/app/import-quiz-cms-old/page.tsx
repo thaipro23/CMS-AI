@@ -192,7 +192,7 @@ export default function ImportQuizCmsOldPage() {
       ]}
     />
 
-    <section className="legacy-import-source-panel">
+    {!preview ? <section className="legacy-import-source-panel">
       <div className="legacy-import-source-heading">
         <div><span>Nguồn dữ liệu</span><h2>Chọn file cần import</h2></div>
         <p>Tên file phải bắt đầu bằng mã môn. Mỗi sheet tương ứng một bài trong SU26.</p>
@@ -215,14 +215,17 @@ export default function ImportQuizCmsOldPage() {
         <div><b>Kiểm tra trước, chưa ghi dữ liệu</b><span>Hệ thống chỉ tạo dữ liệu sau khi bạn xác nhận ở bước cuối.</span></div>
         <button className="btn" type="button" disabled={busy || !workbooks.length} onClick={() => void runPreview()}>{busyAction === 'preview' ? 'Đang kiểm tra...' : preview ? 'Kiểm tra lại file' : 'Kiểm tra file'}</button>
       </div>
-    </section>
+    </section> : null}
 
     {error ? <div className="alert error"><b>Không thể hoàn tất</b><span>{error}</span></div> : null}
 
     {preview ? <>
       <section className="legacy-import-preview-heading">
         <div><span>Kết quả kiểm tra</span><h2>{preview.workbook_count === 1 ? preview.workbooks[0]?.filename : `${preview.workbook_count} file Excel`}</h2><p>{targetSubjects || 'Chưa xác định được môn đích'} · {preview.sheet_count} sheet</p></div>
-        <StatusBadge status={preview.can_commit ? 'ready' : 'failed'} label={preview.can_commit ? 'Sẵn sàng import' : 'Cần xử lý'} />
+        <div className="legacy-import-preview-actions">
+          <StatusBadge status={preview.can_commit ? 'ready' : 'failed'} label={preview.can_commit ? 'Sẵn sàng import' : 'Cần xử lý'} />
+          <button className="btn secondary small" type="button" disabled={busy} onClick={resetResult}>Đổi tệp</button>
+        </div>
       </section>
 
       <section className="legacy-import-summary" aria-label="Tổng quan kết quả kiểm tra">
