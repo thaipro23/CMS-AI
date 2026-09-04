@@ -763,6 +763,8 @@ class QuestionBankGenerationReviewWorkflowService:
         requested_content = data.pop('question_content_json', None)
         legacy_fields = {'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer'}
         legacy_changed = bool(legacy_fields.intersection(data))
+        duplicate_sensitive_fields = {'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer'}
+        duplicate_sensitive_changed = requested_type is not None or requested_content is not None or bool(duplicate_sensitive_fields.intersection(data))
         allowed = {'difficulty','cognitive_level','learning_objective','question_text','option_a','option_b','option_c','option_d','correct_answer','explanation','concept_title','question_family_id','source_ref','source_type','source_excerpt','source_evidence'}
         changed = False
         for field, value in data.items():
@@ -786,6 +788,18 @@ class QuestionBankGenerationReviewWorkflowService:
         else:
             normalize_question_content(normalize_question_type(question.question_type), canonical_question_content(question))
         question.question_hash = question_response_fingerprint(question)
+        if duplicate_sensitive_changed:
+            duplicate = self.db.query(Question).filter(
+                Question.bank_version_id == version.id,
+                Question.id != question.id,
+                Question.question_hash == question.question_hash,
+                or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
+                Question.status.notin_(['rejected', 'draft_error']),
+            ).order_by(Question.created_at.asc()).first()
+            question.is_duplicate = bool(duplicate)
+            question.duplicate_of_question_id = str(duplicate.id) if duplicate else None
+            question.duplicate_score = 1.0 if duplicate else None
+            question.quality_flags = [flag for flag in (question.quality_flags or []) if 'duplicate' not in str(flag).lower() and 'trùng' not in str(flag).lower()]
         if question.status == 'draft_error' and changed:
             question.draft_error_reason=None; question.draft_error_detail=None; question.quality_flags=[]
             if not target_status: target_status='pending_review'

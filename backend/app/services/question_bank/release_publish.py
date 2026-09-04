@@ -62,26 +62,23 @@ class QuestionBankReleasePublishWorkflowService:
         ).scalar() or 0)
         questions = self.db.query(Question).filter(Question.bank_version_id == version.id).all()
         active = [q for q in questions if not bool(q.is_retired)]
-        approved = [q for q in active if q.status in {'approved', 'published'} and not bool(q.is_duplicate)]
+        approved, auto_excluded = self._release_question_selection(version)
         pending = [q for q in active if q.status in {'pending_review', 'needs_review'}]
         draft_error = [q for q in active if q.status == 'draft_error']
         rejected = [q for q in active if q.status == 'rejected']
         known_statuses = {'approved', 'published', 'pending_review', 'needs_review', 'draft_error', 'rejected'}
         unknown_status = [q for q in active if q.status not in known_statuses]
-        unresolved = pending + draft_error + unknown_status
-        roots: dict[str, int] = {}
-        for q in approved:
-            root = question_lineage_root(q)
-            roots[root] = roots.get(root, 0) + 1
-        duplicate_lineage_roots = [root for root, count in roots.items() if count > 1]
+        unresolved = pending + unknown_status
+        auto_excluded_duplicates = [item for item in auto_excluded if 'duplicate' in item.get('reasons', []) or 'duplicate_lineage' in item.get('reasons', [])]
+        duplicate_lineage_roots = sorted({str(item.get('lineage_root') or '') for item in auto_excluded if 'duplicate_lineage' in item.get('reasons', []) and item.get('lineage_root')})
         diff_required = bool(meta.get('diff_required'))
         checks = [
             _check('document_change', 'fail' if diff_required else 'pass', 'Tài liệu đã thay đổi, cần bấm Kiểm tra thay đổi và đánh dấu đã xử lý trước khi chốt.' if diff_required else 'Tài liệu không còn yêu cầu kiểm tra thay đổi.', {'document_change_state': meta.get('document_change_state'), 'diff_base_bank_version_id': meta.get('diff_base_bank_version_id')}),
             _check('approved_questions', 'pass' if approved else 'fail', f'Có {len(approved)} câu đã duyệt.' if approved else 'Chưa có câu đã duyệt để chốt Release.', {'approved_count': len(approved)}),
             _check('pending_review', 'fail' if pending else 'pass', f'Còn {len(pending)} câu chờ duyệt. Phải duyệt hoặc bỏ hết trước khi chốt bộ đề.' if pending else 'Không còn câu chờ duyệt.', {'pending_review_count': len(pending)}),
-            _check('draft_error', 'fail' if draft_error else 'pass', f'Còn {len(draft_error)} câu lỗi. Phải sửa hoặc bỏ hết trước khi chốt bộ đề.' if draft_error else 'Không còn câu lỗi.', {'draft_error_count': len(draft_error)}),
+            _check('draft_error', 'warning' if draft_error else 'pass', f'Có {len(draft_error)} câu lỗi; hệ thống sẽ tự loại khỏi Release, không chặn chốt.' if draft_error else 'Không còn câu lỗi.', {'draft_error_count': len(draft_error), 'auto_excluded': True}, blocking=False),
             _check('legacy_question_status', 'fail' if unknown_status else 'pass', f'Có {len(unknown_status)} câu mang trạng thái legacy/không xác định. Hãy chạy migration/data repair trước khi chốt.' if unknown_status else 'Không có trạng thái câu hỏi legacy/không xác định.', {'unknown_status_count': len(unknown_status), 'sample': [{'question_id': q.id, 'status': q.status} for q in unknown_status[:10]]}),
-            _check('duplicate_lineage', 'fail' if duplicate_lineage_roots else 'pass', f'Có {len(duplicate_lineage_roots)} nhóm câu trùng gốc cần xử lý.' if duplicate_lineage_roots else 'Không phát hiện câu trùng gốc trong bộ đã duyệt.', {'duplicate_lineage_roots': duplicate_lineage_roots[:20]}),
+            _check('duplicate_lineage', 'warning' if auto_excluded_duplicates else 'pass', f'Có {len(auto_excluded_duplicates)} câu trùng; hệ thống sẽ tự loại khỏi Release.' if auto_excluded_duplicates else 'Không phát hiện câu trùng trong bộ đã duyệt.', {'duplicate_lineage_roots': duplicate_lineage_roots[:20], 'auto_excluded_duplicate_count': len(auto_excluded_duplicates)}, blocking=False),
             _check('existing_open_release', 'fail' if open_release_count else 'pass', f'Đã có {open_release_count} Release chưa kết thúc trên Bank Version này. Hãy publish/retry hoặc hủy Release hiện tại thay vì tạo bản trùng.' if open_release_count else 'Không có Release draft/ready/publish_failed trùng trên Bank Version.', {'open_release_count': open_release_count}),
         ]
         can_create = not any(item.get('blocking') for item in checks if item.get('status') == 'fail')
@@ -91,13 +88,13 @@ class QuestionBankReleasePublishWorkflowService:
         if pending:
             actions.append('Duyệt hoặc bỏ tất cả câu đang chờ duyệt.')
         if draft_error:
-            actions.append('Sửa hoặc bỏ tất cả câu lỗi trước khi chốt bộ đề.')
+            actions.append(f'{len(draft_error)} câu lỗi sẽ tự bị loại khỏi Release; có thể sửa sau nếu muốn dùng lại.')
         if unknown_status:
             actions.append('Chạy migration/data repair để chuẩn hóa trạng thái legacy trước khi chốt Release.')
         if not approved:
             actions.append('Tạo hoặc duyệt thêm câu hỏi trước khi chốt.')
-        if duplicate_lineage_roots:
-            actions.append('Loại bớt câu trùng gốc để tránh một bộ đề có nhiều câu quá giống nhau.')
+        if auto_excluded_duplicates:
+            actions.append(f'{len(auto_excluded_duplicates)} câu trùng sẽ tự bị loại khỏi Release.')
         if published_release_count > 0 or self._bank_version_is_published_locked(version):
             can_create = False
             status = 'published'
@@ -118,6 +115,8 @@ class QuestionBankReleasePublishWorkflowService:
                 'draft_error_count': len(draft_error),
                 'unknown_status_count': len(unknown_status),
                 'unresolved_count': len(unresolved),
+                'auto_excluded_count': len(auto_excluded) + len(draft_error),
+                'auto_excluded_duplicate_count': len(auto_excluded_duplicates),
                 'rejected_count': len(rejected),
                 'retired_count': len([q for q in questions if bool(q.is_retired)]),
                 'published_release_count': published_release_count,
@@ -133,7 +132,7 @@ class QuestionBankReleasePublishWorkflowService:
                 },
             },
             'recommended_actions': actions,
-            'message': 'Bài đã publish; các thao tác chỉnh sửa đã khóa.' if status == 'published' else ('Đủ điều kiện chốt bộ đề.' if can_create else 'Chưa thể chốt bộ đề. Phải duyệt hoặc bỏ hết tất cả câu hỏi trước.'),
+            'message': 'Bài đã publish; các thao tác chỉnh sửa đã khóa.' if status == 'published' else ('Đủ điều kiện chốt bộ đề; câu lỗi/trùng sẽ tự loại.' if can_create else 'Chưa thể chốt bộ đề. Hãy xử lý các câu còn chờ duyệt hoặc trạng thái không xác định.'),
         }
 
     def list_course_quiz_instances(self, *, openedx_course_id: str | None = None, bank_release_id: str | None = None, limit: int = 100) -> list[CourseQuizInstance]:
@@ -364,11 +363,107 @@ class QuestionBankReleasePublishWorkflowService:
                 changed += 1
         return changed
 
-    def _release_questions_for_version(self, version: QuestionBankVersion) -> list[Question]:
-        return self.db.query(Question).filter(
+    def _release_question_selection(self, version: QuestionBankVersion) -> tuple[list[Question], list[dict]]:
+        """Return clean Release membership and an audited exclusion list."""
+        candidates = self.db.query(Question).filter(
             Question.bank_version_id == version.id,
             Question.status.in_(['approved', 'published']),
         ).order_by(Question.difficulty.asc(), Question.question_family_id.asc().nullslast(), Question.created_at.asc()).all()
+        selected: list[Question] = []
+        excluded: list[dict] = []
+        seen_lineage: dict[str, str] = {}
+        for question in candidates:
+            reasons: list[str] = []
+            if bool(question.is_retired):
+                reasons.append('retired')
+            if bool(question.is_duplicate):
+                reasons.append('duplicate')
+            lineage_root = question_lineage_root(question)
+            if not reasons and lineage_root in seen_lineage:
+                reasons.append('duplicate_lineage')
+            if reasons:
+                excluded.append({
+                    'question_id': str(question.id),
+                    'reasons': reasons,
+                    'lineage_root': lineage_root,
+                    'kept_question_id': seen_lineage.get(lineage_root),
+                })
+                continue
+            seen_lineage[lineage_root] = str(question.id)
+            selected.append(question)
+        return selected, excluded
+
+    def _release_questions_for_version(self, version: QuestionBankVersion) -> list[Question]:
+        questions, _excluded = self._release_question_selection(version)
+        return questions
+
+    def _refresh_unpublished_release_snapshot(self, release: QuestionBankRelease) -> list[dict]:
+        """Refresh a pristine unpublished Release from current clean questions."""
+        if release.status == 'published' or release.published_at:
+            return []
+        version = self.db.get(QuestionBankVersion, release.bank_version_id)
+        if not version:
+            raise ValueError('Release thiếu Bank Version để làm mới snapshot.')
+        rows = self.db.query(BankReleaseQuestion).filter(BankReleaseQuestion.bank_release_id == release.id).all()
+        if any(bool(row.openedx_library_problem_id) for row in rows):
+            return []
+
+        questions, excluded = self._release_question_selection(version)
+        if not questions:
+            raise ValueError('Không còn câu đã duyệt hợp lệ sau khi tự loại câu lỗi/trùng. Hãy duyệt ít nhất một câu trước khi đưa lên CMS.')
+
+        selected_by_id = {str(question.id): question for question in questions}
+        existing_by_id = {str(row.question_id): row for row in rows}
+        for question_id, row in list(existing_by_id.items()):
+            if question_id not in selected_by_id:
+                self.db.delete(row)
+                existing_by_id.pop(question_id, None)
+
+        for question in questions:
+            question_id = str(question.id)
+            row = existing_by_id.get(question_id)
+            if row is None:
+                row = BankReleaseQuestion(
+                    id=str(uuid.uuid4()),
+                    bank_release_id=release.id,
+                    question_id=question.id,
+                    question_family_id=question.question_family_id,
+                    difficulty=question.difficulty,
+                    openedx_library_problem_id=None,
+                )
+                self.db.add(row)
+                existing_by_id[question_id] = row
+            else:
+                row.question_family_id = question.question_family_id
+                row.difficulty = question.difficulty
+
+        counts = {'easy': 0, 'medium': 0, 'hard': 0}
+        families = set()
+        for question in questions:
+            diff = (question.difficulty or 'easy').lower()
+            counts[diff if diff in counts else 'easy'] += 1
+            if question.question_family_id:
+                families.add(question.question_family_id)
+        question_ids = [str(question.id) for question in questions]
+        now = datetime.utcnow().isoformat()
+        release.status = 'ready'
+        release.approved_question_count = len(questions)
+        release.easy_count = counts['easy']
+        release.medium_count = counts['medium']
+        release.hard_count = counts['hard']
+        release.family_count = len(families)
+        release.metadata_json = {
+            **(release.metadata_json or {}),
+            'membership_count': len(question_ids),
+            'membership_sha256': self._release_membership_hash(question_ids),
+            'membership_frozen_at': now,
+            'membership_refreshed_before_publish_at': now,
+            'auto_excluded_count': len(excluded),
+            'auto_excluded_questions': excluded[:100],
+            'auto_exclusion_policy': 'draft_error_rejected_not_candidates; duplicate_retired_duplicate_lineage_excluded',
+        }
+        self.db.flush()
+        return excluded
 
     @staticmethod
     def _release_membership_hash(question_ids: list[str]) -> str:
@@ -376,6 +471,7 @@ class QuestionBankReleasePublishWorkflowService:
         return hashlib.sha256(payload).hexdigest()
 
     def _load_frozen_release_snapshot(self, release: QuestionBankRelease) -> tuple[list[BankReleaseQuestion], list[Question]]:
+        self._refresh_unpublished_release_snapshot(release)
         rows = self.db.query(BankReleaseQuestion).filter(
             BankReleaseQuestion.bank_release_id == release.id
         ).order_by(BankReleaseQuestion.id.asc()).all()
@@ -456,7 +552,7 @@ class QuestionBankReleasePublishWorkflowService:
         code_parts.extend([chapter_code, version.version_code])
         code = release_code or '-'.join(str(part) for part in code_parts if str(part or '').strip())
         library_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
-        questions = self._release_questions_for_version(version) if include_approved_questions else []
+        questions, auto_excluded = self._release_question_selection(version) if include_approved_questions else ([], [])
         counts = {'easy': 0, 'medium': 0, 'hard': 0}
         families = set()
         for question in questions:
@@ -494,6 +590,9 @@ class QuestionBankReleasePublishWorkflowService:
                 'membership_count': len(questions),
                 'membership_sha256': self._release_membership_hash([question.id for question in questions]),
                 'membership_frozen_at': datetime.utcnow().isoformat(),
+                'auto_excluded_count': len(auto_excluded),
+                'auto_excluded_questions': auto_excluded[:100],
+                'auto_exclusion_policy': 'draft_error_rejected_not_candidates; duplicate_retired_duplicate_lineage_excluded',
             },
         )
         self.db.add(release)

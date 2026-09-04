@@ -9228,3 +9228,25 @@ html[data-theme='dark'] .bank-multipage .bank-production-table tr:hover td {
     justify-content: flex-start;
   }
 }
+
+
+/* v25.9.16.7.2.64.16.5.7.2.18 — import overlay hard stop */
+.legacy-quiz-import-page .bank-workflow-stepper,
+.legacy-quiz-import-page .legacy-import-preview-heading,
+.legacy-quiz-import-page .legacy-import-confirm {
+  position: static !important;
+  inset: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  transform: none !important;
+}
+.legacy-quiz-import-page .bank-workflow-stepper {
+  z-index: 1 !important;
+  margin: 0 !important;
+}
+.legacy-quiz-import-page .bank-page-identity {
+  position: relative !important;
+  z-index: 2;
+  margin: 0 !important;
+}
+.legacy-quiz-import-page > * { min-width: 0; }
