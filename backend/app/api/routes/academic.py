@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 40584)
-Total output lines: 3560
-
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -1701,7 +1698,47 @@ async def create_udemy_progress_import_job(
                         {'key': f'udemy-progress:{item["delivery"].id}:{item["hash"]}'},
                     )
             except Exception:
- …584 tokens truncated…h)
+                # The unique idempotency key remains the final protection when the
+                # database user cannot acquire advisory locks.
+                pass
+            prior = db.query(UdemyProgressImportBatch).filter(
+                UdemyProgressImportBatch.subject_delivery_id == item['delivery'].id,
+                UdemyProgressImportBatch.file_hash == item['hash'],
+                UdemyProgressImportBatch.status.in_(['queued', 'running', 'completed']),
+            ).order_by(UdemyProgressImportBatch.created_at.desc()).first()
+            is_duplicate = bool(prior and not force_reimport)
+            batch = UdemyProgressImportBatch(
+                parent_job_id=parent.id,
+                subject_delivery_id=item['delivery'].id,
+                duplicate_of_batch_id=prior.id if is_duplicate else None,
+                idempotency_key=(
+                    f'duplicate:{item["delivery"].id}:{item["hash"]}:{parent.id}'
+                    if is_duplicate else
+                    (f'force:{item["delivery"].id}:{item["hash"]}:{parent.id}' if force_reimport else f'{item["delivery"].id}:{item["hash"]}')
+                ),
+                file_name=item['filename'],
+                file_hash=item['hash'],
+                file_size_bytes=len(item['raw']),
+                status='skipped' if is_duplicate else 'queued',
+                force_reimport=bool(force_reimport),
+                requested_by=user.user_id,
+                request_json=json_safe_value({
+                    'term_id': term_id,
+                    'block_id': block_id,
+                    'branch': branch_value,
+                    'subject_code': item['subject'].subject_code,
+                    'source_archive': item.get('source_archive'),
+                    'report_identity': item.get('report_identity') or {},
+                    'requester_context': _requester_context_json(user),
+                    'policy_version': 'udemy-progress-import/batch35.3.3',
+                }),
+                result_json=(
+                    {'ok': True, 'skipped': True, 'message': 'File trùng đã được import trước đó.', 'duplicate_of_batch_id': prior.id}
+                    if is_duplicate else {}
+                ),
+                finished_at=datetime.utcnow() if is_duplicate else None,
+            )
+            db.add(batch)
             db.flush()
             if is_duplicate:
                 duplicate_count += 1
