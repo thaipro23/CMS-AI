@@ -316,9 +316,8 @@ class Settings(BaseSettings):
 
     academic_ap_sync_enabled: bool = True
     academic_ap_api_base_url: str = 'https://api.poly.edu.vn/api/cms'
-    # Subject catalog source of truth. Discovery always calls this endpoint with
-    # branch=poly and the selected term_name. The requested UI branch is retained
-    # as metadata only because AP's ptcd catalog has historically been noisy.
+    # Canonical internal CMS API: global subject catalog, product-scoped campuses,
+    # and POSTed class/student data. These endpoints are keyless.
     academic_ap_get_all_subject_endpoint: str = '/get-all-subject'
     academic_ap_get_campus_endpoint: str = '/get-campus'
     academic_ap_get_data_cms_endpoint: str = '/get-data-cms'
@@ -326,20 +325,16 @@ class Settings(BaseSettings):
     academic_ap_get_course_endpoint: str = '/get-all-subject'
     academic_ap_api_key: str | None = None
     academic_ap_request_timeout_seconds: int = 60
-    # TLS verification mode for AP integrations other than api_v2.poly.edu.vn.
-    # api_v2.poly.edu.vn is an approved host-specific exception and always uses
-    # verify=False because its served certificate currently mismatches the hostname.
-    # strict: verify CA chain + hostname (default for every other host).
-    # chain_only: verify CA chain but skip hostname check.
-    # off: disable TLS verification for the configured AP host.
+    # Internal API uses normal HTTPS verification. chain_only/off remain emergency
+    # deployment knobs only; there is no hostname-specific TLS bypass.
     academic_ap_tls_mode: str = 'strict'
     # Prevent AP sync from bloating the DB. In production, empty AP classes
     # (no valid student username in student/students array) are ignored and do
-    # not create subject/class/teacher/student rows. The /get-course catalog is
-    # used for discovery; subjects are persisted only when required by the flow.
+    # not create subject/class/teacher/student rows. /get-all-subject is discovery
+    # only; subjects are persisted when required by the selected sync flow.
     academic_ap_skip_empty_classes: bool = True
     academic_ap_import_catalog_subjects: bool = False
-    # Cache the AP /get-course discovery response into a local JSON file so one
+    # Cache the internal /get-all-subject response into a local JSON file so one
     # sync run does not repeatedly download the same term catalog.
     academic_ap_get_course_file_cache_enabled: bool = True
     academic_ap_get_course_file_cache_dir: str = '/tmp/ai-server-ap-cache/get-all-subject'

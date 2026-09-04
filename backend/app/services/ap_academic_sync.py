@@ -9,7 +9,6 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import func
@@ -260,7 +259,7 @@ class APAcademicClient:
 
     def _subject_cache_file(self, *, branch: str, term_name: str | None, campus: str | None = None) -> Path:
         endpoint = _clean(getattr(settings, 'academic_ap_get_all_subject_endpoint', '/get-all-subject'))
-        cache_scope = f'{self.base_url}|{endpoint}|discovery-branch=poly'
+        cache_scope = f'{self.base_url}|{endpoint}|branch={_lower(branch) or "poly"}'
         base_hash = hashlib.sha1(cache_scope.encode('utf-8')).hexdigest()[:12]
         branch_part = _safe_filename_part(_lower(branch) or 'poly', default='branch')
         term_part = _safe_filename_part(term_name or 'all-terms', default='all-terms')
@@ -1364,10 +1363,16 @@ class AcademicImportService:
         if campus and _lower(campus) and _lower(campus) not in requested:
             requested.insert(0, _lower(campus))
         if scope == 'all':
-            configured = requested or [item['value'] for item in self._campus_master_values(branch=branch)]
+            if requested:
+                return requested
+            try:
+                remote = APAcademicClient().get_campuses(branch=branch)
+                configured = [_lower(item.get('campus_code')) for item in remote if _lower(item.get('campus_code'))]
+            except Exception:
+                configured = [item['value'] for item in self._campus_master_values(branch=branch)]
             if not configured:
-                raise RuntimeError('sync_scope=all cần danh sách cơ sở đang dùng trong /premises. Vào trang Cơ sở, thêm hoặc bật cơ sở cho đúng hệ rồi chạy lại.')
-            return configured
+                raise RuntimeError('Không tải được danh sách cơ sở từ API nội bộ và chưa có danh mục cơ sở dự phòng.')
+            return list(dict.fromkeys(configured))
         if scope in {'campus', 'subject'}:
             if not requested:
                 raise RuntimeError('Đồng bộ theo cơ sở/môn cần chọn ít nhất một cơ sở từ dropdown.')
@@ -1376,7 +1381,7 @@ class AcademicImportService:
 
 
     def _configured_subject_codes(self) -> list[str]:
-        # Optional emergency fallback only. Normal production flow uses api_v2 /get-course.
+        # Optional emergency fallback only. Normal flow uses keyless /get-all-subject.
         return _unique_upper(_parse_csv_codes(settings.academic_ap_subject_codes))
 
     def _subject_code_from_item(self, item: dict[str, Any]) -> str:
@@ -1432,7 +1437,7 @@ class AcademicImportService:
                 if not fallback:
                     raise RuntimeError(
                         f'Không lấy được danh sách môn triển khai từ AP cho kỳ {term_name}. '
-                        'Hãy kiểm tra API key/kết nối AP hoặc chọn phạm vi Theo môn với mã môn cụ thể. '
+                        'Hãy kiểm tra kết nối API nội bộ hoặc chọn phạm vi Theo môn với mã môn cụ thể. '
                         f'Chi tiết: {exc}'
                     ) from exc
                 catalog = []
