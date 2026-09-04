@@ -1,9 +1,9 @@
-name: Temporary project UI and quiz fix v5
+name: Temporary project UI and quiz fix v6
 on:
   push:
     paths:
       - '.github/workflows/tmp-project-ui-quiz-fix.yml'
-      - '.github/scripts/tmp_project_ui_quiz_fix_v5.py'
+      - '.github/scripts/tmp_project_ui_quiz_fix_v6.py'
 permissions:
   contents: write
 jobs:
@@ -17,8 +17,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply verified scoped fixes v5
-        run: python .github/scripts/tmp_project_ui_quiz_fix_v5.py
+      - name: Apply quiz and RBAC cleanup v6
+        run: python .github/scripts/tmp_project_ui_quiz_fix_v6.py
       - name: Source contract checks
         shell: bash
         run: |
@@ -31,6 +31,22 @@ jobs:
             echo 'Question-type quota fields remain in frontend quiz API contract' >&2
             exit 1
           fi
+          if grep -nE 'payload\.(single_select_count|multi_select_count|text_input_count|numerical_input_count)' backend/app/api/routes/question_bank_v2.py; then
+            echo 'Quiz route still reads removed type-quota fields' >&2
+            exit 1
+          fi
+          if grep -n 'QuestionTypeQuotaMixin' backend/app/schemas/question_bank.py; then
+            echo 'Dead QuestionTypeQuotaMixin remains' >&2
+            exit 1
+          fi
+          if grep -n 'exact_type_counts' backend/app/services/question_bank_service.py backend/app/services/question_bank/quiz_creation.py; then
+            echo 'Quiz path still depends on exact_type_counts' >&2
+            exit 1
+          fi
+          if grep -n 'quota loại' backend/app/schemas/question_bank.py backend/app/services/question_bank_service.py backend/app/services/question_bank/quiz_creation.py; then
+            echo 'Question-type quota wording remains in active quiz path' >&2
+            exit 1
+          fi
           if grep -n 'Lớp đang vận hành trên Udemy' frontend/app/student-management/classes/'[classId]'/page.tsx; then
             echo 'Duplicate Udemy banner remains' >&2
             exit 1
@@ -41,9 +57,14 @@ jobs:
           grep -n "assert call\['params'\] == {'product': 'POLY', 'term_name': 'Fall 2026'}" backend/app/tests/test_academic_ap_internal_api.py
           test "$(grep -c "requested_types = {'auto': int(total_questions)}" backend/app/services/question_bank/quiz_creation.py)" -eq 2
           test "$(grep -c 'requested_original = dict(requested)' backend/app/services/question_bank/quiz_creation.py)" -eq 2
+          grep -n 'single_select_count=None,multi_select_count=None,text_input_count=None,numerical_input_count=None' backend/app/services/question_bank_service.py
           grep -n 'CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS' backend/app/services/business_rbac.py
           grep -n 'func.lower(UserRoleAssignment.user_id)' backend/app/services/business_rbac.py
           grep -n 'self.db.query(RBACPermission).all()' backend/app/services/business_rbac.py
+          if sed -n '/CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS/,/^}/p' backend/app/services/business_rbac.py | grep -q "'user.manage_all'"; then
+            echo 'All-campus owner bundle is too broad: user.manage_all must not be granted' >&2
+            exit 1
+          fi
           grep -n "view_dashboard: \['bank.view', 'audit.view', 'academic.view', 'view_training_reports'\]" frontend/context/AppContext.tsx
           grep -n 'project-spacing-contract.css' frontend/app/layout.tsx
           grep -n 'accessible-dialog-body' frontend/styles/project-spacing-contract.css
@@ -55,9 +76,18 @@ jobs:
             backend/app/core/config.py \
             backend/app/schemas/question_bank.py \
             backend/app/services/question_bank/quiz_creation.py \
+            backend/app/services/question_bank_service.py \
             backend/app/services/business_rbac.py \
+            backend/app/api/routes/question_bank_v2.py \
             backend/app/services/academic_service.py \
-            backend/app/tests/test_academic_ap_internal_api.py
+            backend/app/tests/test_academic_ap_internal_api.py \
+            backend/app/tests/test_rbac_admin_campus_owner_contract.py
+      - name: Install backend test dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements-ci.txt
+      - name: Backend focused tests
+        working-directory: backend
+        run: pytest -q app/tests/test_academic_ap_internal_api.py app/tests/test_rbac_admin_campus_owner_contract.py
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -77,18 +107,12 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
-            backend/app/services/ap_academic_sync.py \
+            backend/app/api/routes/question_bank_v2.py \
             backend/app/schemas/question_bank.py \
+            backend/app/services/question_bank_service.py \
             backend/app/services/question_bank/quiz_creation.py \
             backend/app/services/business_rbac.py \
-            backend/app/tests/test_academic_ap_internal_api.py \
-            frontend/app/bank/quiz/page.tsx \
-            frontend/lib/api.ts \
-            frontend/app/student-management/classes/'[classId]'/page.tsx \
-            frontend/app/ap-sync/page.tsx \
-            frontend/context/AppContext.tsx \
-            frontend/app/layout.tsx \
-            frontend/styles/project-spacing-contract.css
+            backend/app/tests/test_rbac_admin_campus_owner_contract.py
           git diff --cached --check
-          git commit -m 'fix: simplify quiz planner and normalize project operations UX'
+          git commit -m 'fix: remove quiz type quota contract and tighten campus owner access'
           git push origin HEAD:feat/import-quiz-cms-old-su26
