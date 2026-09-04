@@ -33,7 +33,7 @@ jobs:
           grep -q 'learning_status_counts' backend/app/services/academic_service.py
 
       - name: Install backend dependencies
-        run: pip install -q -r backend/requirements.txt
+        run: pip install -q -r backend/requirements.txt ruff
 
       - name: Backend focused verification
         env:
