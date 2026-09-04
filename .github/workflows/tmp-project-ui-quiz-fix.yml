@@ -1,4 +1,4 @@
-name: Temporary project UI and quiz fix
+name: Temporary project UI and quiz fix v2
 on:
   push:
     paths:
@@ -16,10 +16,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply scoped fixes
-        run: python .github/scripts/tmp_project_ui_quiz_fix.py
+      - name: Apply scoped fixes v2
+        run: python .github/scripts/tmp_project_ui_quiz_fix_v2.py
+      - name: Source contract checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -nE 'Loại câu hỏi|singleSelectCount|multiSelectCount|textInputCount|numericalInputCount|typeQuotas|TypeQuotaDraft|normalizeTypeQuotas|sumTypeQuotas' frontend/app/bank/quiz/page.tsx
+          ! grep -n 'Lớp đang vận hành trên Udemy' frontend/app/student-management/classes/'[classId]'/page.tsx
+          grep -n "params = {'product': product}" backend/app/services/ap_academic_sync.py
+          grep -n "params\['term_name'\] = normalized_term" backend/app/services/ap_academic_sync.py
+          grep -n 'apitest.poly.edu.vn/api/cms/get-campus' backend/app/core/config.py
+          grep -n "requested_types = {'auto': int(total_questions)}" backend/app/services/question_bank/quiz_creation.py
+          grep -n "CAMPUS_OWNER:.*department.manage_all.*user.manage_all.*rbac.view" backend/app/services/business_rbac.py
+          grep -n 'self.db.query(RBACPermission).all()' backend/app/services/business_rbac.py
+          grep -n 'project-spacing-contract.css' frontend/app/layout.tsx
+          grep -n 'Cập nhật cơ sở' frontend/app/ap-sync/page.tsx
       - name: Backend syntax
-        run: python -m py_compile backend/app/services/ap_academic_sync.py backend/app/schemas/question_bank.py
+        run: |
+          python -m py_compile \
+            backend/app/services/ap_academic_sync.py \
+            backend/app/core/config.py \
+            backend/app/schemas/question_bank.py \
+            backend/app/services/question_bank/quiz_creation.py \
+            backend/app/services/business_rbac.py \
+            backend/app/services/academic_service.py
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -29,11 +50,26 @@ jobs:
       - name: Frontend lint
         working-directory: frontend
         run: npm run lint -- --max-warnings=0
+      - name: Frontend production build
+        working-directory: frontend
+        run: npm run build
+      - name: Diff check
+        run: git diff --check
       - name: Commit fixes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add backend/app/services/ap_academic_sync.py backend/app/schemas/question_bank.py frontend/app/bank/quiz/page.tsx frontend/app/student-management/classes/'[classId]'/page.tsx frontend/app/ap-sync/page.tsx frontend/app/layout.tsx frontend/styles/project-spacing-contract.css
+          git add \
+            backend/app/services/ap_academic_sync.py \
+            backend/app/core/config.py \
+            backend/app/schemas/question_bank.py \
+            backend/app/services/question_bank/quiz_creation.py \
+            backend/app/services/business_rbac.py \
+            frontend/app/bank/quiz/page.tsx \
+            frontend/app/student-management/classes/'[classId]'/page.tsx \
+            frontend/app/ap-sync/page.tsx \
+            frontend/app/layout.tsx \
+            frontend/styles/project-spacing-contract.css
           git diff --cached --check
-          git commit -m 'fix: simplify quiz config and normalize project spacing'
+          git commit -m 'fix: simplify quiz planner and normalize project operations UX'
           git push origin HEAD:feat/import-quiz-cms-old-su26
