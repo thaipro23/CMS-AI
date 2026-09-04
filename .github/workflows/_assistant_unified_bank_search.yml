@@ -32,7 +32,6 @@ jobs:
           text = text.replace("  const [subjectQuery, setSubjectQuery] = useState('')\n", "")
           text = text.replace("    const query = subjectQuery.trim()", "    const query = search.trim()")
           text = text.replace("  }, [headers, subjectQuery])", "  }, [headers, search])")
-
           text = text.replace(
               '<section className="subject-quick-search" aria-label="Tìm nhanh môn học">',
               '<section className="subject-quick-search" aria-label="Tìm bộ môn hoặc môn học">',
@@ -63,9 +62,7 @@ jobs:
               '        placeholder="Tìm bộ môn..."\n      />',
               '        placeholder="Tìm bộ môn hoặc môn học..."\n        hideSearch\n      />',
           )
-
-          required_absent = ['subjectQuery', 'setSubjectQuery']
-          for token in required_absent:
+          for token in ('subjectQuery', 'setSubjectQuery'):
               if token in text:
                   raise SystemExit(f'legacy duplicate search token remains: {token}')
           if 'hideSearch' not in text:
@@ -123,3 +120,5 @@ jobs:
           git diff --cached --check
           git commit -m "fix: unify department and subject search"
           git push origin HEAD:feat/import-quiz-cms-old-su26
+
+# trigger retry after workflow registration
