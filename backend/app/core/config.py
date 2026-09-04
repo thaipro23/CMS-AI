@@ -315,11 +315,15 @@ class Settings(BaseSettings):
 
 
     academic_ap_sync_enabled: bool = True
-    academic_ap_api_base_url: str = 'https://api_v2.poly.edu.vn'
+    academic_ap_api_base_url: str = 'https://api.poly.edu.vn/api/cms'
     # Subject catalog source of truth. Discovery always calls this endpoint with
     # branch=poly and the selected term_name. The requested UI branch is retained
     # as metadata only because AP's ptcd catalog has historically been noisy.
-    academic_ap_get_course_endpoint: str = '/get-course'
+    academic_ap_get_all_subject_endpoint: str = '/get-all-subject'
+    academic_ap_get_campus_endpoint: str = '/get-campus'
+    academic_ap_get_data_cms_endpoint: str = '/get-data-cms'
+    # Deprecated rolling-upgrade alias; canonical code uses get-all-subject.
+    academic_ap_get_course_endpoint: str = '/get-all-subject'
     academic_ap_api_key: str | None = None
     academic_ap_request_timeout_seconds: int = 60
     # TLS verification mode for AP integrations other than api_v2.poly.edu.vn.
@@ -338,7 +342,7 @@ class Settings(BaseSettings):
     # Cache the AP /get-course discovery response into a local JSON file so one
     # sync run does not repeatedly download the same term catalog.
     academic_ap_get_course_file_cache_enabled: bool = True
-    academic_ap_get_course_file_cache_dir: str = '/tmp/ai-server-ap-cache/get-course'
+    academic_ap_get_course_file_cache_dir: str = '/tmp/ai-server-ap-cache/get-all-subject'
     academic_ap_get_course_file_cache_ttl_seconds: int = 86400
     academic_ap_get_course_file_cache_refresh: bool = False
     academic_ap_subject_codes: str = ''
@@ -637,8 +641,6 @@ def validate_security_settings() -> None:
     if settings.academic_ap_sync_enabled:
         if not settings.academic_ap_api_base_url or 'CHANGE_ME' in settings.academic_ap_api_base_url:
             errors.append('ACADEMIC_AP_API_BASE_URL is required when ACADEMIC_AP_SYNC_ENABLED=true')
-        if not settings.academic_ap_api_key or settings.academic_ap_api_key.startswith('CHANGE_ME') or len(settings.academic_ap_api_key) < 12:
-            errors.append('ACADEMIC_AP_API_KEY is required when ACADEMIC_AP_SYNC_ENABLED=true')
         if settings.academic_ap_request_timeout_seconds < 5:
             errors.append('ACADEMIC_AP_REQUEST_TIMEOUT_SECONDS must be at least 5 seconds')
     if errors:

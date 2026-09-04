@@ -3497,7 +3497,7 @@ def delete_academic_campus(
 def get_ap_sync_options(
     term_name: str = Query('', description='Tên kỳ AP, ví dụ Summer 2026.'),
     branch: str = Query('poly'),
-    campus: str | None = Query(None, description='Giữ tương thích UI cũ. Cơ sở lấy từ danh mục nhập thủ công; danh sách môn lấy từ api_v2 /get-course với branch=poly và term_name đã chọn.'),
+    campus: str | None = Query(None, description='Giữ tương thích UI cũ. Cơ sở lấy từ get-campus theo POLY/PTCD; môn lấy từ get-all-subject. Hai API nội bộ không dùng API key.'),
     include_subjects: bool = Query(True),
     user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
