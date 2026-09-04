@@ -1762,6 +1762,9 @@ class AcademicService:
         avg_progress = entry.get('learning_avg_progress_percent')
         avg_grade = entry.get('learning_avg_grade_percent')
         alerts = entry.get('learning_alerts') or []
+        issue_counts_raw = entry.get('learning_status_counts')
+        has_issue_counts = isinstance(issue_counts_raw, dict)
+        issue_counts = issue_counts_raw if has_issue_counts else {}
         if status == 'no_course_map':
             if 'course_mapping_status' in entry:
                 return str(entry.get('course_mapping_status') or '').lower() not in COURSE_MAPPING_MAPPED_STATUSES
@@ -1769,22 +1772,68 @@ class AcademicService:
         if status == 'cms_not_synced':
             return total > 0 and (cms_unsynced > 0 or cms_synced < total)
         if status == 'not_fully_enrolled':
+            if has_issue_counts:
+                return int(issue_counts.get('not_enrolled') or 0) > 0
             return total > 0 and enrolled < total
         if status == 'no_learning_data':
             return total > 0 and synced == 0
         if status == 'no_activity':
+            if has_issue_counts:
+                return int(issue_counts.get('no_activity') or 0) > 0
             return total > 0 and synced > 0 and active == 0
         if status == 'low_progress':
+            if has_issue_counts:
+                return int(issue_counts.get('low_progress') or 0) > 0
             return isinstance(avg_progress, (int, float)) and avg_progress < self._low_progress_threshold()
         if status == 'low_grade':
+            if has_issue_counts:
+                return int(issue_counts.get('low_grade') or 0) > 0
             return isinstance(avg_grade, (int, float)) and avg_grade < self._low_grade_threshold()
         if status == 'udemy_late':
             return int(entry.get('udemy_progress_late_count') or 0) > 0
         if status == 'sync_error':
+            if has_issue_counts:
+                return int(issue_counts.get('sync_error') or 0) > 0
             return any('lỗi' in str(item).lower() for item in alerts)
         if status == 'has_alert':
             return bool(alerts)
         return True
+
+    def _learning_issue_counts_from_snapshots(self, snapshots: list[AcademicStudentLearningSnapshot]) -> dict[str, int]:
+        """Count actionable learner states without turning missing snapshots into fake learner issues.
+
+        The subject/class filters are phrased as "Có sinh viên ...", so they must
+        match when at least one known learner is in that state. Aggregate averages
+        are not sufficient: one learner can have a low grade while the subject
+        average is still high, and one learner can be inactive while classmates
+        are already studying.
+        """
+        counts = {
+            'not_enrolled': 0,
+            'no_activity': 0,
+            'low_progress': 0,
+            'low_grade': 0,
+            'sync_error': 0,
+        }
+        sync_error_statuses = {'failed', 'missing_user', 'inactive_user', 'unknown'}
+        for snapshot in snapshots or []:
+            enrollment_status = str(snapshot.enrollment_status or '').strip().lower()
+            if enrollment_status in sync_error_statuses:
+                counts['sync_error'] += 1
+                continue
+            if enrollment_status != 'enrolled':
+                counts['not_enrolled'] += 1
+                continue
+            if not self._snapshot_has_learning_activity(snapshot):
+                counts['no_activity'] += 1
+                continue
+            progress = self._snapshot_progress_percent(snapshot)
+            grade = self._snapshot_grade_percent(snapshot)
+            if progress is not None and progress < self._low_progress_threshold():
+                counts['low_progress'] += 1
+            if grade is not None and grade < self._low_grade_threshold():
+                counts['low_grade'] += 1
+        return counts
 
     def _learning_summary_by_class_ids(self, class_ids: list[str], course_by_class: dict[str, str | None] | None = None) -> dict[str, dict[str, Any]]:
         if not class_ids:
@@ -1832,6 +1881,7 @@ class AcademicService:
                 'learning_active_count': int(bucket.get('active', 0) or 0),
                 'learning_synced_count': synced,
                 'learning_not_enrolled_count': max(0, total - enrolled),
+                'learning_status_counts': self._learning_issue_counts_from_snapshots(bucket['snapshots']),
                 'learning_avg_progress_percent': avg_progress,
                 'learning_avg_grade_percent': avg_grade,
                 'learning_last_synced_at': bucket['last_synced_at'],
@@ -1901,6 +1951,7 @@ class AcademicService:
                 'learning_active_count': int(bucket.get('active', 0) or 0),
                 'learning_synced_count': synced,
                 'learning_not_enrolled_count': max(0, total - enrolled),
+                'learning_status_counts': self._learning_issue_counts_from_snapshots(bucket['snapshots']),
                 'learning_avg_progress_percent': avg_progress,
                 'learning_avg_grade_percent': avg_grade,
                 'learning_last_synced_at': bucket['last_synced_at'],

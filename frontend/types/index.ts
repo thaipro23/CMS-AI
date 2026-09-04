@@ -2402,6 +2402,7 @@ export type AcademicSubjectManagement = AcademicSubject & {
   learning_active_count?: number
   learning_synced_count?: number
   learning_not_enrolled_count?: number
+  learning_status_counts?: Record<string, number>
   learning_avg_progress_percent?: number | null
   learning_avg_grade_percent?: number | null
   learning_last_synced_at?: string | null
@@ -2472,6 +2473,7 @@ export type AcademicClass = {
   learning_active_count?: number
   learning_synced_count?: number
   learning_not_enrolled_count?: number
+  learning_status_counts?: Record<string, number>
   learning_avg_progress_percent?: number | null
   learning_avg_grade_percent?: number | null
   learning_last_synced_at?: string | null

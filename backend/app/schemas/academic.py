@@ -126,6 +126,7 @@ class AcademicSubjectManagementOut(AcademicSubjectOut):
     learning_active_count: int = 0
     learning_synced_count: int = 0
     learning_not_enrolled_count: int = 0
+    learning_status_counts: dict[str, int] = Field(default_factory=dict)
     learning_avg_progress_percent: float | None = None
     learning_avg_grade_percent: float | None = None
     learning_last_synced_at: datetime | None = None

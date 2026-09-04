@@ -469,9 +469,10 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
             >
               <option value="all">Tất cả môn</option>
               {isCms ? <>
-                <option value="no_course_map">Chưa ghép course</option>
-                <option value="cms_not_synced">Chưa đồng bộ CMS</option>
-                <option value="no_learning_data">Chưa có progress CMS</option>
+                <option value="not_fully_enrolled">Có sinh viên chưa ghi danh</option>
+                <option value="no_activity">Có sinh viên chưa học</option>
+                <option value="low_progress">Có sinh viên tiến độ thấp</option>
+                <option value="low_grade">Có sinh viên điểm thấp</option>
               </> : <>
                 <option value="udemy_not_imported">Chưa import tiến độ</option>
                 <option value="udemy_late">Có SV chậm tiến độ</option>
