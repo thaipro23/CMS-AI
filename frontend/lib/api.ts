@@ -2367,10 +2367,6 @@ export async function createQuizBlueprint(
     difficulty_easy: number;
     difficulty_medium: number;
     difficulty_hard: number;
-    single_select_count?: number | null;
-    multi_select_count?: number | null;
-    text_input_count?: number | null;
-    numerical_input_count?: number | null;
     max_families_per_bank?: number;
     pick_count_per_slot?: number;
   },
@@ -2878,10 +2874,6 @@ export async function previewQuizAutoMap(
     difficulty_medium?: number;
     difficulty_hard?: number;
     max_families_per_bank?: number;
-    single_select_count?: number | null;
-    multi_select_count?: number | null;
-    text_input_count?: number | null;
-    numerical_input_count?: number | null;
     chapter_plan?: Array<{
       chapter_id: string;
       action: "quiz" | "skip" | "assignment" | "final_test";
@@ -2907,10 +2899,6 @@ export async function applyQuizAutoMap(
     difficulty_medium?: number;
     difficulty_hard?: number;
     max_families_per_bank?: number;
-    single_select_count?: number | null;
-    multi_select_count?: number | null;
-    text_input_count?: number | null;
-    numerical_input_count?: number | null;
     chapter_plan?: Array<{
       chapter_id: string;
       action: "quiz" | "skip" | "assignment" | "final_test";
@@ -2936,10 +2924,6 @@ export async function previewQuizFromBankRelease(
     difficulty_hard: number;
     max_families_per_bank?: number;
     quiz_blueprint_id?: string | null;
-    single_select_count?: number | null;
-    multi_select_count?: number | null;
-    text_input_count?: number | null;
-    numerical_input_count?: number | null;
   },
 ) {
   return parseResponse<BankReleaseQuizPlan>(
@@ -2968,10 +2952,6 @@ export async function createQuizFromBankRelease(
     difficulty_hard: number;
     max_families_per_bank?: number;
     quiz_blueprint_id?: string | null;
-    single_select_count?: number | null;
-    multi_select_count?: number | null;
-    text_input_count?: number | null;
-    numerical_input_count?: number | null;
     custom_timer_enabled?: boolean;
     time_limit_minutes?: number;
     retake_cooldown_minutes?: number;

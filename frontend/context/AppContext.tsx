@@ -59,7 +59,7 @@ const STORAGE_KEYS = {
 const IS_PRODUCTION = process.env.NEXT_PUBLIC_APP_ENV === 'production' || process.env.NODE_ENV === 'production'
 
 const LEGACY_PERMISSION_BRIDGE: Record<string, string[]> = {
-  view_dashboard: ['bank.view', 'audit.view'],
+  view_dashboard: ['bank.view', 'audit.view', 'academic.view', 'view_training_reports'],
   view_questions: ['bank.view', 'question.edit', 'question.approve', 'question.reject'],
   view_jobs: ['jobs.view'],
   view_ops_readiness: ['ops.readiness.view'],

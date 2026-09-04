@@ -87,13 +87,13 @@ def test_get_campus_uses_product_and_no_api_key():
     assert_keyless(call)
 
 
-def test_get_all_subject_is_global_keyless_catalog():
+def test_get_all_subject_is_product_term_scoped_keyless_catalog():
     subjects = make_client().get_subjects(branch='poly', term_name='Fall 2026')
     assert [item['subject_code'] for item in subjects] == ['AUT218', 'MEC229']
     call = FakeHttpClient.calls[-1]
     assert call['method'] == 'GET'
     assert call['url'] == 'https://api.poly.edu.vn/api/cms/get-all-subject'
-    assert not call.get('params')
+    assert call['params'] == {'product': 'POLY', 'term_name': 'Fall 2026'}
     assert_keyless(call)
 
 

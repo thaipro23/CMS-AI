@@ -444,10 +444,12 @@ class APAcademicClient:
             getattr(settings, 'academic_ap_get_all_subject_endpoint', '/get-all-subject'),
             '/get-all-subject',
         )
-        # get-all-subject is intentionally global/keyless. Do not send the legacy
-        # branch/term query parameters; scope is applied locally when fields exist.
+        product = 'POLY' if normalized_branch == 'poly' else 'PTCD'
+        params = {'product': product}
+        if normalized_term:
+            params['term_name'] = normalized_term
         with httpx.Client(timeout=self.timeout_seconds, verify=self._verify_config(endpoint)) as http:
-            response = http.get(endpoint, headers=self._headers())
+            response = http.get(endpoint, headers=self._headers(), params=params)
             response.raise_for_status()
             data = response.json()
         items = self._extract_list_response(data, label='AP get-all-subject')

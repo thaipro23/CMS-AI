@@ -1,0 +1,55 @@
+/* ACMS project-wide spacing/layout contract. Loaded last intentionally.
+   Structural only: spacing, flow, overflow and responsive behavior. */
+:root {
+  --acms-space-1: 4px;
+  --acms-space-2: 8px;
+  --acms-space-3: 12px;
+  --acms-space-4: 16px;
+  --acms-space-5: 20px;
+  --acms-space-6: 24px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+.app-main, .app-content, .enterprise-content, .page-root, .page-stack,
+.enterprise-standard-page, .bank-contract-page, .workspace-section,
+.popup-action-panel, .enterprise-panel, .academic-unified-card,
+.training-workspace-section, .bank-section-body { min-width: 0; }
+
+.page-stack, .bank-multipage, .enterprise-standard-page,
+.quiz-creation-workbench, .ap-sync-page { gap: var(--acms-space-5); }
+
+.section-heading, .enterprise-section-heading, .workspace-section-header,
+.enterprise-content-section-head, .toolbar, .toolbar-actions, .section-actions,
+.header-actions, .button-row, .filter-actions, .settings-actions,
+.class-action-row { gap: var(--acms-space-3); }
+
+.toolbar, .toolbar-actions, .section-actions, .header-actions,
+.button-row, .filter-actions, .settings-actions, .class-action-row,
+.accessible-dialog-footer { flex-wrap: wrap; }
+
+.settings-form-grid, .quiz-small-grid, .option-grid,
+.compact-filter-grid, .filter-grid, .form-grid, .quiz-modal-grid {
+  column-gap: var(--acms-space-4);
+  row-gap: var(--acms-space-3);
+}
+
+.table-scroll, .enterprise-table-scroll, .data-table-scroll,
+.enterprise-data-table-scroll { max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; }
+
+.accessible-dialog-surface { max-width: min(96vw, 1180px); max-height: min(92vh, 960px); min-width: 0; }
+.accessible-dialog-header, .accessible-dialog-footer { gap: var(--acms-space-3); }
+.accessible-dialog-body { min-width: 0; overflow: auto; overscroll-behavior: contain; }
+.quiz-modal-grid { align-items: start; }
+.quiz-timer-subhead { margin-top: var(--acms-space-4); }
+
+@media (max-width: 960px) {
+  .quiz-modal-grid, .settings-form-grid, .form-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .page-stack, .bank-multipage, .enterprise-standard-page { gap: var(--acms-space-4); }
+}
+
+@media (max-width: 640px) {
+  .toolbar, .toolbar-actions, .section-actions, .header-actions,
+  .button-row, .filter-actions, .settings-actions, .class-action-row,
+  .accessible-dialog-footer { width: 100%; }
+}

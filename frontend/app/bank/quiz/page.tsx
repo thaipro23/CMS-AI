@@ -31,10 +31,6 @@ type AssessmentConfig = {
   easy: number
   medium: number
   hard: number
-  singleSelectCount: number
-  multiSelectCount: number
-  textInputCount: number
-  numericalInputCount: number
   timerEnabled: boolean
   timeLimitMinutes: number
   retakeCooldownMinutes: number
@@ -156,10 +152,6 @@ export default function BankQuizPage() {
     easy: 50,
     medium: 30,
     hard: 20,
-    singleSelectCount: 15,
-    multiSelectCount: 0,
-    textInputCount: 0,
-    numericalInputCount: 0,
     timerEnabled: true,
     timeLimitMinutes: 15,
     retakeCooldownMinutes: 5,
@@ -171,10 +163,6 @@ export default function BankQuizPage() {
     easy: 20,
     medium: 40,
     hard: 40,
-    singleSelectCount: 30,
-    multiSelectCount: 0,
-    textInputCount: 0,
-    numericalInputCount: 0,
     timerEnabled: true,
     timeLimitMinutes: 60,
     retakeCooldownMinutes: 0,
@@ -220,8 +208,6 @@ export default function BankQuizPage() {
   const missingReleaseCount = effectiveMappings.filter((item: any) => item.effectiveRequiresQuiz && (!item.release_id || (item.missing_requirements || []).includes('RELEASE'))).length
   const quizDifficultyTotal = quizConfig.easy + quizConfig.medium + quizConfig.hard
   const finalDifficultyTotal = finalConfig.easy + finalConfig.medium + finalConfig.hard
-  const quizTypeTotal = quizConfig.singleSelectCount + quizConfig.multiSelectCount + quizConfig.textInputCount + quizConfig.numericalInputCount
-  const finalTypeTotal = finalConfig.singleSelectCount + finalConfig.multiSelectCount + finalConfig.textInputCount + finalConfig.numericalInputCount
 
   function hydrateActionDefaults(result: QuizAutoMapResult) {
     setChapterActions((prev) => {
@@ -269,10 +255,6 @@ export default function BankQuizPage() {
         difficulty_easy: quizConfig.easy,
         difficulty_medium: quizConfig.medium,
         difficulty_hard: quizConfig.hard,
-        single_select_count: quizConfig.singleSelectCount,
-        multi_select_count: quizConfig.multiSelectCount,
-        text_input_count: quizConfig.textInputCount,
-        numerical_input_count: quizConfig.numericalInputCount,
         max_families_per_bank: 2,
         chapter_plan: keepPlan ? actionPlan : [],
       })
@@ -305,10 +287,6 @@ export default function BankQuizPage() {
         difficulty_easy: quizConfig.easy,
         difficulty_medium: quizConfig.medium,
         difficulty_hard: quizConfig.hard,
-        single_select_count: quizConfig.singleSelectCount,
-        multi_select_count: quizConfig.multiSelectCount,
-        text_input_count: quizConfig.textInputCount,
-        numerical_input_count: quizConfig.numericalInputCount,
         max_families_per_bank: 2,
         chapter_plan: actionPlan,
       })
@@ -360,10 +338,6 @@ export default function BankQuizPage() {
         difficulty_hard: config.hard,
         max_families_per_bank: 2,
         quiz_blueprint_id: selectedBlueprintId || null,
-        single_select_count: config.singleSelectCount,
-        multi_select_count: config.multiSelectCount,
-        text_input_count: config.textInputCount,
-        numerical_input_count: config.numericalInputCount,
         custom_timer_enabled: config.timerEnabled,
         time_limit_minutes: config.timeLimitMinutes,
         retake_cooldown_minutes: config.retakeCooldownMinutes,
@@ -383,8 +357,8 @@ export default function BankQuizPage() {
 
   async function confirmCreateFromModal() {
     if (!createModal) return
-    const quizInvalid = quizDifficultyTotal !== 100 || quizTypeTotal !== quizConfig.totalQuestions
-    const finalInvalid = finalDifficultyTotal !== 100 || finalTypeTotal !== finalConfig.totalQuestions
+    const quizInvalid = quizDifficultyTotal !== 100
+    const finalInvalid = finalDifficultyTotal !== 100
     const invalidConfig = createModal.kind === 'all' ? quizInvalid || finalInvalid : (createModal.item.action === 'final_test' ? finalInvalid : quizInvalid)
     if (invalidConfig) return
     if (createModal.kind === 'one') {
@@ -412,16 +386,6 @@ export default function BankQuizPage() {
   function updateConfig(kind: 'quiz' | 'final', patch: Partial<AssessmentConfig>) {
     const updater = (current: AssessmentConfig): AssessmentConfig => {
       const next = { ...current, ...patch }
-      if (patch.totalQuestions !== undefined) {
-        const otherTypes = next.multiSelectCount + next.textInputCount + next.numericalInputCount
-        if (otherTypes <= next.totalQuestions) next.singleSelectCount = next.totalQuestions - otherTypes
-        else {
-          next.singleSelectCount = next.totalQuestions
-          next.multiSelectCount = 0
-          next.textInputCount = 0
-          next.numericalInputCount = 0
-        }
-      }
       return next
     }
     setQuotaPreview(null)
@@ -431,7 +395,6 @@ export default function BankQuizPage() {
 
   function ConfigPanel({ kind, config }: { kind: 'quiz' | 'final'; config: AssessmentConfig }) {
     const total = config.easy + config.medium + config.hard
-    const typeTotal = config.singleSelectCount + config.multiSelectCount + config.textInputCount + config.numericalInputCount
     const lockedByBlueprint = Boolean(selectedBlueprintId && createModal?.kind === 'one')
     const title = kind === 'final' ? 'Cấu hình Final test' : 'Cấu hình Quiz tự luyện'
     const note = kind === 'final' ? 'Dùng riêng cho dòng chọn Tạo Final test.' : 'Dùng cho các dòng chọn Tạo Quiz.'
@@ -449,17 +412,6 @@ export default function BankQuizPage() {
         <label>Medium %<input className="input" type="number" disabled={lockedByBlueprint} value={config.medium} onChange={(event) => updateConfig(kind, { medium: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
         <label>Hard %<input className="input" type="number" disabled={lockedByBlueprint} value={config.hard} onChange={(event) => updateConfig(kind, { hard: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
       </div>
-      <div className="section-heading compact-heading quiz-timer-subhead">
-        <div><h3>Loại câu hỏi</h3><p className="muted">Quota là số câu chính xác, tổng phải bằng {config.totalQuestions}.</p></div>
-        <span className={classNames('status', typeTotal === config.totalQuestions ? 'success' : 'warning')}>{typeTotal}/{config.totalQuestions}</span>
-      </div>
-      <div className="quiz-type-quota-grid">
-        <label>Một đáp án<input className="input" type="number" min={0} max={config.totalQuestions} disabled={lockedByBlueprint} value={config.singleSelectCount} onChange={(event) => updateConfig(kind, { singleSelectCount: normalizeNumber(Number(event.target.value), 0, 0, config.totalQuestions) })} /></label>
-        <label>Nhiều đáp án<input className="input" type="number" min={0} max={config.totalQuestions} disabled={lockedByBlueprint} value={config.multiSelectCount} onChange={(event) => updateConfig(kind, { multiSelectCount: normalizeNumber(Number(event.target.value), 0, 0, config.totalQuestions) })} /></label>
-        <label>Trả lời ngắn<input className="input" type="number" min={0} max={config.totalQuestions} disabled={lockedByBlueprint} value={config.textInputCount} onChange={(event) => updateConfig(kind, { textInputCount: normalizeNumber(Number(event.target.value), 0, 0, config.totalQuestions) })} /></label>
-        <label>Trả lời số<input className="input" type="number" min={0} max={config.totalQuestions} disabled={lockedByBlueprint} value={config.numericalInputCount} onChange={(event) => updateConfig(kind, { numericalInputCount: normalizeNumber(Number(event.target.value), 0, 0, config.totalQuestions) })} /></label>
-      </div>
-      {typeTotal !== config.totalQuestions ? <div className="alert warning">Tổng quota loại câu hỏi đang là {typeTotal}/{config.totalQuestions}. Hãy điều chỉnh trước khi tạo.</div> : null}
       <div className="section-heading compact-heading quiz-timer-subhead">
         <div>
           <h3>Timer</h3>
@@ -488,10 +440,6 @@ export default function BankQuizPage() {
       easy: blueprint.difficulty_easy,
       medium: blueprint.difficulty_medium,
       hard: blueprint.difficulty_hard,
-      singleSelectCount: Number(blueprint.single_select_count ?? blueprint.total_questions),
-      multiSelectCount: Number(blueprint.multi_select_count ?? 0),
-      textInputCount: Number(blueprint.text_input_count ?? 0),
-      numericalInputCount: Number(blueprint.numerical_input_count ?? 0),
     })
   }
 
@@ -517,8 +465,7 @@ export default function BankQuizPage() {
     if (!createModal || createModal.kind !== 'one' || !autoMap?.subject?.id || blueprintSaveBusy) return
     const config = configForAction(createModal.item.action)
     const difficultyTotal = config.easy + config.medium + config.hard
-    const typeTotal = config.singleSelectCount + config.multiSelectCount + config.textInputCount + config.numericalInputCount
-    if (difficultyTotal !== 100 || typeTotal !== config.totalQuestions) {
+    if (difficultyTotal !== 100) {
       setMessage({ tone: 'warning', text: 'Cấu hình chưa hợp lệ nên chưa thể lưu Blueprint.' })
       return
     }
@@ -533,10 +480,6 @@ export default function BankQuizPage() {
         difficulty_easy: config.easy,
         difficulty_medium: config.medium,
         difficulty_hard: config.hard,
-        single_select_count: config.singleSelectCount,
-        multi_select_count: config.multiSelectCount,
-        text_input_count: config.textInputCount,
-        numerical_input_count: config.numericalInputCount,
         max_families_per_bank: 2,
         pick_count_per_slot: 1,
       })
@@ -555,7 +498,7 @@ export default function BankQuizPage() {
     const item = createModal.item
     if (item.action === 'final_test') {
       setQuotaPreview(null)
-      setMessage({ tone: 'info', text: `Final test sẽ kiểm tra quota trên toàn bộ ${(item as any).source_release_ids?.length || 0} Release nguồn khi tạo, không kiểm tra riêng một Release.` })
+      setMessage({ tone: 'info', text: `Final test sẽ kiểm tra khả năng đáp ứng trên toàn bộ ${(item as any).source_release_ids?.length || 0} Release nguồn khi tạo, không kiểm tra riêng một Release.` })
       return
     }
     const releaseId = item.release_id
@@ -571,14 +514,10 @@ export default function BankQuizPage() {
         difficulty_hard: config.hard,
         max_families_per_bank: 2,
         quiz_blueprint_id: selectedBlueprintId || null,
-        single_select_count: config.singleSelectCount,
-        multi_select_count: config.multiSelectCount,
-        text_input_count: config.textInputCount,
-        numerical_input_count: config.numericalInputCount,
       })
       setQuotaPreview(result)
     } catch (error) {
-      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Release không đáp ứng quota câu hỏi đã chọn.' })
+      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Release không đáp ứng số câu/độ khó đã chọn.' })
     } finally {
       setQuotaPreviewBusy(false)
     }
@@ -817,7 +756,7 @@ export default function BankQuizPage() {
     <AccessibleDialog
       open={Boolean(createModal)}
       title={createModal?.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : createModal ? `${actionLabel(createModal.item.action)} cho ${createModal.item.chapter_title}` : 'Cấu hình tạo bài kiểm tra'}
-      description="Quiz tự luyện và Final test có cấu hình riêng. Kiểm tra tỷ lệ độ khó, quota loại câu hỏi và khả năng đáp ứng của Release trước khi xác nhận."
+      description="Quiz tự luyện và Final test có cấu hình riêng. Kiểm tra tỷ lệ độ khó, số câu, tỷ lệ độ khó và khả năng đáp ứng của Release trước khi xác nhận."
       onClose={() => setCreateModal(null)}
       size="xlarge"
       className="quiz-config-modal"
@@ -832,18 +771,17 @@ export default function BankQuizPage() {
               const blueprint = blueprints.find((item) => item.id === next)
               if (blueprint) applyBlueprintToConfig(blueprint, createModal.item.action)
             }}><option value="">Cấu hình thủ công</option>{blueprints.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.total_questions} câu</option>)}</select></label>
-            <p className="helper">Chọn Blueprint sẽ khóa quota/độ khó theo Blueprint để backend và giao diện dùng cùng một cấu hình.</p>
+            <p className="helper">Chọn Blueprint sẽ khóa số câu/độ khó theo Blueprint để backend và giao diện dùng cùng một cấu hình.</p>
             {!selectedBlueprintId ? <div className="quiz-blueprint-save-row"><input className="input" value={blueprintTitle} onChange={(event) => setBlueprintTitle(event.target.value)} placeholder="Tên Blueprint" /><button className="btn secondary" type="button" disabled={blueprintSaveBusy || busy || Boolean(creatingKey)} onClick={saveCurrentBlueprint}>{blueprintSaveBusy ? 'Đang lưu...' : 'Lưu cấu hình thành Blueprint'}</button></div> : null}
           </div> : null}
           <div className="quiz-modal-grid">{(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} /> : null}{(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} /> : null}</div>
-          <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : createModal.item.action === 'final_test' ? `Final test sẽ lấy candidate pool từ toàn bộ ${(createModal.item as any).source_release_ids?.length || 0} Release của các Bài đang chọn Tạo Quiz.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {normalizeOpenEdxCourseId(courseId) || '—'} · Quiz độ khó {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · loại {quizConfig.singleSelectCount}/{quizConfig.multiSelectCount}/{quizConfig.textInputCount}/{quizConfig.numericalInputCount} · Final loại {finalConfig.singleSelectCount}/{finalConfig.multiSelectCount}/{finalConfig.textInputCount}/{finalConfig.numericalInputCount}</small></div>
+          <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : createModal.item.action === 'final_test' ? `Final test sẽ lấy candidate pool từ toàn bộ ${(createModal.item as any).source_release_ids?.length || 0} Release của các Bài đang chọn Tạo Quiz.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {normalizeOpenEdxCourseId(courseId) || '—'} · Quiz {quizConfig.totalQuestions} câu · độ khó {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.totalQuestions} câu · độ khó {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
           {(quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100) ? <div className="alert warning">Tổng tỷ lệ Easy/Medium/Hard của mỗi loại phải bằng 100%.</div> : null}
-          {(quizTypeTotal !== quizConfig.totalQuestions || finalTypeTotal !== finalConfig.totalQuestions) ? <div className="alert warning">Tổng quota loại câu hỏi phải đúng bằng số câu của Quiz/Final tương ứng.</div> : null}
           {createModal.kind === 'one' ? <div className="quota-preview-panel">
-            {createModal.item.action === 'final_test' ? <div className="alert info"><b>Final test dùng bộ câu hỏi tổng hợp.</b> Hệ thống sẽ kiểm tra quota trên toàn bộ {(createModal.item as any).source_release_ids?.length || 0} Release nguồn ngay trước khi tạo và chặn nếu thiếu câu.</div> : <><button className="btn secondary" type="button" disabled={quotaPreviewBusy || busy || Boolean(creatingKey)} onClick={previewCurrentQuota}>{quotaPreviewBusy ? 'Đang kiểm tra quota...' : 'Kiểm tra quota với Release'}</button>
-            {quotaPreview ? <><div className="alert success"><b>Release đáp ứng quota.</b> {quotaPreview.assigned_question_count} câu được phân vào {quotaPreview.slots.length} Problem Bank slot.{quotaPreview.flexibly_assigned_question_count ? ` Có ${quotaPreview.flexibly_assigned_question_count} câu CMS cũ được xếp linh hoạt vì chưa có độ khó.` : ''}</div>{quotaPreview.warnings?.length ? <div className="alert info"><b>Ngoại lệ cho dữ liệu CMS cũ</b><ul>{quotaPreview.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}<div className="quiz-matrix-preview"><table><thead><tr><th>Difficulty × type</th><th>Số câu</th></tr></thead><tbody>{Object.entries(quotaPreview.matrix_target_counts || {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => <tr key={key}><td>{key.replace(':', ' · ')}</td><td>{value}</td></tr>)}</tbody></table></div></> : null}</>}
+            {createModal.item.action === 'final_test' ? <div className="alert info"><b>Final test dùng bộ câu hỏi tổng hợp.</b> Hệ thống sẽ kiểm tra khả năng đáp ứng trên toàn bộ {(createModal.item as any).source_release_ids?.length || 0} Release nguồn ngay trước khi tạo và chặn nếu thiếu câu.</div> : <><button className="btn secondary" type="button" disabled={quotaPreviewBusy || busy || Boolean(creatingKey)} onClick={previewCurrentQuota}>{quotaPreviewBusy ? 'Đang kiểm tra...' : 'Kiểm tra khả năng đáp ứng'}</button>
+            {quotaPreview ? <><div className="alert success"><b>Release đáp ứng cấu hình.</b> {quotaPreview.assigned_question_count} câu được phân vào {quotaPreview.slots.length} Problem Bank slot.{quotaPreview.flexibly_assigned_question_count ? ` Có ${quotaPreview.flexibly_assigned_question_count} câu CMS cũ được xếp linh hoạt vì chưa có độ khó.` : ''}</div>{quotaPreview.warnings?.length ? <div className="alert info"><b>Ngoại lệ cho dữ liệu CMS cũ</b><ul>{quotaPreview.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}<div className="quiz-matrix-preview"><table><thead><tr><th>Độ khó</th><th>Số câu</th></tr></thead><tbody>{Object.entries(quotaPreview.matrix_target_counts || {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => <tr key={key}><td>{key.replace(':auto', '').toUpperCase()}</td><td>{value}</td></tr>)}</tbody></table></div></> : null}</>}
           </div> : null}
-          <div className="modal-actions"><button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button><button className="btn" type="button" disabled={busy || Boolean(creatingKey) || (createModal.kind === 'all' ? (quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100 || quizTypeTotal !== quizConfig.totalQuestions || finalTypeTotal !== finalConfig.totalQuestions || !readyRows.length) : (createModal.item.action === 'final_test' ? (finalDifficultyTotal !== 100 || finalTypeTotal !== finalConfig.totalQuestions) : (quizDifficultyTotal !== 100 || quizTypeTotal !== quizConfig.totalQuestions)))} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button></div>
+          <div className="modal-actions"><button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button><button className="btn" type="button" disabled={busy || Boolean(creatingKey) || (createModal.kind === 'all' ? (quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100 || !readyRows.length) : (createModal.item.action === 'final_test' ? finalDifficultyTotal !== 100 : quizDifficultyTotal !== 100))} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button></div>
       </> : null}
     </AccessibleDialog>
   </PageRoot>

@@ -249,14 +249,14 @@ export default function ApSyncPage() {
       icon="sync"
       tone="blue"
       breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Đồng bộ AP' }]}
-      secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running} onClick={loadOptions}>{loadingOptions ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
+      secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running} onClick={loadOptions}>{loadingOptions ? 'Đang cập nhật...' : 'Cập nhật cơ sở'}</button>}
     />
 
     {message ? <div className="alert">{message}</div> : null}
 
     <OperationsKpiStrip items={[
       { label: 'Học kỳ', value: termName || 'Chưa chọn', hint: 'Phạm vi đồng bộ hiện tại' },
-      { label: 'Cơ sở khả dụng', value: totalCampuses, hint: 'Nhập thủ công tại trang Cơ sở', tone: totalCampuses ? 'success' : 'warning' },
+      { label: 'Cơ sở khả dụng', value: totalCampuses, hint: 'Lấy từ API theo hệ POLY/PTCD', tone: totalCampuses ? 'success' : 'warning' },
       { label: 'Môn được đồng bộ', value: totalSelectedSubjects, hint: `CMS ${optionsByBranch.poly.cms_subject_count + optionsByBranch.ptcd.cms_subject_count} · Udemy ${optionsByBranch.poly.udemy_subject_count + optionsByBranch.ptcd.udemy_subject_count}`, tone: totalSelectedSubjects ? 'success' : 'warning' },
       { label: 'Job đang chạy', value: activeRuns.length, hint: activeRuns.length ? 'Không tạo job trùng' : 'Sẵn sàng chạy', tone: activeRuns.length ? 'info' : 'neutral' },
       { label: 'Kết quả gần nhất', value: lastResults.length, hint: dryRun ? 'Chế độ kiểm tra kế hoạch' : 'Chế độ ghi dữ liệu' },

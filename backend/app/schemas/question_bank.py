@@ -392,7 +392,7 @@ class QuestionTypeQuotaMixin(BaseModel):
             raise ValueError(f'Tổng quota theo loại câu hỏi phải bằng tổng số câu ({sum(resolved)}/{int(total)}).')
 
 
-class QuizBlueprintCreate(QuestionTypeQuotaMixin):
+class QuizBlueprintCreate(BaseModel):
     subject_id: str
     chapter_id: str
     subject_offering_id: str | None = None
@@ -408,7 +408,6 @@ class QuizBlueprintCreate(QuestionTypeQuotaMixin):
     def validate_blueprint(self):
         if self.difficulty_easy + self.difficulty_medium + self.difficulty_hard != 100:
             raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%.')
-        self.validate_type_quota(self.total_questions)
         if self.pick_count_per_slot != 1:
             raise ValueError('Blueprint theo quota loại câu hỏi hiện yêu cầu pick_count_per_slot=1.')
         return self
@@ -897,7 +896,7 @@ class BankReleaseReadinessOut(BaseModel):
     message: str
 
 
-class BankReleaseQuizPreviewRequest(QuestionTypeQuotaMixin):
+class BankReleaseQuizPreviewRequest(BaseModel):
     quiz_blueprint_id: str | None = None
     total_questions: int = Field(default=15, ge=1, le=200)
     difficulty_easy: int = Field(default=50, ge=0, le=100)
@@ -909,7 +908,6 @@ class BankReleaseQuizPreviewRequest(QuestionTypeQuotaMixin):
     def validate_quiz_plan_request(self):
         if self.difficulty_easy + self.difficulty_medium + self.difficulty_hard != 100:
             raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%.')
-        self.validate_type_quota(self.total_questions)
         return self
 
 
@@ -1013,7 +1011,7 @@ class QuizChapterPlanItem(BaseModel):
     action: Literal['quiz', 'skip', 'assignment', 'final_test'] = 'quiz'
 
 
-class QuizAutoMapRequest(QuestionTypeQuotaMixin):
+class QuizAutoMapRequest(BaseModel):
     openedx_course_id: str = Field(min_length=1, max_length=255)
     selected_subject_offering_id: str | None = None
     total_questions: int = Field(default=15, ge=1, le=200)
@@ -1027,7 +1025,6 @@ class QuizAutoMapRequest(QuestionTypeQuotaMixin):
     def validate_auto_map_quota(self):
         if self.difficulty_easy + self.difficulty_medium + self.difficulty_hard != 100:
             raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%.')
-        self.validate_type_quota(self.total_questions)
         return self
 
 

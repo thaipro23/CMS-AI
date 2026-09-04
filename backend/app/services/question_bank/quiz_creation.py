@@ -962,13 +962,8 @@ class QuestionBankQuizCreationWorkflowService:
             )
 
         requested = self._target_counts_for_quiz(total_questions, difficulty_easy, difficulty_medium, difficulty_hard)
-        requested_types = exact_type_counts(
-            total=total_questions,
-            single_select_count=single_select_count,
-            multi_select_count=multi_select_count,
-            text_input_count=text_input_count,
-            numerical_input_count=numerical_input_count,
-        )
+        requested_original = dict(requested)
+        requested_types = {'auto': int(total_questions)}
         release_by_id = {str(item.id): item for item in source_releases}
         grouped: dict[tuple[str, str], list[dict]] = {}
         flexible: dict[str, list[dict]] = {}
@@ -1004,7 +999,7 @@ class QuestionBankQuizCreationWorkflowService:
                 seen_questions.add(str(question.id))
                 seen_components.add(component)
                 source_question_counts[str(release.id)] = source_question_counts.get(str(release.id), 0) + 1
-                qtype = normalize_question_type(getattr(question, 'question_type', None))
+                qtype = 'auto'
                 entry = {'release_id': str(release.id), 'row': row, 'question': question, 'component': component}
                 if self._legacy_final_difficulty_is_unclassified(question):
                     flexible.setdefault(qtype, []).append(entry)
@@ -1027,6 +1022,45 @@ class QuestionBankQuizCreationWorkflowService:
             ]
             raise ValueError(f'Final test có Bài nguồn không còn câu hợp lệ: {", ".join(labels)}.')
 
+        legacy_rebalanced = False
+        legacy_entries = [entry for values in grouped.values() for entry in values] + [entry for values in flexible.values() for entry in values]
+        legacy_mode = bool(legacy_entries) and all(
+            str(getattr(entry['question'], 'source_type', '') or '').strip().lower() == 'legacy_quiz_excel'
+            for entry in legacy_entries
+        )
+        if legacy_mode:
+            order = ('easy', 'medium', 'hard')
+            weights = {'easy': max(int(difficulty_easy or 0), 0), 'medium': max(int(difficulty_medium or 0), 0), 'hard': max(int(difficulty_hard or 0), 0)}
+            classified_capacity = {diff: len(grouped.get((diff, 'auto'), [])) for diff in order}
+            flex_left = len(flexible.get('auto', []))
+            effective = {diff: min(int(requested.get(diff, 0) or 0), classified_capacity[diff]) for diff in order}
+            for diff in order:
+                missing = max(0, int(requested.get(diff, 0) or 0) - effective[diff])
+                used = min(missing, flex_left)
+                effective[diff] += used
+                flex_left -= used
+            remaining = int(total_questions) - sum(effective.values())
+            while remaining > 0:
+                candidates = [diff for diff in order if classified_capacity[diff] > effective[diff]]
+                if candidates:
+                    target_diff = min(candidates, key=lambda diff: (0 if weights[diff] > 0 else 1, effective[diff] / max(weights[diff], 1), order.index(diff)))
+                    effective[target_diff] += 1
+                    remaining -= 1
+                    continue
+                if flex_left > 0:
+                    target_diff = min(order, key=lambda diff: (0 if weights[diff] > 0 else 1, effective[diff] / max(weights[diff], 1), order.index(diff)))
+                    effective[target_diff] += 1
+                    flex_left -= 1
+                    remaining -= 1
+                    continue
+                break
+            if sum(effective.values()) != int(total_questions):
+                raise ValueError(
+                    f'Final test legacy không đủ {int(total_questions)} câu; '
+                    f'khả dụng theo độ khó={classified_capacity}, chưa phân loại={len(flexible.get("auto", []))}.'
+                )
+            legacy_rebalanced = effective != requested_original
+            requested = effective
         availability = {
             (diff, qtype): len(grouped.get((diff, qtype), []))
             for diff in ('easy', 'medium', 'hard')
@@ -1136,7 +1170,7 @@ class QuestionBankQuizCreationWorkflowService:
             if not repaired:
                 label = next((item.get('chapter_title') for item in (source_details or []) if str(item.get('release_id')) == missing_rid), missing_rid)
                 raise ValueError(
-                    f'Không thể đưa câu của {label} vào Final test với quota difficulty/loại hiện tại. '
+                    f'Không thể đưa câu của {label} vào Final test với cấu hình độ khó hiện tại. '
                     'Hãy tăng số câu Final hoặc điều chỉnh quota loại/độ khó.'
                 )
 
@@ -1199,6 +1233,11 @@ class QuestionBankQuizCreationWorkflowService:
         if actual_total != int(total_questions):
             raise ValueError(f'Final test planner tạo {actual_total}/{int(total_questions)} câu; từ chối tạo cấu hình lệch quota.')
         warnings: list[str] = []
+        if legacy_rebalanced:
+            warnings.append(
+                f'Final test CMS cũ không đủ phân bố độ khó đã yêu cầu; hệ thống tự cân lại '
+                f'{requested_original} → {requested} nhưng vẫn giữ đúng {int(total_questions)} câu.'
+            )
         unclassified_count = sum(len(items) for items in flexible.values())
         if unclassified_count:
             warnings.append(
@@ -1220,8 +1259,8 @@ class QuestionBankQuizCreationWorkflowService:
             'total_questions': int(total_questions),
             'target_counts': {key.upper(): value for key, value in requested.items()},
             'effective_target_counts': {key.upper(): requested[key] for key in requested},
-            'question_type_target_counts': requested_types,
-            'matrix_target_counts': {f'{diff}:{qtype}': int(value) for (diff, qtype), value in matrix.items()},
+            'question_type_target_counts': {},
+            'matrix_target_counts': {diff.upper(): int(requested.get(diff, 0) or 0) for diff in ('easy', 'medium', 'hard')},
             'coverage': coverage,
             'slots': slots,
             'warnings': warnings,
@@ -1343,7 +1382,7 @@ class QuestionBankQuizCreationWorkflowService:
         unclassified_concept_question_ids: set[str] = set()
         for row in rows:
             question = questions[row.question_id]
-            qtype = normalize_question_type(getattr(question, 'question_type', None))
+            qtype = 'auto'
             if legacy_difficulty_is_unclassified(question):
                 flexible_rows.setdefault(qtype, []).append(row)
             else:
@@ -1570,13 +1609,43 @@ class QuestionBankQuizCreationWorkflowService:
             return result_slots, coverage, diff_warnings
 
         requested = self._target_counts_for_quiz(total_questions, difficulty_easy, difficulty_medium, difficulty_hard)
-        requested_types = exact_type_counts(
-            total=total_questions,
-            single_select_count=single_select_count,
-            multi_select_count=multi_select_count,
-            text_input_count=text_input_count,
-            numerical_input_count=numerical_input_count,
-        )
+        requested_original = dict(requested)
+        requested_types = {'auto': int(total_questions)}
+        legacy_rebalanced = False
+        legacy_mode = bool(rows) and all(is_legacy_quiz_question(questions[row.question_id]) for row in rows)
+        if legacy_mode:
+            order = ('easy', 'medium', 'hard')
+            weights = {'easy': max(int(difficulty_easy or 0), 0), 'medium': max(int(difficulty_medium or 0), 0), 'hard': max(int(difficulty_hard or 0), 0)}
+            classified_capacity = {diff: len(grouped_rows.get((diff, 'auto'), [])) for diff in order}
+            flex_left = len(flexible_rows.get('auto', []))
+            effective = {diff: min(int(requested.get(diff, 0) or 0), classified_capacity[diff]) for diff in order}
+            for diff in order:
+                missing = max(0, int(requested.get(diff, 0) or 0) - effective[diff])
+                used = min(missing, flex_left)
+                effective[diff] += used
+                flex_left -= used
+            remaining = int(total_questions) - sum(effective.values())
+            while remaining > 0:
+                candidates = [diff for diff in order if classified_capacity[diff] > effective[diff]]
+                if candidates:
+                    target_diff = min(candidates, key=lambda diff: (0 if weights[diff] > 0 else 1, effective[diff] / max(weights[diff], 1), order.index(diff)))
+                    effective[target_diff] += 1
+                    remaining -= 1
+                    continue
+                if flex_left > 0:
+                    target_diff = min(order, key=lambda diff: (0 if weights[diff] > 0 else 1, effective[diff] / max(weights[diff], 1), order.index(diff)))
+                    effective[target_diff] += 1
+                    flex_left -= 1
+                    remaining -= 1
+                    continue
+                break
+            if sum(effective.values()) != int(total_questions):
+                raise ValueError(
+                    f'Release legacy không đủ {int(total_questions)} câu để tạo Quiz; '
+                    f'khả dụng theo độ khó={classified_capacity}, chưa phân loại={len(flexible_rows.get("auto", []))}.'
+                )
+            legacy_rebalanced = effective != requested_original
+            requested = effective
         availability = {
             (diff, qtype): len(grouped_rows.get((diff, qtype), []))
             for diff in ('easy', 'medium', 'hard')
@@ -1638,6 +1707,11 @@ class QuestionBankQuizCreationWorkflowService:
         slots: list[dict] = []
         coverage: list[dict] = []
         warnings: list[str] = []
+        if legacy_rebalanced:
+            warnings.append(
+                f'Release CMS cũ không đủ phân bố độ khó đã yêu cầu; hệ thống tự cân lại '
+                f'{requested_original} → {requested} nhưng vẫn giữ đúng {int(total_questions)} câu.'
+            )
         unclassified_difficulty_count = sum(len(items) for items in flexible_rows.values())
         flexibly_assigned_count = sum(len(items) for items in allocated_flexible_rows.values())
         if unclassified_difficulty_count:
@@ -1693,21 +1767,18 @@ class QuestionBankQuizCreationWorkflowService:
             )
         plan = {
             'ok': True,
-            'planner_engine': 'bank_release_difficulty_question_type_itembank_v4',
+            'planner_engine': 'bank_release_difficulty_itembank_v5',
             'uses_llm': False,
             'release_id': release.id,
             'release_code': release.release_code,
             'openedx_library_key': release.openedx_library_key,
             'requested_total_questions': int(total_questions),
             'total_questions': int(total_questions),
-            'target_counts': {k.upper(): v for k, v in requested.items()},
+            'target_counts': {k.upper(): v for k, v in requested_original.items()},
             'effective_target_counts': {k.upper(): requested[k] for k in requested},
-            'question_type_target_counts': requested_types,
-            'question_type_coverage': [
-                {'question_type': qtype, 'target_questions': int(requested_types[qtype]), 'available_questions': sum(availability.get((diff, qtype), 0) for diff in ('easy','medium','hard')) + flexible_availability.get(qtype, 0), 'selected_slots': sum(int(matrix.get((diff,qtype),0) or 0) for diff in ('easy','medium','hard'))}
-                for qtype in requested_types
-            ],
-            'matrix_target_counts': {f'{diff}:{qtype}': int(value) for (diff, qtype), value in matrix.items()},
+            'question_type_target_counts': {},
+            'question_type_coverage': [],
+            'matrix_target_counts': {diff.upper(): int(requested.get(diff, 0) or 0) for diff in ('easy', 'medium', 'hard')},
             'coverage': coverage,
             'slots': slots,
             'warnings': list(dict.fromkeys(warnings)),
@@ -1717,9 +1788,9 @@ class QuestionBankQuizCreationWorkflowService:
             'unclassified_difficulty_question_count': unclassified_difficulty_count,
             'unclassified_concept_question_count': len(unclassified_concept_question_ids),
             'flexibly_assigned_question_count': flexibly_assigned_count,
-            'hard_guard': {'valid': True, 'summary': 'Release plan hợp lệ: đúng quota difficulty × loại câu hỏi; không trùng question_id hoặc Open edX component giữa các bank.'},
-            'message': f'Tạo kế hoạch {len(slots)} Problem Bank theo quota difficulty × loại câu hỏi, learner thấy {int(total_questions)} câu.',
-            **_ui_notice('success', f'Tạo kế hoạch {len(slots)} Problem Bank theo quota difficulty × loại câu hỏi, learner thấy {int(total_questions)} câu.'),
+            'hard_guard': {'valid': True, 'summary': 'Release plan hợp lệ: đúng số câu theo độ khó hiệu lực; không trùng question_id hoặc Open edX component giữa các bank.'},
+            'message': f'Tạo kế hoạch {len(slots)} Problem Bank theo cấu hình độ khó, learner thấy {int(total_questions)} câu.',
+            **_ui_notice('success', f'Tạo kế hoạch {len(slots)} Problem Bank theo cấu hình độ khó, learner thấy {int(total_questions)} câu.'),
         }
         return plan
 

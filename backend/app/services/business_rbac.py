@@ -71,6 +71,21 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     TEACHER_ASSIGNED: {'academic.view', 'view_training_reports'},
 }
 
+
+CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS: set[str] = {
+    'department.manage_all', 'subject.create', 'subject.update', 'course.sync',
+    'user.manage_all', 'rbac.view',
+}
+
+
+def _is_all_campus_assignment(assignment: Any) -> bool:
+    role_code = str(getattr(assignment, 'role_code', '') or '').upper()
+    scope_type = str(getattr(assignment, 'scope_type', '') or '').upper()
+    scope_id = str(getattr(assignment, 'scope_id', '') or '').strip()
+    return role_code in {CAMPUS_OWNER, CAMPUS_MANAGER} and (
+        scope_type == 'SYSTEM' or (scope_type == 'CAMPUS' and scope_id == '*')
+    )
+
 LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
     'view_dashboard': {'bank.view', 'audit.view', 'academic.view', 'view_training_reports'},
     'view_questions': {'bank.view', 'question.edit', 'question.approve', 'question.reject'},
@@ -198,12 +213,15 @@ class BusinessRBACService:
         return self.db.query(UserRoleAssignment).filter(UserRoleAssignment.revoked_at.is_(None))
 
     def active_assignments_for_identity(self, user_id: str | None, email: str | None = None, username: str | None = None) -> list[UserRoleAssignment]:
-        values = {str(item).strip() for item in [user_id, username] if str(item or '').strip()}
+        values = {
+            str(item).strip().lower()
+            for item in [user_id, username, email]
+            if str(item or '').strip()
+        }
         filters = []
         if values:
-            filters.append(UserRoleAssignment.user_id.in_(sorted(values)))
-        if email:
-            filters.append(UserRoleAssignment.email == email)
+            filters.append(func.lower(UserRoleAssignment.user_id).in_(sorted(values)))
+            filters.append(func.lower(UserRoleAssignment.email).in_(sorted(values)))
         if not filters:
             return []
         return self.active_assignments_query().filter(or_(*filters)).all()
@@ -292,12 +310,20 @@ class BusinessRBACService:
 
     def effective_permissions_for_user(self, user: Any) -> set[str]:
         permissions: set[str] = set()
-        if self.is_system_admin(user):
+        system_admin = self.is_system_admin(user)
+        if system_admin:
             permissions.update(ROLE_PERMISSIONS[SYSTEM_ADMIN])
+            permissions.update(
+                str(row.code).strip()
+                for row in self.db.query(RBACPermission).all()
+                if str(getattr(row, 'code', '') or '').strip()
+            )
         for assignment in self.active_assignments_for_actor(user):
-            if assignment.role_code == SYSTEM_ADMIN and not self.is_system_admin(user):
+            if assignment.role_code == SYSTEM_ADMIN and not system_admin:
                 continue
             permissions.update(ROLE_PERMISSIONS.get(assignment.role_code, set()))
+            if _is_all_campus_assignment(assignment):
+                permissions.update(CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS)
         if self._has_ap_teacher_assignment(user):
             permissions.update(ROLE_PERMISSIONS[TEACHER_ASSIGNED])
         return permissions
@@ -656,6 +682,13 @@ class BusinessRBACService:
                 return str(scope_id).upper()
         return scope_id
 
+    @staticmethod
+    def assignment_permission_codes(item: UserRoleAssignment) -> list[str]:
+        permissions = set(ROLE_PERMISSIONS.get(item.role_code, set()))
+        if _is_all_campus_assignment(item):
+            permissions.update(CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS)
+        return sorted(permissions)
+
     def serialize_assignment(self, item: UserRoleAssignment) -> dict[str, Any]:
         return {
             'id': item.id,
@@ -663,7 +696,7 @@ class BusinessRBACService:
             'email': item.email,
             'role_code': item.role_code,
             'role_name': ROLE_LABELS.get(item.role_code, item.role_code),
-            'permission_codes': sorted(ROLE_PERMISSIONS.get(item.role_code, set())),
+            'permission_codes': self.assignment_permission_codes(item),
             'scope_type': item.scope_type,
             'scope_id': item.scope_id,
             'scope_label': self.scope_label(item.scope_type, item.scope_id),
