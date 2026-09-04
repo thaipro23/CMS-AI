@@ -2584,10 +2584,6 @@ def preview_quiz_from_release(release_id: str, payload: BankReleaseQuizPreviewRe
             difficulty_medium=payload.difficulty_medium,
             difficulty_hard=payload.difficulty_hard,
             max_families_per_bank=payload.max_families_per_bank,
-            single_select_count=payload.single_select_count,
-            multi_select_count=payload.multi_select_count,
-            text_input_count=payload.text_input_count,
-            numerical_input_count=payload.numerical_input_count,
             quiz_blueprint_id=payload.quiz_blueprint_id,
         )
         log_audit(db, action='question_bank.release.quiz.preview', status='success', message=result.get('message', ''), user=user, target_type='bank_release', target_id=release_id, metadata={'slot_count': result.get('total_questions'), 'warnings': result.get('warnings')})
@@ -2658,10 +2654,6 @@ async def create_quiz_from_release(release_id: str, payload: BankReleaseQuizCrea
             difficulty_medium=payload.difficulty_medium,
             difficulty_hard=payload.difficulty_hard,
             max_families_per_bank=payload.max_families_per_bank,
-            single_select_count=payload.single_select_count,
-            multi_select_count=payload.multi_select_count,
-            text_input_count=payload.text_input_count,
-            numerical_input_count=payload.numerical_input_count,
             quiz_blueprint_id=payload.quiz_blueprint_id,
             custom_timer_enabled=payload.custom_timer_enabled,
             time_limit_minutes=payload.time_limit_minutes,

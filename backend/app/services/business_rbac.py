@@ -74,7 +74,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 
 CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS: set[str] = {
     'department.manage_all', 'subject.create', 'subject.update', 'course.sync',
-    'user.manage_all', 'rbac.view',
+    'rbac.view',
 }
 
 

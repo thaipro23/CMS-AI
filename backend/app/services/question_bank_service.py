@@ -55,7 +55,6 @@ from app.services.source_chunk_refs import join_source_chunk_ids, split_source_c
 from app.services.bank_dashboard_stats import BankDashboardStatsService
 from app.services.bank_search import BankSearchService
 from app.services.object_storage import StorageError, get_object_storage
-from app.services.question_type_quota import exact_type_counts
 
 
 from app.services.question_bank.release_publish import QuestionBankReleasePublishWorkflowService
@@ -2745,9 +2744,10 @@ class VersionedQuestionBankService:
         if subject_offering_id:
             offering=self.db.get(SubjectOffering,subject_offering_id)
             if not offering or str(offering.subject_id)!=str(subject_id): raise ValueError('Subject Offering không thuộc Subject của Quiz Blueprint.')
-        if int(pick_count_per_slot or 1)!=1: raise ValueError('Blueprint theo quota loại câu hỏi yêu cầu pick_count_per_slot=1.')
-        type_counts=exact_type_counts(total=total_questions,single_select_count=single_select_count,multi_select_count=multi_select_count,text_input_count=text_input_count,numerical_input_count=numerical_input_count)
-        item=QuizBlueprint(id=str(uuid.uuid4()),subject_id=subject_id,chapter_id=chapter_id,subject_offering_id=subject_offering_id,title=title,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,single_select_count=type_counts['single_select'],multi_select_count=type_counts['multi_select'],text_input_count=type_counts['text_input'],numerical_input_count=type_counts['numerical_input'],max_families_per_bank=max_families_per_bank,pick_count_per_slot=1)
+        if int(pick_count_per_slot or 1)!=1: raise ValueError('Blueprint hiện yêu cầu pick_count_per_slot=1 để giữ đúng số câu mỗi slot.')
+        # Legacy nullable type-count columns remain in the table for rolling-upgrade compatibility only.
+        # New blueprints deliberately leave them NULL: response type is determined by the Release questions.
+        item=QuizBlueprint(id=str(uuid.uuid4()),subject_id=subject_id,chapter_id=chapter_id,subject_offering_id=subject_offering_id,title=title,total_questions=total_questions,difficulty_easy=difficulty_easy,difficulty_medium=difficulty_medium,difficulty_hard=difficulty_hard,single_select_count=None,multi_select_count=None,text_input_count=None,numerical_input_count=None,max_families_per_bank=max_families_per_bank,pick_count_per_slot=1)
         self.db.add(item); self.db.commit(); self.db.refresh(item); return item
 
 

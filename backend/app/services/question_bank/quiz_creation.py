@@ -26,9 +26,7 @@ from app.models.question_bank import (
 )
 from app.modules.openedx_connector.factory import get_openedx_connector
 from app.services.question_family import normalize_difficulty
-from app.services.question_content import normalize_question_type
 from app.services.question_type_quota import (
-    exact_type_counts,
     feasible_type_difficulty_matrix,
     feasible_type_difficulty_matrix_with_flexible,
 )
@@ -1127,7 +1125,7 @@ class QuestionBankQuizCreationWorkflowService:
                 for _ in range(target):
                     candidates = [rid for rid, items in by_release.items() if allocation[rid] < len(items)]
                     if not candidates:
-                        raise ValueError(f'Final test không đủ câu {diff.upper()} · {qtype} cho quota {target}.')
+                        raise ValueError(f'Final test không đủ câu {diff.upper()} cho cấu hình {target} câu.')
                     rid = min(
                         candidates,
                         key=lambda value: (
@@ -1171,7 +1169,7 @@ class QuestionBankQuizCreationWorkflowService:
                 label = next((item.get('chapter_title') for item in (source_details or []) if str(item.get('release_id')) == missing_rid), missing_rid)
                 raise ValueError(
                     f'Không thể đưa câu của {label} vào Final test với cấu hình độ khó hiện tại. '
-                    'Hãy tăng số câu Final hoặc điều chỉnh quota loại/độ khó.'
+                    'Hãy tăng số câu Final hoặc điều chỉnh tỷ lệ độ khó.'
                 )
 
         slots: list[dict] = []
@@ -1195,7 +1193,7 @@ class QuestionBankQuizCreationWorkflowService:
                 if int(pick_count) > len(problem_ids):
                     raise ValueError(
                         f'Release {release.release_code or release.id} chỉ có {len(problem_ids)} ứng viên '
-                        f'cho {cell["difficulty"].upper()} · {cell["question_type"]}, cần pick {pick_count}.'
+                        f'cho {cell["difficulty"].upper()}, cần pick {pick_count}.'
                     )
                 assigned_questions.update(question_ids)
                 assigned_components.update(problem_ids)
@@ -1231,7 +1229,7 @@ class QuestionBankQuizCreationWorkflowService:
 
         actual_total = sum(int(slot.get('pick_count') or 0) for slot in slots)
         if actual_total != int(total_questions):
-            raise ValueError(f'Final test planner tạo {actual_total}/{int(total_questions)} câu; từ chối tạo cấu hình lệch quota.')
+            raise ValueError(f'Final test planner tạo {actual_total}/{int(total_questions)} câu; từ chối tạo cấu hình lệch số câu.')
         warnings: list[str] = []
         if legacy_rebalanced:
             warnings.append(
@@ -1241,7 +1239,7 @@ class QuestionBankQuizCreationWorkflowService:
         unclassified_count = sum(len(items) for items in flexible.values())
         if unclassified_count:
             warnings.append(
-                f'{unclassified_count} câu CMS cũ chưa có NGƯỠNG/độ khó được phân bổ linh hoạt vào quota Final test.'
+                f'{unclassified_count} câu CMS cũ chưa có NGƯỠNG/độ khó được phân bổ linh hoạt vào cấu hình độ khó Final test.'
             )
         source_ids = [str(item.id) for item in source_releases]
         return {
@@ -1257,7 +1255,7 @@ class QuestionBankQuizCreationWorkflowService:
             'source_chapters': list(source_details or []),
             'requested_total_questions': int(total_questions),
             'total_questions': int(total_questions),
-            'target_counts': {key.upper(): value for key, value in requested.items()},
+            'target_counts': {key.upper(): value for key, value in requested_original.items()},
             'effective_target_counts': {key.upper(): requested[key] for key in requested},
             'question_type_target_counts': {},
             'matrix_target_counts': {diff.upper(): int(requested.get(diff, 0) or 0) for diff in ('easy', 'medium', 'hard')},
@@ -1272,11 +1270,11 @@ class QuestionBankQuizCreationWorkflowService:
             'classification_policy': 'legacy_flexible_fallback' if unclassified_count else 'strict',
             'hard_guard': {
                 'valid': True,
-                'summary': 'Final test dùng toàn bộ Release nguồn làm candidate pool theo quota; mỗi ItemBank chỉ chứa component của đúng một Library.',
+                'summary': 'Final test dùng toàn bộ Release nguồn làm candidate pool theo cấu hình độ khó; mỗi ItemBank chỉ chứa component của đúng một Library.',
             },
             'message': (
                 f'Final test tổng hợp {len(assigned_questions)} câu ứng viên từ {len(source_releases)} Bài/Release; '
-                f'learner nhận đúng {int(total_questions)} câu theo quota.'
+                f'learner nhận đúng {int(total_questions)} câu theo cấu hình.'
             ),
             **_ui_notice(
                 'success',
@@ -1717,7 +1715,7 @@ class QuestionBankQuizCreationWorkflowService:
         if unclassified_difficulty_count:
             warnings.append(
                 f'{unclassified_difficulty_count} câu CMS cũ chưa có NGƯỠNG/độ khó; '
-                f'{flexibly_assigned_count} câu được phân bổ linh hoạt vào quota Easy/Medium/Hard.'
+                f'{flexibly_assigned_count} câu được phân bổ linh hoạt vào cấu hình Easy/Medium/Hard.'
             )
         if unclassified_concept_question_ids:
             warnings.append(

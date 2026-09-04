@@ -377,21 +377,6 @@ class CourseChapterMappingOut(BaseModel):
         from_attributes = True
 
 
-class QuestionTypeQuotaMixin(BaseModel):
-    single_select_count: int | None = Field(default=None, ge=0, le=200)
-    multi_select_count: int | None = Field(default=None, ge=0, le=200)
-    text_input_count: int | None = Field(default=None, ge=0, le=200)
-    numerical_input_count: int | None = Field(default=None, ge=0, le=200)
-
-    def validate_type_quota(self, total: int) -> None:
-        values = [self.single_select_count, self.multi_select_count, self.text_input_count, self.numerical_input_count]
-        if all(value is None for value in values):
-            return
-        resolved = [0 if value is None else int(value) for value in values]
-        if sum(resolved) != int(total):
-            raise ValueError(f'Tổng quota theo loại câu hỏi phải bằng tổng số câu ({sum(resolved)}/{int(total)}).')
-
-
 class QuizBlueprintCreate(BaseModel):
     subject_id: str
     chapter_id: str
@@ -409,7 +394,7 @@ class QuizBlueprintCreate(BaseModel):
         if self.difficulty_easy + self.difficulty_medium + self.difficulty_hard != 100:
             raise ValueError('Tổng tỷ lệ EASY/MEDIUM/HARD phải bằng 100%.')
         if self.pick_count_per_slot != 1:
-            raise ValueError('Blueprint theo quota loại câu hỏi hiện yêu cầu pick_count_per_slot=1.')
+            raise ValueError('Blueprint hiện yêu cầu pick_count_per_slot=1 để giữ đúng số câu mỗi slot.')
         return self
 
 
