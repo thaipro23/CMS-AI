@@ -1,0 +1,9 @@
+.body {
+  /* Preserve full sections inside the dialog's scrollable middle row. */
+  grid-auto-rows: max-content;
+  align-content: start;
+}
+
+.body > * {
+  min-width: 0;
+}

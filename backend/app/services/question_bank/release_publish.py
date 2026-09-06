@@ -18,7 +18,6 @@ from app.models.question_bank import (
     CourseQuizInstance,
     QuestionBankRelease,
     QuestionBankVersion,
-    QuestionSearchDocument,
     SubjectOffering,
     Subject,
     SubjectChapter,
@@ -26,8 +25,7 @@ from app.models.question_bank import (
 from app.modules.openedx_connector.factory import get_openedx_connector
 from app.services.openedx_exporter import question_to_openedx_olx
 from app.services.question_media import build_openedx_question_assets
-from app.services.answer_randomizer import normalize_and_shuffle_options
-from app.services.question_bank.helpers import _check, _ui_notice, parse_openedx_course_id, question_lineage_root, slugify
+from app.services.question_bank.helpers import _check, _ui_notice, question_lineage_root, slugify
 
 
 class QuestionBankReleasePublishWorkflowService:
@@ -146,6 +144,62 @@ class QuestionBankReleasePublishWorkflowService:
             query = query.filter(CourseQuizInstance.bank_release_id == bank_release_id)
         return query.order_by(CourseQuizInstance.created_at.desc()).limit(max(1, min(int(limit or 100), 300))).all()
 
+    async def _reconcile_quiz_absence(self, *, instance: CourseQuizInstance, metadata: dict) -> dict:
+        """Check the live CMS tree before keeping a stale local Quiz lock.
+
+        A connector timeout can happen after Studio has rejected or rolled back
+        the create request. In that case the AI Server may have no reliable node
+        locator, while the local history row still says
+        ``rollback_manual_required``. Reading the draft course is safe and
+        idempotent: an exact managed node or matching assessment title keeps the
+        lock; a successful tree read with no match proves the local row is stale.
+        """
+        connector = get_openedx_connector()
+        blocks = await connector.get_course_blocks(
+            normalize_openedx_course_id(instance.openedx_course_id, required=True)
+        )
+        known_ids = {
+            str(value).strip()
+            for value in (instance.openedx_quiz_node_id, instance.openedx_unit_node_id)
+            if str(value or '').strip()
+        }
+        normalized_blocks = [item for item in (blocks or []) if isinstance(item, dict)]
+        live_ids = {
+            str(item.get('block_id') or item.get('id') or '').strip()
+            for item in normalized_blocks
+        }
+        if known_ids & live_ids:
+            return {'verified': True, 'absent': False, 'reason': 'managed_node_still_exists', 'live_node_ids': sorted(known_ids & live_ids)}
+
+        expected_titles = {
+            str(value).strip().casefold()
+            for value in (metadata.get('quiz_title'), metadata.get('unit_title'))
+            if str(value or '').strip()
+        }
+        if not known_ids and not expected_titles:
+            return {
+                'verified': True,
+                'absent': False,
+                'reason': 'missing_managed_quiz_identity',
+            }
+        title_matches = [
+            str(item.get('block_id') or item.get('id') or '')
+            for item in normalized_blocks
+            # A mapped ``chapter`` named “Final test” is the normal empty
+            # Section shown in Studio. It is not the Quiz created by ACMS.
+            # Quiz creation adds a sequential and a vertical beneath it.
+            if str(item.get('type') or '').lower() in {'sequential', 'vertical'}
+            and str(item.get('display_name') or '').strip().casefold() in expected_titles
+        ]
+        if title_matches:
+            return {'verified': True, 'absent': False, 'reason': 'managed_assessment_title_still_exists', 'live_node_ids': title_matches}
+        return {
+            'verified': True,
+            'absent': True,
+            'reason': 'course_tree_read_success_no_managed_quiz',
+            'course_block_count': len(normalized_blocks),
+        }
+
     async def rollback_course_quiz_instance(self, *, instance_id: str, mode: str = 'safe', note: str = '', actor: str | None = None) -> dict:
         instance = self.db.get(CourseQuizInstance, instance_id)
         if not instance:
@@ -153,28 +207,59 @@ class QuestionBankReleasePublishWorkflowService:
         meta = dict(instance.metadata_json or {})
         mode = (mode or 'safe').lower()
         delete_result: dict = {}
-        openedx_deleted = False
-        manual_required = True
-        if mode != 'manual' and instance.openedx_unit_node_id:
+        # Failed creation can have only the root locator. Deleting the leaf alone
+        # also leaves an empty subsection which prevents a clean retry in Studio.
+        node_id = instance.openedx_quiz_node_id or instance.openedx_unit_node_id
+        compensation = meta.get('compensating_rollback_result') or {}
+        openedx_deleted = instance.status == 'rolled_back' or (
+            compensation.get('ok') is True and compensation.get('deleted') is True
+        )
+        manual_required = not openedx_deleted
+        if not openedx_deleted and mode != 'manual' and node_id:
             connector = get_openedx_connector()
             delete_func = getattr(connector, 'delete_quiz_node', None)
             if callable(delete_func):
                 try:
                     delete_result = await delete_func(
                         course_id=normalize_openedx_course_id(instance.openedx_course_id, required=True),
-                        node_id=instance.openedx_unit_node_id,
+                        node_id=node_id,
                         metadata={'course_quiz_instance_id': instance.id, 'actor': actor, 'note': note, 'rollback_source': 'ai_server_course_quiz_history'},
                     )
-                    openedx_deleted = bool(delete_result.get('ok') and delete_result.get('deleted'))
+                    openedx_deleted = delete_result.get('ok') is True and delete_result.get('deleted') is True
                     manual_required = not openedx_deleted
                 except Exception as exc:
                     delete_result = {'ok': False, 'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}'}
                     manual_required = True
             else:
                 delete_result = {'ok': False, 'status': 'delete_quiz_node_unavailable'}
+        reconciliation: dict = {}
+        # Old rows can lack both node locators. If Studio is already clean, close
+        # the stale local lock so the operator can create the assessment again.
+        # When CMS cannot be read, retain the manual state and explain why.
+        if not openedx_deleted and mode != 'manual':
+            try:
+                reconciliation = await self._reconcile_quiz_absence(instance=instance, metadata=meta)
+                if reconciliation.get('verified') and reconciliation.get('absent'):
+                    openedx_deleted = True
+                    manual_required = False
+                    delete_result = {
+                        **delete_result,
+                        'ok': True,
+                        'deleted': True,
+                        'already_missing': True,
+                        'status': 'verified_absent_in_course_tree',
+                    }
+            except Exception as exc:
+                reconciliation = {
+                    'verified': False,
+                    'absent': False,
+                    'status': 'course_tree_reconciliation_unavailable',
+                    'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}',
+                }
         instance.status = 'rolled_back' if openedx_deleted else 'rollback_manual_required'
         instance.metadata_json = {
             **meta,
+            'manual_cleanup_required': manual_required,
             'rollback': {
                 'mode': mode,
                 'actor': actor,
@@ -183,19 +268,25 @@ class QuestionBankReleasePublishWorkflowService:
                 'openedx_deleted': openedx_deleted,
                 'manual_cleanup_required': manual_required,
                 'delete_result': delete_result,
+                'reconciliation': reconciliation,
             },
         }
         instance.updated_at = datetime.utcnow()
         self.db.commit()
+        message = (
+            'Đã xóa phần bài kiểm tra trên CMS. Bạn có thể tạo lại.'
+            if openedx_deleted else
+            'Chưa xác nhận được việc xóa bài kiểm tra trên CMS. Bấm Kiểm tra và khôi phục để thử lại; nếu vẫn lỗi, kiểm tra bài trong Studio.'
+        )
         return {
-            'ok': True,
+            'ok': openedx_deleted,
             'course_quiz_instance_id': instance.id,
             'status': instance.status,
             'openedx_deleted': openedx_deleted,
             'manual_cleanup_required': manual_required,
             'delete_result': delete_result,
-            'message': 'Đã rollback Quiz trên Open edX.' if openedx_deleted else 'Đã đánh dấu cần kiểm tra/xóa Quiz thủ công trong Studio.',
-            **_ui_notice('success' if openedx_deleted else 'warning', 'Đã rollback Quiz trên Open edX.' if openedx_deleted else 'Đã đánh dấu cần kiểm tra/xóa Quiz thủ công trong Studio.'),
+            'message': message,
+            **_ui_notice('success' if openedx_deleted else 'warning', message),
         }
 
     @staticmethod
@@ -1216,4 +1307,3 @@ class QuestionBankReleasePublishWorkflowService:
             if failed_version:
                 self._safe_refresh_chapter_stats(failed_version.chapter_id)
             raise RuntimeError(error_text) from exc
-

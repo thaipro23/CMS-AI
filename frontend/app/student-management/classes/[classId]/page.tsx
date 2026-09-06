@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import progressEmailStyles from '../../../../components/student-management/ProgressEmailDialog.module.css'
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../../context/AppContext'
@@ -1176,7 +1177,7 @@ function ClassDetailContent() {
       size="xlarge"
       busy={progressEmailSubmitting}
       className="progress-email-dialog"
-      bodyClassName="progress-email-dialog-body"
+      bodyClassName={`progress-email-dialog-body ${progressEmailStyles.body}`}
       footer={<div className="progress-email-dialog-footer">
         <div>
           <b>{progressEmailSelected.size} sinh viên được chọn</b>
@@ -1200,23 +1201,23 @@ function ClassDetailContent() {
       {!progressEmailLoading && progressEmailPreview ? <>
         {!progressEmailPreview.mail_configured ? <InlineNotice notice={{
           type: 'warning',
-          title: 'AI Server chưa có Mail Send ProxyKey',
-          body: 'Quản trị viên cần bật MAILSEND_ENABLED và khai báo MAILSEND_PROXY_API_KEY cho backend và worker-heavy. Danh sách vẫn xem được nhưng chưa thể gửi.',
+          title: 'Chưa cấu hình gửi email',
+          body: 'Liên hệ quản trị viên để bật dịch vụ gửi email. Bạn vẫn có thể xem danh sách sinh viên.',
         }} /> : null}
         <div className="progress-email-policy-note">
           <AppIcon name="info" size={18} />
-          <div><b>Chỉ nhắc người đang trễ mốc Quiz</b><p>{progressEmailPreview.policy_note}</p></div>
+          <div><b>Nhắc sinh viên chậm tiến độ Quiz</b><p>Sinh viên đã bắt kịp tiến độ sẽ được bỏ khỏi danh sách trước khi gửi.</p></div>
         </div>
         <div className="progress-email-summary">
-          <div><span>Roster lớp</span><b>{progressEmailPreview.roster_total}</b></div>
+          <div><span>Sinh viên trong lớp</span><b>{progressEmailPreview.roster_total}</b></div>
           <div className="is-warning"><span>Đang chậm tiến độ</span><b>{progressEmailPreview.candidate_count}</b></div>
           <div className="is-ready"><span>Có thể gửi</span><b>{progressEmailPreview.deliverable_count}</b></div>
-          <div><span>Thiếu email / inactive</span><b>{progressEmailPreview.missing_email_count + progressEmailPreview.inactive_student_count}</b></div>
+          <div><span>Thiếu email / Ngừng học</span><b>{progressEmailPreview.missing_email_count + progressEmailPreview.inactive_student_count}</b></div>
         </div>
 
         <section className="progress-email-recipients">
           <div className="progress-email-section-head">
-            <div><h3>Người nhận</h3><p>Email được che trên giao diện; địa chỉ thật chỉ dùng bên trong worker gửi mail.</p></div>
+            <div><h3>Người nhận</h3></div>
             <button className="btn secondary small" type="button" disabled={!progressEmailDeliverable.length} onClick={toggleAllProgressEmailRecipients}>{progressEmailAllSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả có thể gửi'}</button>
           </div>
           <div className="progress-email-recipient-table" role="table" aria-label="Sinh viên chậm tiến độ">
@@ -1237,7 +1238,7 @@ function ClassDetailContent() {
         </section>
 
         <section className="progress-email-compose">
-          <div className="progress-email-section-head"><div><h3>Nội dung thông báo</h3><p>Có thể dùng <code>{'{{maHs}}'}</code> để Mail Send điền mã sinh viên theo từng người nhận.</p></div></div>
+          <div className="progress-email-section-head"><div><h3>Nội dung thông báo</h3><p>Dùng <code>{'{{maHs}}'}</code> để tự điền mã sinh viên.</p></div></div>
           <label><span>Tiêu đề</span><input className="input" maxLength={200} value={progressEmailSubject} onChange={(event) => setProgressEmailSubject(event.target.value)} /></label>
           <label><span>Nội dung</span><textarea className="input" rows={9} maxLength={12000} value={progressEmailBody} onChange={(event) => setProgressEmailBody(event.target.value)} /></label>
         </section>

@@ -1424,6 +1424,12 @@ def _worker_user_from_request_json(request_json: dict | None, *, fallback_user_i
     data = data if isinstance(data, dict) else {}
     permissions = data.get('permissions') if isinstance(data.get('permissions'), list) else []
     course_ids = data.get('course_ids') if isinstance(data.get('course_ids'), list) else None
+    # requester_context is built by the API from the authenticated principal.
+    # A bare role=admin (including old jobs) is not sufficient proof. Database
+    # role assignments still get re-read by the access service at execution time.
+    proof = data.get('authenticated_admin_claims')
+    proof = proof if isinstance(proof, dict) and data.get('role') == 'admin' else {}
+    admin_claims = {key: True for key in ('is_superuser', 'is_super_admin', 'ai_system_admin') if proof.get(key) is True}
     return UserContext(
         user_id=str(data.get('user_id') or fallback_user_id or 'academic-worker'),
         username=str(data.get('username') or data.get('user_id') or fallback_user_id or 'academic-worker'),
@@ -1431,7 +1437,7 @@ def _worker_user_from_request_json(request_json: dict | None, *, fallback_user_i
         role=str(data.get('role') or 'viewer'),
         permissions={str(item) for item in permissions},
         course_ids=[str(item) for item in course_ids] if course_ids is not None else None,
-        raw_claims={'source': source, 'job_id': job_id, 'worker_scope_recheck': True},
+        raw_claims={**admin_claims, 'source': source, 'job_id': job_id, 'worker_scope_recheck': True},
     )
 
 

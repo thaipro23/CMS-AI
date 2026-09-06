@@ -446,6 +446,14 @@ def _requester_context_json(user: UserContext) -> dict[str, Any]:
         'role': user.role,
         'permissions': sorted(list(user.permissions or set())),
         'course_ids': list(user.course_ids or []) if user.course_ids is not None else None,
+        # These booleans come only from the authenticated server-side principal,
+        # never the request body. Keep SSO superuser authority across the queue
+        # boundary without copying tokens, cookies or unrelated claims. DB grants
+        # are deliberately not converted into a permanent admin snapshot.
+        'authenticated_admin_claims': {
+            key: True for key in ('is_superuser', 'is_super_admin', 'ai_system_admin')
+            if user.role == 'admin' and (user.raw_claims or {}).get(key) is True
+        },
     })
 
 

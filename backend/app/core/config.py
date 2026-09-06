@@ -344,7 +344,9 @@ class Settings(BaseSettings):
 
     # Course Quiz/Problem Bank writes can create and verify several XBlocks.
     # Keep ordinary reads short while giving these writes a separate budget.
-    openedx_request_timeout_seconds: int = 30
+    # Course-tree reads are also used to reconcile a failed Quiz create. A
+    # 30-second timeout left stale local locks when Studio was merely slow.
+    openedx_request_timeout_seconds: int = 180
     openedx_write_timeout_seconds: int = 180
     # Bounded retry is used only for idempotent connector operations.
     openedx_retry_max_attempts: int = 4

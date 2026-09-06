@@ -2039,7 +2039,7 @@ class QuestionBankQuizCreationWorkflowService:
         active_instances = (
             self.db.query(CourseQuizInstance)
             .filter(
-                CourseQuizInstance.openedx_course_id == course_id,
+                CourseQuizInstance.openedx_course_id.in_(openedx_course_id_candidates(course_id)),
                 CourseQuizInstance.chapter_id == chapter.id,
                 CourseQuizInstance.status.in_(['creating', 'created', 'published', 'rollback_manual_required']),
             )
@@ -2122,6 +2122,20 @@ class QuestionBankQuizCreationWorkflowService:
                     },
                 },
             )
+            # Persist both locators before validating policy, configuring the
+            # timer or inserting banks. A later failure (or worker restart) must
+            # leave enough information to remove the whole assessment safely.
+            unit_node_id = quiz_result.get('leaf_unit_node_id') or quiz_result.get('unit_node_id')
+            created_nodes = quiz_result.get('created_nodes') if isinstance(quiz_result.get('created_nodes'), list) else []
+            created_node_id = str(
+                quiz_result.get('quiz_node_id')
+                or (created_nodes[0].get('usage_key') if created_nodes else '')
+                or unit_node_id or ''
+            )
+            instance.openedx_quiz_node_id = created_node_id or None
+            instance.openedx_unit_node_id = unit_node_id or None
+            instance.metadata_json = {**(instance.metadata_json or {}), 'quiz_result': quiz_result}
+            self.db.commit()
             if quiz_result.get('ok') is not True:
                 raise RuntimeError(f'Open edX không tạo Quiz node thành công: {quiz_result}')
             course_policy_result = quiz_result.get('course_quiz_policy_result') if isinstance(quiz_result.get('course_quiz_policy_result'), dict) else {}
@@ -2136,15 +2150,8 @@ class QuestionBankQuizCreationWorkflowService:
                     'Open edX chưa xác minh Course Advanced Settings bắt buộc '
                     f'(Maximum Attempts = 1, Show Answer = Never): {course_policy_result}'
                 )
-            unit_node_id = quiz_result.get('leaf_unit_node_id') or quiz_result.get('unit_node_id')
             if not unit_node_id:
                 raise RuntimeError('Open edX không trả leaf_unit_node_id sau khi tạo Quiz')
-            created_nodes = quiz_result.get('created_nodes') if isinstance(quiz_result.get('created_nodes'), list) else []
-            created_node_id = str(
-                quiz_result.get('quiz_node_id')
-                or (created_nodes[0].get('usage_key') if created_nodes else '')
-                or unit_node_id
-            )
             sequence_usage_key = ''
             for node in reversed(created_nodes):
                 if str(node.get('block_type') or '').lower() == 'sequential':
@@ -2199,7 +2206,7 @@ class QuestionBankQuizCreationWorkflowService:
             )
             if insert_result.get('ok') is not True:
                 raise RuntimeError(f'Open edX không tạo Problem Bank thành công: {insert_result}')
-            instance.openedx_quiz_node_id = quiz_result.get('created_nodes', [{}])[0].get('usage_key') if isinstance(quiz_result.get('created_nodes'), list) and quiz_result.get('created_nodes') else unit_node_id
+            instance.openedx_quiz_node_id = created_node_id
             instance.openedx_unit_node_id = unit_node_id
             instance.status = 'created'
             instance.metadata_json = {

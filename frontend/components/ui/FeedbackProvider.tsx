@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState } fro
 import type { ReactNode } from 'react'
 import { AccessibleDialog } from './AccessibleDialog'
 import { VisualIcon } from './VisualIcon'
+import { userFacingError } from '../../lib/userFacingError'
 
 export type FeedbackTone = 'success' | 'info' | 'warning' | 'danger'
 
@@ -48,8 +49,13 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
   const notify = useCallback((toast: Omit<Toast, 'id'>) => {
     counter.current += 1
     const id = counter.current
-    setToasts((current) => [...current.slice(-3), { ...toast, id }])
-    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 5000)
+    const message = toast.tone === 'danger' && toast.message ? userFacingError(toast.message) : toast.message
+    setToasts((current) => [...current.slice(-3), { ...toast, message, id }])
+    // Errors and warnings remain readable until dismissed. Success/info can
+    // disappear automatically; the corresponding inline result stays on page.
+    if (toast.tone === 'success' || toast.tone === 'info') {
+      window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 7000)
+    }
   }, [])
 
   const confirmAction = useCallback((options: ConfirmOptions) => new Promise<boolean>((resolve) => {

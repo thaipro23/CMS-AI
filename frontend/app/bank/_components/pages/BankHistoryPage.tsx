@@ -86,7 +86,7 @@ export function BankHistoryPage() {
     { key: 'created', header: 'Ngày tạo', kind: 'date', width: 142, priority: 'important', hideable: true, render: (item) => dateText(item.created_at) },
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 180, sticky: 'right', hideable: false, render: (item) => <>
       {['failed', 'rollback_manual_required'].includes(item.status) ? <button className="btn small secondary" type="button" onClick={() => setFailedQuiz(item)}>Xem lỗi</button> : null}
-      {can('publish_questions') && item.status !== 'rolled_back' && !item.metadata_json?.compensating_rollback_result?.deleted && (item.status !== 'failed' || item.openedx_quiz_node_id || item.openedx_unit_node_id) ? <button className="btn small secondary" disabled={busy} onClick={() => run(async () => { await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ trang lịch sử Quiz' }) }, 'Đã gửi yêu cầu khôi phục Quiz', load)}>Khôi phục</button> : null}
+      {can('publish_questions') && item.status !== 'creating' && item.status !== 'rolled_back' && !item.metadata_json?.compensating_rollback_result?.deleted && (item.status !== 'failed' || item.openedx_quiz_node_id || item.openedx_unit_node_id) ? <button className="btn small secondary" disabled={busy} onClick={() => run(() => rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ trang lịch sử Quiz' }), 'Đã khôi phục bài kiểm tra', load)}>{item.status === 'rollback_manual_required' ? 'Kiểm tra và khôi phục' : 'Khôi phục'}</button> : null}
     </> },
   ], [busy, can, headers, run, safePage, state.pageSize])
 
@@ -99,9 +99,9 @@ export function BankHistoryPage() {
     { key: 'created', header: 'Ngày tạo', kind: 'date', width: 142, priority: 'important', hideable: true, render: (item) => dateText(item.created_at) },
   ], [safePage, state.pageSize])
 
-  const created = quizHistory.filter((item) => item.status !== 'rolled_back' && item.status !== 'failed').length
+  const created = quizHistory.filter((item) => ['created', 'published'].includes(item.status)).length
   const rolledBack = quizHistory.filter((item) => item.status === 'rolled_back').length
-  const failed = quizHistory.filter((item) => item.status === 'failed').length
+  const failed = quizHistory.filter((item) => ['failed', 'rollback_manual_required'].includes(item.status)).length
 
   return <PageRoot className="page-stack bank-multipage bank-contract-page history-console bank-history-page">
     <SideDrawer open={Boolean(failedQuiz)} title="Chi tiết lỗi tạo bài kiểm tra" onClose={() => setFailedQuiz(null)}>
@@ -146,7 +146,7 @@ export function BankHistoryPage() {
       </div>
       <div className="history-filter-bar bank-contract-filter-toolbar">
         <label className="bank-contract-filter-field"><span>Tìm kiếm</span><input className="input" value={state.q} onChange={(event) => update({ q: event.target.value })} placeholder={activeView === 'quiz' ? 'Course ID, tên Quiz, Release...' : 'Mã Release, Library CMS...'} /></label>
-        <label className="bank-contract-filter-field"><span>Trạng thái</span><select className="input" value={state.status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="created">Đã tạo</option><option value="published">Đã đưa lên CMS</option><option value="rolled_back">Đã khôi phục</option><option value="failed">Thất bại</option></select></label>
+        <label className="bank-contract-filter-field"><span>Trạng thái</span><select className="input" value={state.status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="created">Đã tạo</option><option value="published">Đã đưa lên CMS</option><option value="rolled_back">Đã khôi phục</option><option value="rollback_manual_required">Cần khôi phục</option><option value="failed">Thất bại</option></select></label>
         <button className="btn secondary" type="button" disabled={loading} onClick={() => void load().catch(() => undefined)}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
       </div>
       {activeView === 'quiz' ? <EnterpriseDataTable tableId="bank-history-quizzes" caption="Quiz trên CMS" rows={quizRows} columns={quizColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredQuiz.length} totalPages={quizTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="Quiz" emptyTitle="Chưa có Quiz phù hợp" emptyDescription="Thử xóa bộ lọc hoặc tạo Quiz từ Release đã chốt." /> : <EnterpriseDataTable tableId="bank-history-releases" caption="Bộ đề đã chốt" rows={releaseRows} columns={releaseColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredReleases.length} totalPages={releaseTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="bộ đề" emptyTitle="Chưa có bộ đề phù hợp" emptyDescription="Thử xóa bộ lọc hoặc chốt Release từ workspace của bài." />}

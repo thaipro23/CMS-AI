@@ -1,5 +1,10 @@
 .page {
   min-width: 0;
+  /* The shell's page-stack is a bounded grid. Auto tracks can shrink cards
+     with overflow:hidden down to their headers when the preview grows. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: max-content;
+  align-content: start;
 }
 
 .steps {

@@ -283,10 +283,10 @@ class RealOpenEdXConnector(OpenEdXConnector):
             delay = min(maximum, delay)
         return delay + (random.uniform(0.0, min(0.25, delay * 0.1)) if delay > 0 else 0.0)
 
-    async def _post_connector_json(self, *, url: str, body: bytes, step: str, retry_safe: bool) -> dict[str, Any]:
+    async def _post_connector_json(self, *, url: str, body: bytes, step: str, retry_safe: bool, write_operation: bool = False) -> dict[str, Any]:
         attempts = max(1, min(8, int(getattr(settings, 'openedx_retry_max_attempts', 4) or 4))) if retry_safe else 1
         last_exc: Exception | None = None
-        request_timeout = settings.openedx_write_timeout_seconds if not retry_safe else settings.openedx_request_timeout_seconds
+        request_timeout = settings.openedx_write_timeout_seconds if write_operation or not retry_safe else settings.openedx_request_timeout_seconds
         async with httpx.AsyncClient(timeout=request_timeout) as client:
             for attempt in range(1, attempts + 1):
                 response: httpx.Response | None = None
@@ -775,7 +775,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
             'metadata': metadata or {},
         }
         body = self._json_body(payload)
-        return await self._post_connector_json(url=url, body=body, step='delete_quiz_node', retry_safe=True)
+        return await self._post_connector_json(url=url, body=body, step='delete_quiz_node', retry_safe=True, write_operation=True)
 
     async def upsert_quiz_timer_config(
         self,

@@ -3,7 +3,7 @@
 import { formatVNDateTime } from '../../../lib/time'
 import { inlineMessageFromBackend } from '../../../lib/backendNotice'
 import { normalizeOpenEdxCourseId } from '../../../lib/openedx'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { InlineNotice, type InlineNoticeData } from '../../../components/ui/InlineNotice'
 import { useAppContext } from '../../../context/AppContext'
 import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
@@ -23,6 +23,8 @@ import {
   rollbackCourseQuizInstance,
 } from '../../../lib/api'
 import { ContentNotice } from '../../../components/ui/ContentNotice'
+import { useFeedback } from '../../../components/ui/FeedbackProvider'
+import { statusClass, statusLabel } from '../_components/shared'
 
 type QuizMapping = QuizAutoMapResult['mappings'][number]
 type EffectiveQuizMapping = QuizMapping & { action: QuizChapterAction; effectiveReady: boolean; effectiveRequiresQuiz: boolean }
@@ -172,6 +174,7 @@ function ConfigPanel({ kind, config, lockedByBlueprint, updateConfig }: { kind: 
 
 export default function BankQuizPage() {
   const { authHeaders, can } = useAppContext()
+  const { notify } = useFeedback()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
   const [courseId, setCourseId] = useState('')
   const [autoMap, setAutoMap] = useState<QuizAutoMapResult | null>(null)
@@ -191,6 +194,11 @@ export default function BankQuizPage() {
   const planPreviewRequest = useRef(0)
   const [blueprintTitle, setBlueprintTitle] = useState('')
   const [blueprintSaveBusy, setBlueprintSaveBusy] = useState(false)
+
+  useEffect(() => {
+    if (!message || message.tone === 'info') return
+    notify({ tone: message.tone, title: message.tone === 'danger' ? 'Không thực hiện được thao tác' : message.tone === 'warning' ? 'Cần kiểm tra' : 'Hoàn tất', message: message.text })
+  }, [message, notify])
 
   const [quizConfig, setQuizConfig] = useState<AssessmentConfig>({
     totalQuestions: 15,
@@ -264,7 +272,7 @@ export default function BankQuizPage() {
     })
   }
 
-  async function loadHistory(targetCourseId = courseId) {
+  const loadHistory = useCallback(async (targetCourseId = courseId) => {
     const normalizedCourseId = normalizeOpenEdxCourseId(targetCourseId)
     if (!normalizedCourseId) {
       setHistory([])
@@ -280,7 +288,20 @@ export default function BankQuizPage() {
     } finally {
       setHistoryBusy(false)
     }
-  }
+  }, [courseId, headers])
+
+  const recoverQuiz = useCallback(async (item: CourseQuizInstance) => {
+    setBusy(true)
+    try {
+      const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử bài kiểm tra' })
+      setMessage(inlineMessageFromBackend(result, result.message || 'Đã khôi phục bài kiểm tra.', result.ok ? 'success' : 'warning'))
+      await loadHistory()
+    } catch (error) {
+      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Khôi phục thất bại' })
+    } finally {
+      setBusy(false)
+    }
+  }, [headers, loadHistory])
 
   async function runPreview(offeringId = selectedOfferingId, keepPlan = false) {
     const normalizedCourseId = normalizeOpenEdxCourseId(courseId)
@@ -602,7 +623,7 @@ export default function BankQuizPage() {
       key: 'readiness', header: 'Điều kiện', kind: 'status', width: 168, priority: 'important', hideable: true,
       render: (item) => {
         const existing = activeQuizInstances.get(activeQuizKey(item.chapter_id, item.action))
-        if (existing) return <div className="quiz-requirement-stack"><span className="status warning">Đã có {item.action === 'final_test' ? 'Final test' : 'Quiz'}</span><small>Khôi phục bản đang có trước khi tạo lại</small></div>
+        if (existing) return <div className="quiz-requirement-stack"><span className={statusClass(existing.status)}>{existing.status === 'rollback_manual_required' ? 'Tạo lỗi · Cần khôi phục' : statusLabel(existing.status)}</span><small>{existing.status === 'creating' ? 'Đang xử lý trên CMS' : 'Khôi phục bản đang có trước khi tạo lại'}</small></div>
         return <div className="quiz-requirement-stack"><span className={classNames('status', productionStatusClass(item))}>{item.effectiveRequiresQuiz ? ((item as any).status_label || actionStatusText(item)) : 'Không tạo'}</span>{item.effectiveRequiresQuiz && ((item as any).missing_requirements || []).length ? <small>{((item as any).missing_requirements || []).map(missingRequirementLabel).join(' · ')}</small> : <small>{item.effectiveRequiresQuiz ? 'Đủ Section + Release' : 'Không yêu cầu'}</small>}</div>
       },
     },
@@ -615,31 +636,21 @@ export default function BankQuizPage() {
       render: (item) => {
         if (!item.effectiveRequiresQuiz) return <span className="muted">Bỏ qua</span>
         const existing = activeQuizInstances.get(activeQuizKey(item.chapter_id, item.action))
-        return <button className="btn small" disabled={Boolean(existing) || !item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{existing ? 'Đã có Quiz' : creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final' : 'Tạo Quiz'}</button>
+        if (existing?.status === 'rollback_manual_required') return <button className="btn secondary small" disabled={busy || Boolean(creatingKey)} onClick={() => void recoverQuiz(existing)}>Kiểm tra và khôi phục</button>
+        return <button className="btn small" disabled={Boolean(existing) || !item.effectiveReady || !item.course_chapter_mapping_id || creatingKey === item.chapter_id || busy} onClick={() => setCreateModal({ kind: 'one', item })}>{existing ? (existing.status === 'creating' ? 'Đang tạo...' : item.action === 'final_test' ? 'Đã có Final test' : 'Đã có Quiz') : creatingKey === item.chapter_id ? 'Đang tạo...' : item.action === 'final_test' ? 'Tạo Final' : 'Tạo Quiz'}</button>
       },
     },
-  ], [activeQuizInstances, busy, courseTreeUnavailable, creatingKey, titleForItem])
+  ], [activeQuizInstances, busy, courseTreeUnavailable, creatingKey, titleForItem, recoverQuiz])
 
   const historyColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_row, index) => index + 1 },
     { key: 'quiz', header: 'Bài kiểm tra', kind: 'identity', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="quiz-history-identity"><b>{item.metadata_json?.quiz_title || 'Bài kiểm tra Open edX'}</b><small>{item.openedx_unit_node_id || item.bank_release_id}</small></div> },
     { key: 'type', header: 'Loại', kind: 'status', width: 108, priority: 'important', hideable: true, render: (item) => item.metadata_json?.assessment_type === 'final_test' ? <span className="status warning">Final test</span> : <span className="status pending">Quiz</span> },
-    { key: 'status', header: 'Trạng thái', kind: 'status', width: 122, priority: 'important', hideable: true, render: (item) => <span className={classNames('status', item.status === 'created' || item.status === 'published' ? 'success' : item.status === 'rolled_back' || item.status === 'failed' ? 'danger' : 'pending')}>{item.status}</span> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 142, priority: 'important', hideable: true, render: (item) => <span className={statusClass(item.status)}>{statusLabel(item.status)}</span> },
     { key: 'timer', header: 'Timer', kind: 'number', width: 94, priority: 'optional', hideable: true, render: (item) => item.metadata_json?.timer_config?.custom_timer_enabled ? `${item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút` : 'Tắt' },
     { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 138, priority: 'important', hideable: true, render: (item) => formatVNDateTime(item.created_at) },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 116, hideable: false, render: (item) => <button className="btn small secondary" disabled={busy || item.status === 'rolled_back'} onClick={async () => {
-      setBusy(true)
-      try {
-        const result = await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ giao diện lịch sử bài kiểm tra' })
-        setMessage(inlineMessageFromBackend(result, result.message || 'Đã khôi phục bài kiểm tra.', result.ok ? 'success' : 'warning'))
-        await loadHistory(normalizeOpenEdxCourseId(courseId))
-      } catch (error) {
-        setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Khôi phục thất bại' })
-      } finally {
-        setBusy(false)
-      }
-    }}>Khôi phục</button> },
-  ], [busy, courseId, headers])
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 170, hideable: false, render: (item) => <button className="btn small secondary" disabled={busy || item.status === 'rolled_back' || item.status === 'creating'} onClick={() => void recoverQuiz(item)}>{item.status === 'rollback_manual_required' ? 'Kiểm tra và khôi phục' : 'Khôi phục'}</button> },
+  ], [busy, recoverQuiz])
 
   if (!can('publish_questions')) return <PageRoot className="page-stack bank-multipage bank-contract-page bank-quiz-page">
     <PageHeader eyebrow="Ngân hàng đề" title="Tạo Quiz trên Open edX" icon="quiz" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Tạo Quiz' }]} />

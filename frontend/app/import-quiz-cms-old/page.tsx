@@ -198,14 +198,14 @@ export default function ImportQuizCmsOldPage() {
     <ImportSteps current={currentStep} />
 
     <WorkspaceSection
-      title="Quy tắc dữ liệu legacy"
+      title="Định dạng tệp nhập"
       description="Câu hợp lệ được nhập vào trạng thái Chờ duyệt."
       icon="info"
       tone="blue"
     >
       <div className={styles.ruleGrid}>
         <div><span>TYPE</span><b>0 · Một đáp án</b><small>1 · Nhiều đáp án · 2 · Điền ô trống</small></div>
-        <div><span>NGƯỠNG</span><b>1 · Dễ · 2 · Trung bình</b><small>3 · Khó; thiếu ngưỡng vẫn được nhận và xếp quota linh hoạt.</small></div>
+        <div><span>NGƯỠNG</span><b>1 · Dễ · 2 · Trung bình</b><small>3 · Khó; câu chưa có ngưỡng vẫn được nhập để duyệt.</small></div>
         <div><span>ẢNH</span><b>Kiểm tra trước khi import</b><small>Thiếu ảnh có thể bổ sung và kiểm tra lại hoặc bỏ đúng câu lỗi.</small></div>
       </div>
     </WorkspaceSection>
@@ -287,7 +287,7 @@ export default function ImportQuizCmsOldPage() {
           title="Xử lý lỗi và cảnh báo"
           description="Chỉ lỗi cấp câu mới được bỏ qua; lỗi môn, tệp hoặc trang tính vẫn phải sửa."
           icon="alert"
-          tone={preview.errors.length ? "amber" : "green"}
+          tone={(preview.errors || []).length ? "amber" : "green"}
         >
           <div className={styles.issueStack}>
             {preview.can_skip_invalid_questions ? <>
@@ -312,14 +312,14 @@ export default function ImportQuizCmsOldPage() {
               </div>
             </details>) : <InlineNotice notice={{ type: "success", title: "Không còn lỗi chặn", body: "Dữ liệu hợp lệ. Bạn có thể xác nhận nhập câu hỏi." }} />}
 
-            {preview.skipped_invalid_questions.length ? <details className={styles.issueGroup} open>
+            {(preview.skipped_invalid_questions || []).length ? <details className={styles.issueGroup} open>
               <summary><span><b>Câu đã bỏ qua</b><small>Không được tạo trong ngân hàng đề</small></span><strong>{preview.skipped_invalid_question_count}</strong></summary>
-              <div className={styles.issueItems}>{preview.skipped_invalid_questions.slice(0, 12).map((item, index) => <div className={styles.issueItem} key={`${item.workbook}-${item.sheet}-${item.row}-${index}`}><b>{item.error_codes?.map((code) => ERROR_LABELS[code] || "Câu hỏi không hợp lệ").join(", ") || "Câu hỏi không hợp lệ"}</b><small>{[item.sheet, item.row ? `dòng ${item.row}` : ""].filter(Boolean).join(" · ")}</small></div>)}</div>
+              <div className={styles.issueItems}>{(preview.skipped_invalid_questions || []).slice(0, 12).map((item, index) => <div className={styles.issueItem} key={`${item.workbook}-${item.sheet}-${item.row}-${index}`}><b>{item.error_codes?.map((code) => ERROR_LABELS[code] || "Câu hỏi không hợp lệ").join(", ") || "Câu hỏi không hợp lệ"}</b><small>{[item.sheet, item.row ? `dòng ${item.row}` : ""].filter(Boolean).join(" · ")}</small></div>)}</div>
             </details> : null}
 
-            {preview.warnings.length ? <details className={styles.issueGroup}>
-              <summary><span><b>Cảnh báo</b><small>Không chặn import</small></span><strong>{preview.warnings.length}</strong></summary>
-              <div className={styles.issueItems}>{preview.warnings.slice(0, 20).map((warning, index) => <div className={styles.issueItem} key={`${warning}-${index}`}><p>{warning}</p></div>)}</div>
+            {(preview.warnings || []).length ? <details className={styles.issueGroup}>
+              <summary><span><b>Cảnh báo</b><small>Không chặn import</small></span><strong>{(preview.warnings || []).length}</strong></summary>
+              <div className={styles.issueItems}>{(preview.warnings || []).slice(0, 20).map((warning, index) => <div className={styles.issueItem} key={`${warning}-${index}`}><p>{warning}</p></div>)}</div>
             </details> : null}
           </div>
         </WorkspaceSection>

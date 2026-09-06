@@ -182,3 +182,43 @@ def test_all_campus_owner_can_save_read_and_retire_semester_through_http(db):
         row.scope_id = 'hn'
         db.commit()
         assert client.post('/academic/terms', json={'term_code': 'SP27', 'term_name': 'Spring 2027', 'branch': 'poly'}).status_code == 403
+
+
+def worker_actor(user):
+    from app.api.routes.academic import _requester_context_json
+    from app.worker import _worker_user_from_request_json
+    snapshot = _requester_context_json(user)
+    return _worker_user_from_request_json({'requester_context': snapshot}, fallback_user_id=user.user_id, source='test', job_id='sync-1'), snapshot
+
+
+@pytest.mark.parametrize('claim', ['is_superuser', 'is_super_admin', 'ai_system_admin'])
+def test_cms_admin_remains_authorized_in_grade_sync_worker(db, claim):
+    from app.services.academic.access import AcademicAccessWorkflowService
+    user = get_user_context(Principal(user_id='29', role='admin', raw_claims={claim: True, 'token': 'do-not-copy'}), db)
+    worker, snapshot = worker_actor(user)
+    assert 'token' not in str(snapshot)
+    assert snapshot['authenticated_admin_claims'] == {claim: True}
+    AcademicAccessWorkflowService(db, BusinessRBACService(db)).assert_can_access_class(worker, 'any-class')
+
+
+@pytest.mark.parametrize('claims', [{}, {'is_staff': True}, {'ai_system_admin': 'true'}])
+def test_grade_sync_worker_does_not_trust_admin_label_or_staff(db, claims):
+    from app.core.rbac import UserContext
+    from app.services.academic.access import AcademicAccessWorkflowService
+    worker, _ = worker_actor(UserContext(user_id='unassigned', role='admin', permissions=set(), raw_claims=claims))
+    with pytest.raises(HTTPException) as caught:
+        AcademicAccessWorkflowService(db, BusinessRBACService(db)).assert_can_access_class(worker, 'any-class')
+    assert caught.value.status_code == 403
+
+
+def test_queued_database_admin_grant_is_rechecked_after_revocation(db):
+    from app.services.academic.access import AcademicAccessWorkflowService
+    row = grant(db, role='SYSTEM_ADMIN', scope_type='SYSTEM', scope_id='*')
+    worker, snapshot = worker_actor(actor(db))
+    assert snapshot['authenticated_admin_claims'] == {}
+    access = AcademicAccessWorkflowService(db, BusinessRBACService(db))
+    access.assert_can_access_class(worker, 'any-class')
+    row.revoked_at = datetime.utcnow()
+    db.commit()
+    with pytest.raises(HTTPException):
+        access.assert_can_access_class(worker, 'any-class')

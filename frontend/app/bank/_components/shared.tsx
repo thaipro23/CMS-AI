@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../../context/AppContext'
 import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
 import { FilterToolbar } from '../../../components/ui/FilterToolbar'
+import { useFeedback } from '../../../components/ui/FeedbackProvider'
 import {
   BankRelease,
   BankDashboardOverview,
@@ -119,6 +120,7 @@ export function statusLabel(status?: string | null) {
   const labels: Record<string, string> = {
     active: 'Đang dùng', draft: 'Bản nháp', approved: 'Đã duyệt', published: 'Đã đưa lên CMS', ready: 'Sẵn sàng',
     pending_review: 'Chờ duyệt', rejected: 'Đã bỏ', failed: 'Lỗi', created: 'Đã tạo', rolled_back: 'Đã khôi phục', indexed: 'Đã xử lý', deleted: 'Đã xóa',
+    creating: 'Đang tạo', rollback_manual_required: 'Cần khôi phục',
   }
   return labels[value] || value
 }
@@ -127,7 +129,7 @@ export function statusClass(status?: string | null) {
   const value = status || ''
   if (['active', 'approved', 'published', 'created', 'ready', 'indexed'].includes(value)) return 'status success'
   if (['failed', 'rejected', 'rolled_back', 'deleted'].includes(value)) return 'status danger'
-  if (['draft', 'pending_review'].includes(value)) return 'status warning'
+  if (['draft', 'pending_review', 'rollback_manual_required'].includes(value)) return 'status warning'
   return 'status'
 }
 
@@ -138,8 +140,9 @@ export function useBankData() {
 }
 
 export function useAsyncMessage() {
+  const { notify } = useFeedback()
   const [message, setMessage] = useState('')
-  const [messageTone, setMessageTone] = useState<'success' | 'error'>('success')
+  const [messageTone, setMessageTone] = useState<'success' | 'warning' | 'error'>('success')
   const [busy, setBusy] = useState(false)
   const [busyLabel, setBusyLabel] = useState('Đang xử lý, vui lòng chờ...')
   const run = async (work: () => Promise<unknown>, ok: string, after?: () => Promise<void>, loadingText = 'Đang xử lý, vui lòng chờ...') => {
@@ -152,11 +155,14 @@ export function useAsyncMessage() {
       if (after) await after()
       const record = result && typeof result === 'object' ? result as Record<string, unknown> : null
       const userMessage = typeof record?.user_message === 'string' ? record.user_message : typeof record?.message === 'string' ? record.message : ''
-      setMessageTone('success')
+      const warning = record?.ok === false || record?.manual_cleanup_required === true || record?.ui_notice_type === 'warning'
+      setMessageTone(warning ? 'warning' : 'success')
       setMessage(userMessage || ok)
+      notify({ tone: warning ? 'warning' : 'success', title: warning ? 'Cần kiểm tra' : 'Hoàn tất', message: userMessage || ok })
     } catch (error) {
       setMessageTone('error')
       setMessage(error instanceof Error ? error.message : 'Thao tác thất bại')
+      notify({ tone: 'danger', title: 'Không thực hiện được thao tác', message: error instanceof Error ? error.message : 'Thao tác thất bại' })
     } finally {
       setBusy(false)
     }
