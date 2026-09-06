@@ -375,7 +375,6 @@ function ClassDetailContent() {
   const [selectedBehaviorLoading, setSelectedBehaviorLoading] = useState(false)
   const effectiveCourseId = learningSummary?.openedx_course_id || classInfo?.openedx_course_id || ''
   const isUdemyClass = classInfo?.learning_platform === 'udemy'
-  const udemyDashboardHref = classInfo?.subject_delivery_id ? `/subject-management/${encodeURIComponent(classInfo.subject_delivery_id)}/udemy` : '/subject-management'
 
   const refreshStudentPage = async () => {
     const studentPage = await getAcademicClassStudents(headers, classId, { search: debouncedSearch, learningStatus, page, pageSize })
@@ -1096,7 +1095,6 @@ function ClassDetailContent() {
       deliveryId={classInfo.subject_delivery_id}
       classId={classId}
       classCode={classInfo.class_code || 'Lớp'}
-      managementHref={udemyDashboardHref}
     /> : null}
 
     {!isUdemyClass ? <>

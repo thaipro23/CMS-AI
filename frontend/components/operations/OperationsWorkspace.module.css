@@ -1,0 +1,8 @@
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+.body > * { min-width: 0; }

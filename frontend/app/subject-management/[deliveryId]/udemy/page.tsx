@@ -49,7 +49,7 @@ function statusBadge(row: UdemyProgressStudent) {
   if (row.status === 'on_track') return <StatusBadge status="success" label="Đạt tiến độ" />
   if (row.status === 'late') return <StatusBadge status="failed" label="Chậm tiến độ" />
   if (row.status === 'no_plan') return <StatusBadge status="warning" label="Chưa có mốc đến hạn" />
-  if (row.status === 'outside_roster') return <StatusBadge status="warning" label="Ngoài roster AP" />
+  if (row.status === 'outside_roster') return <StatusBadge status="warning" label="Ngoài danh sách lớp AP" />
   if (row.status === 'ambiguous') return <StatusBadge status="warning" label="Cần đối chiếu" />
   return <StatusBadge status="failed" label="Chưa khớp AP" />
 }
@@ -84,7 +84,7 @@ export default function UdemyProgressPage() {
   const exportStorageKey = useMemo(() => `ai-server:udemy-export-job:${deliveryId}`, [deliveryId])
   const importStorageKey = useMemo(() => `ai-server:udemy-import-job:${deliveryId}`, [deliveryId])
   const handledImportJobs = useRef(new Set<string>())
-  const canManage = can('manage_settings')
+  const canManage = can('academic.catalog.manage')
 
   const [dashboard, setDashboard] = useState<UdemyProgressDashboard | null>(null)
   const [rows, setRows] = useState<UdemyProgressStudentList>(EMPTY_LIST)
@@ -298,7 +298,7 @@ export default function UdemyProgressPage() {
     { key: 'variance', header: 'Chênh lệch', kind: 'number', width: 112, render: (row) => row.variance_percent == null ? '—' : <span className={row.variance_percent < 0 ? 'udemy-negative' : 'udemy-positive'}>{row.variance_percent > 0 ? '+' : ''}{percent(row.variance_percent)}</span> },
     { key: 'deadline', header: 'Deadline', kind: 'date', minWidth: 130, render: (row) => formatDate(row.current_deadline_date) },
     { key: 'status', header: 'Trạng thái', kind: 'status', minWidth: 150, sortable: true, render: statusBadge },
-    { key: 'match', header: 'Đối chiếu AP', kind: 'status', minWidth: 160, render: (row) => row.match_status === 'matched_roster' ? <StatusBadge status="success" label="Đúng roster" /> : <StatusBadge status="warning" label={row.status_label} /> },
+    { key: 'match', header: 'Đối chiếu AP', kind: 'status', minWidth: 160, render: (row) => row.match_status === 'matched_roster' ? <StatusBadge status="success" label="Khớp danh sách AP" /> : <StatusBadge status="warning" label={row.status_label} /> },
     { key: 'updated', header: 'Cập nhật', kind: 'date', minWidth: 145, sortable: true, render: (row) => <div>{formatDateTime(row.last_imported_at)}<small>{row.source_format}</small></div> },
     { key: 'note', header: 'Ghi chú', kind: 'text', minWidth: 260, render: (row) => row.diagnostic || '—' },
   ]
@@ -370,7 +370,7 @@ export default function UdemyProgressPage() {
       ? `Đang xuất ${Math.round(((exportJob?.progress_current || 0) / Math.max(1, exportJob?.progress_total || 100)) * 100)}%`
       : 'Xuất Excel'
 
-  return <PageRoot className="page-stack enterprise-standard-page udemy-progress-page">
+  return <PageRoot className="page-stack enterprise-standard-page training-operations-page udemy-progress-page">
     <EnterpriseScreenHeader
       eyebrow="Quản lý môn học · Udemy"
       title={dashboard ? `${dashboard.delivery.subject_code} · Tiến độ Udemy` : 'Tiến độ Udemy'}
@@ -423,7 +423,7 @@ export default function UdemyProgressPage() {
       <CompactFilterBar actions={<div className="subject-filter-actions"><button className="btn secondary" type="button" onClick={() => { setAppliedQ(q.trim()); setPage(1) }}>Áp dụng</button><button className="btn secondary" type="button" onClick={() => { setQ(''); setAppliedQ(''); setClassId(''); setStatus('all'); setPage(1) }}>Xóa lọc</button></div>}>
         <label>Tìm kiếm<input className="input" value={q} onChange={(event) => setQ(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { setAppliedQ(q.trim()); setPage(1) } }} placeholder="Mã SV, họ tên, email, lớp..." /></label>
         <label>Lớp<select className="input" value={classId} onChange={(event) => { setClassId(event.target.value); setPage(1) }}><option value="">Tất cả lớp</option>{dashboard?.classes.map((item) => <option key={item.id} value={item.id}>{item.class_code}{item.campus ? ` · ${String(item.campus).toUpperCase()}` : ''}</option>)}</select></label>
-        <label>Trạng thái<select className="input" value={status} onChange={(event) => { setStatus(event.target.value as StatusFilter); setPage(1) }}><option value="all">{tab === 'alerts' ? 'Tất cả cảnh báo' : 'Tất cả'}</option>{tab !== 'alerts' ? <option value="on_track">Đạt tiến độ</option> : null}<option value="late">Chậm tiến độ</option><option value="no_plan">Chưa có mốc đến hạn</option><option value="outside_roster">Ngoài roster AP</option><option value="ambiguous">Cần đối chiếu</option><option value="unmatched">Chưa khớp AP</option></select></label>
+        <label>Trạng thái<select className="input" value={status} onChange={(event) => { setStatus(event.target.value as StatusFilter); setPage(1) }}><option value="all">{tab === 'alerts' ? 'Tất cả cảnh báo' : 'Tất cả'}</option>{tab !== 'alerts' ? <option value="on_track">Đạt tiến độ</option> : null}<option value="late">Chậm tiến độ</option><option value="no_plan">Chưa có mốc đến hạn</option><option value="outside_roster">Ngoài danh sách lớp AP</option><option value="ambiguous">Cần đối chiếu</option><option value="unmatched">Chưa khớp AP</option></select></label>
       </CompactFilterBar>
       <WorkspaceSection title={tab === 'alerts' ? 'Sinh viên cần xử lý' : 'Tiến độ sinh viên Udemy'} description={tab === 'alerts' ? 'Chỉ hiển thị trường hợp chậm tiến độ, chưa có mốc hoặc chưa khớp AP.' : 'Dữ liệu hiện tại lấy từ lần import mới nhất; lịch sử file vẫn được giữ.'} actions={<button className="btn small secondary" type="button" onClick={() => void reloadAll()} disabled={loading}>Làm mới</button>}>
         <EnterpriseDataTable

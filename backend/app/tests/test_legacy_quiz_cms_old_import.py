@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -537,7 +538,8 @@ def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -
         db.close()
 
 
-def test_legacy_quiz_rebalances_missing_hard_without_question_type_quota() -> None:
+@pytest.mark.parametrize('assessment_type', ['quiz', 'final_test'])
+def test_legacy_quiz_rebalances_missing_hard_without_question_type_quota(assessment_type: str) -> None:
     db = _session()
     try:
         release = QuestionBankRelease(
@@ -581,17 +583,16 @@ def test_legacy_quiz_rebalances_missing_hard_without_question_type_quota() -> No
         db.commit()
 
         workflow = QuestionBankQuizCreationWorkflowService(SimpleNamespace(db=db))
-        plan = workflow._build_release_quiz_plan(
-            release=release,
-            total_questions=15,
-            difficulty_easy=50,
-            difficulty_medium=30,
-            difficulty_hard=20,
-        )
+        config = dict(total_questions=15, difficulty_easy=50, difficulty_medium=30, difficulty_hard=20)
+        if assessment_type == 'final_test':
+            plan = workflow._build_final_test_plan(source_releases=[release], source_details=[], **config)
+        else:
+            plan = workflow._build_release_quiz_plan(release=release, **config)
 
         assert plan['target_counts'] == {'EASY': 7, 'MEDIUM': 5, 'HARD': 3}
         assert plan['effective_target_counts'] == {'EASY': 9, 'MEDIUM': 6, 'HARD': 0}
-        assert len(plan['slots']) == 15
+        if assessment_type == 'quiz':
+            assert len(plan['slots']) == 15
         assert sum(int(slot['pick_count']) for slot in plan['slots']) == 15
         assigned_ids = {
             question_id
@@ -607,3 +608,38 @@ def test_legacy_quiz_rebalances_missing_hard_without_question_type_quota() -> No
         assert any('tự cân lại' in warning for warning in plan['warnings'])
     finally:
         db.close()
+
+
+@pytest.mark.parametrize(('config', 'expected'), [
+    ({'difficulty_easy': 100, 'difficulty_medium': 0, 'difficulty_hard': 0, 'retake_cooldown_minutes': 0}, (100, 0, 0, 0)),
+    ({'difficulty_easy': 0, 'difficulty_medium': 100, 'difficulty_hard': 0, 'retake_cooldown_minutes': 0}, (0, 100, 0, 0)),
+    ({'difficulty_easy': 0, 'difficulty_medium': 0, 'difficulty_hard': 100, 'retake_cooldown_minutes': 0}, (0, 0, 100, 0)),
+    ({}, (50, 30, 20, 5)),
+    ({'difficulty_easy': None, 'difficulty_medium': None, 'difficulty_hard': None, 'retake_cooldown_minutes': None}, (50, 30, 20, 5)),
+])
+def test_quiz_worker_preserves_zero_values_and_defaults(monkeypatch, config: dict, expected: tuple) -> None:
+    from app import worker
+    from app.services.bank_operation_jobs import BankOperationJobService
+    from app.services.question_bank_service import VersionedQuestionBankService
+
+    db = Mock()
+    job = SimpleNamespace(id='quiz-job', request_json=config, requested_by=None, release_id='release-1')
+    ops = Mock()
+    ops.get_job.return_value = job
+    ops.complete.side_effect = lambda job, *, result, label: SimpleNamespace(result_json=result)
+    create_quiz = AsyncMock(return_value={'ok': True, 'status': 'completed'})
+    monkeypatch.setattr(worker, 'SessionLocal', lambda: db)
+    monkeypatch.setattr(BankOperationJobService, '__new__', lambda cls, db: ops)
+    monkeypatch.setattr(VersionedQuestionBankService, 'create_quiz_from_release', create_quiz)
+    monkeypatch.setattr('app.services.audit_log.log_audit', Mock())
+
+    result = worker.bank_quiz_create_task.run(job.id)
+
+    assert result['ok'] is True
+    create_quiz.assert_awaited_once()
+    sent = create_quiz.await_args.kwargs
+    assert tuple(sent[key] for key in (
+        'difficulty_easy', 'difficulty_medium', 'difficulty_hard', 'retake_cooldown_minutes',
+    )) == expected
+    ops.fail.assert_not_called()
+    db.close.assert_called_once()

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
-import { InlineNotice } from '../../../../components/ui/InlineNotice'
+import { InlineNotice, noticeError } from '../../../../components/ui/InlineNotice'
 import { OperationsKpiStrip } from '../../../../components/operations/OperationsWorkspace'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
@@ -22,15 +22,17 @@ function releaseTitle(item: BankRelease) {
 
 export function BankHistoryPage() {
   const { headers, can } = useBankData()
-  const { message, busy, run } = useAsyncMessage()
+  const { message, messageTone, busy, run } = useAsyncMessage()
   const { state, update } = useUrlTableState({ status: 'all', sort: 'quiz', pageSize: 20, density: 'compact' })
   const [quizHistory, setQuizHistory] = useState<CourseQuizInstance[]>([])
   const [releases, setReleases] = useState<BankRelease[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<unknown>(null)
   const activeView = state.sort === 'release' ? 'release' : 'quiz'
 
   const load = async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const [quizRows, releaseRows] = await Promise.all([
         getCourseQuizInstances(headers, { limit: 100 }),
@@ -38,6 +40,9 @@ export function BankHistoryPage() {
       ])
       setQuizHistory(quizRows)
       setReleases(releaseRows)
+    } catch (error) {
+      setLoadError(error)
+      throw error
     } finally {
       setLoading(false)
     }
@@ -100,10 +105,10 @@ export function BankHistoryPage() {
       description="Theo dõi Release đã chốt, Quiz đã tạo trên CMS, trạng thái khôi phục và các lỗi cần kiểm tra."
       icon="audit"
       tone="slate"
-      actions={<button className="btn secondary" type="button" disabled={loading} onClick={() => load()}>{loading ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
+      actions={<button className="btn secondary" type="button" disabled={loading} onClick={() => void load().catch(() => undefined)}>{loading ? 'Đang tải...' : 'Làm mới dữ liệu'}</button>}
     />
 
-    <InlineNotice notice={message ? { type: 'info', title: 'Thông báo thao tác', body: message } : null} />
+    <InlineNotice notice={loadError ? noticeError(loadError, 'Không tải được lịch sử.') : message ? { type: messageTone, body: message } : null} />
 
     <OperationsKpiStrip ariaLabel="Tổng quan lịch sử bộ đề" items={[
       { label: 'Bộ đề đã chốt', value: releases.length, icon: 'release', tone: 'info' },
@@ -128,7 +133,7 @@ export function BankHistoryPage() {
       <div className="history-filter-bar bank-contract-filter-toolbar">
         <label className="bank-contract-filter-field"><span>Tìm kiếm</span><input className="input" value={state.q} onChange={(event) => update({ q: event.target.value })} placeholder={activeView === 'quiz' ? 'Course ID, tên Quiz, Release...' : 'Mã Release, Library CMS...'} /></label>
         <label className="bank-contract-filter-field"><span>Trạng thái</span><select className="input" value={state.status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="created">Đã tạo</option><option value="published">Đã đưa lên CMS</option><option value="rolled_back">Đã khôi phục</option><option value="failed">Thất bại</option></select></label>
-        <button className="btn secondary" type="button" disabled={loading} onClick={() => load()}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
+        <button className="btn secondary" type="button" disabled={loading} onClick={() => void load().catch(() => undefined)}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
       </div>
       {activeView === 'quiz' ? <EnterpriseDataTable tableId="bank-history-quizzes" caption="Quiz trên CMS" rows={quizRows} columns={quizColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredQuiz.length} totalPages={quizTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="Quiz" emptyTitle="Chưa có Quiz phù hợp" emptyDescription="Thử xóa bộ lọc hoặc tạo Quiz từ Release đã chốt." /> : <EnterpriseDataTable tableId="bank-history-releases" caption="Bộ đề đã chốt" rows={releaseRows} columns={releaseColumns} rowKey={(item) => item.id} density={state.density} onDensityChange={(density) => update({ density }, { resetPage: false })} loading={loading} page={safePage} pageSize={state.pageSize} total={filteredReleases.length} totalPages={releaseTotalPages} onPageChange={(page) => update({ page }, { resetPage: false })} onPageSizeChange={(pageSize) => update({ pageSize, page: 1 }, { resetPage: false })} label="bộ đề" emptyTitle="Chưa có bộ đề phù hợp" emptyDescription="Thử xóa bộ lọc hoặc chốt Release từ workspace của bài." />}
     </BankSection>

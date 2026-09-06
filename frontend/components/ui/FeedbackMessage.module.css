@@ -1,0 +1,29 @@
+/* Shared feedback layout, including dialogs rendered outside AppShell. */
+.message {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e40af;
+}
+.success { border-color: #bbf7d0; background: #f0fdf4; color: #166534; }
+.warning { border-color: #fde68a; background: #fffbeb; color: #92400e; }
+.error { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
+.info { border-color: #bfdbfe; background: #eff6ff; color: #1e40af; }
+.icon { position: static; grid-column: 1; grid-row: 1; width: 32px; height: 32px; }
+.copy { display: grid; grid-column: 2; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.copy > * { margin: 0; min-width: 0; }
+.action { grid-column: 3; min-width: 0; align-self: center; }
+:global(.accessible-dialog-body) > .message + * { margin-block-start: 12px; }
+@media (max-width: 640px) {
+  .message { grid-template-columns: 32px minmax(0, 1fr); }
+  .action { grid-column: 1 / -1; justify-self: stretch; }
+}

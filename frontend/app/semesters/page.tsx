@@ -1,5 +1,7 @@
 'use client'
 
+import { InlineNotice, type InlineNoticeData } from '../../components/ui/InlineNotice'
+
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { deleteAcademicTerm, getAcademicTermWithBlocks, getAcademicTerms, saveAcademicTerm } from '../../lib/api'
@@ -103,27 +105,28 @@ export default function SemestersPage() {
   const [items, setItems] = useState<TermRow[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState<InlineNoticeData | null>(null)
+  const notify = (body: string, type: InlineNoticeData['type'] = 'error') => setMessage({ type, body })
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<TermForm>(emptyForm())
   const [deleteTarget, setDeleteTarget] = useState<TermRow | null>(null)
 
-  const load = async () => {
-    setLoading(true); setMessage('')
+  const load = async (clearMessage = true) => {
+    setLoading(true); if (clearMessage) setMessage(null)
     try {
       const terms = await getAcademicTerms(headers, { active: null })
       const withBlocks = await Promise.all(terms.map(async (term) => {
         try { return await getAcademicTermWithBlocks(headers, term.id) as TermRow } catch { return { ...term, blocks: [] } }
       }))
       setItems(withBlocks)
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được danh sách học kỳ') }
+    } catch (error) { notify(error instanceof Error ? error.message : 'Không tải được danh sách học kỳ') }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [headers])
 
-  const openCreate = () => { setForm(emptyForm()); setModalOpen(true) }
+  const openCreate = () => { setMessage(null); setForm(emptyForm()); setModalOpen(true) }
   const openEdit = async (item: TermRow) => {
-    setSaving(true); setMessage('')
+    setSaving(true); setMessage(null)
     try {
       const full = await getAcademicTermWithBlocks(headers, item.id) as TermRow
       const sourceBlocks = pickBlocksForTermForm(full.blocks || [])
@@ -133,36 +136,36 @@ export default function SemestersPage() {
       })
       setForm({ id: full.id, term_code: full.term_code, term_name: full.term_name, branch: (full.branch || 'poly') as Branch, active: full.active, blocks: nextBlocks })
       setModalOpen(true)
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được học kỳ') }
+    } catch (error) { notify(error instanceof Error ? error.message : 'Không tải được học kỳ') }
     finally { setSaving(false) }
   }
   const updateBlock = (index: number, patch: Partial<BlockForm>) => setForm((value) => ({ ...value, blocks: value.blocks.map((block, idx) => idx === index ? { ...block, ...patch } : block) }))
   const updateLearningWeek = (blockIndex: number, weekIndex: number, patch: Partial<LearningWeekForm>) => setForm((value) => ({ ...value, blocks: value.blocks.map((block, idx) => idx === blockIndex ? { ...block, learning_weeks: block.learning_weeks.map((week, widx) => widx === weekIndex ? { ...week, ...patch } : week) } : block) }))
   const rebuildLearningWeeks = (blockIndex: number) => setForm((value) => ({ ...value, blocks: value.blocks.map((block, idx) => idx === blockIndex ? { ...block, learning_weeks: defaultLearningWeeks(block.start_date) } : block) }))
   const save = async () => {
-    if (!form.term_code.trim()) { setMessage('Thiếu mã học kỳ'); return }
-    if (!form.term_name.trim()) { setMessage('Thiếu tên học kỳ'); return }
-    if (form.blocks.length !== 2) { setMessage('Một kỳ phải có đúng 2 block'); return }
+    if (!form.term_code.trim()) { notify('Thiếu mã học kỳ'); return }
+    if (!form.term_name.trim()) { notify('Thiếu tên học kỳ'); return }
+    if (form.blocks.length !== 2) { notify('Một kỳ phải có đúng 2 block'); return }
     const invalidDateBlock = form.blocks.find((block) => (block.start_date && !normalizeDateInput(block.start_date)) || (block.end_date && !normalizeDateInput(block.end_date)) || block.learning_weeks.some((week) => (week.start_date && !normalizeDateInput(week.start_date)) || (week.end_date && !normalizeDateInput(week.end_date))))
-    if (invalidDateBlock) { setMessage('Ngày block/tuần học phải nhập đúng định dạng dd/mm/yyyy.'); return }
-    setSaving(true); setMessage('')
+    if (invalidDateBlock) { notify('Ngày block/tuần học phải nhập đúng định dạng dd/mm/yyyy.'); return }
+    setSaving(true); setMessage(null)
     try {
       await saveAcademicTerm(jsonHeaders, { id: form.id, term_code: form.term_code.trim(), term_name: form.term_name.trim(), branch: form.branch, start_date: null, end_date: null, active: form.active, blocks: form.blocks.map((block, index) => ({ id: block.id, block_code: block.block_code.trim() || `Block ${index + 1}`, block_name: block.block_name.trim() || `Block ${index + 1}`, start_date: toIsoDate(block.start_date), end_date: toIsoDate(block.end_date), sort_order: index + 1, active: block.active, metadata_json: { learning_weeks: normalizeLearningWeeks(block.learning_weeks), learning_week_source: 'semesters_page' } })) })
-      setMessage(`Đã lưu học kỳ ${form.term_code}`)
+      notify(`Đã lưu học kỳ ${form.term_code}`, 'success')
       setModalOpen(false)
-      await load()
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Lưu học kỳ thất bại') }
+      await load(false)
+    } catch (error) { notify(error instanceof Error ? error.message : 'Lưu học kỳ thất bại') }
     finally { setSaving(false) }
   }
   const confirmDelete = async () => {
     if (!deleteTarget) return
-    setSaving(true); setMessage('')
+    setSaving(true); setMessage(null)
     try {
       await deleteAcademicTerm(jsonHeaders, deleteTarget.id)
-      setMessage(`Đã xóa học kỳ ${deleteTarget.term_name}`)
+      notify(`Đã xóa học kỳ ${deleteTarget.term_name}`, 'success')
       setDeleteTarget(null)
-      await load()
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Xóa học kỳ thất bại') }
+      await load(false)
+    } catch (error) { notify(error instanceof Error ? error.message : 'Xóa học kỳ thất bại') }
     finally { setSaving(false) }
   }
 
@@ -172,18 +175,18 @@ export default function SemestersPage() {
     { key: 'block1', header: 'Lịch Block 1', kind: 'date', minWidth: 210, priority: 'important', hideable: true, render: (item) => { const block = pickBlocksForTermForm(item.blocks)[0]; return block ? <div className="term-block-cell"><b>{block.block_name || 'Block 1'}</b><small>{formatDate(block.start_date)} → {formatDate(block.end_date)}</small></div> : <span className="muted">Chưa cấu hình</span> } },
     { key: 'block2', header: 'Lịch Block 2', kind: 'date', minWidth: 210, priority: 'important', hideable: true, render: (item) => { const block = pickBlocksForTermForm(item.blocks)[1]; return block ? <div className="term-block-cell"><b>{block.block_name || 'Block 2'}</b><small>{formatDate(block.start_date)} → {formatDate(block.end_date)}</small></div> : <span className="muted">Chưa cấu hình</span> } },
     { key: 'status', header: 'Trạng thái', kind: 'status', width: 112, hideable: true, render: (item) => <StatusBadge status={item.active ? 'active' : 'inactive'} label={item.active ? 'Đang dùng' : 'Đã xóa'} /> },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 112, sticky: 'right', hideable: false, render: (item) => <div className="row-actions"><button className="btn small secondary" type="button" onClick={() => openEdit(item)}>Sửa</button><button className="btn small danger secondary-danger" type="button" disabled={saving} onClick={() => setDeleteTarget(item)}>Xóa</button></div> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 112, sticky: 'right', hideable: false, render: (item) => <div className="row-actions"><button className="btn small secondary" type="button" onClick={() => openEdit(item)}>Sửa</button><button className="btn small danger secondary-danger" type="button" disabled={saving} onClick={() => { setMessage(null); setDeleteTarget(item) }}>Xóa</button></div> },
   ]
 
-  if (!can('manage_settings')) return <PageRoot className="page-stack enterprise-standard-page semesters-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Học kỳ" description="Quản lý học kỳ, block đào tạo và cấu hình tuần học dùng cho đồng bộ và phân tích tiến độ." icon="semester" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Học kỳ' }]} /><section className="card empty-state">Bạn không có quyền quản lý cấu hình học kỳ.</section></PageRoot>
+  if (!can('academic.catalog.manage')) return <PageRoot className="page-stack enterprise-standard-page training-operations-page semesters-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Học kỳ" description="Quản lý học kỳ, block đào tạo và cấu hình tuần học dùng cho đồng bộ và phân tích tiến độ." icon="semester" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Học kỳ' }]} /><section className="card empty-state">Bạn không có quyền quản lý cấu hình học kỳ.</section></PageRoot>
 
-  return <PageRoot className="page-stack enterprise-standard-page semesters-page">
+  return <PageRoot className="page-stack enterprise-standard-page training-operations-page semesters-page">
     <EnterpriseScreenHeader eyebrow="Danh mục" title="Học kỳ & Cấu hình tuần học" description="Quản lý học kỳ, hai block đào tạo và cấu hình tuần học dùng cho đồng bộ và phân tích tiến độ." icon="semester" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Học kỳ' }]} />
-    {message ? <div className="alert">{message}</div> : null}
+    <InlineNotice notice={modalOpen || deleteTarget ? null : message} />
     <WorkspaceSection
       title="Danh sách học kỳ"
       description="Mỗi học kỳ có đúng 2 block; lịch tuần học được chỉnh trong màn Sửa."
-      actions={<><button className="btn secondary" type="button" disabled={loading} onClick={load}>Làm mới</button><button className="btn" type="button" onClick={openCreate}>Thêm học kỳ</button></>}
+      actions={<><button className="btn secondary" type="button" disabled={loading} onClick={() => void load()}>Làm mới</button><button className="btn" type="button" onClick={openCreate}>Thêm học kỳ</button></>}
       icon="semester"
       tone="blue"
     >
@@ -199,14 +202,15 @@ export default function SemestersPage() {
       bodyClassName="semester-dialog-body"
       footer={<div className="dialog-action-row"><button className="btn secondary" disabled={saving} onClick={() => setModalOpen(false)}>Hủy</button><button className="btn" data-dialog-autofocus disabled={saving} onClick={save}>{saving ? 'Đang lưu...' : 'Lưu học kỳ'}</button></div>}
     >
+      <InlineNotice notice={message} />
       <div className="academic-modal-form">
         <label>Hệ<select className="input" value={form.branch} onChange={(event) => setForm((value) => ({ ...value, branch: event.target.value as Branch }))}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label>
         <label>Mã học kỳ<input className="input" value={form.term_code} onChange={(event) => setForm((value) => ({ ...value, term_code: event.target.value, term_name: value.term_name || event.target.value }))} placeholder="Summer 2026" /></label>
         <label>Tên học kỳ<input className="input" value={form.term_name} onChange={(event) => setForm((value) => ({ ...value, term_name: event.target.value }))} placeholder="Summer 2026" /></label>
         <label>Trạng thái<select className="input" value={form.active ? 'true' : 'false'} onChange={(event) => setForm((value) => ({ ...value, active: event.target.value === 'true' }))}><option value="true">Đang dùng</option><option value="false">Đã xóa</option></select></label>
       </div>
-      <div className="section-head semester-dialog-section-head"><div><h3>Block & Cấu hình tuần học</h3><p>Mỗi kỳ có đúng 2 block. Chỉnh tuần học khi có nghỉ/lễ để deadline Quiz bám đúng lịch.</p></div></div>
-      <div className="term-block-editor">{form.blocks.map((block, index) => <section className="term-block-card" key={`${block.id || 'new'}-${index}`}><header><div><span>Block {index + 1}</span><b>{block.block_name || block.block_code}</b></div><button className="btn small secondary" type="button" onClick={() => rebuildLearningWeeks(index)}>Tự chia 6 tuần</button></header><div className="settings-form-grid"><label>Mã block<input className="input" value={block.block_code} onChange={(event) => updateBlock(index, { block_code: event.target.value })} /></label><label>Tên block<input className="input" value={block.block_name} onChange={(event) => updateBlock(index, { block_name: event.target.value })} /></label><label>Bắt đầu<input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" value={block.start_date} onChange={(event) => updateBlock(index, { start_date: event.target.value })} /></label><label>Kết thúc<input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" value={block.end_date} onChange={(event) => updateBlock(index, { end_date: event.target.value })} /></label></div><label className="check-row"><input type="checkbox" checked={block.active} onChange={(event) => updateBlock(index, { active: event.target.checked })} /> Block đang dùng</label><div className="learning-weeks-editor"><div className="learning-weeks-head"><b>6 tuần học</b><small>Định dạng ngày hiển thị dd/mm/yyyy.</small></div><div className="learning-weeks-grid">{block.learning_weeks.map((week, weekIndex) => <label className="learning-week-card" key={`${index}-${weekIndex}`}><span>Tuần {week.week_number}</span><input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" value={week.start_date} onChange={(event) => updateLearningWeek(index, weekIndex, { start_date: event.target.value })} /><input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" value={week.end_date} onChange={(event) => updateLearningWeek(index, weekIndex, { end_date: event.target.value })} /></label>)}</div></div></section>)}</div>
+      <div className="section-head semester-dialog-section-head"><div><h3>Block & Cấu hình tuần học</h3><p>Điều chỉnh tuần học khi có nghỉ lễ để hạn làm Quiz theo đúng lịch.</p></div></div>
+      <div className="term-block-editor">{form.blocks.map((block, index) => <section className="term-block-card" key={`${block.id || 'new'}-${index}`}><header><div><span>Block {index + 1}</span><b>{block.block_name || block.block_code}</b></div><button className="btn small secondary" type="button" onClick={() => rebuildLearningWeeks(index)}>Tự chia 6 tuần</button></header><div className="settings-form-grid"><label>Mã block<input className="input" value={block.block_code} onChange={(event) => updateBlock(index, { block_code: event.target.value })} /></label><label>Tên block<input className="input" value={block.block_name} onChange={(event) => updateBlock(index, { block_name: event.target.value })} /></label><label>Bắt đầu<input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" value={block.start_date} onChange={(event) => updateBlock(index, { start_date: event.target.value })} /></label><label>Kết thúc<input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" value={block.end_date} onChange={(event) => updateBlock(index, { end_date: event.target.value })} /></label></div><label className="check-row"><input type="checkbox" checked={block.active} onChange={(event) => updateBlock(index, { active: event.target.checked })} /> Block đang dùng</label><div className="learning-weeks-editor"><div className="learning-weeks-head"><b>6 tuần học</b></div><div className="learning-weeks-grid">{block.learning_weeks.map((week, weekIndex) => <div className="learning-week-card" key={`${index}-${weekIndex}`}><span>Tuần {week.week_number}</span><input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" aria-label={`Block ${index + 1}, tuần ${week.week_number}: ngày bắt đầu`} value={week.start_date} onChange={(event) => updateLearningWeek(index, weekIndex, { start_date: event.target.value })} /><input className="input semester-date-input" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/yyyy" aria-label={`Block ${index + 1}, tuần ${week.week_number}: ngày kết thúc`} value={week.end_date} onChange={(event) => updateLearningWeek(index, weekIndex, { end_date: event.target.value })} /></div>)}</div></div></section>)}</div>
     </AccessibleDialog>
     <AccessibleDialog
       open={Boolean(deleteTarget)}
@@ -217,6 +221,7 @@ export default function SemestersPage() {
       size="small"
       footer={<div className="dialog-action-row"><button className="btn secondary" disabled={saving} onClick={() => setDeleteTarget(null)}>Hủy</button><button className="btn danger" data-dialog-autofocus disabled={saving} onClick={confirmDelete}>{saving ? 'Đang xóa...' : 'Xác nhận xóa'}</button></div>}
     >
+      <InlineNotice notice={message} />
       {deleteTarget ? <div className="academic-confirm-body"><p>Học kỳ <b>{deleteTarget.term_name}</b> và hai block/kế hoạch học sẽ bị khóa.</p><div className="academic-confirm-summary"><span>Hệ</span><b>{branchLabel(deleteTarget.branch)}</b><span>Mã học kỳ</span><b>{deleteTarget.term_code}</b></div></div> : null}
     </AccessibleDialog>
   </PageRoot>

@@ -667,6 +667,14 @@
 .bank-departments-page .bank-subject-search-results__list strong { color: #1d4ed8; font-size: 12px; white-space: nowrap; }
 .bank-departments-page .bank-subject-search-results__code { padding: 5px 7px; border-radius: 7px; color: #1e40af; background: #dbeafe; font-weight: 800; }
 
+.quiz-config-modal .quiz-plan-preview-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.quiz-config-modal .quiz-plan-preview-panel > .btn { justify-self: start; }
+
 @media (max-width: 640px) {
   .bank-departments-page .bank-subject-search-results__list { grid-template-columns: minmax(0, 1fr); }
   .bank-departments-page .bank-subject-search-results__list > a { grid-template-columns: auto minmax(0, 1fr); }

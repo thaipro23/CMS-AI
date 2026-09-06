@@ -552,7 +552,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
         ]
       : [
           { key: "udemy", header: "Tiến độ Udemy", kind: "progress", minWidth: 195, priority: "important", hideable: true, render: (item) => { const udemyTotal = platformStudentTotal(item, "udemy"); const imported = Number(item.udemy_progress_student_count || 0); const late = Number(item.udemy_progress_late_count || 0); return <><span className={syncTone(imported, udemyTotal)}>Đã import {ratioLabel(imported, udemyTotal)}</span><small>Tiến độ trung bình {percentLabel(item.udemy_progress_average_percent)}</small><small className={late > 0 ? "danger-text" : undefined}>{late > 0 ? `${late} SV chậm tiến độ` : "Không có SV chậm"}</small></> } },
-          { key: "risk", header: "Cảnh báo Udemy", kind: "status", minWidth: 185, priority: "important", hideable: true, render: (item) => { const late = Number(item.udemy_progress_late_count || 0); const unmatched = Number((item as any).udemy_progress_unmatched_count || 0); return <><span className={late || unmatched ? "status-pill warning" : "status-pill success"}>{late || unmatched ? `${late + unmatched} trường hợp` : "Ổn"}</span><small>Chậm tiến độ {late}</small><small>Chưa khớp roster {unmatched}</small></> } },
+          { key: "risk", header: "Cảnh báo Udemy", kind: "status", minWidth: 185, priority: "important", hideable: true, render: (item) => { const late = Number(item.udemy_progress_late_count || 0); const unmatched = Number((item as any).udemy_progress_unmatched_count || 0); return <><span className={late || unmatched ? "status-pill warning" : "status-pill success"}>{late || unmatched ? `${late + unmatched} trường hợp` : "Ổn"}</span><small>Chậm tiến độ {late}</small><small>Chưa khớp danh sách AP {unmatched}</small></> } },
         ];
 
     return [
@@ -563,7 +563,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   }, [branch, campus, isCms, page, pageSize, platform, platformLabel, selectedTerm?.term_name, termId]);
 
   return (
-    <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
+    <PageRoot className="page-stack enterprise-standard-page training-operations-page student-management-page academic-flow-page training-management-page teacher-management-page ux-enterprise-page">
       <EnterpriseScreenHeader
         eyebrow="Vận hành đào tạo"
         title={`Quản lý giảng viên ${platformLabel}`}
@@ -680,9 +680,9 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
         ] : [
           { key: 'teachers', label: 'Giảng viên Udemy', value: countLabel(summary.teacher_count), hint: 'Theo bộ lọc hiện tại' },
           { key: 'classes', label: 'Lớp Udemy', value: countLabel(summary.class_count), hint: `${countLabel(summary.subject_count)} môn` },
-          { key: 'students', label: 'Sinh viên Udemy', value: countLabel(summary.udemy_student_count || summary.student_count), hint: 'Theo roster AP' },
-          { key: 'imported', label: 'Đã có tiến độ', value: ratioLabel(summary.udemy_progress_student_count, summary.udemy_student_count || summary.student_count), hint: 'Snapshot gần nhất' },
-          { key: 'progress', label: 'Tiến độ trung bình', value: percentLabel(summary.udemy_progress_average_percent), hint: 'Theo file import mới nhất' },
+          { key: 'students', label: 'Sinh viên Udemy', value: countLabel(summary.udemy_student_count || summary.student_count), hint: 'Theo danh sách AP' },
+          { key: 'imported', label: 'Đã có tiến độ', value: ratioLabel(summary.udemy_progress_student_count, summary.udemy_student_count || summary.student_count), hint: 'Dữ liệu cập nhật gần nhất' },
+          { key: 'progress', label: 'Tiến độ trung bình', value: percentLabel(summary.udemy_progress_average_percent), hint: 'Theo tệp nhập gần nhất' },
           { key: 'late', label: 'Chậm tiến độ', value: countLabel(summary.udemy_progress_late_count), hint: 'Theo mốc kế hoạch đến hạn', tone: summary.udemy_progress_late_count > 0 ? 'warning' : 'success' },
         ]} />
 
@@ -708,15 +708,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
             />
           )}
 
-        {!campus && (
-          <InlineNotice
-            notice={{
-              type: "warning",
-              title: "Dữ liệu lớn",
-              body: "Đang xem tất cả cơ sở. Nên lọc cơ sở để tải nhanh hơn.",
-            }}
-          />
-        )}
+
 
         <InlineNotice notice={message} />
 

@@ -1,5 +1,7 @@
 'use client'
 
+import { InlineNotice, type InlineNoticeData } from '../../components/ui/InlineNotice'
+
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
 import { enqueueAcademicApSyncJob, getAcademicApSyncJob, getAcademicApSyncJobs, getAcademicApSyncOptions } from '../../lib/api'
@@ -99,7 +101,8 @@ export default function ApSyncPage() {
   const [loadingOptions, setLoadingOptions] = useState(false)
   const [running, setRunning] = useState(false)
   const [dryRun, setDryRun] = useState(false)
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState<InlineNoticeData | null>(null)
+  const notify = (body: string, type: InlineNoticeData['type'] = 'error') => setMessage({ type, body })
   const [lastResults, setLastResults] = useState<Array<{ branch: BranchCode; result: AcademicSyncResult }>>([])
   const [activeRuns, setActiveRuns] = useState<Array<{ branch: BranchCode; run: AcademicSyncRun }>>([])
   const [syncConfirm, setSyncConfirm] = useState<SyncConfirm>(null)
@@ -108,11 +111,11 @@ export default function ApSyncPage() {
   const currentBranchOptions = optionsByBranch[selectedBranch] || EMPTY_OPTIONS
   const totalCampuses = BRANCHES.reduce((sum, branch) => sum + (optionsByBranch[branch.value].campuses?.length || 0), 0)
   const totalSelectedSubjects = BRANCHES.reduce((sum, branch) => sum + Number(optionsByBranch[branch.value].selected_subject_count || 0), 0)
-  const canManageAcademicOps = can('manage_settings')
+  const canManageAcademicOps = can('academic.catalog.manage')
 
-  const loadOptions = async () => {
+  const loadOptions = async (clearMessage = true) => {
     setLoadingOptions(true)
-    setMessage('')
+    if (clearMessage) setMessage(null)
     try {
       const [poly, ptcd] = await Promise.all([
         getAcademicApSyncOptions(headers, { termName, branch: 'poly', includeSubjects: false }),
@@ -125,7 +128,7 @@ export default function ApSyncPage() {
         setTermName(String(availableTerms[0].value || ''))
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không tải được dữ liệu học kỳ/hệ/cơ sở')
+      notify(error instanceof Error ? error.message : 'Không tải được dữ liệu học kỳ/hệ/cơ sở')
     } finally {
       setLoadingOptions(false)
     }
@@ -165,17 +168,17 @@ export default function ApSyncPage() {
             return [...mapped, ...current.filter((item) => !seen.has(item.result.sync_run.id))].slice(0, 10)
           })
           if (finished.some((item) => item.run.status === 'failed')) {
-            setMessage('Có job đồng bộ AP thất bại. Xem chi tiết trong bảng kết quả gần nhất.')
+            notify('Có tác vụ đồng bộ AP thất bại. Xem chi tiết trong bảng kết quả gần nhất.')
           } else {
             const onlyDryRun = finished.every((item) => String(item.run.mode || '').includes('dry_run'))
-            setMessage(onlyDryRun ? 'Đã kiểm tra kế hoạch đồng bộ AP.' : 'Đã chạy xong đồng bộ AP.')
-            await loadOptions()
+            notify(onlyDryRun ? 'Đã kiểm tra kế hoạch đồng bộ AP.' : 'Đã chạy xong đồng bộ AP.', 'success')
+            await loadOptions(false)
           }
         }
         if (next.some((item) => isRunActive(item.run))) timer = setTimeout(poll, 2000)
       } catch (error) {
         if (!canceled) {
-          setMessage(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái job đồng bộ AP')
+          notify(error instanceof Error ? error.message : 'Không kiểm tra được trạng thái tác vụ đồng bộ AP')
           timer = setTimeout(poll, 4000)
         }
       }
@@ -187,17 +190,17 @@ export default function ApSyncPage() {
 
   const requestRunForBranches = (branches: BranchCode[]) => {
     if (!canManageAcademicOps) {
-      setMessage('Bạn không có quyền đồng bộ AP.')
+      notify('Bạn không có quyền đồng bộ AP.')
       return
     }
     const normalizedTerm = termName.trim()
     if (!normalizedTerm) {
-      setMessage('Vui lòng chọn kỳ trước khi đồng bộ.')
+      notify('Vui lòng chọn kỳ trước khi đồng bộ.')
       return
     }
     const runnable = branches.filter((branch) => optionValues(optionsByBranch[branch].campuses).length > 0 && Number(optionsByBranch[branch].selected_subject_count || 0) > 0)
     if (!runnable.length) {
-      setMessage('Chưa có phạm vi AP hợp lệ. Hãy bảo đảm có cơ sở đang bật và đã chọn CMS/Udemy cho ít nhất một môn trong Quản lý môn học.')
+      notify('Chưa có phạm vi AP hợp lệ. Hãy bảo đảm có cơ sở đang bật và đã chọn CMS/Udemy cho ít nhất một môn trong Quản lý môn học.')
       return
     }
     const label = branches.length > 1 ? 'các hệ có môn đã chọn CMS/Udemy' : `hệ ${BRANCHES.find((item) => item.value === branches[0])?.label || branches[0]}`
@@ -211,7 +214,7 @@ export default function ApSyncPage() {
     const normalizedTerm = termName.trim()
     const runnable = syncConfirm.runnable
     setRunning(true)
-    setMessage('')
+    setMessage(null)
     setLastResults([])
     try {
       const queuedRuns: Array<{ branch: BranchCode; run: AcademicSyncRun }> = []
@@ -233,37 +236,37 @@ export default function ApSyncPage() {
         const seen = new Set(current.map((item) => item.run.id))
         return [...queuedRuns, ...current.filter((item) => !seen.has(item.run.id))]
       })
-      setMessage(dryRun ? 'Đã đưa job kiểm tra kế hoạch AP vào hàng đợi.' : 'Đã đưa job đồng bộ AP vào hàng đợi. Bạn có thể F5 hoặc mở máy khác để theo dõi tiếp.')
+      notify(dryRun ? 'Đã xếp hàng kiểm tra kế hoạch AP.' : 'Đã xếp hàng đồng bộ AP. Bạn có thể xem tiến trình tại Tác vụ nền.', 'info')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không đưa được job đồng bộ AP vào hàng đợi')
+      notify(error instanceof Error ? error.message : 'Không đưa được job đồng bộ AP vào hàng đợi')
     } finally {
       setRunning(false)
     }
   }
 
-  return <PageRoot className="page-stack enterprise-standard-page ap-sync-page">
+  return <PageRoot className="page-stack enterprise-standard-page training-operations-page ap-sync-page">
     <EnterpriseScreenHeader
       eyebrow="Vận hành hệ thống"
       title="Đồng bộ AP"
-      description="Chỉ đồng bộ AP cho các môn đã chọn CMS hoặc Udemy tại Quản lý môn học; các môn Chưa chọn không được gọi /get-data-cms."
+      description="Đồng bộ lớp, giảng viên và sinh viên cho các môn đã chọn CMS hoặc Udemy."
       icon="sync"
       tone="blue"
       breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Đồng bộ AP' }]}
-      secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running} onClick={loadOptions}>{loadingOptions ? 'Đang cập nhật...' : 'Cập nhật cơ sở'}</button>}
+      secondaryActions={<button className="btn secondary" type="button" disabled={loadingOptions || running} onClick={() => void loadOptions()}>{loadingOptions ? 'Đang cập nhật...' : 'Cập nhật cơ sở'}</button>}
     />
 
-    {message ? <div className="alert">{message}</div> : null}
+    <InlineNotice notice={message} />
 
     <OperationsKpiStrip items={[
       { label: 'Học kỳ', value: termName || 'Chưa chọn', hint: 'Phạm vi đồng bộ hiện tại' },
       { label: 'Cơ sở khả dụng', value: totalCampuses, hint: 'Lấy từ API theo hệ POLY/PTCD', tone: totalCampuses ? 'success' : 'warning' },
       { label: 'Môn được đồng bộ', value: totalSelectedSubjects, hint: `CMS ${optionsByBranch.poly.cms_subject_count + optionsByBranch.ptcd.cms_subject_count} · Udemy ${optionsByBranch.poly.udemy_subject_count + optionsByBranch.ptcd.udemy_subject_count}`, tone: totalSelectedSubjects ? 'success' : 'warning' },
-      { label: 'Job đang chạy', value: activeRuns.length, hint: activeRuns.length ? 'Không tạo job trùng' : 'Sẵn sàng chạy', tone: activeRuns.length ? 'info' : 'neutral' },
+      { label: 'Tác vụ đang chạy', value: activeRuns.length, hint: activeRuns.length ? 'Đang xử lý' : 'Sẵn sàng chạy', tone: activeRuns.length ? 'info' : 'neutral' },
       { label: 'Kết quả gần nhất', value: lastResults.length, hint: dryRun ? 'Chế độ kiểm tra kế hoạch' : 'Chế độ ghi dữ liệu' },
     ]} />
 
     <div className="ap-sync-workspace">
-      <WorkspaceSection title="Kế hoạch đồng bộ" description="Phạm vi môn lấy trực tiếp từ Quản lý môn học: chỉ CMS/Udemy, không đồng bộ các môn Chưa chọn. Hãy kiểm tra kế hoạch trước khi ghi dữ liệu nếu phạm vi lớn." className="ap-sync-plan">
+      <WorkspaceSection title="Kế hoạch đồng bộ" description="Chọn học kỳ và kiểm tra phạm vi trước khi đồng bộ." className="ap-sync-plan">
         <div className="settings-form-grid">
           <label>Học kỳ<select className="input" value={termName} onChange={(event) => setTermName(event.target.value)} disabled={!termOptions.length}>{termOptions.length ? termOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">Chưa có học kỳ</option>}</select></label>
           <label>Hệ khi chạy riêng<select className="input" value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value as BranchCode)}>{BRANCHES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
@@ -276,14 +279,14 @@ export default function ApSyncPage() {
           <div><span>Môn đã chọn</span><b>{currentBranchOptions.selected_subject_count || 0}</b><small>CMS {currentBranchOptions.cms_subject_count || 0} · Udemy {currentBranchOptions.udemy_subject_count || 0}</small></div>
         </div>
         {!totalCampuses ? <div className="alert warning">Chưa có cơ sở đang bật. Vào trang Cơ sở để thêm thủ công trước khi đồng bộ.</div> : null}
-        {termName.trim() && totalSelectedSubjects === 0 ? <div className="alert warning">Học kỳ này chưa có môn nào được chọn CMS/Udemy. Vào Quản lý môn học để chọn nền tảng; AP sẽ không đồng bộ ồ ạt các môn Chưa chọn.</div> : null}
+        {termName.trim() && totalSelectedSubjects === 0 ? <div className="alert warning">Học kỳ này chưa có môn nào được chọn CMS/Udemy. Vào Quản lý môn học để chọn nền tảng; Các môn chưa chọn nền tảng được bỏ qua.</div> : null}
         {canManageAcademicOps ? <div className="ap-sync-actions">
           <button className="btn" type="button" disabled={running || loadingOptions || Boolean(activeRuns.length) || totalCampuses === 0 || totalSelectedSubjects === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>{dryRun ? 'Kiểm tra toàn bộ' : 'Đồng bộ toàn bộ'}</button>
           <button className="btn secondary" type="button" disabled={running || loadingOptions || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !currentBranchOptions.selected_subject_count || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>{dryRun ? `Kiểm tra hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}` : `Đồng bộ hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}`}</button>
         </div> : <div className="alert warning">Bạn không có quyền chạy đồng bộ AP.</div>}
       </WorkspaceSection>
 
-      <WorkspaceSection title="Tiến trình & kết quả" description="Các job đang chạy và kết quả gần nhất theo hệ." actions={activeRuns.length ? <button className="btn small secondary" type="button" onClick={() => refreshActiveRuns().catch((error) => setMessage(error instanceof Error ? error.message : 'Không tải được trạng thái job'))}>Làm mới</button> : undefined} className="ap-sync-recent">
+      <WorkspaceSection title="Tiến trình & kết quả" description="Theo dõi tiến trình và kết quả theo hệ." actions={activeRuns.length ? <button className="btn small secondary" type="button" onClick={() => refreshActiveRuns().catch((error) => notify(error instanceof Error ? error.message : 'Không tải được trạng thái tác vụ'))}>Làm mới</button> : undefined} className="ap-sync-recent">
         <div className="operation-compact-list" aria-live="polite">
           {activeRuns.map(({ branch, run }) => { const progress = runProgress(run); return <div className="operation-compact-item" key={run.id}><header><b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b><StatusBadge status={run.status} /></header><div className="job-progress table-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent}><i style={{ width: `${progress.percent}%` }} /></div><p>{progress.percent}% · {progress.label}</p><small>Run {run.id.slice(0, 8)}</small></div> })}
           {lastResults.map(({ branch, result }) => <div className="operation-compact-item" key={`${branch}-${result.sync_run?.id}`}><header><b>{BRANCHES.find((item) => item.value === branch)?.label || branch}</b><StatusBadge status={result.sync_run?.status || 'unknown'} /></header><p>{summarizeCounters(result)}</p>{result.sync_run?.error_message ? <small className="table-error-text">{result.sync_run.error_message}</small> : <small>Run {result.sync_run?.id?.slice(0, 8) || '—'}</small>}</div>)}

@@ -59,8 +59,8 @@ const roleSubtitles: Record<string, string> = {
   DEPARTMENT_HEAD: 'Quản lý các môn, phiên bản, bài và người duyệt trong một bộ môn.',
   SUBJECT_OWNER: 'Quản lý một môn hoặc một phiên bản/kỳ cụ thể.',
   QUESTION_REVIEWER: 'Chỉ xem, sửa, duyệt hoặc từ chối câu hỏi trong phạm vi được giao.',
-  CAMPUS_OWNER: 'Vận hành sinh viên/lớp/analytics trong cơ sở được phân công.',
-  CAMPUS_MANAGER: 'Legacy alias của Chủ cơ sở; dùng CAMPUS_OWNER cho gán mới.',
+  CAMPUS_OWNER: 'Quản lý đào tạo tại cơ sở được giao. Phạm vi tất cả cơ sở có thêm quyền quản lý danh mục, đồng bộ AP và phân công Chủ cơ sở.',
+  CAMPUS_MANAGER: 'Vai trò Chủ cơ sở cũ. Chọn Chủ cơ sở khi cấp quyền mới.',
   TEACHER_ASSIGNED: 'Giáo viên chỉ xem lớp được AP phân công; phạm vi cơ sở chỉ là ràng buộc phụ; danh sách lớp lấy từ AP.',
 }
 
@@ -77,9 +77,9 @@ const scopeLabel: Record<string, string> = {
   SYSTEM: 'Toàn hệ thống',
   DEPARTMENT: 'Bộ môn',
   SUBJECT: 'Môn học',
-  SUBJECT_VERSION: 'Version/kỳ môn',
-  CHAPTER: 'Bài / chapter',
-  COURSE: 'Course Open edX',
+  SUBJECT_VERSION: 'Phiên bản/kỳ môn',
+  CHAPTER: 'Bài học',
+  COURSE: 'Khóa học Open edX',
   CAMPUS: 'Cơ sở',
 }
 
@@ -97,8 +97,10 @@ function resultClass(status: string) {
 
 export default function UsersPage() {
   const { authHeaders, isSystemAdmin, businessPermissions, canScope } = useAppContext()
+  const canAssignCampusOwners = isSystemAdmin || businessPermissions.includes('campus_owner.assign')
   const [message, setMessage] = useState<ActionMessageData | null>(null)
   const [loading, setLoading] = useState(false)
+  const [granting, setGranting] = useState(false)
   const [roles, setRoles] = useState<RBACRole[]>([])
   const [assignments, setAssignments] = useState<RoleAssignment[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
@@ -137,12 +139,13 @@ export default function UsersPage() {
   const grantableRoleCodes = useMemo(() => {
     if (isSystemAdmin) return new Set(allRoles.map((role) => role.code))
     const result = new Set<string>()
+    if (canAssignCampusOwners) result.add('CAMPUS_OWNER')
     if (businessPermissions.includes('subject.assign_owner')) result.add('SUBJECT_OWNER')
     if (businessPermissions.includes('reviewer.assign')) result.add('QUESTION_REVIEWER')
     return result
-  }, [allRoles, businessPermissions, isSystemAdmin])
+  }, [allRoles, businessPermissions, canAssignCampusOwners, isSystemAdmin])
   const visibleRoles = allRoles.filter((role) => grantableRoleCodes.has(role.code))
-  const availableScopes = allowedScopesByRole[form.role_code] || ['SYSTEM']
+  const availableScopes = form.role_code === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS'] : (allowedScopesByRole[form.role_code] || ['SYSTEM'])
   const scopeOptions = useMemo(() => {
     const needle = scopeSearch.trim().toLowerCase()
     const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : 'user.manage_all'
@@ -154,9 +157,9 @@ export default function UsersPage() {
     if (form.scope_type === 'DEPARTMENT') return filter(departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}`, target: { scopeType: 'DEPARTMENT' as const, scopeId: d.id, departmentId: d.id } })))
     if (form.scope_type === 'SUBJECT') return filter(subjects.map((subject) => ({ id: subject.id, label: `${subject.code} · ${subject.name}`, path: `Môn / ${subject.code}`, target: { scopeType: 'SUBJECT' as const, scopeId: subject.id, subjectId: subject.id, departmentId: subject.department_id } })))
     if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((offering) => ({ id: offering.id, label: `${offering.code} · ${offering.name || offering.version_code}`, path: `Version / ${offering.code}`, target: { scopeType: 'SUBJECT_VERSION' as const, scopeId: offering.id, subjectOfferingId: offering.id, subjectId: offering.subject_id, departmentId: offering.department_id || undefined } })))
-    if (form.scope_type === 'CAMPUS') return isSystemAdmin ? [{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }, ...campuses.map((campus) => ({ id: campus.campus_code, label: `${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${campus.campus_code.toUpperCase()}` }))] : []
+    if (form.scope_type === 'CAMPUS' && canAssignCampusOwners) return [...(isSystemAdmin ? [{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }] : []), ...campuses.map((campus) => ({ id: campus.campus_code, label: `${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${campus.campus_code.toUpperCase()}` }))].filter((item) => !needle || `${item.id} ${item.label}`.toLowerCase().includes(needle))
     return []
-  }, [campuses, canScope, departments, form.role_code, form.scope_type, isSystemAdmin, offerings, scopeSearch, subjects])
+  }, [campuses, canAssignCampusOwners, canScope, departments, form.role_code, form.scope_type, isSystemAdmin, offerings, scopeSearch, subjects])
 
   const selectedScopeOptions = useMemo(() => scopeOptions.filter((item) => selectedScopeIds.includes(item.id)), [scopeOptions, selectedScopeIds])
 
@@ -221,8 +224,9 @@ export default function UsersPage() {
     setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: scopes[0] }))
   }
 
-  async function loadAll() {
+  async function loadAll(clearMessage = true) {
     setLoading(true)
+    if (clearMessage) setMessage(null)
     try {
       const headers = authHeaders()
       const canLoadBankGrantScopes = isSystemAdmin || businessPermissions.includes('subject.assign_owner') || businessPermissions.includes('reviewer.assign')
@@ -230,8 +234,8 @@ export default function UsersPage() {
         getRBACRoles(headers),
         getRoleAssignments(headers, { includeRevoked }),
         canLoadBankGrantScopes ? searchDepartments(headers) : Promise.resolve([] as Department[]),
-        isSystemAdmin ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),
-        isSystemAdmin ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),
+        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),
+        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),
       ])
       setRoles(roleRows)
       setAssignments(assignmentRows.items)
@@ -242,9 +246,8 @@ export default function UsersPage() {
         if (!campusMap.has(key)) campusMap.set(key, campus)
       })
       setCampuses(Array.from(campusMap.values()).sort((a, b) => a.campus_code.localeCompare(b.campus_code)))
-      setMessage(null)
     } catch (e) {
-      setMessage(toUserError(e, 'Không tải được trang phân quyền. Kiểm tra token, RBAC scope và backend logs.'))
+      setMessage(toUserError(e, 'Không tải được danh sách phân quyền. Vui lòng thử lại.'))
     } finally {
       setLoading(false)
     }
@@ -274,8 +277,10 @@ export default function UsersPage() {
   }, [authHeaders, debouncedScopeSearch, form.scope_type, grantOpen])
 
   async function submitAssignment() {
+    if (granting) return
+    setGranting(true)
     try {
-      if (!form.user_id.trim()) throw new Error('Cần nhập user_id/username Open edX.')
+      if (!form.user_id.trim()) throw new Error('Cần nhập tên tài khoản Open edX.')
       const scopeIds = form.scope_type === 'SYSTEM' ? ['*'] : selectedScopeIds
       if (!scopeIds.length) throw new Error('Cần chọn ít nhất một phạm vi để gán quyền.')
       const result = await createRoleAssignmentsBatch({
@@ -291,18 +296,29 @@ export default function UsersPage() {
       setForm((prev) => ({ ...prev, user_id: '', email: '', grant_reason: '', sync_openedx: false }))
       setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : [])
       setGrantOpen(false)
-      await loadAll()
+      await loadAll(false)
     } catch (e) {
       setMessage(toUserError(e, 'Không gán được quyền. Kiểm tra người dùng, vai trò, phạm vi và quyền của người đang thao tác.'))
+    } finally {
+      setGranting(false)
     }
+  }
+
+  function canRevokeAssignment(item: RoleAssignment) {
+    if (item.revoked_at) return false
+    if (typeof item.can_revoke === 'boolean') return item.can_revoke
+    if (isSystemAdmin) return true
+    if (item.role_code === 'CAMPUS_OWNER') return canAssignCampusOwners && item.scope_type === 'CAMPUS' && Boolean(item.scope_id) && item.scope_id !== '*'
+    const permission = item.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : item.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : null
+    return Boolean(permission && canScope(permission, { scopeType: item.scope_type as BusinessScopeType, scopeId: item.scope_id }))
   }
 
 
   async function revokeAssignment(id: string) {
     try {
       await revokeRoleAssignment(id, authHeaders(true), 'Thu hồi từ màn phân quyền')
-      setMessage({ type: 'success', title: 'Đã thu hồi quyền', body: 'Assignment đã được revoke, không xóa cứng để giữ audit.' })
-      await loadAll()
+      setMessage({ type: 'success', title: 'Đã thu hồi quyền', body: 'Quyền đã ngừng hiệu lực. Lịch sử cấp quyền vẫn được lưu.' })
+      await loadAll(false)
     } catch (e) {
       setMessage(toUserError(e, 'Không thu hồi được quyền.'))
     }
@@ -332,9 +348,9 @@ export default function UsersPage() {
         title: dryRun ? 'Đã kiểm tra file Excel' : 'Đã import phân quyền',
         body: `Hợp lệ ${result.valid_rows}/${result.total_rows}. Tạo ${result.created_count}, bỏ qua ${result.skipped_count}, lỗi ${result.failed_count}.`,
       })
-      if (!dryRun) await loadAll()
+      if (!dryRun) await loadAll(false)
     } catch (e) {
-      setMessage(toUserError(e, 'Không import được file Excel. Kiểm tra đúng template và dữ liệu scope_id.'))
+      setMessage(toUserError(e, 'Không nhập được tệp Excel. Kiểm tra tệp mẫu và mã phạm vi.'))
     }
   }
 
@@ -360,25 +376,25 @@ export default function UsersPage() {
     <EnterpriseScreenHeader
       eyebrow="Quản trị"
       title="Người dùng & phân quyền"
-      description="Quản lý vai trò, phạm vi truy cập và trạng thái quyền của người dùng theo RBAC nghiệp vụ."
+      description="Quản lý vai trò, phạm vi truy cập và trạng thái quyền của người dùng theo phạm vi được giao."
       icon="users"
       tone="blue"
       breadcrumbs={[{ label: 'Quản trị' }, { label: 'Người dùng & phân quyền' }]}
-      primaryAction={visibleRoles.length ? <button className="btn" type="button" onClick={() => { setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : []); setGrantOpen(true) }}>Gán quyền</button> : null}
+      primaryAction={visibleRoles.length ? <button className="btn" type="button" onClick={() => { setMessage(null); setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : []); setGrantOpen(true) }}>Gán quyền</button> : null}
       secondaryActions={<>
-        {isSystemAdmin && <button className="btn secondary" type="button" onClick={downloadTemplate}>Tải template</button>}
-        {isSystemAdmin && <button className="btn secondary" type="button" onClick={() => setImportOpen(true)}>Import Excel</button>}
-        <button className="btn secondary" type="button" onClick={loadAll} disabled={loading}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
+        {isSystemAdmin && <button className="btn secondary" type="button" onClick={downloadTemplate}>Tải tệp mẫu</button>}
+        {isSystemAdmin && <button className="btn secondary" type="button" onClick={() => { setMessage(null); setImportOpen(true) }}>Import Excel</button>}
+        <button className="btn secondary" type="button" onClick={() => void loadAll()} disabled={loading}>{loading ? 'Đang tải...' : 'Làm mới'}</button>
       </>}
     />
 
-    <ActionMessage message={message} onClose={() => setMessage(null)} />
+    <ActionMessage message={grantOpen || importOpen || selectedUserId ? null : message} onClose={() => setMessage(null)} />
 
     <OperationsKpiStrip items={[
       { label: 'Người dùng có quyền', value: userRows.length, hint: 'Theo phạm vi bạn quản lý' },
-      { label: 'Quyền hiệu lực', value: assignmentStats.total, hint: isSystemAdmin ? 'Toàn hệ thống' : 'Trong scope hiện tại', tone: 'info' },
+      { label: 'Quyền hiệu lực', value: assignmentStats.total, hint: isSystemAdmin ? 'Toàn hệ thống' : 'Trong phạm vi được giao', tone: 'info' },
       { label: 'Trưởng/Chủ môn', value: assignmentStats.heads + assignmentStats.owners, hint: `${assignmentStats.heads} trưởng bộ môn · ${assignmentStats.owners} chủ môn` },
-      { label: 'Người duyệt', value: assignmentStats.reviewers, hint: 'Quyền review câu hỏi' },
+      { label: 'Người duyệt', value: assignmentStats.reviewers, hint: 'Duyệt câu hỏi' },
       { label: 'Chủ cơ sở', value: assignmentStats.campusManagers, hint: 'Phạm vi vận hành đào tạo' },
     ]} />
 
@@ -393,11 +409,13 @@ export default function UsersPage() {
     <AccessibleDialog
       open={grantOpen}
       title="Gán quyền"
-      description="Chọn một người dùng, một vai trò và một hoặc nhiều phạm vi. Toàn bộ thay đổi được ghi trong một transaction."
+      description={canAssignCampusOwners && !isSystemAdmin ? 'Phân công Chủ cơ sở cho một hoặc nhiều cơ sở cụ thể.' : 'Chọn người dùng, vai trò và phạm vi được giao.'}
       size="large"
-      onClose={() => setGrantOpen(false)}
-      footer={<div className="dialog-footer-actions"><button className="btn secondary" type="button" onClick={() => setGrantOpen(false)}>Hủy</button><button className="btn" type="button" onClick={submitAssignment} disabled={!form.user_id.trim() || (form.scope_type !== 'SYSTEM' && !selectedScopeIds.length)}>Gán {form.scope_type === 'SYSTEM' ? 1 : selectedScopeIds.length} phạm vi</button></div>}
+      busy={granting}
+      onClose={() => !granting && setGrantOpen(false)}
+      footer={<div className="dialog-footer-actions"><button className="btn secondary" type="button" disabled={granting} onClick={() => setGrantOpen(false)}>Hủy</button><button className="btn" type="button" onClick={submitAssignment} disabled={granting || !form.user_id.trim() || (form.scope_type !== 'SYSTEM' && !selectedScopeIds.length)}>Gán {form.scope_type === 'SYSTEM' ? 1 : selectedScopeIds.length} phạm vi</button></div>}
     >
+      <ActionMessage message={message} onClose={() => setMessage(null)} />
       {!visibleRoles.length ? <div className="alert warning">Bạn không có quyền gán thêm vai trò trong phạm vi hiện tại.</div> : <div className="rbac-grant-form">
         <div className="form-grid two-columns">
           <label>Vai trò<select className="input" value={form.role_code} onChange={(event) => syncScopeForRole(event.target.value as BusinessRoleCode)}>{visibleRoles.map((role) => <option key={role.code} value={role.code}>{roleLabels[role.code] || role.name}</option>)}</select></label>
@@ -407,7 +425,7 @@ export default function UsersPage() {
         </div>
         <div className="permission-role-description"><b>{roleLabels[form.role_code]}</b><span>{selectedRole?.description || roleSubtitles[form.role_code]}</span></div>
         {form.scope_type !== 'SYSTEM' ? <div className="rbac-multi-scope-picker">
-          <div className="rbac-scope-toolbar"><label className="rbac-scope-search">Tìm phạm vi<input className="input" value={scopeSearch} onChange={(event) => setScopeSearch(event.target.value)} placeholder="Gõ mã hoặc tên môn..." /></label><div className="button-row"><button className="btn small secondary" type="button" onClick={selectAllVisibleScopes} disabled={!scopeOptions.length}>Chọn kết quả đang hiển thị</button><button className="btn small secondary" type="button" onClick={() => setSelectedScopeIds([])} disabled={!selectedScopeIds.length}>Bỏ chọn</button></div></div>
+          <div className="rbac-scope-toolbar"><label className="rbac-scope-search">Tìm phạm vi<input className="input" value={scopeSearch} onChange={(event) => setScopeSearch(event.target.value)} placeholder="Mã hoặc tên phạm vi..." /></label><div className="button-row"><button className="btn small secondary" type="button" onClick={selectAllVisibleScopes} disabled={!scopeOptions.length}>Chọn kết quả đang hiển thị</button><button className="btn small secondary" type="button" onClick={() => setSelectedScopeIds([])} disabled={!selectedScopeIds.length}>Bỏ chọn</button></div></div>
           <div className="rbac-scope-selection-summary"><b>{selectedScopeIds.length}</b><span>phạm vi đã chọn</span>{scopeOptionsLoading ? <small>Đang tải danh mục...</small> : null}</div>
           <div className="rbac-scope-option-list">{scopeOptions.map((item) => <label className={`rbac-scope-option ${selectedScopeIds.includes(item.id) ? 'selected' : ''}`} key={item.id}><input type="checkbox" checked={selectedScopeIds.includes(item.id)} onChange={() => toggleScopeOption(item.id)} /><span><b>{item.label}</b><small>{item.path}</small></span></label>)}{!scopeOptionsLoading && !scopeOptions.length ? <div className="empty-state small-empty">Không tìm thấy phạm vi phù hợp.</div> : null}</div>
         </div> : <div className="permission-effect-preview"><span>Quyền sẽ có hiệu lực</span><b>{roleLabels[form.role_code]} · Toàn hệ thống</b></div>}
@@ -418,11 +436,13 @@ export default function UsersPage() {
     </AccessibleDialog>
 
 
-    <SideDrawer open={Boolean(selectedUserId)} title={selectedUserId || 'Chi tiết người dùng'} description="Quyền trực tiếp đang được lưu; quyền kế thừa được backend áp dụng theo cây scope." onClose={() => setSelectedUserId(null)}>
-      <div className="rbac-user-detail-list">{assignments.filter((item) => item.user_id === selectedUserId).map((item) => <article className="rbac-user-detail-item" key={item.id}><header><div><b>{roleLabels[item.role_code] || item.role_name || item.role_code}</b><small>{item.scope_label || `${item.scope_type}:${item.scope_id}`}</small></div><StatusBadge status={item.revoked_at ? 'revoked' : 'active'} label={item.revoked_at ? 'Đã thu hồi' : 'Đang hiệu lực'} /></header><p>{item.grant_reason || 'Không ghi lý do cấp quyền.'}</p><small>{item.granted_by ? `Cấp bởi ${item.granted_by}` : 'Không rõ người cấp'} · {formatDate(item.created_at)}</small>{!item.revoked_at ? <button className="btn small secondary danger-text" type="button" onClick={() => revokeAssignment(item.id)}>Thu hồi quyền</button> : null}</article>)}{!assignments.some((item) => item.user_id === selectedUserId) ? <div className="empty-state">Không có assignment.</div> : null}</div>
+    <SideDrawer open={Boolean(selectedUserId)} title={selectedUserId || 'Chi tiết người dùng'} description="Xem quyền đang có hiệu lực và lịch sử cấp quyền." onClose={() => setSelectedUserId(null)}>
+      <ActionMessage message={message} onClose={() => setMessage(null)} />
+      <div className="rbac-user-detail-list">{assignments.filter((item) => item.user_id === selectedUserId).map((item) => <article className="rbac-user-detail-item" key={item.id}><header><div><b>{roleLabels[item.role_code] || item.role_name || item.role_code}</b><small>{item.scope_label || `${item.scope_type}:${item.scope_id}`}</small></div><StatusBadge status={item.revoked_at ? 'revoked' : 'active'} label={item.revoked_at ? 'Đã thu hồi' : 'Đang hiệu lực'} /></header><p>{item.grant_reason || 'Không ghi lý do cấp quyền.'}</p><small>{item.granted_by ? `Cấp bởi ${item.granted_by}` : 'Không rõ người cấp'} · {formatDate(item.created_at)}</small>{canRevokeAssignment(item) ? <button className="btn small secondary danger-text" type="button" onClick={() => revokeAssignment(item.id)}>Thu hồi quyền</button> : null}</article>)}{!assignments.some((item) => item.user_id === selectedUserId) ? <div className="empty-state">Chưa có quyền được cấp.</div> : null}</div>
     </SideDrawer>
 
-    {isSystemAdmin && <SideDrawer open={importOpen} title="Import phân quyền bằng Excel" description="Dùng template chuẩn, chạy kiểm tra trước khi ghi assignment." onClose={() => setImportOpen(false)} width="medium">
+    {isSystemAdmin && <SideDrawer open={importOpen} title="Import phân quyền bằng Excel" description="Dùng tệp mẫu và kiểm tra dữ liệu trước khi nhập." onClose={() => setImportOpen(false)} width="medium">
+      <ActionMessage message={message} onClose={() => setMessage(null)} />
       <div className="import-steps"><div><b>1</b><span>Tải file mẫu</span></div><div><b>2</b><span>Điền người dùng và phạm vi</span></div><div><b>3</b><span>Kiểm tra thử</span></div><div><b>4</b><span>Import chính thức</span></div></div>
       <div className="button-row"><button className="btn secondary" onClick={downloadTemplate}>Tải Excel mẫu</button></div>
       <label>Chọn file Excel</label><input className="input" type="file" accept=".xlsx,.xlsm" onChange={onFileChange} />

@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { ActionMessageType } from "./ActionMessage";
 import { VisualIcon } from "./VisualIcon";
+import { userFacingError } from '../../lib/userFacingError';
+import styles from './FeedbackMessage.module.css';
 
 export type InlineNoticeData = {
   type: ActionMessageType;
@@ -18,16 +20,16 @@ export function InlineNotice({ notice }: { notice: InlineNoticeData | null }) {
   if (!notice) return null;
   return (
     <div
-      className={`academic-inline-notice enterprise-inline-notice ${notice.type}`}
+      className={`academic-inline-notice enterprise-inline-notice ${notice.type} ${styles.message} ${styles[notice.type]}`}
       role={notice.type === "error" ? "alert" : "status"}
       aria-live="polite"
     >
-      <VisualIcon label={notice.title || titleFor(notice.type)} icon={noticeIcon(notice.type)} tone={noticeTone(notice.type)} className="notice-visual-icon" />
-      <div className="notice-copy"><b>{notice.title || titleFor(notice.type)}</b>
-      <span>{notice.body}</span></div>
+      <VisualIcon label={notice.title || titleFor(notice.type)} icon={noticeIcon(notice.type)} tone={noticeTone(notice.type)} className={`notice-visual-icon ${styles.icon}`} />
+      <div className={`notice-copy ${styles.copy}`}><b>{notice.title || titleFor(notice.type)}</b>
+      <span>{notice.type === 'error' ? userFacingError(notice.body) : notice.body}</span></div>
       {notice.actionHref && notice.actionLabel ? (
         <Link
-          className="btn secondary small notice-action-btn"
+          className={`btn secondary small notice-action-btn ${styles.action}`}
           href={notice.actionHref}
         >
           {notice.actionLabel}
@@ -35,7 +37,7 @@ export function InlineNotice({ notice }: { notice: InlineNoticeData | null }) {
       ) : null}
       {notice.onRetry ? (
         <button
-          className="btn secondary small notice-action-btn"
+          className={`btn secondary small notice-action-btn ${styles.action}`}
           type="button"
           onClick={notice.onRetry}
         >
@@ -69,28 +71,11 @@ export function noticeError(
   fallback = "Thao tác thất bại. Vui lòng thử lại.",
 ): InlineNoticeData {
   const raw = error instanceof Error ? error.message : String(error || "");
-  const body = compactError(raw, fallback);
-  return { type: "error", title: "Có lỗi", body };
+  const body = userFacingError(raw, fallback);
+  return { type: "error", title: "Không thể hoàn tất", body };
 }
 
-function compactError(raw: string, fallback: string) {
-  const text = String(raw || "").trim();
-  if (!text) return fallback;
-  if (/401|unauthori[sz]ed|missing bearer/i.test(text))
-    return "Phiên đăng nhập hết hạn. Đăng nhập lại.";
-  if (/403|forbidden|permission|phân quyền/i.test(text))
-    return "Bạn không có quyền thực hiện thao tác này.";
-  if (/404|not found|không tìm thấy/i.test(text))
-    return "Không tìm thấy dữ liệu cần xử lý.";
-  if (/422|validation|invalid/i.test(text))
-    return "Dữ liệu chưa hợp lệ. Kiểm tra lại thông tin nhập.";
-  if (/timeout|timed out/i.test(text))
-    return "Hệ thống xử lý quá lâu. Thử lại sau.";
-  if (/network|failed to fetch/i.test(text))
-    return "Không kết nối được máy chủ.";
-  const firstLine = text.split("\n").find(Boolean) || text;
-  return firstLine.length > 140 ? `${firstLine.slice(0, 137)}...` : firstLine;
-}
+
 
 function titleFor(type: ActionMessageType) {
   if (type === "success") return "Thành công";

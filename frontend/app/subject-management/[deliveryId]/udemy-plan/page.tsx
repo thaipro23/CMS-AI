@@ -33,7 +33,7 @@ export default function UdemyPlanPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
-  const canManage = can('manage_settings')
+  const canManage = can('academic.catalog.manage')
 
   const [detail, setDetail] = useState<UdemyPlanDetail | null>(null)
   const [history, setHistory] = useState<UdemySubjectPlan[]>([])
@@ -140,9 +140,9 @@ export default function UdemyPlanPage() {
     } finally { setSaving(false) }
   }
 
-  if (!canManage) return <PageRoot className="page-stack enterprise-standard-page udemy-plan-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Kế hoạch Udemy" description="Bạn không có quyền quản lý kế hoạch môn học." icon="book" tone="blue" breadcrumbs={[{ label: 'Danh mục', href: '/subject-management' }, { label: 'Kế hoạch Udemy' }]} /><section className="card empty-state">Bạn không có quyền quản lý kế hoạch Udemy.</section></PageRoot>
+  if (!canManage) return <PageRoot className="page-stack enterprise-standard-page training-operations-page udemy-plan-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Kế hoạch Udemy" description="Bạn không có quyền quản lý kế hoạch môn học." icon="book" tone="blue" breadcrumbs={[{ label: 'Danh mục', href: '/subject-management' }, { label: 'Kế hoạch Udemy' }]} /><section className="card empty-state">Bạn không có quyền quản lý kế hoạch Udemy.</section></PageRoot>
 
-  return <PageRoot className="page-stack enterprise-standard-page udemy-plan-page">
+  return <PageRoot className="page-stack enterprise-standard-page training-operations-page udemy-plan-page">
     <EnterpriseScreenHeader
       eyebrow="Quản lý môn học"
       title={detail ? `${detail.delivery.subject_code} · Kế hoạch Udemy` : 'Kế hoạch Udemy'}

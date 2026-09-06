@@ -208,9 +208,9 @@ function SubjectClassesContent() {
         { key: 'enrolled', label: 'Ghi danh', value: summary.learning_enrolled_count, hint: 'Sinh viên đã enroll CMS' },
       ] : [
         { key: 'classes', label: 'Lớp Udemy', value: summary.class_count || total, hint: 'Vẫn chia theo Block' },
-        { key: 'students', label: 'Sinh viên', value: summary.student_count, hint: 'Theo roster AP' },
+        { key: 'students', label: 'Sinh viên', value: summary.student_count, hint: 'Theo danh sách AP' },
         { key: 'imported', label: 'Đã có tiến độ', value: `${summary.udemy_progress_student_count}/${summary.student_count}`, hint: 'Snapshot mới nhất' },
-        { key: 'progress', label: 'Tiến độ trung bình', value: percentLabel(summary.udemy_progress_average_percent), hint: 'Theo file import mới nhất' },
+        { key: 'progress', label: 'Tiến độ trung bình', value: percentLabel(summary.udemy_progress_average_percent), hint: 'Theo tệp nhập gần nhất' },
         { key: 'late', label: 'Chậm tiến độ', value: summary.udemy_progress_late_count, hint: 'Theo mốc kế hoạch đến hạn', tone: summary.udemy_progress_late_count > 0 ? 'warning' : 'success' },
       ]} />
 

@@ -73,7 +73,7 @@ const LEGACY_PERMISSION_BRIDGE: Record<string, string[]> = {
   publish_questions: ['bank.release.create', 'bank.release.publish', 'quiz.preview', 'quiz.create_openedx'],
   export_questions: ['bank.release.create', 'bank.release.publish'],
   publish_to_openedx: ['bank.release.publish', 'quiz.create_openedx'],
-  manage_settings: ['user.manage_all', 'department.manage_all', 'department.assign_head'],
+  manage_settings: ['user.manage_all'],
   manage_department: ['department.manage_all', 'department.update'],
   view_user_analytics: ['user.manage_all'],
   view_training_reports: ['academic.view', 'view_training_reports'],

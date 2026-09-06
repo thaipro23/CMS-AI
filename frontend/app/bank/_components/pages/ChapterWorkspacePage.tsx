@@ -1146,7 +1146,7 @@ ${chunk.content}`).join('\n\n')
     </section>
 
     {!selectedBankVersion ? <section className="bank-hierarchy-panel"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section ref={questionReviewSectionRef} className="bank-hierarchy-panel chapter-question-workspace chapter-review-section" id="bank-question-list" tabIndex={-1} aria-labelledby="chapter-review-heading">
-        <div className="section-head question-list-head chapter-question-list-head"><div className="chapter-question-list-heading"><span className="chapter-question-list-icon" aria-hidden="true"><AppIcon name="layers" size={18} /></span><div><h3 id="chapter-review-heading">Danh sách câu hỏi</h3><p className="helper">Chọn một câu để mở popup duyệt, xem đầy đủ đáp án, giải thích và bằng chứng nguồn.</p></div></div><div className="button-row no-margin">
+        <div className="section-head question-list-head chapter-question-list-head"><div className="chapter-question-list-heading"><span className="chapter-question-list-icon" aria-hidden="true"><AppIcon name="layers" size={18} /></span><div><h3 id="chapter-review-heading">Danh sách câu hỏi</h3><p className="helper">Chọn câu hỏi để xem nội dung và duyệt.</p></div></div><div className="button-row no-margin">
           {!chapterPublished && canEditQuestions ? <button className="btn" onClick={openCreateQuestion}>+ Thêm câu hỏi</button> : null}
           {!chapterPublished && canEditQuestions ? <button className="btn secondary" onClick={() => setImportOpen(true)}>Import Excel</button> : null}
           {!chapterPublished && canEditQuestions ? <button className="btn secondary" onClick={() => setOpenEdxImportOpen(true)}>Import Open edX</button> : null}
@@ -1201,7 +1201,7 @@ ${chunk.content}`).join('\n\n')
       <div className="chapter-popup-grid">
         {!chapterPublished && canEditQuestions ? <div className="popup-action-panel">
           <h3>Gắn tài liệu</h3>
-          <p className="helper">Tài liệu là nguồn để AI tạo câu hỏi cho đúng bài này. Nếu version clone bị đổi tài liệu, hệ thống sẽ kiểm tra khác biệt.</p>
+          <p className="helper">Thêm tài liệu làm nguồn tạo câu hỏi cho bài học.</p>
           {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
           {activeOperation?.type === 'material_upload' ? <div className="alert info" role="status" aria-live="polite"><b>Hệ thống đang xử lý tài liệu.</b> {activeOperation.label}</div> : null}
           <div className="mini-form">
@@ -1391,7 +1391,7 @@ ${chunk.content}`).join('\n\n')
 
     <Modal open={Boolean(rejectingQuestion)} title={rejectingQuestion?.status === 'draft_error' ? 'Bỏ câu lỗi' : 'Bỏ câu hỏi'} onClose={() => { setRejectingQuestion(null); setRejectReason('') }}>
       <div className="mini-form">
-        <p className="helper">Nhập lý do hủy/bỏ câu. Lý do này được lưu lại để biết ai làm gì và dùng làm dữ liệu fine-tune AI sau này.</p>
+        <p className="helper">Nhập lý do loại câu hỏi để người phụ trách có thể xem lại.</p>
         {rejectingQuestion ? <div className="reject-question-preview"><b>{rejectingQuestion.question_text || 'Câu lỗi chưa có nội dung'}</b>{rejectingQuestion.status === 'draft_error' ? <small>Lý do lỗi: {bankQuestionErrorMessage(rejectingQuestion) || 'Không rõ'}</small> : null}</div> : null}
         <textarea className="input" rows={4} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Ví dụ: Câu hỏi không đúng tài liệu, đáp án sai, câu lỗi không sửa được..." />
         <div className="modal-actions"><button className="btn secondary" disabled={Boolean(actionBusy)} onClick={() => { setRejectingQuestion(null); setRejectReason('') }}>Hủy</button><button className="btn danger" disabled={chapterPublished || isActionBusy('question_reject') || !rejectReason.trim()} onClick={confirmRejectQuestion}>Xác nhận bỏ câu</button></div>
@@ -1400,7 +1400,7 @@ ${chunk.content}`).join('\n\n')
 
     <Modal open={Boolean(createForm)} title="Thêm câu hỏi thủ công" onClose={() => { if (!isActionBusy('question_create')) { setCreateForm(null); setCreatePendingMedia([]) } }} wide>
       {createForm ? <>
-        <p className="helper">Câu tạo thủ công luôn bắt đầu ở trạng thái Chờ duyệt. Ảnh là media của đề bài và có thể kết hợp với mọi kiểu trả lời.</p>
+        <p className="helper">Câu hỏi mới được lưu ở trạng thái Chờ duyệt.</p>
         <QuestionAuthoringEditor form={createForm} onChange={setCreateForm} pendingMedia={createPendingMedia} onPendingMediaChange={setCreatePendingMedia} showReviewStatus={false} disabled={isActionBusy('question_create')} />
         <div className="button-row"><button className="btn" disabled={chapterPublished || isActionBusy('question_create') || Boolean(questionFormValidationError(createForm))} onClick={saveCreatedQuestion}>{isActionBusy('question_create') ? <BusyLabel text="Đang lưu" /> : 'Lưu & chờ duyệt'}</button><button className="btn secondary" disabled={isActionBusy('question_create')} onClick={() => { setCreateForm(null); setCreatePendingMedia([]) }}>Hủy</button></div>
       </> : null}

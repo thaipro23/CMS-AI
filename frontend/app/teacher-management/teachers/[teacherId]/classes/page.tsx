@@ -214,7 +214,7 @@ export default function TeacherClassesPage() {
         { key: 'classes', label: 'Lớp Udemy', value: teacher.class_count, hint: `${teacher.subject_count} môn` },
         { key: 'students', label: 'Sinh viên', value: teacher.udemy_student_count || teacher.student_count, hint: `${teacher.unique_student_count || 0} sinh viên riêng biệt` },
         { key: 'imported', label: 'Đã có tiến độ', value: ratioLabel(teacher.udemy_progress_student_count, teacher.udemy_student_count || teacher.student_count), hint: 'Snapshot mới nhất' },
-        { key: 'progress', label: 'Tiến độ trung bình', value: percentLabel(teacher.udemy_progress_average_percent), hint: 'Theo file import mới nhất' },
+        { key: 'progress', label: 'Tiến độ trung bình', value: percentLabel(teacher.udemy_progress_average_percent), hint: 'Theo tệp nhập gần nhất' },
         { key: 'late', label: 'Chậm tiến độ', value: teacher.udemy_progress_late_count || 0, hint: 'Theo mốc kế hoạch đến hạn', tone: (teacher.udemy_progress_late_count || 0) > 0 ? 'warning' : 'success' },
       ]} /> : null}
 

@@ -1,3 +1,4 @@
+import { userFacingError, userFacingValidation } from './userFacingError';
 import {
   CourseChunk,
   Job,
@@ -373,11 +374,7 @@ function validationDetailsMessage(details: unknown): string {
   const messages = details
     .map((entry) => {
       if (!isJsonObject(entry)) return "";
-      const loc = Array.isArray(entry.loc)
-        ? entry.loc.filter((part) => part !== "body" && part !== "query").map(String).join(".")
-        : "";
-      const msg = stringFromJson(entry.msg) || stringFromJson(entry.message) || "Dữ liệu không hợp lệ";
-      return loc ? `${loc}: ${msg}` : msg;
+      return userFacingValidation(entry);
     })
     .filter(Boolean);
   return messages.join("; ");
@@ -394,21 +391,10 @@ function normalizeApiErrorMessage(response: Response, data: unknown): string {
     root.detail ||
     root.message ||
     response.statusText;
-  const code =
-    stringFromJson(errorEnvelope?.code) ||
-    stringFromJson(detail?.code) ||
-    stringFromJson(root.code) ||
-    "";
   const mapOne = (item: JsonValue | undefined): string => {
     if (!item) return "Dữ liệu không hợp lệ";
     if (typeof item === "string") return item;
-    if (isJsonObject(item))
-      return (
-        stringFromJson(item.msg) ||
-        stringFromJson(item.message) ||
-        stringFromJson(item.detail) ||
-        "Dữ liệu không hợp lệ"
-      );
+    if (isJsonObject(item)) return userFacingValidation(item);
     return "Dữ liệu không hợp lệ";
   };
   let message = "";
@@ -427,7 +413,7 @@ function normalizeApiErrorMessage(response: Response, data: unknown): string {
 
   const lower = message.toLowerCase();
   if (response.status === 413 || lower.includes("file quá lớn")) {
-    return "File quá lớn. Vui lòng giảm dung lượng file hoặc chia nhỏ tài liệu rồi upload lại.";
+    return "Tệp quá lớn. Vui lòng giảm dung lượng hoặc chia nhỏ tài liệu rồi tải lên lại.";
   }
   if (
     lower.includes("office cũ") ||
@@ -435,7 +421,7 @@ function normalizeApiErrorMessage(response: Response, data: unknown): string {
     lower.includes(".doc") ||
     lower.includes(".xls")
   ) {
-    return message;
+    return userFacingError(message);
   }
   if (
     lower.includes("unsupported") ||
@@ -443,11 +429,10 @@ function normalizeApiErrorMessage(response: Response, data: unknown): string {
     lower.includes("không hỗ trợ") ||
     lower.includes("chưa được hỗ trợ")
   ) {
-    return message.startsWith("Định dạng file")
-      ? message
-      : `Định dạng file không hỗ trợ. ${message}`;
+    // Unsupported actions, platforms or versions are not file-format errors.
+    return userFacingError(message);
   }
-  return code ? `${message} [${code}]` : message;
+  return userFacingError(message);
 }
 
 export async function parseResponse<T>(response: Response): Promise<T> {
@@ -459,8 +444,8 @@ export async function parseResponse<T>(response: Response): Promise<T> {
   } catch (error) {
     throw new ApiRequestError(
       response.ok
-        ? "Phản hồi máy chủ không đúng định dạng JSON."
-        : `Máy chủ trả lỗi ${response.status}. Vui lòng thử lại hoặc kiểm tra backend/proxy.`,
+        ? "Không đọc được phản hồi từ máy chủ. Vui lòng thử lại."
+        : `Máy chủ chưa thể xử lý yêu cầu (HTTP ${response.status}). Vui lòng thử lại sau.`,
       { code: "INVALID_API_RESPONSE", status: response.status, requestId, cause: error },
     );
   }

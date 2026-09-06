@@ -1,5 +1,7 @@
 'use client'
 
+import styles from './OperationsWorkspace.module.css'
+
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import type { AppIconName } from '../icons/AppIcon'
 import type { VisualTone } from '../ui/VisualIcon'
@@ -72,7 +74,7 @@ export function WorkspaceSection({ title, description, actions, children, classN
       <div className="visual-section-heading"><VisualIcon label={title} icon={icon} tone={tone} /><div><h2>{title}</h2>{description ? <p>{description}</p> : null}</div></div>
       {actions ? <div className="workspace-section-actions">{actions}</div> : null}
     </div>
-    <div className="workspace-section-body">{children}</div>
+    <div className={`workspace-section-body ${styles.body}`}>{children}</div>
   </section>
 }
 

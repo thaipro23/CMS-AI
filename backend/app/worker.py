@@ -1112,20 +1112,25 @@ def bank_quiz_create_task(job_id: str):
             return {'ok': False, 'error': 'job_not_found'}
         try:
             payload = job.request_json or {}
-            ops.start(job, label='Đang tạo Quiz node và ItemBank slots trên Open edX', total=7)
+
+            def request_int(key: str, default: int) -> int:
+                value = payload.get(key)
+                return default if value is None else int(value)
+
+            ops.start(job, label='Đang tạo Quiz trên Open edX', total=7)
             result = await VersionedQuestionBankService(db).create_quiz_from_release(
                 course_chapter_mapping_id=str(payload.get('course_chapter_mapping_id')),
                 quiz_title=str(payload.get('quiz_title') or ''),
                 unit_title=str(payload.get('unit_title') or 'Quiz'),
                 total_questions=int(payload.get('total_questions') or 15),
-                difficulty_easy=int(payload.get('difficulty_easy') or 50),
-                difficulty_medium=int(payload.get('difficulty_medium') or 30),
-                difficulty_hard=int(payload.get('difficulty_hard') or 20),
+                difficulty_easy=request_int('difficulty_easy', 50),
+                difficulty_medium=request_int('difficulty_medium', 30),
+                difficulty_hard=request_int('difficulty_hard', 20),
                 max_families_per_bank=int(payload.get('max_families_per_bank') or 2),
                 quiz_blueprint_id=payload.get('quiz_blueprint_id'),
                 custom_timer_enabled=bool(payload.get('custom_timer_enabled', True)),
                 time_limit_minutes=int(payload.get('time_limit_minutes') or 15),
-                retake_cooldown_minutes=int(payload.get('retake_cooldown_minutes') or 5),
+                retake_cooldown_minutes=request_int('retake_cooldown_minutes', 5),
                 auto_submit_on_timeout=bool(payload.get('auto_submit_on_timeout', True)),
                 lock_after_timeout=bool(payload.get('lock_after_timeout', True)),
                 native_timed_exam=bool(payload.get('native_timed_exam', False)),

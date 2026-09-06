@@ -47,7 +47,7 @@ class OpenEdxSessionExchangeResponse(BaseModel):
 def _bridge_secret() -> str:
     secret = settings.openedx_session_bridge_secret or settings.openedx_connector_hmac_secret
     if not secret:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='CMS session bridge secret is not configured')
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Kết nối đăng nhập CMS chưa được cấu hình. Vui lòng liên hệ quản trị viên.')
     return str(secret)
 
 
@@ -60,14 +60,14 @@ def _decode_bridge_ticket(ticket: str) -> dict[str, Any]:
     try:
         payload_b64, supplied_sig = ticket.split('.', 1)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid CMS session ticket') from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Phiên đăng nhập CMS không hợp lệ. Vui lòng đăng nhập lại.') from exc
     expected_sig = hmac.new(_bridge_secret().encode('utf-8'), payload_b64.encode('ascii'), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected_sig, supplied_sig):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid CMS session ticket signature')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Không xác minh được phiên đăng nhập CMS. Vui lòng đăng nhập lại.')
     try:
         payload = json.loads(_b64url_decode(payload_b64).decode('utf-8'))
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid CMS session ticket payload') from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Dữ liệu phiên đăng nhập CMS không hợp lệ. Vui lòng đăng nhập lại.') from exc
     now = int(time.time())
     issued_at = int(payload.get('iat') or 0)
     expires_at = int(payload.get('exp') or 0)
@@ -75,16 +75,16 @@ def _decode_bridge_ticket(ticket: str) -> dict[str, Any]:
     if not issued_at or not expires_at or not payload.get('jti'):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={'code': 'CMS_TICKET_CLAIMS_INVALID', 'message': 'CMS session ticket thiếu claim bảo mật bắt buộc.'},
+            detail={'code': 'CMS_TICKET_CLAIMS_INVALID', 'message': 'Phiên đăng nhập thiếu thông tin xác thực. Vui lòng đăng nhập lại.'},
         )
     if expires_at < now:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={'code': 'CMS_TICKET_EXPIRED', 'message': 'CMS session ticket đã hết hạn.'})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={'code': 'CMS_TICKET_EXPIRED', 'message': 'Phiên đăng nhập CMS đã hết hạn. Vui lòng đăng nhập lại.'})
     if issued_at > now + 10 or now - issued_at > max_age or expires_at - issued_at > max_age:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={'code': 'CMS_TICKET_TOO_OLD', 'message': 'CMS session ticket không còn trong thời gian cho phép.'})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={'code': 'CMS_TICKET_TOO_OLD', 'message': 'Phiên đăng nhập CMS đã hết hạn. Vui lòng đăng nhập lại.'})
     if payload.get('aud') != settings.openedx_session_bridge_audience:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='CMS session ticket audience mismatch')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Phiên đăng nhập không dành cho hệ thống này.')
     if payload.get('iss') != settings.openedx_session_bridge_issuer:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='CMS session ticket issuer mismatch')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Không xác minh được nguồn cấp phiên đăng nhập.')
     return payload
 
 

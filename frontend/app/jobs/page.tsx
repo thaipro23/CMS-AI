@@ -1,5 +1,7 @@
 'use client'
 
+import { userFacingError } from '../../lib/userFacingError'
+
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getAcademicApSyncJobs,
@@ -280,7 +282,7 @@ function JobsContent() {
     { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 138, priority: 'important', hideable: true, render: (job) => <small>{dateText(job.createdAt)}</small> },
     { key: 'scope', header: 'Phạm vi chi tiết', kind: 'text', minWidth: 175, priority: 'optional', hideable: true, defaultVisible: false, render: (job) => <><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></> },
     { key: 'requested_by', header: 'Người tạo', kind: 'text', width: 120, priority: 'optional', hideable: true, defaultVisible: false, render: (job) => job.requestedBy || 'Hệ thống' },
-    { key: 'message', header: 'Nội dung', kind: 'text', minWidth: 230, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2, render: (job) => <span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error || job.message || 'Đang chờ xử lý'}</span> },
+    { key: 'message', header: 'Nội dung', kind: 'text', minWidth: 230, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2, render: (job) => <span className={job.status === 'failed' ? 'table-error-text' : ''}>{job.error ? userFacingError(job.error) : job.message || 'Đang chờ xử lý'}</span> },
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 92, sticky: 'right', hideable: false, render: (job) => <button className="btn small secondary" type="button" onClick={() => setSelectedJob(job)}>Chi tiết</button> },
   ], [pageSize, safePage])
 
@@ -297,12 +299,12 @@ function JobsContent() {
     { key: 'created', header: 'Ngày tạo', kind: 'date', width: 138, priority: 'important', hideable: true, render: (item) => <small>{dateText(item.created_at)}</small> },
   ], [])
 
-  if (!can('view_jobs')) return <PageRoot className="page-stack enterprise-standard-page ops-console jobs-console"><EnterpriseScreenHeader eyebrow="Vận hành hệ thống" title="Tác vụ nền" description="Theo dõi các job đồng bộ, sinh câu hỏi, xuất báo cáo, publish Release và tạo Quiz đang chạy trong hệ thống." icon="jobs" tone="blue" breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Tác vụ nền' }]} /><section className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</section></PageRoot>
+  if (!can('view_jobs')) return <PageRoot className="page-stack enterprise-standard-page ops-console jobs-console"><EnterpriseScreenHeader eyebrow="Vận hành hệ thống" title="Tác vụ nền" description="Theo dõi đồng bộ dữ liệu, tạo câu hỏi, xuất báo cáo và xuất bản bộ đề." icon="jobs" tone="blue" breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Tác vụ nền' }]} /><section className="card empty-state">Vai trò hiện tại không có quyền xem tiến trình xử lý.</section></PageRoot>
   return <PageRoot className="page-stack enterprise-standard-page ops-console jobs-console ux-enterprise-page">
     <EnterpriseScreenHeader
       eyebrow="Vận hành hệ thống"
       title="Tác vụ nền"
-      description="Theo dõi các job đồng bộ, sinh câu hỏi, xuất báo cáo, publish Release và tạo Quiz đang chạy trong hệ thống."
+      description="Theo dõi đồng bộ dữ liệu, tạo câu hỏi, xuất báo cáo và xuất bản bộ đề."
       icon="jobs"
       tone="blue"
       breadcrumbs={[{ label: 'Vận hành hệ thống' }, { label: 'Tác vụ nền' }]}

@@ -219,10 +219,10 @@ export function UdemyProgressImportDialog({
     </div>}
   >
     <InlineNotice notice={noticeInfo(delivery
-      ? `File được gắn trực tiếp với môn ${delivery.subject_code}. Tác vụ chạy nền; F5 hoặc chuyển trang không làm mất tiến trình.`
-      : 'Có thể chọn nhiều file cùng lúc hoặc một ZIP. ZIP được kiểm tra an toàn và bung trên server. File sai học kỳ, sai hệ, sai mã môn hoặc không thuộc Udemy sẽ bị loại riêng; các file hợp lệ vẫn tiếp tục.', 'Quy tắc import hàng loạt')} />
+      ? `File được gắn trực tiếp với môn ${delivery.subject_code}. Bạn có thể xem tiến trình tại Tác vụ nền.`
+      : 'Có thể chọn nhiều file cùng lúc hoặc một ZIP. File sai học kỳ, sai hệ, sai mã môn hoặc không thuộc Udemy sẽ bị loại riêng; các file hợp lệ vẫn tiếp tục.', 'Phạm vi nhập dữ liệu')} />
     <div className="udemy-progress-upload-panel">
-      {!delivery ? <label><b>Block vận hành</b><small>Import tiến độ vẫn chia theo Block; chỉ màn Quản lý môn học mới quản lý nền tảng theo học kỳ.</small>
+      {!delivery ? <label><b>Block vận hành</b><small>Chọn Block cần cập nhật tiến độ.</small>
         <select className="input" value={effectiveBlockId} disabled={busy || Boolean(result)} onChange={(event) => setSelectedBlockId(event.target.value)}>
           {!blocks.length ? <option value="">Chưa có Block</option> : null}
           {blocks.map((item) => <option key={item.id} value={item.id}>{item.block_name}</option>)}

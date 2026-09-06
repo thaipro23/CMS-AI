@@ -199,7 +199,7 @@ export default function ImportQuizCmsOldPage() {
 
     <WorkspaceSection
       title="Quy tắc dữ liệu legacy"
-      description="Kiểm tra ngay trước khi ghi vào kho đề; validation trong kho đề và khi publish vẫn được giữ làm lớp bảo vệ tiếp theo."
+      description="Câu hợp lệ được nhập vào trạng thái Chờ duyệt."
       icon="info"
       tone="blue"
     >
@@ -212,7 +212,7 @@ export default function ImportQuizCmsOldPage() {
 
     {!preview ? <WorkspaceSection
       title="1. Chọn nguồn import"
-      description="Tên file phải bắt đầu bằng mã môn. Mỗi sheet tương ứng một Bài trong SU26. Bước này chưa ghi dữ liệu."
+      description="Tên file phải bắt đầu bằng mã môn. Mỗi trang tính tương ứng một Bài trong SU26. Bước này chưa ghi dữ liệu."
       icon="upload"
       tone="blue"
       actions={<button className="btn" type="button" disabled={busy || !workbooks.length} onClick={() => void runPreview()}>{busyAction === "preview" ? "Đang kiểm tra..." : "Kiểm tra file"}</button>}
@@ -261,7 +261,7 @@ export default function ImportQuizCmsOldPage() {
       <div className={styles.reviewGrid}>
         <WorkspaceSection
           title="Đối chiếu môn và bài"
-          description="Mỗi sheet tạo hoặc dùng lại đúng Bài tương ứng trong SU26."
+          description="Mỗi trang tính tạo hoặc dùng lại đúng Bài tương ứng trong SU26."
           icon="book"
           tone="blue"
         >
@@ -285,7 +285,7 @@ export default function ImportQuizCmsOldPage() {
 
         <WorkspaceSection
           title="Xử lý lỗi và cảnh báo"
-          description="Chỉ lỗi cấp câu mới được bỏ qua; lỗi môn, file hoặc sheet vẫn phải sửa."
+          description="Chỉ lỗi cấp câu mới được bỏ qua; lỗi môn, tệp hoặc trang tính vẫn phải sửa."
           icon="alert"
           tone={preview.errors.length ? "amber" : "green"}
         >
@@ -302,7 +302,7 @@ export default function ImportQuizCmsOldPage() {
             </> : null}
 
             {errorGroups.length ? errorGroups.map(({ code, items }, groupIndex) => <details className={styles.issueGroup} key={code} open={groupIndex === 0}>
-              <summary><span><b>{ERROR_LABELS[code] || code}</b><small>{code}</small></span><strong>{items.length}</strong></summary>
+              <summary><span><b>{ERROR_LABELS[code] || "Dữ liệu cần kiểm tra"}</b></span><strong>{items.length}</strong></summary>
               <div className={styles.issueItems}>
                 {items.slice(0, 12).map((item, index) => <div className={styles.issueItem} key={`${code}-${item.workbook}-${item.sheet}-${item.row}-${index}`}>
                   <small>{[item.workbook, item.sheet, item.row ? `dòng ${item.row}` : "", item.field].filter(Boolean).join(" · ")}</small>
@@ -310,11 +310,11 @@ export default function ImportQuizCmsOldPage() {
                 </div>)}
                 {items.length > 12 ? <small>Còn {items.length - 12} lỗi cùng nhóm.</small> : null}
               </div>
-            </details>) : <InlineNotice notice={{ type: "success", title: "Không còn lỗi chặn", body: "Dữ liệu đã qua preflight và có thể chuyển sang bước xác nhận import." }} />}
+            </details>) : <InlineNotice notice={{ type: "success", title: "Không còn lỗi chặn", body: "Dữ liệu hợp lệ. Bạn có thể xác nhận nhập câu hỏi." }} />}
 
             {preview.skipped_invalid_questions.length ? <details className={styles.issueGroup} open>
               <summary><span><b>Câu đã bỏ qua</b><small>Không được tạo trong ngân hàng đề</small></span><strong>{preview.skipped_invalid_question_count}</strong></summary>
-              <div className={styles.issueItems}>{preview.skipped_invalid_questions.slice(0, 12).map((item, index) => <div className={styles.issueItem} key={`${item.workbook}-${item.sheet}-${item.row}-${index}`}><b>{item.error_codes?.join(", ") || "INVALID_QUESTION"}</b><small>{[item.sheet, item.row ? `dòng ${item.row}` : ""].filter(Boolean).join(" · ")}</small></div>)}</div>
+              <div className={styles.issueItems}>{preview.skipped_invalid_questions.slice(0, 12).map((item, index) => <div className={styles.issueItem} key={`${item.workbook}-${item.sheet}-${item.row}-${index}`}><b>{item.error_codes?.map((code) => ERROR_LABELS[code] || "Câu hỏi không hợp lệ").join(", ") || "Câu hỏi không hợp lệ"}</b><small>{[item.sheet, item.row ? `dòng ${item.row}` : ""].filter(Boolean).join(" · ")}</small></div>)}</div>
             </details> : null}
 
             {preview.warnings.length ? <details className={styles.issueGroup}>
@@ -327,7 +327,7 @@ export default function ImportQuizCmsOldPage() {
 
       {!job ? <WorkspaceSection
         title="3. Xác nhận import"
-        description="Mọi câu mới đều ghi nhận người import và vào trạng thái Chờ duyệt. Validation trong kho đề/publish vẫn tiếp tục chạy."
+        description="Ghi nhận người nhập và chuyển câu hỏi vào trạng thái Chờ duyệt."
         icon="check"
         tone={preview.can_commit ? "green" : "amber"}
         actions={<button className="btn" type="button" disabled={busy || !preview.can_commit} onClick={() => void startImport()}>{busyAction === "enqueue" ? "Đang tạo tác vụ..." : "Import vào SU26"}</button>}
@@ -335,22 +335,22 @@ export default function ImportQuizCmsOldPage() {
         <InlineNotice notice={{
           type: preview.can_commit ? "success" : "warning",
           title: preview.can_commit ? `Sẵn sàng import ${preview.question_count} câu` : "Chưa thể import",
-          body: `${preview.message} Câu thiếu concept/độ khó vẫn được nhận và xếp linh hoạt khi tạo Quiz.`,
+          body: `${preview.message} Câu thiếu chủ điểm hoặc độ khó vẫn được nhận để xử lý khi tạo Quiz.`,
         }} />
       </WorkspaceSection> : null}
     </> : null}
 
     {job ? <WorkspaceSection
       title="Tác vụ import"
-      description={job.progress_label || "Đang xử lý dữ liệu legacy trong tác vụ nền."}
+      description={job.progress_label || "Đang nhập câu hỏi."}
       icon="jobs"
       tone={job.status === "failed" ? "red" : job.status === "completed" ? "green" : "blue"}
       actions={<StatusBadge status={job.status} label={job.status === "completed" ? "Hoàn tất" : job.status === "failed" ? "Thất bại" : job.status === "running" ? "Đang chạy" : "Đang chờ"} />}
     >
       <progress className={styles.progress} max={100} value={Math.max(0, Math.min(100, job.progress_percent || 0))} />
-      <p className={styles.progressText}>{Math.round(job.progress_percent || 0)}% · {job.progress_current}/{job.progress_total} sheet</p>
+      <p className={styles.progressText}>{Math.round(job.progress_percent || 0)}% · {job.progress_current}/{job.progress_total} trang tính</p>
       <InlineNotice notice={job.error_message ? { type: "error", title: "Import thất bại", body: job.error_message } : null} />
-      <InlineNotice notice={job.status === "completed" ? { type: "success", title: String(result.message || "Import hoàn tất."), body: `${Number(result.created_question_count || 0)} câu mới đang Chờ duyệt; đã loại ${Number(result.skipped_invalid_question_count || 0)} câu lỗi; bỏ qua ${Number(result.skipped_question_count || 0)} câu đã có do retry.` } : null} />
+      <InlineNotice notice={job.status === "completed" ? { type: "success", title: String(result.message || "Import hoàn tất."), body: `${Number(result.created_question_count || 0)} câu mới đang Chờ duyệt; đã loại ${Number(result.skipped_invalid_question_count || 0)} câu lỗi; bỏ qua ${Number(result.skipped_question_count || 0)} câu đã được nhập trước đó.` } : null} />
       <div className="button-row"><Link className="btn secondary" href="/bank/departments">Mở Ngân hàng đề</Link><Link className="btn secondary" href="/jobs">Xem tác vụ nền</Link></div>
     </WorkspaceSection> : null}
   </PageRoot>;

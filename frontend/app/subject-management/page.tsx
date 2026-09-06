@@ -23,7 +23,7 @@ import { PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../components/table/EnterpriseDataTable'
 import { CompactFilterBar, OperationsKpiStrip, WorkspaceSection } from '../../components/operations/OperationsWorkspace'
-import { InlineNotice, noticeError, noticeInfo, noticeSuccess } from '../../components/ui/InlineNotice'
+import { InlineNotice, noticeError, noticeSuccess } from '../../components/ui/InlineNotice'
 import { PersistentJobNotice } from '../../components/ui/PersistentJobNotice'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { UdemyPlanImportDialog } from '../../components/subject-management/UdemyPlanImportDialog'
@@ -129,7 +129,7 @@ export default function SubjectManagementPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
-  const canManage = can('manage_settings')
+  const canManage = can('academic.catalog.manage')
 
   const [branch, setBranch] = useState<Branch>('poly')
   const [terms, setTerms] = useState<AcademicTerm[]>([])
@@ -307,10 +307,10 @@ export default function SubjectManagementPage() {
     { key: 'updated', header: 'Cập nhật gần nhất', kind: 'date', minWidth: 165, render: (item) => <div><span>{formatDateTime(item.catalog_refreshed_at)}</span>{item.configured_at ? <small>Chọn nền tảng: {formatDateTime(item.configured_at)}</small> : null}</div> },
   ]
 
-  if (!canManage) return <PageRoot className="page-stack enterprise-standard-page subject-management-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Quản lý môn học" description="Chọn nền tảng CMS hoặc Udemy theo học kỳ." icon="book" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Quản lý môn học' }]} /><section className="card empty-state">Bạn không có quyền quản lý danh mục môn học.</section></PageRoot>
+  if (!canManage) return <PageRoot className="page-stack enterprise-standard-page training-operations-page subject-management-page"><EnterpriseScreenHeader eyebrow="Danh mục" title="Quản lý môn học" description="Chọn nền tảng CMS hoặc Udemy theo học kỳ." icon="book" tone="blue" breadcrumbs={[{ label: 'Danh mục' }, { label: 'Quản lý môn học' }]} /><section className="card empty-state">Bạn không có quyền quản lý danh mục môn học.</section></PageRoot>
 
   const jobActive = Boolean(catalogJob && ['queued', 'running'].includes(catalogJob.status))
-  return <PageRoot className="page-stack enterprise-standard-page subject-management-page">
+  return <PageRoot className="page-stack enterprise-standard-page training-operations-page subject-management-page">
     <EnterpriseScreenHeader
       eyebrow="Danh mục"
       title="Quản lý môn học"
@@ -322,11 +322,10 @@ export default function SubjectManagementPage() {
       primaryAction={<button className="btn" type="button" disabled={!termId || jobActive} onClick={() => void refreshCatalog()}>{jobActive ? 'Đang lấy môn từ AP...' : 'Lấy danh sách tất cả môn'}</button>}
     />
 
-    <InlineNotice notice={noticeInfo('Kỳ mới kế thừa lựa chọn CMS/Udemy nhất quán từ kỳ gần nhất để không phải tích lại từ đầu. Bạn có thể thêm, đổi hoặc bỏ chọn; thay đổi sẽ áp dụng đồng thời cho mọi Block của môn trong học kỳ đang chọn.', 'Quy tắc quản lý theo học kỳ')} />
     <InlineNotice notice={message ? noticeSuccess(message) : null} />
     <InlineNotice notice={error ? noticeError(error) : null} />
     {catalogJob ? <PersistentJobNotice job={catalogJob} title="Đồng bộ danh mục môn từ AP" /> : null}
-    {progressJob ? <PersistentJobNotice job={progressJob} title="Import tiến độ Udemy" description={progressJob.status === 'completed' ? 'Dữ liệu danh sách môn đã được cập nhật.' : 'Job chạy nền và tiếp tục khi F5 hoặc chuyển trang.'} /> : null}
+    {progressJob ? <PersistentJobNotice job={progressJob} title="Import tiến độ Udemy" description={progressJob.status === 'completed' ? 'Dữ liệu danh sách môn đã được cập nhật.' : 'Theo dõi tiến trình tại Tác vụ nền.'} /> : null}
 
     <OperationsKpiStrip items={[
       { label: 'Tổng môn', value: result.summary.total, hint: `${branchLabel(branch)} · ${selectedTerm?.term_name || 'Chưa chọn kỳ'}` },

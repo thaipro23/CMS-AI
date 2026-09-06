@@ -49,6 +49,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'quiz.preview', 'quiz.create_openedx', 'quota.manage', 'audit.view', 'bank.view',
         'academic.view', 'academic.manage_campus', 'view_training_reports',
         'jobs.view', 'ops.readiness.view', 'rbac.view',
+        'academic.catalog.manage', 'campus_owner.assign',
     },
     # QUIZ_BANK domain: question bank / quiz roles only. They do not grant
     # Student Ops visibility unless the user is separately assigned there.
@@ -73,8 +74,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 
 
 CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS: set[str] = {
-    'department.manage_all', 'subject.create', 'subject.update', 'course.sync',
-    'rbac.view',
+    'academic.catalog.manage', 'campus_owner.assign', 'rbac.view',
 }
 
 
@@ -99,7 +99,7 @@ LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
     'export_questions': {'bank.release.create', 'bank.release.publish'},
     'publish_to_openedx': {'bank.release.publish', 'quiz.create_openedx'},
     'manage_budget': {'quota.manage'},
-    'manage_settings': {'user.manage_all', 'department.manage_all', 'department.assign_head'},
+    'manage_settings': {'user.manage_all'},
     'manage_department': {'department.manage_all', 'department.update'},
     'view_user_analytics': {'user.manage_all'},
     'view_training_reports': {'academic.view', 'view_training_reports'},
@@ -189,6 +189,8 @@ class BusinessRBACService:
             'bank.view': 'Xem ngân hàng đề',
             'academic.view': 'Xem báo cáo giáo viên/lớp trong cơ sở',
             'academic.manage_campus': 'Quản lý vận hành đào tạo theo cơ sở',
+            'academic.catalog.manage': 'Quản lý danh mục đào tạo và đồng bộ AP',
+            'campus_owner.assign': 'Phân công Chủ cơ sở cho từng cơ sở',
             'view_training_reports': 'Xem báo cáo quản lý giáo viên',
             'jobs.view': 'Xem tác vụ trong phạm vi được phân quyền',
             'ops.readiness.view': 'Xem readiness toàn hệ thống',
@@ -428,8 +430,10 @@ class BusinessRBACService:
         for assignment in self.active_assignments_for_actor(user):
             if assignment.role_code == SYSTEM_ADMIN and not self.is_system_admin(user):
                 continue
-            if permission not in ROLE_PERMISSIONS.get(assignment.role_code, set()):
+            if permission not in self.assignment_permission_codes(assignment):
                 continue
+            if _is_all_campus_assignment(assignment):
+                return True
             if self._assignment_covers(assignment, target):
                 return True
         return False
@@ -439,7 +443,7 @@ class BusinessRBACService:
         if not self.has_permission(user, permission, target):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f'Không đủ quyền {permission} trong scope {target.scope_type}:{target.scope_id}',
+                detail='Bạn không có quyền thực hiện thao tác này trong phạm vi đã chọn.',
             )
 
     def require_system_admin(self, user: Any) -> None:
@@ -449,6 +453,15 @@ class BusinessRBACService:
     def can_grant(self, actor: Any, role_code: str, scope_type: str, scope_id: str) -> bool:
         if self.is_system_admin(actor):
             return True
+        if role_code == CAMPUS_OWNER:
+            # All-campus owners delegate only individual campuses. They cannot
+            # create a peer, a system admin, or any question-bank role.
+            return (
+                str(scope_type).upper() == 'CAMPUS'
+                and bool(str(scope_id or '').strip())
+                and str(scope_id).strip() != '*'
+                and self.has_any_business_permission(actor, 'campus_owner.assign')
+            )
         target = self.entity_scope(scope_type, scope_id)
         if role_code == SUBJECT_OWNER:
             return self.has_permission(actor, 'subject.assign_owner', target)
@@ -461,17 +474,17 @@ class BusinessRBACService:
     def _validate_assignment_scope(self, role_code: str, scope_type: str, scope_id: str) -> None:
         scope_type = scope_type.upper()
         if role_code == SYSTEM_ADMIN and scope_type != 'SYSTEM':
-            raise HTTPException(status_code=400, detail='SYSTEM_ADMIN chỉ được gán ở scope SYSTEM')
+            raise HTTPException(status_code=400, detail='Quản trị viên chỉ được cấp quyền trên toàn hệ thống.')
         if role_code == DEPARTMENT_HEAD and scope_type != 'DEPARTMENT':
-            raise HTTPException(status_code=400, detail='DEPARTMENT_HEAD chỉ được gán ở scope DEPARTMENT')
+            raise HTTPException(status_code=400, detail='Trưởng bộ môn cần được gán cho một bộ môn.')
         if role_code == SUBJECT_OWNER and scope_type not in {'SUBJECT', 'SUBJECT_VERSION'}:
-            raise HTTPException(status_code=400, detail='SUBJECT_OWNER chỉ được gán ở scope SUBJECT hoặc SUBJECT_VERSION')
+            raise HTTPException(status_code=400, detail='Chủ môn cần được gán cho một môn hoặc phiên bản môn.')
         if role_code == QUESTION_REVIEWER and scope_type not in {'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'}:
-            raise HTTPException(status_code=400, detail='QUESTION_REVIEWER chỉ được gán ở scope SUBJECT/SUBJECT_VERSION/CHAPTER')
+            raise HTTPException(status_code=400, detail='Người duyệt cần được gán cho một môn, phiên bản môn hoặc bài học.')
         if role_code in {CAMPUS_MANAGER, CAMPUS_OWNER} and scope_type not in {'CAMPUS', 'SYSTEM'}:
-            raise HTTPException(status_code=400, detail='CAMPUS_OWNER/CAMPUS_MANAGER chỉ được gán ở scope CAMPUS hoặc SYSTEM')
+            raise HTTPException(status_code=400, detail='Chủ cơ sở cần được gán cho từng cơ sở hoặc tất cả cơ sở.')
         if role_code == TEACHER_ASSIGNED and scope_type not in {'CLASS', 'CAMPUS', 'SYSTEM'}:
-            raise HTTPException(status_code=400, detail='TEACHER_ASSIGNED chỉ được gán ở scope CLASS/CAMPUS/SYSTEM; AP assignment vẫn là nguồn lớp chính')
+            raise HTTPException(status_code=400, detail='Giảng viên chỉ xem được các lớp do AP phân công trong phạm vi được giao.')
         if scope_type == 'SYSTEM':
             return
         if scope_type == 'CAMPUS':
@@ -495,17 +508,17 @@ class BusinessRBACService:
         if scope_type == 'SUBJECT_VERSION' and not self.db.get(SubjectOffering, scope_id):
             raise HTTPException(status_code=404, detail='Không tìm thấy phiên bản môn để gán quyền')
         if scope_type == 'CHAPTER' and not self.db.get(SubjectChapter, scope_id):
-            raise HTTPException(status_code=404, detail='Không tìm thấy bài/chapter để gán quyền')
+            raise HTTPException(status_code=404, detail='Không tìm thấy bài học để cấp quyền.')
 
     def create_assignment(self, *, actor: Any, user_id: str, email: str | None, role_code: str, scope_type: str, scope_id: str = '*', grant_reason: str = '', sync_openedx: bool = False) -> UserRoleAssignment:
         role_code = role_code.strip().upper()
         if role_code == CAMPUS_MANAGER:
-            raise HTTPException(status_code=400, detail='CAMPUS_MANAGER là role legacy; dùng CAMPUS_OWNER cho gán mới')
+            raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
         scope_type = scope_type.strip().upper()
         scope_id = (scope_id or '*').strip() or '*'
         self._validate_assignment_scope(role_code, scope_type, scope_id)
         if not self.can_grant(actor, role_code, scope_type, scope_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được gán role này trong scope này')
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được cấp vai trò này trong phạm vi đã chọn.')
         existing = self.active_assignments_query().filter(
             UserRoleAssignment.user_id == user_id,
             UserRoleAssignment.role_code == role_code,
@@ -552,7 +565,7 @@ class BusinessRBACService:
     ) -> tuple[list[UserRoleAssignment], int, int]:
         role_code = role_code.strip().upper()
         if role_code == CAMPUS_MANAGER:
-            raise HTTPException(status_code=400, detail='CAMPUS_MANAGER là role legacy; dùng CAMPUS_OWNER cho gán mới')
+            raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
         scope_type = scope_type.strip().upper()
         normalized_ids = list(dict.fromkeys(((value or '*').strip() or '*') for value in scope_ids))
         if not normalized_ids:
@@ -564,7 +577,7 @@ class BusinessRBACService:
         for scope_id in normalized_ids:
             self._validate_assignment_scope(role_code, scope_type, scope_id)
             if not self.can_grant(actor, role_code, scope_type, scope_id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f'Bạn không được gán role này trong scope {scope_id}')
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được cấp vai trò này trong phạm vi đã chọn.')
 
         existing_rows = self.active_assignments_query().filter(
             UserRoleAssignment.user_id == user_id,
@@ -612,9 +625,9 @@ class BusinessRBACService:
     def revoke_assignment(self, assignment_id: str, actor: Any, revoke_reason: str = '') -> UserRoleAssignment:
         item = self.db.get(UserRoleAssignment, assignment_id)
         if not item or item.revoked_at is not None:
-            raise HTTPException(status_code=404, detail='Không tìm thấy assignment đang hiệu lực')
+            raise HTTPException(status_code=404, detail='Không tìm thấy quyền đang có hiệu lực.')
         if not self.can_grant(actor, item.role_code, item.scope_type, item.scope_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được thu hồi assignment này')
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được thu hồi quyền này.')
         item.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
         item.revoked_by = getattr(actor, 'user_id', None)
         item.revoke_reason = revoke_reason or ''

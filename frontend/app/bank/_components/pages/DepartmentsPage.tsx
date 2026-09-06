@@ -143,8 +143,8 @@ export function DepartmentsPage() {
 
   useEffect(() => {
     const query = search.trim()
+    setSubjectResults([])
     if (query.length < 2) {
-      setSubjectResults([])
       return
     }
     const controller = new AbortController()
@@ -346,7 +346,7 @@ export function DepartmentsPage() {
       {search.trim().length >= 2 && subjectResults.length ? <div className="bank-subject-search-results" aria-live="polite">
         <div className="bank-subject-search-results__head">
           <b>Môn học phù hợp</b>
-          <span>{subjectResults.length} kết quả · bấm để mở phiên bản môn</span>
+          <span>{subjectResults.length > 8 ? `Hiển thị 8/${subjectResults.length} kết quả` : `${subjectResults.length} kết quả`}</span>
         </div>
         <div className="bank-subject-search-results__list">
           {subjectResults.slice(0, 8).map((subject) => {

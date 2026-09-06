@@ -1,6 +1,8 @@
 "use client";
 
 import { VisualIcon } from "./VisualIcon";
+import { userFacingError } from '../../lib/userFacingError';
+import styles from './FeedbackMessage.module.css';
 
 export type ActionMessageType = "success" | "error" | "info" | "warning";
 
@@ -11,24 +13,7 @@ export type ActionMessageData = {
   detail?: string;
 };
 
-function compactError(raw: string, fallback: string) {
-  const text = String(raw || "").trim();
-  if (!text) return fallback;
-  if (/401|unauthori[sz]ed|missing bearer/i.test(text))
-    return "Phiên đăng nhập hết hạn. Đăng nhập lại.";
-  if (/403|forbidden|permission|phân quyền/i.test(text))
-    return "Bạn không có quyền thực hiện thao tác này.";
-  if (/404|not found|không tìm thấy/i.test(text))
-    return "Không tìm thấy dữ liệu cần xử lý.";
-  if (/422|validation|invalid/i.test(text) && !text.includes(":") && text.length < 100)
-    return "Dữ liệu chưa hợp lệ. Kiểm tra lại thông tin nhập.";
-  if (/timeout|timed out/i.test(text))
-    return "Hệ thống xử lý quá lâu. Thử lại sau.";
-  if (/network|failed to fetch/i.test(text))
-    return "Không kết nối được máy chủ.";
-  const firstLine = text.split("\n").find(Boolean) || text;
-  return firstLine.length > 140 ? `${firstLine.slice(0, 137)}...` : firstLine;
-}
+
 
 export function toUserError(
   error: unknown,
@@ -37,9 +22,8 @@ export function toUserError(
   const raw = error instanceof Error ? error.message : String(error || "");
   return {
     type: "error",
-    title: "Có lỗi",
-    body: compactError(raw, fallback),
-    detail: raw && raw.length > 160 ? raw : undefined,
+    title: "Không thể hoàn tất",
+    body: userFacingError(raw, fallback),
   };
 }
 
@@ -53,19 +37,20 @@ export function ActionMessage({
   if (!message) return null;
   return (
     <section
-      className={`notice enterprise-action-message notice-${message.type}`}
+      className={`notice enterprise-action-message notice-${message.type} ${styles.message} ${styles[message.type]}`}
       role={message.type === "error" ? "alert" : "status"}
       aria-live="polite"
     >
-      <VisualIcon label={message.title || titleFor(message.type)} icon={message.type === "success" ? "check" : message.type === "info" ? "info" : "alert"} tone={message.type === "success" ? "green" : message.type === "error" ? "red" : message.type === "warning" ? "amber" : "blue"} className="notice-visual-icon" />
-      <div className="notice-copy">
+      <VisualIcon label={message.title || titleFor(message.type)} icon={message.type === "success" ? "check" : message.type === "info" ? "info" : "alert"} tone={message.type === "success" ? "green" : message.type === "error" ? "red" : message.type === "warning" ? "amber" : "blue"} className={`notice-visual-icon ${styles.icon}`} />
+      <div className={`notice-copy ${styles.copy}`}>
         <strong>{message.title || titleFor(message.type)}</strong>
-        <p>{message.body}</p>
-        {message.detail && <small>{message.detail}</small>}
+        <p>{message.type === 'error' ? userFacingError(message.body) : message.body}</p>
+        {message.detail && message.type !== 'error' && <small>{message.detail}</small>}
       </div>
       {onClose && (
         <button
-          className="notice-close"
+          className={`notice-close ${styles.action}`}
+          type="button"
           onClick={onClose}
           aria-label="Đóng thông báo"
         >

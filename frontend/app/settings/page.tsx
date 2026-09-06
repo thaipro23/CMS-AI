@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { getRuntimeSettings, updateRuntimeSettings, getRealtimePricing } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
-import { ROLE_LABELS, ROLE_PERMISSIONS, RuntimeSettings, RuntimeSettingsUpdate, PricingResponse } from '../../types'
+import { RuntimeSettings, RuntimeSettingsUpdate, PricingResponse } from '../../types'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
 import { LoadingButton } from '../../components/ui/LoadingButton'
 import { PageHeader, PageRoot } from '../../components/layout/PageHeader'
@@ -135,7 +135,7 @@ export default function SettingsPage() {
       const data = await updateRuntimeSettings(form, authHeaders(true))
       setSettings(data)
       setForm(toForm(data))
-      setMessage({ type: 'success', body: 'Đã lưu cấu hình runtime. Các request generate/sync tiếp theo sẽ dùng cấu hình mới.' })
+      setMessage({ type: 'success', body: 'Đã lưu cấu hình. Các tác vụ tiếp theo sẽ dùng cấu hình mới.' })
     } catch (e) {
       setMessage(toUserError(e))
     } finally {
@@ -162,15 +162,7 @@ export default function SettingsPage() {
 
   if (!can('manage_settings')) {
     return <PageRoot className="page-stack">
-      <section className="card warning-card">
-        <div className="eyebrow">403 / Admin only</div>
-        <h2>Trang Settings chỉ dành cho admin</h2>
-        <p className="helper">Role hiện tại là <b>{role}</b>. Backend cũng chặn bằng quyền <b>manage_settings</b>, nên teacher/reviewer/viewer không đọc hoặc sửa được API key, model và SSO.</p>
-      </section>
-      <section className="card">
-        <h2>RBAC hiện tại</h2>
-        <div className="role-box large"><b>{ROLE_LABELS[role]}</b><small>{ROLE_PERMISSIONS[role].join(', ')}</small></div>
-      </section>
+      <ActionMessage message={{ type: 'warning', title: 'Không có quyền truy cập', body: 'Cài đặt hệ thống chỉ dành cho Quản trị viên.' }} />
     </PageRoot>
   }
 
@@ -191,19 +183,17 @@ export default function SettingsPage() {
         { key: 'model', label: 'Mô hình & worker' },
         { key: 'openedx', label: 'Kết nối Open edX' },
         { key: 'auth', label: 'SSO & xác thực' },
-        { key: 'cost', label: 'Chi phí & pricing' },
+        { key: 'cost', label: 'Chi phí' },
       ]} />
 
       <div className="settings-panel">
         {activeTab === 'limits' ? <>
           <CoursePolicyPanel courseId="__bank_chapter_default__" headers={authHeaders()} writeHeaders={authHeaders(true)} canEdit={can('manage_settings')} />
-          <WorkspaceSection title="Nguyên tắc runtime" description="Các secret không được ghi vào runtime JSON.">
-            <div className="settings-secret-note">API key, OAuth secret, JWT secret và token phải được cấp qua biến môi trường hoặc secret manager của hạ tầng production.</div>
-          </WorkspaceSection>
+
         </> : null}
 
         {activeTab === 'model' ? <>
-          <WorkspaceSection title="Cổng mô hình" description="Model dùng cho tác vụ sinh câu hỏi.">
+          <WorkspaceSection title="Cổng mô hình" description="Chọn mô hình dùng để tạo câu hỏi.">
             <div className="settings-form-grid">
               <label>Nhà cung cấp<select className="input" value={form.model.model_provider} onChange={(event) => setForm(mergeField(form, 'model', 'model_provider', event.target.value))}><option value="openai">OpenAI</option><option value="local">Local</option><option value="auto">Tự động</option></select></label>
               <label>Tên mô hình<input className="input" value={form.model.openai_model} onChange={(event) => setForm(mergeField(form, 'model', 'openai_model', event.target.value))} placeholder="gpt-5-mini" /></label>
@@ -249,7 +239,7 @@ export default function SettingsPage() {
           <div className="settings-form-grid">
             <label>Auth mode<select className="input" value={form.sso.auth_mode} onChange={(event) => setForm(mergeField(form, 'sso', 'auth_mode', event.target.value))}><option value="openedx_sso">Open edX SSO</option><option value="jwt">JWT</option></select></label>
             <label>JWT secret<input className="input" type="password" value="" disabled placeholder={settings?.sso.has_jwt_secret ? `Env đã có secret: ${settings?.sso.jwt_secret_masked}` : 'Cấu hình bằng JWT_SECRET'} /></label>
-            <div className="settings-secret-note wide">Sau khi đổi auth mode, cần xác minh bridge/plugin SSO và rollback plan trước khi áp dụng trên production.</div>
+            <div className="settings-secret-note wide">Đổi phương thức xác thực sẽ ảnh hưởng đến lần đăng nhập tiếp theo.</div>
           </div>
         </WorkspaceSection> : null}
 

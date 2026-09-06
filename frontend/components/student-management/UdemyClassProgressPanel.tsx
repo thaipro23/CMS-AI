@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getUdemyProgressStudents } from "../../lib/api";
 import type { UdemyProgressStudent, UdemyProgressStudentList } from "../../types";
@@ -50,7 +49,7 @@ function progressStatus(row: UdemyProgressStudent) {
   if (row.status === "on_track") return <StatusBadge status="success" label="Đạt tiến độ" />;
   if (row.status === "late") return <StatusBadge status="failed" label="Chậm tiến độ" />;
   if (row.status === "no_plan") return <StatusBadge status="warning" label="Chưa có mốc" />;
-  if (row.status === "outside_roster") return <StatusBadge status="warning" label="Ngoài roster AP" />;
+  if (row.status === "outside_roster") return <StatusBadge status="warning" label="Ngoài danh sách lớp AP" />;
   if (row.status === "ambiguous") return <StatusBadge status="warning" label="Cần đối chiếu" />;
   return <StatusBadge status="failed" label="Chưa khớp AP" />;
 }
@@ -60,13 +59,11 @@ export function UdemyClassProgressPanel({
   deliveryId,
   classId,
   classCode,
-  managementHref,
 }: {
   headers: HeadersInit;
   deliveryId: string;
   classId: string;
   classCode: string;
-  managementHref: string;
 }) {
   const [rows, setRows] = useState<UdemyProgressStudentList>(EMPTY_ROWS);
   const [q, setQ] = useState("");
@@ -164,7 +161,7 @@ export function UdemyClassProgressPanel({
       minWidth: 145,
       priority: "optional",
       render: (row) => row.match_status === "matched_roster"
-        ? <StatusBadge status="success" label="Đúng roster" />
+        ? <StatusBadge status="success" label="Khớp danh sách AP" />
         : <StatusBadge status="warning" label={row.status_label || "Cần đối chiếu"} />,
     },
     {
@@ -179,10 +176,8 @@ export function UdemyClassProgressPanel({
 
   return <WorkspaceSection
     title={`Tiến độ sinh viên Udemy · ${classCode || "Lớp"}`}
-    description="Hiển thị trực tiếp dữ liệu Udemy của đúng lớp này; không cần chuyển sang màn quản lý môn chỉ để xem tiến độ."
     icon="analytics"
     tone="green"
-    actions={<Link className="btn secondary small" href={managementHref}>Import / kế hoạch Udemy</Link>}
   >
     <InlineNotice notice={error ? { type: "error", title: "Không tải được tiến độ Udemy", body: error, onRetry: () => void loadRows(), retryLabel: "Thử lại" } : null} />
     <CompactFilterBar
@@ -211,7 +206,7 @@ export function UdemyClassProgressPanel({
           <option value="no_plan">Chưa có mốc đến hạn</option>
           <option value="unmatched">Chưa khớp AP</option>
           <option value="ambiguous">Cần đối chiếu</option>
-          <option value="outside_roster">Ngoài roster AP</option>
+          <option value="outside_roster">Ngoài danh sách lớp AP</option>
         </select>
       </label>
     </CompactFilterBar>

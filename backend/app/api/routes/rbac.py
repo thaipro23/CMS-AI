@@ -252,7 +252,10 @@ def list_assignments(
         scope_id=scope_id,
         include_revoked=include_revoked,
     )
-    return {'items': [service.serialize_assignment(item) for item in items], 'total': len(items)}
+    return {'items': [
+        {**service.serialize_assignment(item), 'can_revoke': item.revoked_at is None and service.can_grant(user, item.role_code, item.scope_type, item.scope_id)}
+        for item in items
+    ], 'total': len(items)}
 
 
 @router.post('/assignments', response_model=RoleAssignmentOut)
@@ -391,14 +394,14 @@ async def import_assignments(
             ).first()
             valid_rows += 1
             if dry_run:
-                result_rows.append({**base, 'scope_label': service.scope_label(payload.scope_type, payload.scope_id), 'status': 'valid', 'message': 'Hợp lệ, chưa ghi DB vì đang dry-run', 'assignment': None})
+                result_rows.append({**base, 'scope_label': service.scope_label(payload.scope_type, payload.scope_id), 'status': 'valid', 'message': 'Hợp lệ, chưa cấp quyền.', 'assignment': None})
             elif existing:
                 skipped_count += 1
-                result_rows.append({**base, 'scope_label': service.scope_label(payload.scope_type, payload.scope_id), 'status': 'skipped', 'message': 'Assignment đã tồn tại, bỏ qua', 'assignment': service.serialize_assignment(existing)})
+                result_rows.append({**base, 'scope_label': service.scope_label(payload.scope_type, payload.scope_id), 'status': 'skipped', 'message': 'Quyền đã tồn tại, bỏ qua.', 'assignment': service.serialize_assignment(existing)})
             else:
                 item = service.create_assignment(actor=user, **payload.model_dump())
                 created_count += 1
-                result_rows.append({**base, 'scope_label': service.scope_label(payload.scope_type, payload.scope_id), 'status': 'created', 'message': 'Đã tạo assignment', 'assignment': service.serialize_assignment(item)})
+                result_rows.append({**base, 'scope_label': service.scope_label(payload.scope_type, payload.scope_id), 'status': 'created', 'message': 'Đã cấp quyền.', 'assignment': service.serialize_assignment(item)})
         except HTTPException as exc:
             failed_count += 1
             result_rows.append({**base, 'scope_label': None, 'status': 'failed', 'message': str(exc.detail), 'assignment': None})

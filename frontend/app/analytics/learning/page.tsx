@@ -952,7 +952,7 @@ export default function AnalyticsLearningPage() {
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 106, hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => openReason(row)}>Chi tiết</button> },
   ], [effectiveCourseId])
 
-  return <PageRoot className="page-stack enterprise-standard-page analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
+  return <PageRoot className="page-stack enterprise-standard-page training-operations-page analytics-learning-page analytics-learning-result-only-page analytics-three-step-flow-page">
     <EnterpriseScreenHeader
       eyebrow="Vận hành đào tạo"
       title="Phân tích học tập"

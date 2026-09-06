@@ -86,7 +86,7 @@ test.describe('Subject Management Batch 35.2 term scope', () => {
     await page.goto('/subject-management')
 
     await expect(page.getByRole('heading', { level: 1, name: 'Quản lý môn học' })).toBeVisible()
-    await expect(page.getByText(/Kỳ mới kế thừa lựa chọn CMS\/Udemy nhất quán/)).toBeVisible()
+    await expect(page.getByText(/Kỳ mới kế thừa lựa chọn CMS\/Udemy nhất quán/)).toHaveCount(0)
     await expect(page.getByRole('combobox', { name: 'Block' })).toHaveCount(0)
     await expect(page.getByText('Khác nhau giữa các Block')).toBeVisible()
     await expect(page.getByText('2 Block', { exact: true })).toBeVisible()

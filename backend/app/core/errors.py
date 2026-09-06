@@ -13,6 +13,20 @@ from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError, Pending
 import httpx
 
 
+def public_validation_details(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Pydantic's ctx can contain ValueError instances, which JSONResponse cannot
+    # serialize. Keep locations/types/limits while excluding submitted data.
+    return [
+        {
+            'loc': list(error.get('loc') or []),
+            'type': str(error.get('type') or 'value_error'),
+            'msg': str(error.get('msg') or 'Dữ liệu không hợp lệ.'),
+            'ctx': {key: value for key, value in (error.get('ctx') or {}).items() if isinstance(value, (str, int, float, bool)) or value is None},
+        }
+        for error in errors
+    ]
+
+
 def error_payload(*, code: str, message: str, status_code: int, details: Any = None, request_id: str | None = None) -> dict[str, Any]:
     return {
         'error': {
@@ -103,7 +117,7 @@ def public_http_exception(*, status_code: int, code: str, message: str, logger_n
             detail={
                 'code': 'VALIDATION_ERROR',
                 'message': 'Dữ liệu gửi lên không hợp lệ.',
-                'details': active.errors(),
+                'details': public_validation_details(active.errors()),
             },
         )
     if isinstance(active, PermissionError):
@@ -168,7 +182,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             code='VALIDATION_ERROR',
             message='Dữ liệu gửi lên không hợp lệ.',
             status_code=422,
-            details=exc.errors(),
+            details=public_validation_details(exc.errors()),
             request_id=request_id,
         ),
     )
@@ -191,4 +205,3 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
             request_id=request_id,
         ),
     )
-

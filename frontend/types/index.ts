@@ -1878,6 +1878,7 @@ export type RBACPermission = {
 
 export type RoleAssignment = {
   id: string
+  can_revoke?: boolean | null
   user_id: string
   email?: string | null
   role_code: BusinessRoleCode | string

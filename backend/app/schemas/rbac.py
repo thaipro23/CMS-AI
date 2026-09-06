@@ -41,7 +41,7 @@ class RoleAssignmentCreate(BaseModel):
     def validate_role_code(cls, value: str) -> str:
         value = value.strip().upper()
         if value not in VALID_ROLE_CODES or value == 'CAMPUS_MANAGER':
-            raise ValueError(f'role_code không hợp lệ để gán mới: {value}')
+            raise ValueError('Vai trò không hợp lệ để cấp quyền mới.')
         return value
 
     @field_validator('scope_type')
@@ -49,7 +49,7 @@ class RoleAssignmentCreate(BaseModel):
     def validate_scope_type(cls, value: str) -> str:
         value = value.strip().upper()
         if value not in VALID_SCOPE_TYPES:
-            raise ValueError(f'scope_type không hợp lệ: {value}')
+            raise ValueError('Loại phạm vi không hợp lệ.')
         return value
 
     @field_validator('scope_id')
@@ -72,7 +72,7 @@ class RoleAssignmentBatchCreate(BaseModel):
     def validate_role_code(cls, value: str) -> str:
         value = value.strip().upper()
         if value not in VALID_ROLE_CODES or value == 'CAMPUS_MANAGER':
-            raise ValueError(f'role_code không hợp lệ để gán mới: {value}')
+            raise ValueError('Vai trò không hợp lệ để cấp quyền mới.')
         return value
 
     @field_validator('scope_type')
@@ -80,7 +80,7 @@ class RoleAssignmentBatchCreate(BaseModel):
     def validate_scope_type(cls, value: str) -> str:
         value = value.strip().upper()
         if value not in VALID_SCOPE_TYPES:
-            raise ValueError(f'scope_type không hợp lệ: {value}')
+            raise ValueError('Loại phạm vi không hợp lệ.')
         return value
 
     @field_validator('scope_ids')
@@ -111,6 +111,7 @@ class RoleAssignmentRevoke(BaseModel):
 
 class RoleAssignmentOut(BaseModel):
     id: str
+    can_revoke: bool | None = None
     user_id: str
     email: str | None = None
     role_code: str

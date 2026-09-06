@@ -3,6 +3,8 @@
 import type { ReactNode } from 'react'
 import type { AcademicBulkOperationJob } from '../../types'
 import { VisualIcon } from './VisualIcon'
+import { userFacingError } from '../../lib/userFacingError'
+import styles from './FeedbackMessage.module.css'
 
 export function PersistentJobNotice({
   job,
@@ -22,10 +24,12 @@ export function PersistentJobNotice({
   const current = Math.max(0, Math.min(total, Number(job.progress_current || 0)))
   const percent = Math.round((current / total) * 100)
   const active = ['queued', 'running'].includes(job.status)
-  const body = description || job.error_message || job.progress_label || 'Hệ thống đang xử lý tác vụ nền.'
+  const body = job.status === 'failed'
+    ? userFacingError(job.error_message, 'Tác vụ chưa hoàn tất. Vui lòng thử lại.')
+    : description || job.progress_label || 'Hệ thống đang xử lý tác vụ nền.'
 
   return <section
-    className={`academic-inline-notice enterprise-inline-notice persistent-job-notice ${statusTone}`}
+    className={`academic-inline-notice enterprise-inline-notice persistent-job-notice ${statusTone} ${styles.message} ${styles[statusTone]}`}
     role={statusTone === 'error' ? 'alert' : 'status'}
     aria-live="polite"
     aria-busy={active}
@@ -34,9 +38,9 @@ export function PersistentJobNotice({
       label={title}
       icon={statusTone === 'error' || statusTone === 'warning' ? 'alert' : statusTone === 'success' ? 'check' : 'clock'}
       tone={statusTone === 'error' ? 'red' : statusTone === 'warning' ? 'amber' : statusTone === 'success' ? 'green' : 'blue'}
-      className="notice-visual-icon"
+      className={`notice-visual-icon ${styles.icon}`}
     />
-    <div className="notice-copy persistent-job-copy">
+    <div className={`notice-copy persistent-job-copy ${styles.copy}`}>
       <b>{title}</b>
       <span>{body}</span>
       <div className="persistent-job-progress-row">
@@ -44,6 +48,6 @@ export function PersistentJobNotice({
         <small>{percent}%</small>
       </div>
     </div>
-    {action ? <div className="persistent-job-action">{action}</div> : null}
+    {action ? <div className={`persistent-job-action ${styles.action}`}>{action}</div> : null}
   </section>
 }

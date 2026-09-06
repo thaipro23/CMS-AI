@@ -44,7 +44,7 @@ ROLE_LABELS: dict[str, str] = {
 def _normalize_role(role: str | None) -> str:
     role = (role or 'viewer').lower().strip()
     if role not in ROLE_PERMISSIONS:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f'Unknown role: {role}')
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Vai trò tài khoản không hợp lệ.')
     return role
 
 
@@ -71,7 +71,7 @@ def _principal_from_demo_headers(x_user_id: str | None, x_user_role: str | None,
 def _principal_from_jwt(token: str) -> Principal:
     if not settings.jwt_secret or settings.jwt_secret == 'dev_secret_change_me':
         if settings.app_env.lower() in {'prod', 'production'}:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='JWT secret is not configured for production')
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Đăng nhập hệ thống chưa được cấu hình. Vui lòng liên hệ quản trị viên.')
     try:
         claims = jwt.decode(
             token,
@@ -82,11 +82,11 @@ def _principal_from_jwt(token: str) -> Principal:
             options={'require_exp': True, 'require_sub': True},
         )
     except JWTError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token') from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.') from exc
     if not claims.get('sub') or not claims.get('exp'):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token claims')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Phiên đăng nhập thiếu thông tin xác thực. Vui lòng đăng nhập lại.')
     if claims.get('token_type') != 'ai_session':
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid access token type')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.')
     if is_session_revoked(str(claims.get('jti') or '') or None):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -94,7 +94,7 @@ def _principal_from_jwt(token: str) -> Principal:
         )
     role = _normalize_role(claims.get('role'))
     if role == 'admin' and not (claims.get('is_superuser') is True or claims.get('is_super_admin') is True or claims.get('ai_system_admin') is True):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='AI admin token requires Open edX superuser/super_admin proof')
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Chưa xác minh được quyền quản trị của tài khoản.')
     course_ids = _normalize_courses(claims.get('courses') or claims.get('course_ids'))
     return Principal(
         user_id=str(claims.get('sub') or claims.get('user_id') or 'jwt-user'),
@@ -135,6 +135,6 @@ def get_principal(
         cookie_token = request.cookies.get('ai_openedx_access_token')
         if cookie_token:
             return _principal_from_jwt(cookie_token)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Missing Bearer access token')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Vui lòng đăng nhập để tiếp tục.')
 
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f'Unsupported AUTH_MODE={settings.auth_mode}')

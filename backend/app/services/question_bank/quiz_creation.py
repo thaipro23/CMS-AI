@@ -35,6 +35,11 @@ from app.services.question_bank.helpers import (
 )
 
 
+def _difficulty_summary(counts: dict[str, int]) -> str:
+    labels = (('easy', 'Dễ'), ('medium', 'Trung bình'), ('hard', 'Khó'))
+    return ', '.join(f'{label}: {int(counts.get(key, 0) or 0)}' for key, label in labels)
+
+
 class QuestionBankQuizCreationWorkflowService:
     """Course quiz auto-map and native Problem Bank creation workflow.
 
@@ -827,8 +832,10 @@ class QuestionBankQuizCreationWorkflowService:
             }
             raise ValueError(
                 f'{label} không đủ câu theo độ khó để đáp ứng cấu hình. '
-                f'Cần={difficulty_targets}; hiện có={available_summary}; '
-                f'chưa phân loại={max(0, int(flexible_capacity or 0))}.'
+                f'Cần {_difficulty_summary(difficulty_targets)}. '
+                f'Hiện có {_difficulty_summary(available_summary)}; '
+                f'chưa phân loại: {max(0, int(flexible_capacity or 0))}. '
+                'Hãy điều chỉnh tỷ lệ độ khó hoặc bổ sung câu hỏi.'
             )
         matrix = {
             (diff, 'auto'): max(0, int(difficulty_targets.get(diff, 0) or 0))
@@ -1081,8 +1088,9 @@ class QuestionBankQuizCreationWorkflowService:
                 break
             if sum(effective.values()) != int(total_questions):
                 raise ValueError(
-                    f'Final test legacy không đủ {int(total_questions)} câu; '
-                    f'khả dụng theo độ khó={classified_capacity}, chưa phân loại={len(flexible.get("auto", []))}.'
+                    f'Bộ đề CMS cũ không đủ {int(total_questions)} câu để tạo Final test. '
+                    f'Hiện có {_difficulty_summary(classified_capacity)}; '
+                    f'chưa phân loại: {len(flexible.get("auto", []))}.'
                 )
             legacy_rebalanced = effective != requested_original
             requested = effective
@@ -1245,8 +1253,8 @@ class QuestionBankQuizCreationWorkflowService:
         warnings: list[str] = []
         if legacy_rebalanced:
             warnings.append(
-                f'Final test CMS cũ không đủ phân bố độ khó đã yêu cầu; hệ thống tự cân lại '
-                f'{requested_original} → {requested} nhưng vẫn giữ đúng {int(total_questions)} câu.'
+                f'Bộ đề CMS cũ thiếu câu theo tỷ lệ đã chọn. Hệ thống tự cân lại độ khó '
+                f'cho Final test thành {_difficulty_summary(requested)}, tổng cộng {int(total_questions)} câu.'
             )
         unclassified_count = sum(len(items) for items in flexible.values())
         if unclassified_count:
@@ -1646,8 +1654,9 @@ class QuestionBankQuizCreationWorkflowService:
                 break
             if sum(effective.values()) != int(total_questions):
                 raise ValueError(
-                    f'Release legacy không đủ {int(total_questions)} câu để tạo Quiz; '
-                    f'khả dụng theo độ khó={classified_capacity}, chưa phân loại={len(flexible_rows.get("auto", []))}.'
+                    f'Bộ đề CMS cũ không đủ {int(total_questions)} câu để tạo Quiz. '
+                    f'Hiện có {_difficulty_summary(classified_capacity)}; '
+                    f'chưa phân loại: {len(flexible_rows.get("auto", []))}.'
                 )
             legacy_rebalanced = effective != requested_original
             requested = effective
@@ -1696,20 +1705,20 @@ class QuestionBankQuizCreationWorkflowService:
         warnings: list[str] = []
         if legacy_rebalanced:
             warnings.append(
-                f'Release CMS cũ không đủ phân bố độ khó đã yêu cầu; hệ thống tự cân lại '
-                f'{requested_original} → {requested} nhưng vẫn giữ đúng {int(total_questions)} câu.'
+                f'Bộ đề CMS cũ thiếu câu theo tỷ lệ đã chọn. Hệ thống tự cân lại độ khó '
+                f'thành {_difficulty_summary(requested)}, tổng cộng {int(total_questions)} câu.'
             )
         unclassified_difficulty_count = sum(len(items) for items in flexible_rows.values())
         flexibly_assigned_count = sum(len(items) for items in allocated_flexible_rows.values())
         if unclassified_difficulty_count:
             warnings.append(
                 f'{unclassified_difficulty_count} câu CMS cũ chưa có NGƯỠNG/độ khó; '
-                f'{flexibly_assigned_count} câu được phân bổ linh hoạt vào cấu hình Easy/Medium/Hard.'
+                f'{flexibly_assigned_count} câu được phân bổ linh hoạt vào các mức Dễ, Trung bình và Khó.'
             )
         if unclassified_concept_question_ids:
             warnings.append(
-                f'{len(unclassified_concept_question_ids)} câu CMS cũ chưa có concept; '
-                'hệ thống coi mỗi câu là một nhóm độc lập nên không chặn tạo Quiz.'
+                f'{len(unclassified_concept_question_ids)} câu CMS cũ chưa phân loại khái niệm; '
+                'mỗi câu được xếp vào một nhóm riêng để tạo Quiz.'
             )
         assigned_question_ids: set[str] = set()
         assigned_components: set[str] = set()

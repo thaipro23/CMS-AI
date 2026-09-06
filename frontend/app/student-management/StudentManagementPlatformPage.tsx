@@ -398,7 +398,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   }, [branch, campus, isCms, mappingSubjectId, page, pageSize, platform, selectedTerm?.term_name, termId]);
 
   return (
-    <PageRoot className="page-stack enterprise-standard-page student-management-page academic-flow-page ux-enterprise-page">
+    <PageRoot className="page-stack enterprise-standard-page training-operations-page student-management-page academic-flow-page ux-enterprise-page">
       <EnterpriseScreenHeader
         eyebrow="Vận hành đào tạo"
         title={`Quản lý sinh viên ${platformLabel}`}

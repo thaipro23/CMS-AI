@@ -711,16 +711,11 @@ def _require_academic_catalog_admin(
     user: UserContext = Depends(get_user_context),
     db: Session = Depends(get_db),
 ) -> UserContext:
-    """Restrict global AP imports and campus catalog mutations to system administrators.
-
-    CAMPUS_OWNER is intentionally excluded: that role is scoped to class operations
-    inside assigned campuses and must not mutate the global campus catalog or enqueue
-    cross-campus AP import jobs.
-    """
-    if 'manage_settings' in set(user.permissions or []):
+    """Global catalogs/AP sync are managed by admins and all-campus owners."""
+    service = BusinessRBACService(db)
+    if service.has_any_business_permission(user, 'academic.catalog.manage'):
         return user
-    BusinessRBACService(db).require_system_admin(user)
-    return user
+    raise HTTPException(status_code=403, detail='Bạn không có quyền quản lý danh mục đào tạo hoặc đồng bộ AP toàn hệ thống.')
 
 
 def _require_academic_view_permission(
@@ -1151,10 +1146,10 @@ def list_terms(
 def get_term_with_blocks(
     term_id: str,
     active_blocks: bool | None = None,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
+    _require_academic_catalog_admin(user, db)
     service = AcademicService(db)
     term = db.query(AcademicTerm).filter(AcademicTerm.id == term_id).first()
     if not term:
@@ -1168,10 +1163,10 @@ def get_term_with_blocks(
 @router.post('/terms', response_model=AcademicTermWithBlocksOut)
 def save_academic_term(
     payload: AcademicTermUpsertIn,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
+    _require_academic_catalog_admin(user, db)
     term = AcademicService(db).save_term_with_blocks(payload.model_dump())
     blocks = AcademicService(db).list_blocks(term_id=term.id, active=None)
     log_audit(db, action='academic.term.upsert', status='success', message='Lưu học kỳ/block thành công', user=user, target_type='academic_term', target_id=term.id, metadata={'term_code': term.term_code, 'branch': term.branch, 'block_count': len(blocks)})
@@ -1183,10 +1178,10 @@ def save_academic_term(
 @router.delete('/terms/{term_id}', response_model=AcademicTermWithBlocksOut)
 def delete_academic_term(
     term_id: str,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
+    _require_academic_catalog_admin(user, db)
     service = AcademicService(db)
     term = db.query(AcademicTerm).filter(AcademicTerm.id == term_id).first()
     if not term:
@@ -3508,10 +3503,10 @@ def get_ap_sync_options(
 @router.post('/sync/from-json', response_model=AcademicImportResultOut)
 def sync_from_json(
     payload: AcademicImportFromJsonIn,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
+    _require_academic_catalog_admin(user, db)
     return AcademicAPSyncWorkflowService(db).sync_from_json(payload, user=user)
 
 
@@ -3553,8 +3548,8 @@ def get_ap_sync_job(
 @router.post('/sync/ap', response_model=AcademicImportResultOut)
 def sync_from_ap(
     payload: AcademicAPSyncIn,
-    user: UserContext = Depends(require_permission('manage_settings')),
+    user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    _require_academic_admin(db, user)
+    _require_academic_catalog_admin(user, db)
     return AcademicAPSyncWorkflowService(db).sync_from_ap(payload, user=user)

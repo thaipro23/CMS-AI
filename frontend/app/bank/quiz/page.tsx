@@ -3,7 +3,8 @@
 import { formatVNDateTime } from '../../../lib/time'
 import { inlineMessageFromBackend } from '../../../lib/backendNotice'
 import { normalizeOpenEdxCourseId } from '../../../lib/openedx'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { InlineNotice, type InlineNoticeData } from '../../../components/ui/InlineNotice'
 import { useAppContext } from '../../../context/AppContext'
 import { PageHeader, PageRoot } from '../../../components/layout/PageHeader'
 import { BankPageIdentity, BankSection, BankWorkflowStepper } from '../_components/BankDesignContract'
@@ -25,6 +26,8 @@ import {
 type QuizMapping = QuizAutoMapResult['mappings'][number]
 type EffectiveQuizMapping = QuizMapping & { action: QuizChapterAction; effectiveReady: boolean; effectiveRequiresQuiz: boolean }
 type PendingCreate = { kind: 'one'; item: EffectiveQuizMapping } | { kind: 'all' }
+
+const DIFFICULTY_LABELS: Record<string, string> = { EASY: 'Dễ', MEDIUM: 'Trung bình', HARD: 'Khó' }
 
 type AssessmentConfig = {
   totalQuestions: number
@@ -54,8 +57,8 @@ function quizSuffixFromChapterTitle(title: string | undefined | null) {
 
 type InlineMessage = { tone: 'success' | 'danger' | 'warning' | 'info'; text: string }
 
-function messageClass(message: InlineMessage) {
-  return message.tone === 'danger' ? 'danger' : message.tone === 'warning' ? 'warning' : message.tone === 'info' ? 'info' : 'success'
+function quizNotice(message: InlineMessage | null): InlineNoticeData | null {
+  return message ? { type: message.tone === 'danger' ? 'error' : message.tone, body: message.text } : null
 }
 
 function defaultActionFromMapping(item: QuizMapping): QuizChapterAction {
@@ -126,6 +129,46 @@ function normalizeNumber(value: number, fallback: number, min: number, max: numb
   return Math.max(min, Math.min(max, Math.trunc(next)))
 }
 
+function ConfigPanel({ kind, config, lockedByBlueprint, updateConfig }: { kind: 'quiz' | 'final'; config: AssessmentConfig; lockedByBlueprint: boolean; updateConfig: (kind: 'quiz' | 'final', patch: Partial<AssessmentConfig>) => void }) {
+    const total = config.easy + config.medium + config.hard
+    const title = kind === 'final' ? 'Cấu hình Final test' : 'Cấu hình Quiz tự luyện'
+    const note = kind === 'final' ? 'Dùng riêng cho dòng chọn Tạo Final test.' : 'Dùng cho các dòng chọn Tạo Quiz.'
+    return <div className="popup-action-panel">
+      <div className="section-heading compact-heading">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted">{note}</p>
+        </div>
+        <span className={classNames('status', total === 100 ? 'success' : 'warning')}>{total}%</span>
+      </div>
+      <div className="quiz-small-grid">
+        <label>Số câu<input className="input" type="number" min={1} max={200} disabled={lockedByBlueprint} value={config.totalQuestions} onChange={(event) => updateConfig(kind, { totalQuestions: normalizeNumber(Number(event.target.value), kind === 'final' ? 30 : 15, 1, 200) })} /></label>
+        <label>Dễ (%)<input className="input" type="number" disabled={lockedByBlueprint} value={config.easy} onChange={(event) => updateConfig(kind, { easy: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
+        <label>Trung bình (%)<input className="input" type="number" disabled={lockedByBlueprint} value={config.medium} onChange={(event) => updateConfig(kind, { medium: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
+        <label>Khó (%)<input className="input" type="number" disabled={lockedByBlueprint} value={config.hard} onChange={(event) => updateConfig(kind, { hard: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
+      </div>
+      <div className="section-heading compact-heading quiz-timer-subhead">
+        <div>
+          <h3>Thời gian làm bài</h3>
+          <p className="muted">Thời gian làm bài và chờ làm lại.</p>
+        </div>
+        <label className="toggle-line toggle-strong">
+          <input type="checkbox" checked={config.timerEnabled} onChange={(event) => updateConfig(kind, { timerEnabled: event.target.checked })} />
+          <span>Bật</span>
+        </label>
+      </div>
+      <div className="quiz-small-grid two-cols">
+        <label>Thời gian/phút<input className="input" type="number" min={1} max={300} disabled={!config.timerEnabled} value={config.timeLimitMinutes} onChange={(event) => updateConfig(kind, { timeLimitMinutes: normalizeNumber(Number(event.target.value), kind === 'final' ? 60 : 15, 1, 300) })} /></label>
+        <label>Chờ làm lại/phút<input className="input" type="number" min={0} max={10080} disabled={!config.timerEnabled} value={config.retakeCooldownMinutes} onChange={(event) => updateConfig(kind, { retakeCooldownMinutes: normalizeNumber(Number(event.target.value), 0, 0, 10080) })} /></label>
+      </div>
+      <div className="option-grid compact-options">
+        <label className="toggle-line"><input type="checkbox" disabled={!config.timerEnabled} checked={config.autoSubmitOnTimeout} onChange={(event) => updateConfig(kind, { autoSubmitOnTimeout: event.target.checked })} /><span>Tự nộp khi hết giờ</span></label>
+        <label className="toggle-line"><input type="checkbox" disabled={!config.timerEnabled} checked={config.lockAfterTimeout} onChange={(event) => updateConfig(kind, { lockAfterTimeout: event.target.checked })} /><span>Khóa sau hết giờ</span></label>
+      </div>
+    </div>
+  }
+
+
 export default function BankQuizPage() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(true), [authHeaders])
@@ -144,6 +187,7 @@ export default function BankQuizPage() {
   const [blueprintBusy, setBlueprintBusy] = useState(false)
   const [planPreview, setPlanPreview] = useState<BankReleaseQuizPlan | null>(null)
   const [planPreviewBusy, setPlanPreviewBusy] = useState(false)
+  const planPreviewRequest = useRef(0)
   const [blueprintTitle, setBlueprintTitle] = useState('')
   const [blueprintSaveBusy, setBlueprintSaveBusy] = useState(false)
 
@@ -383,55 +427,22 @@ export default function BankQuizPage() {
     }
   }
 
+  function clearPlanPreview() {
+    planPreviewRequest.current += 1
+    setPlanPreview(null)
+    setPlanPreviewBusy(false)
+  }
+
   function updateConfig(kind: 'quiz' | 'final', patch: Partial<AssessmentConfig>) {
     const updater = (current: AssessmentConfig): AssessmentConfig => {
       const next = { ...current, ...patch }
       return next
     }
-    setPlanPreview(null)
+    clearPlanPreview()
     if (kind === 'final') setFinalConfig(updater)
     else setQuizConfig(updater)
   }
 
-  function ConfigPanel({ kind, config }: { kind: 'quiz' | 'final'; config: AssessmentConfig }) {
-    const total = config.easy + config.medium + config.hard
-    const lockedByBlueprint = Boolean(selectedBlueprintId && createModal?.kind === 'one')
-    const title = kind === 'final' ? 'Cấu hình Final test' : 'Cấu hình Quiz tự luyện'
-    const note = kind === 'final' ? 'Dùng riêng cho dòng chọn Tạo Final test.' : 'Dùng cho các dòng chọn Tạo Quiz.'
-    return <div className="popup-action-panel">
-      <div className="section-heading compact-heading">
-        <div>
-          <h3>{title}</h3>
-          <p className="muted">{note}</p>
-        </div>
-        <span className={classNames('status', total === 100 ? 'success' : 'warning')}>{total}%</span>
-      </div>
-      <div className="quiz-small-grid">
-        <label>Số câu<input className="input" type="number" min={1} max={200} disabled={lockedByBlueprint} value={config.totalQuestions} onChange={(event) => updateConfig(kind, { totalQuestions: normalizeNumber(Number(event.target.value), kind === 'final' ? 30 : 15, 1, 200) })} /></label>
-        <label>Easy %<input className="input" type="number" disabled={lockedByBlueprint} value={config.easy} onChange={(event) => updateConfig(kind, { easy: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
-        <label>Medium %<input className="input" type="number" disabled={lockedByBlueprint} value={config.medium} onChange={(event) => updateConfig(kind, { medium: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
-        <label>Hard %<input className="input" type="number" disabled={lockedByBlueprint} value={config.hard} onChange={(event) => updateConfig(kind, { hard: normalizeNumber(Number(event.target.value), 0, 0, 100) })} /></label>
-      </div>
-      <div className="section-heading compact-heading quiz-timer-subhead">
-        <div>
-          <h3>Timer</h3>
-          <p className="muted">Thời gian làm bài và chờ làm lại.</p>
-        </div>
-        <label className="toggle-line toggle-strong">
-          <input type="checkbox" checked={config.timerEnabled} onChange={(event) => updateConfig(kind, { timerEnabled: event.target.checked })} />
-          <span>Bật</span>
-        </label>
-      </div>
-      <div className="quiz-small-grid two-cols">
-        <label>Thời gian/phút<input className="input" type="number" min={1} max={300} disabled={!config.timerEnabled} value={config.timeLimitMinutes} onChange={(event) => updateConfig(kind, { timeLimitMinutes: normalizeNumber(Number(event.target.value), kind === 'final' ? 60 : 15, 1, 300) })} /></label>
-        <label>Chờ làm lại/phút<input className="input" type="number" min={0} max={10080} disabled={!config.timerEnabled} value={config.retakeCooldownMinutes} onChange={(event) => updateConfig(kind, { retakeCooldownMinutes: normalizeNumber(Number(event.target.value), 0, 0, 10080) })} /></label>
-      </div>
-      <div className="option-grid compact-options">
-        <label className="toggle-line"><input type="checkbox" disabled={!config.timerEnabled} checked={config.autoSubmitOnTimeout} onChange={(event) => updateConfig(kind, { autoSubmitOnTimeout: event.target.checked })} /><span>Tự nộp khi hết giờ</span></label>
-        <label className="toggle-line"><input type="checkbox" disabled={!config.timerEnabled} checked={config.lockAfterTimeout} onChange={(event) => updateConfig(kind, { lockAfterTimeout: event.target.checked })} /><span>Khóa sau hết giờ</span></label>
-      </div>
-    </div>
-  }
 
   function applyBlueprintToConfig(blueprint: QuizBlueprint, action: QuizChapterAction) {
     const kind = action === 'final_test' ? 'final' : 'quiz'
@@ -497,13 +508,18 @@ export default function BankQuizPage() {
     if (!createModal || createModal.kind !== 'one') return
     const item = createModal.item
     if (item.action === 'final_test') {
-      setPlanPreview(null)
+      clearPlanPreview()
       setMessage({ tone: 'info', text: `Final test sẽ kiểm tra khả năng đáp ứng trên toàn bộ ${(item as any).source_release_ids?.length || 0} Release nguồn khi tạo, không kiểm tra riêng một Release.` })
       return
     }
     const releaseId = item.release_id
     if (!releaseId) return
     const config = configForAction(item.action)
+    if (config.easy + config.medium + config.hard !== 100) {
+      setMessage({ tone: 'warning', text: 'Tổng tỷ lệ Dễ, Trung bình và Khó phải bằng 100%.' })
+      return
+    }
+    const requestId = ++planPreviewRequest.current
     setPlanPreviewBusy(true)
     setPlanPreview(null)
     try {
@@ -515,21 +531,26 @@ export default function BankQuizPage() {
         max_families_per_bank: 2,
         quiz_blueprint_id: selectedBlueprintId || null,
       })
-      setPlanPreview(result)
+      if (requestId === planPreviewRequest.current) setPlanPreview(result)
     } catch (error) {
-      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Release không đáp ứng số câu/độ khó đã chọn.' })
+      if (requestId === planPreviewRequest.current) {
+        setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Bộ đề không đáp ứng số câu và độ khó đã chọn.' })
+      }
     } finally {
-      setPlanPreviewBusy(false)
+      if (requestId === planPreviewRequest.current) setPlanPreviewBusy(false)
     }
   }
 
   useEffect(() => {
-    setPlanPreview(null)
+    clearPlanPreview()
     setSelectedBlueprintId('')
+    if (createModal) setMessage(null)
     setBlueprintTitle(createModal?.kind === 'one' ? `${createModal.item.action === 'final_test' ? 'Final test' : 'Quiz'} · ${createModal.item.chapter_title}` : '')
     loadBlueprintsForModal().catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createModal?.kind, createModal?.kind === 'one' ? createModal.item.chapter_id : ''])
+
+  useEffect(() => () => { planPreviewRequest.current += 1 }, [])
 
   useEffect(() => {
     const normalizedCourseId = normalizeOpenEdxCourseId(courseId)
@@ -643,10 +664,7 @@ export default function BankQuizPage() {
       meta={applied ? <span className="status success">Đã lưu cấu hình</span> : autoMap ? <span className="status warning">Đang preview</span> : <span className="status pending">Chưa map</span>}
     />
 
-    {message ? <div className={classNames('academic-inline-notice', messageClass(message))} role="alert" aria-live="polite">
-      <VisualIcon label={message.text} icon={message.tone === 'danger' ? 'alert' : message.tone === 'success' ? 'check' : 'info'} tone={message.tone === 'danger' ? 'red' : message.tone === 'success' ? 'green' : message.tone === 'warning' ? 'amber' : 'blue'} size={18} className="notice-visual-icon" />
-      <div className="notice-copy"><b>{message.tone === 'danger' ? 'Không thể hoàn tất thao tác' : message.tone === 'success' ? 'Đã hoàn tất' : message.tone === 'warning' ? 'Cần kiểm tra' : 'Thông tin'}</b><span>{message.text}</span></div>
-    </div> : null}
+    <InlineNotice notice={createModal ? null : quizNotice(message)} />
 
     <BankWorkflowStepper
       currentStep={workflowStep}
@@ -671,12 +689,12 @@ export default function BankQuizPage() {
           <VisualIcon label="Chưa có kết quả map" icon="layers" tone="blue" size={28} className="bank-quiz-empty-map__icon" />
           <div><h3>Chưa có kết quả map</h3><p>Nhập Course ID và bấm “Kiểm tra map”. Sau khi resolve thành công, bảng bài học và trạng thái Release sẽ xuất hiện tại đây.</p></div>
           <div className="bank-quiz-empty-metrics" aria-label="Thông tin map chưa có dữ liệu">
-            <div><span>Khóa học</span><b>—</b></div><div><span>Version môn</span><b>—</b></div><div><span>Release</span><b>—</b></div><div><span>Bài đã map</span><b>—</b></div>
+            <div><span>Khóa học</span><b>—</b></div><div><span>Phiên bản môn</span><b>—</b></div><div><span>Release</span><b>—</b></div><div><span>Bài đã map</span><b>—</b></div>
           </div>
         </div> : <>
           <div className="bank-quiz-summary-grid" aria-label="Tóm tắt kết quả map">
             <div><span>Khóa học</span><b>{autoMap.openedx_course_id || normalizeOpenEdxCourseId(courseId) || '—'}</b></div>
-            <div><span>Version môn</span><b>{autoMap.offering?.code || autoMap.offering?.id || selectedOfferingId || '—'}</b></div>
+            <div><span>Phiên bản môn</span><b>{autoMap.offering?.code || autoMap.offering?.id || selectedOfferingId || '—'}</b></div>
             <div><span>Bài đã map</span><b>{matchedCount}/{chapterCount || 0}</b></div>
             <div><span>Sẵn sàng tạo</span><b>{readyRows.length}</b></div>
           </div>
@@ -700,8 +718,8 @@ export default function BankQuizPage() {
             columns={mappingColumns}
             rowKey={(item) => item.chapter_id}
             density="compact"
-            emptyTitle="Version môn chưa có bài"
-            emptyDescription="Kiểm tra lại version môn hoặc dữ liệu Chapter trong ngân hàng đề."
+            emptyTitle="Phiên bản môn chưa có bài"
+            emptyDescription="Kiểm tra lại version môn hoặc dữ liệu bài học trong ngân hàng đề."
             label="bài"
           />
 
@@ -722,11 +740,11 @@ export default function BankQuizPage() {
       >
         <div className="bank-quiz-config-form">
           <label>Khóa học ID<input className="input" value={courseId} onBlur={() => { const normalized = normalizeOpenEdxCourseId(courseId); if (normalized) setCourseId(normalized) }} onChange={(event) => { setCourseId(event.target.value); setSelectedOfferingId(''); setAutoMap(null); setChapterActions({}) }} placeholder="course-v1:FPL+WEB107+SU26" /></label>
-          <label>Version môn<select className="input" value={selectedOfferingId || autoMap?.offering?.id || ''} disabled={busy || !candidates.length} onChange={async (event) => {
+          <label>Phiên bản môn<select className="input" value={selectedOfferingId || autoMap?.offering?.id || ''} disabled={busy || !candidates.length} onChange={async (event) => {
             const next = event.target.value
             setSelectedOfferingId(next)
             if (next) await runPreview(next, false)
-          }}><option value="">{candidates.length ? 'Chọn version môn...' : 'Hệ thống tự xác định'}</option>{candidates.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.offering_code}{item.course_run_match ? ' · khớp Course ID' : ''} · {item.ready_chapter_count}/{item.chapter_count} bài có Release</option>)}</select></label>
+          }}><option value="">{candidates.length ? 'Chọn phiên bản môn...' : 'Hệ thống tự xác định'}</option>{candidates.map((item) => <option key={item.offering_id} value={item.offering_id}>{item.offering_code}{item.course_run_match ? ' · khớp Course ID' : ''} · {item.ready_chapter_count}/{item.chapter_count} bài có Release</option>)}</select></label>
           <div className="bank-quiz-config-actions">
             <button className="btn secondary" type="button" disabled={busy || !normalizeOpenEdxCourseId(courseId)} onClick={() => runPreview(selectedOfferingId, true)}>{busy ? 'Đang kiểm tra...' : autoMap ? 'Kiểm tra lại' : 'Kiểm tra map'}</button>
             <button className="btn" type="button" disabled={busy || !autoMap} onClick={runApply}>{busy ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
@@ -744,7 +762,7 @@ export default function BankQuizPage() {
 
     <BankSection
       title="Lịch sử của khóa học"
-      description="Chỉ hiển thị bài kiểm tra thuộc Course ID đang nhập. Khôi phục là thao tác có audit."
+      description="Chỉ hiển thị bài kiểm tra thuộc Course ID đang nhập. Lịch sử khôi phục được lưu."
       icon="audit"
       tone="slate"
       meta={historyBusy ? <span className="status pending">Đang tải</span> : <span className="status pending">{history.length} bản ghi</span>}
@@ -756,30 +774,31 @@ export default function BankQuizPage() {
     <AccessibleDialog
       open={Boolean(createModal)}
       title={createModal?.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : createModal ? `${actionLabel(createModal.item.action)} cho ${createModal.item.chapter_title}` : 'Cấu hình tạo bài kiểm tra'}
-      description="Quiz tự luyện và Final test có cấu hình riêng. Kiểm tra tỷ lệ độ khó, số câu, tỷ lệ độ khó và khả năng đáp ứng của Release trước khi xác nhận."
+      description="Chọn số câu, tỷ lệ độ khó và thời gian làm bài trước khi xác nhận."
       onClose={() => setCreateModal(null)}
+      busy={busy || Boolean(creatingKey)}
       size="xlarge"
       className="quiz-config-modal"
       bodyClassName="quiz-config-modal-body"
     >
       {createModal ? <>
+          <InlineNotice notice={quizNotice(message)} />
           {createModal.kind === 'one' ? <div className="quiz-blueprint-picker">
             <label>Quiz Blueprint<select className="input" disabled={blueprintBusy || busy || Boolean(creatingKey)} value={selectedBlueprintId} onChange={(event) => {
               const next = event.target.value
               setSelectedBlueprintId(next)
-              setPlanPreview(null)
+              clearPlanPreview()
               const blueprint = blueprints.find((item) => item.id === next)
               if (blueprint) applyBlueprintToConfig(blueprint, createModal.item.action)
             }}><option value="">Cấu hình thủ công</option>{blueprints.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.total_questions} câu</option>)}</select></label>
-            <p className="helper">Chọn Blueprint sẽ khóa số câu/độ khó theo Blueprint để backend và giao diện dùng cùng một cấu hình.</p>
             {!selectedBlueprintId ? <div className="quiz-blueprint-save-row"><input className="input" value={blueprintTitle} onChange={(event) => setBlueprintTitle(event.target.value)} placeholder="Tên Blueprint" /><button className="btn secondary" type="button" disabled={blueprintSaveBusy || busy || Boolean(creatingKey)} onClick={saveCurrentBlueprint}>{blueprintSaveBusy ? 'Đang lưu...' : 'Lưu cấu hình thành Blueprint'}</button></div> : null}
           </div> : null}
-          <div className="quiz-modal-grid">{(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} /> : null}{(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} /> : null}</div>
-          <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : createModal.item.action === 'final_test' ? `Final test sẽ lấy candidate pool từ toàn bộ ${(createModal.item as any).source_release_ids?.length || 0} Release của các Bài đang chọn Tạo Quiz.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {normalizeOpenEdxCourseId(courseId) || '—'} · Quiz {quizConfig.totalQuestions} câu · độ khó {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.totalQuestions} câu · độ khó {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
-          {(quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100) ? <div className="alert warning">Tổng tỷ lệ Easy/Medium/Hard của mỗi loại phải bằng 100%.</div> : null}
+          <div className="quiz-modal-grid">{(createModal.kind === 'all' || createModal.item.action === 'quiz') ? <ConfigPanel kind="quiz" config={quizConfig} lockedByBlueprint={Boolean(selectedBlueprintId && createModal.kind === 'one')} updateConfig={updateConfig} /> : null}{(createModal.kind === 'all' || createModal.item.action === 'final_test') ? <ConfigPanel kind="final" config={finalConfig} lockedByBlueprint={Boolean(selectedBlueprintId && createModal.kind === 'one')} updateConfig={updateConfig} /> : null}</div>
+          <div className="quiz-create-preview"><b>Phạm vi xác nhận</b><span>{createModal.kind === 'all' ? `${readyRows.length} bài đủ điều kiện sẽ được tạo. Các dòng Không tạo hoặc còn thiếu điều kiện được bỏ qua.` : createModal.item.action === 'final_test' ? `Final test sẽ lấy câu hỏi từ ${(createModal.item as any).source_release_ids?.length || 0} Release của các Bài đang chọn Tạo Quiz.` : `${createModal.item.chapter_title} sẽ được tạo bằng Release ${createModal.item.release_code || 'đã chọn'}.`}</span><small>Course ID: {normalizeOpenEdxCourseId(courseId) || '—'} · Quiz {quizConfig.totalQuestions} câu · độ khó {quizConfig.easy}/{quizConfig.medium}/{quizConfig.hard} · Final {finalConfig.totalQuestions} câu · độ khó {finalConfig.easy}/{finalConfig.medium}/{finalConfig.hard}</small></div>
+          {(quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100) ? <div className="alert warning">Tổng tỷ lệ Dễ/Trung bình/Khó của mỗi loại phải bằng 100%.</div> : null}
           {createModal.kind === 'one' ? <div className="quiz-plan-preview-panel">
             {createModal.item.action === 'final_test' ? <div className="alert info"><b>Final test dùng bộ câu hỏi tổng hợp.</b> Hệ thống sẽ kiểm tra khả năng đáp ứng trên toàn bộ {(createModal.item as any).source_release_ids?.length || 0} Release nguồn ngay trước khi tạo và chặn nếu thiếu câu.</div> : <><button className="btn secondary" type="button" disabled={planPreviewBusy || busy || Boolean(creatingKey)} onClick={previewCurrentPlan}>{planPreviewBusy ? 'Đang kiểm tra...' : 'Kiểm tra khả năng đáp ứng'}</button>
-            {planPreview ? <><div className="alert success"><b>Release đáp ứng cấu hình.</b> {planPreview.assigned_question_count} câu được phân vào {planPreview.slots.length} Problem Bank slot.{planPreview.flexibly_assigned_question_count ? ` Có ${planPreview.flexibly_assigned_question_count} câu CMS cũ được xếp linh hoạt vì chưa có độ khó.` : ''}</div>{planPreview.warnings?.length ? <div className="alert info"><b>Ngoại lệ cho dữ liệu CMS cũ</b><ul>{planPreview.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}<div className="quiz-matrix-preview"><table><thead><tr><th>Độ khó</th><th>Số câu</th></tr></thead><tbody>{Object.entries(planPreview.matrix_target_counts || {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => <tr key={key}><td>{key.replace(':auto', '').toUpperCase()}</td><td>{value}</td></tr>)}</tbody></table></div></> : null}</>}
+            {planPreview ? <><div className="alert success"><b>Bộ đề đủ câu để tạo Quiz.</b> Sinh viên sẽ làm {planPreview.total_questions} câu, được chọn từ {planPreview.assigned_question_count} câu khả dụng.</div>{planPreview.warnings?.length ? <div className="alert info"><b>Điều chỉnh khi tạo đề</b><ul>{planPreview.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}<div className="quiz-matrix-preview"><table><thead><tr><th>Độ khó</th><th>Số câu</th></tr></thead><tbody>{Object.entries(planPreview.matrix_target_counts || {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => <tr key={key}><td>{DIFFICULTY_LABELS[key.replace(':auto', '').toUpperCase()] || key}</td><td>{value}</td></tr>)}</tbody></table></div></> : null}</>}
           </div> : null}
           <div className="modal-actions"><button className="btn secondary" type="button" disabled={busy || Boolean(creatingKey)} onClick={() => setCreateModal(null)}>Hủy</button><button className="btn" type="button" disabled={busy || Boolean(creatingKey) || (createModal.kind === 'all' ? (quizDifficultyTotal !== 100 || finalDifficultyTotal !== 100 || !readyRows.length) : (createModal.item.action === 'final_test' ? finalDifficultyTotal !== 100 : quizDifficultyTotal !== 100))} onClick={confirmCreateFromModal}>{createModal.kind === 'all' ? `Tạo ${readyRows.length} bài kiểm tra` : actionLabel(createModal.item.action)}</button></div>
       </> : null}
