@@ -77,6 +77,36 @@ def test_final_pools_keep_libraries_separate_and_cover_every_lesson():
             assert all(ref.startswith('lb:' + slot['library_key'][4:] + ':') for ref in slot['openedx_problem_ids'])
 
 
+def test_final_pool_splits_large_lesson_into_bounded_problem_banks():
+    with _session() as db:
+        release = source_release(db, 'large-lesson', ['easy'] * 50)
+        plan = QuestionBankQuizCreationWorkflowService(SimpleNamespace(db=db))._build_final_test_plan(
+            source_releases=[release], source_details=[], total_questions=10,
+            difficulty_easy=100, difficulty_medium=0, difficulty_hard=0)
+
+        assert len(plan['slots']) == 5
+        assert [len(slot['openedx_problem_ids']) for slot in plan['slots']] == [10] * 5
+        assert [slot['pick_count'] for slot in plan['slots']] == [2] * 5
+        assert sum(slot['pick_count'] for slot in plan['slots']) == 10
+        assert len({component for slot in plan['slots'] for component in slot['openedx_problem_ids']}) == 50
+        assert all(slot['source_bank_count'] == 5 for slot in plan['slots'])
+
+
+def test_final_pool_balances_eight_equal_lessons_without_exceeding_total():
+    with _session() as db:
+        releases = [source_release(db, f'lesson-{index}', ['easy'] * 50) for index in range(8)]
+        plan = QuestionBankQuizCreationWorkflowService(SimpleNamespace(db=db))._build_final_test_plan(
+            source_releases=releases, source_details=[], total_questions=50,
+            difficulty_easy=100, difficulty_medium=0, difficulty_hard=0)
+
+        picks = list(plan['source_release_pick_counts'].values())
+        assert sum(picks) == 50
+        assert sorted(picks) == [6] * 6 + [7] * 2
+        assert max(picks) - min(picks) <= 1
+        assert plan['source_release_candidate_counts'] == {f'lesson-{index}': 50 for index in range(8)}
+        assert plan['source_release_distribution_policy'] == 'capacity_balanced_water_filling_v1'
+
+
 def test_native_ai_still_requires_requested_difficulty_when_not_taking_all():
     with _session() as db:
         release = source_release(db, 'ai', ['medium'] * 10, 'ai')

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from datetime import datetime
@@ -1148,6 +1149,11 @@ class QuestionBankQuizCreationWorkflowService:
                     candidates = [rid for rid, items in by_release.items() if allocation[rid] < len(items)]
                     if not candidates:
                         raise ValueError(f'Final test không đủ câu {diff.upper()} cho cấu hình {target} câu.')
+                    # Capacity-aware water-filling: balance the number of
+                    # visible questions across source lessons first, while
+                    # never assigning more than a lesson actually has. The
+                    # global total keeps this fair when Easy/Medium/Hard are
+                    # allocated in separate cells.
                     rid = min(
                         candidates,
                         key=lambda value: (
@@ -1194,6 +1200,12 @@ class QuestionBankQuizCreationWorkflowService:
                     'Hãy tăng số câu Final hoặc điều chỉnh tỷ lệ độ khó.'
                 )
 
+        # A Final test can combine many lessons, so a single lesson must not
+        # turn into one oversized Problem Bank.  Keep candidate pools bounded
+        # while preserving every candidate and the exact number selected from
+        # the release/difficulty cell.  For example, 50 candidates with a
+        # target of 10 become five banks of 10 candidates, taking two each.
+        max_final_bank_candidates = 10
         slots: list[dict] = []
         assigned_questions: set[str] = set()
         assigned_components: set[str] = set()
@@ -1210,42 +1222,69 @@ class QuestionBankQuizCreationWorkflowService:
                     cell['by_release'][rid],
                     key=lambda entry: (str(getattr(entry['question'], 'created_at', '') or ''), str(entry['question'].id)),
                 )
-                question_ids = [str(entry['question'].id) for entry in entries]
                 problem_ids = [str(entry['component']) for entry in entries]
                 if int(pick_count) > len(problem_ids):
                     raise ValueError(
                         f'Release {release.release_code or release.id} chỉ có {len(problem_ids)} ứng viên '
                         f'cho {cell["difficulty"].upper()}, cần pick {pick_count}.'
                     )
-                assigned_questions.update(question_ids)
-                assigned_components.update(problem_ids)
                 candidate_count += len(problem_ids)
-                cell_slot_count += 1
                 detail = next((item for item in (source_details or []) if str(item.get('release_id')) == rid), {})
                 chapter_title = str(detail.get('chapter_title') or release.release_code or rid)
-                slots.append({
-                    'slot_no': slot_no,
-                    'difficulty': cell['difficulty'].upper(),
-                    'question_type': cell['question_type'],
-                    'pick_count': int(pick_count),
-                    'max_count': int(pick_count),
-                    'library_key': release.openedx_library_key,
-                    'openedx_problem_ids': problem_ids,
-                    'problem_display_names': {
-                        entry['component']: _build_problem_display_name(entry['question'])
-                        for entry in entries if is_manually_authored_question(entry['question'])
-                    },
-                    'question_ids': question_ids,
-                    'family_names': [chapter_title],
-                    'variant_count': len(question_ids),
-                    'sampling_strategy': 'difficulty_pool',
-                    'source_release_id': release.id,
-                    'source_release_code': release.release_code,
-                    'source_chapter_id': detail.get('chapter_id'),
-                    'source_chapter_title': chapter_title,
-                    'rule': f'random {int(pick_count)}/{len(question_ids)} từ {chapter_title}',
-                })
-                slot_no += 1
+
+                # Use all candidate components, but split them into bounded
+                # banks.  When there are fewer requested questions than the
+                # natural number of chunks, use one bank per requested pick;
+                # this keeps every created bank meaningful (pick_count >= 1)
+                # while still avoiding one monolithic pool.
+                natural_bank_count = max(
+                    1,
+                    math.ceil(len(entries) / max_final_bank_candidates),
+                )
+                bank_count = max(1, min(natural_bank_count, int(pick_count)))
+                chunk_size = math.ceil(len(entries) / bank_count)
+                chunks = [
+                    entries[offset:offset + chunk_size]
+                    for offset in range(0, len(entries), chunk_size)
+                ]
+                pick_base, pick_remainder = divmod(int(pick_count), len(chunks))
+                for chunk_index, chunk_entries in enumerate(chunks):
+                    chunk_pick_count = pick_base + (1 if chunk_index < pick_remainder else 0)
+                    if chunk_pick_count <= 0:
+                        continue
+                    chunk_question_ids = [str(entry['question'].id) for entry in chunk_entries]
+                    chunk_problem_ids = [str(entry['component']) for entry in chunk_entries]
+                    assigned_questions.update(chunk_question_ids)
+                    assigned_components.update(chunk_problem_ids)
+                    cell_slot_count += 1
+                    slots.append({
+                        'slot_no': slot_no,
+                        'difficulty': cell['difficulty'].upper(),
+                        'question_type': cell['question_type'],
+                        'pick_count': int(chunk_pick_count),
+                        'max_count': int(chunk_pick_count),
+                        'library_key': release.openedx_library_key,
+                        'openedx_problem_ids': chunk_problem_ids,
+                        'problem_display_names': {
+                            entry['component']: _build_problem_display_name(entry['question'])
+                            for entry in chunk_entries if is_manually_authored_question(entry['question'])
+                        },
+                        'question_ids': chunk_question_ids,
+                        'family_names': [chapter_title],
+                        'variant_count': len(chunk_question_ids),
+                        'sampling_strategy': 'difficulty_pool',
+                        'source_release_id': release.id,
+                        'source_release_code': release.release_code,
+                        'source_chapter_id': detail.get('chapter_id'),
+                        'source_chapter_title': chapter_title,
+                        'source_bank_index': chunk_index + 1,
+                        'source_bank_count': len(chunks),
+                        'rule': (
+                            f'random {int(chunk_pick_count)}/{len(chunk_question_ids)} từ {chapter_title}'
+                            f' · nhóm {chunk_index + 1}/{len(chunks)}'
+                        ),
+                    })
+                    slot_no += 1
             coverage.append({
                 'difficulty': cell['difficulty'].upper(),
                 'question_type': cell['question_type'],
@@ -1271,7 +1310,7 @@ class QuestionBankQuizCreationWorkflowService:
         source_ids = [str(item.id) for item in source_releases]
         return {
             'ok': True,
-            'planner_engine': 'final_test_all_chapter_releases_itembank_v1',
+            'planner_engine': 'final_test_all_chapter_releases_itembank_v2',
             'uses_llm': False,
             'release_id': source_ids[0],
             'release_code': source_releases[0].release_code,
@@ -1293,10 +1332,12 @@ class QuestionBankQuizCreationWorkflowService:
             'unclassified_difficulty_question_count': unclassified_count,
             'flexibly_assigned_question_count': sum(len(items) for items in allocated_flexible.values()),
             'source_release_pick_counts': release_pick_totals,
+            'source_release_candidate_counts': source_question_counts,
+            'source_release_distribution_policy': 'capacity_balanced_water_filling_v1',
             'classification_policy': 'legacy_flexible_fallback' if unclassified_count else 'strict',
             'hard_guard': {
                 'valid': True,
-                'summary': 'Final test dùng toàn bộ Release nguồn làm candidate pool theo cấu hình độ khó; mỗi ItemBank chỉ chứa component của đúng một Library.',
+                'summary': 'Final test phân bổ cân bằng theo từng Release nguồn trong giới hạn câu khả dụng; mỗi ItemBank chỉ chứa component của đúng một Library.',
             },
             'message': (
                 f'Final test tổng hợp {len(assigned_questions)} câu ứng viên từ {len(source_releases)} Bài/Release; '

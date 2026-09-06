@@ -922,6 +922,9 @@ class BankReleaseQuizPlanOut(BackendUiStatusMixin):
     release_id: str
     release_code: str
     openedx_library_key: str | None = None
+    source_release_ids: list[str] = Field(default_factory=list)
+    source_release_codes: list[str] = Field(default_factory=list)
+    source_release_count: int = 0
     requested_total_questions: int
     total_questions: int
     target_counts: dict = Field(default_factory=dict)
@@ -936,6 +939,9 @@ class BankReleaseQuizPlanOut(BackendUiStatusMixin):
     unclassified_difficulty_question_count: int = 0
     unclassified_concept_question_count: int = 0
     flexibly_assigned_question_count: int = 0
+    source_release_pick_counts: dict[str, int] = Field(default_factory=dict)
+    source_release_candidate_counts: dict[str, int] = Field(default_factory=dict)
+    source_release_distribution_policy: str | None = None
     hard_guard: dict = Field(default_factory=dict)
     message: str = ''
 

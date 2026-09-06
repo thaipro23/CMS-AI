@@ -1507,6 +1507,9 @@ export type BankReleaseQuizPlan = BackendUiNotice & {
   release_id: string
   release_code: string
   openedx_library_key?: string | null
+  source_release_ids?: string[]
+  source_release_codes?: string[]
+  source_release_count?: number
   requested_total_questions: number
   total_questions: number
   target_counts: Record<string, number>
@@ -1521,6 +1524,9 @@ export type BankReleaseQuizPlan = BackendUiNotice & {
   unclassified_difficulty_question_count: number
   unclassified_concept_question_count: number
   flexibly_assigned_question_count: number
+  source_release_pick_counts?: Record<string, number>
+  source_release_candidate_counts?: Record<string, number>
+  source_release_distribution_policy?: string | null
   hard_guard: Record<string, any>
   message: string
 }

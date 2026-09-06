@@ -586,7 +586,9 @@ def test_legacy_quiz_rebalances_missing_hard_without_question_type_quota(assessm
 
         assert plan['target_counts'] == {'EASY': 7, 'MEDIUM': 5, 'HARD': 3}
         assert plan['effective_target_counts'] == {'EASY': 9, 'MEDIUM': 6, 'HARD': 0}
-        assert len(plan['slots']) == 2
+        # Final test keeps the lesson's candidate pool split into bounded
+        # Problem Banks; the single-release Quiz keeps one bank per difficulty.
+        assert len(plan['slots']) == (3 if assessment_type == 'final_test' else 2)
         assert sum(int(slot['pick_count']) for slot in plan['slots']) == 15
         assigned_ids = {
             question_id

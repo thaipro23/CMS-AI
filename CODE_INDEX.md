@@ -17,6 +17,7 @@ Cập nhật: 06/09/2026. Nhánh làm việc: `feat/import-quiz-cms-old-su26`; n
 | Bảng tràn ngang, cột/nút bị che | [EnterpriseDataTable](frontend/components/table/EnterpriseDataTable.tsx) | [TableStates](frontend/components/table/TableStates.tsx), [OperationsWorkspace](frontend/components/operations/OperationsWorkspace.tsx) |
 | Import Quiz CMS cũ | [page](frontend/app/import-quiz-cms-old/page.tsx), [CSS module](frontend/app/import-quiz-cms-old/page.module.css) | [legacy_quiz_import](backend/app/services/question_bank/legacy_quiz_import.py), [question-bank-v2 routes](backend/app/api/routes/question_bank_v2.py) |
 | Tạo Quiz: số câu, độ khó, 0%, preview cũ | [Quiz page](frontend/app/bank/quiz/page.tsx) | [quiz_creation](backend/app/services/question_bank/quiz_creation.py), `bank_quiz_create_task` trong worker |
+| Final test dồn quá nhiều câu vào một Bài | [quiz_creation](backend/app/services/question_bank/quiz_creation.py) | `final_test_all_chapter_releases_itembank_v2`; pool lớn được tách thành nhiều Problem Bank, phân bổ cân bằng theo từng Bài và giới hạn câu khả dụng |
 | Dữ liệu sinh viên/giảng viên sai phạm vi | [academic/access](backend/app/services/academic/access.py) | [roster](backend/app/services/academic/roster.py), [teacher_report](backend/app/services/academic/teacher_report.py), [AcademicService](backend/app/services/academic_service.py) |
 | Tiến độ Udemy ở chi tiết lớp | [UdemyClassProgressPanel](frontend/components/student-management/UdemyClassProgressPanel.tsx) | [udemy_progress](backend/app/services/academic/udemy_progress.py); request bắt buộc giữ `class_id` |
 | Lấy danh mục môn/cơ sở, POLY/PTCD, kỳ học | [APAcademicClient](backend/app/services/ap_academic_sync.py) | [academic/ap_sync](backend/app/services/academic/ap_sync.py), [subject_delivery](backend/app/services/academic/subject_delivery.py) |
@@ -41,7 +42,7 @@ Menu chỉ giúp điều hướng; quyền thực tế phải được chặn t�
 
 1. Chọn phiên bản môn, Release, bài/đích Open edX, tổng số câu và tỷ lệ Dễ/Trung bình/Khó.
 2. Preview lấy lại khi cấu hình thay đổi; response cũ không được ghi đè preview mới.
-3. Planner chọn đủ câu theo độ khó. Luồng tạo Quiz không có quota theo loại câu hỏi; loại câu gốc trong Release được giữ nguyên. Với câu nhập tay/import không có concept, hệ thống lấy theo pool độ khó (ví dụ 10 Dễ + 5 Trung bình); nếu tổng kho đúng bằng số cần tạo thì lấy đủ 10/10.
+3. Planner chọn đủ câu theo độ khó. Luồng tạo Quiz không có quota theo loại câu hỏi; loại câu gốc trong Release được giữ nguyên. Với câu nhập tay/import không có concept, hệ thống lấy theo pool độ khó (ví dụ 10 Dễ + 5 Trung bình); nếu tổng kho đúng bằng số cần tạo thì lấy đủ 10/10. Final test gom nhiều Bài/Release nhưng tách pool lớn thành nhiều Problem Bank và vẫn giữ tổng `pick_count` chính xác.
 4. Dữ liệu import cũ có thể cân lại độ khó khả dụng khi thiếu câu Khó; câu native vẫn chịu quy tắc độ khó. Không tự biến câu multi-select thành single-select.
 5. Worker giữ giá trị `0` của tỷ lệ độ khó/thời gian chờ; chỉ dùng mặc định nếu thiếu hoặc `null`.
 6. Release đã xuất bản thành công giữ quy tắc khóa. Việc chuẩn hóa thông báo không bỏ kiểm tra nội dung hoặc readiness.
@@ -112,6 +113,7 @@ Route động dùng dấu ngoặc vuông như cấu trúc Next.js. `page.tsx` c�
 - [global-workspace-scroll-notice-hotfix.css](frontend/styles/global-workspace-scroll-notice-hotfix.css): cuộn workspace, notice trong AppShell.
 - [OperationsWorkspace.module.css](frontend/components/operations/OperationsWorkspace.module.css): khoảng cách giữa thông báo, bảng và nội dung bên trong từng WorkspaceSection.
 - [FeedbackMessage.module.css](frontend/components/ui/FeedbackMessage.module.css): notice trong trang và portal dialog; không phụ thuộc vị trí bên trong AppShell.
+- 44 vị trí thông báo legacy đã chuyển sang `ContentNotice`/`InlineNotice`/`ActionMessage` hoặc trạng thái bảng chuyên biệt. JSX không còn render `.alert`/`.form-message` cũ; các chuỗi `alert` còn lại là `role="alert"`, icon hoặc selector CSS tương thích.
 - [Import page.module.css](frontend/app/import-quiz-cms-old/page.module.css): chỉ áp dụng Import Quiz CMS cũ.
 
 `PageRoot` là fragment và đăng ký class cho `<main>` trong AppShell. Khi thêm/sửa một trang đào tạo phải giữ class nền và `training-operations-page`; không giả định class fallback của shell vẫn còn sau khi trang đăng ký. `AccessibleDialog` được render qua portal; selector chỉ nằm dưới class trang sẽ không áp dụng cho nội dung dialog. Dùng `className`/`bodyClassName` hoặc CSS module của component.
