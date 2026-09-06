@@ -6,6 +6,10 @@ import type { TableDensity } from '../../../hooks/useUrlTableState'
 import type { BankVersionQuestion } from '../../../types'
 import { statusClass, statusLabel } from './shared'
 
+export function isManualQuestion(row: BankVersionQuestion) {
+  return ['manual', 'import'].includes(row.authoring_mode || '') || ['manual', 'legacy_quiz_excel'].includes(row.source_type || '')
+}
+
 function difficultyLabel(value?: string | null) {
   if (value === 'easy') return 'Dễ'
   if (value === 'medium') return 'Trung bình'
@@ -78,7 +82,7 @@ export function BankQuestionEnterpriseTable({
       key: 'question', header: 'Câu hỏi', kind: 'identity', minWidth: 390, priority: 'required', hideable: false, truncateLines: 2,
       render: (row) => <button className="bank-question-link-button" type="button" onClick={() => onPreview(row)} aria-label={`Mở duyệt câu hỏi: ${row.question_text || 'chưa có nội dung'}`}>
         <b>{row.question_text || 'Câu hỏi chưa có nội dung'}</b>
-        <small>{row.question_family_id ? `Family: ${row.question_family_id}` : row.concept_title || 'Chưa gắn concept'}</small>
+        {row.concept_title ? <small>{row.concept_title}</small> : null}
       </button>,
     },
     {
@@ -91,10 +95,10 @@ export function BankQuestionEnterpriseTable({
     },
     {
       key: 'quality', header: 'Chất lượng', kind: 'number', width: 88, priority: 'important', align: 'center', hideable: true,
-      render: (row) => <span className={`quality-score ${Number(row.quality_score || 0) < .6 ? 'low' : ''}`}>{Math.round(Number(row.quality_score || 0) * 100)}%</span>,
+      render: (row) => isManualQuestion(row) && !row.quality_score ? <span title="Chưa có đánh giá tự động">—</span> : <span className={`quality-score ${Number(row.quality_score || 0) < .6 ? 'low' : ''}`}>{Math.round(Number(row.quality_score || 0) * 100)}%</span>,
     },
     {
-      key: 'concept', header: 'Concept', kind: 'text', minWidth: 150, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2,
+      key: 'concept', header: 'Khái niệm', kind: 'text', minWidth: 150, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2,
       render: (row) => row.concept_title || '—',
     },
     {

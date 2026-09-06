@@ -8,7 +8,7 @@ export function userFacingError(error: unknown, fallback = 'Thao tác chưa hoà
   if (/^(?:HTTP\s*)?403\b|forbidden|does not have permission|access denied/i.test(message)) return 'Bạn không có quyền thực hiện thao tác này.'
   if (/^(?:HTTP\s*)?404\b|^(?:question|course|release|batch|job) not found$/i.test(message)) return 'Không tìm thấy dữ liệu cần xử lý.'
   if (/failed to fetch|network error|networkerror/i.test(message)) return 'Không kết nối được máy chủ. Vui lòng thử lại.'
-  if (/timeout|timed out/i.test(message)) return 'Yêu cầu xử lý quá thời gian cho phép. Vui lòng thử lại.'
+  if (/timeout|timed out/i.test(message)) return 'Yêu cầu xử lý quá thời gian cho phép. Kiểm tra trạng thái tác vụ trước khi thử lại.'
   if (/^(?:internal server error|bad gateway|service unavailable)$/i.test(message)) return 'Máy chủ tạm thời chưa đáp ứng. Vui lòng thử lại sau.'
   return message
 }

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,10 @@ _TRANSIENT_OPENEDX_STATUS_RE = re.compile(r'HTTP\s+(429|502|503|504)\b', re.IGNO
 
 
 def bank_operation_error_code(error: Exception | str) -> str:
+    if isinstance(error, httpx.TimeoutException):
+        return 'OPENEDX_REQUEST_TIMEOUT'
+    if isinstance(error, httpx.TransportError):
+        return 'OPENEDX_CONNECTION_ERROR'
     message = str(error or '')
     lowered = message.lower()
     if 'openedx_library_org_missing' in lowered or ('organization' in lowered and ('chưa tồn tại' in lowered or 'does not exist' in lowered)):
@@ -36,6 +41,10 @@ def bank_operation_error_code(error: Exception | str) -> str:
 def bank_operation_user_message(error: Exception | str) -> str:
     message = str(error or '').strip()
     code = bank_operation_error_code(error)
+    if code == 'OPENEDX_REQUEST_TIMEOUT':
+        return message if message.startswith('Open edX chưa phản hồi khi thêm nhóm câu ') else 'Open edX không phản hồi trong thời gian cho phép. Hãy kiểm tra kết quả trong Lịch sử Quiz trước khi tạo lại.'
+    if code == 'OPENEDX_CONNECTION_ERROR':
+        return 'Kết nối tới Open edX bị gián đoạn. Hãy kiểm tra kết quả trong Lịch sử Quiz trước khi tạo lại.'
     if code == 'OPENEDX_LIBRARY_ORG_MISSING':
         return 'Open edX chưa có Organization sở hữu Content Library. Hãy kiểm tra OPENEDX_LIBRARY_ORG và Organization tương ứng.'
     if code == 'OPENEDX_TEMPORARILY_UNAVAILABLE':

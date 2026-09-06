@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { BankOpenEdxImportPreview } from '../../../types'
 import { importBankOpenEdxQuestions, previewBankOpenEdxImport } from '../../../lib/api'
 import { Modal } from './shared'
+import { ContentNotice } from '../../../components/ui/ContentNotice'
 
 function questionTypeLabel(value: string) {
   if (value === 'single_select') return 'Một đáp án'
@@ -86,12 +87,12 @@ export function BankOpenEdxImportModal({
 
   return <Modal open={open} title="Import câu hỏi từ Open edX OLX" onClose={() => { if (!busy) onClose() }} wide>
     <div className="bank-openedx-import-form">
-      <div className="alert info"><b>Giữ nguyên semantics chấm điểm.</b> Hệ thống nhận Một đáp án, Nhiều đáp án, Trả lời ngắn và Trả lời số. Response Open edX chưa hỗ trợ sẽ bị chặn thay vì âm thầm đổi cách chấm.</div>
+      <ContentNotice tone="info"><b>Giữ nguyên semantics chấm điểm.</b> Hệ thống nhận Một đáp án, Nhiều đáp án, Trả lời ngắn và Trả lời số. Response Open edX chưa hỗ trợ sẽ bị chặn thay vì âm thầm đổi cách chấm.</ContentNotice>
       <label>Nguồn tham chiếu<input className="input" disabled={Boolean(busy) || disabled} value={sourceRef} onChange={(event) => { setSourceRef(event.target.value); setPreview(null) }} placeholder="Ví dụ: course-v1:FPL+WEB107+SU26 / problem ..." /></label>
       <label>Problem OLX<textarea className="input openedx-olx-input" rows={13} disabled={Boolean(busy) || disabled} value={olx} onChange={(event) => { setOlx(event.target.value); setPreview(null); setError('') }} placeholder={'<problem>\n  <multiplechoiceresponse>...\n</problem>'} /></label>
       <p className="helper">Nếu OLX tham chiếu ảnh/static asset của Course cũ, response type vẫn được đọc nhưng ảnh không được sao chép mù. Hãy upload lại ảnh trong editor ACMS để asset thuộc đúng Question/Library mới.</p>
 
-      {error ? <div className="alert danger" role="alert">{error}</div> : null}
+      {error ? <ContentNotice tone="danger" role="alert">{error}</ContentNotice> : null}
       {preview ? <div className="openedx-import-preview">
         <div className="summary-grid compact-summary">
           <div><span>Đọc được</span><b>{preview.total_parsed}</b></div>
@@ -101,8 +102,8 @@ export function BankOpenEdxImportModal({
           <div><span>Nhiều đáp án</span><b>{typeCounts.multi_select || 0}</b></div>
           <div><span>Text / Số</span><b>{(typeCounts.text_input || 0) + (typeCounts.numerical_input || 0)}</b></div>
         </div>
-        {preview.warnings?.map((warning, index) => <div className="alert warning" key={`warning-${index}`}>{warning}</div>)}
-        {preview.errors?.length ? <div className="alert danger"><b>Không thể import khi còn lỗi:</b><ul>{preview.errors.slice(0, 12).map((row, index) => <li key={`error-${index}`}>Câu {String(row.index ?? index + 1)} · {String(row.question_type || 'unknown')} · {String(row.error || 'Không hợp lệ')}</li>)}</ul></div> : null}
+        {preview.warnings?.map((warning, index) => <ContentNotice tone="warning" key={`warning-${index}`}>{warning}</ContentNotice>)}
+        {preview.errors?.length ? <ContentNotice tone="danger"><b>Không thể import khi còn lỗi:</b><ul>{preview.errors.slice(0, 12).map((row, index) => <li key={`error-${index}`}>Câu {String(row.index ?? index + 1)} · {String(row.question_type || 'unknown')} · {String(row.error || 'Không hợp lệ')}</li>)}</ul></ContentNotice> : null}
         {preview.questions?.length ? <div className="openedx-import-question-list">{preview.questions.slice(0, 20).map((row, index) => <div key={`${row.index || index}-${row.question_text || ''}`}><span className="soft-tag">{questionTypeLabel(String(row.question_type || ''))}</span><b>{String(row.question_text || `Câu ${index + 1}`)}</b></div>)}</div> : null}
         {preview.questions.length > 20 ? <p className="helper">Chỉ hiển thị 20 câu đầu trong preview để popup không quá nặng.</p> : null}
       </div> : null}

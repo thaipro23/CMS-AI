@@ -12,6 +12,7 @@ import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
 import type { Department, Subject, SubjectOffering, SubjectVersionSummary } from '../../../../types'
 import { createSubjectOffering, deleteSubjectOffering, getDepartment, getSubject, getSubjectVersionSummaries, updateSubjectOffering } from '../../../../lib/api'
 import { BankTableStatusFilter, BankTableToolbar, Breadcrumb, ConfirmDialog, EntityActions, Modal, TERMS, bankStatusMatches, emptyReviewStats, matchesSearch, reviewStatusText, useAsyncMessage, useBankData } from '../shared'
+import { ContentNotice } from '../../../../components/ui/ContentNotice'
 
 export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
   const { headers, canScope } = useBankData()
@@ -75,7 +76,7 @@ export function SubjectVersionsPage({ subjectId }: { subjectId: string }) {
         : 'Quản lý phiên bản môn theo học kỳ, bài học và tiến độ duyệt trong phạm vi được phân quyền.'}
       icon="layers"
     />
-    {message ? <div className="alert info">{message}</div> : null}
+    {message ? <ContentNotice tone="info">{message}</ContentNotice> : null}
     <section className="bank-hierarchy-panel">
       <BankTableToolbar
         search={tableState.q}

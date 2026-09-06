@@ -3,6 +3,7 @@
 import type { BankQuestionContent, BankQuestionMedia } from '../../../types'
 import type { BankQuestionEditForm } from './shared'
 import { defaultQuestionContent } from './shared'
+import { ContentNotice } from '../../../components/ui/ContentNotice'
 
 export type PendingQuestionImage = { id: string; file: File; altText: string }
 
@@ -165,7 +166,7 @@ export function QuestionAuthoringEditor({
     <div className="question-media-section"><h3>Ảnh trong câu hỏi</h3><p className="helper">Ảnh độc lập với kiểu trả lời. PNG/JPEG/WebP, tối đa 4 MB/ảnh; alt text bắt buộc.</p>{existingMedia.map((media) => <figure key={media.id}>{mediaUrl ? <img src={mediaUrl(media)} alt={media.alt_text} /> : null}<figcaption>{media.alt_text}</figcaption>{onDeleteMedia ? <button className="btn danger small" type="button" disabled={disabled} onClick={() => onDeleteMedia(media)}>Xóa</button> : null}</figure>)}{pendingMedia.map((item) => <div className="question-pending-media" key={item.id}><span>{item.file.name}</span><input className="input" disabled={disabled} value={item.altText} placeholder="Alt text (bắt buộc)" onChange={(event) => onPendingMediaChange(pendingMedia.map((candidate) => candidate.id === item.id ? { ...candidate, altText: event.target.value } : candidate))} /><button className="icon-button danger" type="button" onClick={() => onPendingMediaChange(pendingMedia.filter((candidate) => candidate.id !== item.id))}>×</button></div>)}<label className="btn secondary file-button">+ Thêm ảnh<input hidden type="file" accept="image/png,image/jpeg,image/webp" disabled={disabled || existingMedia.length + pendingMedia.length >= 4} onChange={(event) => { const file = event.target.files?.[0]; if (file) onPendingMediaChange([...pendingMedia, { id: `${Date.now()}-${file.name}`, file, altText: '' }]); event.currentTarget.value = '' }} /></label></div>
     <div className="grid grid-3"><label>Concept<input className="input" disabled={disabled} value={form.concept_title} onChange={(event) => onChange({ ...form, concept_title: event.target.value })} /></label><label>Family<input className="input" disabled={disabled} value={form.question_family_id} onChange={(event) => onChange({ ...form, question_family_id: event.target.value })} /></label><label>Nguồn<input className="input" disabled={disabled} value={form.source_ref} onChange={(event) => onChange({ ...form, source_ref: event.target.value })} /></label></div>
     <label>Giải thích<textarea className="input" rows={2} disabled={disabled} value={form.explanation} onChange={(event) => onChange({ ...form, explanation: event.target.value })} /></label>
-    {questionFormValidationError(form) ? <div className="alert warning">{questionFormValidationError(form)}</div> : <div className="alert success">Dữ liệu câu hỏi hợp lệ.</div>}
+    {questionFormValidationError(form) ? <ContentNotice tone="warning">{questionFormValidationError(form)}</ContentNotice> : <ContentNotice tone="success">Dữ liệu câu hỏi hợp lệ.</ContentNotice>}
   </div>
 }
 

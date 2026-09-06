@@ -12,6 +12,7 @@ import { EnterpriseDataTable, EnterpriseTableColumn } from '../../components/tab
 import { useOpsTableState } from '../../hooks/useOpsTableState'
 import { useDebouncedValue } from '../../lib/useDebouncedValue'
 import { formatVNDateTime } from '../../lib/time'
+import { userFacingError } from '../../lib/userFacingError'
 import { CompactFilterBar, InfoPairGrid, OperationsKpiStrip, SideDrawer } from '../../components/operations/OperationsWorkspace'
 
 const actionLabel: Record<string, string> = {
@@ -21,6 +22,8 @@ const actionLabel: Record<string, string> = {
   'question_bank.bank_version.generate.job': 'Đưa việc tạo câu hỏi vào hàng đợi',
   'question_bank.release.publish_openedx': 'Đưa bộ đề lên CMS',
   'question_bank.release.quiz.create': 'Tạo Quiz trên CMS',
+  'question_bank.release.quiz.create.async': 'Tạo Quiz / Final test trên CMS',
+  'question_bank.release.quiz.create.job': 'Đưa việc tạo bài kiểm tra vào hàng đợi',
   'academic.sync.ap.job': 'Đưa đồng bộ AP vào hàng đợi',
   'academic.sync.ap.run': 'Chạy đồng bộ AP',
   'academic.class_sync.async': 'Đồng bộ lớp/CMS',
@@ -39,6 +42,11 @@ function errorText(value?: string | null) {
   return value === 'USER_ERROR' ? 'Do người dùng/cấu hình' : value === 'SYSTEM_ERROR' ? 'Do hệ thống' : value === 'EXTERNAL_SERVICE_ERROR' ? 'Dịch vụ ngoài' : value === 'VALIDATION_ERROR' ? 'Dữ liệu đầu vào' : value === 'AUTH_ERROR' ? 'Phân quyền' : '—'
 }
 function actorLabel(row: AuditLogRow) { return row.actor_id === 'system' ? 'Hệ thống' : row.actor_id || '—' }
+function logMessage(row: AuditLogRow) {
+  return row.status === 'failed'
+    ? userFacingError(row.message, 'Tác vụ thất bại nhưng nhật ký cũ chưa lưu nguyên nhân. Mở Lịch sử Quiz để xem chi tiết bài kiểm tra.')
+    : row.message || '—'
+}
 function targetLabel(row: AuditLogRow) { return [row.target_type, row.target_id].filter(Boolean).join(' ') || '—' }
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -108,7 +116,7 @@ function AuditContent() {
     { key: 'action', header: 'Hành động', kind: 'identity', minWidth: 240, priority: 'required', hideable: false, render: (row) => <><b>{actionText(row.action)}</b>{debugMode ? <small>{row.action}</small> : <small>{row.target_type || 'Hệ thống'}</small>}</> },
     { key: 'status', header: 'Kết quả', kind: 'status', width: 110, priority: 'required', hideable: false, render: (row) => <StatusBadge status={row.status} /> },
     { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 142, priority: 'important', hideable: true, render: (row) => <small>{formatVNDateTime(row.created_at)}</small> },
-    { key: 'message', header: 'Nội dung', kind: 'text', minWidth: 240, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2, render: (row) => <span className={row.status === 'failed' ? 'table-error-text' : ''}>{row.message || 'Không có nội dung mô tả.'}</span> },
+    { key: 'message', header: 'Nội dung', kind: 'text', minWidth: 240, priority: 'optional', hideable: true, defaultVisible: false, truncateLines: 2, render: (row) => <span className={row.status === 'failed' ? 'table-error-text' : ''}>{logMessage(row)}</span> },
     { key: 'error_type', header: 'Nguồn lỗi', kind: 'status', width: 130, priority: 'optional', hideable: true, defaultVisible: false, render: (row) => errorText(row.error_type) },
     { key: 'target', header: 'Đối tượng', kind: 'text', minWidth: 150, priority: 'optional', hideable: true, defaultVisible: false, render: (row) => <small>{targetLabel(row)}</small> },
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 92, sticky: 'right', hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => setSelectedLog(row)}>Chi tiết</button> },
@@ -151,7 +159,7 @@ function AuditContent() {
         { label: 'Nguồn lỗi', value: errorText(selectedLog.error_type) },
         { label: 'Đối tượng', value: targetLabel(selectedLog) },
         { label: 'Mã hành động', value: <code>{selectedLog.action}</code>, wide: true },
-        { label: 'Nội dung', value: selectedLog.message || 'Không có nội dung mô tả.', wide: true },
+        { label: 'Nội dung', value: logMessage(selectedLog), wide: true },
       ]} /></div> : null}
     </SideDrawer>
   </PageRoot>

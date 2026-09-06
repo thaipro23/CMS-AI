@@ -240,8 +240,8 @@ def test_bank_publish_preflight_failure_is_reported_before_import(monkeypatch) -
         reject_publish_contract,
     )
     parsed = parse_legacy_quiz_workbook(raw, filename='MEC005.xlsx')
-    question = parsed['sheets'][0]['questions'][0]
-    assert any(item['code'] == 'BANK_PREFLIGHT_FAILED' for item in question['errors'])
+    parsed_question = parsed['sheets'][0]['questions'][0]
+    assert any(item['code'] == 'BANK_PREFLIGHT_FAILED' for item in parsed_question['errors'])
     assert any(item['code'] == 'BANK_PREFLIGHT_FAILED' for item in parsed['errors'])
 
 
@@ -416,7 +416,7 @@ def test_end_to_end_import_creates_su26_audit_and_is_retry_idempotent(tmp_path: 
         db.close()
 
 
-def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -> None:
+def test_quiz_planner_pools_unclassified_imports_and_accepts_all_manual_questions() -> None:
     db = _session()
     try:
         release = QuestionBankRelease(
@@ -483,11 +483,7 @@ def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -
         assert len(plan['slots']) == 3
         assigned = [question_id for slot in plan['slots'] for question_id in slot['question_ids']]
         assert len(assigned) == len(set(assigned)) == 5
-        assert all(
-            family['unclassified_concept']
-            for slot in plan['slots']
-            for family in slot['families']
-        )
+        assert all(slot['families'] == [] for slot in plan['slots'])
 
         strict_release = QuestionBankRelease(
             id='release-strict-manual',
@@ -526,14 +522,13 @@ def test_quiz_planner_relaxes_concept_and_difficulty_only_for_legacy_imports() -
             ),
         ])
         db.commit()
-        with pytest.raises(ValueError, match='không đủ câu theo độ khó'):
-            workflow._build_release_quiz_plan(
-                release=strict_release,
-                total_questions=1,
-                difficulty_easy=100,
-                difficulty_medium=0,
-                difficulty_hard=0,
-            )
+        manual_plan = workflow._build_release_quiz_plan(
+            release=strict_release, total_questions=1,
+            difficulty_easy=100, difficulty_medium=0, difficulty_hard=0,
+        )
+        assert manual_plan['effective_target_counts'] == {'EASY': 0, 'MEDIUM': 1, 'HARD': 0}
+        assert manual_plan['slots'][0]['pick_count'] == 1
+        assert manual_plan['slots'][0]['question_ids'] == [strict_question.id]
     finally:
         db.close()
 
@@ -591,8 +586,7 @@ def test_legacy_quiz_rebalances_missing_hard_without_question_type_quota(assessm
 
         assert plan['target_counts'] == {'EASY': 7, 'MEDIUM': 5, 'HARD': 3}
         assert plan['effective_target_counts'] == {'EASY': 9, 'MEDIUM': 6, 'HARD': 0}
-        if assessment_type == 'quiz':
-            assert len(plan['slots']) == 15
+        assert len(plan['slots']) == 2
         assert sum(int(slot['pick_count']) for slot in plan['slots']) == 15
         assigned_ids = {
             question_id
@@ -623,17 +617,17 @@ def test_quiz_worker_preserves_zero_values_and_defaults(monkeypatch, config: dic
     from app.services.question_bank_service import VersionedQuestionBankService
 
     db = Mock()
-    job = SimpleNamespace(id='quiz-job', request_json=config, requested_by=None, release_id='release-1')
+    quiz_job = SimpleNamespace(id='quiz-job', request_json=config, requested_by=None, release_id='release-1')
     ops = Mock()
-    ops.get_job.return_value = job
-    ops.complete.side_effect = lambda job, *, result, label: SimpleNamespace(result_json=result)
+    ops.get_job.return_value = quiz_job
+    ops.complete.side_effect = lambda _quiz_job, *, result, label: SimpleNamespace(result_json=result)
     create_quiz = AsyncMock(return_value={'ok': True, 'status': 'completed'})
     monkeypatch.setattr(worker, 'SessionLocal', lambda: db)
     monkeypatch.setattr(BankOperationJobService, '__new__', lambda cls, db: ops)
     monkeypatch.setattr(VersionedQuestionBankService, 'create_quiz_from_release', create_quiz)
     monkeypatch.setattr('app.services.audit_log.log_audit', Mock())
 
-    result = worker.bank_quiz_create_task.run(job.id)
+    result = worker.bank_quiz_create_task.run(quiz_job.id)
 
     assert result['ok'] is True
     create_quiz.assert_awaited_once()

@@ -25,6 +25,8 @@ from app.models.question_bank import (
     SubjectOffering,
 )
 from app.modules.openedx_connector.factory import get_openedx_connector
+from app.services.openedx_exporter import _build_problem_display_name, is_manually_authored_question
+from app.services.bank_operation_jobs import bank_operation_error_code, bank_operation_user_message
 from app.services.question_family import normalize_difficulty
 from app.services.question_bank.helpers import (
     _ui_notice,
@@ -1056,11 +1058,11 @@ class QuestionBankQuizCreationWorkflowService:
 
         legacy_rebalanced = False
         legacy_entries = [entry for values in grouped.values() for entry in values] + [entry for values in flexible.values() for entry in values]
-        legacy_mode = bool(legacy_entries) and all(
-            str(getattr(entry['question'], 'source_type', '') or '').strip().lower() == 'legacy_quiz_excel'
+        manual_mode = bool(legacy_entries) and all(
+            is_manually_authored_question(entry['question'])
             for entry in legacy_entries
         )
-        if legacy_mode:
+        if manual_mode or int(total_questions) == len(legacy_entries):
             order = ('easy', 'medium', 'hard')
             weights = {'easy': max(int(difficulty_easy or 0), 0), 'medium': max(int(difficulty_medium or 0), 0), 'hard': max(int(difficulty_hard or 0), 0)}
             classified_capacity = {diff: len(grouped.get((diff, 'auto'), [])) for diff in order}
@@ -1088,7 +1090,7 @@ class QuestionBankQuizCreationWorkflowService:
                 break
             if sum(effective.values()) != int(total_questions):
                 raise ValueError(
-                    f'Bộ đề CMS cũ không đủ {int(total_questions)} câu để tạo Final test. '
+                    f'Bộ đề không đủ {int(total_questions)} câu để tạo Final test. '
                     f'Hiện có {_difficulty_summary(classified_capacity)}; '
                     f'chưa phân loại: {len(flexible.get("auto", []))}.'
                 )
@@ -1229,9 +1231,14 @@ class QuestionBankQuizCreationWorkflowService:
                     'max_count': int(pick_count),
                     'library_key': release.openedx_library_key,
                     'openedx_problem_ids': problem_ids,
+                    'problem_display_names': {
+                        entry['component']: _build_problem_display_name(entry['question'])
+                        for entry in entries if is_manually_authored_question(entry['question'])
+                    },
                     'question_ids': question_ids,
                     'family_names': [chapter_title],
                     'variant_count': len(question_ids),
+                    'sampling_strategy': 'difficulty_pool',
                     'source_release_id': release.id,
                     'source_release_code': release.release_code,
                     'source_chapter_id': detail.get('chapter_id'),
@@ -1253,7 +1260,7 @@ class QuestionBankQuizCreationWorkflowService:
         warnings: list[str] = []
         if legacy_rebalanced:
             warnings.append(
-                f'Bộ đề CMS cũ thiếu câu theo tỷ lệ đã chọn. Hệ thống tự cân lại độ khó '
+                f'Số câu khả dụng khác tỷ lệ đã chọn. Hệ thống tự cân lại độ khó '
                 f'cho Final test thành {_difficulty_summary(requested)}, tổng cộng {int(total_questions)} câu.'
             )
         unclassified_count = sum(len(items) for items in flexible.values())
@@ -1329,6 +1336,7 @@ class QuestionBankQuizCreationWorkflowService:
         if not bool((release.metadata_json or {}).get('verification_complete')):
             raise ValueError('Release chưa có bằng chứng verify đầy đủ từ Open edX. Hãy publish/re-verify Release trước khi tạo Quiz.')
         rows, questions = self._published_release_question_rows(release)
+        manual_mode = bool(rows) and all(is_manually_authored_question(questions[row.question_id]) for row in rows)
         by_component: dict[str, BankReleaseQuestion] = {}
         duplicate_components: list[str] = []
         for row in rows:
@@ -1487,6 +1495,34 @@ class QuestionBankQuizCreationWorkflowService:
                     'Hãy tạo/publish thêm câu hoặc giảm tỷ lệ/số câu Quiz.'
                 )
 
+            if manual_mode:
+                ordered_rows = sorted(diff_rows, key=lambda row: str(row.question_id))
+                question_ids = [row.question_id for row in ordered_rows]
+                problem_ids = [str(row.openedx_library_problem_id).strip().strip('\"\'') for row in ordered_rows]
+                difficulty_label = {'easy': 'Dễ', 'medium': 'Trung bình', 'hard': 'Khó'}[diff]
+                return [{
+                    'difficulty': diff.upper(),
+                    'question_type': qtype,
+                    'pick_count': target_count,
+                    'max_count': target_count,
+                    'library_key': release.openedx_library_key,
+                    'openedx_problem_ids': problem_ids,
+                    'problem_display_names': {
+                        component: _build_problem_display_name(questions[question_id])
+                        for component, question_id in zip(problem_ids, question_ids)
+                    },
+                    'question_ids': question_ids,
+                    'families': [],
+                    'family_names': [],
+                    'variant_count': available_count,
+                    'sampling_strategy': 'difficulty_pool',
+                    'rule': f'Lấy {target_count}/{available_count} câu {difficulty_label}',
+                }], {
+                    'difficulty': diff.upper(), 'question_type': qtype,
+                    'target_questions': target_count, 'available_questions': available_count,
+                    'selected_slots': 1, 'status': 'difficulty_pool',
+                }, []
+
             # Group by concept/family. The planner keeps a group whole unless it is impossible
             # to satisfy the exact requested slot count without splitting.
             group_map: dict[str, dict] = {}
@@ -1625,8 +1661,7 @@ class QuestionBankQuizCreationWorkflowService:
         requested_original = dict(requested)
         requested_types = {'auto': int(total_questions)}
         legacy_rebalanced = False
-        legacy_mode = bool(rows) and all(is_legacy_quiz_question(questions[row.question_id]) for row in rows)
-        if legacy_mode:
+        if manual_mode or int(total_questions) == len(rows):
             order = ('easy', 'medium', 'hard')
             weights = {'easy': max(int(difficulty_easy or 0), 0), 'medium': max(int(difficulty_medium or 0), 0), 'hard': max(int(difficulty_hard or 0), 0)}
             classified_capacity = {diff: len(grouped_rows.get((diff, 'auto'), [])) for diff in order}
@@ -1654,7 +1689,7 @@ class QuestionBankQuizCreationWorkflowService:
                 break
             if sum(effective.values()) != int(total_questions):
                 raise ValueError(
-                    f'Bộ đề CMS cũ không đủ {int(total_questions)} câu để tạo Quiz. '
+                    f'Bộ đề không đủ {int(total_questions)} câu để tạo Quiz. '
                     f'Hiện có {_difficulty_summary(classified_capacity)}; '
                     f'chưa phân loại: {len(flexible_rows.get("auto", []))}.'
                 )
@@ -1705,7 +1740,7 @@ class QuestionBankQuizCreationWorkflowService:
         warnings: list[str] = []
         if legacy_rebalanced:
             warnings.append(
-                f'Bộ đề CMS cũ thiếu câu theo tỷ lệ đã chọn. Hệ thống tự cân lại độ khó '
+                f'Số câu khả dụng khác tỷ lệ đã chọn. Hệ thống tự cân lại độ khó '
                 f'thành {_difficulty_summary(requested)}, tổng cộng {int(total_questions)} câu.'
             )
         unclassified_difficulty_count = sum(len(items) for items in flexible_rows.values())
@@ -1714,11 +1749,6 @@ class QuestionBankQuizCreationWorkflowService:
             warnings.append(
                 f'{unclassified_difficulty_count} câu CMS cũ chưa có NGƯỠNG/độ khó; '
                 f'{flexibly_assigned_count} câu được phân bổ linh hoạt vào các mức Dễ, Trung bình và Khó.'
-            )
-        if unclassified_concept_question_ids:
-            warnings.append(
-                f'{len(unclassified_concept_question_ids)} câu CMS cũ chưa phân loại khái niệm; '
-                'mỗi câu được xếp vào một nhóm riêng để tạo Quiz.'
             )
         assigned_question_ids: set[str] = set()
         assigned_components: set[str] = set()
@@ -1763,7 +1793,8 @@ class QuestionBankQuizCreationWorkflowService:
             )
         plan = {
             'ok': True,
-            'planner_engine': 'bank_release_difficulty_itembank_v5',
+            'planner_engine': 'bank_release_difficulty_pool_v6' if manual_mode else 'bank_release_difficulty_itembank_v5',
+            'sampling_strategy': 'difficulty_pool' if manual_mode else 'concept_slots',
             'uses_llm': False,
             'release_id': release.id,
             'release_code': release.release_code,
@@ -1997,6 +2028,8 @@ class QuestionBankQuizCreationWorkflowService:
             quiz_blueprint_id=quiz_blueprint_id,
             status='creating',
             metadata_json={
+                'quiz_title': final_quiz_title,
+                'unit_title': final_unit_title,
                 'plan': plan,
                 'validation': validation,
                 'actor': actor,
@@ -2016,6 +2049,7 @@ class QuestionBankQuizCreationWorkflowService:
         rollback_result: dict = {}
         rollback_error = ''
         try:
+            failure_stage = 'Tạo bài kiểm tra trên CMS'
             quiz_result = await connector.create_quiz_node(
                 course_id=course_id,
                 parent_node_id=chapter_mapping.openedx_parent_node_id,
@@ -2084,6 +2118,7 @@ class QuestionBankQuizCreationWorkflowService:
             # loaded the unit-reset plugin yet, so do not rely on it.
             forced_timer_result = {'enabled': False, 'status': 'not_requested'}
             if timer_config['custom_timer_enabled']:
+                failure_stage = 'Lưu thời gian làm bài'
                 forced_timer_result = await connector.upsert_quiz_timer_config(
                     course_id=course_id,
                     sequence_usage_key=sequence_usage_key,
@@ -2107,6 +2142,7 @@ class QuestionBankQuizCreationWorkflowService:
                 if forced_timer_result.get('ok') is False or forced_timer_result.get('success') is False:
                     raise RuntimeError(f'Không lưu được cấu hình timer vào LMS plugin: {forced_timer_result}')
 
+            failure_stage = 'Thêm các nhóm câu hỏi'
             insert_result = await connector.insert_problem_banks(
                 course_id=course_id,
                 unit_node_id=unit_node_id,
@@ -2183,6 +2219,9 @@ class QuestionBankQuizCreationWorkflowService:
                 **(instance.metadata_json or {}),
                 'failed_at': datetime.utcnow().isoformat(),
                 'error': f'{type(exc).__name__}: {str(exc) or repr(exc)}',
+                'error_code': bank_operation_error_code(exc),
+                'error_message': bank_operation_user_message(exc),
+                'failure_stage': failure_stage,
                 'remote_node_created_before_failure': bool(created_node_id),
                 'compensating_rollback_result': rollback_result,
                 'compensating_rollback_error': rollback_error or None,

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import type { BankQuestionImportPreview } from '../../../types'
 import { downloadBankQuestionImportErrors, downloadBankQuestionImportTemplate, enqueueBankQuestionImport, previewBankQuestionImport } from '../../../lib/api'
 import { Modal } from './shared'
+import { ContentNotice } from '../../../components/ui/ContentNotice'
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -29,11 +30,11 @@ export function BankQuestionImportModal({ open, headers, bankVersionId, onClose,
       <p className="helper">Import không ghi dữ liệu ngay khi chọn file. Hệ thống kiểm tra toàn bộ dòng trước; câu hợp lệ được tạo ở trạng thái <b>Chờ duyệt</b>.</p>
       <div className="button-row"><button className="btn secondary" disabled={busy} onClick={async () => { try { setBusy(true); saveBlob(await downloadBankQuestionImportTemplate(headers, bankVersionId), 'bank-question-import-template.xlsx') } catch (e) { setError(e instanceof Error ? e.message : 'Không tải được file mẫu') } finally { setBusy(false) } }}>Tải file mẫu</button></div>
       <input className="input" type="file" accept=".xlsx" onChange={(event) => { setFile(event.target.files?.[0] || null); setPreview(null); setError('') }} />
-      {error && <div className="alert danger">{error}</div>}
+      {error && <ContentNotice tone="danger">{error}</ContentNotice>}
       {!preview && <div className="modal-actions"><button className="btn secondary" onClick={reset}>Hủy</button><button className="btn" disabled={busy || !file} onClick={async () => { if (!file) return; try { setBusy(true); setError(''); setPreview(await previewBankQuestionImport(headers, bankVersionId, file)) } catch (e) { setError(e instanceof Error ? e.message : 'Không kiểm tra được file') } finally { setBusy(false) } }}>{busy ? 'Đang kiểm tra...' : 'Kiểm tra dữ liệu'}</button></div>}
       {preview && <>
         <div className="summary-grid compact-summary"><div><span>Tổng dòng</span><b>{preview.total_rows}</b></div><div><span>Hợp lệ</span><b>{preview.valid_count}</b></div><div><span>Dòng lỗi</span><b>{preview.error_count}</b></div></div>
-        <div className={preview.can_commit ? 'alert success' : 'alert warning'}>{preview.message}</div>
+        <ContentNotice tone={preview.can_commit ? "success" : "warning"}>{preview.message}</ContentNotice>
         {preview.errors.length > 0 && <>
           <div className="button-row no-margin"><button className="btn secondary" disabled={busy} onClick={async () => { try { setBusy(true); saveBlob(await downloadBankQuestionImportErrors(headers, bankVersionId, preview.preview_token), 'bank-question-import-errors.xlsx') } catch (e) { setError(e instanceof Error ? e.message : 'Không tải được file lỗi') } finally { setBusy(false) } }}>Tải file lỗi Excel</button></div>
           <div className="responsive-table-wrap"><table className="ops-data-table"><thead><tr><th>Dòng</th><th>Cột</th><th>Mã lỗi</th><th>Nội dung</th></tr></thead><tbody>{preview.errors.slice(0, 100).map((item, index) => <tr key={`${item.row}-${item.field}-${index}`}><td>{item.row || '—'}</td><td>{item.field || '—'}</td><td><code>{item.code || 'INVALID'}</code></td><td>{item.message || 'Dữ liệu không hợp lệ'}</td></tr>)}</tbody></table></div>

@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader, PageRoot } from '../../../../components/layout/PageHeader'
 import { InlineNotice, noticeError } from '../../../../components/ui/InlineNotice'
-import { OperationsKpiStrip } from '../../../../components/operations/OperationsWorkspace'
+import { OperationsKpiStrip, SideDrawer } from '../../../../components/operations/OperationsWorkspace'
+import { ContentNotice } from '../../../../components/ui/ContentNotice'
+import { userFacingError } from '../../../../lib/userFacingError'
 import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../components/table/EnterpriseDataTable'
 import { useUrlTableState } from '../../../../hooks/useUrlTableState'
 import { formatVNDateTime } from '../../../../lib/time'
@@ -28,6 +30,7 @@ export function BankHistoryPage() {
   const [releases, setReleases] = useState<BankRelease[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<unknown>(null)
+  const [failedQuiz, setFailedQuiz] = useState<CourseQuizInstance | null>(null)
   const activeView = state.sort === 'release' ? 'release' : 'quiz'
 
   const load = async () => {
@@ -76,12 +79,15 @@ export function BankHistoryPage() {
 
   const quizColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_row, index) => (safePage - 1) * state.pageSize + index + 1 },
-    { key: 'quiz', header: 'Bài kiểm tra', kind: 'identity', minWidth: 250, hideable: false, render: (item) => <div className="quiz-history-identity"><b>{item.metadata_json?.quiz_title || 'Quiz trên CMS'}</b><small>{item.openedx_course_id}</small></div> },
+    { key: 'quiz', header: 'Bài kiểm tra', kind: 'identity', minWidth: 250, hideable: false, render: (item) => <div className="quiz-history-identity"><b>{item.metadata_json?.quiz_title || (item.metadata_json?.assessment_type === 'final_test' ? 'Final test' : 'Quiz trên CMS')}</b><small>{item.openedx_course_id}</small></div> },
     { key: 'status', header: 'Trạng thái', kind: 'status', width: 122, priority: 'important', hideable: true, render: (item) => <span className={statusClass(item.status)}>{statusLabel(item.status)}</span> },
     { key: 'type', header: 'Loại', kind: 'status', width: 108, priority: 'important', hideable: true, render: (item) => item.metadata_json?.assessment_type === 'final_test' ? 'Final test' : 'Quiz' },
     { key: 'node', header: 'Node Open edX', kind: 'text', minWidth: 170, priority: 'optional', hideable: true, defaultVisible: false, render: (item) => item.openedx_unit_node_id || '—' },
     { key: 'created', header: 'Ngày tạo', kind: 'date', width: 142, priority: 'important', hideable: true, render: (item) => dateText(item.created_at) },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 116, sticky: 'right', hideable: false, render: (item) => can('publish_questions') && item.status !== 'rolled_back' ? <button className="btn small secondary" disabled={busy} onClick={() => run(async () => { await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ trang lịch sử Quiz' }) }, 'Đã gửi yêu cầu khôi phục Quiz', load)}>Khôi phục</button> : <span className="muted">—</span> },
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 180, sticky: 'right', hideable: false, render: (item) => <>
+      {['failed', 'rollback_manual_required'].includes(item.status) ? <button className="btn small secondary" type="button" onClick={() => setFailedQuiz(item)}>Xem lỗi</button> : null}
+      {can('publish_questions') && item.status !== 'rolled_back' && !item.metadata_json?.compensating_rollback_result?.deleted && (item.status !== 'failed' || item.openedx_quiz_node_id || item.openedx_unit_node_id) ? <button className="btn small secondary" disabled={busy} onClick={() => run(async () => { await rollbackCourseQuizInstance(headers, item.id, { mode: 'safe', note: 'Khôi phục từ trang lịch sử Quiz' }) }, 'Đã gửi yêu cầu khôi phục Quiz', load)}>Khôi phục</button> : null}
+    </> },
   ], [busy, can, headers, run, safePage, state.pageSize])
 
   const releaseColumns = useMemo<EnterpriseTableColumn<BankRelease>[]>(() => [
@@ -98,6 +104,14 @@ export function BankHistoryPage() {
   const failed = quizHistory.filter((item) => item.status === 'failed').length
 
   return <PageRoot className="page-stack bank-multipage bank-contract-page history-console bank-history-page">
+    <SideDrawer open={Boolean(failedQuiz)} title="Chi tiết lỗi tạo bài kiểm tra" onClose={() => setFailedQuiz(null)}>
+      {failedQuiz ? <ContentNotice tone="error">
+        {failedQuiz.metadata_json?.failure_stage ? <b>{failedQuiz.metadata_json.failure_stage}</b> : null}
+        <p>{userFacingError(failedQuiz.metadata_json?.error_message || failedQuiz.metadata_json?.error, 'Lần chạy cũ chưa lưu nguyên nhân. Tra cứu log worker theo mã bài kiểm tra bên dưới.')}</p>
+        {failedQuiz.metadata_json?.manual_cleanup_required ? <p>CMS chưa xác nhận dọn phần tạo dở. Kiểm tra trong Studio trước khi tạo lại.</p> : null}
+        <small>Mã bài kiểm tra: {failedQuiz.id}</small>
+      </ContentNotice> : null}
+    </SideDrawer>
     <PageHeader eyebrow="Ngân hàng đề" title="Lịch sử bộ đề và Quiz" icon="audit" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Lịch sử Quiz' }]} />
 
     <BankPageIdentity

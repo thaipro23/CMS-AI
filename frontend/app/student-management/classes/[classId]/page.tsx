@@ -40,6 +40,7 @@ import { EnterpriseDataTable, type EnterpriseTableColumn } from '../../../../com
 import { VisualIcon } from '../../../../components/ui/VisualIcon'
 import { AppIcon } from '../../../../components/icons/AppIcon'
 import { UdemyClassProgressPanel } from '../../../../components/student-management/UdemyClassProgressPanel'
+import { ContentNotice } from '../../../../components/ui/ContentNotice'
 
 
 type GradeColumn = { key: string; name: string; quizNumber?: number | null; deadlineDate?: string | null; availableFrom?: string | null; deadlineMode?: string | null; scheduleWarning?: string | null }
@@ -1067,7 +1068,7 @@ function ClassDetailContent() {
         </div>
         <div className="progress-track"><span style={{ width: `${bulkJobProgressPercent(progressEmailJob)}%` }} /></div>
       </div>}
-      {message && <p className="form-message">{message}</p>}
+      {message && <ContentNotice tone="info">{message}</ContentNotice>}
 
 
       <TrainingContextChips items={[classInfo?.block_name || 'Chưa có block', classInfo?.teacher_name || classInfo?.teacher_username || 'Chưa phân công giảng viên', classInfo?.exam_cutoff_date ? `Ngày cuối xét cấm thi: ${formatDateOnly(classInfo.exam_cutoff_date)}` : 'Chưa có ngày cuối xét cấm thi', isUdemyClass ? 'Nền tảng Udemy' : (classInfo?.openedx_course_id || 'Chưa ghép Course CMS')]} />
@@ -1119,8 +1120,8 @@ function ClassDetailContent() {
         <div><span>Chưa đủ dữ liệu</span><b>{onlineSummary?.insufficient_data_count || 0}</b></div>
       </div>
       <p className="online-learning-disclaimer">Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.</p>
-      {onlineLoading && <p className="form-message">Đang tải học online...</p>}
-      {onlineMessage && <p className="form-message">{onlineMessage}</p>}
+      {onlineLoading && <ContentNotice tone="info">Đang tải học online...</ContentNotice>}
+      {onlineMessage && <ContentNotice tone="info">{onlineMessage}</ContentNotice>}
     </section>
 
     <section className="card academic-unified-card student-list-card">
@@ -1278,7 +1279,7 @@ function ClassDetailContent() {
               <p>Deadline ưu tiên lấy từ cấu hình Quiz đã có; chỉ suy luận 6 tuần khi thật sự thiếu.</p>
             </div>
           </div>
-          {selectedBehaviorLoading && <p className="form-message">Đang tải timeline học online...</p>}
+          {selectedBehaviorLoading && <ContentNotice tone="info">Đang tải timeline học online...</ContentNotice>}
           {!selectedBehaviorLoading && selectedBehaviorDetail?.sessions?.length ? <div className="online-week-timeline">
             {[1, 2, 3, 4, 5, 6].map((week) => {
               const sessions = selectedBehaviorDetail.sessions.filter((item) => Number(item.week_index || 0) === week)
@@ -1305,7 +1306,7 @@ function ClassDetailContent() {
               </div>
             })}
           </div> : null}
-          {!selectedBehaviorLoading && selectedBehaviorDetail && !selectedBehaviorDetail.sessions?.length ? <p className="form-message">Chưa có dữ liệu theo Bài/Session. Hãy chạy ingest và Tính lại học online.</p> : null}
+          {!selectedBehaviorLoading && selectedBehaviorDetail && !selectedBehaviorDetail.sessions?.length ? <ContentNotice tone="info">Chưa có dữ liệu theo Bài/Session. Hãy chạy ingest và Tính lại học online.</ContentNotice> : null}
         </div>
 
         <p className="online-learning-disclaimer">Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.</p>
@@ -1330,7 +1331,7 @@ function ClassDetailContent() {
           <div><span>Ngày làm/nộp</span><b>{formatDateOnly(selectedQuiz.score?.submitted_at)}</b></div>
           {debugMode && <div><span>Nguồn dữ liệu</span><b>{selectedQuiz.score?.source || 'CMS/Open edX'}</b></div>}
         </div>
-        {(selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning) && <p className="form-message warning-message">{selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning}</p>}
+        {(selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning) && <ContentNotice tone="warning">{selectedQuiz.score?.schedule_warning || selectedQuiz.column.scheduleWarning}</ContentNotice>}
         <div className="modal-actions"><button className="btn primary" type="button" onClick={() => setSelectedQuiz(null)}>Đóng</button></div>
       </> : null}
     </AccessibleDialog>

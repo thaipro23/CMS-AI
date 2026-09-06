@@ -27,7 +27,19 @@ def _compact_text(value: object, max_len: int = 80) -> str:
     return text if len(text) <= max_len else text[: max_len - 1].rstrip() + '…'
 
 
+def is_manually_authored_question(question: Question) -> bool:
+    return (
+        str(getattr(question, 'authoring_mode', '') or '').lower() in {'manual', 'import'}
+        or str(getattr(question, 'source_type', '') or '').lower() in {'legacy_quiz_excel', 'manual'}
+    )
+
+
 def _build_problem_display_name(question: Question) -> str:
+    if is_manually_authored_question(question):
+        # Imported topic/source titles often contain the sheet name (e.g. Q1).
+        # A question keeps its own title when sampled into another assessment.
+        prompt = re.sub(r'<[^>]+>', ' ', str(question.question_text or ''))
+        return _compact_text(f'Câu hỏi: {prompt}', 100) if prompt.strip() else 'Câu hỏi'
     for candidate in (question.learning_objective, question.topic, question.source_node_title, question.question_text):
         title = _compact_text(candidate, 90)
         if title:

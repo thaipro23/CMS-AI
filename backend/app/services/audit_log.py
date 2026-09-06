@@ -82,6 +82,7 @@ def log_audit(
     status: str = 'success',
     message: str = '',
     user: UserContext | None = None,
+    actor_id: str | None = None,
     course_id: str | None = None,
     target_type: str | None = None,
     target_id: str | None = None,
@@ -104,7 +105,7 @@ def log_audit(
             db.rollback()
         row = AuditLog(
             course_id=course_id,
-            actor_id=user.user_id if user else 'system',
+            actor_id=user.user_id if user else (actor_id or 'system'),
             actor_role=user.role if user else None,
             action=action,
             target_type=target_type,

@@ -342,7 +342,10 @@ class Settings(BaseSettings):
     academic_ap_get_course_file_cache_refresh: bool = False
     academic_ap_subject_codes: str = ''
 
+    # Course Quiz/Problem Bank writes can create and verify several XBlocks.
+    # Keep ordinary reads short while giving these writes a separate budget.
     openedx_request_timeout_seconds: int = 30
+    openedx_write_timeout_seconds: int = 180
     # Bounded retry is used only for idempotent connector operations.
     openedx_retry_max_attempts: int = 4
     openedx_retry_base_seconds: float = 2.0
@@ -554,6 +557,8 @@ def validate_security_settings() -> None:
         errors.append('OPENEDX_LIBRARY_ORG must be 1-30 characters: A-Z, 0-9, dot, underscore or hyphen')
     if not (1 <= int(settings.openedx_retry_max_attempts) <= 8):
         errors.append('OPENEDX_RETRY_MAX_ATTEMPTS must be between 1 and 8')
+    if int(settings.openedx_write_timeout_seconds) < int(settings.openedx_request_timeout_seconds):
+        errors.append('OPENEDX_WRITE_TIMEOUT_SECONDS must be >= OPENEDX_REQUEST_TIMEOUT_SECONDS')
     if float(settings.openedx_retry_base_seconds) <= 0:
         errors.append('OPENEDX_RETRY_BASE_SECONDS must be > 0')
     if float(settings.openedx_retry_max_seconds) < float(settings.openedx_retry_base_seconds):

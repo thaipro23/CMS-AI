@@ -1771,7 +1771,7 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell {
   font-size: 12px !important;
 }
 
-.enterprise-unified-shell .chapter-workflow-panel > .alert.full-row {
+.enterprise-unified-shell .chapter-workflow-panel > .full-row {
   margin: 10px 0 0 !important;
 }
 

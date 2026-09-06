@@ -1099,7 +1099,7 @@ def bank_release_publish_task(job_id: str):
 
 @celery_app.task(name='bank_quiz_create_task')
 def bank_quiz_create_task(job_id: str):
-    from app.services.bank_operation_jobs import BankOperationJobService
+    from app.services.bank_operation_jobs import BankOperationJobService, bank_operation_error_code, bank_operation_user_message
     from app.services.question_bank_service import VersionedQuestionBankService
     from app.services.audit_log import AuditErrorType, log_audit
 
@@ -1151,14 +1151,15 @@ def bank_quiz_create_task(job_id: str):
                 'release_code': result.get('release_code'),
                 'message': result.get('message'),
             }
-            log_audit(db, action='question_bank.release.quiz.create.async', status='success', message=result_json.get('message') or 'Tạo Quiz thành công', user=None, course_id=result_json.get('openedx_course_id'), target_type='bank_operation_job', target_id=job.id, metadata=result_json)
+            log_audit(db, action='question_bank.release.quiz.create.async', status='success', message=result_json.get('message') or 'Tạo Quiz thành công', actor_id=job.requested_by, course_id=result_json.get('openedx_course_id'), target_type='bank_operation_job', target_id=job.id, metadata=result_json)
             return ops.complete(job, result=result_json, label='Đã tạo Quiz Open edX').result_json
         except Exception as exc:
+            logger.exception('bank quiz creation failed job_id=%s', job_id)
+            ops.fail(job, error=exc)
             try:
-                log_audit(db, action='question_bank.release.quiz.create.async', status='failed', error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR, message=str(exc), user=None, target_type='bank_operation_job', target_id=job.id)
+                log_audit(db, action='question_bank.release.quiz.create.async', status='failed', error_type=AuditErrorType.VALIDATION_ERROR if isinstance(exc, ValueError) else AuditErrorType.EXTERNAL_SERVICE_ERROR, message=bank_operation_user_message(exc), actor_id=job.requested_by, course_id=job.course_id, target_type='bank_operation_job', target_id=job.id, metadata={'error_code': bank_operation_error_code(exc), 'exception_class': type(exc).__name__})
             except Exception:
                 pass
-            ops.fail(job, error=exc)
             raise
         finally:
             db.close()

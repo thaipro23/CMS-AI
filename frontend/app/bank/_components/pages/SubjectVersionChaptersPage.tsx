@@ -11,6 +11,7 @@ import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
 import type { ChapterSummary, Department, Subject, SubjectChapter, SubjectOffering } from '../../../../types'
 import { createSubjectChapter, deleteSubjectChapter, getChapterSummaries, getDepartment, getSubject, getSubjectOffering, updateSubjectChapter } from '../../../../lib/api'
 import { BankTableStatusFilter, BankTableToolbar, Breadcrumb, ConfirmDialog, EntityActions, Modal, bankStatusMatches, buildChapterTitle, chapterDisplayName, emptyReviewStats, matchesSearch, normalizeLessonInput, reviewStatusText, useAsyncMessage, useBankData } from '../shared'
+import { ContentNotice } from '../../../../components/ui/ContentNotice'
 
 export function SubjectVersionChaptersPage({ versionId }: { versionId: string }) {
   const { headers, canScope } = useBankData()
@@ -71,7 +72,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
         : 'Quản lý bài học, tài liệu, câu hỏi và trạng thái bộ đề của phiên bản môn.'}
       icon="file"
     />
-    {message ? <div className="alert info">{message}</div> : null}
+    {message ? <ContentNotice tone="info">{message}</ContentNotice> : null}
     <section className="bank-hierarchy-panel">
       <BankTableToolbar
         search={tableState.q}
@@ -91,7 +92,7 @@ export function SubjectVersionChaptersPage({ versionId }: { versionId: string })
       if (!deleteTarget) return
       try { await deleteSubjectChapter(headers, deleteTarget.id); setDeleteTarget(null); await load() } catch (error) { setDeleteTarget(null); setDeleteError(error instanceof Error ? error.message : 'Không thể xóa bài/chapter') }
     }} />
-    <Modal open={Boolean(deleteError)} title="Không thể xóa bài/chapter" onClose={() => setDeleteError('')}><div className="mini-form"><div className="alert danger">{deleteError}</div><p className="helper">Kiểm tra tài liệu, câu hỏi, Release, mapping hoặc Quiz đang liên kết.</p><button className="btn" onClick={() => setDeleteError('')}>Đã hiểu</button></div></Modal>
+    <Modal open={Boolean(deleteError)} title="Không thể xóa bài/chapter" onClose={() => setDeleteError('')}><div className="mini-form"><ContentNotice tone="danger">{deleteError}</ContentNotice><p className="helper">Kiểm tra tài liệu, câu hỏi, Release, mapping hoặc Quiz đang liên kết.</p><button className="btn" onClick={() => setDeleteError('')}>Đã hiểu</button></div></Modal>
     <Modal open={createOpen} title="Thêm bài" onClose={() => setCreateOpen(false)}><div className="mini-form"><label>Tên bài / Final test / Assignment<input className="input" value={chapterInput} onChange={(e) => setChapterInput(e.target.value)} /></label><p className="helper">Nhập số để tạo “Bài 1.2”; tên đặc biệt được giữ nguyên.</p><div className="modal-actions"><button className="btn secondary" onClick={() => setCreateOpen(false)}>Hủy</button><button className="btn" disabled={busy || !offering || !normalizeLessonInput(chapterInput)} onClick={() => run(async () => {
       if (!offering) return
       const nextNo = (summaries.reduce((max, item) => Math.max(max, Number(item.chapter.sort_order || item.chapter.chapter_no || 0)), 0) || 0) + 1

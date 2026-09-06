@@ -9,13 +9,32 @@ for (const extension of ['.ts', '.tsx']) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText, filename)
 }
-require.extensions['.css'] = (module) => { module.exports = new Proxy({}, { get: (_, key) => key }) }
+require.extensions['.css'] = (module) => { module.exports = { __esModule: true, default: new Proxy({}, { get: (_, key) => key }) } }
 const { userFacingError, userFacingValidation } = require('../lib/userFacingError.ts')
 const { parseResponse, ApiRequestError } = require('../lib/api.ts')
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 const { PersistentJobNotice } = require('../components/ui/PersistentJobNotice.tsx')
 const { ActionMessage } = require('../components/ui/ActionMessage.tsx')
+const { ContentNotice } = require('../components/ui/ContentNotice.tsx')
+
+test('rich notices keep title, body and lists together beside one decorative icon', () => {
+  const markup = renderToStaticMarkup(React.createElement(ContentNotice, { tone: 'success' },
+    React.createElement('b', null, 'Đã đưa bộ đề lên CMS.'),
+    'Tạo phiên bản mới nếu cần chỉnh sửa.',
+    React.createElement('ul', null, React.createElement('li', null, 'Một mục'))))
+  assert.equal((markup.match(/<svg/g) || []).length, 1)
+  assert.match(markup, /<div class="content"><b>Đã đưa bộ đề lên CMS\.<\/b>Tạo phiên bản mới/)
+  assert.match(markup, /role="status"/)
+  assert.doesNotMatch(markup, /class="alert/)
+})
+
+test('legacy danger tone has an error role and a readable message', () => {
+  const markup = renderToStaticMarkup(React.createElement(ContentNotice, { tone: 'danger' }, 'Không đủ câu hỏi. [BANK_OPERATION_FAILED]'))
+  assert.match(markup, /role="alert"/)
+  assert.match(markup, /Không đủ câu hỏi/)
+  assert.doesNotMatch(markup, /BANK_OPERATION_FAILED/)
+})
 
 test('preserves a complete actionable difficulty error without its diagnostic suffix', () => {
   const message = 'Không đủ câu hỏi. Cần Dễ: 7, Trung bình: 5, Khó: 3. Hãy điều chỉnh tỷ lệ độ khó.'

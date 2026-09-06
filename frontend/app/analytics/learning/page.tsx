@@ -53,6 +53,7 @@ import { AccessibleDialog } from '../../../components/ui/AccessibleDialog'
 import { InlineNotice } from '../../../components/ui/InlineNotice'
 import { EnterpriseDataTable, EnterpriseTableColumn } from '../../../components/table/EnterpriseDataTable'
 import { TrainingContextChips, TrainingKpiStrip, TrainingMappingEmptyState, TrainingWorkflowSteps } from '../../../components/training/TrainingWorkspace'
+import { ContentNotice } from '../../../components/ui/ContentNotice'
 
 const PAGE_SIZE = 200
 const SUBJECT_PAGE_SIZE = 50
@@ -1320,7 +1321,7 @@ export default function AnalyticsLearningPage() {
         {Array.isArray(mappingReliability.read_only_guarantees) && mappingReliability.read_only_guarantees.length > 0 && <p className="analytics-pilot-disclaimer">Read-only: {mappingReliability.read_only_guarantees.slice(0, 3).join(' · ')}</p>}
       </div>}
       </>}
-      <div className="alert info compact-alert">{permissionText}</div>
+      <ContentNotice tone="info" className="compact-alert">{permissionText}</ContentNotice>
       <InlineNotice notice={message ? { type: 'warning', title: 'Cần kiểm tra', body: message } : null} />
     </section>
 

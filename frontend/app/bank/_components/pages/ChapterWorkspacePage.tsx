@@ -132,12 +132,13 @@ import {
   countRows,
   auditActionText,
 } from '../shared'
-import { BankQuestionEnterpriseTable } from '../BankQuestionEnterpriseTable'
+import { BankQuestionEnterpriseTable, isManualQuestion } from '../BankQuestionEnterpriseTable'
 import { BankQuestionImportModal } from '../BankQuestionImportModal'
 import { BankOpenEdxImportModal } from '../BankOpenEdxImportModal'
 import { QuestionAuthoringEditor, QuestionResponsePreview, questionFormValidationError, type PendingQuestionImage } from '../QuestionAuthoringEditor'
 import { BankHierarchyPageIntro } from '../BankHierarchyPageIntro'
 import { useBankQuestionTableState } from '../../../../hooks/useBankQuestionTableState'
+import { ContentNotice } from '../../../../components/ui/ContentNotice'
 
 type ChapterLongOperation = {
   id: string
@@ -1125,10 +1126,10 @@ ${chunk.content}`).join('\n\n')
         : 'Quản lý tài liệu, câu hỏi, quy trình duyệt và Release của bài học.'}
       icon="file"
     />
-    {message ? <div className="alert info">{message}</div> : null}
+    {message ? <ContentNotice tone="info">{message}</ContentNotice> : null}
     {activeOperation ? <ChapterOperationStatus operation={activeOperation} /> : null}
-    {chapterPublished ? <div className="alert success"><b>Bài đã publish.</b> Các thao tác sửa tài liệu, tạo câu hỏi, duyệt/bỏ câu, kiểm tra thay đổi và chốt lại đã được khóa. Muốn thay đổi, hãy clone/tạo version mới.</div> : null}
-    {!chapterPublished && diffRequired ? <div className="alert warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</div> : null}
+    {chapterPublished ? <ContentNotice tone="success"><b>Đã đưa bộ đề lên CMS.</b> Tạo phiên bản mới nếu cần chỉnh sửa.</ContentNotice> : null}
+    {!chapterPublished && diffRequired ? <ContentNotice tone="warning"><b>Tài liệu đã thay đổi.</b> Hệ thống sẽ kiểm tra khác biệt và hiển thị kết quả để giáo viên xác nhận.</ContentNotice> : null}
 
     <section className="bank-hierarchy-panel chapter-command-bar compact-command-bar chapter-workflow-panel" aria-label="Thao tác bài học">
       <div className="button-row no-margin chapter-primary-actions">
@@ -1142,7 +1143,7 @@ ${chunk.content}`).join('\n\n')
         {latestRelease ? <button className="btn secondary chapter-action-button release-audit" disabled={isActionBusy('release_preview')} onClick={() => runAction('release_preview', async () => { setReleasePreview(await getBankReleasePreview(headers, latestRelease.id)) }, 'Đã tải snapshot Release.', undefined, 'Không tải được snapshot Release.')}>{isActionBusy('release_preview') ? <BusyLabel text="Đang tải" /> : 'Xem trước Release'}</button> : null}
         {canPublishQuestions ? (chapterPublished ? <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button> : !latestRelease ? <button className="btn" disabled={isActionBusy('release_create') || longOperationBusy || !selectedBankVersion || !readiness?.can_create_release || releaseReviewBlocked} title={releaseReviewBlocked ? 'Còn câu chờ duyệt hoặc trạng thái chưa xác định. Câu lỗi và câu trùng sẽ tự loại khỏi Release.' : undefined} onClick={() => setConfirmation('release_create')}>{isActionBusy('release_create') ? <BusyLabel text="Đang chốt" /> : `Chốt bộ đề (${approvedQuestionCount} câu)`}</button> : latestRelease.status !== 'published' ? <button className="btn" disabled={isActionBusy('release_publish') || longOperationBusy} onClick={() => setConfirmation('release_publish')}>{activeOperation?.type === 'release_publish' ? <BusyLabel text="Đang đưa lên CMS" /> : isActionBusy('release_publish') ? <BusyLabel text="Đang xếp hàng" /> : 'Đưa lên CMS'}</button> : <button className="btn secondary chapter-action-button published" disabled>Đã đưa lên CMS</button>) : null}
       </div>
-      {!chapterPublished && releaseReviewBlocked ? <div className="alert warning full-row"><b>Chưa thể chốt bộ đề.</b> Còn {pendingReviewCount} câu chờ duyệt cần quyết định. {draftErrorCount ? `${draftErrorCount} câu lỗi sẽ tự loại khỏi Release.` : ''}</div> : null}
+      {!chapterPublished && releaseReviewBlocked ? <ContentNotice tone="warning" className="full-row"><b>Chưa thể chốt bộ đề.</b> Còn {pendingReviewCount} câu chờ duyệt cần quyết định. {draftErrorCount ? `${draftErrorCount} câu lỗi sẽ tự loại khỏi Release.` : ''}</ContentNotice> : null}
     </section>
 
     {!selectedBankVersion ? <section className="bank-hierarchy-panel"><div className="empty-state">Đang chuẩn bị workspace cho bài này...</div></section> : <section ref={questionReviewSectionRef} className="bank-hierarchy-panel chapter-question-workspace chapter-review-section" id="bank-question-list" tabIndex={-1} aria-labelledby="chapter-review-heading">
@@ -1202,8 +1203,8 @@ ${chunk.content}`).join('\n\n')
         {!chapterPublished && canEditQuestions ? <div className="popup-action-panel">
           <h3>Gắn tài liệu</h3>
           <p className="helper">Thêm tài liệu làm nguồn tạo câu hỏi cho bài học.</p>
-          {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
-          {activeOperation?.type === 'material_upload' ? <div className="alert info" role="status" aria-live="polite"><b>Hệ thống đang xử lý tài liệu.</b> {activeOperation.label}</div> : null}
+          {popupMessage ? <ContentNotice tone={popupMessage.type}>{popupMessage.text}</ContentNotice> : null}
+          {activeOperation?.type === 'material_upload' ? <ContentNotice tone="info" role="status" aria-live="polite"><b>Hệ thống đang xử lý tài liệu.</b> {activeOperation.label}</ContentNotice> : null}
           <div className="mini-form">
             <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
             <button className="btn" disabled={materialOperationBusy || generateOperationBusy || isActionBusy('material_upload_enqueue') || !file} onClick={uploadSelectedMaterial}>{isActionBusy('material_upload_enqueue') || materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : '+ Gắn tài liệu'}</button>
@@ -1244,9 +1245,9 @@ ${chunk.content}`).join('\n\n')
             <span className="chapter-generate-plan-icon" aria-hidden="true"><AppIcon name="file" size={19} /></span>
             <div><h3 id="chapter-generate-plan-title">Kế hoạch tạo câu hỏi</h3><p>AI dùng tài liệu đã gắn để tạo câu hỏi theo tỷ lệ <b>EASY/MEDIUM/HARD</b>, kiểm tra chất lượng rồi đưa vào hàng chờ duyệt.</p></div>
           </div>
-          {popupMessage ? <div className={`alert ${popupMessage.type}`}>{popupMessage.text}</div> : null}
-          {activeOperation?.type === 'generate' ? <div className="alert info" role="status" aria-live="polite"><b>Hệ thống đang tạo câu hỏi.</b> {activeOperation.label}</div> : null}
-          {chapterPublished ? <div className="alert warning">Bài đã publish nên không thể tạo thêm câu hỏi trên version này.</div> : null}
+          {popupMessage ? <ContentNotice tone={popupMessage.type}>{popupMessage.text}</ContentNotice> : null}
+          {activeOperation?.type === 'generate' ? <ContentNotice tone="info" role="status" aria-live="polite"><b>Hệ thống đang tạo câu hỏi.</b> {activeOperation.label}</ContentNotice> : null}
+          {chapterPublished ? <ContentNotice tone="warning">Bài đã publish nên không thể tạo thêm câu hỏi trên version này.</ContentNotice> : null}
           <div className="chapter-generate-quota-card">
             <div className="chapter-generate-quota-ring" style={{ background: `conic-gradient(#2563eb ${generationQuotaPercent}%, #dbeafe ${generationQuotaPercent}% 100%)` }}><span /></div>
             <div><b>{usedQuestionCount}/{chapterQuestionLimit}</b><span>Tổng câu đã tạo / giới hạn của bài</span><small>Còn {remainingQuota} câu có thể tạo thêm</small></div>
@@ -1271,9 +1272,9 @@ ${chunk.content}`).join('\n\n')
             <label><span>Nhiều đáp án %</span><div className="chapter-percent-input"><input className="input" type="number" min={0} max={100} value={questionTypeMulti} onChange={(event) => setQuestionTypeMulti(event.target.value)} /><b>%</b></div></label>
           </div>
           <div className={`chapter-generate-validation${invalidQuestionTypeMix ? ' is-invalid' : ''}`} role="status"><AppIcon name={invalidQuestionTypeMix ? 'alert' : 'info'} size={17} /><span>Tổng tỷ lệ Một đáp án + Nhiều đáp án phải bằng 100%.</span></div>
-          {!materials.length ? <div className="alert warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</div> : null}
-          {overQuota ? <div className="alert warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</div> : null}
-          {remainingQuota === 0 ? <div className="alert warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu. Không thể tạo thêm.</div> : null}
+          {!materials.length ? <ContentNotice tone="warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</ContentNotice> : null}
+          {overQuota ? <ContentNotice tone="warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</ContentNotice> : null}
+          {remainingQuota === 0 ? <ContentNotice tone="warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu. Không thể tạo thêm.</ContentNotice> : null}
         </section>
       </div>
     </AccessibleDialog>
@@ -1320,7 +1321,7 @@ ${chunk.content}`).join('\n\n')
           <div><span>Tổng câu snapshot</span><b>{releasePreview.total_questions}</b></div>
           <div><span>Dễ / TB / Khó</span><b>{releasePreview.counts.easy || 0} / {releasePreview.counts.medium || 0} / {releasePreview.counts.hard || 0}</b></div>
         </div>
-        <div className="alert info"><b>Snapshot đã chốt.</b> Danh sách dưới đây lấy từ `ai_bank_release_questions`, không lấy theo bộ lọc câu hỏi đang xem.</div>
+        <ContentNotice tone="info">Danh sách câu hỏi đã chốt trong Release này.</ContentNotice>
         <div className="bank-release-preview-list">{releasePreview.questions.map((item, index) => <article key={item.release_question_id} className="bank-release-preview-question">
           <div className="question-main-head"><span className="soft-tag">Câu {index + 1}</span><span className="soft-tag">{item.difficulty}</span>{item.concept_title ? <span className="soft-tag">{item.concept_title}</span> : null}</div>
           <b>{item.question_text}</b>
@@ -1372,7 +1373,7 @@ ${chunk.content}`).join('\n\n')
         <div className="question-review-drawer__meta question-review-dialog-meta">
           <span className={statusClass(previewQuestion.status)}>{statusLabel(previewQuestion.status)}</span>
           <span className="soft-tag">{previewQuestion.difficulty === 'easy' ? 'Dễ' : previewQuestion.difficulty === 'hard' ? 'Khó' : previewQuestion.difficulty === 'medium' ? 'Trung bình' : '—'}</span>
-          <span className="soft-tag">Quality {Math.round(Number(previewQuestion.quality_score || 0) * 100)}%</span>
+          {!isManualQuestion(previewQuestion) || Boolean(previewQuestion.quality_score) ? <span className="soft-tag">Chất lượng {Math.round(Number(previewQuestion.quality_score || 0) * 100)}%</span> : null}
         </div>
         <div className="question-review-drawer__body question-review-dialog-content">
           <section className="question-review-block"><span className="question-review-label">Nội dung câu hỏi</span><div className="question-prompt">{previewQuestion.question_text || 'Câu hỏi chưa có nội dung'}</div></section>
@@ -1380,8 +1381,8 @@ ${chunk.content}`).join('\n\n')
           {previewQuestion.explanation ? <section className="question-review-block"><span className="question-review-label">Giải thích</span><p>{previewQuestion.explanation}</p></section> : null}
           {previewQuestion.source_evidence ? <section className="question-review-block"><span className="question-review-label">Bằng chứng nguồn</span><p>{previewQuestion.source_evidence}</p></section> : null}
           <section className="question-review-metadata">
-            <div><span>Concept</span><b>{previewQuestion.concept_title || 'Chưa gắn'}</b></div>
-            <div><span>Family</span><b>{previewQuestion.question_family_id || '—'}</b></div>
+            {previewQuestion.concept_title ? <div><span>Khái niệm</span><b>{previewQuestion.concept_title}</b></div> : null}
+            {!isManualQuestion(previewQuestion) && previewQuestion.question_family_id ? <div><span>Nhóm biến thể</span><b>{previewQuestion.question_family_id}</b></div> : null}
             <div><span>Nguồn</span><b>{previewQuestion.source_type || (previewQuestion.is_carry_over ? 'Clone kỳ trước' : 'AI/Bank')}</b></div>
           </section>
           {previewQuestion.status === 'draft_error' ? <div className="draft-error-reason"><b>Lý do lỗi:</b> {bankQuestionErrorMessage(previewQuestion) || 'Không rõ'}</div> : null}
@@ -1454,8 +1455,8 @@ ${chunk.content}`).join('\n\n')
         {diffPreview.summary.changed_concepts?.length ? <div className="diff-chip-group"><b>Concept đổi:</b>{diffPreview.summary.changed_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
         {diffPreview.summary.new_concepts?.length ? <div className="diff-chip-group"><b>Concept mới:</b>{diffPreview.summary.new_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
         {diffPreview.summary.removed_concepts?.length ? <div className="diff-chip-group danger"><b>Concept bị xóa:</b>{diffPreview.summary.removed_concepts.slice(0, 12).map((item) => <span key={item}>{item}</span>)}</div> : null}
-        <div className="alert warning"><b>Gợi ý xử lý:</b> {diffActionHint(diffPreview)}</div>
-        {materialRecheckResult ? <div className="alert success"><b>Đã áp dụng xử lý tự động.</b> Giữ {materialRecheckResult.kept_count + materialRecheckResult.safe_skipped_count} câu, tự loại {materialRecheckResult.retired_count} câu, gỡ {materialRecheckResult.release_removed_count || 0} mapping release.</div> : null}
+        <ContentNotice tone="warning"><b>Gợi ý xử lý:</b> {diffActionHint(diffPreview)}</ContentNotice>
+        {materialRecheckResult ? <ContentNotice tone="success"><b>Đã áp dụng xử lý tự động.</b> Giữ {materialRecheckResult.kept_count + materialRecheckResult.safe_skipped_count} câu, tự loại {materialRecheckResult.retired_count} câu, gỡ {materialRecheckResult.release_removed_count || 0} mapping release.</ContentNotice> : null}
         <div className="button-row">
           <button className="btn" disabled={Boolean(actionBusy)} onClick={() => runAction('diff_apply', applyMaterialRecheck, 'Đã áp dụng xử lý tự động sau khi kiểm tra thay đổi tài liệu.', undefined, 'Không áp dụng được xử lý tự động. Vui lòng thử lại.')}>Áp dụng xử lý tự động</button>
           <button className="btn secondary" disabled={Boolean(actionBusy)} onClick={() => run(keepReusableOnly, 'Đã giữ câu phù hợp và bỏ câu không còn chắc phù hợp')}>Giữ câu còn phù hợp</button>

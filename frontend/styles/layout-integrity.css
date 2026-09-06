@@ -199,8 +199,6 @@ body { overflow-x: hidden; }
 }
 
 /* Alerts and decorative layers cannot cover copy. */
-.alert,
-.form-message,
 .inline-notice,
 .action-message {
   display: grid;
@@ -212,9 +210,9 @@ body { overflow-x: hidden; }
 }
 .alert::before,
 .form-message::before {
-  position: static !important;
-  flex: 0 0 auto;
-  align-self: start;
+  /* Legacy notices contain mixed text/element children, not a two-column grid.
+     Their icon stays in the gutter reserved by global-visual-polish.css. */
+  position: absolute;
 }
 .alert > *, .form-message > * { min-width: 0; }
 .visual-section-card::after,

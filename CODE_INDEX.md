@@ -1,6 +1,6 @@
 # Dash-CMS — chỉ mục mã nguồn
 
-Cập nhật: 06/09/2026. Nhánh làm việc: `feat/import-quiz-cms-old-su26`; nền rà soát: `2164b11e`.
+Cập nhật: 06/09/2026. Nhánh làm việc: `feat/import-quiz-cms-old-su26`; nền rà soát: sau `2e2c187`.
 Đây là bản đồ tìm mã nguồn, không phải xác nhận đã triển khai production. Khi tiếp tục, luôn đọc `git status`, `git diff`, rồi `git fetch origin` trước khi chọn HEAD mới.
 
 ## Tìm nhanh theo lỗi
@@ -41,7 +41,7 @@ Menu chỉ giúp điều hướng; quyền thực tế phải được chặn t�
 
 1. Chọn phiên bản môn, Release, bài/đích Open edX, tổng số câu và tỷ lệ Dễ/Trung bình/Khó.
 2. Preview lấy lại khi cấu hình thay đổi; response cũ không được ghi đè preview mới.
-3. Planner chọn đủ câu theo độ khó. Luồng tạo Quiz không có quota theo loại câu hỏi; loại câu gốc trong Release được giữ nguyên.
+3. Planner chọn đủ câu theo độ khó. Luồng tạo Quiz không có quota theo loại câu hỏi; loại câu gốc trong Release được giữ nguyên. Với câu nhập tay/import không có concept, hệ thống lấy theo pool độ khó (ví dụ 10 Dễ + 5 Trung bình); nếu tổng kho đúng bằng số cần tạo thì lấy đủ 10/10.
 4. Dữ liệu import cũ có thể cân lại độ khó khả dụng khi thiếu câu Khó; câu native vẫn chịu quy tắc độ khó. Không tự biến câu multi-select thành single-select.
 5. Worker giữ giá trị `0` của tỷ lệ độ khó/thời gian chờ; chỉ dùng mặc định nếu thiếu hoặc `null`.
 6. Release đã xuất bản thành công giữ quy tắc khóa. Việc chuẩn hóa thông báo không bỏ kiểm tra nội dung hoặc readiness.
@@ -108,6 +108,7 @@ Route động dùng dấu ngoặc vuông như cấu trúc Next.js. `page.tsx` c�
 - [student-operations-visual-hotfix.css](frontend/styles/student-operations-visual-hotfix.css), [training-analytics-ux.css](frontend/styles/training-analytics-ux.css): trang lớp, sinh viên, giảng viên.
 - [subject-management-udemy.css](frontend/styles/subject-management-udemy.css): quản lý môn, tiến độ/kế hoạch Udemy.
 - [frontend-runtime-contracts.css](frontend/styles/frontend-runtime-contracts.css): dialog, thông báo, trạng thái route.
+- Open edX đọc API dùng `OPENEDX_REQUEST_TIMEOUT_SECONDS` (30 giây mặc định); các lệnh ghi tạo Quiz/Final test/Problem Bank dùng `OPENEDX_WRITE_TIMEOUT_SECONDS` (180 giây mặc định).
 - [global-workspace-scroll-notice-hotfix.css](frontend/styles/global-workspace-scroll-notice-hotfix.css): cuộn workspace, notice trong AppShell.
 - [OperationsWorkspace.module.css](frontend/components/operations/OperationsWorkspace.module.css): khoảng cách giữa thông báo, bảng và nội dung bên trong từng WorkspaceSection.
 - [FeedbackMessage.module.css](frontend/components/ui/FeedbackMessage.module.css): notice trong trang và portal dialog; không phụ thuộc vị trí bên trong AppShell.

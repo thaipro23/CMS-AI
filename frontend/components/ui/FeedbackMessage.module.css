@@ -22,6 +22,12 @@
 .copy { display: grid; grid-column: 2; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .copy > * { margin: 0; min-width: 0; }
 .action { grid-column: 3; min-width: 0; align-self: center; }
+.contentMessage { grid-template-columns: 32px minmax(0, 1fr); }
+.content { grid-column: 2; min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
+.content > b { display: block; margin-bottom: 4px; }
+.content > :first-child { margin-top: 0; }
+.content > :last-child { margin-bottom: 0; }
+.content ul { padding-inline-start: 20px; margin-block: 6px 0; }
 :global(.accessible-dialog-body) > .message + * { margin-block-start: 12px; }
 @media (max-width: 640px) {
   .message { grid-template-columns: 32px minmax(0, 1fr); }

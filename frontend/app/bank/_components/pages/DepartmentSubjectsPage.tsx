@@ -24,6 +24,7 @@ import {
   useAsyncMessage,
   useBankData,
 } from '../shared'
+import { ContentNotice } from '../../../../components/ui/ContentNotice'
 
 export function DepartmentSubjectsPage({ departmentId }: { departmentId: string }) {
   const { headers, canScope } = useBankData()
@@ -93,7 +94,7 @@ export function DepartmentSubjectsPage({ departmentId }: { departmentId: string 
         : 'Quản lý danh sách môn học, phiên bản môn và tiến độ duyệt trong phạm vi được phân quyền.'}
       icon="book"
     />
-    {message ? <div className="alert info">{message}</div> : null}
+    {message ? <ContentNotice tone="info">{message}</ContentNotice> : null}
     <section className="bank-hierarchy-panel">
       <BankTableToolbar
         search={tableState.q}

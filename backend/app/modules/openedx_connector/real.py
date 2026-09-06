@@ -286,7 +286,8 @@ class RealOpenEdXConnector(OpenEdXConnector):
     async def _post_connector_json(self, *, url: str, body: bytes, step: str, retry_safe: bool) -> dict[str, Any]:
         attempts = max(1, min(8, int(getattr(settings, 'openedx_retry_max_attempts', 4) or 4))) if retry_safe else 1
         last_exc: Exception | None = None
-        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
+        request_timeout = settings.openedx_write_timeout_seconds if not retry_safe else settings.openedx_request_timeout_seconds
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
             for attempt in range(1, attempts + 1):
                 response: httpx.Response | None = None
                 try:
@@ -809,7 +810,7 @@ class RealOpenEdXConnector(OpenEdXConnector):
             'metadata': metadata or {},
         }
         body = self._json_body(payload)
-        async with httpx.AsyncClient(timeout=settings.openedx_request_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=settings.openedx_write_timeout_seconds) as client:
             response = await client.post(url, content=body, headers=self._connector_headers('POST', url, body) | {'Content-Type': 'application/json'})
             self._raise_for_openedx_error(response, 'upsert_quiz_timer_config')
             payload = response.json()
@@ -827,15 +828,39 @@ class RealOpenEdXConnector(OpenEdXConnector):
         course_id = normalize_openedx_course_id(course_id, required=True)
         endpoint = getattr(settings, 'openedx_problem_bank_insert_endpoint', '/api/ai-connector/v1/courses/{course_id}/problem-banks')
         url = f'{self.cms_base_url}{endpoint.format(course_id=course_id)}'
-        payload = {
-            'course_id': course_id,
-            'unit_node_id': _clean_openedx_usage_key(unit_node_id),
-            'slots': slots or [],
-            'metadata': metadata or {},
+        if not slots:
+            raise ValueError('Không có nhóm câu hỏi để tạo bài kiểm tra.')
+        refs = [str(ref).strip().strip('\"\'') for slot in slots for ref in (slot.get('openedx_problem_ids') or slot.get('problem_ids') or [])]
+        if len(refs) != len(set(refs)):
+            raise ValueError('Một câu hỏi đang nằm trong nhiều nhóm; không thể tạo đề trùng câu.')
+        # A Final test spans several Libraries. Keep each write bounded to one
+        # bank; the caller compensates the entire new Quiz if any bank fails.
+        results = []
+        for index, slot in enumerate(slots):
+            payload = {
+                'course_id': course_id,
+                'unit_node_id': _clean_openedx_usage_key(unit_node_id),
+                'slots': [slot],
+                'metadata': {**(metadata or {}), 'cleanup_legacy_ai_randomized_blocks': index == 0 and (metadata or {}).get('cleanup_legacy_ai_randomized_blocks', True)},
+            }
+            try:
+                result = await self._post_connector_json(url=url, body=self._json_body(payload), step='insert_problem_banks', retry_safe=False)
+            except httpx.TimeoutException as exc:
+                raise httpx.ReadTimeout(f'Open edX chưa phản hồi khi thêm nhóm câu {index + 1}/{len(slots)}. Hãy kiểm tra kết quả trong Lịch sử Quiz trước khi tạo lại.') from exc
+            if result.get('ok') is not True:
+                raise RuntimeError(f'Open edX không xác nhận nhóm câu {index + 1}/{len(slots)}: {result.get("message") or "thiếu kết quả"}')
+            blocks = result.get('problem_bank_blocks') or []
+            if len(blocks) != 1 or any(block.get('block_type') != 'itembank' or block.get('selection_verified') is not True for block in blocks):
+                raise RuntimeError(f'Không xác minh được nhóm câu {index + 1}/{len(slots)} trên Open edX.')
+            results.append(result)
+        return {
+            **results[0],
+            'created': any(result.get('created') for result in results),
+            'problem_bank_blocks': [block for result in results for block in result['problem_bank_blocks']],
+            'slots_requested': len(slots), 'slots_inserted': len(results),
+            'course_local_problem_children_created': sum(int(result.get('course_local_problem_children_created') or 0) for result in results),
+            'warnings': [warning for result in results for warning in (result.get('warnings') or [])],
         }
-        body = self._json_body(payload)
-        # Inserting ItemBank slots can create course-local XBlocks; do not blind retry.
-        return await self._post_connector_json(url=url, body=body, step='insert_problem_banks', retry_safe=False)
 
     async def publish_problem_olx(self, course_id: str, parent_block_id: str | None, olx: str, display_name: str) -> dict:
         course_id = normalize_openedx_course_id(course_id, required=True)

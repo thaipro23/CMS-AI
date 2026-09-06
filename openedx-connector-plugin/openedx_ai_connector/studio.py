@@ -1619,7 +1619,31 @@ def _problem_bank_slot_display_name(slot: dict) -> str:
     if not family_names and isinstance(slot.get('families'), list):
         family_names = [family.get('family_name') for family in slot.get('families') if isinstance(family, dict) and family.get('family_name')]
     label = ' + '.join(str(name) for name in family_names if name) or str(slot.get('difficulty') or 'Problem Bank')
-    return _normalize_xblock_title(f'Problem Bank {str(slot.get("difficulty") or slot_no).upper()} - {label}', f'Problem Bank {slot_no:02d}', max_len=120)
+    difficulty = {'EASY': 'Dễ', 'MEDIUM': 'Trung bình', 'HARD': 'Khó'}.get(str(slot.get('difficulty') or '').upper(), 'Câu hỏi')
+    if slot.get('sampling_strategy') == 'difficulty_pool':
+        label = str(slot.get('source_chapter_title') or '')
+    suffix = f' · {label}' if label else ''
+    # The slot number prevents disjoint pools with the same concept title from
+    # accidentally reusing one another's bank during a resumed insert.
+    return _normalize_xblock_title(f'Nhóm {slot_no:02d} · {difficulty}{suffix}', f'Nhóm {slot_no:02d}', max_len=120)
+
+
+def _apply_problem_display_name(store: Any, user: Any, child: Any, title: str) -> None:
+    """Name the course copy without changing a published Library component."""
+    from xml.etree import ElementTree as ET
+
+    title = _normalize_xblock_title(title, 'Câu hỏi', max_len=120)
+    fields = {'display_name': title}
+    data = _field_value(child, 'data', '')
+    if data:
+        root = ET.fromstring(data)
+        if root.tag == 'problem':
+            root.set('display_name', title)
+            fields['data'] = ET.tostring(root, encoding='unicode')
+    _update_created_block_fields(store, child, user, fields)
+    saved = _get_item_best_effort(store, getattr(child, 'location', child)) or child
+    if _field_value(saved, 'display_name') != title:
+        raise RuntimeError('Không lưu được tên câu hỏi trên CMS.')
 
 
 def _expected_library_component_refs(slot: dict) -> list[str]:
@@ -1902,7 +1926,7 @@ def _verify_native_itembank_block(store: Any, block: Any, slot: dict) -> dict:
     unexpected_upstreams = sorted(actual_set - expected_set)
     bank_type_ok = (_block_type(block) or '').lower() == 'itembank'
     expected_max_count = max(1, int(slot.get('pick_count') or slot.get('max_count') or 1))
-    max_count_ok = max_count == expected_max_count
+    max_count_ok = max_count == expected_max_count and 1 <= expected_max_count <= len(expected_upstreams)
     library_ok = bool(library_key) and all(_upstream_belongs_to_library(item, library_key) for item in expected_upstreams)
     exact_children_ok = (
         len(course_local_children) == len(expected_upstreams)
@@ -2007,7 +2031,10 @@ def insert_problem_banks(request, course_id: str):
             pick_count = int(slot.get('pick_count') or slot.get('max_count') or 1)
             if pick_count < 1:
                 raise ValueError(f'Slot {slot.get("slot_no")} có pick_count không hợp lệ.')
-            all_refs.extend(_expected_library_component_refs(slot))
+            expected_refs = _expected_library_component_refs(slot)
+            if pick_count > len(expected_refs):
+                raise ValueError(f'Nhóm {slot.get("slot_no")} cần {pick_count} câu nhưng chỉ có {len(expected_refs)} câu khả dụng.')
+            all_refs.extend(expected_refs)
         duplicate_refs = sorted({ref for ref in all_refs if all_refs.count(ref) > 1})
         if duplicate_refs:
             raise ValueError(f'Cùng một Library component xuất hiện ở nhiều slot; connector từ chối tạo đề trùng: {duplicate_refs[:5]}')
@@ -2068,6 +2095,10 @@ def insert_problem_banks(request, course_id: str):
                 if child_created:
                     created_locations.append(getattr(child, 'location', child))
                     total_children += 1
+                display_names = slot.get('problem_display_names') or {}
+                title = display_names.get(upstream_ref) if isinstance(display_names, dict) else None
+                if isinstance(title, str) and title.strip():
+                    _apply_problem_display_name(store, user, child, title)
 
             bank = _get_item_best_effort(store, getattr(bank, 'location', bank)) or bank
             verification = _verify_native_itembank_block(store, bank, slot)

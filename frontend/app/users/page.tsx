@@ -34,6 +34,7 @@ import {
   SubjectOffering,
   AcademicCampus,
 } from '../../types'
+import { ContentNotice } from '../../components/ui/ContentNotice'
 
 
 type UserAccessRow = {
@@ -416,7 +417,7 @@ export default function UsersPage() {
       footer={<div className="dialog-footer-actions"><button className="btn secondary" type="button" disabled={granting} onClick={() => setGrantOpen(false)}>Hủy</button><button className="btn" type="button" onClick={submitAssignment} disabled={granting || !form.user_id.trim() || (form.scope_type !== 'SYSTEM' && !selectedScopeIds.length)}>Gán {form.scope_type === 'SYSTEM' ? 1 : selectedScopeIds.length} phạm vi</button></div>}
     >
       <ActionMessage message={message} onClose={() => setMessage(null)} />
-      {!visibleRoles.length ? <div className="alert warning">Bạn không có quyền gán thêm vai trò trong phạm vi hiện tại.</div> : <div className="rbac-grant-form">
+      {!visibleRoles.length ? <ContentNotice tone="warning">Bạn không có quyền gán thêm vai trò trong phạm vi hiện tại.</ContentNotice> : <div className="rbac-grant-form">
         <div className="form-grid two-columns">
           <label>Vai trò<select className="input" value={form.role_code} onChange={(event) => syncScopeForRole(event.target.value as BusinessRoleCode)}>{visibleRoles.map((role) => <option key={role.code} value={role.code}>{roleLabels[role.code] || role.name}</option>)}</select></label>
           <label>Loại phạm vi<select className="input" value={form.scope_type} onChange={(event) => { const nextScope = event.target.value as BusinessScopeType; setScopeSearch(''); setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : []); setForm({ ...form, scope_type: nextScope }) }}>{availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>

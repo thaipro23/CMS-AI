@@ -11,6 +11,7 @@ import { OperationsKpiStrip, WorkspaceSection } from '../../components/operation
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { AccessibleDialog } from '../../components/ui/AccessibleDialog'
 import { AcademicAPOption, AcademicAPSyncOptions, AcademicSyncResult, AcademicSyncRun } from '../../types'
+import { ContentNotice } from '../../components/ui/ContentNotice'
 
 type BranchCode = 'poly' | 'ptcd'
 type BranchState = Record<BranchCode, AcademicAPSyncOptions>
@@ -278,12 +279,12 @@ export default function ApSyncPage() {
           <div><span>Phạm vi riêng</span><b>{BRANCHES.find((item) => item.value === selectedBranch)?.label}</b><small>{currentBranchOptions.campuses?.length || 0} cơ sở</small></div>
           <div><span>Môn đã chọn</span><b>{currentBranchOptions.selected_subject_count || 0}</b><small>CMS {currentBranchOptions.cms_subject_count || 0} · Udemy {currentBranchOptions.udemy_subject_count || 0}</small></div>
         </div>
-        {!totalCampuses ? <div className="alert warning">Chưa có cơ sở đang bật. Vào trang Cơ sở để thêm thủ công trước khi đồng bộ.</div> : null}
-        {termName.trim() && totalSelectedSubjects === 0 ? <div className="alert warning">Học kỳ này chưa có môn nào được chọn CMS/Udemy. Vào Quản lý môn học để chọn nền tảng; Các môn chưa chọn nền tảng được bỏ qua.</div> : null}
+        {!totalCampuses ? <ContentNotice tone="warning">Chưa có cơ sở đang bật. Vào trang Cơ sở để thêm thủ công trước khi đồng bộ.</ContentNotice> : null}
+        {termName.trim() && totalSelectedSubjects === 0 ? <ContentNotice tone="warning">Học kỳ này chưa có môn nào được chọn CMS/Udemy. Vào Quản lý môn học để chọn nền tảng; Các môn chưa chọn nền tảng được bỏ qua.</ContentNotice> : null}
         {canManageAcademicOps ? <div className="ap-sync-actions">
           <button className="btn" type="button" disabled={running || loadingOptions || Boolean(activeRuns.length) || totalCampuses === 0 || totalSelectedSubjects === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>{dryRun ? 'Kiểm tra toàn bộ' : 'Đồng bộ toàn bộ'}</button>
           <button className="btn secondary" type="button" disabled={running || loadingOptions || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !currentBranchOptions.selected_subject_count || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>{dryRun ? `Kiểm tra hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}` : `Đồng bộ hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}`}</button>
-        </div> : <div className="alert warning">Bạn không có quyền chạy đồng bộ AP.</div>}
+        </div> : <ContentNotice tone="warning">Bạn không có quyền chạy đồng bộ AP.</ContentNotice>}
       </WorkspaceSection>
 
       <WorkspaceSection title="Tiến trình & kết quả" description="Theo dõi tiến trình và kết quả theo hệ." actions={activeRuns.length ? <button className="btn small secondary" type="button" onClick={() => refreshActiveRuns().catch((error) => notify(error instanceof Error ? error.message : 'Không tải được trạng thái tác vụ'))}>Làm mới</button> : undefined} className="ap-sync-recent">
