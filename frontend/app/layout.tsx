@@ -20,6 +20,7 @@ import '../styles/student-operations-visual-hotfix.css'
 import '../styles/bank-cost-dashboard.css'
 import '../styles/subject-management-udemy.css'
 import '../styles/project-spacing-contract.css'
+import '../styles/fa26-layout-hotfix.css'
 import type { Metadata, Viewport } from 'next'
 import { AppProvider } from '../context/AppContext'
 import { AppShell } from '../components/layout/AppShell'
@@ -44,4 +45,3 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <body><AppProvider><FeedbackProvider><AppShell>{children}</AppShell></FeedbackProvider></AppProvider></body>
   </html>
 }
-

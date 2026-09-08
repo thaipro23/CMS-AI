@@ -1,0 +1,144 @@
+/*
+ * FA26 production layout + workflow hotfix.
+ * Scoped to the affected pages so unrelated dashboards keep their existing layout.
+ */
+
+.student-management-page,
+.analytics-learning-page,
+.bank-quiz-page {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.student-management-page > *,
+.analytics-learning-page > *,
+.bank-quiz-page > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.student-management-page .card,
+.analytics-learning-page .card,
+.student-management-page .training-workspace-section,
+.analytics-learning-page .training-workspace-section {
+  min-width: 0;
+  max-width: 100%;
+  position: relative;
+  isolation: isolate;
+}
+
+.student-management-page .toolbar-actions,
+.student-management-page .class-action-row,
+.analytics-learning-page .toolbar-actions,
+.analytics-learning-page .compact-filter-bar,
+.analytics-learning-page .training-workflow-steps {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.student-management-page .enterprise-data-table,
+.student-management-page .enterprise-table-shell,
+.student-management-page .enterprise-table-scroll,
+.student-management-page .enterprise-table-wrap,
+.analytics-learning-page .enterprise-data-table,
+.analytics-learning-page .enterprise-table-shell,
+.analytics-learning-page .enterprise-table-scroll,
+.analytics-learning-page .enterprise-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.student-management-page .enterprise-table-scroll,
+.student-management-page .enterprise-table-wrap,
+.analytics-learning-page .enterprise-table-scroll,
+.analytics-learning-page .enterprise-table-wrap {
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+}
+
+.student-management-page .enterprise-sticky-horizontal-scroll,
+.analytics-learning-page .enterprise-sticky-horizontal-scroll {
+  position: static !important;
+  inset: auto !important;
+  z-index: auto !important;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 8px;
+}
+
+.student-management-page .training-kpi-strip,
+.analytics-learning-page .training-kpi-strip {
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.analytics-learning-page .compact-filter-bar > *,
+.analytics-learning-page .training-workflow-steps > *,
+.student-management-page .toolbar-actions > * {
+  min-width: 0;
+}
+
+.bank-quiz-page .popup-action-panel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.bank-quiz-page .quiz-small-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px 16px;
+  min-width: 0;
+}
+
+.bank-quiz-page .quiz-small-grid.two-cols {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.bank-quiz-page .quiz-timer-subhead {
+  margin-top: 2px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, rgba(15, 23, 42, 0.12));
+}
+
+.bank-quiz-page .compact-options {
+  gap: 10px 16px;
+  align-items: start;
+}
+
+.premises-catalog-refresh {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px 0;
+  min-width: 0;
+}
+
+.premises-catalog-refresh__message {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  max-width: 760px;
+}
+
+@media (max-width: 900px) {
+  .student-management-page .toolbar-actions,
+  .student-management-page .class-action-row,
+  .analytics-learning-page .compact-filter-bar,
+  .premises-catalog-refresh {
+    align-items: stretch;
+  }
+
+  .premises-catalog-refresh {
+    flex-direction: column;
+  }
+
+  .bank-quiz-page .quiz-small-grid.two-cols {
+    grid-template-columns: 1fr;
+  }
+}

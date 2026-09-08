@@ -14,9 +14,11 @@ from app.core.origin_guard import enforce_mutating_origin_guard
 from app.core.security_headers import apply_security_headers
 from app.db.init_db import init_db
 from app.services.runtime_settings import apply_runtime_settings
+from app.services.fa26_compat import apply_fa26_compat_patches, backfill_legacy_material_preview_chunks
 
 apply_runtime_settings()
 validate_security_settings()
+apply_fa26_compat_patches()
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, debug=settings.debug)
 app.add_exception_handler(HTTPException, http_exception_handler)
@@ -71,6 +73,7 @@ async def security_headers_middleware(request: Request, call_next):
 @app.on_event('startup')
 def on_startup():
     init_db()
+    backfill_legacy_material_preview_chunks()
 
 
 @app.get('/metrics', include_in_schema=False)
@@ -86,8 +89,6 @@ def metrics(
     if not supplied_token and authorization and authorization.lower().startswith('bearer '):
         supplied_token = authorization.split(' ', 1)[1].strip()
 
-    # In production validate_security_settings() already enforces a strong token.
-    # In dev, setting METRICS_TOKEN still protects the endpoint.
     if configured_token and not hmac.compare_digest(supplied_token, configured_token):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Invalid metrics token')
     if not configured_token and settings.app_env.lower() in {'prod', 'production'}:
