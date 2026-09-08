@@ -110,35 +110,55 @@
   align-items: start;
 }
 
-.premises-catalog-refresh {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 24px 0;
-  min-width: 0;
-}
-
-.premises-catalog-refresh__message {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  max-width: 760px;
-}
 
 @media (max-width: 900px) {
   .student-management-page .toolbar-actions,
   .student-management-page .class-action-row,
-  .analytics-learning-page .compact-filter-bar,
-  .premises-catalog-refresh {
+  .analytics-learning-page .compact-filter-bar {
     align-items: stretch;
-  }
-
-  .premises-catalog-refresh {
-    flex-direction: column;
   }
 
   .bank-quiz-page .quiz-small-grid.two-cols {
     grid-template-columns: 1fr;
   }
+}
+
+/*
+ * FA26 student/analytics stacking fix.
+ * Legacy .page-stack is forced to CSS Grid by production-ui.css. On these long
+ * operational pages that can size top-level grid rows smaller than their
+ * overflowing content, so the following card starts on top of the previous
+ * card (visible on class detail and analytics subject picker). Keep the
+ * workspace as the scroll owner, but make these two page stacks content-sized
+ * flex columns like the Bank hierarchy fix.
+ */
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack.student-management-page,
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack.analytics-learning-page {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  align-content: normal !important;
+  gap: 16px !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack.student-management-page > *,
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack.analytics-learning-page > * {
+  flex: 0 0 auto !important;
+  align-self: stretch !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+
+/* The cards themselves must size from their children; no later legacy rule may
+ * turn them into a compressed grid track whose content paints into the next
+ * section. */
+.enterprise-app-shell.enterprise-unified-shell .student-management-page > .academic-unified-card,
+.enterprise-app-shell.enterprise-unified-shell .analytics-learning-page > .academic-unified-card {
+  flex: 0 0 auto !important;
+  align-self: stretch !important;
+  height: auto !important;
+  min-height: max-content !important;
 }
