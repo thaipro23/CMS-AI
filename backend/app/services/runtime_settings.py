@@ -115,6 +115,13 @@ def apply_runtime_settings() -> None:
             continue
         setattr(settings, key, value)
 
+    # FastAPI and Celery both call this function during process bootstrap. Keep
+    # compatibility patches process-wide so worker-side Final Test generation uses
+    # the same FA26 policy as HTTP-side validation/planning. The lazy import avoids
+    # introducing a module-import cycle while runtime_settings itself is loading.
+    from app.services.fa26_compat import apply_fa26_compat_patches
+    apply_fa26_compat_patches()
+
 
 def _mask_secret(value: str | None) -> str:
     if not value:
