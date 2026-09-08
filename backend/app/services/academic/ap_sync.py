@@ -13,7 +13,7 @@ from app.core.json_safe import json_safe_value
 from app.core.rbac import UserContext
 from app.models.academic import AcademicSubject, AcademicSubjectDelivery, AcademicSyncRun, AcademicTerm
 from app.schemas.academic import AcademicAPSyncIn, AcademicImportFromJsonIn, AcademicSyncCounters
-from app.services.ap_academic_sync import AcademicImportService
+from app.services.academic.ap_importer import AcademicImportService
 from app.services.audit_log import AuditErrorType, log_audit
 
 
