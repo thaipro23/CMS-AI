@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import types
 import uuid
 from datetime import datetime
 from typing import Any
@@ -154,12 +153,19 @@ def _build_final_test_plan_compat(
     difficulty_hard: int,
     max_families_per_bank: int = 2,
 ) -> dict:
-    """Keep native Finals strict and allow legacy Excel Finals to rebalance difficulty only."""
-    release_rows: dict[str, tuple[list, dict[str, Question]]] = {}
+    """Apply FA26 Final Test compatibility without changing source question types.
+
+    Final Test always uses the native multi-Release planner, which balances the
+    visible question allocation across source lessons/Releases. Difficulty remains
+    the only explicit quota. Question format is preserved from each source question
+    (single/multi/text/numerical) and is never converted or hard-filtered to one type.
+
+    Legacy Excel questions may rebalance difficulty when classified capacity is
+    short; native questions remain strict and must satisfy the requested mix.
+    """
     all_questions: list[Question] = []
     for release in source_releases or []:
         rows, questions = self._published_release_question_rows(release)
-        release_rows[str(release.id)] = (rows, questions)
         all_questions.extend(questions[row.question_id] for row in rows if row.question_id in questions)
 
     all_legacy = bool(all_questions) and all(
@@ -176,56 +182,36 @@ def _build_final_test_plan_compat(
         'max_families_per_bank': max_families_per_bank,
     }
 
+    plan = _ORIGINAL_FINAL_TEST_PLAN(self, **kwargs)
+
+    candidate_type_counts = {
+        'single_select': 0,
+        'multi_select': 0,
+        'text_input': 0,
+        'numerical_input': 0,
+    }
+    for question in all_questions:
+        qtype = _canonical_question_type(getattr(question, 'question_type', None))
+        candidate_type_counts[qtype] = candidate_type_counts.get(qtype, 0) + 1
+
+    # Do not expose an invented exact question-type mix. Each Problem Bank keeps
+    # the original component/question types and Open edX samples from those pools.
+    plan['candidate_question_type_counts'] = candidate_type_counts
+    plan['question_type_policy'] = 'preserve_source_types_no_quota'
+    plan['question_type_filter_applied'] = False
+
     if all_legacy:
-        filtered_by_release: dict[str, tuple[list, dict[str, Question]]] = {}
-        candidate_count = 0
-        for release in source_releases or []:
-            rows, questions = release_rows[str(release.id)]
-            allowed_rows = [
-                row for row in rows
-                if row.question_id in questions
-                and _canonical_question_type(questions[row.question_id].question_type) == 'single_select'
-            ]
-            allowed_questions = {row.question_id: questions[row.question_id] for row in allowed_rows}
-            filtered_by_release[str(release.id)] = (allowed_rows, allowed_questions)
-            candidate_count += len(allowed_rows)
-        if candidate_count < int(total_questions or 0):
-            raise ValueError(
-                f'Final test legacy yêu cầu {int(total_questions or 0)} câu single-select '
-                f'nhưng các Release nguồn chỉ có {candidate_count} câu single-select hợp lệ. '
-                'Hệ thống không tự thay bằng multi-select/text/numerical.'
-            )
-
-        had_local = '_published_release_question_rows' in self.__dict__
-        old_local = self.__dict__.get('_published_release_question_rows')
-
-        def _filtered_rows(_self, release):
-            return filtered_by_release[str(release.id)]
-
-        self._published_release_question_rows = types.MethodType(_filtered_rows, self)
-        try:
-            plan = _ORIGINAL_FINAL_TEST_PLAN(self, **kwargs)
-        finally:
-            if had_local:
-                self.__dict__['_published_release_question_rows'] = old_local
-            else:
-                self.__dict__.pop('_published_release_question_rows', None)
-
-        for slot in plan.get('slots') or []:
-            slot['question_type'] = 'single_select'
-        plan['question_type_counts'] = {
-            'single_select': int(total_questions or 0),
-            'multi_select': 0,
-            'text_input': 0,
-            'numerical_input': 0,
-        }
-        plan['question_type_policy'] = 'legacy_final_exact_single_select'
         plan['difficulty_policy'] = 'legacy_rebalance_when_capacity_short'
         return plan
 
-    plan = _ORIGINAL_FINAL_TEST_PLAN(self, **kwargs)
-    requested = {str(key).upper(): int(value or 0) for key, value in (plan.get('target_counts') or {}).items()}
-    effective = {str(key).upper(): int(value or 0) for key, value in (plan.get('effective_target_counts') or {}).items()}
+    requested = {
+        str(key).upper(): int(value or 0)
+        for key, value in (plan.get('target_counts') or {}).items()
+    }
+    effective = {
+        str(key).upper(): int(value or 0)
+        for key, value in (plan.get('effective_target_counts') or {}).items()
+    }
     if requested and effective and requested != effective:
         raise ValueError(
             'Final test native không được tự cân lại tỷ lệ độ khó. '
@@ -240,7 +226,12 @@ def _legacy_question_chunk_content(question: Question) -> str:
     prompt = str(question.question_text or '').strip()
     if prompt:
         lines.append(prompt)
-    for label, field in (('A', question.option_a), ('B', question.option_b), ('C', question.option_c), ('D', question.option_d)):
+    for label, field in (
+        ('A', question.option_a),
+        ('B', question.option_b),
+        ('C', question.option_c),
+        ('D', question.option_d),
+    ):
         value = str(field or '').strip()
         if value:
             lines.append(f'{label}. {value}')
@@ -261,11 +252,17 @@ def backfill_legacy_material_preview_chunks() -> dict[str, int]:
     chunks_created = 0
     try:
         material_ids = [
-            str(row[0]) for row in (
+            str(row[0])
+            for row in (
                 db.query(Question.material_version_id)
-                .filter(Question.source_type == 'legacy_quiz_excel', Question.material_version_id.isnot(None))
-                .distinct().all()
-            ) if row[0]
+                .filter(
+                    Question.source_type == 'legacy_quiz_excel',
+                    Question.material_version_id.isnot(None),
+                )
+                .distinct()
+                .all()
+            )
+            if row[0]
         ]
         for material_id in material_ids:
             materials_checked += 1
@@ -276,24 +273,36 @@ def backfill_legacy_material_preview_chunks() -> dict[str, int]:
                 continue
             questions = (
                 db.query(Question)
-                .filter(Question.material_version_id == material_id, Question.source_type == 'legacy_quiz_excel')
-                .order_by(Question.created_at.asc(), Question.id.asc()).all()
+                .filter(
+                    Question.material_version_id == material_id,
+                    Question.source_type == 'legacy_quiz_excel',
+                )
+                .order_by(Question.created_at.asc(), Question.id.asc())
+                .all()
             )
             created_for_material = 0
             for index, question in enumerate(questions, start=1):
                 content = _legacy_question_chunk_content(question)
                 if not content:
                     continue
-                db.add(MaterialChunk(
-                    id=str(uuid.uuid4()), material_version_id=material.id,
-                    bank_version_id=material.bank_version_id, subject_id=material.subject_id,
-                    chapter_id=material.chapter_id, subject_offering_id=material.subject_offering_id,
-                    chunk_index=index, content=content, token_count=max(1, len(content.split())),
-                    source_type='legacy_quiz_excel', page_number=question.source_page,
-                    source_ref=str(question.source_ref or f'legacy-question:{question.id}'),
-                    content_hash=hashlib.sha256(content.encode('utf-8')).hexdigest(),
-                    created_at=question.created_at or datetime.utcnow(),
-                ))
+                db.add(
+                    MaterialChunk(
+                        id=str(uuid.uuid4()),
+                        material_version_id=material.id,
+                        bank_version_id=material.bank_version_id,
+                        subject_id=material.subject_id,
+                        chapter_id=material.chapter_id,
+                        subject_offering_id=material.subject_offering_id,
+                        chunk_index=index,
+                        content=content,
+                        token_count=max(1, len(content.split())),
+                        source_type='legacy_quiz_excel',
+                        page_number=question.source_page,
+                        source_ref=str(question.source_ref or f'legacy-question:{question.id}'),
+                        content_hash=hashlib.sha256(content.encode('utf-8')).hexdigest(),
+                        created_at=question.created_at or datetime.utcnow(),
+                    )
+                )
                 created_for_material += 1
             if created_for_material:
                 materials_backfilled += 1
@@ -304,7 +313,11 @@ def backfill_legacy_material_preview_chunks() -> dict[str, int]:
         logger.exception('legacy material preview chunk backfill failed')
     finally:
         db.close()
-    return {'materials_checked': materials_checked, 'materials_backfilled': materials_backfilled, 'chunks_created': chunks_created}
+    return {
+        'materials_checked': materials_checked,
+        'materials_backfilled': materials_backfilled,
+        'chunks_created': chunks_created,
+    }
 
 
 def apply_fa26_compat_patches() -> None:
