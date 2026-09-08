@@ -260,7 +260,7 @@ export default function ApSyncPage() {
 
     <OperationsKpiStrip items={[
       { label: 'Học kỳ', value: termName || 'Chưa chọn', hint: 'Phạm vi đồng bộ hiện tại' },
-      { label: 'Cơ sở khả dụng', value: totalCampuses, hint: 'Lấy từ API theo hệ POLY/PTCD', tone: totalCampuses ? 'success' : 'warning' },
+      { label: 'Cơ sở khả dụng', value: totalCampuses, hint: 'Lấy từ danh mục cơ sở Dash CMS', tone: totalCampuses ? 'success' : 'warning' },
       { label: 'Môn được đồng bộ', value: totalSelectedSubjects, hint: `CMS ${optionsByBranch.poly.cms_subject_count + optionsByBranch.ptcd.cms_subject_count} · Udemy ${optionsByBranch.poly.udemy_subject_count + optionsByBranch.ptcd.udemy_subject_count}`, tone: totalSelectedSubjects ? 'success' : 'warning' },
       { label: 'Tác vụ đang chạy', value: activeRuns.length, hint: activeRuns.length ? 'Đang xử lý' : 'Sẵn sàng chạy', tone: activeRuns.length ? 'info' : 'neutral' },
       { label: 'Kết quả gần nhất', value: lastResults.length, hint: dryRun ? 'Chế độ kiểm tra kế hoạch' : 'Chế độ ghi dữ liệu' },

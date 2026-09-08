@@ -482,7 +482,7 @@ class APAcademicClient:
         if not self.base_url:
             raise RuntimeError('Thiếu ACADEMIC_AP_API_BASE_URL khi gọi /get-data-cms.')
         body = {
-            'campus': _clean(campus),
+            'campus_code': _clean(campus),
             'term_name': _clean(term_name),
             'subject_code': _clean(subject_code).upper(),
         }
@@ -1367,13 +1367,9 @@ class AcademicImportService:
         if scope == 'all':
             if requested:
                 return requested
-            try:
-                remote = APAcademicClient().get_campuses(branch=branch)
-                configured = [_lower(item.get('campus_code')) for item in remote if _lower(item.get('campus_code'))]
-            except Exception:
-                configured = [item['value'] for item in self._campus_master_values(branch=branch)]
+            configured = [item['value'] for item in self._campus_master_values(branch=branch)]
             if not configured:
-                raise RuntimeError('Không tải được danh sách cơ sở từ API nội bộ và chưa có danh mục cơ sở dự phòng.')
+                raise RuntimeError('Chưa có cơ sở đang hoạt động trong danh mục /premises của Dash CMS.')
             return list(dict.fromkeys(configured))
         if scope in {'campus', 'subject'}:
             if not requested:
@@ -1454,9 +1450,9 @@ class AcademicImportService:
     def get_ap_sync_options(self, *, term_name: str | None = None, branch: str = 'poly', campus: str | None = None, include_subjects: bool = True) -> dict[str, Any]:
         """Return safe dropdown options for AP sync.
 
-        Campuses come from keyless /get-campus?product=POLY|PTCD. Subjects come
-        from keyless /get-all-subject. Existing DB/env data is fallback only so
-        the operator keeps one simple set of dropdowns when the API is unavailable.
+        Campuses are authoritative from the manually maintained Dash CMS
+        ``/premises`` catalog. Subjects come from the keyless AP
+        ``/get-all-subject`` endpoint.
         """
         normalized_branch = _lower(branch) or 'poly'
         warnings: list[str] = []
@@ -1466,27 +1462,9 @@ class AcademicImportService:
             {'value': 'ptcd', 'label': 'PTCĐ', 'description': 'Branch ACMS cũ: ptcd', 'meta': {}},
         ]
 
-        try:
-            remote_campuses = APAcademicClient().get_campuses(branch=normalized_branch)
-            campuses = [
-                {
-                    'value': item['campus_code'],
-                    'label': item.get('campus_name') or item['campus_code'].upper(),
-                    'description': f"Danh mục nội bộ · {item.get('product') or normalized_branch.upper()}",
-                    'meta': {
-                        'source': 'ap.get-campus',
-                        'product': item.get('product'),
-                        'api_value': item.get('api_value'),
-                    },
-                }
-                for item in remote_campuses
-            ]
-        except Exception:
-            campuses = self._campus_master_values(branch=normalized_branch)
-            if campuses:
-                warnings.append('Không tải được danh sách cơ sở từ API nội bộ; tạm dùng danh mục cơ sở đã lưu.')
-            else:
-                warnings.append('Không tải được danh sách cơ sở từ API nội bộ và chưa có danh mục cơ sở dự phòng.')
+        campuses = self._campus_master_values(branch=normalized_branch)
+        if not campuses:
+            warnings.append('Chưa có cơ sở đang hoạt động trong danh mục /premises của Dash CMS.')
 
         term_query = self.db.query(AcademicTerm).filter(AcademicTerm.active.is_(True))
         if normalized_branch:

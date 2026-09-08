@@ -168,7 +168,7 @@ def test_get_data_cms_accepts_new_numeric_success_envelope_and_date_only_payload
     call = FakeHttpClient.calls[-1]
     assert call['method'] == 'POST'
     assert call['url'] == 'https://api.poly.edu.vn/api/cms/get-data-cms'
-    assert call['json'] == {'campus': 'hn', 'term_name': 'Fall 2026', 'subject_code': 'COM108'}
+    assert call['json'] == {'campus_code': 'hn', 'term_name': 'Fall 2026', 'subject_code': 'COM108'}
     assert_keyless(call)
 
 
