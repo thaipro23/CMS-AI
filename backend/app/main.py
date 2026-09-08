@@ -14,7 +14,12 @@ from app.core.origin_guard import enforce_mutating_origin_guard
 from app.core.security_headers import apply_security_headers
 from app.db.init_db import init_db
 from app.services.runtime_settings import apply_runtime_settings
-from app.services.fa26_compat import apply_fa26_compat_patches, backfill_legacy_material_preview_chunks
+from app.services.fa26_compat import (
+    apply_fa26_compat_patches,
+    backfill_legacy_material_preview_chunks,
+    bind_quiz_constraint_request,
+    reset_quiz_constraint_request,
+)
 
 apply_runtime_settings()
 validate_security_settings()
@@ -35,6 +40,34 @@ app.add_middleware(
     allow_headers=_base_cors_headers,
     expose_headers=['X-Request-ID', 'X-Process-Time-Ms'],
 )
+
+
+@app.middleware('http')
+async def quiz_constraint_mode_middleware(request: Request, call_next):
+    """Keep optional Quiz/Final constraint flags even while legacy schemas ignore extras.
+
+    The browser sends explicit difficulty_enabled, question_type_enabled and
+    question_type_weights fields. FastAPI's current request models predate these
+    optional fields, so bind them request-locally before validation. The
+    compatibility job-service patch persists the same fields into Celery jobs.
+    """
+    token = None
+    path = str(request.url.path or '')
+    if (
+        request.method.upper() == 'POST'
+        and '/question-bank-v2/releases/' in path
+        and ('/quiz/preview' in path or '/quiz/create-job' in path)
+    ):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            token = bind_quiz_constraint_request(payload)
+    try:
+        return await call_next(request)
+    finally:
+        reset_quiz_constraint_request(token)
 
 
 @app.middleware('http')
