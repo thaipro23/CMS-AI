@@ -59,14 +59,18 @@
   overscroll-behavior-x: contain;
 }
 
+/* Keep the synchronized horizontal rail reachable while a long table is in view.
+ * The previous static override pinned it to the table footer, which made horizontal
+ * navigation impossible from the middle of a long student list. */
 .student-management-page .enterprise-sticky-horizontal-scroll,
 .analytics-learning-page .enterprise-sticky-horizontal-scroll {
-  position: static !important;
-  inset: auto !important;
-  z-index: auto !important;
+  position: sticky !important;
+  top: auto !important;
+  bottom: 0 !important;
+  z-index: 24 !important;
   width: 100%;
   max-width: 100%;
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 .student-management-page .training-kpi-strip,
