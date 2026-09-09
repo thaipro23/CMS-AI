@@ -12,6 +12,10 @@ from app.services.question_content import canonical_question_content, normalize_
 ANSWER_FIELD_TO_LABEL = {'A': 'option_a', 'B': 'option_b', 'C': 'option_c', 'D': 'option_d'}
 MEDIA_PLACEHOLDER_PREFIX = '__ACMS_MEDIA_'
 BLANK_TOKEN_RE = re.compile(r'\[_{3,}\]')
+OPENEDX_FEEDBACK_STATUS_PREFIX_RE = re.compile(
+    r'^\s*(?:đúng|sai|chưa\s+đúng)\s*(?:[:.!-]+\s*|$)',
+    re.IGNORECASE,
+)
 
 
 def media_placeholder(media_id: str) -> str:
@@ -25,6 +29,12 @@ def _safe_text(value: object) -> str:
 def _compact_text(value: object, max_len: int = 80) -> str:
     text = ' '.join(str(value or '').split())
     return text if len(text) <= max_len else text[: max_len - 1].rstrip() + '…'
+
+
+def _openedx_choice_feedback(value: object) -> str:
+    """Leave correctness status to Open edX and keep only explanatory feedback."""
+    text = str(value or '').strip()
+    return OPENEDX_FEEDBACK_STATUS_PREFIX_RE.sub('', text, count=1).strip()
 
 
 def is_manually_authored_question(question: Question) -> bool:
@@ -182,7 +192,7 @@ def question_to_openedx_olx(
             fallback_feedback = ''
             if not explicit_feedback and index < 4:
                 fallback_feedback = build_choice_feedback(question, chr(ord('A') + index))
-            feedback = _safe_text(explicit_feedback or fallback_feedback)
+            feedback = _safe_text(_openedx_choice_feedback(explicit_feedback or fallback_feedback))
             hint = f'<choicehint>{feedback}</choicehint>' if feedback else ''
             choices.append(f'      <choice correct="{is_correct}">{_safe_text(option["text"])}{hint}</choice>')
         response_xml = f'''  <multiplechoiceresponse>\n    <label>{prompt}</label>\n{media_xml}    <choicegroup type="MultipleChoice">\n{chr(10).join(choices)}\n    </choicegroup>\n{solution_xml}\n  </multiplechoiceresponse>'''
@@ -190,12 +200,18 @@ def question_to_openedx_olx(
         choices = []
         for option in response['options']:
             is_correct = 'true' if option['correct'] else 'false'
-            feedback = _safe_text(option.get('feedback'))
+            feedback = _safe_text(_openedx_choice_feedback(option.get('feedback')))
             hint = f'<choicehint>{feedback}</choicehint>' if feedback else ''
             choices.append(f'      <choice correct="{is_correct}">{_safe_text(option["text"])}{hint}</choice>')
         response_xml = f'''  <choiceresponse>\n    <label>{prompt}</label>\n{media_xml}    <checkboxgroup>\n{chr(10).join(choices)}\n    </checkboxgroup>\n{solution_xml}\n  </choiceresponse>'''
     elif qtype == 'dropdown_fill':
-        raw_segments = BLANK_TOKEN_RE.split(str(question.question_text or ''))
+        raw_prompt = str(question.question_text or '')
+        raw_segments = BLANK_TOKEN_RE.split(raw_prompt)
+        blank_tokens = BLANK_TOKEN_RE.findall(raw_prompt)
+        preserve_authored_blank = (
+            str(getattr(question, 'authoring_mode', '') or '').strip().lower() == 'manual'
+            or str(getattr(question, 'source_type', '') or '').strip().lower() == 'manual'
+        )
         inline_parts = [_safe_text(raw_segments[0])]
         for blank_index, correct_id in enumerate(response['correct_option_ids']):
             choices = []
@@ -209,6 +225,10 @@ def question_to_openedx_olx(
                 if blank_index == len(response['correct_option_ids']) - 1
                 else ''
             )
+            # Manual authoring uses [_____] as part of the teacher-authored prompt.
+            # Keep that marker in <p>; imported/legacy behavior stays unchanged.
+            if preserve_authored_blank:
+                inline_parts.append(_safe_text(blank_tokens[blank_index]))
             inline_parts.append(
                 '      <optionresponse inline="1">\n'
                 f'        <label>Ô trống {blank_index + 1}</label>\n'
