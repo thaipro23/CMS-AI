@@ -5,6 +5,7 @@ import pytest
 from app.models.question import Question
 from app.services.cms_tags import build_question_tags
 from app.services.openedx_exporter import question_to_openedx_olx
+from app.services.question_content import apply_canonical_content
 
 
 class DummyTarget:
@@ -60,6 +61,55 @@ def test_question_to_olx_contains_multiple_choice():
     assert 'correct="true"' in xml
 
 
+def test_exporter_strips_redundant_openedx_correctness_prefix_from_explicit_feedback():
+    q = make_question(question_content_json={
+        'schema_version': 2,
+        'response': {
+            'type': 'single_select',
+            'options': [
+                {'id': 'a', 'text': 'Lấy dữ liệu', 'correct': True, 'feedback': 'Đúng. Vì GET dùng để đọc tài nguyên.'},
+                {'id': 'b', 'text': 'Xóa dữ liệu', 'correct': False, 'feedback': 'Chưa đúng: DELETE mới dùng để xóa.'},
+                {'id': 'c', 'text': 'Deploy ứng dụng', 'correct': False, 'feedback': ''},
+                {'id': 'd', 'text': 'Thiết kế giao diện', 'correct': False, 'feedback': ''},
+            ],
+        },
+    })
+    root = ET.fromstring(question_to_openedx_olx(q))
+    feedback = [(choice.findtext('choicehint') or '') for choice in root.findall('.//choicegroup/choice')]
+    assert feedback[0] == 'Vì GET dùng để đọc tài nguyên.'
+    assert feedback[1] == 'DELETE mới dùng để xóa.'
+
+
+def test_manual_dropdown_export_keeps_blank_marker_inside_prompt_paragraph():
+    q = make_question(
+        question_type='dropdown_fill',
+        question_text='Các hệ điều hành thường được lưu trữ [_____].',
+        option_a='', option_b='', option_c='', option_d='',
+        correct_answer='A',
+        authoring_mode='manual',
+        source_type='manual',
+        pedagogy_json={},
+    )
+    apply_canonical_content(q, 'dropdown_fill', {
+        'response': {
+            'type': 'dropdown_fill',
+            'options': [
+                {'id': 'cpu', 'text': 'Trong CPU', 'feedback': ''},
+                {'id': 'storage', 'text': 'Trên bộ nhớ ngoài', 'feedback': ''},
+                {'id': 'rom', 'text': 'Trong ROM', 'feedback': ''},
+                {'id': 'ram', 'text': 'Trong RAM', 'feedback': ''},
+            ],
+            'correct_option_ids': ['storage'],
+        },
+    })
+    root = ET.fromstring(question_to_openedx_olx(q))
+    paragraph = root.find('.//div[@class="acms-dropdown-fill"]/p')
+    assert paragraph is not None
+    paragraph_xml = ET.tostring(paragraph, encoding='unicode')
+    assert '[_____]' in paragraph_xml
+    assert paragraph.find('optionresponse') is not None
+
+
 def test_exporter_emits_one_friendly_indirect_knowledge_hint():
     xml = question_to_openedx_olx(make_question())
     root = ET.fromstring(xml)
@@ -82,7 +132,9 @@ def test_exporter_emits_misconception_specific_choice_feedback():
     choices = root.findall('.//choicegroup/choice')
     assert len(choices) == 4
     feedback = [(choice.findtext('choicehint') or '') for choice in choices]
-    assert feedback[0].startswith('Đúng.')
+    assert feedback[0].startswith('Bạn đã nhận diện đúng kiến thức/quy tắc cần dùng.')
+    assert not feedback[0].startswith('Đúng.')
+    assert not feedback[1].startswith('Chưa đúng')
     assert 'nhầm thao tác đọc với thao tác xóa' in feedback[1]
     assert 'nhầm HTTP method với quy trình triển khai' in feedback[2]
     assert 'nhầm giao thức dữ liệu với thiết kế giao diện' in feedback[3]
