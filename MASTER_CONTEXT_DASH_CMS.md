@@ -191,3 +191,21 @@ NEXT ACTION:
 - Source commit: `564a2312ab4a4ba8579c6bd4226f03db5616b85c` (`fix: preserve manual dropdown blanks and clean Open edX feedback`).
 - Regression commit: `319c4b75cc6a3785e4f8afb1bf4db0d8806f8945` (`test: cover manual dropdown blanks and Open edX feedback cleanup`).
 - Deployment/production verification: NOT DONE in this session.
+
+## Update 2026-09-09 — Backend build compile failure in health route
+
+### Observed
+- Jenkins backend build reached `PYTHON COMPILE` and stopped before SonarQube with `SyntaxError: '(' was never closed` in `backend/app/api/routes/health.py:256`.
+- Broken expression was `QueryHotspotService().report(max_items=max(1, min(int(max_items or 100), 300))`.
+
+### Root cause
+- The `report(` call was missing its final closing parenthesis. This is a syntax-only regression; no QueryHotspot business logic change was required.
+
+### Fix
+- `backend/app/api/routes/health.py` now uses `return QueryHotspotService().report(max_items=max(1, min(int(max_items or 100), 300)))`.
+- Remote source commit: `f310f1ad299924b727c1bc70e32e85f04e373893` (`fix: close query hotspot health report call`).
+
+### Verification
+- Remote branch/file re-read confirms the corrected expression is present.
+- Local handed-off source snapshot with the corrected expression passes `python -m compileall -q app` with exit code 0.
+- Jenkins/Sonar rerun: NOT YET VERIFIED; rerun the pipeline from the new branch HEAD.
