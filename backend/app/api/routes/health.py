@@ -253,7 +253,7 @@ def query_hotspot_health(max_items: int = 100, user: UserContext = Depends(requi
     """Read-only static query hotspot scan for load hardening review."""
     from app.services.query_hotspot import QueryHotspotService
 
-    return QueryHotspotService().report(max_items=max(1, min(int(max_items or 100), 300))
+    return QueryHotspotService().report(max_items=max(1, min(int(max_items or 100), 300)))
 
 
 @router.get('/health/performance-readiness', response_model=PerformanceReadinessReport)
