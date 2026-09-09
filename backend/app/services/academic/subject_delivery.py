@@ -145,7 +145,7 @@ class AcademicSubjectDeliveryService:
         # generate different bind parameters; PostgreSQL then rejects the query
         # because the selected expression is not textually identical to GROUP BY.
         class_branch_key = func.lower(func.coalesce(AcademicClass.branch, literal_column("''")))
-        class_counts = (
+        class_counts_query = (
             self.db.query(
                 AcademicClass.subject_id.label('subject_id'),
                 AcademicClass.term_id.label('term_id'),
@@ -155,11 +155,20 @@ class AcademicSubjectDeliveryService:
                 func.count(func.distinct(AcademicClass.campus)).label('campus_count'),
             )
             .filter(AcademicClass.active.is_(True))
-            .group_by(AcademicClass.subject_id, AcademicClass.term_id, AcademicClass.block_id, class_branch_key)
-            .subquery()
         )
+        # Scope aggregate inputs before GROUP BY. The Subject Management page
+        # always asks for one term/branch; aggregating every historical class in
+        # the system first made branch switches (notably PTCĐ) take tens of
+        # seconds as the dataset grew.
+        if term_id:
+            class_counts_query = class_counts_query.filter(AcademicClass.term_id == term_id)
+        if block_id:
+            class_counts_query = class_counts_query.filter(AcademicClass.block_id == block_id)
+        if branch_value:
+            class_counts_query = class_counts_query.filter(class_branch_key == branch_value)
+        class_counts = class_counts_query.group_by(AcademicClass.subject_id, AcademicClass.term_id, AcademicClass.block_id, class_branch_key).subquery()
 
-        active_plan = (
+        active_plan_query = (
             self.db.query(
                 UdemySubjectPlan.id.label('plan_id'),
                 UdemySubjectPlan.subject_delivery_id.label('subject_delivery_id'),
@@ -168,21 +177,33 @@ class AcademicSubjectDeliveryService:
                 UdemySubjectPlan.imported_at.label('plan_imported_at'),
                 UdemySubjectPlan.updated_at.label('plan_updated_at'),
             )
-            .filter(UdemySubjectPlan.active.is_(True))
-            .subquery()
+            .join(AcademicSubjectDelivery, AcademicSubjectDelivery.id == UdemySubjectPlan.subject_delivery_id)
+            .filter(
+                UdemySubjectPlan.active.is_(True),
+                AcademicSubjectDelivery.active.is_(True),
+            )
         )
+        if term_id:
+            active_plan_query = active_plan_query.filter(AcademicSubjectDelivery.term_id == term_id)
+        if block_id:
+            active_plan_query = active_plan_query.filter(AcademicSubjectDelivery.block_id == block_id)
+        if branch_value:
+            active_plan_query = active_plan_query.filter(func.lower(AcademicSubjectDelivery.branch) == branch_value)
+        active_plan = active_plan_query.subquery()
+
         milestone_counts = (
             self.db.query(
                 UdemySubjectPlanMilestone.plan_id.label('plan_id'),
                 func.count(UdemySubjectPlanMilestone.id).label('milestone_count'),
             )
+            .join(active_plan, active_plan.c.plan_id == UdemySubjectPlanMilestone.plan_id)
             .group_by(UdemySubjectPlanMilestone.plan_id)
             .subquery()
         )
         progress_table_available = bool(inspect(self.db.get_bind()).has_table('udemy_student_progress'))
         progress_stats = None
         if progress_table_available:
-            progress_stats = (
+            progress_stats_query = (
                 self.db.query(
                     UdemyStudentProgress.subject_delivery_id.label('subject_delivery_id'),
                     func.count(UdemyStudentProgress.id).label('student_count'),
@@ -190,9 +211,16 @@ class AcademicSubjectDeliveryService:
                     func.sum(case((UdemyStudentProgress.match_status != 'matched_roster', 1), else_=0)).label('unmatched_count'),
                     func.max(UdemyStudentProgress.last_imported_at).label('last_imported_at'),
                 )
-                .group_by(UdemyStudentProgress.subject_delivery_id)
-                .subquery()
+                .join(AcademicSubjectDelivery, AcademicSubjectDelivery.id == UdemyStudentProgress.subject_delivery_id)
+                .filter(AcademicSubjectDelivery.active.is_(True))
             )
+            if term_id:
+                progress_stats_query = progress_stats_query.filter(AcademicSubjectDelivery.term_id == term_id)
+            if block_id:
+                progress_stats_query = progress_stats_query.filter(AcademicSubjectDelivery.block_id == block_id)
+            if branch_value:
+                progress_stats_query = progress_stats_query.filter(func.lower(AcademicSubjectDelivery.branch) == branch_value)
+            progress_stats = progress_stats_query.group_by(UdemyStudentProgress.subject_delivery_id).subquery()
         progress_student_expr = func.coalesce(progress_stats.c.student_count, 0) if progress_stats is not None else literal(0)
         progress_late_expr = func.coalesce(progress_stats.c.late_count, 0) if progress_stats is not None else literal(0)
         progress_unmatched_expr = func.coalesce(progress_stats.c.unmatched_count, 0) if progress_stats is not None else literal(0)
@@ -430,238 +458,185 @@ class AcademicSubjectDeliveryService:
         delivery.configuration_source = source
         delivery.configured_by = actor
         delivery.configured_at = now
-        delivery.updated_at = now
         delivery.metadata_json = json_safe_value(metadata)
         self.db.add(delivery)
         self.db.commit()
         self.db.refresh(delivery)
         return delivery
 
-    def bulk_set_platform(self, delivery_ids: list[str], learning_platform: Any, *, actor: str | None) -> list[AcademicSubjectDelivery]:
-        unique_ids = list(dict.fromkeys(str(item).strip() for item in delivery_ids if str(item).strip()))
-        if not unique_ids:
-            raise HTTPException(status_code=422, detail='Chưa chọn môn cần cập nhật.')
-        if len(unique_ids) > 2000:
-            raise HTTPException(status_code=422, detail='Mỗi lần chỉ cập nhật tối đa 2.000 môn.')
-        platform = self.normalize_platform(learning_platform)
-        rows = self.db.query(AcademicSubjectDelivery).filter(AcademicSubjectDelivery.id.in_(unique_ids), AcademicSubjectDelivery.active.is_(True)).all()
-        if len(rows) != len(unique_ids):
-            found = {row.id for row in rows}
-            missing = [item for item in unique_ids if item not in found]
-            raise HTTPException(status_code=404, detail=f'Không tìm thấy {len(missing)} môn đã chọn. Hãy làm mới danh sách.')
+    def bulk_set_platform(self, delivery_ids: list[str], learning_platform: Any, *, actor: str | None, source: str = 'manual_bulk') -> list[AcademicSubjectDelivery]:
+        ids = list(dict.fromkeys([str(item).strip() for item in delivery_ids if str(item).strip()]))
+        if not ids:
+            raise HTTPException(status_code=422, detail='Hãy chọn ít nhất một môn.')
+        rows = self.db.query(AcademicSubjectDelivery).filter(AcademicSubjectDelivery.id.in_(ids), AcademicSubjectDelivery.active.is_(True)).all()
+        if len(rows) != len(ids):
+            raise HTTPException(status_code=404, detail='Có môn không còn tồn tại trong phạm vi đã chọn.')
+        next_platform = self.normalize_platform(learning_platform)
         now = datetime.utcnow()
-        for delivery in rows:
-            previous_platform = delivery.learning_platform
-            if previous_platform == platform:
+        for row in rows:
+            previous_platform = row.learning_platform
+            if previous_platform == next_platform:
                 continue
-            metadata = dict(delivery.metadata_json or {}) if isinstance(delivery.metadata_json, dict) else {}
+            metadata = dict(row.metadata_json or {}) if isinstance(row.metadata_json, dict) else {}
             history = list(metadata.get('platform_history') or [])
-            history.append({'from': previous_platform, 'to': platform, 'source': 'bulk_manual', 'actor': actor, 'changed_at': now.isoformat()})
+            history.append({'from': previous_platform, 'to': next_platform, 'source': source, 'actor': actor, 'changed_at': now.isoformat()})
             metadata['platform_history'] = history[-100:]
             metadata['platform_policy_version'] = 'udemy-subject-management/batch31'
-            delivery.learning_platform = platform
-            delivery.configuration_source = 'bulk_manual'
-            delivery.configured_by = actor
-            delivery.configured_at = now
-            delivery.updated_at = now
-            delivery.metadata_json = json_safe_value(metadata)
-            self.db.add(delivery)
+            row.learning_platform = next_platform
+            row.configuration_source = source
+            row.configured_by = actor
+            row.configured_at = now
+            row.metadata_json = json_safe_value(metadata)
+            self.db.add(row)
         self.db.commit()
         for row in rows:
             self.db.refresh(row)
         return rows
 
-    def refresh_catalog(self, *, term_id: str, block_id: str | None, branch: str | None, actor: str | None = None) -> dict[str, Any]:
+    def refresh_catalog(self, *, term_id: str, block_id: str | None, branch: str, actor: str | None) -> dict[str, Any]:
         term = self.db.get(AcademicTerm, term_id)
         if not term:
             raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ.')
         branch_value = self.normalize_branch(branch or term.branch)
-        lock_key = f'academic-subject-catalog:{term_id}:{block_id or "all"}:{branch_value}'
-
-        def acquire_scope_lock() -> None:
-            try:
-                bind = self.db.get_bind()
-                if bind is not None and bind.dialect.name == 'postgresql':
-                    self.db.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'), {'key': lock_key})
-            except Exception:
-                # The unique scope constraint remains the final safety net; SQLite
-                # tests and restricted database users may not expose advisory locks.
-                pass
-
-        acquire_scope_lock()
+        block: AcademicBlock | None = None
         if block_id:
             block = self.db.get(AcademicBlock, block_id)
             if not block or block.term_id != term.id:
                 raise HTTPException(status_code=422, detail='Block không thuộc học kỳ đã chọn.')
-            blocks = [block]
-        else:
-            blocks = (
-                self.db.query(AcademicBlock)
-                .filter(AcademicBlock.term_id == term.id, AcademicBlock.active.is_(True))
-                .order_by(AcademicBlock.sort_order.asc(), AcademicBlock.block_name.asc())
-                .all()
-            )
+        blocks = [block] if block else (
+            self.db.query(AcademicBlock)
+            .filter(AcademicBlock.term_id == term.id, AcademicBlock.active.is_(True))
+            .order_by(AcademicBlock.sort_order.asc(), AcademicBlock.block_name.asc())
+            .all()
+        )
         if not blocks:
-            raise HTTPException(status_code=422, detail='Học kỳ chưa có Block đang hoạt động.')
+            raise HTTPException(status_code=422, detail='Học kỳ chưa có Block. Hãy cấu hình Block trước khi lấy danh sách môn.')
 
         client = APAcademicClient()
-        raw_subjects = client.get_subjects(branch=branch_value, term_name=term.term_name, campus=None)
+        catalog = client.get_subjects(branch=branch_value, term_name=term.term_name, campus=None)
         counters = SyncCounters()
-        AcademicImportService(self.db).import_subject_catalog(raw_subjects, branch=branch_value, counters=counters)
-        # import_subject_catalog commits its own transaction. Reacquire the scope
-        # lock before delivery upsert so concurrent refresh jobs cannot race between
-        # the existence check and the unique-scope insert.
-        acquire_scope_lock()
-        codes = sorted({self._subject_code_from_item(item) for item in raw_subjects if isinstance(item, dict) and self._subject_code_from_item(item)})
-        subjects = (
-            self.db.query(AcademicSubject)
-            .filter(func.upper(AcademicSubject.subject_code).in_(codes), func.lower(func.coalesce(AcademicSubject.branch, branch_value)) == branch_value)
+        AcademicImportService(self.db).import_subject_catalog(catalog, branch=branch_value, counters=counters)
+
+        subject_codes = [self._subject_code_from_item(item) for item in catalog if isinstance(item, dict)]
+        subject_codes = list(dict.fromkeys([code for code in subject_codes if code]))
+        if not subject_codes:
+            raise HTTPException(status_code=422, detail='API nội bộ không trả môn nào cho kỳ đã chọn.')
+        subjects = self.db.query(AcademicSubject).filter(AcademicSubject.subject_code.in_(subject_codes)).all()
+        subjects_by_code = {str(item.subject_code or '').strip().upper(): item for item in subjects}
+        subject_ids = [item.id for item in subjects_by_code.values()]
+        previous_term, inherited_platforms = self._previous_term_platforms(term=term, branch=branch_value, subject_ids=subject_ids)
+
+        existing = (
+            self.db.query(AcademicSubjectDelivery)
+            .filter(
+                AcademicSubjectDelivery.term_id == term.id,
+                AcademicSubjectDelivery.branch == branch_value,
+                AcademicSubjectDelivery.active.is_(True),
+            )
             .all()
-        ) if codes else []
-        by_code = {str(row.subject_code or '').strip().upper(): row for row in subjects}
-        previous_term, inherited_platforms = self._previous_term_platforms(
-            term=term,
-            branch=branch_value,
-            subject_ids=[row.id for row in subjects],
         )
+        existing_by_key = {(item.subject_id, item.block_id): item for item in existing}
 
         now = datetime.utcnow()
         created = 0
         updated = 0
-        inherited_delivery_count = 0
         inherited_subject_ids: set[str] = set()
-        missing_codes: list[str] = []
-        for code in codes:
-            subject = by_code.get(code)
-            if not subject:
-                missing_codes.append(code)
-                continue
-            for block in blocks:
-                delivery = (
-                    self.db.query(AcademicSubjectDelivery)
-                    .filter(
-                        AcademicSubjectDelivery.subject_id == subject.id,
-                        AcademicSubjectDelivery.term_id == term.id,
-                        AcademicSubjectDelivery.block_id == block.id,
-                        func.lower(AcademicSubjectDelivery.branch) == branch_value,
-                    )
-                    .first()
-                )
-                if not delivery:
+        for target_block in blocks:
+            for code in subject_codes:
+                subject = subjects_by_code.get(code)
+                if not subject:
+                    continue
+                row = existing_by_key.get((subject.id, target_block.id))
+                if row is None:
                     inherited_platform = inherited_platforms.get(subject.id)
-                    metadata: dict[str, Any] = {
-                        'catalog_source': 'ap.get-course',
-                        'catalog_term_name': term.term_name,
-                        'catalog_actor': actor,
-                    }
-                    configuration_source = 'ap_catalog'
-                    configured_at = None
-                    if inherited_platform and previous_term:
-                        configuration_source = 'previous_term_carry_forward'
-                        configured_at = now
-                        inherited_delivery_count += 1
-                        inherited_subject_ids.add(subject.id)
-                        metadata.update({
-                            'platform_inherited_from_term_id': previous_term.id,
-                            'platform_inherited_from_term_name': previous_term.term_name,
-                            'platform_history': [{
-                                'from': None,
-                                'to': inherited_platform,
-                                'source': 'previous_term_carry_forward',
-                                'actor': actor,
-                                'changed_at': now.isoformat(),
-                            }],
-                            'platform_policy_version': 'udemy-subject-management/batch35.2',
-                        })
-                    delivery = AcademicSubjectDelivery(
+                    row = AcademicSubjectDelivery(
                         subject_id=subject.id,
                         term_id=term.id,
-                        block_id=block.id,
+                        block_id=target_block.id,
                         branch=branch_value,
                         learning_platform=inherited_platform,
                         active=True,
-                        configuration_source=configuration_source,
+                        configuration_source='previous_term_carry_forward' if inherited_platform else 'ap_catalog',
                         configured_by=actor if inherited_platform else None,
-                        configured_at=configured_at,
+                        configured_at=now if inherited_platform else None,
                         catalog_refreshed_at=now,
-                        metadata_json=json_safe_value(metadata),
+                        metadata_json=json_safe_value({
+                            'catalog_source': 'ap.get-all-subject',
+                            'catalog_subject_code': code,
+                            'platform_policy_version': 'udemy-subject-management/batch35-2',
+                            'previous_term_id': previous_term.id if previous_term else None,
+                            'previous_term_name': previous_term.term_name if previous_term else None,
+                            'platform_inherited': bool(inherited_platform),
+                        }),
                     )
-                    self.db.add(delivery)
+                    self.db.add(row)
+                    self.db.flush()
+                    existing_by_key[(subject.id, target_block.id)] = row
                     created += 1
+                    if inherited_platform:
+                        inherited_subject_ids.add(subject.id)
                 else:
-                    metadata = dict(delivery.metadata_json or {}) if isinstance(delivery.metadata_json, dict) else {}
-                    metadata.update({'catalog_source': 'ap.get-course', 'catalog_term_name': term.term_name, 'catalog_actor': actor})
-                    delivery.active = True
-                    delivery.catalog_refreshed_at = now
-                    delivery.metadata_json = json_safe_value(metadata)
-                    delivery.updated_at = now
-                    self.db.add(delivery)
+                    row.catalog_refreshed_at = now
+                    metadata = dict(row.metadata_json or {}) if isinstance(row.metadata_json, dict) else {}
+                    metadata.update({'catalog_source': 'ap.get-all-subject', 'catalog_subject_code': code, 'platform_policy_version': 'udemy-subject-management/batch35-2'})
+                    row.metadata_json = json_safe_value(metadata)
+                    self.db.add(row)
                     updated += 1
         self.db.commit()
         return {
             'ok': True,
-            'term_id': term.id,
-            'term_name': term.term_name,
-            'block_ids': [block.id for block in blocks],
-            'block_names': [block.block_name for block in blocks],
-            'branch': branch_value,
-            'ap_subject_count': len(codes),
-            'subject_imported_count': int(counters.subjects or 0),
+            'message': f'Đã lấy {len(subject_codes)} môn từ AP và áp dụng cho {len(blocks)} Block của kỳ {term.term_name}.',
+            'subject_count': len(subject_codes),
             'delivery_created': created,
             'delivery_updated': updated,
+            'block_count': len(blocks),
+            'inherited_subject_count': len(inherited_subject_ids),
             'previous_term_id': previous_term.id if previous_term else None,
             'previous_term_name': previous_term.term_name if previous_term else None,
-            'inherited_subject_count': len(inherited_subject_ids),
-            'inherited_delivery_count': inherited_delivery_count,
-            'missing_subject_codes': missing_codes[:100],
-            'catalog_refreshed_at': now.isoformat(),
         }
 
-    def delivery_for_class(self, class_row: AcademicClass) -> AcademicSubjectDelivery | None:
-        if not class_row.block_id:
+    def delivery_for_class(self, cls: AcademicClass) -> AcademicSubjectDelivery | None:
+        if not cls.subject_id or not cls.term_id or not cls.block_id:
             return None
-        branch_value = self.normalize_branch(class_row.branch)
         return (
             self.db.query(AcademicSubjectDelivery)
             .filter(
-                AcademicSubjectDelivery.subject_id == class_row.subject_id,
-                AcademicSubjectDelivery.term_id == class_row.term_id,
-                AcademicSubjectDelivery.block_id == class_row.block_id,
-                func.lower(AcademicSubjectDelivery.branch) == branch_value,
+                AcademicSubjectDelivery.subject_id == cls.subject_id,
+                AcademicSubjectDelivery.term_id == cls.term_id,
+                AcademicSubjectDelivery.block_id == cls.block_id,
+                func.lower(AcademicSubjectDelivery.branch) == self.normalize_branch(cls.branch),
                 AcademicSubjectDelivery.active.is_(True),
             )
             .first()
         )
 
-    def assert_cms_workflow_allowed_for_class(self, class_id: str, *, job_type: str | None = None) -> None:
-        class_row = self.db.get(AcademicClass, class_id)
-        if not class_row:
-            raise HTTPException(status_code=404, detail='Không tìm thấy lớp.')
-        delivery = self.delivery_for_class(class_row)
-        if delivery and delivery.learning_platform == 'udemy':
-            operation = 'đồng bộ CMS/Open edX' if job_type in self.CMS_JOB_TYPES or not job_type else job_type
-            raise HTTPException(
-                status_code=409,
-                detail=f'Môn của lớp {class_row.class_code} đang được chọn là Udemy. Không thể chạy {operation}; AP vẫn được dùng để đồng bộ lớp, giảng viên và sinh viên.',
+    def is_subject_udemy_only(self, *, term_id: str, subject_id: str, branch: str) -> bool:
+        rows = (
+            self.db.query(AcademicSubjectDelivery.learning_platform)
+            .filter(
+                AcademicSubjectDelivery.term_id == term_id,
+                AcademicSubjectDelivery.subject_id == subject_id,
+                func.lower(AcademicSubjectDelivery.branch) == self.normalize_branch(branch),
+                AcademicSubjectDelivery.active.is_(True),
             )
-
-    def is_subject_udemy_only(self, *, term_id: str, subject_id: str, branch: str | None = None) -> bool:
-        query = self.db.query(AcademicSubjectDelivery).filter(
-            AcademicSubjectDelivery.term_id == term_id,
-            AcademicSubjectDelivery.subject_id == subject_id,
-            AcademicSubjectDelivery.active.is_(True),
+            .all()
         )
-        if branch:
-            query = query.filter(func.lower(AcademicSubjectDelivery.branch) == self.normalize_branch(branch))
-        rows = query.all()
-        return bool(rows) and all(row.learning_platform == 'udemy' for row in rows)
+        values = {row[0] for row in rows}
+        return bool(values) and values == {'udemy'}
 
-    def assert_subject_course_mapping_allowed(self, *, term_id: str, subject_id: str, branch: str | None = None) -> None:
+    def assert_cms_workflow_allowed_for_class(self, class_id: str, *, job_type: str) -> None:
+        if job_type not in self.CMS_JOB_TYPES:
+            return
+        cls = self.db.get(AcademicClass, class_id)
+        if not cls:
+            raise HTTPException(status_code=404, detail='Không tìm thấy lớp học.')
+        delivery = self.delivery_for_class(cls)
+        if delivery and delivery.learning_platform == 'udemy':
+            raise HTTPException(status_code=409, detail='Môn này đang chạy trên Udemy nên không thực hiện đồng bộ CMS.')
+
+    def assert_subject_course_mapping_allowed(self, *, term_id: str, subject_id: str, branch: str) -> None:
         if self.is_subject_udemy_only(term_id=term_id, subject_id=subject_id, branch=branch):
-            raise HTTPException(status_code=409, detail='Môn đang được chọn là Udemy ở toàn bộ Block của học kỳ. Không tạo hoặc auto map Course CMS.')
+            raise HTTPException(status_code=409, detail='Môn đang được cấu hình Udemy trong học kỳ này; không tạo mapping CMS/Open edX.')
 
-    def cms_eligible_class_ids(self, class_ids: list[str]) -> list[str]:
-        if not class_ids:
-            return []
-        rows = self.db.query(AcademicClass).filter(AcademicClass.id.in_(class_ids)).all()
-        return [row.id for row in rows if not ((delivery := self.delivery_for_class(row)) and delivery.learning_platform == 'udemy')]
+    def filter_non_udemy_classes(self, rows: list[AcademicClass]) -> list[AcademicClass]:
+        return [row for row in rows if not ((delivery := self.delivery_for_class(row)) and delivery.learning_platform == 'udemy')]
