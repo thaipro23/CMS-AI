@@ -23,7 +23,7 @@ def test_version_is_synchronized_across_runtime_artifacts():
         assert VERSION in read(path), path
 
 
-def test_release_keeps_historical_migrations_and_current_0061_head():
+def test_release_keeps_historical_migrations_and_current_0062_head():
     versions = ROOT / 'backend/alembic/versions'
     assert (versions / '0053_v25_9_16_7_2_64_16_5_4_diff_idempotency.py').exists()
     assert (versions / '0057_v25_9_16_7_2_64_35_udemy_hardening_indexes.py').exists()
@@ -31,6 +31,7 @@ def test_release_keeps_historical_migrations_and_current_0061_head():
     assert (versions / '0059_v25_9_16_7_2_64_37_question_bank_legacy_hygiene.py').exists()
     assert (versions / '0060_v25_9_16_7_2_64_38_question_authoring_types_media.py').exists()
     assert (versions / '0061_v25_9_16_7_2_64_39_quiz_blueprint_type_quota.py').exists()
+    assert (versions / '0062_v25_9_16_7_2_64_40_training_scope_indexes.py').exists()
 
 
 def test_accessible_dialog_is_the_only_active_dialog_primitive():

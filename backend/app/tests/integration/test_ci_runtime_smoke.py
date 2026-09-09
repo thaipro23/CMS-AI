@@ -15,7 +15,7 @@ def test_postgres_migration_head_and_idempotency_contract() -> None:
     engine = create_engine(os.environ['DATABASE_URL'], pool_pre_ping=True)
     with engine.begin() as connection:
         version = connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()
-        assert version == '0061_v25_9_16_7_2_64_39'
+        assert version == '0062_v25_9_16_7_2_64_40'
         column_exists = connection.execute(text("""
             SELECT EXISTS (
                 SELECT 1 FROM information_schema.columns

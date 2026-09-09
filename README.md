@@ -13,7 +13,7 @@ This branch extends the known-good `.16` baseline without replacing Open edX cor
 - Open edX publish continues through the connector/worker flow; no Open edX core patch is required.
 - AP synchronization remains scoped to subjects selected CMS/Udemy in `/subject-management` from `.16`.
 - Heavy generation/publish/quiz operations remain persistent Celery jobs.
-- Database schema head: `0061_v25_9_16_7_2_64_39`.
+- Database schema head: `0062_v25_9_16_7_2_64_40`.
 
 Release notes: `RELEASE_v25.9.16.7.2.64.16.5.7.2.18_QUESTION_TYPES_ERROR_HARDENING.md`.
 Verification: `VERIFICATION_v25.9.16.7.2.64.16.5.7.2.18.md`.

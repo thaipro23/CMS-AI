@@ -25,7 +25,7 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0061_v25_9_16_7_2_64_39'
+_EXPECTED_ALEMBIC_REVISION = '0062_v25_9_16_7_2_64_40'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {
@@ -253,7 +253,7 @@ def query_hotspot_health(max_items: int = 100, user: UserContext = Depends(requi
     """Read-only static query hotspot scan for load hardening review."""
     from app.services.query_hotspot import QueryHotspotService
 
-    return QueryHotspotService().report(max_items=max(1, min(int(max_items or 100), 300)))
+    return QueryHotspotService().report(max_items=max(1, min(int(max_items or 100), 300))
 
 
 @router.get('/health/performance-readiness', response_model=PerformanceReadinessReport)
