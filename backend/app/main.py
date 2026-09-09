@@ -14,6 +14,7 @@ from app.core.origin_guard import enforce_mutating_origin_guard
 from app.core.security_headers import apply_security_headers
 from app.db.init_db import init_db
 from app.services.runtime_settings import apply_runtime_settings
+from app.services.bank_quiz_performance import apply_bank_quiz_performance_patches
 from app.services.fa26_compat import (
     apply_fa26_compat_patches,
     backfill_legacy_material_preview_chunks,
@@ -24,6 +25,7 @@ from app.services.fa26_compat import (
 apply_runtime_settings()
 validate_security_settings()
 apply_fa26_compat_patches()
+apply_bank_quiz_performance_patches()
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, debug=settings.debug)
 app.add_exception_handler(HTTPException, http_exception_handler)
