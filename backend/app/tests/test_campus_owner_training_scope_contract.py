@@ -7,6 +7,8 @@ SCOPE_ROUTE = ROOT / 'backend/app/api/routes/academic_scope.py'
 API_ROUTER = ROOT / 'backend/app/api/router.py'
 APP_SHELL = ROOT / 'frontend/components/layout/AppShell.tsx'
 ACADEMIC_TABLE_STATE = ROOT / 'frontend/hooks/useAcademicTableState.ts'
+STUDENT_PLATFORM_PAGE = ROOT / 'frontend/app/student-management/StudentManagementPlatformPage.tsx'
+SUBJECT_CLASSES_PAGE = ROOT / 'frontend/app/student-management/subjects/[subjectId]/classes/page.tsx'
 
 
 def test_campus_owner_can_open_subject_when_subject_has_class_in_owned_campus():
@@ -46,3 +48,16 @@ def test_academic_table_state_keeps_scoped_owner_on_allowed_branch_and_campus():
     assert 'branches.includes(nextBranch)' in source
     assert 'campusCodes.has(nextCampus)' in source
     assert 'merged = { ...merged, ...scoped }' in source
+    assert 'trainingScopeReady' in source
+    assert 'scopeReady: authReady && isAuthenticated && trainingScopeReady' in source
+
+
+def test_student_operations_wait_for_scope_before_data_requests():
+    platform_source = STUDENT_PLATFORM_PAGE.read_text(encoding='utf-8')
+    classes_source = SUBJECT_CLASSES_PAGE.read_text(encoding='utf-8')
+    assert 'state, update, scopeReady' in platform_source
+    assert 'if (!scopeReady)' in platform_source
+    assert 'loading={!scopeReady || loading}' in platform_source
+    assert 'state, update, scopeReady' in classes_source
+    assert 'if (!scopeReady)' in classes_source
+    assert 'loading={!scopeReady || loading}' in classes_source
