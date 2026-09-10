@@ -103,4 +103,15 @@ class AcademicAccessWorkflowService:
             ).first()
             if exists:
                 return
+        # A CAMPUS_OWNER owns every AP class/student inside the assigned campus,
+        # not only subjects explicitly assigned to them as a teacher.  The class
+        # listing applies the same campus predicate again, so this parent-level
+        # check only unlocks navigation to subjects that actually exist in scope.
+        if decision.campus_codes:
+            campus_subject_exists = self.db.query(AcademicClass.id).filter(
+                AcademicClass.subject_id == subject_id,
+                func.lower(AcademicClass.campus).in_(decision.campus_codes),
+            ).first()
+            if campus_subject_exists:
+                return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được phân công hoặc phân quyền xem môn này')
