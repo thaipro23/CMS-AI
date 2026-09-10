@@ -6,6 +6,7 @@ ACCESS = ROOT / 'backend/app/services/academic/access.py'
 SCOPE_ROUTE = ROOT / 'backend/app/api/routes/academic_scope.py'
 API_ROUTER = ROOT / 'backend/app/api/router.py'
 APP_SHELL = ROOT / 'frontend/components/layout/AppShell.tsx'
+ACADEMIC_TABLE_STATE = ROOT / 'frontend/hooks/useAcademicTableState.ts'
 
 
 def test_campus_owner_can_open_subject_when_subject_has_class_in_owned_campus():
@@ -28,7 +29,7 @@ def test_training_scope_endpoint_resolves_branch_from_campus_catalog():
     assert 'academic_scope.router' in router_source
 
 
-def test_app_shell_uses_business_role_and_training_scope_instead_of_legacy_viewer_only():
+def test_app_shell_uses_business_role_and_normalizes_training_url_scope():
     source = APP_SHELL.read_text(encoding='utf-8')
     assert "CAMPUS_OWNER: 'Chủ cơ sở'" in source
     assert 'businessRoleLabel(assignments, ROLE_LABELS[role])' in source
@@ -36,3 +37,12 @@ def test_app_shell_uses_business_role_and_training_scope_instead_of_legacy_viewe
     assert "`${API}/academic/training-scope`" in source
     assert "params.delete('term_id')" in source
     assert "params.delete('block_id')" in source
+
+
+def test_academic_table_state_keeps_scoped_owner_on_allowed_branch_and_campus():
+    source = ACADEMIC_TABLE_STATE.read_text(encoding='utf-8')
+    assert 'function applyTrainingScope' in source
+    assert "`${API}/academic/training-scope`" in source
+    assert 'branches.includes(nextBranch)' in source
+    assert 'campusCodes.has(nextCampus)' in source
+    assert 'merged = { ...merged, ...scoped }' in source
