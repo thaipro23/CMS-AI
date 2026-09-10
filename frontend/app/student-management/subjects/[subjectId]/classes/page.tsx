@@ -43,7 +43,7 @@ function SubjectClassesContent() {
   const platform = searchParams.get('platform') === 'udemy' ? 'udemy' : 'cms'
   const isCms = platform === 'cms'
   const platformLabel = isCms ? 'CMS' : 'Udemy'
-  const { state, update } = useAcademicTableState({ branch: 'poly', status: 'all', pageSize: 50 })
+  const { state, update, scopeReady } = useAcademicTableState({ branch: 'poly', status: 'all', pageSize: 50 })
   const { termId, branch, campus, blockId, q, status, page, pageSize, density } = state
   const debouncedSearch = useDebouncedValue(q, 350)
   const [blocks, setBlocks] = useState<AcademicBlock[]>([])
@@ -54,7 +54,7 @@ function SubjectClassesContent() {
   const [message, setMessage] = useState<InlineNoticeData | null>(null)
 
   useEffect(() => {
-    if (!termId) { setBlocks([]); return }
+    if (!scopeReady || !termId) { setBlocks([]); return }
     let cancelled = false
     getAcademicBlocks(headers, termId).then((items) => {
       if (cancelled) return
@@ -62,9 +62,13 @@ function SubjectClassesContent() {
       if (blockId && !items.some((item) => item.id === blockId)) update({ blockId: '' })
     }).catch(() => setBlocks([]))
     return () => { cancelled = true }
-  }, [headers, termId, blockId, update])
+  }, [headers, scopeReady, termId, blockId, update])
 
   const loadClasses = async (cancelledRef?: { cancelled: boolean }) => {
+    if (!scopeReady) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setMessage(null)
     try {
@@ -103,7 +107,7 @@ function SubjectClassesContent() {
     const cancelledRef = { cancelled: false }
     loadClasses(cancelledRef)
     return () => { cancelledRef.cancelled = true }
-  }, [headers, subjectId, termId, branch, campus, blockId, debouncedSearch, status, page, pageSize, platform])
+  }, [headers, scopeReady, subjectId, termId, branch, campus, blockId, debouncedSearch, status, page, pageSize, platform])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   useEffect(() => {
@@ -171,17 +175,17 @@ function SubjectClassesContent() {
     />
 
     <section className="card academic-unified-card training-workspace-section subject-classes-workspace">
-      <TrainingContextChips items={[branch.toUpperCase(), termName || termId || 'Chưa rõ kỳ', campus ? campus.toUpperCase() : 'Tất cả cơ sở', subjectName || subjectCode]} />
+      <TrainingContextChips items={[scopeReady ? branch.toUpperCase() : 'Đang xác định hệ', termName || termId || 'Chưa rõ kỳ', scopeReady ? (campus ? campus.toUpperCase() : 'Tất cả cơ sở') : 'Đang xác định cơ sở', subjectName || subjectCode]} />
 
       <div className="training-compact-filter">
         <label className="is-narrow">Block
-          <select className="input" value={blockId} onChange={(event) => update({ blockId: event.target.value })}>
+          <select className="input" value={blockId} disabled={!scopeReady} onChange={(event) => update({ blockId: event.target.value })}>
             <option value="">Tất cả block</option>
             {blocks.map((item) => <option key={item.id} value={item.id}>{item.block_name}</option>)}
           </select>
         </label>
         <label>Trạng thái
-          <select className="input" value={status} onChange={(event) => update({ status: event.target.value })}>
+          <select className="input" value={status} disabled={!scopeReady} onChange={(event) => update({ status: event.target.value })}>
             <option value="all">Tất cả lớp</option>
             {isCms ? <>
               <option value="cms_not_synced">Chưa đồng bộ CMS</option>
@@ -196,7 +200,7 @@ function SubjectClassesContent() {
           </select>
         </label>
         <label className="is-wide">Tìm lớp hoặc giảng viên
-          <input className="input" value={q} onChange={(event) => update({ q: event.target.value })} placeholder="BUS2015.01, tên giảng viên..." />
+          <input className="input" value={q} disabled={!scopeReady} onChange={(event) => update({ q: event.target.value })} placeholder="BUS2015.01, tên giảng viên..." />
         </label>
       </div>
 
@@ -224,7 +228,7 @@ function SubjectClassesContent() {
         rowKey={(item) => item.id}
         density={density}
         onDensityChange={(value) => update({ density: value }, { resetPage: false })}
-        loading={loading}
+        loading={!scopeReady || loading}
         error={message?.type === 'error' ? message.body : undefined}
         onRetry={() => loadClasses()}
         emptyTitle="Không có lớp phù hợp"
