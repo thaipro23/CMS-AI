@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../../context/AppContext'
-import { logoutAuthSession, buildCmsSessionBridgeUrl, clearCmsSessionBridgeAttempt, markCmsSessionBridgeStarted } from '../../lib/api'
+import { API, apiFetch, logoutAuthSession, buildCmsSessionBridgeUrl, clearCmsSessionBridgeAttempt, markCmsSessionBridgeStarted } from '../../lib/api'
 import { SHOW_DIAGNOSTICS_UI } from '../../lib/runtime'
 import { ROLE_LABELS } from '../../types'
 import { AppIcon, type AppIconName } from '../icons/AppIcon'
@@ -26,9 +26,39 @@ type NavItem = {
   platform?: 'cms' | 'udemy'
 }
 
+type TrainingScope = {
+  unrestricted?: boolean
+  campus_scoped?: boolean
+  campus_codes?: string[]
+  branches?: string[]
+  campuses?: Array<{ campus_code?: string; campus_name?: string; branch?: string }>
+  preferred_branch?: string | null
+  preferred_campus?: string | null
+}
+
 const SIDEBAR_STORAGE_KEY = 'ai-shell-sidebar'
 const GROUP_STORAGE_KEY = 'ai-shell-nav-groups'
 const SHELL_MOBILE_QUERY = '(max-width: 1023px)'
+
+const BUSINESS_ROLE_LABELS: Record<string, string> = {
+  SYSTEM_ADMIN: 'Quản trị web',
+  DEPARTMENT_HEAD: 'Trưởng bộ môn',
+  CAMPUS_OWNER: 'Chủ cơ sở',
+  CAMPUS_MANAGER: 'Chủ cơ sở',
+  SUBJECT_OWNER: 'Chủ môn',
+  QUESTION_REVIEWER: 'Người duyệt câu hỏi',
+  TEACHER_ASSIGNED: 'Giáo viên được phân công',
+}
+
+const BUSINESS_ROLE_RANK: Record<string, number> = {
+  SYSTEM_ADMIN: 100,
+  DEPARTMENT_HEAD: 70,
+  CAMPUS_OWNER: 60,
+  CAMPUS_MANAGER: 60,
+  SUBJECT_OWNER: 50,
+  QUESTION_REVIEWER: 20,
+  TEACHER_ASSIGNED: 10,
+}
 
 const navGroups: Array<{ key: NavGroupKey; label: string }> = [
   { key: 'overview', label: 'Tổng quan' },
@@ -141,6 +171,30 @@ function loadGroupPreference(): Record<NavGroupKey, boolean> {
   }
 }
 
+function businessRoleLabel(
+  assignments: Array<{ role_code: string; scope_type: string; scope_id: string }>,
+  fallback: string,
+) {
+  const primary = [...assignments].sort((left, right) => {
+    const leftRank = BUSINESS_ROLE_RANK[String(left.role_code || '').toUpperCase()] || 0
+    const rightRank = BUSINESS_ROLE_RANK[String(right.role_code || '').toUpperCase()] || 0
+    return rightRank - leftRank
+  })[0]
+  if (!primary) return fallback
+  const roleCode = String(primary.role_code || '').toUpperCase()
+  const label = BUSINESS_ROLE_LABELS[roleCode] || fallback
+  const scopeType = String(primary.scope_type || '').toUpperCase()
+  const scopeId = String(primary.scope_id || '').trim()
+  if ((roleCode === 'CAMPUS_OWNER' || roleCode === 'CAMPUS_MANAGER') && scopeType === 'CAMPUS' && scopeId && scopeId !== '*') {
+    return `${label} · ${scopeId.toUpperCase()}`
+  }
+  return label
+}
+
+function isTrainingRoute(pathname: string) {
+  return /^\/(?:student-management|teacher-management|training-management|analytics)(?:\/|$)/.test(pathname)
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
@@ -150,6 +204,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const mainContentRef = useRef<HTMLElement>(null)
   const layoutRegistrationRef = useRef<string | null>(null)
   const cmsBridgeAttemptRef = useRef<string | null>(null)
+  const trainingScopePathRef = useRef<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [mobile, setMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -157,8 +212,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [pageChrome, setPageChrome] = useState<PageChrome | null>(null)
   const [activePlatform, setActivePlatform] = useState<'cms' | 'udemy'>('cms')
   const [pageLayoutClass, setPageLayoutClass] = useState(() => fallbackPageLayoutClass(pathname))
-  const { courseId, role, userId, can, isAuthenticated, authReady, clearAuthSession } = useAppContext()
+  const { courseId, role, userId, can, isAuthenticated, authReady, assignments, authHeaders, clearAuthSession } = useAppContext()
   const { notify } = useFeedback()
+
+  const effectiveRoleLabel = useMemo(
+    () => businessRoleLabel(assignments, ROLE_LABELS[role]),
+    [assignments, role],
+  )
 
   const registerChrome = useCallback((value: PageChrome) => {
     setPageChrome(value)
@@ -194,6 +254,76 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setActivePlatform(nextPlatform)
     window.sessionStorage.setItem('ai-training-platform', nextPlatform)
   }, [pathname])
+
+  useEffect(() => {
+    if (!authReady || !isAuthenticated || !isTrainingRoute(pathname)) {
+      trainingScopePathRef.current = null
+      return
+    }
+    const currentHref = `${pathname}${window.location.search}`
+    if (trainingScopePathRef.current === currentHref) return
+    trainingScopePathRef.current = currentHref
+    const controller = new AbortController()
+
+    apiFetch(`${API}/academic/training-scope`, {
+      headers: authHeaders(),
+      credentials: 'include',
+      cache: 'no-store',
+      timeoutMs: 15_000,
+      retries: 1,
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return null
+        return await response.json() as TrainingScope
+      })
+      .then((scope) => {
+        if (controller.signal.aborted || !scope?.campus_scoped) return
+        const allowedCodes = new Set((scope.campus_codes || []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean))
+        const allowedBranches = (scope.branches || []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)
+        const campusRows = Array.isArray(scope.campuses) ? scope.campuses : []
+        const params = new URLSearchParams(window.location.search)
+        const currentBranch = String(params.get('branch') || '').trim().toLowerCase()
+        const currentCampus = String(params.get('campus') || '').trim().toLowerCase()
+        const preferredBranch = String(scope.preferred_branch || '').trim().toLowerCase()
+        const preferredCampus = String(scope.preferred_campus || '').trim().toLowerCase()
+        const nextBranch = currentBranch && allowedBranches.includes(currentBranch)
+          ? currentBranch
+          : preferredBranch || allowedBranches[0] || currentBranch
+        const branchCampusCodes = campusRows
+          .filter((item) => !nextBranch || String(item.branch || '').trim().toLowerCase() === nextBranch)
+          .map((item) => String(item.campus_code || '').trim().toLowerCase())
+          .filter((value) => value && allowedCodes.has(value))
+        const nextCampus = currentCampus && allowedCodes.has(currentCampus) && (!branchCampusCodes.length || branchCampusCodes.includes(currentCampus))
+          ? currentCampus
+          : preferredCampus && allowedCodes.has(preferredCampus) && (!branchCampusCodes.length || branchCampusCodes.includes(preferredCampus))
+            ? preferredCampus
+            : branchCampusCodes.length === 1 ? branchCampusCodes[0] : ''
+
+        const branchChanged = Boolean(nextBranch) && nextBranch !== currentBranch
+        const campusChanged = nextCampus !== currentCampus
+        if (!branchChanged && !campusChanged) return
+        if (nextBranch) params.set('branch', nextBranch)
+        if (nextCampus) params.set('campus', nextCampus)
+        else params.delete('campus')
+        if (branchChanged) {
+          // term_id/block_id are branch-specific.  Keeping a Poly UUID while
+          // redirecting a PTCĐ campus owner would trigger one invalid request and
+          // can surface an empty/403 state before the page repairs itself.
+          params.delete('term_id')
+          params.delete('block_id')
+        }
+        const query = params.toString()
+        const href = query ? `${pathname}?${query}` : pathname
+        trainingScopePathRef.current = href
+        router.replace(href, { scroll: false })
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) console.warn('Không xác định được phạm vi vận hành đào tạo', error)
+      })
+
+    return () => controller.abort()
+  }, [authHeaders, authReady, isAuthenticated, pathname, router])
 
   useEffect(() => {
     const media = window.matchMedia(SHELL_MOBILE_QUERY)
@@ -454,11 +584,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <details ref={userMenuRef} className="enterprise-user-menu">
             <summary aria-label="Mở menu tài khoản">
               <span className="enterprise-avatar">{String(userId || 'U').slice(0, 2).toUpperCase()}</span>
-              <span className="enterprise-user-summary"><b>{ROLE_LABELS[role]}</b></span>
+              <span className="enterprise-user-summary"><b>{effectiveRoleLabel}</b></span>
               <AppIcon name="chevron-down" size={14}/>
             </summary>
             <div className="enterprise-user-popover">
-              <div className="enterprise-user-popover-head"><AppIcon name="user"/><span><b>{userId || 'Người dùng'}</b><small>{ROLE_LABELS[role]}</small></span></div>
+              <div className="enterprise-user-popover-head"><AppIcon name="user"/><span><b>{userId || 'Người dùng'}</b><small>{effectiveRoleLabel}</small></span></div>
               <button type="button" onClick={reconnectCms}><AppIcon name="sync"/> Kết nối lại CMS</button>
               <button type="button" onClick={signOut}><AppIcon name="logout"/> Đăng xuất</button>
             </div>
