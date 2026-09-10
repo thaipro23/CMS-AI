@@ -70,13 +70,21 @@ export function useAcademicTableState(defaults: Partial<AcademicTableState> = {}
   const searchParams = useSearchParams()
   const { authReady, isAuthenticated, authHeaders, userId } = useAppContext()
   const [trainingScope, setTrainingScope] = useState<TrainingScope | null>(null)
+  const [trainingScopeReady, setTrainingScopeReady] = useState(false)
 
   useEffect(() => {
-    if (!authReady || !isAuthenticated) {
+    if (!authReady) {
       setTrainingScope(null)
+      setTrainingScopeReady(false)
+      return
+    }
+    if (!isAuthenticated) {
+      setTrainingScope(null)
+      setTrainingScopeReady(false)
       return
     }
     const controller = new AbortController()
+    setTrainingScopeReady(false)
     apiFetch(`${API}/academic/training-scope`, {
       headers: authHeaders(),
       credentials: 'include',
@@ -87,10 +95,14 @@ export function useAcademicTableState(defaults: Partial<AcademicTableState> = {}
     })
       .then(async (response) => response.ok ? await response.json() as TrainingScope : null)
       .then((scope) => {
-        if (!controller.signal.aborted) setTrainingScope(scope)
+        if (controller.signal.aborted) return
+        setTrainingScope(scope)
+        setTrainingScopeReady(true)
       })
       .catch(() => {
-        if (!controller.signal.aborted) setTrainingScope(null)
+        if (controller.signal.aborted) return
+        setTrainingScope(null)
+        setTrainingScopeReady(true)
       })
     return () => controller.abort()
   }, [authHeaders, authReady, isAuthenticated, userId])
@@ -143,5 +155,5 @@ export function useAcademicTableState(defaults: Partial<AcademicTableState> = {}
     else router.replace(href, { scroll: false })
   }, [pathname, router, searchParams, state, trainingScope])
 
-  return { state, update }
+  return { state, update, scopeReady: authReady && isAuthenticated && trainingScopeReady }
 }
