@@ -157,7 +157,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   const [terms, setTerms] = useState<AcademicTerm[]>([]);
   const [campuses, setCampuses] = useState<AcademicCampus[]>([]);
   const [subjects, setSubjects] = useState<AcademicSubjectManagement[]>([]);
-  const { state, update } = useAcademicTableState({ branch: "poly", status: "all", pageSize: 50 });
+  const { state, update, scopeReady } = useAcademicTableState({ branch: "poly", status: "all", pageSize: 50 });
   const { termId, branch, campus, q: search, status: learningStatus, page, pageSize, density } = state;
   const debouncedSearch = useDebouncedValue(search, 350);
   const [total, setTotal] = useState(0);
@@ -174,6 +174,10 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   const canImportUdemy = !isCms && can('manage_settings');
 
   useEffect(() => {
+    if (!scopeReady) {
+      setTerms([]);
+      return;
+    }
     let cancelled = false;
     getAcademicTerms(headers, { branch, active: true })
       .then((items) => {
@@ -190,9 +194,13 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
     return () => {
       cancelled = true;
     };
-  }, [headers, branch, termId]);
+  }, [headers, scopeReady, branch, termId]);
 
   useEffect(() => {
+    if (!scopeReady) {
+      setCampuses([]);
+      return;
+    }
     let cancelled = false;
     getAcademicCampuses(headers, { branch, active: true })
       .then((items) => {
@@ -204,9 +212,13 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
     return () => {
       cancelled = true;
     };
-  }, [headers, branch, campus]);
+  }, [headers, scopeReady, branch, campus]);
 
   const loadSubjects = async (cancelledRef?: { cancelled: boolean }) => {
+    if (!scopeReady) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setMessage(null);
     try {
@@ -241,10 +253,10 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
     return () => {
       cancelledRef.cancelled = true;
     };
-  }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize, platform]);
+  }, [headers, scopeReady, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize, platform]);
 
   const loadBulkJobs = async () => {
-    if (!isCms) { setBulkJobs([]); return; }
+    if (!scopeReady || !isCms) { setBulkJobs([]); return; }
     try {
       const items = await getAcademicBulkOperationJobs(headers, {
         status: "active",
@@ -280,10 +292,11 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   }, [page, totalPages, update]);
 
   useEffect(() => {
+    if (!scopeReady) return;
     loadBulkJobs();
     const timer = window.setInterval(() => loadBulkJobs(), 10000);
     return () => window.clearInterval(timer);
-  }, [headers, termId, branch, campus, isCms]);
+  }, [headers, scopeReady, termId, branch, campus, isCms]);
 
   const runAutoMapAllAndSync = async () => {
     if (!isCms) return;
@@ -414,6 +427,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
             <select
               className="input"
               value={branch}
+              disabled={!scopeReady}
               onChange={(event) => {
                 update({ branch: event.target.value, campus: "" });
               }}
@@ -427,12 +441,13 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
             <select
               className="input"
               value={termId}
+              disabled={!scopeReady}
               onChange={(event) => {
                 update({ termId: event.target.value });
               }}
             >
               {!terms.length && (
-                <option value="">Chưa có kỳ, tạo tại /semesters</option>
+                <option value="">{scopeReady ? 'Chưa có kỳ, tạo tại /semesters' : 'Đang xác định phạm vi...'}</option>
               )}
               {terms.map((item) => (
                 <option key={item.id} value={item.id}>
@@ -446,11 +461,12 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
             <select
               className="input"
               value={campus}
+              disabled={!scopeReady}
               onChange={(event) => {
                 update({ campus: event.target.value });
               }}
             >
-              <option value="">Tất cả cơ sở</option>
+              <option value="">{scopeReady ? 'Tất cả cơ sở' : 'Đang xác định cơ sở...'}</option>
               {campuses.map((item) => (
                 <option key={item.id} value={item.campus_code}>
                   {item.campus_code.toUpperCase()} · {item.campus_name}
@@ -463,6 +479,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
             <select
               className="input"
               value={learningStatus}
+              disabled={!scopeReady}
               onChange={(event) => {
                 update({ status: event.target.value });
               }}
@@ -485,6 +502,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
             <input
               className="input"
               value={search}
+              disabled={!scopeReady}
               onChange={(event) => {
                 update({ q: event.target.value });
               }}
@@ -511,7 +529,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
       <WorkspaceSection
         title={`Danh sách môn ${platformLabel}`}
         description={isCms ? `${countLabel(summary.course_missing_count)} môn chưa ghép Course CMS trong phạm vi hiện tại.` : `${countLabel(summary.udemy_progress_late_count)} sinh viên đang chậm tiến độ Udemy trong phạm vi hiện tại.`}
-        actions={isCms ? <button className="btn" type="button" disabled={!termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}</button> : canImportUdemy ? <button className="btn" type="button" disabled={!termId} onClick={() => setBulkUdemyImportOpen(true)}>Import hàng loạt Udemy</button> : undefined}
+        actions={isCms ? <button className="btn" type="button" disabled={!scopeReady || !termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}</button> : canImportUdemy ? <button className="btn" type="button" disabled={!scopeReady || !termId} onClick={() => setBulkUdemyImportOpen(true)}>Import hàng loạt Udemy</button> : undefined}
         icon="book"
         tone={isCms ? (summary.course_missing_count > 0 ? "amber" : "green") : ((summary.udemy_progress_late_count || 0) > 0 ? "amber" : "green")}
       >
@@ -548,12 +566,12 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
           rowKey={(subject) => subject.id}
           density={density}
           onDensityChange={(value) => update({ density: value }, { resetPage: false })}
-          loading={loading}
+          loading={!scopeReady || loading}
           error={message?.type === "error" ? message.body : undefined}
           onRetry={() => loadSubjects()}
           emptyTitle="Chưa có môn phù hợp"
           emptyDescription={`Đổi học kỳ, cơ sở, trạng thái hoặc xóa từ khóa. Nếu vẫn trống, kiểm tra môn đã được cấu hình ${platformLabel} tại Quản lý môn học và dữ liệu AP sync.`}
-          emptyAction={<button className="btn secondary small" type="button" onClick={() => update({ q: "", status: "all", page: 1 }, { resetPage: false })}>Xóa bộ lọc nhanh</button>}
+          emptyAction={<button className="btn secondary small" type="button" disabled={!scopeReady} onClick={() => update({ q: "", status: "all", page: 1 }, { resetPage: false })}>Xóa bộ lọc nhanh</button>}
           page={page}
           pageSize={pageSize}
           total={total}
