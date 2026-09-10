@@ -1,6 +1,6 @@
 # MASTER CONTEXT — DASH CMS
 
-Updated: 2026-09-09 (Asia/Bangkok / UTC+7)
+Updated: 2026-09-10 (Asia/Bangkok / UTC+7)
 
 ## A. Project Identity
 
@@ -88,34 +88,40 @@ Business rule:
 
 ## Current Work
 
-CURRENT TASK: Fix PTCĐ `/get-data-cms` campus field and remove `/premises` API campus refresh button.
+CURRENT TASK: Fix campus-owner scope in Training Operations: automatic PTCĐ/TK filter selection, campus-owned subject/class access, and correct role display.
 
-STATUS: SOURCE UPDATED / STATIC REGRESSION PASS / NOT DEPLOYED.
+STATUS: SOURCE COMMITTED TO CANONICAL BRANCH / REMOTE SOURCE RE-READ / NOT DEPLOYED OR PRODUCTION-VERIFIED.
 
-FILES MODIFIED:
+CURRENT HEAD AFTER THIS UPDATE: set by GitHub contents commit following `105e3026cce5a2a6239f76c2704730469d4c6c15`; re-read branch before deployment rather than assuming this document's SHA is still HEAD.
 
-- `backend/app/services/ap_academic_sync.py`
-- `frontend/app/premises/layout.tsx`
-- `frontend/styles/fa26-layout-hotfix.css`
-- `frontend/app/ap-sync/page.tsx`
-- `backend/app/tests/test_ap_sync_manual_campus_contract.py`
+FILES IN CURRENT FIX:
+
+- `backend/app/services/academic/access.py`
+- `backend/app/api/routes/academic_scope.py`
+- `backend/app/api/router.py`
+- `frontend/components/layout/AppShell.tsx`
+- `frontend/hooks/useAcademicTableState.ts`
+- `frontend/app/student-management/StudentManagementPlatformPage.tsx`
+- `frontend/app/student-management/subjects/[subjectId]/classes/page.tsx`
+- `backend/app/tests/test_campus_owner_training_scope_contract.py`
 - `MASTER_CONTEXT_DASH_CMS.md`
 
 NEXT ACTION:
 
-1. Build/deploy a new Dash CMS image containing this working copy.
-2. Verify runtime image for backend + worker + frontend.
-3. Test a single `/get-data-cms` request with `campus_code` and confirm HTTP 200.
-4. Run PTCĐ sync again with the same 18 Dash campuses.
-5. Verify classes/students/teachers/subjects are imported.
-6. Separately decide whether to change all-error runs from `completed` to failed/partial.
+1. Build backend + frontend image from the canonical branch.
+2. Deploy the new image(s) to production and verify runtime image digests/tags.
+3. Login with a concrete `CAMPUS_OWNER` account such as the reported TK owner.
+4. Confirm the account lands on `branch=ptcd&campus=tk` before protected academic list requests are sent.
+5. Confirm `/api/academic/training-scope` reports the assigned campus and branch.
+6. Re-run the reported `/api/academic/subjects/<subject_id>/classes?...campus=tk&branch=ptcd...` request and confirm 200 with only TK classes.
+7. Confirm the user chip/popover shows `Chủ cơ sở · TK`, not legacy `Người xem - chỉ xem`.
 
 ## Production claim
 
 - Source updated: YES.
-- Tests: partial; bounded static regression PASS.
-- Commit: NOT VERIFIED (ZIP has no `.git`).
-- Push: NOT VERIFIED.
+- GitHub commits/push: YES on `feat/import-quiz-cms-old-su26`.
+- Remote source re-read: YES for the scope hook and affected student-management pages.
+- Automated execution of the new static regression test: NOT RUN in this chat environment.
 - Deployment: NOT DONE/NOT VERIFIED in this session.
 - Production verification: NOT DONE.
 
@@ -209,3 +215,42 @@ NEXT ACTION:
 - Remote branch/file re-read confirms the corrected expression is present.
 - Local handed-off source snapshot with the corrected expression passes `python -m compileall -q app` with exit code 0.
 - Jenkins/Sonar rerun: NOT YET VERIFIED; rerun the pipeline from the new branch HEAD.
+
+## Update 2026-09-10 — Campus-owner Training Operations scope, subject access, role label
+
+### Production evidence before the fix
+- A campus owner account scoped to campus `TK` under branch `ptcd` could reach Training Operations but the UI initially retained the generic `poly` default.
+- The reported class-list request for a PTCĐ/TK subject returned HTTP 403 with `Bạn không được phân công hoặc phân quyền xem môn này`.
+- The shell displayed the legacy effective role label `Người xem - chỉ xem` instead of the effective business assignment `CAMPUS_OWNER`.
+
+### Root causes
+- `AcademicAccessWorkflowService.assert_can_access_subject()` checked explicit subject ownership/AP teacher assignment but did not treat a subject as visible when it had classes in a campus owned by the actor.
+- Training pages initialized `useAcademicTableState({ branch: 'poly', ... })`; scope resolution was asynchronous, so protected data effects could run before campus/branch normalization.
+- App shell role text was based on the legacy `role` compatibility field instead of ranking the active business-RBAC assignments returned by `/rbac/me`.
+
+### Fix contract
+- `backend/app/services/academic/access.py`: a campus-scoped owner may open a subject only when an `AcademicClass` for that subject exists in one of `decision.campus_codes`. Class-level filters still re-apply campus scope.
+- `GET /api/academic/training-scope`: backend returns the effective campus codes plus branch mapping from `AcademicCampus`, including preferred branch/campus for scoped operators.
+- `frontend/components/layout/AppShell.tsx`: Training Operations routes normalize the URL to an allowed branch/campus; a branch change drops stale branch-specific `term_id` and `block_id`. User role display now uses the highest active business assignment and shows a scoped campus owner as `Chủ cơ sở · <CAMPUS>`.
+- `frontend/hooks/useAcademicTableState.ts`: branch/campus updates are constrained by the backend training scope and now expose `scopeReady` only after the scope request completes for an authenticated user.
+- `frontend/app/student-management/StudentManagementPlatformPage.tsx` and subject class page: term/campus/subject/class requests are gated on `scopeReady`; filters/actions are disabled during scope resolution and tables stay in loading state. This prevents the initial generic Poly request from racing the PTCĐ/TK correction.
+
+### Git commits already present from the timed-out assistant turn
+- `fb0bac28c54e3cf5477d86d214716cfc30927623` — allow campus owners to open subjects in assigned campus.
+- `33e42293ec9bb8a5b8b5ea4edb470704729803ae` — expose Training Operations campus scope.
+- `f9735a47d2297cc9515e00f43e427c702e20103b` — register training-scope API route.
+- `2f10dc569851e844bb7f3da0e7b2dc3afd805af1` — align training defaults and business-role label.
+- `dd92cc18f8b076b54511a66c3c8ac1ea2861f5ea` — initial regression contract.
+- `cbf603e63a6fc0163b9d3893b0d04b7b74fe584c` — enforce scoped branch/campus in academic table state.
+- `7fad4c545a6ba43196001d35c1dc8c0b14835174` — guard scoped academic filter state.
+
+### Additional hardening after resuming the timed-out chat
+- `869c90500638cc18ca586f992e151a56d2fc31ad` — expose `scopeReady` from the shared academic table state.
+- `9c9f854c3016c2f60f28cc5b09fc36ea8cb4c4c4` — gate subject-class requests on resolved training scope.
+- `270aacd41b5c66d04870564de6efc2234bc479df` — gate Student Management term/campus/subject/job requests on resolved training scope.
+- `105e3026cce5a2a6239f76c2704730469d4c6c15` — static regression assertions for the scope-ready gate.
+
+### Verification boundaries
+- GitHub branch and source files were re-read after the writes and show the expected scope-ready guards.
+- The repository has no required branch status checks for this branch and no new CI result was observed for these commits during this chat.
+- No production deployment was performed from ChatGPT. The 403 screenshot/request happened before these new commits and cannot be used to judge the patched source.
