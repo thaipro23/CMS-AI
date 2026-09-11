@@ -40,6 +40,7 @@ import { ContentNotice } from '../../components/ui/ContentNotice'
 type UserAccessRow = {
   userId: string
   email?: string | null
+  lastLoginAt?: string | null
   assignments: RoleAssignment[]
   activeAssignments: RoleAssignment[]
   roleCodes: string[]
@@ -88,6 +89,12 @@ const scopeLabel: Record<string, string> = {
 function formatDate(value?: string | null) {
   if (!value) return '—'
   try { return formatVNDateTime(value) } catch { return value }
+}
+
+function usernameFromEmail(value: string) {
+  const normalized = value.trim().toLowerCase()
+  const at = normalized.indexOf('@')
+  return at > 0 ? normalized.slice(0, at) : ''
 }
 
 function resultClass(status: string) {
@@ -195,6 +202,7 @@ export default function UsersPage() {
       return {
         userId,
         email: rows.find((row) => row.email)?.email || null,
+        lastLoginAt: rows.find((row) => row.last_login_at)?.last_login_at || null,
         assignments: rows,
         activeAssignments: activeRows,
         roleCodes: Array.from(new Set(activeRows.map((row) => String(row.role_code)))),
@@ -283,17 +291,19 @@ export default function UsersPage() {
     if (granting) return
     setGranting(true)
     try {
-      if (!form.user_id.trim()) throw new Error('Cần nhập tên tài khoản Open edX.')
+      const normalizedEmail = form.email.trim().toLowerCase()
+      const derivedUsername = usernameFromEmail(normalizedEmail)
+      if (!derivedUsername) throw new Error('Cần nhập email hợp lệ để tạo tài khoản CMS.')
       const scopeIds = form.scope_type === 'SYSTEM' ? ['*'] : selectedScopeIds
       if (!scopeIds.length) throw new Error('Cần chọn ít nhất một phạm vi để gán quyền.')
       const result = await createRoleAssignmentsBatch({
-        user_id: form.user_id.trim(),
-        email: form.email.trim() || null,
+        user_id: derivedUsername,
+        email: normalizedEmail,
         role_code: form.role_code,
         scope_type: form.scope_type,
         scope_ids: scopeIds,
         grant_reason: form.grant_reason.trim() || 'Gán từ màn phân quyền',
-        sync_openedx: form.sync_openedx,
+        sync_openedx: true,
       }, authHeaders(true))
       setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.` })
       setForm((prev) => ({ ...prev, user_id: '', email: '', grant_reason: '', sync_openedx: false }))
@@ -365,7 +375,7 @@ export default function UsersPage() {
   useEffect(() => { loadAll() }, [includeRevoked]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const userColumns: EnterpriseTableColumn<UserAccessRow>[] = [
-    { key: 'user', header: 'Người dùng', kind: 'identity', minWidth: 220, priority: 'required', hideable: false, render: (item) => <div className="rbac-user-summary"><b>{item.userId}</b><small>{item.email || 'Chưa có email'}</small></div> },
+    { key: 'user', header: 'Người dùng', kind: 'identity', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="rbac-user-summary"><b>{item.userId}</b><small>{item.email || 'Chưa có email'}</small><small>Đăng nhập lần cuối: {formatDate(item.lastLoginAt)}</small></div> },
     { key: 'roles', header: 'Vai trò hiệu lực', kind: 'text', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="rbac-role-stack">{item.roleCodes.length ? item.roleCodes.map((code) => <span key={code} className={`rbac-role-chip ${code === 'SYSTEM_ADMIN' ? 'system' : ''}`}>{roleLabels[code] || code}</span>) : <span className="muted">Không có quyền hiệu lực</span>}</div> },
     { key: 'scope', header: 'Phạm vi', kind: 'identity', minWidth: 240, priority: 'important', hideable: true, render: (item) => <div className="rbac-scope-list">{item.scopes.slice(0, 2).map((scope) => <span key={scope}>{scope}</span>)}{item.scopes.length > 2 ? <small>+{item.scopes.length - 2} phạm vi khác</small> : null}</div> },
     { key: 'count', header: 'Số quyền', kind: 'number', width: 82, priority: 'important', hideable: true, render: (item) => item.activeAssignments.length },
@@ -416,15 +426,14 @@ export default function UsersPage() {
       size="large"
       busy={granting}
       onClose={() => !granting && setGrantOpen(false)}
-      footer={<div className="dialog-footer-actions"><button className="btn secondary" type="button" disabled={granting} onClick={() => setGrantOpen(false)}>Hủy</button><button className="btn" type="button" onClick={submitAssignment} disabled={granting || !form.user_id.trim() || (form.scope_type !== 'SYSTEM' && !selectedScopeIds.length)}>Gán {form.scope_type === 'SYSTEM' ? 1 : selectedScopeIds.length} phạm vi</button></div>}
+      footer={<div className="dialog-footer-actions"><button className="btn secondary" type="button" disabled={granting} onClick={() => setGrantOpen(false)}>Hủy</button><button className="btn" type="button" onClick={submitAssignment} disabled={granting || !usernameFromEmail(form.email) || (form.scope_type !== 'SYSTEM' && !selectedScopeIds.length)}>Gán {form.scope_type === 'SYSTEM' ? 1 : selectedScopeIds.length} phạm vi</button></div>}
     >
       <ActionMessage message={message} onClose={() => setMessage(null)} />
       {!visibleRoles.length ? <ContentNotice tone="warning">Bạn không có quyền gán thêm vai trò trong phạm vi hiện tại.</ContentNotice> : <div className="rbac-grant-form">
         <div className="form-grid two-columns">
           <label>Vai trò<select className="input" value={form.role_code} onChange={(event) => syncScopeForRole(event.target.value as BusinessRoleCode)}>{visibleRoles.map((role) => <option key={role.code} value={role.code}>{roleLabels[role.code] || role.name}</option>)}</select></label>
           <label>Loại phạm vi<select className="input" value={form.scope_type} onChange={(event) => { const nextScope = event.target.value as BusinessScopeType; setScopeSearch(''); setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : []); setForm({ ...form, scope_type: nextScope }) }}>{availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>
-          <label>Tài khoản Open edX<input className="input" value={form.user_id} onChange={(event) => setForm({ ...form, user_id: event.target.value })} placeholder="vd: owner_web107" /></label>
-          <label>Email <span className="optional-label">(không bắt buộc)</span><input className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="user@fpt.edu.vn" /></label>
+          <label>Email CMS<input className="input" type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value, user_id: usernameFromEmail(event.target.value) })} placeholder="user@fpt.edu.vn" /><small>Username tự tạo: <b>{usernameFromEmail(form.email) || '—'}</b></small></label>
         </div>
         <div className="permission-role-description"><b>{roleLabels[form.role_code]}</b><span>{selectedRole?.description || roleSubtitles[form.role_code]}</span></div>
         {form.scope_type !== 'SYSTEM' ? <div className="rbac-multi-scope-picker">
@@ -434,7 +443,7 @@ export default function UsersPage() {
         </div> : <div className="permission-effect-preview"><span>Quyền sẽ có hiệu lực</span><b>{roleLabels[form.role_code]} · Toàn hệ thống</b></div>}
         {selectedScopeOptions.length ? <div className="permission-effect-preview"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}
         <label>Lý do cấp quyền<input className="input" value={form.grant_reason} onChange={(event) => setForm({ ...form, grant_reason: event.target.value })} placeholder="Ví dụ: Phụ trách COM1071 và COM1072 Summer 2026" /></label>
-        <label className="check-row"><input type="checkbox" checked={form.sync_openedx} onChange={(event) => setForm({ ...form, sync_openedx: event.target.checked })} /> Ghi nhận yêu cầu đồng bộ Open edX</label>
+        <ContentNotice tone="info">Khi gán quyền, hệ thống tự tạo/kiểm tra tài khoản CMS và UserProfile. Tài khoản mới không có mật khẩu local; đăng nhập bằng SSO.</ContentNotice>
       </div>}
     </AccessibleDialog>
 

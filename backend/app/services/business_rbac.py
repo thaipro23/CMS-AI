@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.rbac import RBACPermission, RBACRole, RBACRolePermission, UserRoleAssignment
 from app.models.question_bank import Department, Subject, SubjectChapter, SubjectOffering, QuestionBankRelease, QuestionBankVersion
 from app.core.config import settings
+from app.services.identity import login_by_user_ids, normalize_email_identity
 
 SYSTEM_ADMIN = 'SYSTEM_ADMIN'
 DEPARTMENT_HEAD = 'DEPARTMENT_HEAD'
@@ -241,6 +242,56 @@ class BusinessRBACService:
             email=getattr(user, 'email', None) or raw_claims.get('email'),
             username=getattr(user, 'username', None) or raw_claims.get('username'),
         )
+
+    @staticmethod
+    def _identity(user_id: str | None, email: str | None) -> tuple[str, str | None]:
+        """Return the canonical Dash/Open edX identity for an assignment.
+
+        Interactive permission grants are email-first.  The backend remains
+        compatible with historical rows/imports that only contain ``user_id``.
+        Whenever an email is present it is authoritative and the local part is
+        used as the CMS username; a client-supplied mismatching user_id is never
+        trusted.
+        """
+        raw_user_id = str(user_id or '').strip()
+        raw_email = str(email or '').strip()
+        if raw_email:
+            identity = normalize_email_identity(raw_email)
+            return identity['username'], identity['email']
+        if not raw_user_id:
+            raise HTTPException(status_code=422, detail='Cần nhập email để tạo tài khoản CMS và cấp quyền.')
+        return raw_user_id, None
+
+    @staticmethod
+    def _provision_cms_identity(*, username: str, email: str) -> dict[str, Any]:
+        """Create/verify the CMS account before committing a new permission."""
+        from app.services.openedx_student_insight import OpenEdXConnectorClient
+
+        client = OpenEdXConnectorClient()
+        rows = client.resolve_users([
+            {
+                'username': username,
+                'email': email,
+                'person_type': 'teacher',
+                'role': 'teacher',
+                'full_name': username,
+            },
+        ], create_missing=True)
+        match = next((row for row in rows if str(row.get('username') or row.get('openedx_username') or row.get('ap_username') or '').strip().lower() == username.lower()), None)
+        if not match or match.get('exists') is not True:
+            raise RuntimeError('Open edX Connector chưa xác nhận tài khoản CMS đã tồn tại.')
+        if match.get('user_profile_ok') is False:
+            raise RuntimeError('Tài khoản CMS chưa có UserProfile hợp lệ.')
+        if match.get('created') and match.get('password_login_enabled') is True:
+            raise RuntimeError('Tài khoản CMS mới không được phép có mật khẩu local.')
+        return {
+            'status': 'created' if match.get('created') else 'verified',
+            'username': match.get('openedx_username') or match.get('username') or username,
+            'email': match.get('openedx_email') or email,
+            'openedx_user_id': match.get('openedx_user_id'),
+            'profile_ok': match.get('user_profile_ok') is not False,
+            'password_policy': match.get('password_policy') or ('unusable_password' if match.get('created') else 'existing'),
+        }
 
     def is_legacy_system_admin(self, user: Any) -> bool:
         if str(getattr(user, 'role', '') or '').lower() != 'admin':
@@ -522,6 +573,7 @@ class BusinessRBACService:
             raise HTTPException(status_code=404, detail='Không tìm thấy bài học để cấp quyền.')
 
     def create_assignment(self, *, actor: Any, user_id: str, email: str | None, role_code: str, scope_type: str, scope_id: str = '*', grant_reason: str = '', sync_openedx: bool = False) -> UserRoleAssignment:
+        user_id, email = self._identity(user_id, email)
         role_code = role_code.strip().upper()
         if role_code == CAMPUS_MANAGER:
             raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
@@ -532,6 +584,7 @@ class BusinessRBACService:
         self._validate_assignment_scope(role_code, scope_type, scope_id)
         if not self.can_grant(actor, role_code, scope_type, scope_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được cấp vai trò này trong phạm vi đã chọn.')
+        provisioning = self._provision_cms_identity(username=user_id, email=email) if email else None
         existing = self.active_assignments_query().filter(
             UserRoleAssignment.user_id == user_id,
             UserRoleAssignment.role_code == role_code,
@@ -543,7 +596,7 @@ class BusinessRBACService:
                 existing.email = email
             if grant_reason:
                 existing.grant_reason = grant_reason
-            existing.metadata_json = {**(existing.metadata_json or {}), 'sync_openedx_requested': bool(sync_openedx)}
+            existing.metadata_json = {**(existing.metadata_json or {}), 'sync_openedx_requested': True if email else bool(sync_openedx), 'cms_provisioning': provisioning} if provisioning else {**(existing.metadata_json or {}), 'sync_openedx_requested': bool(sync_openedx)}
             self.db.add(existing)
             self.db.commit()
             self.db.refresh(existing)
@@ -557,7 +610,7 @@ class BusinessRBACService:
             scope_id=scope_id,
             granted_by=getattr(actor, 'user_id', None),
             grant_reason=grant_reason or '',
-            metadata_json={'sync_openedx_requested': bool(sync_openedx)},
+            metadata_json={'sync_openedx_requested': True if email else bool(sync_openedx), 'cms_provisioning': provisioning} if provisioning else {'sync_openedx_requested': bool(sync_openedx)},
         )
         self.db.add(item)
         self.db.commit()
@@ -576,6 +629,7 @@ class BusinessRBACService:
         grant_reason: str = '',
         sync_openedx: bool = False,
     ) -> tuple[list[UserRoleAssignment], int, int]:
+        user_id, email = self._identity(user_id, email)
         role_code = role_code.strip().upper()
         if role_code == CAMPUS_MANAGER:
             raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
@@ -594,6 +648,8 @@ class BusinessRBACService:
             if not self.can_grant(actor, role_code, scope_type, scope_id):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được cấp vai trò này trong phạm vi đã chọn.')
 
+        provisioning = self._provision_cms_identity(username=user_id, email=email) if email else None
+
         existing_rows = self.active_assignments_query().filter(
             UserRoleAssignment.user_id == user_id,
             UserRoleAssignment.role_code == role_code,
@@ -611,7 +667,7 @@ class BusinessRBACService:
                     item.email = email
                 if grant_reason:
                     item.grant_reason = grant_reason
-                item.metadata_json = {**(item.metadata_json or {}), 'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True}
+                item.metadata_json = {**(item.metadata_json or {}), 'sync_openedx_requested': True if email else bool(sync_openedx), 'batch_grant': True, 'cms_provisioning': provisioning} if provisioning else {**(item.metadata_json or {}), 'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True}
                 reused_count += 1
             else:
                 item = UserRoleAssignment(
@@ -623,7 +679,7 @@ class BusinessRBACService:
                     scope_id=scope_id,
                     granted_by=getattr(actor, 'user_id', None),
                     grant_reason=grant_reason or '',
-                    metadata_json={'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True},
+                    metadata_json={'sync_openedx_requested': True if email else bool(sync_openedx), 'batch_grant': True, 'cms_provisioning': provisioning} if provisioning else {'sync_openedx_requested': bool(sync_openedx), 'batch_grant': True},
                 )
                 created_count += 1
             self.db.add(item)
@@ -721,7 +777,7 @@ class BusinessRBACService:
             permissions.update(CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS)
         return sorted(permissions)
 
-    def serialize_assignment(self, item: UserRoleAssignment) -> dict[str, Any]:
+    def serialize_assignment(self, item: UserRoleAssignment, *, profile: Any | None = None) -> dict[str, Any]:
         return {
             'id': item.id,
             'user_id': item.user_id,
@@ -740,7 +796,12 @@ class BusinessRBACService:
             'revoke_reason': item.revoke_reason or '',
             'created_at': item.created_at,
             'updated_at': item.updated_at,
+            'last_login_at': getattr(profile, 'last_login_at', None) if profile is not None else None,
         }
+
+    def serialize_assignments(self, items: list[UserRoleAssignment]) -> list[dict[str, Any]]:
+        profiles = login_by_user_ids(self.db, [item.user_id for item in items])
+        return [self.serialize_assignment(item, profile=profiles.get(item.user_id)) for item in items]
 
     def _scope_covers_scope(self, parent: EntityScope, child: EntityScope) -> bool:
         """Return True when parent scope covers child scope in the Bank hierarchy.

@@ -128,6 +128,7 @@ class RoleAssignmentOut(BaseModel):
     revoke_reason: str = ''
     created_at: datetime
     updated_at: datetime
+    last_login_at: datetime | None = None
 
     class Config:
         from_attributes = True

@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from app.core.rbac import ROLE_LABELS, ROLE_PERMISSIONS, UserContext, get_user_context
 from app.db.session import get_db
 from app.services.business_rbac import BusinessRBACService
+from app.services.identity import upsert_login
 from app.core.config import is_production, settings
 from app.core.security import _normalize_role
 from app.core.session_security import (
@@ -192,6 +193,20 @@ def exchange_openedx_session(payload: OpenEdxSessionExchangeRequest, request: Re
     if settings.auth_cookie_domain:
         cookie_kwargs['domain'] = settings.auth_cookie_domain
     response.set_cookie(**cookie_kwargs)
+
+    # Record the last successful Dash login (not every API request).  Keep the
+    # exchange usable during a rolling migration if the new table is not live
+    # on one replica yet; the next login will backfill it after migration.
+    try:
+        upsert_login(
+            db,
+            user_id=user_id,
+            email=data.get('email'),
+            username=data.get('username') or user_id,
+            display_name=data.get('name'),
+        )
+    except Exception:
+        db.rollback()
 
     return OpenEdxSessionExchangeResponse(
         access_token=None if is_production() else token,

@@ -283,3 +283,35 @@ NEXT ACTION:
 - CMS-AI local commit: `9d457e4` (`feat: split training scopes and optimize reports`).
 - CMS-FPT local commit: `d504eee` (`fix: route connector reports to read replica`).
 - Push was attempted for both canonical branches but rejected by the automatic review after the session usage limit was reached; run the push commands when GitHub access is available.
+
+## Addendum 2026-09-11 — Excel teacher-report export latency
+
+- The export worker's 12–62% stage is the live CMS/Open edX grade refresh, performed per mapped class before workbook generation. It is not Excel serialization.
+- Repeated `export_excel` jobs now reuse a complete, non-preserved CMS snapshot for up to `ACADEMIC_TEACHER_REPORT_EXPORT_SNAPSHOT_MAX_AGE_SECONDS` (default 300 seconds). Missing, incomplete, old, or `grade_preserved` snapshots still force the live connector and fail closed on errors. `rebuild_cache` remains forced-live.
+- Read-only class analytics batches now allow up to 500 compact students per connector request (enrollment/account creation stays at 100). Old `teacher-reports/` object cleanup moved to the periodic artifact-cleanup task so object-storage listing is not on the export critical path.
+- Workbook guide metadata records how many classes used the bounded snapshot window and how many were refreshed live.
+- Background Excel jobs now use openpyxl `write_only` workbooks; the direct small-export compatibility path remains normal mode. This keeps large exports (around 50,000 grade records) from retaining the full workbook in worker RAM.
+
+### Verification
+
+- Teacher-report freshness/worker reliability regressions: 19 passed.
+- Backend `compileall`: passed.
+- Streaming workbook smoke test with populated overview/class/student rows: passed.
+
+## Addendum 2026-09-11 — email-first RBAC identities, Dash last login, daily score refresh
+
+- Interactive RBAC grants are email-first. The backend normalizes the email, derives the CMS username from the local part before `@`, and ignores a mismatching client-supplied `user_id`. The UI shows the derived username as a preview and no longer asks operators to type it separately.
+- Granting a permission calls the Open edX Connector `users/resolve` endpoint with `create_missing=true` and a staff payload. The connector creates/repairs the Django `UserProfile` and enforces `set_unusable_password()` for newly created users; no password is generated or returned. Provisioning failure is fail-closed before the AI RBAC assignment is committed. Legacy Excel/bootstrap rows may still carry `user_id`, but new API grants require email.
+- Dash stores identity records in `ai_user_profiles` (`backend/app/models/identity.py`) with `last_login_at`. The successful CMS session exchange upserts this record. RBAC list/effective/scope responses enrich assignments with one batch lookup, and `/users` renders username once followed by email and “Đăng nhập lần cuối”. Migration `0064_rbac_identity_login` creates the table/indexes.
+- Celery beat timezone is `Asia/Ho_Chi_Minh`. `academic_sync_all_student_scores_task` runs daily at `05:00`, fans out durable `learning_sync` jobs for every active class, reuses active jobs, and processes class rosters with the configured 1,000–20,000 ceiling. The existing connector learning path remains read-only and uses CMS-FPT `read_replica` for score/progress reads.
+
+### Verification
+
+- New RBAC identity/login/scheduler contract: 7 passed.
+- Backend compileall and frontend `npm run typecheck`: passed.
+- Existing campus-owner contract retains the deliberate fail-closed behavior for legacy `CAMPUS/*` wildcard assignments.
+
+### Deployment notes
+
+- CMS-AI: run Alembic migration `0064_rbac_identity_login`, then rebuild/roll out backend and frontend. Verify `/api/rbac/assignments` contains `last_login_at` and beat logs show `academic-score-sync-all-students` at 05:00 Asia/Ho_Chi_Minh.
+- CMS-FPT: rebuild LMS/CMS images from `fpt-indigo-ui` so the connector account-provisioning/profile/no-password change is deployed. Keep `AI_CONNECTOR_READ_DB_ALIAS=read_replica` and replica credentials configured.

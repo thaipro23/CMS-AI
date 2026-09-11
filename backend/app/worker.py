@@ -5,6 +5,7 @@ from datetime import datetime
 from collections import defaultdict
 from typing import Any
 from celery import Celery
+from celery.schedules import crontab
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from app.core.config import settings
@@ -41,7 +42,10 @@ celery_app.conf.update(
     task_serializer='json',
     result_serializer='json',
     accept_content=['json'],
-    timezone='UTC',
+    # Celery beat wall-clock schedules are operator-facing.  Keep interval
+    # tasks equivalent while making the daily score refresh unambiguously
+    # 05:00 Asia/Ho_Chi_Minh instead of relying on a UTC conversion.
+    timezone='Asia/Ho_Chi_Minh',
     enable_utc=True,
     task_track_started=True,
     task_acks_late=bool(settings.celery_task_acks_late),
@@ -63,6 +67,7 @@ celery_app.conf.update(
         'bank_quiz_create_task': {'queue': 'sync'},
         'academic_ap_sync_task': {'queue': 'sync'},
         'academic_class_sync_task': {'queue': 'sync'},
+        'academic_sync_all_student_scores_task': {'queue': 'sync'},
         'academic_subject_auto_map_all_sync_task': {'queue': 'sync'},
         'academic_subject_catalog_refresh_task': {'queue': 'sync'},
         'academic_teacher_report_job_task': {'queue': 'exports'},
@@ -84,6 +89,7 @@ celery_app.conf.update(
         'bank_quiz_create_task': {'soft_time_limit': 1500, 'time_limit': 1800},
         'academic_ap_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
         'academic_class_sync_task': {'soft_time_limit': 1500, 'time_limit': 1800},
+        'academic_sync_all_student_scores_task': {'soft_time_limit': 300, 'time_limit': 600},
         'academic_subject_auto_map_all_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
         'academic_subject_catalog_refresh_task': {'soft_time_limit': 900, 'time_limit': 1200},
         'academic_teacher_report_job_task': {'soft_time_limit': 5400, 'time_limit': 5700},
@@ -108,6 +114,10 @@ if getattr(settings, 'analytics_ingest_scheduler_enabled', False):
         'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
         'args': (None, None),
     }
+_beat_schedule['academic-score-sync-all-students'] = {
+    'task': 'academic_sync_all_student_scores_task',
+    'schedule': crontab(hour=5, minute=0),
+}
 celery_app.conf.beat_schedule = _beat_schedule
 
 
@@ -1534,7 +1544,8 @@ def academic_class_sync_task(job_id: str):
                 pass
             return result
         force = bool(job.force)
-        limit = max(1, min(500, int(job.limit or 500)))
+        configured_limit = max(1000, min(int(getattr(settings, 'academic_class_sync_max_students', 5000) or 5000), 20000))
+        limit = max(1, min(configured_limit, int(job.limit or 500)))
 
         if job.job_type == 'cms_sync_check':
             result = service.resolve_class_openedx_users(worker_user, job.class_id, force=force, limit=limit)
@@ -1607,6 +1618,77 @@ def academic_class_sync_task(job_id: str):
             except Exception:
                 pass
         raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name='academic_sync_all_student_scores_task')
+def academic_sync_all_student_scores_task():
+    """Fan out a full read-only CMS score refresh for every active class.
+
+    Beat runs this at 05:00 Vietnam time.  Each class gets its own durable job
+    and existing class worker, so 50,000+ student rows are processed in bounded
+    connector batches instead of one request or one oversized transaction.
+    """
+    from app.models.academic import AcademicClass, AcademicClassSyncJob
+
+    db = SessionLocal()
+    queued = reused = skipped = 0
+    try:
+        class_ids = [str(value) for (value,) in db.query(AcademicClass.id).filter(AcademicClass.active.is_(True)).order_by(AcademicClass.id.asc()).all()]
+        max_students = max(1000, min(int(getattr(settings, 'academic_class_sync_max_students', 5000) or 5000), 20000))
+        requester_context = {
+            'user_id': 'academic-score-scheduler',
+            'username': 'academic-score-scheduler',
+            'role': 'admin',
+            'permissions': [],
+            'authenticated_admin_claims': {'ai_system_admin': True},
+        }
+        for class_id in class_ids:
+            active = db.query(AcademicClassSyncJob).filter(
+                AcademicClassSyncJob.class_id == class_id,
+                AcademicClassSyncJob.job_type == 'learning_sync',
+                AcademicClassSyncJob.status.in_(['queued', 'running']),
+            ).order_by(AcademicClassSyncJob.created_at.desc()).first()
+            if active:
+                reused += 1
+                continue
+            job = AcademicClassSyncJob(
+                job_type='learning_sync',
+                status='queued',
+                class_id=class_id,
+                requested_by='academic-score-scheduler',
+                force=True,
+                limit=max_students,
+                progress_current=0,
+                progress_total=100,
+                progress_label='Đang chờ đồng bộ điểm toàn bộ sinh viên lúc 05:00',
+                request_json=json_safe_value({
+                    'force': True,
+                    'limit': max_students,
+                    'scheduled': True,
+                    'schedule_timezone': 'Asia/Ho_Chi_Minh',
+                    'schedule_time': '05:00',
+                    'requester_context': requester_context,
+                    'approved_class_id': class_id,
+                }),
+                result_json={},
+            )
+            db.add(job)
+            db.commit()
+            try:
+                academic_class_sync_task.delay(job.id)
+                queued += 1
+            except Exception:
+                db.rollback()
+                job.status = 'failed'
+                job.error_message = 'Không đưa được job đồng bộ điểm vào hàng đợi Celery.'
+                job.result_json = {'ok': False, 'scheduled': True}
+                job.finished_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+                skipped += 1
+        return {'ok': True, 'scheduled': True, 'timezone': 'Asia/Ho_Chi_Minh', 'schedule': '05:00', 'class_total': len(class_ids), 'queued': queued, 'reused': reused, 'skipped': skipped}
     finally:
         db.close()
 
@@ -2628,9 +2710,10 @@ def academic_udemy_progress_export_task(self, job_id: str):
 
 @celery_app.task(name='academic_udemy_artifact_cleanup_task', acks_late=True)
 def academic_udemy_artifact_cleanup_task():
-    """Periodic retention enforcement without deleting active import inputs."""
+    """Periodic retention enforcement for import and teacher-report artifacts."""
     from app.models.academic import AcademicBulkOperationJob
     from app.services.academic.udemy_progress import UdemyProgressService
+    from app.services.object_storage import get_object_storage
 
     db = SessionLocal()
     try:
@@ -2644,7 +2727,21 @@ def academic_udemy_artifact_cleanup_task():
         result = UdemyProgressService.cleanup_expired_artifacts(
             protected_import_job_ids=active_import_job_ids,
         )
-        return json_safe_value({'ok': True, **result})
+        teacher_report_deleted = 0
+        storage = get_object_storage()
+        cutoff = datetime.utcnow().timestamp() - max(3600, int(settings.academic_teacher_report_file_retention_hours) * 3600)
+        try:
+            for artifact in storage.list_objects('teacher-reports'):
+                if artifact.last_modified and artifact.last_modified.timestamp() < cutoff:
+                    try:
+                        storage.delete(artifact.reference, missing_ok=True)
+                        teacher_report_deleted += 1
+                    except Exception:
+                        pass
+        except Exception:
+            # Storage cleanup must never make the periodic task fail.
+            pass
+        return json_safe_value({'ok': True, **result, 'teacher_report_deleted': teacher_report_deleted})
     finally:
         db.close()
 
@@ -2715,6 +2812,15 @@ def academic_teacher_report_job_task(job_id: str):
                 db.add(job)
                 db.commit()
 
+            force_refresh = bool(request.get('force_refresh'))
+            # Repeated exports can reuse a complete snapshot for a short,
+            # bounded window.  Cache rebuild remains a true live refresh; an
+            # operator can also force the export path with force_refresh=true.
+            snapshot_window_seconds = (
+                0
+                if job.job_type != 'export_excel' or force_refresh
+                else max(0, int(settings.academic_teacher_report_export_snapshot_max_age_seconds))
+            )
             refresh_result = service.refresh_training_teacher_learning_data(
                 worker_user,
                 term_id=term_id,
@@ -2724,6 +2830,7 @@ def academic_teacher_report_job_task(job_id: str):
                 class_id=class_id,
                 strict=True,
                 progress_callback=_learning_refresh_progress,
+                max_snapshot_age_seconds=snapshot_window_seconds,
             )
 
         if job.job_type == 'rebuild_cache':
@@ -2766,18 +2873,9 @@ def academic_teacher_report_job_task(job_id: str):
             job.progress_label = 'Đang ghi file Excel báo cáo giáo viên'
             db.commit()
             storage = get_object_storage()
-            retention_seconds = max(3600, int(settings.academic_teacher_report_file_retention_hours) * 3600)
-            cutoff = datetime.utcnow().timestamp() - retention_seconds
-            try:
-                old_files = storage.list_objects('teacher-reports')
-            except Exception:
-                old_files = []
-            for old_file in old_files:
-                try:
-                    if old_file.last_modified and old_file.last_modified.timestamp() < cutoff:
-                        storage.delete(old_file.reference, missing_ok=True)
-                except Exception:
-                    pass
+            # Retention cleanup is intentionally best-effort and off the
+            # critical path.  Listing a large object-storage prefix here made
+            # otherwise-ready exports wait on remote storage metadata.
             safe_branch = str(branch or 'all').replace('/', '-').replace(' ', '-')
             safe_campus = str(campus or 'all').replace('/', '-').replace(' ', '-')
             if class_id:
@@ -2789,7 +2887,7 @@ def academic_teacher_report_job_task(job_id: str):
             tmp_dir = Path(tempfile.mkdtemp())
             path = tmp_dir / filename
             try:
-                _write_training_teacher_report_xlsx(report, path)
+                _write_training_teacher_report_xlsx(report, path, write_only=True)
                 raw = path.read_bytes()
                 job.file_path = storage.put_bytes(
                     f'teacher-reports/{filename}',

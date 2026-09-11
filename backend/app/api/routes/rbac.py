@@ -167,7 +167,7 @@ def effective_me(user: UserContext = Depends(get_user_context), db: Session = De
         'is_system_admin': service.is_system_admin(user),
         'permissions': permissions,
         'business_permissions': permissions,
-        'assignments': [service.serialize_assignment(item) for item in assignments],
+        'assignments': service.serialize_assignments(assignments),
     }
 
 
@@ -214,7 +214,7 @@ def scope_audit(user: UserContext = Depends(get_user_context), db: Session = Dep
             'broad_offering_ids': sorted(visibility.broad_offering_ids),
             'exact_chapter_ids': sorted(visibility.exact_chapter_ids),
         },
-        'assignments': [service.serialize_assignment(item) for item in assignments],
+        'assignments': service.serialize_assignments(assignments),
         'backend_enforced': True,
     }
 
@@ -252,9 +252,10 @@ def list_assignments(
         scope_id=scope_id,
         include_revoked=include_revoked,
     )
+    serialized = service.serialize_assignments(items)
     return {'items': [
-        {**service.serialize_assignment(item), 'can_revoke': item.revoked_at is None and service.can_grant(user, item.role_code, item.scope_type, item.scope_id)}
-        for item in items
+        {**row, 'can_revoke': item.revoked_at is None and service.can_grant(user, item.role_code, item.scope_type, item.scope_id)}
+        for item, row in zip(items, serialized)
     ], 'total': len(items)}
 
 
@@ -262,6 +263,8 @@ def list_assignments(
 def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     try:
+        if not payload.email:
+            raise HTTPException(status_code=422, detail='Cần nhập email để hệ thống tự tạo/kiểm tra tài khoản CMS.')
         service.ensure_default_catalog()
         item = service.create_assignment(actor=user, **payload.model_dump())
         log_audit(
@@ -286,6 +289,8 @@ def create_assignment(payload: RoleAssignmentCreate, user: UserContext = Depends
 def create_assignments_batch(payload: RoleAssignmentBatchCreate, user: UserContext = Depends(require_permission('view_rbac')), db: Session = Depends(get_db)):
     service = BusinessRBACService(db)
     try:
+        if not payload.email:
+            raise HTTPException(status_code=422, detail='Cần nhập email để hệ thống tự tạo/kiểm tra tài khoản CMS.')
         service.ensure_default_catalog()
         items, created_count, reused_count = service.create_assignments_batch(actor=user, **payload.model_dump())
         log_audit(
@@ -306,7 +311,7 @@ def create_assignments_batch(payload: RoleAssignmentBatchCreate, user: UserConte
             },
         )
         return {
-            'items': [service.serialize_assignment(item) for item in items],
+            'items': service.serialize_assignments(items),
             'created_count': created_count,
             'reused_count': reused_count,
             'total': len(items),

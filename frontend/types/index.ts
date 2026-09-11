@@ -151,6 +151,7 @@ export type Question = {
   openedx_manual_action_required?: boolean | null
   created_at: string
   updated_at: string
+  last_login_at?: string | null
 }
 
 export type Job = {
@@ -1900,6 +1901,7 @@ export type RoleAssignment = {
   revoke_reason?: string
   created_at: string
   updated_at: string
+  last_login_at?: string | null
 }
 
 export type RoleAssignmentCreate = {
