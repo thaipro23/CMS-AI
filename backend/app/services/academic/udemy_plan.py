@@ -661,20 +661,26 @@ class UdemyPlanService:
         sample = [1, 'Fall 2026', 'Block 1', 'SOF3032', 'SOF3032 - Môn Udemy mẫu', 6]
         for week in range(1, 11):
             sample.extend([None, None])
-        sample[6] = date(2026, 9, 7)
-        sample[7] = 20
-        sample[8] = date(2026, 9, 14)
-        sample[9] = 40
-        sample[10] = date(2026, 9, 21)
-        sample[11] = 60
-        sample[12] = date(2026, 9, 28)
-        sample[13] = 80
-        sample[14] = date(2026, 10, 5)
-        sample[15] = 100
+        # Keep deadline cells as explicit dd/mm/yyyy text. Excel/LibreOffice can
+        # otherwise reinterpret an ambiguous value such as 03/10/2026 using the
+        # workstation locale (MM/DD/YYYY) before the backend ever sees the file.
+        sample_deadlines = [
+            ('19/09/2026', 20),
+            ('26/09/2026', 35),
+            ('03/10/2026', 50),
+            ('10/10/2026', 75),
+            ('17/10/2026', 90),
+            ('24/10/2026', 100),
+        ]
+        for index, (deadline_text, progress) in enumerate(sample_deadlines):
+            sample[6 + index * 2] = deadline_text
+            sample[7 + index * 2] = progress
         for col, value in enumerate(sample, 1):
             sheet.cell(row=3, column=col, value=value)
         for col in range(7, 27, 2):
-            sheet.cell(row=3, column=col).number_format = 'dd/mm/yyyy'
+            # Text is intentional: parse_workbook() owns the locale-independent
+            # dd/mm/yyyy conversion and also still accepts genuine Excel dates.
+            sheet.cell(row=3, column=col).number_format = '@'
         widths = [8, 20, 15, 16, 38, 16] + [15, 18] * 10
         for index, width in enumerate(widths, 1):
             sheet.column_dimensions[get_column_letter(index)].width = width
@@ -687,7 +693,7 @@ class UdemyPlanService:
             'Mỗi dòng là một môn trong một Học kỳ + Block + Hệ.',
             'Môn phải đã được lấy từ AP và chọn nền tảng Udemy trên trang Quản lý môn học.',
             'Số lượng Item phải là số nguyên lớn hơn 0.',
-            'Deadline nhập dạng ngày Excel, dd/mm/yyyy hoặc yyyy-mm-dd.',
+            'Deadline nhập dạng chuỗi dd/mm/yyyy (ví dụ 03/10/2026). Không đổi cột Week sang định dạng ngày theo locale; backend cũng vẫn đọc được ngày Excel thật.',
             'Tiến độ từ 0 đến 100, không được giảm; deadline phải tăng dần.',
             'Import lại không ghi đè lịch sử: hệ thống tạo phiên bản kế hoạch mới và giữ phiên bản cũ.',
         ]

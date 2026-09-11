@@ -320,3 +320,9 @@ NEXT ACTION:
 - Root cause for `GET /api/academic/training/teachers?...learning_platform=udemy&teacher_id=...&include_classes=true`: the Udemy branch never initialized the CMS-only local `learning`, but the common class payload later read `learning.get('learning_component_summaries')`. This raises `UnboundLocalError` and returns HTTP 500 for Udemy teacher drill-down.
 - Fixed by initializing `learning: dict[str, Any] = {}` before the Udemy/CMS platform branch. CMS behavior remains unchanged; Udemy returns an empty `learning_component_summaries`.
 - Regression coverage: `backend/app/tests/test_teacher_report_udemy_learning_local_contract.py` and existing outerjoin contract.
+
+## 2026-09-11 — Udemy plan date locale regression
+- Fixed generated Udemy plan template so Week deadline cells are explicit `dd/mm/yyyy` text (`@`) instead of locale-sensitive Excel date cells.
+- `03/10/2026` therefore remains 3 October 2026 even on workstations using an MM/DD locale.
+- Backend parser remains backward-compatible with real Excel date cells, serial values, `dd/mm/yyyy`, and ISO dates.
+- Regression test added at `backend/app/tests/test_udemy_plan_date_locale_regression.py`; targeted local suite was verified before the GitHub source patch.
