@@ -6,6 +6,7 @@ on:
       - feat/import-quiz-cms-old-su26
     paths:
       - .github/workflows/tmp-fix-teacher-report-outerjoin.yml
+      - backend/app/tests/test_teacher_report_outerjoin_contract.py
 
 permissions:
   contents: write
