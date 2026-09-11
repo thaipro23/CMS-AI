@@ -326,3 +326,16 @@ NEXT ACTION:
 - `03/10/2026` therefore remains 3 October 2026 even on workstations using an MM/DD locale.
 - Backend parser remains backward-compatible with real Excel date cells, serial values, `dd/mm/yyyy`, and ISO dates.
 - Regression test added at `backend/app/tests/test_udemy_plan_date_locale_regression.py`; targeted local suite was verified before the GitHub source patch.
+
+## 2026-09-11 — Udemy to CMS AP reconciliation and audit aggregation
+
+- Verified branch source fix commit: `689d871a766404f02425cc14522117d9f763fd09`.
+- Switching a subject delivery from `udemy` to `cms` now preserves platform history and sets `metadata_json.ap_reconcile_required=true` with reason `learning_platform_changed_udemy_to_cms`.
+- The AP Celery worker now uses `app.services.academic.ap_importer.AcademicImportService`, so a subsequent AP import reconciles AP-owned class teacher/student links instead of only upserting.
+- The reconcile marker is cleared only after a non-dry-run AP sync finishes with `status=completed` and `counters.errors == 0`. Partial/error/dry-run syncs do not clear it.
+- Per-class success audit rows are kept for manual class operations, but bulk/scheduled child success rows are suppressed. Failure audit rows remain per child.
+- The daily 05:00 Asia/Ho_Chi_Minh score scheduler writes one summary audit action `academic.sync_all_student_scores` with success/failed status.
+- Regression files: `backend/app/tests/test_ap_platform_resync_and_class_audit_regression.py` and `backend/app/tests/test_ap_platform_resync_integration.py`.
+- GitHub Actions RED→GREEN verification run `34604486553` completed successfully: RED reproduced before patch, GREEN passed after patch, and `py_compile` passed for changed production modules.
+- This verifies source/tests only. Kubernetes deployment and production runtime verification have not been performed in this change.
+
