@@ -24,14 +24,14 @@ jobs:
         shell: bash
         run: |
           set +e
-          python -m pytest -q backend/app/tests/test_teacher_report_outerjoin_contract.py
+          python backend/app/tests/test_teacher_report_outerjoin_contract.py
           rc=$?
           set -e
           if [ "$rc" -eq 0 ]; then
             echo "Regression test unexpectedly passed before the fix"
             exit 1
           fi
-          echo "Confirmed regression test fails before source patch"
+          echo "Confirmed regression test fails against malformed source"
 
       - name: Apply minimal source patch
         shell: bash
@@ -58,7 +58,7 @@ jobs:
           PY
 
       - name: GREEN - regression test passes
-        run: python -m pytest -q backend/app/tests/test_teacher_report_outerjoin_contract.py
+        run: python backend/app/tests/test_teacher_report_outerjoin_contract.py
 
       - name: Syntax check teacher report module
         run: python -m py_compile backend/app/services/academic/teacher_report.py
