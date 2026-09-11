@@ -315,3 +315,8 @@ NEXT ACTION:
 
 - CMS-AI: run Alembic migration `0064_rbac_identity_login`, then rebuild/roll out backend and frontend. Verify `/api/rbac/assignments` contains `last_login_at` and beat logs show `academic-score-sync-all-students` at 05:00 Asia/Ho_Chi_Minh.
 - CMS-FPT: rebuild LMS/CMS images from `fpt-indigo-ui` so the connector account-provisioning/profile/no-password change is deployed. Keep `AI_CONNECTOR_READ_DB_ALIAS=read_replica` and replica credentials configured.
+
+## 2026-09-11 — Udemy teacher detail 500 regression
+- Root cause for `GET /api/academic/training/teachers?...learning_platform=udemy&teacher_id=...&include_classes=true`: the Udemy branch never initialized the CMS-only local `learning`, but the common class payload later read `learning.get('learning_component_summaries')`. This raises `UnboundLocalError` and returns HTTP 500 for Udemy teacher drill-down.
+- Fixed by initializing `learning: dict[str, Any] = {}` before the Udemy/CMS platform branch. CMS behavior remains unchanged; Udemy returns an empty `learning_component_summaries`.
+- Regression coverage: `backend/app/tests/test_teacher_report_udemy_learning_local_contract.py` and existing outerjoin contract.

@@ -1341,6 +1341,7 @@ class AcademicTeacherReportWorkflowService:
             deadline_due_quizzes = 0
             policy_summary: dict[str, Any] = {}
             alerts: list[str] = []
+            learning: dict[str, Any] = {}
             if is_udemy:
                 bucket['udemy_class_count'] += 1
                 bucket['udemy_student_count'] += class_student_count
