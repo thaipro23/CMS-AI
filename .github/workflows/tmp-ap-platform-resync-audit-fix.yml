@@ -1,4 +1,4 @@
-name: Temporary AP platform resync audit fix
+name: Temporary AP resync context cleanup
 
 on:
   push:
@@ -6,14 +6,12 @@ on:
       - feat/import-quiz-cms-old-su26
     paths:
       - .github/workflows/tmp-ap-platform-resync-audit-fix.yml
-      - backend/app/tests/test_ap_platform_resync_and_class_audit_regression.py
-      - backend/app/tests/test_ap_platform_resync_integration.py
 
 permissions:
   contents: write
 
 jobs:
-  red-green-fix:
+  update-context-and-cleanup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,117 +19,27 @@ jobs:
           ref: feat/import-quiz-cms-old-su26
           fetch-depth: 0
 
-      - name: Install bounded test dependencies
-        run: |
-          python -m pip install --disable-pip-version-check -q sqlalchemy fastapi pydantic pydantic-settings celery httpx pytest python-multipart openpyxl
-
-      - name: RED - regression suite must fail before source patch
-        shell: bash
-        run: |
-          set +e
-          PYTHONPATH=backend python -m pytest -q \
-            backend/app/tests/test_ap_platform_resync_and_class_audit_regression.py \
-            backend/app/tests/test_ap_platform_resync_integration.py
-          rc=$?
-          set -e
-          if [ "$rc" -eq 0 ]; then
-            echo "Expected RED regression suite to fail before the patch"
-            exit 1
-          fi
-          echo "RED confirmed with exit code $rc"
-
-      - name: Apply minimal production patch
+      - name: Append verified handoff context
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-
-          worker = Path('backend/app/worker.py')
-          source = worker.read_text(encoding='utf-8')
-
-          old = "    from app.services.ap_academic_sync import AcademicImportService, SyncCounters\n"
-          new = "    from app.services.academic.ap_importer import AcademicImportService\n    from app.services.ap_academic_sync import SyncCounters\n"
-          if source.count(old) != 1:
-              raise SystemExit(f'worker AP importer anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """        status = 'success' if result_run.status == 'completed' else 'failed'\n        try:\n            log_audit(\n"""
-          new = """        if (\n            result_run.status == 'completed'\n            and not bool(request.get('dry_run'))\n            and int(counters.errors or 0) == 0\n        ):\n            from app.services.academic.subject_delivery import AcademicSubjectDeliveryService\n            AcademicSubjectDeliveryService(db).mark_ap_reconciled(\n                term_name=str(request.get('term_name') or run.term_name or ''),\n                branch=str(request.get('branch') or run.branch or 'poly'),\n                subject_codes=list(request.get('subject_codes') or []),\n                actor=run.requested_by or 'ap-sync',\n            )\n\n        status = 'success' if result_run.status == 'completed' else 'failed'\n        try:\n            log_audit(\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'worker AP completion anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """def _advisory_xact_lock_for_key(db, key: str) -> None:\n    try:\n        bind = db.get_bind()\n        if bind and bind.dialect.name == 'postgresql':\n            db.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'), {'key': key})\n    except Exception:\n        pass\n\n@celery_app.task(name='academic_class_sync_task')\n"""
-          new = """def _advisory_xact_lock_for_key(db, key: str) -> None:\n    try:\n        bind = db.get_bind()\n        if bind and bind.dialect.name == 'postgresql':\n            db.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'), {'key': key})\n    except Exception:\n        pass\n\n\ndef _should_log_academic_class_sync_success(request_json: dict | None) -> bool:\n    \"\"\"Keep manual success audits while suppressing bulk/scheduled child noise.\"\"\"\n    data = request_json if isinstance(request_json, dict) else {}\n    if bool(data.get('scheduled')):\n        return False\n    if str(data.get('parent_job_id') or '').strip():\n        return False\n    if str(data.get('parent_job_type') or '').strip():\n        return False\n    return True\n\n\n@celery_app.task(name='academic_class_sync_task')\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'worker audit helper anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """            try:\n                log_audit(\n                    db,\n                    action='academic.class_sync.async.skipped_udemy',\n                    status='success',\n                    message=job.progress_label,\n                    user=None,\n                    target_type='academic_class_sync_job',\n                    target_id=job.id,\n                    metadata=result,\n                )\n            except Exception:\n                pass\n            return result\n"""
-          new = """            if _should_log_academic_class_sync_success(request_json):\n                try:\n                    log_audit(\n                        db,\n                        action='academic.class_sync.async.skipped_udemy',\n                        status='success',\n                        message=job.progress_label,\n                        user=None,\n                        target_type='academic_class_sync_job',\n                        target_id=job.id,\n                        metadata=result,\n                    )\n                except Exception:\n                    pass\n            return result\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'worker skipped audit anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """        try:\n            log_audit(\n                db,\n                action=action,\n                status='success',\n                message=label,\n                user=None,\n                target_type='academic_class_sync_job',\n                target_id=job.id,\n                metadata=json_safe_value({'class_id': job.class_id, 'counts': safe_result.get('counts', {}) if isinstance(safe_result, dict) else {}, 'updated': safe_result.get('updated', 0) if isinstance(safe_result, dict) else 0}),\n            )\n        except Exception:\n            pass\n        return safe_result\n"""
-          new = """        if _should_log_academic_class_sync_success(request_json):\n            try:\n                log_audit(\n                    db,\n                    action=action,\n                    status='success',\n                    message=label,\n                    user=None,\n                    target_type='academic_class_sync_job',\n                    target_id=job.id,\n                    metadata=json_safe_value({'class_id': job.class_id, 'counts': safe_result.get('counts', {}) if isinstance(safe_result, dict) else {}, 'updated': safe_result.get('updated', 0) if isinstance(safe_result, dict) else 0}),\n                )\n            except Exception:\n                pass\n        return safe_result\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'worker normal audit anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """    from app.models.academic import AcademicClass, AcademicClassSyncJob\n\n    db = SessionLocal()\n"""
-          new = """    from app.models.academic import AcademicClass, AcademicClassSyncJob\n    from app.services.audit_log import AuditErrorType, log_audit\n\n    db = SessionLocal()\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'scheduled audit import anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """                db.commit()\n                skipped += 1\n        return {'ok': True, 'scheduled': True, 'timezone': 'Asia/Ho_Chi_Minh', 'schedule': '05:00', 'class_total': len(class_ids), 'queued': queued, 'reused': reused, 'skipped': skipped}\n    finally:\n        db.close()\n"""
-          new = """                db.commit()\n                skipped += 1\n        result = json_safe_value({\n            'ok': True,\n            'scheduled': True,\n            'timezone': 'Asia/Ho_Chi_Minh',\n            'schedule': '05:00',\n            'class_total': len(class_ids),\n            'queued': queued,\n            'reused': reused,\n            'skipped': skipped,\n        })\n        try:\n            log_audit(\n                db,\n                action='academic.sync_all_student_scores',\n                status='success',\n                message='Đã lập lịch đồng bộ điểm CMS toàn bộ sinh viên',\n                user=None,\n                target_type='academic_score_scheduler',\n                target_id='daily-05-vn',\n                metadata=json_safe_value(result),\n            )\n        except Exception:\n            pass\n        return result\n    except Exception as exc:\n        db.rollback()\n        result = json_safe_value({\n            'ok': False,\n            'scheduled': True,\n            'timezone': 'Asia/Ho_Chi_Minh',\n            'schedule': '05:00',\n            'queued': queued,\n            'reused': reused,\n            'skipped': skipped,\n            'error': str(exc)[:1000],\n        })\n        try:\n            log_audit(\n                db,\n                action='academic.sync_all_student_scores',\n                status='failed',\n                error_type=AuditErrorType.SYSTEM_ERROR,\n                message=str(exc),\n                user=None,\n                target_type='academic_score_scheduler',\n                target_id='daily-05-vn',\n                metadata=json_safe_value(result),\n            )\n        except Exception:\n            pass\n        raise\n    finally:\n        db.close()\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'scheduled return anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-          worker.write_text(source, encoding='utf-8')
-
-          delivery = Path('backend/app/services/academic/subject_delivery.py')
-          source = delivery.read_text(encoding='utf-8')
-
-          old = """    @staticmethod\n    def _subject_code_from_item(item: dict[str, Any]) -> str:\n        return str(item.get('psubject_code') or item.get('subject_code') or item.get('id') or '').strip().upper()\n\n    def _previous_term(self, term: AcademicTerm, branch: str) -> AcademicTerm | None:\n"""
-          new = """    @staticmethod\n    def _subject_code_from_item(item: dict[str, Any]) -> str:\n        return str(item.get('psubject_code') or item.get('subject_code') or item.get('id') or '').strip().upper()\n\n    @staticmethod\n    def _mark_ap_reconcile_required(\n        metadata: dict[str, Any],\n        *,\n        previous_platform: str | None,\n        next_platform: str | None,\n        changed_at: datetime,\n    ) -> dict[str, Any]:\n        if previous_platform == 'udemy' and next_platform == 'cms':\n            metadata['ap_reconcile_required'] = True\n            metadata['ap_reconcile_reason'] = 'learning_platform_changed_udemy_to_cms'\n            metadata['ap_reconcile_required_at'] = changed_at.isoformat()\n            metadata.pop('ap_reconciled_at', None)\n            metadata.pop('ap_reconciled_by', None)\n        return metadata\n\n    def mark_ap_reconciled(\n        self,\n        *,\n        term_name: str,\n        branch: str,\n        subject_codes: list[str],\n        actor: str | None = None,\n    ) -> int:\n        normalized_term = str(term_name or '').strip()\n        normalized_branch = self.normalize_branch(branch)\n        codes = sorted({str(item or '').strip().upper() for item in subject_codes if str(item or '').strip()})\n        if not normalized_term or not codes:\n            return 0\n        rows = (\n            self.db.query(AcademicSubjectDelivery)\n            .join(AcademicSubject, AcademicSubject.id == AcademicSubjectDelivery.subject_id)\n            .join(AcademicTerm, AcademicTerm.id == AcademicSubjectDelivery.term_id)\n            .filter(\n                func.lower(AcademicTerm.term_name) == normalized_term.lower(),\n                func.lower(AcademicSubjectDelivery.branch) == normalized_branch,\n                AcademicSubject.subject_code.in_(codes),\n                AcademicSubjectDelivery.learning_platform == 'cms',\n                AcademicSubjectDelivery.active.is_(True),\n                AcademicSubject.active.is_(True),\n            )\n            .all()\n        )\n        reconciled_at = datetime.utcnow()\n        changed = 0\n        for row in rows:\n            metadata = dict(row.metadata_json or {}) if isinstance(row.metadata_json, dict) else {}\n            if not metadata.get('ap_reconcile_required'):\n                continue\n            metadata['ap_reconcile_required'] = False\n            metadata['ap_reconciled_at'] = reconciled_at.isoformat()\n            metadata['ap_reconciled_by'] = actor or 'ap-sync'\n            row.metadata_json = json_safe_value(metadata)\n            self.db.add(row)\n            changed += 1\n        if changed:\n            self.db.commit()\n        return changed\n\n    def _previous_term(self, term: AcademicTerm, branch: str) -> AcademicTerm | None:\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'delivery helper anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """        metadata['platform_history'] = history[-100:]\n        metadata['platform_policy_version'] = 'udemy-subject-management/batch31'\n        delivery.learning_platform = next_platform\n"""
-          new = """        metadata['platform_history'] = history[-100:]\n        metadata['platform_policy_version'] = 'udemy-subject-management/batch31'\n        metadata = self._mark_ap_reconcile_required(\n            metadata,\n            previous_platform=previous_platform,\n            next_platform=next_platform,\n            changed_at=now,\n        )\n        delivery.learning_platform = next_platform\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'delivery single marker anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = """            metadata['platform_history'] = history[-100:]\n            metadata['platform_policy_version'] = 'udemy-subject-management/batch31'\n            row.learning_platform = next_platform\n"""
-          new = """            metadata['platform_history'] = history[-100:]\n            metadata['platform_policy_version'] = 'udemy-subject-management/batch31'\n            metadata = self._mark_ap_reconcile_required(\n                metadata,\n                previous_platform=previous_platform,\n                next_platform=next_platform,\n                changed_at=now,\n            )\n            row.learning_platform = next_platform\n"""
-          if source.count(old) != 1:
-              raise SystemExit(f'delivery bulk marker anchor count={source.count(old)}')
-          source = source.replace(old, new, 1)
-          delivery.write_text(source, encoding='utf-8')
+          path = Path('MASTER_CONTEXT_DASH_CMS.md')
+          text = path.read_text(encoding='utf-8')
+          marker = '## 2026-09-11 — Udemy to CMS AP reconciliation and audit aggregation'
+          block = '''\n\n## 2026-09-11 — Udemy to CMS AP reconciliation and audit aggregation\n\n- Verified branch source fix commit: `689d871a766404f02425cc14522117d9f763fd09`.\n- Switching a subject delivery from `udemy` to `cms` now preserves platform history and sets `metadata_json.ap_reconcile_required=true` with reason `learning_platform_changed_udemy_to_cms`.\n- The AP Celery worker now uses `app.services.academic.ap_importer.AcademicImportService`, so a subsequent AP import reconciles AP-owned class teacher/student links instead of only upserting.\n- The reconcile marker is cleared only after a non-dry-run AP sync finishes with `status=completed` and `counters.errors == 0`. Partial/error/dry-run syncs do not clear it.\n- Per-class success audit rows are kept for manual class operations, but bulk/scheduled child success rows are suppressed. Failure audit rows remain per child.\n- The daily 05:00 Asia/Ho_Chi_Minh score scheduler writes one summary audit action `academic.sync_all_student_scores` with success/failed status.\n- Regression files: `backend/app/tests/test_ap_platform_resync_and_class_audit_regression.py` and `backend/app/tests/test_ap_platform_resync_integration.py`.\n- GitHub Actions RED→GREEN verification run `34604486553` completed successfully: RED reproduced before patch, GREEN passed after patch, and `py_compile` passed for changed production modules.\n- This verifies source/tests only. Kubernetes deployment and production runtime verification have not been performed in this change.\n'''
+          if marker not in text:
+              path.write_text(text.rstrip() + block + '\n', encoding='utf-8')
           PY
 
-      - name: GREEN - regression and integration tests pass
-        run: |
-          PYTHONPATH=backend python -m pytest -q \
-            backend/app/tests/test_ap_platform_resync_and_class_audit_regression.py \
-            backend/app/tests/test_ap_platform_resync_integration.py
+      - name: Remove temporary workflow
+        run: git rm .github/workflows/tmp-ap-platform-resync-audit-fix.yml
 
-      - name: Syntax check changed production modules
-        run: |
-          python -m py_compile \
-            backend/app/worker.py \
-            backend/app/services/academic/subject_delivery.py
-
-      - name: Commit verified source fix
+      - name: Commit context and cleanup
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/app/worker.py backend/app/services/academic/subject_delivery.py
-          git commit -m "fix: reconcile AP data after Udemy to CMS switch"
+          git add MASTER_CONTEXT_DASH_CMS.md .github/workflows/tmp-ap-platform-resync-audit-fix.yml
+          git commit -m "docs: record AP reconciliation verification"
           git push origin HEAD:feat/import-quiz-cms-old-su26
