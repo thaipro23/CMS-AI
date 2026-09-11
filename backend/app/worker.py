@@ -1319,7 +1319,8 @@ def bank_material_cleanup_task(retention_days: int | None = None, limit: int | N
 def academic_ap_sync_task(run_id: str):
     """Run AP get-data-cms sync outside request/response and persist progress in AcademicSyncRun."""
     from app.models.academic import AcademicSyncRun
-    from app.services.ap_academic_sync import AcademicImportService, SyncCounters
+    from app.services.academic.ap_importer import AcademicImportService
+    from app.services.ap_academic_sync import SyncCounters
     from app.services.audit_log import AuditErrorType, log_audit
 
     db = SessionLocal()
@@ -1382,6 +1383,19 @@ def academic_ap_sync_task(run_id: str):
             campuses=list(request.get('campuses') or []),
             run=run,
         )
+        if (
+            result_run.status == 'completed'
+            and not bool(request.get('dry_run'))
+            and int(counters.errors or 0) == 0
+        ):
+            from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
+            AcademicSubjectDeliveryService(db).mark_ap_reconciled(
+                term_name=str(request.get('term_name') or run.term_name or ''),
+                branch=str(request.get('branch') or run.branch or 'poly'),
+                subject_codes=list(request.get('subject_codes') or []),
+                actor=run.requested_by or 'ap-sync',
+            )
+
         status = 'success' if result_run.status == 'completed' else 'failed'
         try:
             log_audit(
@@ -1459,6 +1473,19 @@ def _advisory_xact_lock_for_key(db, key: str) -> None:
     except Exception:
         pass
 
+
+def _should_log_academic_class_sync_success(request_json: dict | None) -> bool:
+    """Keep manual success audits while suppressing bulk/scheduled child noise."""
+    data = request_json if isinstance(request_json, dict) else {}
+    if bool(data.get('scheduled')):
+        return False
+    if str(data.get('parent_job_id') or '').strip():
+        return False
+    if str(data.get('parent_job_type') or '').strip():
+        return False
+    return True
+
+
 @celery_app.task(name='academic_class_sync_task')
 def academic_class_sync_task(job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
@@ -1529,19 +1556,20 @@ def academic_class_sync_task(job_id: str):
             job.updated_at = datetime.utcnow()
             db.add(job)
             db.commit()
-            try:
-                log_audit(
-                    db,
-                    action='academic.class_sync.async.skipped_udemy',
-                    status='success',
-                    message=job.progress_label,
-                    user=None,
-                    target_type='academic_class_sync_job',
-                    target_id=job.id,
-                    metadata=result,
-                )
-            except Exception:
-                pass
+            if _should_log_academic_class_sync_success(request_json):
+                try:
+                    log_audit(
+                        db,
+                        action='academic.class_sync.async.skipped_udemy',
+                        status='success',
+                        message=job.progress_label,
+                        user=None,
+                        target_type='academic_class_sync_job',
+                        target_id=job.id,
+                        metadata=result,
+                    )
+                except Exception:
+                    pass
             return result
         force = bool(job.force)
         configured_limit = max(1000, min(int(getattr(settings, 'academic_class_sync_max_students', 5000) or 5000), 20000))
@@ -1585,19 +1613,20 @@ def academic_class_sync_task(job_id: str):
         job.updated_at = datetime.utcnow()
         db.add(job)
         db.commit()
-        try:
-            log_audit(
-                db,
-                action=action,
-                status='success',
-                message=label,
-                user=None,
-                target_type='academic_class_sync_job',
-                target_id=job.id,
-                metadata=json_safe_value({'class_id': job.class_id, 'counts': safe_result.get('counts', {}) if isinstance(safe_result, dict) else {}, 'updated': safe_result.get('updated', 0) if isinstance(safe_result, dict) else 0}),
-            )
-        except Exception:
-            pass
+        if _should_log_academic_class_sync_success(request_json):
+            try:
+                log_audit(
+                    db,
+                    action=action,
+                    status='success',
+                    message=label,
+                    user=None,
+                    target_type='academic_class_sync_job',
+                    target_id=job.id,
+                    metadata=json_safe_value({'class_id': job.class_id, 'counts': safe_result.get('counts', {}) if isinstance(safe_result, dict) else {}, 'updated': safe_result.get('updated', 0) if isinstance(safe_result, dict) else 0}),
+                )
+            except Exception:
+                pass
         return safe_result
     except Exception as exc:
         db.rollback()
@@ -1631,6 +1660,7 @@ def academic_sync_all_student_scores_task():
     connector batches instead of one request or one oversized transaction.
     """
     from app.models.academic import AcademicClass, AcademicClassSyncJob
+    from app.services.audit_log import AuditErrorType, log_audit
 
     db = SessionLocal()
     queued = reused = skipped = 0
@@ -1688,7 +1718,57 @@ def academic_sync_all_student_scores_task():
                 db.add(job)
                 db.commit()
                 skipped += 1
-        return {'ok': True, 'scheduled': True, 'timezone': 'Asia/Ho_Chi_Minh', 'schedule': '05:00', 'class_total': len(class_ids), 'queued': queued, 'reused': reused, 'skipped': skipped}
+        result = json_safe_value({
+            'ok': True,
+            'scheduled': True,
+            'timezone': 'Asia/Ho_Chi_Minh',
+            'schedule': '05:00',
+            'class_total': len(class_ids),
+            'queued': queued,
+            'reused': reused,
+            'skipped': skipped,
+        })
+        try:
+            log_audit(
+                db,
+                action='academic.sync_all_student_scores',
+                status='success',
+                message='Đã lập lịch đồng bộ điểm CMS toàn bộ sinh viên',
+                user=None,
+                target_type='academic_score_scheduler',
+                target_id='daily-05-vn',
+                metadata=json_safe_value(result),
+            )
+        except Exception:
+            pass
+        return result
+    except Exception as exc:
+        db.rollback()
+        result = json_safe_value({
+            'ok': False,
+            'scheduled': True,
+            'timezone': 'Asia/Ho_Chi_Minh',
+            'schedule': '05:00',
+            'queued': queued,
+            'reused': reused,
+            'skipped': skipped,
+            'error': str(exc)[:1000],
+        })
+        try:
+            log_audit(
+                db,
+                action='academic.sync_all_student_scores',
+                status='failed',
+                error_type=AuditErrorType.SYSTEM_ERROR,
+                message=str(exc),
+                user=None,
+                target_type='academic_score_scheduler',
+                target_id='daily-05-vn',
+                metadata=json_safe_value(result),
+            )
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 

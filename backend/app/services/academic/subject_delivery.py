@@ -52,6 +52,65 @@ class AcademicSubjectDeliveryService:
     def _subject_code_from_item(item: dict[str, Any]) -> str:
         return str(item.get('psubject_code') or item.get('subject_code') or item.get('id') or '').strip().upper()
 
+    @staticmethod
+    def _mark_ap_reconcile_required(
+        metadata: dict[str, Any],
+        *,
+        previous_platform: str | None,
+        next_platform: str | None,
+        changed_at: datetime,
+    ) -> dict[str, Any]:
+        if previous_platform == 'udemy' and next_platform == 'cms':
+            metadata['ap_reconcile_required'] = True
+            metadata['ap_reconcile_reason'] = 'learning_platform_changed_udemy_to_cms'
+            metadata['ap_reconcile_required_at'] = changed_at.isoformat()
+            metadata.pop('ap_reconciled_at', None)
+            metadata.pop('ap_reconciled_by', None)
+        return metadata
+
+    def mark_ap_reconciled(
+        self,
+        *,
+        term_name: str,
+        branch: str,
+        subject_codes: list[str],
+        actor: str | None = None,
+    ) -> int:
+        normalized_term = str(term_name or '').strip()
+        normalized_branch = self.normalize_branch(branch)
+        codes = sorted({str(item or '').strip().upper() for item in subject_codes if str(item or '').strip()})
+        if not normalized_term or not codes:
+            return 0
+        rows = (
+            self.db.query(AcademicSubjectDelivery)
+            .join(AcademicSubject, AcademicSubject.id == AcademicSubjectDelivery.subject_id)
+            .join(AcademicTerm, AcademicTerm.id == AcademicSubjectDelivery.term_id)
+            .filter(
+                func.lower(AcademicTerm.term_name) == normalized_term.lower(),
+                func.lower(AcademicSubjectDelivery.branch) == normalized_branch,
+                AcademicSubject.subject_code.in_(codes),
+                AcademicSubjectDelivery.learning_platform == 'cms',
+                AcademicSubjectDelivery.active.is_(True),
+                AcademicSubject.active.is_(True),
+            )
+            .all()
+        )
+        reconciled_at = datetime.utcnow()
+        changed = 0
+        for row in rows:
+            metadata = dict(row.metadata_json or {}) if isinstance(row.metadata_json, dict) else {}
+            if not metadata.get('ap_reconcile_required'):
+                continue
+            metadata['ap_reconcile_required'] = False
+            metadata['ap_reconciled_at'] = reconciled_at.isoformat()
+            metadata['ap_reconciled_by'] = actor or 'ap-sync'
+            row.metadata_json = json_safe_value(metadata)
+            self.db.add(row)
+            changed += 1
+        if changed:
+            self.db.commit()
+        return changed
+
     def _previous_term(self, term: AcademicTerm, branch: str) -> AcademicTerm | None:
         candidates = (
             self.db.query(AcademicTerm)
@@ -457,6 +516,12 @@ class AcademicSubjectDeliveryService:
         })
         metadata['platform_history'] = history[-100:]
         metadata['platform_policy_version'] = 'udemy-subject-management/batch31'
+        metadata = self._mark_ap_reconcile_required(
+            metadata,
+            previous_platform=previous_platform,
+            next_platform=next_platform,
+            changed_at=now,
+        )
         delivery.learning_platform = next_platform
         delivery.configuration_source = source
         delivery.configured_by = actor
@@ -485,6 +550,12 @@ class AcademicSubjectDeliveryService:
             history.append({'from': previous_platform, 'to': next_platform, 'source': source, 'actor': actor, 'changed_at': now.isoformat()})
             metadata['platform_history'] = history[-100:]
             metadata['platform_policy_version'] = 'udemy-subject-management/batch31'
+            metadata = self._mark_ap_reconcile_required(
+                metadata,
+                previous_platform=previous_platform,
+                next_platform=next_platform,
+                changed_at=now,
+            )
             row.learning_platform = next_platform
             row.configuration_source = source
             row.configured_by = actor
