@@ -1,0 +1,76 @@
+name: Temporary Udemy teacher detail learning fix
+
+on:
+  push:
+    branches:
+      - feat/import-quiz-cms-old-su26
+    paths:
+      - .github/workflows/tmp-fix-udemy-teacher-detail-learning.yml
+
+permissions:
+  contents: write
+
+jobs:
+  red-green-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/import-quiz-cms-old-su26
+          fetch-depth: 0
+
+      - name: RED - reproduce Udemy teacher detail regression
+        shell: bash
+        run: |
+          set +e
+          python backend/app/tests/test_teacher_report_udemy_learning_local_contract.py
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "Regression unexpectedly passed before source fix"
+            exit 1
+          fi
+          echo "Confirmed Udemy teacher detail unbound learning regression"
+
+      - name: Apply minimal source fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/app/services/academic/teacher_report.py')
+          source = path.read_text(encoding='utf-8')
+          old = "            policy_summary: dict[str, Any] = {}\n            alerts: list[str] = []\n            if is_udemy:\n"
+          new = "            policy_summary: dict[str, Any] = {}\n            alerts: list[str] = []\n            learning: dict[str, Any] = {}\n            if is_udemy:\n"
+          if source.count(old) != 1:
+              raise SystemExit(f'Expected exactly one platform branch insertion point, got {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: GREEN - regression and adjacent teacher report contracts
+        run: |
+          python backend/app/tests/test_teacher_report_udemy_learning_local_contract.py
+          python backend/app/tests/test_teacher_report_outerjoin_contract.py
+          python -m py_compile backend/app/services/academic/teacher_report.py
+
+      - name: Update project context
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('MASTER_CONTEXT_DASH_CMS.md')
+          marker = '## 2026-09-11 — Udemy teacher detail 500 regression'
+          note = '''\n\n## 2026-09-11 — Udemy teacher detail 500 regression\n- Root cause for `GET /api/academic/training/teachers?...learning_platform=udemy&teacher_id=...&include_classes=true`: the Udemy branch never initialized the CMS-only local `learning`, but the common class payload later read `learning.get('learning_component_summaries')`. This raises `UnboundLocalError` and returns HTTP 500 for Udemy teacher drill-down.\n- Fixed by initializing `learning: dict[str, Any] = {}` before the Udemy/CMS platform branch. CMS behavior remains unchanged; Udemy returns an empty `learning_component_summaries`.\n- Regression coverage: `backend/app/tests/test_teacher_report_udemy_learning_local_contract.py` and existing outerjoin contract.\n'''
+          text = path.read_text(encoding='utf-8')
+          if marker not in text:
+              path.write_text(text.rstrip() + note, encoding='utf-8')
+          PY
+
+      - name: Commit source fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/academic/teacher_report.py MASTER_CONTEXT_DASH_CMS.md
+          git commit -m "fix: repair Udemy teacher detail report"
+          git push origin HEAD:feat/import-quiz-cms-old-su26
