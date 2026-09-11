@@ -66,14 +66,14 @@ jobs:
       - name: Update project context
         shell: bash
         run: |
-          cat >> MASTER_CONTEXT_DASH_CMS.md <<'EOF'
-
-## 2026-09-11 — Udemy plan date locale regression
-- Fixed generated Udemy plan template so Week deadline cells are explicit `dd/mm/yyyy` text (`@`) instead of locale-sensitive Excel date cells.
-- `03/10/2026` therefore remains 3 October 2026 even on workstations using an MM/DD locale.
-- Backend parser remains backward-compatible with real Excel date cells, serial values, `dd/mm/yyyy`, and ISO dates.
-- Regression coverage: `backend/app/tests/test_udemy_plan_date_locale_regression.py` plus existing batch32 Udemy plan suite.
-EOF
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('MASTER_CONTEXT_DASH_CMS.md')
+          note = '''\n\n## 2026-09-11 — Udemy plan date locale regression\n- Fixed generated Udemy plan template so Week deadline cells are explicit `dd/mm/yyyy` text (`@`) instead of locale-sensitive Excel date cells.\n- `03/10/2026` therefore remains 3 October 2026 even on workstations using an MM/DD locale.\n- Backend parser remains backward-compatible with real Excel date cells, serial values, `dd/mm/yyyy`, and ISO dates.\n- Regression coverage: `backend/app/tests/test_udemy_plan_date_locale_regression.py` plus existing batch32 Udemy plan suite.\n'''
+          text = path.read_text(encoding='utf-8')
+          if '## 2026-09-11 — Udemy plan date locale regression' not in text:
+              path.write_text(text.rstrip() + note, encoding='utf-8')
+          PY
 
       - name: Commit source fix
         shell: bash
