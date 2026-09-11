@@ -70,7 +70,7 @@ const allowedScopesByRole: Record<string, BusinessScopeType[]> = {
   DEPARTMENT_HEAD: ['DEPARTMENT'],
   SUBJECT_OWNER: ['SUBJECT', 'SUBJECT_VERSION'],
   QUESTION_REVIEWER: ['SUBJECT', 'SUBJECT_VERSION'],
-  CAMPUS_OWNER: ['CAMPUS', 'SYSTEM'],
+  CAMPUS_OWNER: ['BRANCH', 'CAMPUS', 'SYSTEM'],
   TEACHER_ASSIGNED: ['CAMPUS', 'SYSTEM'],
 }
 
@@ -81,6 +81,7 @@ const scopeLabel: Record<string, string> = {
   SUBJECT_VERSION: 'Phiên bản/kỳ môn',
   CHAPTER: 'Bài học',
   COURSE: 'Khóa học Open edX',
+  BRANCH: 'Hệ đào tạo (tất cả cơ sở)',
   CAMPUS: 'Cơ sở',
 }
 
@@ -154,7 +155,8 @@ export default function UsersPage() {
       .filter((row) => canScope(requiredPermission, row.target))
       .filter((row) => needle ? [row.id, row.label, row.path].some((value) => String(value || '').toLowerCase().includes(needle)) : true)
       .map(({ target: _target, ...row }) => row)
-    if (form.scope_type === 'SYSTEM') return isSystemAdmin ? [{ id: '*', label: 'Toàn hệ thống', path: 'SYSTEM' }] : []
+    if (form.scope_type === 'SYSTEM') return isSystemAdmin ? [{ id: '*', label: 'Toàn hệ thống (Poly và PTCD)', path: 'SYSTEM' }] : []
+    if (form.scope_type === 'BRANCH') return isSystemAdmin ? [{ id: 'poly', label: 'Tất cả cơ sở · Poly', path: 'BRANCH / POLY' }, { id: 'ptcd', label: 'Tất cả cơ sở · PTCĐ', path: 'BRANCH / PTCD' }] : []
     if (form.scope_type === 'DEPARTMENT') return filter(departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}`, target: { scopeType: 'DEPARTMENT' as const, scopeId: d.id, departmentId: d.id } })))
     if (form.scope_type === 'SUBJECT') return filter(subjects.map((subject) => ({ id: subject.id, label: `${subject.code} · ${subject.name}`, path: `Môn / ${subject.code}`, target: { scopeType: 'SUBJECT' as const, scopeId: subject.id, subjectId: subject.id, departmentId: subject.department_id } })))
     if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((offering) => ({ id: offering.id, label: `${offering.code} · ${offering.name || offering.version_code}`, path: `Version / ${offering.code}`, target: { scopeType: 'SUBJECT_VERSION' as const, scopeId: offering.id, subjectOfferingId: offering.id, subjectId: offering.subject_id, departmentId: offering.department_id || undefined } })))

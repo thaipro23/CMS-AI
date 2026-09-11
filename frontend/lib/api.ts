@@ -3391,6 +3391,16 @@ export async function getAcademicSubjectDeliveries(
   )
 }
 
+export async function previewAcademicSubjectPlatformImport(headers: HeadersInit, file: File, termId: string, branch: string): Promise<import('../types').AcademicSubjectPlatformImportPreview> {
+  const form = new FormData()
+  form.append('file', file); form.append('term_id', termId); form.append('branch', branch)
+  return parseResponse(await apiFetch(`${API}/academic/subject-deliveries/platform/import/preview`, { method: 'POST', headers: withoutContentType(headers), body: form }))
+}
+
+export async function applyAcademicSubjectPlatformImport(headers: HeadersInit, previewToken: string): Promise<{ ok: boolean; message: string; updated: number; subjects: number }> {
+  return parseResponse(await apiFetch(`${API}/academic/subject-deliveries/platform/import/apply`, { method: 'POST', headers, body: JSON.stringify({ preview_token: previewToken }) }))
+}
+
 export async function createAcademicSubjectCatalogRefreshJob(
   headers: HeadersInit,
   payload: { termId: string; blockId?: string | null; branch: string },

@@ -213,6 +213,8 @@ def _inherited_course_mappings_for_classes_fast(
         best: AcademicCourseMapping | None = None
         best_rank: int | None = None
         for mapping in candidates:
+            if not self._course_mapping_org_is_valid(mapping, cls):
+                continue
             rank = rank_by_scope.get((mapping.block_id, mapping.campus, mapping.branch))
             if rank is None:
                 continue

@@ -379,7 +379,13 @@ class AcademicService:
             if decision.subject_codes:
                 access_conditions.append(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
             if decision.campus_codes:
-                access_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
+                if decision.campus_branch_pairs:
+                    access_conditions.append(or_(*[
+                        (func.lower(AcademicClass.branch) == branch) & (func.lower(AcademicClass.campus) == campus)
+                        for branch, campus in decision.campus_branch_pairs
+                    ]))
+                else:
+                    access_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
             if not access_conditions:
                 return {'items': [], 'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0, 'has_next': False, 'summary': {'learning_platform': platform}}
             query = query.filter(or_(*access_conditions))
@@ -559,7 +565,13 @@ class AcademicService:
         if decision.subject_codes:
             access_conditions.append(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
         if decision.campus_codes:
-            access_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
+            if decision.campus_branch_pairs:
+                access_conditions.append(or_(*[
+                    (func.lower(AcademicClass.branch) == branch) & (func.lower(AcademicClass.campus) == campus)
+                    for branch, campus in decision.campus_branch_pairs
+                ]))
+            else:
+                access_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
         if not access_conditions:
             return query.filter(False)
         return query.filter(or_(*access_conditions))
@@ -2021,6 +2033,20 @@ class AcademicService:
         """
         suggested_parsed = _parse_openedx_course_id(suggested)
         placeholder_org = bool(suggested_parsed and str(suggested_parsed.get('org') or '').upper() == 'ORG')
+        expected_org = str((suggested_parsed or {}).get('org') or '').upper()
+        term_candidates = _term_run_candidates(term)
+        subject_key = _normalize_text_key(subject.subject_code)
+
+        def safe_candidate(course_id: str) -> bool:
+            parsed = _parse_openedx_course_id(course_id)
+            return bool(
+                parsed
+                and expected_org and not placeholder_org
+                and parsed['org'].upper() == expected_org
+                and _normalize_text_key(parsed['course']) == subject_key
+                and _clean_token(parsed['run']) in term_candidates
+            )
+
         if placeholder_org:
             exact_candidate, exact_count, exact_title, exact_source = None, 0, None, 'neutral_org_suggestion'
         else:
@@ -2028,7 +2054,7 @@ class AcademicService:
                 suggested,
                 allow_external=allow_external,
             )
-        if exact_candidate and exact_count == 1:
+        if exact_candidate and exact_count == 1 and safe_candidate(exact_candidate):
             return {
                 'candidate': exact_candidate,
                 'count': 1,
@@ -2042,8 +2068,6 @@ class AcademicService:
         if not subject_code:
             return {'candidate': None, 'count': 0, 'title': None, 'source': exact_source or 'empty_subject_code', 'suggested_openedx_course_id': suggested, 'candidates': []}
 
-        term_candidates = _term_run_candidates(term)
-        subject_key = _normalize_text_key(subject_code)
         seen: set[str] = set()
         raw_candidates: list[dict[str, Any]] = []
 
@@ -2072,36 +2096,8 @@ class AcademicService:
                 seen.add(value.lower())
                 raw_candidates.append({'course_id': value, 'display_name': str(title or '') or None, 'source': 'course_cache_search'})
 
-        def _subject_matches(course_id: str) -> bool:
-            parsed = _parse_openedx_course_id(course_id)
-            if parsed:
-                return _normalize_text_key(parsed['course']) == subject_key
-            return f'+{subject_key}+' in _normalize_text_key(course_id)
-
-        def _term_score(item: dict[str, Any]) -> int:
-            cid = str(item.get('course_id') or '')
-            title = str(item.get('display_name') or '')
-            parsed = _parse_openedx_course_id(cid)
-            run_key = _clean_token(parsed['run']) if parsed else ''
-            haystack = _clean_token(f'{cid} {title}')
-            if term_candidates and run_key in term_candidates:
-                return 3
-            if term_candidates and any(candidate in haystack for candidate in term_candidates):
-                return 2
-            # When CMS has exactly one course for this subject, allow mapping even
-            # if the run naming convention is not recognized. validate_* will keep
-            # the term mismatch as a warning, not a hard failure.
-            return 1
-
-        subject_matches = [item for item in raw_candidates if _subject_matches(str(item.get('course_id') or ''))]
-        if not subject_matches:
-            return {'candidate': None, 'count': 0, 'title': None, 'source': exact_source or 'cms_openedx_api_search', 'suggested_openedx_course_id': suggested, 'candidates': raw_candidates[:10]}
-
-        preferred = [item for item in subject_matches if _term_score(item) >= 2]
-        candidates = preferred if preferred else subject_matches
-        unique = {str(item['course_id']).lower(): item for item in candidates}
-        candidates = list(unique.values())
-        candidates.sort(key=lambda item: (-_term_score(item), str(item.get('course_id') or '')))
+        candidates = [item for item in raw_candidates if safe_candidate(str(item.get('course_id') or ''))]
+        candidates.sort(key=lambda item: str(item.get('course_id') or ''))
 
         if len(candidates) == 1:
             item = candidates[0]
@@ -2136,7 +2132,7 @@ class AcademicService:
             branch=branch_value,
         ).first()
         if current:
-            return current
+            return current if self._course_mapping_org_is_valid(current) else None
         validation = self.validate_course_mapping_payload(
             term_id=term_id,
             subject_id=subject_id,
@@ -2195,6 +2191,14 @@ class AcademicService:
             branch=branch_value,
         ).first()
         suggested = self.suggested_course_id_for_scope(term_id, subject_id, branch=branch)
+        if current and not self._course_mapping_org_is_valid(current):
+            return {
+                'ok': False,
+                'status': 'invalid_org_match',
+                'message': 'Mapping hiện tại sai org của nhánh. Admin cần kiểm tra và sửa mapping trước khi auto map.',
+                'suggested_openedx_course_id': suggested,
+                'mapping': self._course_mapping_item(current),
+            }
         if current:
             return {
                 'ok': True,
@@ -2565,6 +2569,8 @@ class AcademicService:
             }
             if platform == 'cms':
                 mapping = mapping_by_subject.get(subject_id)
+                if mapping and any(not self._course_mapping_org_is_valid(mapping, cls) for cls in bucket['classes']):
+                    mapping = None
                 suggested = self.suggested_course_id_for_scope(term_id, subject_id, branch=branch or subject.branch) if term_id else None
                 parsed_suggested = _parse_openedx_course_id(suggested) if suggested else None
                 if parsed_suggested and str(parsed_suggested.get('org') or '').upper() == 'ORG':
@@ -3120,8 +3126,7 @@ class AcademicService:
             'branch': mapping.branch,
             'openedx_course_id': mapping.openedx_course_id,
             'openedx_course_title': mapping.openedx_course_title,
-            'validation_status': mapping.validation_status,
-            'validation_json': mapping.validation_json,
+            **self._mapping_validation_for_display(mapping),
             'validated_at': mapping.validated_at,
             'note': mapping.note,
             'active': mapping.active,
@@ -3150,8 +3155,7 @@ class AcademicService:
             'openedx_cohort_name': mapping.openedx_cohort_name,
             'openedx_course_title': mapping.openedx_course_title,
             'mapping_source': mapping.mapping_source,
-            'validation_status': mapping.validation_status,
-            'validation_json': mapping.validation_json,
+            **self._mapping_validation_for_display(mapping, cls=cls),
             'validated_at': mapping.validated_at,
             'note': mapping.note,
             'active': mapping.active,
@@ -3218,11 +3222,53 @@ class AcademicService:
 
     def _course_org_for_branch(self, branch: str | None) -> str | None:
         branch_value = str(branch or '').strip().lower()
+        # These academic branches have fixed Open edX organizations. Legacy
+        # deployment settings must not reverse their enrollment boundaries.
+        required_org = {'ptcd': 'FPS', 'poly': 'FPL'}.get(branch_value)
+        if required_org:
+            return required_org
         mapped = self._configured_openedx_org_map().get(branch_value) if branch_value else None
         if mapped:
             return mapped
         default_org = str(getattr(settings, 'academic_default_openedx_course_org', '') or '').strip().upper()
         return default_org if re.fullmatch(r'[A-Z0-9._-]{1,30}', default_org) else None
+
+    def _course_org_check(self, course_id: str, *, branch: str | None = None, term_id: str | None = None, subject_id: str | None = None) -> dict[str, Any] | None:
+        branch_value = str(branch or '').strip().lower()
+        if not branch_value:
+            subject = self.db.get(AcademicSubject, subject_id) if subject_id else None
+            term = self.db.get(AcademicTerm, term_id) if term_id else None
+            branch_value = str(getattr(subject, 'branch', None) or getattr(term, 'branch', None) or '').strip().lower()
+        expected = self._course_org_for_branch(branch_value)
+        if not expected:
+            return None
+        actual = str((_parse_openedx_course_id(course_id) or {}).get('org') or '').upper()
+        matches = actual == expected
+        return _check('org_match', 'pass' if matches else 'fail',
+                      f'Course org {actual or "(trống)"} {"khớp" if matches else "không khớp"} nhánh {branch_value.upper()}: yêu cầu {expected}.',
+                      {'branch': branch_value, 'expected_org': expected, 'actual_org': actual}, blocking=not matches)
+
+    def _course_mapping_org_is_valid(self, mapping: AcademicCourseMapping | AcademicClassCourseMapping, cls: AcademicClass | None = None) -> bool:
+        check = self._course_org_check(
+            mapping.openedx_course_id,
+            branch=getattr(cls, 'branch', None) if cls else getattr(mapping, 'branch', None),
+            term_id=cls.term_id if cls else getattr(mapping, 'term_id', None),
+            subject_id=cls.subject_id if cls else getattr(mapping, 'subject_id', None),
+        )
+        return not check or not check['blocking']
+
+    def _mapping_validation_for_display(self, mapping, *, cls: AcademicClass | None = None) -> dict[str, Any]:
+        check = self._course_org_check(
+            mapping.openedx_course_id,
+            branch=getattr(cls, 'branch', None) if cls else getattr(mapping, 'branch', None),
+            term_id=cls.term_id if cls else getattr(mapping, 'term_id', None),
+            subject_id=cls.subject_id if cls else getattr(mapping, 'subject_id', None),
+        )
+        if check and check['blocking']:
+            previous = mapping.validation_json if isinstance(mapping.validation_json, dict) else {}
+            checks = [item for item in previous.get('checks', []) if item.get('code') != 'org_match']
+            return {'validation_status': 'invalid_org_match', 'validation_json': _validation_result([*checks, check], parsed=_parse_openedx_course_id(mapping.openedx_course_id))}
+        return {'validation_status': mapping.validation_status, 'validation_json': mapping.validation_json}
 
     def suggested_course_id_for_scope(self, term_id: str, subject_id: str, *, branch: str | None = None, org: str | None = None) -> str:
         term = self.db.get(AcademicTerm, term_id)
@@ -3250,6 +3296,10 @@ class AcademicService:
             checks.append(_check('course_id_format', 'fail', 'Course ID phải đúng dạng course-v1:ORG+COURSE+RUN.'))
             return _validation_result(checks, suggested=suggested, parsed=None)
         checks.append(_check('course_id_format', 'pass', 'Course ID đúng định dạng Open edX.', parsed, blocking=False))
+        cls = self.db.get(AcademicClass, class_id) if class_id else None
+        org_check = self._course_org_check(openedx_course_id, branch=getattr(cls, 'branch', None) or branch, term_id=term_id, subject_id=subject_id)
+        if org_check:
+            checks.append(org_check)
         if subject:
             if _normalize_text_key(parsed['course']) == _normalize_text_key(subject.subject_code):
                 checks.append(_check('subject_match', 'pass', f'Course part {parsed["course"]} khớp mã môn {subject.subject_code}.', blocking=False))
@@ -3388,6 +3438,8 @@ class AcademicService:
         def priority(cls: AcademicClass, mapping: AcademicCourseMapping) -> int | None:
             if mapping.term_id != cls.term_id or mapping.subject_id != cls.subject_id:
                 return None
+            if not self._course_mapping_org_is_valid(mapping, cls):
+                return None
             order = [
                 (cls.block_id, cls.campus, cls.branch),
                 (cls.block_id, None, cls.branch),
@@ -3428,8 +3480,10 @@ class AcademicService:
             AcademicClassCourseMapping.active.is_(True),
         ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast(), AcademicClassCourseMapping.created_at.desc().nullslast()).all()
         direct: dict[str, AcademicClassCourseMapping] = {}
+        classes_by_id = {str(cls.id): cls for cls in valid}
         for row in rows:
-            direct.setdefault(str(row.class_id), row)
+            if self._course_mapping_org_is_valid(row, classes_by_id[str(row.class_id)]):
+                direct.setdefault(str(row.class_id), row)
         inherited = self.inherited_course_mappings_for_classes(valid)
         result: dict[str, AcademicClassCourseMapping | AcademicCourseMapping] = {}
         for cls in valid:
@@ -4046,4 +4100,3 @@ class AcademicService:
 
     def import_openedx_user_mappings(self, records: list[dict[str, Any]], *, requested_by: str | None = None) -> dict[str, Any]:
             return self._academic_identity_workflow().import_openedx_user_mappings(records, requested_by=requested_by)
-

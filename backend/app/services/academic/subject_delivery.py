@@ -25,7 +25,7 @@ from app.services.ap_academic_sync import APAcademicClient, AcademicImportServic
 class AcademicSubjectDeliveryService:
     """Term/block learning-platform catalog for CMS and Udemy subjects."""
 
-    VALID_PLATFORMS = {None, 'cms', 'udemy'}
+    VALID_PLATFORMS = {None, 'cms', 'udemy', 'other'}
     CMS_JOB_TYPES = {'cms_sync_check', 'cms_enrollment_sync', 'learning_sync', 'full_cms_sync'}
 
     def __init__(self, db: Session):
@@ -42,8 +42,10 @@ class AcademicSubjectDeliveryService:
         normalized = str(value).strip().lower()
         if normalized in {'', 'none', 'null', 'unassigned'}:
             return None
-        if normalized not in {'cms', 'udemy'}:
-            raise HTTPException(status_code=422, detail='Nền tảng chỉ nhận cms, udemy hoặc chưa chọn.')
+        if normalized == 'khác':
+            normalized = 'other'
+        if normalized not in {'cms', 'udemy', 'other'}:
+            raise HTTPException(status_code=422, detail='Nền tảng chỉ nhận cms, udemy, other (Khác) hoặc chưa chọn.')
         return normalized
 
     @staticmethod
@@ -105,7 +107,7 @@ class AcademicSubjectDeliveryService:
         for subject_id, values in values_by_subject.items():
             if len(values) == 1:
                 platform = next(iter(values))
-                if platform in {'cms', 'udemy'}:
+                if platform in {'cms', 'udemy', 'other'}:
                     inherited[subject_id] = platform
         return previous_term, inherited
 
@@ -418,6 +420,7 @@ class AcademicSubjectDeliveryService:
             'total': total,
             'cms_count': sum(1 for item in all_items if item.get('platform_consistent', True) and item.get('learning_platform') == 'cms'),
             'udemy_count': sum(1 for item in all_items if item.get('platform_consistent', True) and item.get('learning_platform') == 'udemy'),
+            'other_count': sum(1 for item in all_items if item.get('platform_consistent', True) and item.get('learning_platform') == 'other'),
             'unassigned_count': sum(1 for item in all_items if item.get('platform_consistent', True) and item.get('learning_platform') is None),
             'mixed_count': sum(1 for item in all_items if not item.get('platform_consistent', True)),
             'class_count': sum(int(item.get('class_count') or 0) for item in all_items),

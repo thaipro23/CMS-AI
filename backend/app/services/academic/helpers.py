@@ -209,3 +209,4 @@ class AccessDecision:
     teacher_ids: set[str]
     subject_codes: set[str]
     campus_codes: set[str]
+    campus_branch_pairs: set[tuple[str, str]] | None = None

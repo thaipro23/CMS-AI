@@ -189,9 +189,16 @@ class AcademicTeacherReportWorkflowService:
         campuses = {str(code or '').strip().lower() for code in (decision.campus_codes or set()) if str(code or '').strip()}
         if campuses:
             item_campuses = {str(item.get('campus') or '').strip().lower()}
+            item_branches = {str(item.get('branch') or '').strip().lower()}
+            item_pairs = {(branch, campus) for branch, campus in (decision.campus_branch_pairs or set())}
             for cls in item.get('classes') or []:
                 item_campuses.add(str(cls.get('campus') or '').strip().lower())
-            if item_campuses.intersection(campuses):
+                item_branches.add(str(cls.get('branch') or '').strip().lower())
+            if item_pairs:
+                candidates = {(branch, campus) for branch in item_branches if branch for campus in item_campuses if campus}
+                if candidates.intersection(item_pairs):
+                    return True
+            elif item_campuses.intersection(campuses):
                 return True
         subject_codes = {str(code or '').strip().lower() for code in (decision.subject_codes or set()) if str(code or '').strip()}
         if subject_codes:
@@ -1645,13 +1652,11 @@ class AcademicTeacherReportWorkflowService:
                 AcademicClassStudent.metadata_json,
                 AcademicStudent,
                 OpenEdXUserMapping,
-    UdemyStudentProgress,
             ).join(
                 AcademicStudent,
                 AcademicStudent.id == AcademicClassStudent.student_id,
             ).outerjoin(
                 OpenEdXUserMapping,
-    UdemyStudentProgress,
                 OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
             ).filter(AcademicClassStudent.class_id.in_(class_ids))
             watch_rows: list[dict[str, Any]] = []

@@ -26,7 +26,7 @@ type AppContextValue = {
   authHeaders: (json?: boolean) => HeadersInit
 }
 
-type ScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'CAMPUS' | 'CLASS' | 'COURSE' | 'BANK_VERSION' | 'RELEASE'
+type ScopeType = 'SYSTEM' | 'BRANCH' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'CAMPUS' | 'CLASS' | 'COURSE' | 'BANK_VERSION' | 'RELEASE'
 
 type ScopeTarget = {
   scopeType: ScopeType
@@ -36,6 +36,7 @@ type ScopeTarget = {
   subjectOfferingId?: string
   chapterId?: string
   campus?: string
+  branch?: string
   classId?: string
   courseId?: string
 }
@@ -95,12 +96,13 @@ function normalized(value?: string | null) {
 function assignmentCoversTarget(assignment: EffectiveAssignment, target: ScopeTarget) {
   const scopeType = String(assignment.scope_type || '').toUpperCase()
   const scopeId = normalized(assignment.scope_id)
-  if (scopeType === 'SYSTEM' || scopeId === '*') return true
+  if (scopeType === 'SYSTEM') return true
+  if (scopeType === 'BRANCH') return scopeId === normalized(target.branch || (target.scopeType === 'BRANCH' ? target.scopeId : ''))
   if (scopeType === 'DEPARTMENT') return scopeId === normalized(target.departmentId || (target.scopeType === 'DEPARTMENT' ? target.scopeId : ''))
   if (scopeType === 'SUBJECT') return scopeId === normalized(target.subjectId || (target.scopeType === 'SUBJECT' ? target.scopeId : ''))
   if (scopeType === 'SUBJECT_VERSION') return scopeId === normalized(target.subjectOfferingId || (target.scopeType === 'SUBJECT_VERSION' ? target.scopeId : ''))
   if (scopeType === 'CHAPTER') return scopeId === normalized(target.chapterId || (target.scopeType === 'CHAPTER' ? target.scopeId : ''))
-  if (scopeType === 'CAMPUS') return scopeId === normalized(target.campus || (target.scopeType === 'CAMPUS' ? target.scopeId : ''))
+  if (scopeType === 'CAMPUS') return scopeId !== '*' && scopeId === normalized(target.campus || (target.scopeType === 'CAMPUS' ? target.scopeId : ''))
   if (scopeType === 'CLASS') return scopeId === normalized(target.classId || (target.scopeType === 'CLASS' ? target.scopeId : ''))
   if (scopeType === 'COURSE') return scopeId === normalized(target.courseId || (target.scopeType === 'COURSE' ? target.scopeId : ''))
   if (scopeType === 'BANK_VERSION') return scopeId === normalized(target.scopeType === 'BANK_VERSION' ? target.scopeId : '')

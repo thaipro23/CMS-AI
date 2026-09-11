@@ -465,7 +465,13 @@ class AcademicIdentityReconciliationWorkflowService:
             if not decision.unrestricted and not class_id_value:
                 scope_conditions = []
                 if decision.campus_codes:
-                    scope_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
+                    if decision.campus_branch_pairs:
+                        scope_conditions.append(or_(*[
+                            (func.lower(AcademicClass.branch) == branch) & (func.lower(AcademicClass.campus) == campus)
+                            for branch, campus in decision.campus_branch_pairs
+                        ]))
+                    else:
+                        scope_conditions.append(func.lower(AcademicClass.campus).in_(decision.campus_codes))
                 if decision.subject_codes:
                     scope_conditions.append(func.lower(AcademicSubject.subject_code).in_(decision.subject_codes))
                 if decision.teacher_ids:

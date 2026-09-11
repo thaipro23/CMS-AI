@@ -2,7 +2,7 @@
 
 import { userFacingError } from '../../lib/userFacingError'
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getAcademicApSyncJobs,
   getAcademicBulkOperationJobs,
@@ -85,33 +85,46 @@ function JobsContent() {
   const [message, setMessage] = useState<ActionMessageData | null>(null)
   const [quizOpen, setQuizOpen] = useState(false)
   const [selectedJob, setSelectedJob] = useState<OperationRow | null>(null)
+  const loadGeneration = useRef(0)
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current
     setLoading(true)
     try {
       setMessage(null)
       const headers = authHeaders()
       const statusParam = (status === 'all' ? 'all' : status) as JobsStatusFilter
-      const [opJobs, nextQuizInstances, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs, nextBulkOperationJobs, nextAnalyticsOps] = await Promise.all([
+      // The operational tables are the first paint. The two large/optional
+      // endpoints below must not hold the page hostage when they are slow.
+      const [opJobs, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs, nextBulkOperationJobs] = await Promise.all([
         getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }).catch(() => ({ items: [] as BankOperationJob[] })),
-        getCourseQuizInstances(headers, { limit: 100 }).catch(() => [] as CourseQuizInstance[]),
         getAcademicApSyncJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicSyncRun[]),
         getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 80 }).catch(() => [] as AcademicClassSyncJob[]),
         getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicTeacherReportJob[]),
         getAcademicBulkOperationJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicBulkOperationJob[]),
-        getAnalyticsOpsStatus(headers).catch(() => null),
       ])
+      if (generation !== loadGeneration.current) return
       setOperationJobs(opJobs.items || [])
-      setQuizInstances(nextQuizInstances)
       setAcademicRuns(nextAcademicRuns || [])
       setClassSyncJobs(nextClassSyncJobs || [])
       setTeacherReportJobs(nextTeacherReportJobs || [])
       setBulkOperationJobs(nextBulkOperationJobs || [])
-      setAnalyticsOps(nextAnalyticsOps)
-    } catch (error) {
-      setMessage(toUserError(error))
-    } finally {
       setLoading(false)
+
+      // Supplemental data is allowed to arrive independently after the first
+      // table render. A refresh started later owns the state and stale results
+      // are discarded.
+      getCourseQuizInstances(headers, { limit: 100 }).then((items) => {
+        if (generation === loadGeneration.current) setQuizInstances(items || [])
+      }).catch(() => {})
+      getAnalyticsOpsStatus(headers).then((value) => {
+        if (generation === loadGeneration.current) setAnalyticsOps(value)
+      }).catch(() => {})
+    } catch (error) {
+      if (generation === loadGeneration.current) {
+        setMessage(toUserError(error))
+        setLoading(false)
+      }
     }
   }, [authHeaders, status])
 

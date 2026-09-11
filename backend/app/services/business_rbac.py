@@ -73,6 +73,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 }
 
 
+VALID_BRANCH_CODES = {'poly', 'ptcd'}
+BRANCH_LABELS = {'poly': 'Poly', 'ptcd': 'PTCD'}
+
 CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS: set[str] = {
     'academic.catalog.manage', 'campus_owner.assign', 'rbac.view',
 }
@@ -83,7 +86,7 @@ def _is_all_campus_assignment(assignment: Any) -> bool:
     scope_type = str(getattr(assignment, 'scope_type', '') or '').upper()
     scope_id = str(getattr(assignment, 'scope_id', '') or '').strip()
     return role_code in {CAMPUS_OWNER, CAMPUS_MANAGER} and (
-        scope_type == 'SYSTEM' or (scope_type == 'CAMPUS' and scope_id == '*')
+        scope_type == 'SYSTEM' or (scope_type == 'BRANCH' and scope_id.lower() in VALID_BRANCH_CODES)
     )
 
 LEGACY_PERMISSION_BRIDGE: dict[str, set[str]] = {
@@ -323,9 +326,7 @@ class BusinessRBACService:
         for assignment in self.active_assignments_for_actor(user):
             if assignment.role_code == SYSTEM_ADMIN and not system_admin:
                 continue
-            permissions.update(ROLE_PERMISSIONS.get(assignment.role_code, set()))
-            if _is_all_campus_assignment(assignment):
-                permissions.update(CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS)
+            permissions.update(self.assignment_permission_codes(assignment))
         if self._has_ap_teacher_assignment(user):
             permissions.update(ROLE_PERMISSIONS[TEACHER_ASSIGNED])
         return permissions
@@ -383,6 +384,8 @@ class BusinessRBACService:
             if scope:
                 return scope
             return EntityScope('CHAPTER', scope_id, chapter_id=scope_id)
+        if normalized == 'BRANCH':
+            return EntityScope('BRANCH', scope_id.lower())
         if normalized == 'CAMPUS':
             return EntityScope('CAMPUS', scope_id)
         if normalized == 'CLASS':
@@ -402,11 +405,15 @@ class BusinessRBACService:
         return EntityScope(normalized, scope_id)
 
     def _assignment_covers(self, assignment: UserRoleAssignment, target: EntityScope) -> bool:
+        if assignment.scope_type.upper() == 'CAMPUS' and assignment.scope_id == '*':
+            return False
         assignment_scope = self.entity_scope(assignment.scope_type, assignment.scope_id)
         if assignment_scope.scope_type == 'SYSTEM' or assignment.role_code == SYSTEM_ADMIN:
             return True
         if target.scope_type == 'SYSTEM':
             return False
+        if assignment_scope.scope_type == 'BRANCH':
+            return self._scope_covers_scope(assignment_scope, target)
         if assignment_scope.scope_type == 'DEPARTMENT':
             return bool(target.department_id and target.department_id == assignment_scope.department_id)
         if assignment_scope.scope_type == 'SUBJECT':
@@ -432,8 +439,6 @@ class BusinessRBACService:
                 continue
             if permission not in self.assignment_permission_codes(assignment):
                 continue
-            if _is_all_campus_assignment(assignment):
-                return True
             if self._assignment_covers(assignment, target):
                 return True
         return False
@@ -460,7 +465,7 @@ class BusinessRBACService:
                 str(scope_type).upper() == 'CAMPUS'
                 and bool(str(scope_id or '').strip())
                 and str(scope_id).strip() != '*'
-                and self.has_any_business_permission(actor, 'campus_owner.assign')
+                and self.has_permission(actor, 'campus_owner.assign', self.entity_scope('CAMPUS', scope_id))
             )
         target = self.entity_scope(scope_type, scope_id)
         if role_code == SUBJECT_OWNER:
@@ -481,19 +486,25 @@ class BusinessRBACService:
             raise HTTPException(status_code=400, detail='Chủ môn cần được gán cho một môn hoặc phiên bản môn.')
         if role_code == QUESTION_REVIEWER and scope_type not in {'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER'}:
             raise HTTPException(status_code=400, detail='Người duyệt cần được gán cho một môn, phiên bản môn hoặc bài học.')
-        if role_code in {CAMPUS_MANAGER, CAMPUS_OWNER} and scope_type not in {'CAMPUS', 'SYSTEM'}:
-            raise HTTPException(status_code=400, detail='Chủ cơ sở cần được gán cho từng cơ sở hoặc tất cả cơ sở.')
+        if role_code in {CAMPUS_MANAGER, CAMPUS_OWNER} and scope_type not in {'CAMPUS', 'BRANCH', 'SYSTEM'}:
+            raise HTTPException(status_code=400, detail='Chủ cơ sở cần được gán cho cơ sở, hệ đào tạo hoặc toàn hệ thống.')
         if role_code == TEACHER_ASSIGNED and scope_type not in {'CLASS', 'CAMPUS', 'SYSTEM'}:
             raise HTTPException(status_code=400, detail='Giảng viên chỉ xem được các lớp do AP phân công trong phạm vi được giao.')
         if scope_type == 'SYSTEM':
             return
+        if scope_type == 'BRANCH':
+            if scope_id.lower() not in VALID_BRANCH_CODES:
+                raise HTTPException(status_code=400, detail='Hệ đào tạo phải là Poly hoặc PTCD.')
+            return
         if scope_type == 'CAMPUS':
             if scope_id == '*':
-                return
+                raise HTTPException(status_code=400, detail='Phạm vi tất cả cơ sở cũ chưa xác định hệ đào tạo. Hãy cấp lại BRANCH Poly/PTCD hoặc SYSTEM.')
             from app.models.academic import AcademicCampus
             exists = self.db.query(AcademicCampus.id).filter(AcademicCampus.campus_code.ilike(scope_id)).first()
             if not exists:
                 raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở để gán quyền')
+            if len(self._campus_branches(scope_id)) != 1:
+                raise HTTPException(status_code=400, detail='Mã cơ sở chưa xác định duy nhất hệ đào tạo; cần cấp lại phạm vi tường minh.')
             return
         if scope_type == 'CLASS':
             from app.models.academic import AcademicClass
@@ -516,6 +527,8 @@ class BusinessRBACService:
             raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
         scope_type = scope_type.strip().upper()
         scope_id = (scope_id or '*').strip() or '*'
+        if scope_type in {'BRANCH', 'CAMPUS'}:
+            scope_id = scope_id.lower()
         self._validate_assignment_scope(role_code, scope_type, scope_id)
         if not self.can_grant(actor, role_code, scope_type, scope_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được cấp vai trò này trong phạm vi đã chọn.')
@@ -568,6 +581,8 @@ class BusinessRBACService:
             raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
         scope_type = scope_type.strip().upper()
         normalized_ids = list(dict.fromkeys(((value or '*').strip() or '*') for value in scope_ids))
+        if scope_type in {'BRANCH', 'CAMPUS'}:
+            normalized_ids = list(dict.fromkeys(value.lower() for value in normalized_ids))
         if not normalized_ids:
             raise HTTPException(status_code=400, detail='Cần chọn ít nhất một phạm vi')
         if len(normalized_ids) > 200:
@@ -671,7 +686,9 @@ class BusinessRBACService:
     def scope_label(self, scope_type: str, scope_id: str) -> str:
         scope_type = scope_type.upper()
         if scope_type == 'SYSTEM':
-            return 'Toàn hệ thống'
+            return 'Toàn hệ thống (Poly và PTCD)'
+        if scope_type == 'BRANCH':
+            return f'Tất cả cơ sở · {BRANCH_LABELS.get(scope_id.lower(), scope_id)}'
         if scope_type == 'DEPARTMENT':
             item = self.db.get(Department, scope_id)
             return f'{item.code} · {item.name}' if item else scope_id
@@ -686,7 +703,7 @@ class BusinessRBACService:
             return item.title if item else scope_id
         if scope_type == 'CAMPUS':
             if scope_id == '*':
-                return 'Tất cả cơ sở'
+                return 'Phạm vi cũ chưa xác định hệ đào tạo · Cần cấp lại quyền'
             try:
                 from app.models.academic import AcademicCampus
                 item = self.db.query(AcademicCampus).filter(AcademicCampus.campus_code.ilike(scope_id)).first()
@@ -697,6 +714,8 @@ class BusinessRBACService:
 
     @staticmethod
     def assignment_permission_codes(item: UserRoleAssignment) -> list[str]:
+        if str(item.scope_type).upper() == 'CAMPUS' and str(item.scope_id).strip() == '*':
+            return []
         permissions = set(ROLE_PERMISSIONS.get(item.role_code, set()))
         if _is_all_campus_assignment(item):
             permissions.update(CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS)
@@ -736,6 +755,15 @@ class BusinessRBACService:
             return False
         if parent.scope_type == child.scope_type and parent.scope_id == child.scope_id:
             return True
+        if parent.scope_type == 'BRANCH':
+            branch = parent.scope_id.lower()
+            if branch not in VALID_BRANCH_CODES:
+                return False
+            if child.scope_type == 'BRANCH':
+                return branch == child.scope_id.lower()
+            if child.scope_type == 'CAMPUS' and child.scope_id != '*':
+                return self._campus_branches(child.scope_id) == {branch}
+            return False
         if parent.scope_type == 'DEPARTMENT':
             return bool(child.department_id and child.department_id == parent.department_id)
         if parent.scope_type == 'SUBJECT':
@@ -747,7 +775,7 @@ class BusinessRBACService:
         if parent.scope_type == 'COURSE':
             return bool(child.course_id and child.course_id == parent.course_id)
         if parent.scope_type == 'CAMPUS':
-            return child.scope_type == 'CAMPUS' and (parent.scope_id == '*' or parent.scope_id.lower() == child.scope_id.lower())
+            return child.scope_type == 'CAMPUS' and parent.scope_id != '*' and parent.scope_id.lower() == child.scope_id.lower()
         return False
 
     def is_visible_scope(self, user: Any, scope_type: str, scope_id: str | None = '*') -> bool:
@@ -775,24 +803,93 @@ class BusinessRBACService:
             )
 
 
-    def accessible_campus_codes(self, user: Any) -> set[str] | None:
-        """Academic campus visibility for teacher-management.
+    def _campus_branches(self, campus: str) -> set[str]:
+        from app.models.academic import AcademicCampus
+        rows = self.db.query(AcademicCampus.branch).filter(
+            func.lower(func.trim(AcademicCampus.campus_code)) == self.normalize_campus_code(campus),
+        ).all()
+        # Unknown rows also make the campus ambiguous; never guess their branch.
+        return {self.normalize_campus_code(row[0]) for row in rows}
 
-        None means all campuses. Empty set means no campus-level grant; the
-        academic service may still expose AP-assigned teacher classes.
-        """
+    def accessible_campus_branch_pairs(self, user: Any) -> set[tuple[str, str]] | None:
+        """Campus-wide grants as (branch, campus), preserving assignment boundaries."""
+        from app.models.academic import AcademicCampus
         if self.is_system_admin(user):
             return None
-        codes: set[str] = set()
+        pairs: set[tuple[str, str]] = set()
         for assignment in self.active_assignments_for_actor(user):
-            if assignment.role_code == SYSTEM_ADMIN:
+            if assignment.role_code not in {CAMPUS_OWNER, CAMPUS_MANAGER}:
+                continue
+            scope_type = str(assignment.scope_type).upper()
+            scope_id = self.normalize_campus_code(assignment.scope_id)
+            if scope_type == 'SYSTEM':
                 return None
-            if assignment.role_code in {CAMPUS_MANAGER, CAMPUS_OWNER} and assignment.scope_type.upper() in {'SYSTEM', 'CAMPUS'}:
-                scope_id = str(assignment.scope_id or '*').strip()
-                if assignment.scope_type.upper() == 'SYSTEM' or scope_id == '*':
-                    return None
-                codes.add(scope_id.lower())
-        return codes
+            if scope_type == 'BRANCH' and scope_id in VALID_BRANCH_CODES:
+                rows = self.db.query(AcademicCampus.campus_code).filter(
+                    func.lower(func.trim(AcademicCampus.branch)) == scope_id,
+                ).all()
+                pairs.update((scope_id, self.normalize_campus_code(row[0])) for row in rows if self.normalize_campus_code(row[0]) not in {'', '*'})
+            elif scope_type == 'CAMPUS' and scope_id not in {'', '*'}:
+                branches = self._campus_branches(scope_id)
+                if len(branches) == 1 and branches.issubset(VALID_BRANCH_CODES):
+                    pairs.add((next(iter(branches)), scope_id))
+        return pairs
+
+    def accessible_campus_codes(self, user: Any) -> set[str] | None:
+        """Finite campus codes; consumers must also enforce branch/campus pairs."""
+        pairs = self.accessible_campus_branch_pairs(user)
+        return None if pairs is None else {campus for _branch, campus in pairs}
+
+    def accessible_branch_codes(self, user: Any) -> set[str] | None:
+        """Branches visible through campus grants or AP-assigned classes.
+
+        None denotes an explicit SYSTEM grant only. Branch visibility alone never
+        grants campus-wide or class-wide access.
+        """
+        from app.models.academic import AcademicClass, AcademicTeacher, AcademicTeacherAssignment, AcademicTerm
+        pairs = self.accessible_campus_branch_pairs(user)
+        if pairs is None:
+            return None
+        branches = {branch for branch, _campus in pairs}
+        for assignment in self.active_assignments_for_actor(user):
+            scope_type = str(assignment.scope_type).upper()
+            code = self.normalize_campus_code(assignment.scope_id)
+            if assignment.role_code in {CAMPUS_OWNER, CAMPUS_MANAGER} and scope_type == 'BRANCH' and code in VALID_BRANCH_CODES:
+                branches.add(code)
+            elif assignment.role_code == TEACHER_ASSIGNED and scope_type == 'CLASS':
+                classroom = self.db.get(AcademicClass, assignment.scope_id)
+                if classroom:
+                    term = self.db.get(AcademicTerm, classroom.term_id)
+                    branch = self.normalize_campus_code(classroom.branch or (term.branch if term else None))
+                    if branch in VALID_BRANCH_CODES:
+                        branches.add(branch)
+        raw = getattr(user, 'raw_claims', None) or {}
+        names = {self.normalize_campus_code(value) for value in [getattr(user, 'user_id', None), getattr(user, 'username', None), getattr(user, 'email', None), raw.get('username'), raw.get('preferred_username'), raw.get('email')] if self.normalize_campus_code(value)}
+        if names:
+            rows = self.db.query(AcademicClass.branch, AcademicTerm.branch).join(
+                AcademicTeacherAssignment, AcademicTeacherAssignment.class_id == AcademicClass.id,
+            ).join(AcademicTeacher, AcademicTeacher.id == AcademicTeacherAssignment.teacher_id).join(
+                AcademicTerm, AcademicTerm.id == AcademicClass.term_id,
+            ).filter(AcademicTeacher.active.is_(True), or_(func.lower(AcademicTeacher.username).in_(names), func.lower(AcademicTeacher.email).in_(names))).all()
+            branches.update(self.normalize_campus_code(row[0] or row[1]) for row in rows if self.normalize_campus_code(row[0] or row[1]) in VALID_BRANCH_CODES)
+        return branches
+
+    def ensure_requested_branch_filter_allowed(self, user: Any, branch: str | None, *, term_id: str | None = None, require_filter_when_scoped: bool = False, action: str = 'xem dữ liệu hệ đào tạo') -> None:
+        from app.models.academic import AcademicTerm
+        allowed = self.accessible_branch_codes(user)
+        if allowed is None:
+            return
+        requested = self.normalize_campus_code(branch)
+        term_branch = ''
+        if term_id:
+            term = self.db.get(AcademicTerm, term_id)
+            term_branch = self.normalize_campus_code(term.branch if term else None)
+            if not term or term_branch not in allowed:
+                raise HTTPException(status_code=403, detail=f'Bạn không được {action} trong học kỳ đã chọn.')
+        if requested and (requested not in allowed or (term_branch and requested != term_branch)):
+            raise HTTPException(status_code=403, detail=f'Bạn không được {action} trong hệ {requested.upper()}.')
+        if require_filter_when_scoped and not (requested or term_branch):
+            raise HTTPException(status_code=403, detail='Cần chọn hệ đào tạo hoặc học kỳ trong phạm vi được giao trước khi tạo job/export.')
 
     def can_manage_assignment_scores_for_campus(self, user: Any, campus_code: str | None) -> bool:
         """Deprecated in v25.9.16.7.2.64.13.

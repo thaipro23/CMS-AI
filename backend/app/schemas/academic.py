@@ -202,6 +202,7 @@ class AcademicSubjectDeliverySummaryOut(BaseModel):
     total: int = 0
     cms_count: int = 0
     udemy_count: int = 0
+    other_count: int = 0
     unassigned_count: int = 0
     mixed_count: int = 0
     class_count: int = 0
@@ -251,8 +252,10 @@ class AcademicSubjectPlatformUpdateIn(BaseModel):
         if value is None or not str(value).strip():
             return None
         normalized = str(value).strip().lower()
-        if normalized not in {'cms', 'udemy'}:
-            raise ValueError('Nền tảng chỉ nhận cms, udemy hoặc null')
+        if normalized == 'khác':
+            normalized = 'other'
+        if normalized not in {'cms', 'udemy', 'other'}:
+            raise ValueError('Nền tảng chỉ nhận cms, udemy, other (Khác) hoặc null')
         return normalized
 
 

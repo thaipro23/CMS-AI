@@ -112,7 +112,7 @@ class AcademicSubjectDelivery(Base):
     term_id: Mapped[str] = mapped_column(String, ForeignKey('academic_terms.id'), index=True)
     block_id: Mapped[str] = mapped_column(String, ForeignKey('academic_blocks.id'), index=True)
     branch: Mapped[str] = mapped_column(String(64), index=True)
-    learning_platform: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)  # cms | udemy | NULL
+    learning_platform: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)  # cms | udemy | other | NULL
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     configuration_source: Mapped[str] = mapped_column(String(50), default='manual', index=True)
     configured_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
@@ -124,7 +124,7 @@ class AcademicSubjectDelivery(Base):
 
     __table_args__ = (
         UniqueConstraint('subject_id', 'term_id', 'block_id', 'branch', name='uq_academic_subject_delivery_scope'),
-        CheckConstraint("learning_platform IS NULL OR learning_platform IN ('cms', 'udemy')", name='ck_academic_subject_delivery_platform'),
+        CheckConstraint("learning_platform IS NULL OR learning_platform IN ('cms', 'udemy', 'other')", name='ck_academic_subject_delivery_platform'),
         Index('ix_academic_subject_delivery_scope_active', 'term_id', 'block_id', 'branch', 'active'),
         Index('ix_academic_subject_delivery_platform_scope', 'learning_platform', 'term_id', 'block_id', 'branch'),
     )

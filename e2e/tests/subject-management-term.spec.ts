@@ -80,6 +80,34 @@ async function mockSubjectManagement(page: Page, onBulkUpdate?: (body: any) => v
 }
 
 test.describe('Subject Management Batch 35.2 term scope', () => {
+  test('Excel plan previews the selected term before explicit Apply @desktop', async ({ page }) => {
+    await mockSubjectManagement(page)
+    let applied = 0
+    await page.route('**/academic/subject-deliveries/platform/import/**', async (route) => {
+      if (route.request().url().endsWith('/preview')) {
+        const body = route.request().postData() || ''
+        expect(body).toContain('name="term_id"\r\n\r\nterm-su26')
+        expect(body).toContain('name="branch"\r\n\r\npoly')
+        expect(body).not.toContain('delivery_ids')
+        await fulfillJson(route, { preview_token: 'preview-token', term_id: termId, branch: 'poly', total_rows: 205, matched_count: 205, missing_count: 0, duplicate_count: 0, invalid_count: 0, can_apply: true, rows: [{ row_no: 2, subject_code: 'SOF999', subject_name: 'Môn ngoài trang hiện tại', learning_platform: 'other', status: 'matched', message: '2 Block', delivery_ids: ['off-page-1', 'off-page-2'] }] })
+      } else {
+        applied += 1
+        expect(route.request().postDataJSON()).toEqual({ preview_token: 'preview-token' })
+        await fulfillJson(route, { ok: true, subjects: 205, updated: 410, message: 'Đã áp dụng kế hoạch cho 205 môn.' })
+      }
+    })
+    await page.goto('/subject-management')
+    await page.getByRole('button', { name: 'Import kế hoạch Excel', exact: true }).click()
+    await page.getByLabel('File kế hoạch Excel').setInputFiles({ name: 'plan.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture served by preview boundary') })
+    await page.getByRole('button', { name: 'Xem trước', exact: true }).click()
+    await expect(page.getByText('Môn ngoài trang hiện tại')).toBeVisible()
+    await expect(page.getByText('Khớp: 205', { exact: true })).toBeVisible()
+    expect(applied).toBe(0)
+    await page.getByRole('button', { name: 'Áp dụng kế hoạch', exact: true }).click()
+    await expect(page.getByText('Đã áp dụng kế hoạch cho 205 môn.')).toBeVisible()
+    expect(applied).toBe(1)
+  })
+
   test('manages platform once per term and keeps Block operations visible', async ({ page }) => {
     let bulkBody: any = null
     await mockSubjectManagement(page, (body) => { bulkBody = body })

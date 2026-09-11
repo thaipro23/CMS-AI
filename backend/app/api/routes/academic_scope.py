@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext, require_permission
@@ -26,6 +26,7 @@ def get_training_scope(
     """
     rbac = BusinessRBACService(db)
     campus_codes = rbac.accessible_campus_codes(user)
+    campus_pairs = rbac.accessible_campus_branch_pairs(user)
 
     if campus_codes is None:
         return {
@@ -52,15 +53,16 @@ def get_training_scope(
             'preferred_campus': None,
         }
 
-    rows = (
-        db.query(AcademicCampus)
-        .filter(
-            AcademicCampus.active.is_(True),
-            func.lower(AcademicCampus.campus_code).in_(normalized_codes),
-        )
-        .order_by(AcademicCampus.sort_order.asc(), AcademicCampus.campus_code.asc())
-        .all()
+    campus_query = db.query(AcademicCampus).filter(
+        AcademicCampus.active.is_(True),
+        func.lower(AcademicCampus.campus_code).in_(normalized_codes),
     )
+    if campus_pairs:
+        campus_query = campus_query.filter(or_(*[
+            (func.lower(AcademicCampus.branch) == branch) & (func.lower(AcademicCampus.campus_code) == campus)
+            for branch, campus in campus_pairs
+        ]))
+    rows = campus_query.order_by(AcademicCampus.sort_order.asc(), AcademicCampus.campus_code.asc()).all()
 
     campuses = []
     branches: list[str] = []

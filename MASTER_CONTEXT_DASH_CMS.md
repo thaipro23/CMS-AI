@@ -254,3 +254,32 @@ NEXT ACTION:
 - GitHub branch and source files were re-read after the writes and show the expected scope-ready guards.
 - The repository has no required branch status checks for this branch and no new CI result was observed for these commits during this chat.
 - No production deployment was performed from ChatGPT. The 403 screenshot/request happened before these new commits and cannot be used to judge the patched source.
+
+## Addendum 2026-09-11 — branch RBAC, report/jobs, platform import, replica reads
+
+- Branch ownership is explicit: `CAMPUS_OWNER` with `scope_type=BRANCH, scope_id=poly` owns all Poly campuses; `scope_id=ptcd` owns all PTCĐ campuses; only a `SYSTEM` assignment spans both. Legacy `CAMPUS/*` assignments are fail-closed and must be re-granted explicitly. `BusinessRBACService.accessible_branch_codes()` and `accessible_campus_branch_pairs()` preserve duplicate campus codes that exist in both systems.
+- Student Operations class, subject, identity, overview and teacher-report filters enforce `(branch, campus)` pairs. A PTCĐ owner cannot access a Poly class that happens to use the same campus code. Training scope and term/block/campus catalog routes reject a foreign branch or an omitted scope that would widen access.
+- Open edX course mapping is strict: PTCĐ maps only Org `FPS`; Poly maps only Org `FPL`. Existing mappings with the opposite Org are displayed as `invalid_org_match`, excluded from effective/direct/inherited/fast-path readers, and never silently overwritten or reused.
+- `teacher_report.async` no longer selects the unused `UdemyStudentProgress` entity and no longer passes too many positional arguments to `Query.outerjoin()`.
+- `/jobs` renders five primary job sources first; quiz-instance history and analytics status load independently in the background. A generation token discards stale supplemental results after refresh/filter changes.
+- `/subject-management` supports an Excel plan with exactly `Mã môn | Nền tảng`. The selected term and branch come from the screen. Preview matches the full database catalog, reports missing/duplicate/invalid rows, stores the importer and a short-lived preview token, and requires explicit Apply. Platforms are `CMS`, `Udemy`, `Khác (Other)` or unassigned. Migration `0063_subject_platform_other` updates the database check constraint.
+- CMS-FPT connector learning/progress/grade report helpers run inside `replica_reads` and use the configured `read_replica` alias. The router fails closed when the alias is absent, points at primary, or a nested dependency attempts a primary read. Enrollment/publish/write paths remain on `default`. Tutor plugin settings wire the alias and connector router for LMS and CMS.
+
+### Verification 2026-09-11
+
+- CMS-AI backend targeted regressions: 37 passed (branch boundary, mapping, subject platform import, teacher report outerjoin contract).
+- CMS-AI backend compileall: passed.
+- CMS-AI frontend `npm run typecheck`: passed.
+- CMS-FPT compileall, replica validator and connector unittest: passed (12 tests).
+- Browser E2E execution was not run because the managed environment did not expose a Chromium executable; E2E specs remain in source.
+
+### Deployment notes
+
+- CMS-AI: build and roll out the `ai-server-backend` image and run Alembic migration `0063_subject_platform_other`; rebuild/redeploy the frontend for the Jobs, user-RBAC and subject-management UI changes.
+- CMS-FPT: rebuild LMS and CMS images from `fpt-indigo-ui`; ensure `MYSQL_REPLICA_HOST`, `MYSQL_REPLICA_PORT`, and replica credentials point to the read-only MySQL replica. Do not set `AI_CONNECTOR_READ_DB_ALIAS=default`. Verify connector report endpoints return a structured 503 if replica connectivity is unavailable.
+
+### Local handoff commits
+
+- CMS-AI local commit: `9d457e4` (`feat: split training scopes and optimize reports`).
+- CMS-FPT local commit: `d504eee` (`fix: route connector reports to read replica`).
+- Push was attempted for both canonical branches but rejected by the automatic review after the session usage limit was reached; run the push commands when GitHub access is available.

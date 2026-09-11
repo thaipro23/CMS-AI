@@ -50,7 +50,7 @@ class UserRoleAssignment(Base):
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     role_code: Mapped[str] = mapped_column(String(64), ForeignKey('ai_rbac_roles.code'), index=True)
-    scope_type: Mapped[str] = mapped_column(String(32), index=True)  # SYSTEM | DEPARTMENT | SUBJECT | SUBJECT_VERSION | CHAPTER | COURSE
+    scope_type: Mapped[str] = mapped_column(String(32), index=True)  # SYSTEM | BRANCH (poly/ptcd) | CAMPUS | CLASS | DEPARTMENT | SUBJECT | SUBJECT_VERSION | CHAPTER | COURSE
     scope_id: Mapped[str] = mapped_column(String(255), default='*', index=True)
     granted_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     grant_reason: Mapped[str] = mapped_column(Text, default='')

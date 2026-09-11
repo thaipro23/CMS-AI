@@ -25,7 +25,7 @@ class AcademicAccessWorkflowService:
 
     def access_decision(self, user: UserContext) -> AccessDecision:
         if self.rbac.is_system_admin(user):
-            return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set(), campus_codes=set())
+            return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set(), campus_codes=set(), campus_branch_pairs=None)
         names = _actor_names(user)
         teachers = []
         if names:
@@ -38,11 +38,14 @@ class AcademicAccessWorkflowService:
         # teacher assignments. Quiz Bank roles do not grant class/student access.
         subject_codes: set[str] = set()
         campus_codes: set[str] = set()
+        campus_branch_pairs: set[tuple[str, str]] | None = set()
         try:
             campus_scope = self.rbac.accessible_campus_codes(user)
             if campus_scope is None:
-                return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set(), campus_codes=set())
+                return AccessDecision(unrestricted=True, teacher_ids=set(), subject_codes=set(), campus_codes=set(), campus_branch_pairs=None)
             campus_codes = set(campus_scope or set())
+            pairs_fn = getattr(self.rbac, 'accessible_campus_branch_pairs', None)
+            campus_branch_pairs = pairs_fn(user) if callable(pairs_fn) else None
         except Exception:
             campus_codes = set()
         return AccessDecision(
@@ -50,6 +53,7 @@ class AcademicAccessWorkflowService:
             teacher_ids={item.id for item in teachers},
             subject_codes=subject_codes,
             campus_codes=campus_codes,
+            campus_branch_pairs=campus_branch_pairs,
         )
 
     def assert_can_access_class(self, user: UserContext, class_id: str) -> None:
@@ -79,10 +83,16 @@ class AcademicAccessWorkflowService:
             if subject_exists:
                 return
         if decision.campus_codes:
-            campus_exists = self.db.query(AcademicClass.id).filter(
+            campus_query = self.db.query(AcademicClass.id).filter(
                 AcademicClass.id == class_id,
                 func.lower(AcademicClass.campus).in_(decision.campus_codes),
-            ).first()
+            )
+            if decision.campus_branch_pairs:
+                campus_query = campus_query.filter(or_(*[
+                    (func.lower(AcademicClass.branch) == branch) & (func.lower(AcademicClass.campus) == campus)
+                    for branch, campus in decision.campus_branch_pairs
+                ]))
+            campus_exists = campus_query.first()
             if campus_exists:
                 return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được phân công hoặc phân quyền xem lớp này')
@@ -108,10 +118,16 @@ class AcademicAccessWorkflowService:
         # listing applies the same campus predicate again, so this parent-level
         # check only unlocks navigation to subjects that actually exist in scope.
         if decision.campus_codes:
-            campus_subject_exists = self.db.query(AcademicClass.id).filter(
+            campus_query = self.db.query(AcademicClass.id).filter(
                 AcademicClass.subject_id == subject_id,
                 func.lower(AcademicClass.campus).in_(decision.campus_codes),
-            ).first()
+            )
+            if decision.campus_branch_pairs:
+                campus_query = campus_query.filter(or_(*[
+                    (func.lower(AcademicClass.branch) == branch) & (func.lower(AcademicClass.campus) == campus)
+                    for branch, campus in decision.campus_branch_pairs
+                ]))
+            campus_subject_exists = campus_query.first()
             if campus_subject_exists:
                 return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được phân công hoặc phân quyền xem môn này')

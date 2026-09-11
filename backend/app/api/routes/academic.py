@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from io import BytesIO
 from pathlib import Path
@@ -111,6 +111,7 @@ from app.schemas.academic import (
 from app.services.academic_service import AcademicService
 from app.services.object_storage import StorageError, get_object_storage
 from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
+from app.services.academic.subject_platform_import import SubjectPlatformImportService
 from app.services.academic.udemy_plan import UdemyPlanService
 from app.services.academic.udemy_progress import UdemyProgressService
 from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
@@ -751,6 +752,18 @@ def _require_academic_view_permission(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không có quyền xem dữ liệu đào tạo')
 
 
+def _enforce_academic_branch_scope(db: Session, user: UserContext, *, branch: str | None = None, term_id: str | None = None, require_filter: bool = False, action: str = 'xem dữ liệu đào tạo') -> str | None:
+    """Apply the database RBAC branch boundary before catalog/term work."""
+    rbac = BusinessRBACService(db)
+    rbac.ensure_requested_branch_filter_allowed(user, branch, term_id=term_id, require_filter_when_scoped=require_filter, action=action)
+    if branch and str(branch).strip():
+        return str(branch).strip().lower()
+    if term_id:
+        term = db.get(AcademicTerm, term_id)
+        return str(term.branch or '').strip().lower() if term else None
+    return None
+
+
 def _require_training_write_permission(
     user: UserContext = Depends(get_user_context),
     db: Session = Depends(get_db),
@@ -810,6 +823,7 @@ def _enqueue_teacher_report_job(
             require_filter_when_scoped=True,
             action='tạo báo cáo giáo viên',
         )
+    _enforce_academic_branch_scope(db, user, branch=branch, term_id=term_id, require_filter=True, action='tạo báo cáo giáo viên')
     campus_scope = rbac.campus_scope_for_user(user)
     normalized_branch = branch.strip().lower() if branch else None
     normalized_campus = campus.strip().lower() if campus else None
@@ -1145,6 +1159,14 @@ def list_terms(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    allowed = BusinessRBACService(db).accessible_branch_codes(user)
+    if branch:
+        _enforce_academic_branch_scope(db, user, branch=branch, action='xem học kỳ')
+    elif allowed is not None:
+        # A scoped owner may not receive both systems simply because the filter
+        # was omitted by an older frontend.
+        rows = AcademicService(db).list_terms(branch=None, active=active)
+        return [row for row in rows if str(row.branch or '').strip().lower() in allowed]
     return AcademicService(db).list_terms(branch=branch, active=active)
 
 
@@ -1216,6 +1238,7 @@ def list_blocks(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    _enforce_academic_branch_scope(db, user, term_id=term_id, require_filter=True, action='xem block học kỳ')
     return AcademicService(db).list_blocks(term_id=term_id, active=active)
 
 
@@ -1232,7 +1255,7 @@ def list_academic_subject_deliveries(
     user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    del user
+    _enforce_academic_branch_scope(db, user, branch=branch, term_id=term_id, require_filter=True, action='xem danh mục môn')
     return AcademicSubjectDeliveryService(db).list_deliveries(
         term_id=term_id,
         block_id=block_id,
@@ -1243,6 +1266,37 @@ def list_academic_subject_deliveries(
         page_size=page_size,
         management_scope=management_scope,
     )
+
+
+@router.post('/subject-deliveries/platform/import/preview')
+async def preview_subject_platform_import(
+    file: UploadFile = File(...),
+    term_id: str = Form(...),
+    branch: str = Form(...),
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    rbac = BusinessRBACService(db)
+    rbac.ensure_requested_branch_filter_allowed(user, branch, term_id=term_id, require_filter_when_scoped=True, action='import kế hoạch nền tảng')
+    raw = await file.read()
+    preview = SubjectPlatformImportService(db).preview(raw, term_id=term_id, branch=branch, requested_by=user.user_id or user.username or '')
+    token = SubjectPlatformImportService(db).persist_preview(preview)
+    return {'ok': True, 'preview_token': token, **preview}
+
+
+@router.post('/subject-deliveries/platform/import/apply')
+def apply_subject_platform_import(
+    payload: dict[str, str] = Body(...),
+    user: UserContext = Depends(_require_academic_catalog_admin),
+    db: Session = Depends(get_db),
+):
+    token = str(payload.get('preview_token') or '').strip()
+    if not token:
+        raise HTTPException(422, 'Thiếu mã xem trước kế hoạch.')
+    service = SubjectPlatformImportService(db)
+    preview = service.load_preview(token, requested_by=user.user_id or user.username or '')
+    BusinessRBACService(db).ensure_requested_branch_filter_allowed(user, preview.get('branch'), term_id=preview.get('term_id'), require_filter_when_scoped=True, action='áp dụng kế hoạch nền tảng')
+    return service.apply_preview(preview, actor=user.user_id or user.username or '')
 
 
 @router.post('/subject-deliveries/catalog-refresh/jobs', response_model=AcademicSubjectCatalogRefreshOut)
@@ -1260,6 +1314,7 @@ def enqueue_academic_subject_catalog_refresh(
             raise HTTPException(status_code=422, detail='Block không thuộc học kỳ đã chọn.')
 
     branch_value = AcademicSubjectDeliveryService.normalize_branch(payload.branch or term.branch)
+    _enforce_academic_branch_scope(db, user, branch=branch_value, term_id=term.id, require_filter=True, action='lấy danh sách môn')
     active_candidates = (
         db.query(AcademicBulkOperationJob)
         .filter(
@@ -1340,6 +1395,10 @@ def update_academic_subject_delivery_platform(
     db: Session = Depends(get_db),
 ):
     service = AcademicSubjectDeliveryService(db)
+    existing = db.get(AcademicSubjectDelivery, delivery_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail='Không tìm thấy cấu hình môn.')
+    _enforce_academic_branch_scope(db, user, branch=existing.branch, term_id=existing.term_id, require_filter=True, action='đổi nền tảng môn')
     delivery = service.set_platform(delivery_id, payload.learning_platform, actor=user.user_id or user.username)
     platform_label = {'cms': 'CMS', 'udemy': 'Udemy'}.get(delivery.learning_platform, 'Chưa chọn')
     message = f'Đã đặt nền tảng môn thành {platform_label}. Dữ liệu lịch sử không bị xóa.'
@@ -1363,6 +1422,13 @@ def bulk_update_academic_subject_delivery_platform(
     db: Session = Depends(get_db),
 ):
     service = AcademicSubjectDeliveryService(db)
+    if not payload.delivery_ids:
+        raise HTTPException(status_code=422, detail='Chưa chọn cấu hình môn cần cập nhật.')
+    selected = db.query(AcademicSubjectDelivery).filter(AcademicSubjectDelivery.id.in_(payload.delivery_ids)).all()
+    if len(selected) != len(set(payload.delivery_ids)):
+        raise HTTPException(status_code=404, detail='Một hoặc nhiều cấu hình môn không tồn tại.')
+    for row in selected:
+        _enforce_academic_branch_scope(db, user, branch=row.branch, term_id=row.term_id, require_filter=True, action='đổi nền tảng môn')
     rows = service.bulk_set_platform(payload.delivery_ids, payload.learning_platform, actor=user.user_id or user.username)
     platform_label = {'cms': 'CMS', 'udemy': 'Udemy'}.get(payload.learning_platform, 'Chưa chọn')
     message = f'Đã cập nhật {len(rows)} cấu hình môn theo Block sang {platform_label}. Dữ liệu lịch sử không bị xóa.'
@@ -3307,8 +3373,12 @@ def list_academic_campuses(
     service = AcademicService(db)
     decision = service.access_decision(user)
     query = db.query(AcademicCampus)
+    allowed_branches = BusinessRBACService(db).accessible_branch_codes(user)
     if branch:
-        query = query.filter(AcademicCampus.branch == branch)
+        _enforce_academic_branch_scope(db, user, branch=branch, action='xem danh sách cơ sở')
+        query = query.filter(func.lower(AcademicCampus.branch) == branch.strip().lower())
+    elif allowed_branches is not None:
+        query = query.filter(func.lower(AcademicCampus.branch).in_(sorted(allowed_branches)))
     if active is not None:
         query = query.filter(AcademicCampus.active.is_(active))
     if not decision.unrestricted:

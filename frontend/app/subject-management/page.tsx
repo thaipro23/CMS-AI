@@ -27,11 +27,12 @@ import { InlineNotice, noticeError, noticeSuccess } from '../../components/ui/In
 import { PersistentJobNotice } from '../../components/ui/PersistentJobNotice'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { UdemyPlanImportDialog } from '../../components/subject-management/UdemyPlanImportDialog'
+import { SubjectPlatformImportDialog } from '../../components/subject-management/SubjectPlatformImportDialog'
 import { UdemyProgressImportDialog } from '../../components/subject-management/UdemyProgressImportDialog'
 
 
 type Branch = 'poly' | 'ptcd'
-type PlatformFilter = 'all' | 'unassigned' | 'cms' | 'udemy' | 'mixed'
+type PlatformFilter = 'all' | 'unassigned' | 'cms' | 'udemy' | 'other' | 'mixed'
 
 const EMPTY_RESULT: AcademicSubjectDeliveryListResponse = {
   items: [],
@@ -44,7 +45,7 @@ const EMPTY_RESULT: AcademicSubjectDeliveryListResponse = {
 }
 
 function branchLabel(value?: string | null) { return String(value || '').toLowerCase() === 'ptcd' ? 'PTCĐ' : 'Poly' }
-function platformLabel(value?: AcademicLearningPlatform) { return value === 'cms' ? 'CMS' : value === 'udemy' ? 'Udemy' : 'Chưa chọn' }
+function platformLabel(value?: AcademicLearningPlatform) { return value === 'cms' ? 'CMS' : value === 'udemy' ? 'Udemy' : value === 'other' ? 'Khác' : 'Chưa chọn' }
 function formatDateTime(value?: string | null) {
   if (!value) return 'Chưa có'
   const date = new Date(value)
@@ -82,6 +83,7 @@ function PlatformSelector({
     { value: null, label: 'Chưa chọn' },
     { value: 'cms', label: 'CMS' },
     { value: 'udemy', label: 'Udemy' },
+    { value: 'other', label: 'Khác' },
   ]
   return <div className="subject-platform-control">
     {mixed ? <StatusBadge status="warning" label="Khác nhau giữa các Block" /> : null}
@@ -147,6 +149,7 @@ export default function SubjectManagementPage() {
   const [error, setError] = useState('')
   const [catalogJob, setCatalogJob] = useState<AcademicBulkOperationJob | null>(null)
   const [planImportOpen, setPlanImportOpen] = useState(false)
+  const [platformImportOpen, setPlatformImportOpen] = useState(false)
   const [progressImportOpen, setProgressImportOpen] = useState(false)
   const [progressDelivery, setProgressDelivery] = useState<AcademicSubjectDelivery | null>(null)
   const [progressJob, setProgressJob] = useState<AcademicBulkOperationJob | null>(null)
@@ -318,7 +321,7 @@ export default function SubjectManagementPage() {
       icon="book"
       tone="blue"
       breadcrumbs={[{ label: 'Danh mục' }, { label: 'Quản lý môn học' }]}
-      secondaryActions={<div className="subject-header-actions"><button className="btn secondary" type="button" disabled={!termId || Boolean(progressJob && ['queued', 'running'].includes(progressJob.status))} onClick={() => { setProgressDelivery(null); setProgressImportOpen(true) }}>Import hàng loạt Udemy</button><button className="btn secondary" type="button" onClick={() => setPlanImportOpen(true)}>Import kế hoạch Udemy</button><button className="btn secondary" type="button" disabled={loading} onClick={() => { loadDeliveries(); findActiveCatalogJob() }}>Làm mới</button></div>}
+      secondaryActions={<div className="subject-header-actions"><button className="btn secondary" type="button" disabled={!termId} onClick={() => setPlatformImportOpen(true)}>Import kế hoạch Excel</button><button className="btn secondary" type="button" disabled={!termId || Boolean(progressJob && ['queued', 'running'].includes(progressJob.status))} onClick={() => { setProgressDelivery(null); setProgressImportOpen(true) }}>Import hàng loạt Udemy</button><button className="btn secondary" type="button" onClick={() => setPlanImportOpen(true)}>Import kế hoạch Udemy</button><button className="btn secondary" type="button" disabled={loading} onClick={() => { loadDeliveries(); findActiveCatalogJob() }}>Làm mới</button></div>}
       primaryAction={<button className="btn" type="button" disabled={!termId || jobActive} onClick={() => void refreshCatalog()}>{jobActive ? 'Đang lấy môn từ AP...' : 'Lấy danh sách tất cả môn'}</button>}
     />
 
@@ -339,7 +342,7 @@ export default function SubjectManagementPage() {
     <CompactFilterBar actions={<div className="subject-filter-actions"><button className="btn secondary" type="button" onClick={() => { setAppliedSearch(search.trim()); setPage(1) }}>Áp dụng</button><button className="btn secondary" type="button" disabled={!search && platformFilter === 'all'} onClick={() => { setSearch(''); setAppliedSearch(''); setPlatformFilter('all'); setPage(1) }}>Xóa lọc</button></div>}>
       <label>Hệ<select className="input" value={branch} onChange={(event) => { setBranch(event.target.value as Branch); setTermId(''); setPage(1) }}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label>
       <label>Học kỳ<select className="input" value={termId} onChange={(event) => { setTermId(event.target.value); setPage(1) }}><option value="">Chọn học kỳ</option>{terms.map((item) => <option value={item.id} key={item.id}>{item.term_name}</option>)}</select></label>
-      <label>Nền tảng<select className="input" value={platformFilter} onChange={(event) => { setPlatformFilter(event.target.value as PlatformFilter); setPage(1) }}><option value="all">Tất cả</option><option value="unassigned">Chưa chọn</option><option value="cms">CMS</option><option value="udemy">Udemy</option><option value="mixed">Chưa đồng nhất giữa Block</option></select></label>
+      <label>Nền tảng<select className="input" value={platformFilter} onChange={(event) => { setPlatformFilter(event.target.value as PlatformFilter); setPage(1) }}><option value="all">Tất cả</option><option value="unassigned">Chưa chọn</option><option value="cms">CMS</option><option value="udemy">Udemy</option><option value="other">Khác</option><option value="mixed">Chưa đồng nhất giữa Block</option></select></label>
       <label>Tìm kiếm<input className="input" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { setAppliedSearch(search.trim()); setPage(1) } }} placeholder="Mã hoặc tên môn..." /></label>
     </CompactFilterBar>
 
@@ -376,6 +379,7 @@ export default function SubjectManagementPage() {
       />
     </WorkspaceSection>
 
+    <SubjectPlatformImportDialog open={platformImportOpen} headers={jsonHeaders} termId={termId} branch={branch} onClose={() => setPlatformImportOpen(false)} onApplied={(text) => { setMessage(text); setError(''); void loadDeliveries() }} />
     <UdemyPlanImportDialog
       open={planImportOpen}
       branch={branch}

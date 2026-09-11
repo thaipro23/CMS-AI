@@ -1866,7 +1866,7 @@ export type SubjectVersionSummary = { subject_version: SubjectOffering; stats: B
 export type ChapterSummary = { chapter: SubjectChapter; stats: BankReviewStatusStats }
 
 export type BusinessRoleCode = 'SYSTEM_ADMIN' | 'DEPARTMENT_HEAD' | 'SUBJECT_OWNER' | 'QUESTION_REVIEWER' | 'CAMPUS_OWNER' | 'CAMPUS_MANAGER' | 'TEACHER_ASSIGNED'
-export type BusinessScopeType = 'SYSTEM' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE' | 'CAMPUS' | 'CLASS'
+export type BusinessScopeType = 'SYSTEM' | 'BRANCH' | 'DEPARTMENT' | 'SUBJECT' | 'SUBJECT_VERSION' | 'CHAPTER' | 'COURSE' | 'CAMPUS' | 'CLASS'
 
 export type RBACRole = {
   code: BusinessRoleCode | string
@@ -2013,7 +2013,7 @@ export type AcademicSubject = {
   active: boolean
 }
 
-export type AcademicLearningPlatform = 'cms' | 'udemy' | null
+export type AcademicLearningPlatform = 'cms' | 'udemy' | 'other' | null
 
 export type AcademicSubjectDeliveryBlock = {
   id: string
@@ -2085,6 +2085,7 @@ export type AcademicSubjectDeliveryListResponse = {
     total: number
     cms_count: number
     udemy_count: number
+    other_count?: number
     unassigned_count: number
     mixed_count?: number
     class_count: number
@@ -2100,6 +2101,21 @@ export type AcademicSubjectCatalogRefreshResult = {
   term_id: string
   block_id?: string | null
   branch: string
+}
+
+export type AcademicSubjectPlatformImportPreview = {
+  ok: boolean
+  preview_token: string
+  term_id: string
+  branch: string
+  requested_by: string
+  total_rows: number
+  matched_count: number
+  missing_count: number
+  duplicate_count: number
+  invalid_count: number
+  can_apply: boolean
+  rows: Array<{ row_no: number; subject_code: string; subject_name: string; learning_platform: string | null; status: string; message: string }>
 }
 
 export type AcademicSubjectPlatformMutationResult = {
