@@ -26,8 +26,9 @@ def test_teacher_report_has_no_outerjoin_with_more_than_target_and_onclause():
 def test_student_watch_query_does_not_select_unused_udemy_snapshot_entity():
     """The student watch export only consumes the Open edX mapping in this query."""
     source = TEACHER_REPORT.read_text(encoding='utf-8')
-    marker = 'if include_students and class_ids:'
-    assert marker in source
-    watch_source = source.split(marker, 1)[1]
-    assert 'OpenEdXUserMapping,\n    UdemyStudentProgress,' not in watch_source
-    assert '.outerjoin(\n                OpenEdXUserMapping,\n    UdemyStudentProgress,' not in watch_source
+    start_marker = 'if include_students and class_ids:'
+    end_marker = 'for class_id, class_student_meta, student, mapping in student_query'
+    assert start_marker in source
+    assert end_marker in source
+    watch_query = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    assert 'UdemyStudentProgress' not in watch_query
