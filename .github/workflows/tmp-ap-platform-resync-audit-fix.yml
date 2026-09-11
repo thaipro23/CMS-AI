@@ -40,6 +40,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add MASTER_CONTEXT_DASH_CMS.md .github/workflows/tmp-ap-platform-resync-audit-fix.yml
+          git add -A
           git commit -m "docs: record AP reconciliation verification"
           git push origin HEAD:feat/import-quiz-cms-old-su26
