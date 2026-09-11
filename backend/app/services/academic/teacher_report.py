@@ -1645,13 +1645,11 @@ class AcademicTeacherReportWorkflowService:
                 AcademicClassStudent.metadata_json,
                 AcademicStudent,
                 OpenEdXUserMapping,
-    UdemyStudentProgress,
             ).join(
                 AcademicStudent,
                 AcademicStudent.id == AcademicClassStudent.student_id,
             ).outerjoin(
                 OpenEdXUserMapping,
-    UdemyStudentProgress,
                 OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
             ).filter(AcademicClassStudent.class_id.in_(class_ids))
             watch_rows: list[dict[str, Any]] = []
