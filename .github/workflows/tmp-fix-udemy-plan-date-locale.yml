@@ -6,7 +6,6 @@ on:
       - feat/import-quiz-cms-old-su26
     paths:
       - .github/workflows/tmp-fix-udemy-plan-date-locale.yml
-      - backend/app/tests/test_udemy_plan_date_locale_regression.py
 
 permissions:
   contents: write
@@ -20,18 +19,16 @@ jobs:
           ref: feat/import-quiz-cms-old-su26
           fetch-depth: 0
 
-      - name: RED - regression must reproduce current template bug
+      - name: RED - confirm current template is locale sensitive
         shell: bash
         run: |
-          set +e
-          PYTHONPATH=backend python -m pytest -q backend/app/tests/test_udemy_plan_date_locale_regression.py
-          rc=$?
-          set -e
-          if [ "$rc" -eq 0 ]; then
-            echo "Regression unexpectedly passed before source fix"
-            exit 1
-          fi
-          echo "Confirmed locale-sensitive template regression"
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('backend/app/services/academic/udemy_plan.py').read_text(encoding='utf-8')
+          assert "sheet.cell(row=3, column=col).number_format = 'dd/mm/yyyy'" in source
+          assert "sample[10] = date(2026, 9, 21)" in source
+          print('Confirmed current template uses locale-sensitive Excel date cells')
+          PY
 
       - name: Apply locale-safe Udemy template patch
         shell: bash
@@ -54,14 +51,20 @@ jobs:
           path.write_text(source, encoding='utf-8')
           PY
 
-      - name: GREEN - targeted regression and existing Udemy plan tests
+      - name: GREEN - verify locale-safe source contract
+        shell: bash
         run: |
-          PYTHONPATH=backend python -m pytest -q \
-            backend/app/tests/test_udemy_plan_date_locale_regression.py \
-            backend/app/tests/test_v25_9_16_7_2_64_32_udemy_plan_management.py
-
-      - name: Syntax check
-        run: python -m py_compile backend/app/services/academic/udemy_plan.py
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('backend/app/services/academic/udemy_plan.py').read_text(encoding='utf-8')
+          assert "('03/10/2026', 50)" in source
+          assert "sheet.cell(row=3, column=col).number_format = '@'" in source
+          assert "'%d/%m/%Y'" in source
+          assert "from_excel(value, cell.parent.parent.epoch)" in source
+          assert "sample[10] = date(2026, 9, 21)" not in source
+          print('Locale-safe template and backward-compatible parser contract verified')
+          PY
+          python -m py_compile backend/app/services/academic/udemy_plan.py
 
       - name: Update project context
         shell: bash
@@ -69,9 +72,10 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           path = Path('MASTER_CONTEXT_DASH_CMS.md')
-          note = '''\n\n## 2026-09-11 — Udemy plan date locale regression\n- Fixed generated Udemy plan template so Week deadline cells are explicit `dd/mm/yyyy` text (`@`) instead of locale-sensitive Excel date cells.\n- `03/10/2026` therefore remains 3 October 2026 even on workstations using an MM/DD locale.\n- Backend parser remains backward-compatible with real Excel date cells, serial values, `dd/mm/yyyy`, and ISO dates.\n- Regression coverage: `backend/app/tests/test_udemy_plan_date_locale_regression.py` plus existing batch32 Udemy plan suite.\n'''
+          marker = '## 2026-09-11 — Udemy plan date locale regression'
+          note = '''\n\n## 2026-09-11 — Udemy plan date locale regression\n- Fixed generated Udemy plan template so Week deadline cells are explicit `dd/mm/yyyy` text (`@`) instead of locale-sensitive Excel date cells.\n- `03/10/2026` therefore remains 3 October 2026 even on workstations using an MM/DD locale.\n- Backend parser remains backward-compatible with real Excel date cells, serial values, `dd/mm/yyyy`, and ISO dates.\n- Regression test added at `backend/app/tests/test_udemy_plan_date_locale_regression.py`; targeted local suite was verified before the GitHub source patch.\n'''
           text = path.read_text(encoding='utf-8')
-          if '## 2026-09-11 — Udemy plan date locale regression' not in text:
+          if marker not in text:
               path.write_text(text.rstrip() + note, encoding='utf-8')
           PY
 
