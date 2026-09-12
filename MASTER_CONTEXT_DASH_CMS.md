@@ -351,3 +351,13 @@ NEXT ACTION:
 - External SonarQube Quality Gate is not claimed without an observed Sonar/Jenkins gate result.
 - Kubernetes deployment and production runtime verification remain separate.
 
+## 2026-09-12 — Academic job batch recovery
+
+- Root cause của Excel kẹt 55% là job `queued/running` không có lease reconciliation sau khi Celery worker mất heartbeat. Root cause bổ sung là worker export từng đọc setting snapshot chưa tồn tại. Job quá hạn giờ chuyển sang `failed` với mã `CELERY_JOB_ORPHANED`, giữ nguyên lịch sử/progress và có thể retry cùng durable row.
+- Teacher export vẫn đọc snapshot replica trong luồng thông thường. Snapshot CMS chỉ được tái sử dụng tối đa 300 giây khi đầy đủ toàn bộ roster và không chứa `grade_preserved`; nếu không đạt điều kiện, worker gọi connector refresh như trước. Primary chỉ dùng cho lần xác nhận ngay sau enrollment.
+- Auto-map không còn tạo một lượt hàng nghìn child job. Parent lưu phạm vi class đã được RBAC duyệt, chỉ duy trì cửa sổ mặc định 4 child `queued/running`, tự schedule continuation, và chỉ hoàn tất khi mọi child về trạng thái terminal.
+- `AcademicClassSyncJob` có `parent_job_id` và unique `idempotency_key`; migration head mới là `0065_academic_job_batch_recovery`. Broker enqueue failure được ghi thành job `failed` thay vì để một hàng `queued` giả.
+- `/jobs` và trang Quản lý giảng viên giải thích worker interruption và cho phép chạy lại report/Auto-map thất bại. Retry Auto-map cũ vẫn chạy child theo cửa sổ, không fan-out toàn bộ.
+- Rollout bắt buộc cả `worker` (`interactive,sync`) và `worker-heavy` (`generation,exports`). Runbook: `RUN_ACADEMIC_JOB_BATCH_RECOVERY_2026-09-12.md`.
+- Verification của phạm vi thay đổi: 38 targeted backend tests pass; Ruff trên các file thay đổi và fatal Python checks pass; `compileall` pass; Alembic head là `0065_academic_job_batch_recovery`; frontend `tsc --noEmit` và Next production build pass.
+- Full historical pytest không phải release gate sạch ở checkout này: 736 pass, 306 fail, 2 skip. Các failure gồm integration cần PostgreSQL/Redis thật và nhiều source/version contract của release cũ mâu thuẫn source hiện tại; không tuyên bố full suite pass và không sửa lan ngoài phạm vi recovery.
