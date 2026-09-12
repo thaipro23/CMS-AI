@@ -7,7 +7,7 @@ MODELS = ROOT / 'backend/app/models/academic.py'
 SCHEMAS = ROOT / 'backend/app/schemas/academic.py'
 MIGRATION = ROOT / 'backend/alembic/versions/0051_v25_9_16_7_2_21_bulk_academic_jobs.py'
 JOBS_PAGE = ROOT / 'frontend/app/jobs/page.tsx'
-STUDENT_PAGE = ROOT / 'frontend/app/student-management/page.tsx'
+STUDENT_PAGE = ROOT / 'frontend/app/student-management/StudentManagementPlatformPage.tsx'
 API = ROOT / 'frontend/lib/api.ts'
 TYPES = ROOT / 'frontend/types/index.ts'
 
@@ -27,11 +27,12 @@ def test_bulk_auto_map_route_only_creates_worker_job_not_inline_sync():
     route = ROUTE.read_text(encoding='utf-8')
     assert "@router.post('/subjects/course-mapping/auto-all-sync/jobs'" in route
     assert 'AcademicBulkOperationJob(' in route
-    assert 'academic_subject_auto_map_all_sync_task.delay(job.id)' in route
+    assert 'enqueue_job_task(' in route
+    assert "queue='sync'" in route
     assert 'Đã tạo job Auto map tất cả' in route or 'Đã tạo job Tự động ghép Course CMS' in route
     endpoint_block = route.split("@router.post('/subjects/course-mapping/auto-all-sync/jobs'", 1)[1].split("@router.get('/bulk-operation-jobs'", 1)[0]
     assert '_enqueue_class_sync_job(' not in endpoint_block
-    assert 'academic_subject_auto_map_all_sync_task.delay(job.id)' in endpoint_block
+    assert 'enqueue_job_task(' in endpoint_block
 
 
 def test_worker_runs_auto_map_and_enqueues_child_class_sync_jobs():
@@ -40,7 +41,7 @@ def test_worker_runs_auto_map_and_enqueues_child_class_sync_jobs():
     assert 'auto_map_subject_courses_for_filter' in worker
     assert '_enqueue_academic_class_sync_child_job' in worker
     assert "job_type='full_cms_sync'" in worker
-    assert 'academic_class_sync_task.delay(job.id)' in worker
+    assert 'enqueue_job_task(academic_class_sync_task' in worker
     assert "parent_job_type': 'subject_auto_map_all_sync'" in worker
 
 
@@ -54,5 +55,5 @@ def test_jobs_page_and_student_management_show_bulk_job_progress():
     assert '/academic/bulk-operation-jobs' in api
     assert 'bulkOperationJobs' in jobs
     assert 'Auto map tất cả + đồng bộ CMS' in jobs or 'Tự động ghép Course CMS' in jobs
-    assert 'Auto map đang chạy nền' in student or 'Tự động ghép Course CMS đang chạy nền' in student
-    assert 'Xem Jobs' in student
+    assert 'title: "Đang chạy nền"' in student
+    assert 'Xem tác vụ nền' in student

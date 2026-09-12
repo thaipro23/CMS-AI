@@ -11,6 +11,7 @@ FAILED_STATUSES = {'failed', 'canceled', 'cancelled'}
 
 @dataclass(frozen=True)
 class BatchDispatchPlan:
+    window: int
     target_count: int
     known_count: int
     active_count: int
@@ -41,13 +42,15 @@ def plan_batch_dispatch(
     completed_count = sum(status in SUCCESS_STATUSES for status in status_by_class.values())
     failed_count = sum(status in FAILED_STATUSES for status in status_by_class.values())
     terminal_count = completed_count + failed_count
-    slots = max(0, max(1, min(20, int(window or 1))) - active_count)
+    clean_window = max(1, min(20, int(window or 1)))
+    slots = max(0, clean_window - active_count)
     undispatched = [class_id for class_id in targets if class_id not in status_by_class]
     dispatch_class_ids = undispatched[:slots]
     finished = bool(targets) and terminal_count == len(targets) and active_count == 0
     if not targets:
         finished = True
     return BatchDispatchPlan(
+        window=clean_window,
         target_count=len(targets),
         known_count=len(status_by_class),
         active_count=active_count,
@@ -57,4 +60,3 @@ def plan_batch_dispatch(
         dispatch_class_ids=dispatch_class_ids,
         finished=finished,
     )
-

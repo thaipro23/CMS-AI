@@ -2195,6 +2195,48 @@ def _enqueue_academic_class_sync_child_job(
     return job, False
 
 
+def _restart_academic_class_sync_child_job(db, job):
+    """Retry one failed child in place while preserving its durable history."""
+    from app.services.academic.job_runtime import enqueue_job_task, mark_enqueue_failed, persist_enqueue_metadata
+
+    if job.status != 'failed':
+        return job
+    previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+    retry_count = int(previous.get('retry_count') or 0) + 1
+    job.status = 'queued'
+    job.progress_current = 0
+    job.progress_total = 100
+    job.progress_label = 'Đã xếp hàng chạy lại đồng bộ lớp'
+    job.result_json = json_safe_value({
+        **previous,
+        'retry_count': retry_count,
+        'retry_requested_at': datetime.utcnow().isoformat(),
+    })
+    job.error_message = None
+    job.started_at = None
+    job.finished_at = None
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+    try:
+        metadata = enqueue_job_task(
+            academic_class_sync_task,
+            job.id,
+            queue='sync',
+            attempt=retry_count + 1,
+        )
+    except Exception as exc:
+        mark_enqueue_failed(job, exc)
+        db.add(job)
+        db.commit()
+        raise
+    persist_enqueue_metadata(job, metadata)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 @celery_app.task(name='academic_subject_catalog_refresh_task')
 def academic_subject_catalog_refresh_task(job_id: str):
     """Fetch the AP subject catalog and materialize term/block delivery rows."""
@@ -2417,6 +2459,30 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             children = load_children()
 
         window = int(settings.academic_bulk_sync_dispatch_window)
+        retry_child_ids = {
+            str(value) for value in (state.get('retry_child_job_ids') or []) if value
+        }
+        initial_plan = plan_batch_dispatch(target_class_ids, children, window=window)
+        retry_slots = max(0, initial_plan.window - initial_plan.active_count)
+        if retry_child_ids and retry_slots:
+            target_set = set(target_class_ids)
+            retry_candidates = [
+                child
+                for child in children
+                if child.id in retry_child_ids
+                and child.status == 'failed'
+                and str(child.class_id) in target_set
+            ][:retry_slots]
+            for child in retry_candidates:
+                try:
+                    _restart_academic_class_sync_child_job(db, child)
+                finally:
+                    # One operator retry gives each previously failed child one
+                    # bounded retry. A fresh failure is terminal until the next
+                    # explicit retry, so a broken connector cannot loop forever.
+                    retry_child_ids.discard(child.id)
+            children = load_children()
+
         plan = plan_batch_dispatch(target_class_ids, children, window=window)
         child_ids_by_class = {
             str(key): str(value)
@@ -2460,12 +2526,13 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         children = load_children()
         plan = plan_batch_dispatch(target_class_ids, children, window=window)
         terminal_count = plan.completed_count + plan.failed_count
-        progress = 100 if plan.finished else min(
+        batch_finished = plan.finished and not retry_child_ids
+        progress = 100 if batch_finished else min(
             95,
             40 + int((terminal_count / max(plan.target_count, 1)) * 55),
         )
         state.update({
-            'phase': 'finished' if plan.finished else 'dispatching',
+            'phase': 'finished' if batch_finished else 'dispatching',
             'child_job_ids_by_class': child_ids_by_class,
             'jobs_queued': jobs_queued,
             'jobs_reused': jobs_reused,
@@ -2475,11 +2542,12 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             'class_active_count': plan.active_count,
             'class_completed_count': plan.completed_count,
             'class_failed_count': plan.failed_count,
+            'retry_child_job_ids': sorted(retry_child_ids),
         })
         if dispatch_error:
             state['last_dispatch_error'] = dispatch_error
 
-        if plan.finished:
+        if batch_finished:
             all_failed = plan.target_count > 0 and plan.failed_count == plan.target_count
             subject_mapped = int(state.get('subject_mapped') or 0)
             subject_already_mapped = int(state.get('subject_already_mapped') or 0)

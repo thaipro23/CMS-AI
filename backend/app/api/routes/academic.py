@@ -1093,6 +1093,78 @@ def get_training_teacher_report_job(
     return job
 
 
+@router.post('/training/teachers/report-jobs/{job_id}/retry', response_model=AcademicTeacherReportJobOut)
+def retry_training_teacher_report_job(
+    job_id: str,
+    user: UserContext = Depends(_require_academic_view_permission),
+    db: Session = Depends(get_db),
+):
+    reconcile_teacher_report_jobs(db)
+    _advisory_xact_lock_for_key(db, f'academic-teacher-report-retry:{job_id}')
+    job = db.get(AcademicTeacherReportJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy job báo cáo giáo viên')
+    BusinessRBACService(db).require_academic_scope(
+        user,
+        campus=job.campus,
+        requested_by=job.requested_by,
+        request_json=job.request_json if isinstance(job.request_json, dict) else {},
+        action='chạy lại job báo cáo giáo viên',
+    )
+    if job.status != 'failed':
+        raise HTTPException(status_code=409, detail='Chỉ có thể chạy lại tác vụ báo cáo đã thất bại.')
+
+    previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+    retry_count = int(previous.get('retry_count') or 0) + 1
+    last_failure = {
+        'code': previous.get('code'),
+        'message': job.error_message or previous.get('message'),
+        'failed_at': job.finished_at.isoformat() if job.finished_at else None,
+    }
+    for key in ('code', 'message', 'ok'):
+        previous.pop(key, None)
+    job.status = 'queued'
+    job.progress_current = 0
+    job.progress_total = 100
+    job.progress_label = 'Đã xếp hàng chạy lại báo cáo giáo viên'
+    job.result_json = json_safe_value({
+        **previous,
+        'retry_count': retry_count,
+        'retry_requested_at': datetime.utcnow().isoformat(),
+        'last_failure': last_failure,
+    })
+    job.file_path = None
+    job.file_name = None
+    job.error_message = None
+    job.started_at = None
+    job.finished_at = None
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+    from app.worker import academic_teacher_report_job_task
+    try:
+        metadata = enqueue_job_task(
+            academic_teacher_report_job_task,
+            job.id,
+            queue='exports',
+            attempt=retry_count + 1,
+        )
+    except Exception as exc:
+        mark_enqueue_failed(job, exc)
+        db.add(job)
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail='Không đưa được báo cáo vào hàng đợi Celery/Redis. '
+            'Kiểm tra worker-heavy rồi thử lại.',
+        ) from exc
+    persist_enqueue_metadata(job, metadata)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 @router.get('/training/teachers/report-jobs/{job_id}/download')
 def download_training_teacher_report_job_file(
     job_id: str,
@@ -2761,6 +2833,99 @@ def get_academic_bulk_operation_job(
     if not job:
         raise HTTPException(status_code=404, detail='Không tìm thấy job xử lý hàng loạt')
     BusinessRBACService(db).require_academic_scope(user, campus=job.campus, requested_by=job.requested_by, request_json=job.request_json if isinstance(job.request_json, dict) else {}, action='xem job xử lý hàng loạt')
+    return job
+
+
+@router.post('/bulk-operation-jobs/{job_id}/retry', response_model=AcademicBulkOperationJobOut)
+def retry_academic_bulk_operation_job(
+    job_id: str,
+    user: UserContext = Depends(_require_academic_sync_permission),
+    db: Session = Depends(get_db),
+):
+    reconcile_bulk_operation_jobs(db)
+    _advisory_xact_lock_for_key(db, f'academic-bulk-retry:{job_id}')
+    job = db.get(AcademicBulkOperationJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Không tìm thấy job xử lý hàng loạt')
+    BusinessRBACService(db).require_academic_scope(
+        user,
+        campus=job.campus,
+        requested_by=job.requested_by,
+        request_json=job.request_json if isinstance(job.request_json, dict) else {},
+        action='chạy lại job xử lý hàng loạt',
+    )
+    if job.status != 'failed':
+        raise HTTPException(status_code=409, detail='Chỉ có thể chạy lại tác vụ hàng loạt đã thất bại.')
+    if job.job_type != 'subject_auto_map_all_sync':
+        raise HTTPException(status_code=422, detail='Loại tác vụ hàng loạt này chưa hỗ trợ chạy lại an toàn.')
+
+    previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+    retry_count = int(previous.get('retry_count') or 0) + 1
+    last_failure = {
+        'code': previous.get('code'),
+        'message': job.error_message or previous.get('message'),
+        'failed_at': job.finished_at.isoformat() if job.finished_at else None,
+    }
+    tracked_child_ids = {
+        str(value)
+        for value in (previous.get('child_job_ids_by_class') or {}).values()
+        if value
+    }
+    child_filters = [AcademicClassSyncJob.parent_job_id == job.id]
+    if tracked_child_ids:
+        child_filters.append(AcademicClassSyncJob.id.in_(tracked_child_ids))
+    failed_child_ids = [
+        str(value)
+        for (value,) in db.query(AcademicClassSyncJob.id).filter(
+            or_(*child_filters),
+            AcademicClassSyncJob.status == 'failed',
+        ).all()
+    ]
+    for key in ('code', 'message', 'ok', 'finished_at'):
+        previous.pop(key, None)
+    if previous.get('target_class_ids'):
+        previous['phase'] = 'dispatching'
+        previous['retry_child_job_ids'] = failed_child_ids
+    else:
+        previous.pop('phase', None)
+        previous.pop('retry_child_job_ids', None)
+    previous.update({
+        'retry_count': retry_count,
+        'retry_requested_at': datetime.utcnow().isoformat(),
+        'last_failure': last_failure,
+    })
+    job.status = 'queued'
+    job.progress_current = 40 if previous.get('phase') == 'dispatching' else 0
+    job.progress_total = 100
+    job.progress_label = 'Đã xếp hàng chạy lại Auto map tất cả theo lô'
+    job.result_json = json_safe_value(previous)
+    job.error_message = None
+    job.started_at = None
+    job.finished_at = None
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+    from app.worker import academic_subject_auto_map_all_sync_task
+    try:
+        metadata = enqueue_job_task(
+            academic_subject_auto_map_all_sync_task,
+            job.id,
+            queue='sync',
+            attempt=retry_count + 1,
+        )
+    except Exception as exc:
+        mark_enqueue_failed(job, exc)
+        db.add(job)
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail='Không đưa được Auto map tất cả vào hàng đợi Celery/Redis. '
+            'Kiểm tra worker sync rồi thử lại.',
+        ) from exc
+    persist_enqueue_metadata(job, metadata)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
     return job
 
 @router.get('/subjects/{subject_id}/classes', response_model=AcademicClassListOut)

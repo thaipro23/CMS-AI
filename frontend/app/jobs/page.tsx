@@ -11,6 +11,8 @@ import {
   getBankOperationJobs,
   getCourseQuizInstances,
   getRecentAcademicClassSyncJobs,
+  retryAcademicBulkOperationJob,
+  retryAcademicTrainingTeacherReportJob,
   retryBankOperationJob,
 } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
@@ -68,6 +70,14 @@ function jsonObject(value: unknown): JsonObject {
 
 function jsonText(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function academicJobError(error: string | null | undefined, resultValue: unknown): string | null {
+  const result = jsonObject(resultValue)
+  if (result.code === 'CELERY_JOB_ORPHANED') {
+    return 'Worker bị gián đoạn hoặc không nhận job trong thời gian cho phép. Tác vụ đã được dừng an toàn; hãy chạy lại sau khi kiểm tra worker.'
+  }
+  return error || null
 }
 
 function JobsContent() {
@@ -128,12 +138,20 @@ function JobsContent() {
     }
   }, [authHeaders, status])
 
-  const retryJob = useCallback(async (jobId: string) => {
+  const retryJob = useCallback(async (job: OperationRow) => {
     setLoading(true)
     try {
-      const nextJob = await retryBankOperationJob(authHeaders(), jobId)
-      setOperationJobs((items) => items.map((item) => item.id === nextJob.id ? nextJob : item))
-      setMessage({ type: 'success', title: 'Đã chạy lại', body: `Việc ${shortId(jobId)} đã được đưa vào hàng đợi.` })
+      if (job.group === 'bulk_sync') {
+        const nextJob = await retryAcademicBulkOperationJob(authHeaders(), job.id)
+        setBulkOperationJobs((items) => items.map((item) => item.id === nextJob.id ? nextJob : item))
+      } else if (job.group === 'teacher_report') {
+        const nextJob = await retryAcademicTrainingTeacherReportJob(authHeaders(), job.id)
+        setTeacherReportJobs((items) => items.map((item) => item.id === nextJob.id ? nextJob : item))
+      } else {
+        const nextJob = await retryBankOperationJob(authHeaders(), job.id)
+        setOperationJobs((items) => items.map((item) => item.id === nextJob.id ? nextJob : item))
+      }
+      setMessage({ type: 'success', title: 'Đã chạy lại', body: `Việc ${shortId(job.id)} đã được đưa vào hàng đợi.` })
       await load()
     } catch (error) {
       setMessage(toUserError(error))
@@ -175,7 +193,7 @@ function JobsContent() {
       requestedBy: job.requested_by || 'Hệ thống',
       createdAt: job.created_at,
       message: job.progress_label,
-      error: job.error_message,
+      error: academicJobError(job.error_message, job.result_json),
       rawType: job.job_type,
       canRetry: false,
     }))
@@ -201,9 +219,9 @@ function JobsContent() {
         requestedBy: job.requested_by || 'Hệ thống',
         createdAt: job.created_at,
         message: job.progress_label || `Map ${mapped}+${already} môn · queue ${queued} lớp · reuse ${reused} · bỏ qua ${skipped}`,
-        error: job.error_message,
+        error: academicJobError(job.error_message, job.result_json),
         rawType: job.job_type,
-        canRetry: false,
+        canRetry: job.job_type === 'subject_auto_map_all_sync' && job.status === 'failed',
       }
     })
     const apRows = academicRuns.map((run): OperationRow => {
@@ -240,9 +258,9 @@ function JobsContent() {
       requestedBy: job.requested_by || 'Hệ thống',
       createdAt: job.created_at,
       message: job.progress_label || job.file_name || null,
-      error: job.error_message,
+      error: academicJobError(job.error_message, job.result_json),
       rawType: job.job_type,
-      canRetry: false,
+      canRetry: job.status === 'failed',
     }))
     const analyticsRows: OperationRow[] = []
     if (analyticsOps) {
@@ -338,7 +356,7 @@ function JobsContent() {
     </CompactFilterBar>
     <EnterpriseDataTable tableId="ops-jobs-v2" caption="Danh sách việc" rows={pageRows} columns={columns} rowKey={(job) => `${job.group}-${job.id}`} density={density} onDensityChange={(value) => update({ density: value }, { resetPage: false })} loading={loading} emptyTitle="Không có việc phù hợp" emptyDescription="Thử thay đổi từ khóa, trạng thái hoặc nhóm việc." page={safePage} pageSize={pageSize} total={filteredRows.length} totalPages={totalPages} onPageChange={(value) => update({ page: value }, { resetPage: false })} onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })} label="việc" getRowClassName={(job) => `row-${job.status}`} />
 
-    <SideDrawer open={Boolean(selectedJob)} title={selectedJob?.label || 'Chi tiết tác vụ'} description={selectedJob ? `ID ${selectedJob.id}` : undefined} onClose={() => setSelectedJob(null)} footer={selectedJob?.canRetry ? <button className="btn" type="button" onClick={() => { retryJob(selectedJob.id); setSelectedJob(null) }} disabled={loading}>Chạy lại tác vụ</button> : undefined}>
+    <SideDrawer open={Boolean(selectedJob)} title={selectedJob?.label || 'Chi tiết tác vụ'} description={selectedJob ? `ID ${selectedJob.id}` : undefined} onClose={() => setSelectedJob(null)} footer={selectedJob?.canRetry ? <button className="btn" type="button" onClick={() => { void retryJob(selectedJob); setSelectedJob(null) }} disabled={loading}>Chạy lại tác vụ</button> : undefined}>
       {selectedJob ? <div className="page-stack compact-stack"><StatusBadge status={selectedJob.status} label={statusText(selectedJob.status)} /><InfoPairGrid items={[
         { label: 'Nhóm việc', value: selectedJob.group },
         { label: 'Loại kỹ thuật', value: selectedJob.rawType || '—' },

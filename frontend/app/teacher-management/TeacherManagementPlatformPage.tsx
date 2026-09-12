@@ -8,9 +8,11 @@ import {
   createAcademicTrainingTeacherExportJob,
   downloadAcademicTrainingTeacherReportJob,
   getAcademicCampuses,
+  getAcademicTrainingTeacherReportJob,
   getAcademicTerms,
   getAcademicTrainingTeacherReport,
   getAcademicTrainingTeacherReportJobs,
+  retryAcademicTrainingTeacherReportJob,
   waitForAcademicTrainingTeacherReportJob,
 } from "../../lib/api";
 import {
@@ -423,6 +425,11 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
+        getAcademicTrainingTeacherReportJob(headers, exportJob.id)
+          .then((latest) => {
+            if (!controller.signal.aborted) setExportJob(latest)
+          })
+          .catch(() => undefined)
         setMessage(noticeError(error, "Không kiểm tra được trạng thái xuất Excel."));
       });
     return () => controller.abort();
@@ -440,6 +447,11 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
+        getAcademicTrainingTeacherReportJob(headers, cacheJob.id)
+          .then((latest) => {
+            if (!controller.signal.aborted) setCacheJob(latest)
+          })
+          .catch(() => undefined)
         setMessage(noticeError(error, "Không tính lại được báo cáo giảng viên."));
       });
     return () => controller.abort();
@@ -535,6 +547,20 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
       );
     } catch (error) {
       setMessage(noticeError(error, "Không tải được file Excel."));
+    }
+  };
+
+  const retryReportJob = async (
+    job: AcademicTeacherReportJob,
+    setJob: (value: AcademicTeacherReportJob) => void,
+  ) => {
+    setMessage(null)
+    try {
+      const retried = await retryAcademicTrainingTeacherReportJob(headers, job.id)
+      setJob(retried)
+      setMessage(noticeInfo("Đã đưa tác vụ vào hàng đợi chạy lại."))
+    } catch (error) {
+      setMessage(noticeError(error, "Không chạy lại được tác vụ."))
     }
   };
 
@@ -693,6 +719,8 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
                 type: cacheJob.status === "failed" ? "error" : "info",
                 title: `Làm mới báo cáo giảng viên ${platformLabel}`,
                 body: `${cacheJob.progress_label} · ${jobPercent(cacheJob)}%${cacheJob.status === "failed" ? ` · ${cacheJob.error_message || "Thất bại"}` : ""}`,
+                onRetry: cacheJob.status === "failed" ? () => void retryReportJob(cacheJob, setCacheJob) : undefined,
+                retryLabel: "Chạy lại tác vụ",
               }}
             />
           )}
@@ -704,6 +732,8 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
                 type: exportJob.status === "failed" ? "error" : "info",
                 title: "Tác vụ Excel",
                 body: `${exportJob.progress_label} · ${jobPercent(exportJob)}%${exportJob.status === "failed" ? ` · ${exportJob.error_message || "Thất bại"}` : ""}`,
+                onRetry: exportJob.status === "failed" ? () => void retryReportJob(exportJob, setExportJob) : undefined,
+                retryLabel: "Chạy lại tác vụ",
               }}
             />
           )}

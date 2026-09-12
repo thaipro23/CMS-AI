@@ -3864,6 +3864,18 @@ export async function getAcademicTrainingTeacherReportJob(
   );
 }
 
+export async function retryAcademicTrainingTeacherReportJob(
+  headers: HeadersInit,
+  jobId: string,
+): Promise<AcademicTeacherReportJob> {
+  return parseResponse(
+    await apiFetch(
+      `${API}/academic/training/teachers/report-jobs/${encodeURIComponent(jobId)}/retry`,
+      { method: "POST", credentials: "include", headers },
+    ),
+  );
+}
+
 export async function waitForAcademicTrainingTeacherReportJob(
   headers: HeadersInit,
   jobId: string,
@@ -4093,6 +4105,18 @@ export async function getAcademicBulkOperationJob(
     await apiFetch(
       `${API}/academic/bulk-operation-jobs/${encodeURIComponent(jobId)}`,
       { credentials: "include", headers },
+    ),
+  );
+}
+
+export async function retryAcademicBulkOperationJob(
+  headers: HeadersInit,
+  jobId: string,
+): Promise<AcademicBulkOperationJob> {
+  return parseResponse(
+    await apiFetch(
+      `${API}/academic/bulk-operation-jobs/${encodeURIComponent(jobId)}/retry`,
+      { method: "POST", credentials: "include", headers },
     ),
   );
 }
