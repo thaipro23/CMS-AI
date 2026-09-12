@@ -1539,7 +1539,6 @@ class AcademicTeacherReportWorkflowService:
             })
 
         items: list[dict[str, Any]] = []
-        alert_keys = sorted(self._risk_status_keys())
         for bucket in teacher_buckets.values():
             status_counts = dict(bucket['status_counts'])
             avg_progress = round(bucket['progress_weighted_sum'] / bucket['progress_weight'], 2) if bucket['progress_weight'] else None

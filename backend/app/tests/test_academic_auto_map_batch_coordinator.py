@@ -139,3 +139,21 @@ def test_stale_child_and_parent_are_both_failed_for_retry():
         assert parent.result_json['code'] == 'CELERY_JOB_ORPHANED'
         assert child.result_json['code'] == 'CELERY_JOB_ORPHANED'
     engine.dispose()
+
+
+def test_bulk_reconciliation_does_not_expire_unrelated_long_running_job_types():
+    engine = _batch_engine()
+    with Session(engine) as db:
+        export_job = AcademicBulkOperationJob(
+            id='udemy-export-1',
+            job_type='udemy_progress_export',
+            status='running',
+            updated_at=NOW - timedelta(hours=2),
+        )
+        db.add(export_job)
+        db.commit()
+
+        assert reconcile_bulk_operation_jobs(db, now=NOW) == 0
+        db.refresh(export_job)
+        assert export_job.status == 'running'
+    engine.dispose()
