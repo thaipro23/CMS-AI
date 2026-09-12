@@ -6,6 +6,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+    from app.models.identity import AIUserProfile
 
 from app.core.timezone import vn_now_naive
 
