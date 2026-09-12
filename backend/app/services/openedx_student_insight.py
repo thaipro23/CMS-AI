@@ -428,9 +428,11 @@ class OpenEdXConnectorClient:
             return data
         raise RuntimeError('Open edX Connector remove Course access trả dữ liệu không hợp lệ')
 
-    def class_analytics_payload(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> dict[str, Any]:
+    def class_analytics_payload(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None, read_consistency: str = 'replica') -> dict[str, Any]:
         """Return raw class analytics envelope plus normalized rows.
 
+        Normal reports request ``replica``. The full enrollment flow may request
+        ``primary_after_enrollment`` once so its own write is immediately visible.
         v25.9.16.5.85 keeps connector diagnostics instead of dropping them.
         The Open edX plugin already returns `learning_counts` and
         `diagnostics`; AI Server uses these fields to explain why Course
@@ -448,6 +450,7 @@ class OpenEdXConnectorClient:
             'compact': True,
             'include_diagnostics': False,
             'skip_course_home_progress': True,
+            'read_consistency': read_consistency,
         }
         data = self._post_json(
             path=self.class_analytics_endpoint,
@@ -464,6 +467,7 @@ class OpenEdXConnectorClient:
                 'course_id': data.get('course_id') or course_id,
                 'connector_version': data.get('connector_version'),
                 'connector_contract_version': data.get('connector_contract_version'),
+                'read_consistency': data.get('read_consistency'),
                 'progress_contract': data.get('progress_contract') if isinstance(data.get('progress_contract'), dict) else {},
                 'total': data.get('total', len(rows)),
                 'counts': data.get('counts') if isinstance(data.get('counts'), dict) else {},
@@ -472,11 +476,11 @@ class OpenEdXConnectorClient:
                 'results': rows,
             }
         if isinstance(data, list):
-            return {'ok': True, 'course_id': course_id, 'connector_version': None, 'connector_contract_version': None, 'progress_contract': {}, 'total': len(data), 'counts': {}, 'learning_counts': {}, 'diagnostics': {}, 'results': data}
+            return {'ok': True, 'course_id': course_id, 'connector_version': None, 'connector_contract_version': None, 'read_consistency': None, 'progress_contract': {}, 'total': len(data), 'counts': {}, 'learning_counts': {}, 'diagnostics': {}, 'results': data}
         raise RuntimeError('Open edX Connector class analytics trả về dữ liệu không hợp lệ')
 
-    def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None) -> list[dict[str, Any]]:
-        return self.class_analytics_payload(course_id=course_id, students=students, cohort_name=cohort_name).get('results') or []
+    def class_analytics(self, *, course_id: str, students: list[dict[str, Any]], cohort_name: str | None = None, read_consistency: str = 'replica') -> list[dict[str, Any]]:
+        return self.class_analytics_payload(course_id=course_id, students=students, cohort_name=cohort_name, read_consistency=read_consistency).get('results') or []
 
     def enroll_users(self, *, course_id: str, students: list[dict[str, Any]], teachers: list[dict[str, Any]] | None = None, mode: str | None = None, force: bool = False, cohort_name: str | None = None, create_missing: bool = False) -> list[dict[str, Any]]:
         if not self.configured():

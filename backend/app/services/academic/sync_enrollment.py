@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException
@@ -13,7 +12,6 @@ from app.core.rbac import UserContext
 from app.models.academic import (
     AcademicClass,
     AcademicClassCourseMapping,
-    AcademicCourseMapping,
     AcademicClassStudent,
     AcademicStudent,
     AcademicStudentLearningSnapshot,
@@ -22,8 +20,12 @@ from app.models.academic import (
     AcademicTerm,
     OpenEdXUserMapping,
 )
-from app.services.academic.helpers import _boolish, _derive_mapping_status, _json_safe_value, _validation_result
+from app.services.academic.helpers import _boolish, _derive_mapping_status, _json_safe_value
 from app.services.openedx_student_insight import OpenEdXConnectorClient, normalize_username
+from app.services.academic.analytics_read_consistency import (
+    class_analytics_read_consistency,
+    validate_analytics_read_consistency,
+)
 
 
 class AcademicSyncEnrollmentWorkflowService:
@@ -615,7 +617,7 @@ def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, forc
             'teachers': {'total': len(teacher_payload), 'processed': teacher_processed, 'updated': teacher_updated, 'verified': teacher_verified, 'counts': teacher_counts},
         }
 
-def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000) -> dict[str, Any]:
+def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, immediate_after_enrollment: bool = False) -> dict[str, Any]:
         self.assert_can_access_class(user, class_id)
         cls = self.db.get(AcademicClass, class_id)
         if not cls:
@@ -628,8 +630,8 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
         limit = self._normalize_class_sync_limit(limit)
         # v25.9.16.5.85: Cập nhật điểm is read-only against CMS/Open edX.
         # It must not create CMS accounts and must not enroll learners. Full CMS
-        # sync is the only flow that creates/checks users + enrolls + then reads
-        # progress/grades.
+        # sync is the only flow that asks for a one-time primary read immediately
+        # after enrollment; every normal/manual report stays on the replica.
         query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
@@ -666,6 +668,9 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
         connector_missing_result = 0
         connector_plugin_learning_counts: dict[str, int] = {}
         connector_plugin_diagnostics: dict[str, Any] = {}
+        read_consistency = class_analytics_read_consistency(
+            immediate_after_enrollment=immediate_after_enrollment,
+        )
         for start in range(0, len(rows), batch_size):
             chunk = rows[start:start + batch_size]
             payload = []
@@ -675,7 +680,13 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                     create_missing=False,
                     openedx_user_id=mapping_row.openedx_user_id if mapping_row else None,
                 ))
-            analytics_payload = client.class_analytics_payload(course_id=course_id, cohort_name=cohort_name, students=payload)
+            analytics_payload = client.class_analytics_payload(
+                course_id=course_id,
+                cohort_name=cohort_name,
+                students=payload,
+                read_consistency=read_consistency,
+            )
+            validate_analytics_read_consistency(analytics_payload, requested=read_consistency)
             self._validate_connector_learning_contract(analytics_payload, course_id=course_id)
             results = analytics_payload.get('results') or []
             batch_learning_counts = analytics_payload.get('learning_counts') if isinstance(analytics_payload.get('learning_counts'), dict) else {}
@@ -684,6 +695,7 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                 **batch_diagnostics,
                 'connector_version': analytics_payload.get('connector_version'),
                 'connector_contract_version': analytics_payload.get('connector_contract_version'),
+                'read_consistency': analytics_payload.get('read_consistency') or read_consistency,
                 'progress_contract': analytics_payload.get('progress_contract') if isinstance(analytics_payload.get('progress_contract'), dict) else {},
             }
             for key, value in batch_learning_counts.items():
@@ -742,6 +754,7 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
             'read_only_no_enroll': 1,
             'plugin_connector_version_ok': 1 if self._version_at_least(connector_plugin_diagnostics.get('connector_version'), self.CONNECTOR_MIN_RUNTIME_VERSION) else 0,
             'plugin_student_module_available': 1 if connector_plugin_diagnostics.get('student_module_model_available') is True else 0,
+            'primary_after_enrollment_read': 1 if read_consistency == 'primary_after_enrollment' else 0,
         }
         if connector_plugin_learning_counts:
             connector_counts['plugin_enrolled'] = int(connector_plugin_learning_counts.get('enrolled') or 0)
@@ -844,7 +857,8 @@ def sync_class_full_cms_flow(
           2. If Course CMS is still missing, stop without creating CMS accounts.
           3. Resolve/create CMS accounts from RollNumber only after mapping exists.
           4. Enroll learners and add AP teachers as Limited Staff.
-          5. Pull progress, total grade and component/quiz grades.
+          5. Pull progress/grades once from primary so the enrollment write is visible.
+             Later manual/scheduled reports continue to read the replica.
         """
         self.assert_can_access_class(user, class_id)
         cls = self.db.get(AcademicClass, class_id)
@@ -910,7 +924,13 @@ def sync_class_full_cms_flow(
 
         learning_result = None
         if sync_learning and getattr(settings, 'academic_full_sync_learning_after_enrollment', True):
-            learning_result = self.sync_class_learning_insight(user, class_id, force=force, limit=limit)
+            learning_result = self.sync_class_learning_insight(
+                user,
+                class_id,
+                force=force,
+                limit=limit,
+                immediate_after_enrollment=True,
+            )
             for key, value in (learning_result.get('counts') or {}).items():
                 counts[f'learning_{key}'] = int(value or 0)
 
