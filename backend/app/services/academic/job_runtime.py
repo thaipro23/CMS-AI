@@ -10,23 +10,35 @@ from app.core.config import settings
 ORPHANED_JOB_CODE = 'CELERY_JOB_ORPHANED'
 
 
-def enqueue_job_task(task: Any, job_id: str, *, queue: str, attempt: int = 1) -> dict[str, Any]:
+def enqueue_job_task(
+    task: Any,
+    job_id: str,
+    *,
+    queue: str,
+    attempt: int = 1,
+    countdown_seconds: int | None = None,
+) -> dict[str, Any]:
     """Enqueue one durable job and return metadata that can be audited/retried."""
     task_name = str(getattr(task, 'name', None) or getattr(task, '__name__', 'unknown_task'))
     clean_attempt = max(1, int(attempt or 1))
     task_id = f'{task_name}:{job_id}:{clean_attempt}:{uuid.uuid4()}'
     kwargs = {'args': [job_id], 'task_id': task_id, 'queue': queue}
+    if countdown_seconds is not None:
+        kwargs['countdown'] = max(0, int(countdown_seconds))
     if bool(getattr(settings, 'task_always_eager', False)) and hasattr(task, 'apply'):
         result = task.apply(**kwargs)
     else:
         result = task.apply_async(**kwargs)
-    return {
+    metadata = {
         'task_name': task_name,
         'celery_task_id': str(getattr(result, 'id', None) or task_id),
         'queue': queue,
         'attempt': clean_attempt,
         'enqueued_at': datetime.utcnow().isoformat(),
     }
+    if countdown_seconds is not None:
+        metadata['countdown_seconds'] = max(0, int(countdown_seconds))
+    return metadata
 
 
 def persist_enqueue_metadata(job: Any, metadata: dict[str, Any]) -> None:
@@ -92,4 +104,3 @@ def reconcile_stale_rows(
         job.updated_at = check_time
         changed.append(job)
     return changed
-

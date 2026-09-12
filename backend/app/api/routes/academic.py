@@ -474,6 +474,50 @@ def _advisory_xact_lock_for_key(db: Session, key: str) -> None:
         # Never fail an operator action only because the defensive lock is unavailable.
         pass
 
+
+def reconcile_class_sync_jobs(db: Session, *, now: datetime | None = None) -> int:
+    rows = db.query(AcademicClassSyncJob).filter(
+        AcademicClassSyncJob.status.in_(['queued', 'running']),
+    ).all()
+    changed = reconcile_stale_rows(
+        rows,
+        now=now,
+        queued_timeout_seconds=int(settings.academic_job_queued_stale_seconds),
+        running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
+    )
+    if changed:
+        db.add_all(changed)
+        db.commit()
+    return len(changed)
+
+
+def reconcile_bulk_operation_jobs(db: Session, *, now: datetime | None = None) -> int:
+    # Expire children first. A live child extends its parent lease, while an
+    # orphaned child must not keep the parent alive forever.
+    reconcile_class_sync_jobs(db, now=now)
+    active_parent_ids = {
+        str(value)
+        for (value,) in db.query(AcademicClassSyncJob.parent_job_id).filter(
+            AcademicClassSyncJob.parent_job_id.is_not(None),
+            AcademicClassSyncJob.status.in_(['queued', 'running']),
+        ).distinct().all()
+        if value
+    }
+    rows = db.query(AcademicBulkOperationJob).filter(
+        AcademicBulkOperationJob.status.in_(['queued', 'running']),
+    ).all()
+    changed = reconcile_stale_rows(
+        rows,
+        now=now,
+        queued_timeout_seconds=int(settings.academic_job_queued_stale_seconds),
+        running_timeout_seconds=int(settings.academic_bulk_sync_stale_seconds),
+        active_parent_ids=active_parent_ids,
+    )
+    if changed:
+        db.add_all(changed)
+        db.commit()
+    return len(changed)
+
 def _enqueue_class_sync_job(
     *,
     db: Session,
@@ -486,6 +530,7 @@ def _enqueue_class_sync_job(
     auto_map_course: bool | None = None,
     sync_learning: bool | None = None,
 ) -> AcademicClassSyncJob:
+    reconcile_class_sync_jobs(db)
     service = AcademicService(db)
     service.assert_can_access_class(user, class_id)
     class_row = db.get(AcademicClass, class_id)
@@ -554,7 +599,21 @@ def _enqueue_class_sync_job(
     db.commit()
     db.refresh(job)
     from app.worker import academic_class_sync_task
-    academic_class_sync_task.delay(job.id)
+    try:
+        metadata = enqueue_job_task(academic_class_sync_task, job.id, queue='sync')
+    except Exception as exc:
+        mark_enqueue_failed(job, exc)
+        db.add(job)
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail='Không đưa được tác vụ đồng bộ lớp vào hàng đợi Celery/Redis. '
+            'Kiểm tra worker sync rồi thử lại.',
+        ) from exc
+    persist_enqueue_metadata(job, metadata)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
     return job
 
 
@@ -2498,6 +2557,7 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
     """
     if not payload.term_id:
         raise HTTPException(status_code=422, detail='Thiếu học kỳ để auto map tất cả')
+    reconcile_bulk_operation_jobs(db)
     branch_value = payload.branch.strip().lower() if payload.branch and payload.branch.strip() else None
     campus_value = payload.campus.strip().lower() if payload.campus and payload.campus.strip() else None
     rbac = BusinessRBACService(db)
@@ -2613,7 +2673,25 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
     db.commit()
     db.refresh(job)
     from app.worker import academic_subject_auto_map_all_sync_task
-    academic_subject_auto_map_all_sync_task.delay(job.id)
+    try:
+        metadata = enqueue_job_task(
+            academic_subject_auto_map_all_sync_task,
+            job.id,
+            queue='sync',
+        )
+    except Exception as exc:
+        mark_enqueue_failed(job, exc)
+        db.add(job)
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail='Không đưa được Auto map tất cả vào hàng đợi Celery/Redis. '
+            'Kiểm tra worker sync rồi thử lại.',
+        ) from exc
+    persist_enqueue_metadata(job, metadata)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
     message = 'Đã tạo job Auto map tất cả. Bạn có thể F5 hoặc chuyển màn hình; tiến trình vẫn chạy trong worker và hiển thị ở /jobs.'
     log_audit(
         db,
@@ -2654,6 +2732,7 @@ def list_academic_bulk_operation_jobs(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    reconcile_bulk_operation_jobs(db)
     query = db.query(AcademicBulkOperationJob)
     if status_filter and status_filter != 'all':
         if status_filter == 'active':
@@ -2677,6 +2756,7 @@ def get_academic_bulk_operation_job(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    reconcile_bulk_operation_jobs(db)
     job = db.get(AcademicBulkOperationJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail='Không tìm thấy job xử lý hàng loạt')
@@ -3093,6 +3173,7 @@ def list_recent_class_sync_jobs(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    reconcile_class_sync_jobs(db)
     service = AcademicService(db)
     query = db.query(AcademicClassSyncJob)
     if class_id:
@@ -3122,6 +3203,7 @@ def get_class_sync_job(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    reconcile_class_sync_jobs(db)
     AcademicService(db).assert_can_access_class(user, class_id)
     job = db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.id == job_id, AcademicClassSyncJob.class_id == class_id).first()
     if not job:
@@ -3136,6 +3218,7 @@ def list_class_sync_jobs(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    reconcile_class_sync_jobs(db)
     AcademicService(db).assert_can_access_class(user, class_id)
     return db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.class_id == class_id).order_by(AcademicClassSyncJob.created_at.desc()).limit(limit).all()
 

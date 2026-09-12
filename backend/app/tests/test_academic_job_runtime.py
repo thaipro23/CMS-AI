@@ -105,6 +105,21 @@ def test_enqueue_metadata_records_real_task_id_queue_and_attempt():
     }]
 
 
+def test_continuation_enqueue_applies_bounded_countdown():
+    task = _Task()
+
+    metadata = enqueue_job_task(
+        task,
+        'parent-1',
+        queue='sync',
+        attempt=2,
+        countdown_seconds=10,
+    )
+
+    assert metadata['countdown_seconds'] == 10
+    assert task.calls[0]['countdown'] == 10
+
+
 def test_persist_enqueue_metadata_keeps_last_ten_attempts():
     job = _job(status='queued', age_seconds=0, started=False)
     job.result_json = {'enqueue_history': [{'attempt': value} for value in range(1, 11)]}
@@ -113,4 +128,3 @@ def test_persist_enqueue_metadata_keeps_last_ten_attempts():
 
     assert [item['attempt'] for item in job.result_json['enqueue_history']] == list(range(2, 12))
     assert job.result_json['enqueue'] == {'attempt': 11}
-
