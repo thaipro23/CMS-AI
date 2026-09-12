@@ -1,0 +1,31 @@
+name: Temporary package verified RBAC workspace
+
+on:
+  push:
+    branches:
+      - feat/import-quiz-cms-old-su26
+    paths:
+      - .github/workflows/tmp-package-rbac-final.yml
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/import-quiz-cms-old-su26
+      - name: Build workspace ZIP
+        run: |
+          rm -f .github/workflows/tmp-package-rbac-final.yml
+          zip -qr /tmp/DASH_CMS_WORKSPACE_2026-09-12_RBAC_BRANCH_ADMIN_FINAL.zip . -x '.git/*'
+          sha256sum /tmp/DASH_CMS_WORKSPACE_2026-09-12_RBAC_BRANCH_ADMIN_FINAL.zip | tee /tmp/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DASH_CMS_WORKSPACE_2026-09-12_RBAC_BRANCH_ADMIN_FINAL
+          path: |
+            /tmp/DASH_CMS_WORKSPACE_2026-09-12_RBAC_BRANCH_ADMIN_FINAL.zip
+            /tmp/SHA256.txt
+          if-no-files-found: error
