@@ -155,9 +155,13 @@ export default function UsersPage() {
   }, [allRoles, businessPermissions, canAssignCampusOwners, isSystemAdmin])
   const visibleRoles = allRoles.filter((role) => grantableRoleCodes.has(role.code))
   const availableScopes = form.role_code === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS'] : (allowedScopesByRole[form.role_code] || ['SYSTEM'])
+  const campusScopeMode = form.role_code === 'CAMPUS_OWNER'
+    ? (form.scope_type === 'BRANCH' ? (selectedScopeIds[0] === 'ptcd' ? 'BRANCH_PTCD' : 'BRANCH_POLY') : 'CAMPUS')
+    : form.scope_type
+  const isBranchAdminGrant = form.role_code === 'CAMPUS_OWNER' && form.scope_type === 'BRANCH'
   const scopeOptions = useMemo(() => {
     const needle = scopeSearch.trim().toLowerCase()
-    const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : 'user.manage_all'
+    const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : form.role_code === 'CAMPUS_OWNER' ? 'campus_owner.assign' : 'user.manage_all'
     const filter = <T extends { id: string; label: string; path: string; target: Parameters<typeof canScope>[1] }>(rows: T[]) => rows
       .filter((row) => canScope(requiredPermission, row.target))
       .filter((row) => needle ? [row.id, row.label, row.path].some((value) => String(value || '').toLowerCase().includes(needle)) : true)
@@ -167,7 +171,7 @@ export default function UsersPage() {
     if (form.scope_type === 'DEPARTMENT') return filter(departments.map((d) => ({ id: d.id, label: `${d.code} · ${d.name}`, path: `Bộ môn / ${d.code}`, target: { scopeType: 'DEPARTMENT' as const, scopeId: d.id, departmentId: d.id } })))
     if (form.scope_type === 'SUBJECT') return filter(subjects.map((subject) => ({ id: subject.id, label: `${subject.code} · ${subject.name}`, path: `Môn / ${subject.code}`, target: { scopeType: 'SUBJECT' as const, scopeId: subject.id, subjectId: subject.id, departmentId: subject.department_id } })))
     if (form.scope_type === 'SUBJECT_VERSION') return filter(offerings.map((offering) => ({ id: offering.id, label: `${offering.code} · ${offering.name || offering.version_code}`, path: `Version / ${offering.code}`, target: { scopeType: 'SUBJECT_VERSION' as const, scopeId: offering.id, subjectOfferingId: offering.id, subjectId: offering.subject_id, departmentId: offering.department_id || undefined } })))
-    if (form.scope_type === 'CAMPUS' && canAssignCampusOwners) return [...(isSystemAdmin ? [{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }] : []), ...campuses.map((campus) => ({ id: campus.campus_code, label: `${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${campus.campus_code.toUpperCase()}` }))].filter((item) => !needle || `${item.id} ${item.label}`.toLowerCase().includes(needle))
+    if (form.scope_type === 'CAMPUS' && canAssignCampusOwners) return filter(campuses.map((campus) => ({ id: campus.campus_code.toLowerCase(), label: `${String(campus.branch || '').toUpperCase()} · ${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${String(campus.branch || '').toUpperCase()} / ${campus.campus_code.toUpperCase()}`, target: { scopeType: 'CAMPUS' as const, scopeId: campus.campus_code, campus: campus.campus_code, branch: campus.branch || undefined } })))
     return []
   }, [campuses, canAssignCampusOwners, canScope, departments, form.role_code, form.scope_type, isSystemAdmin, offerings, scopeSearch, subjects])
 
@@ -229,10 +233,29 @@ export default function UsersPage() {
   }, [visibleRoles.map((role) => role.code).join('|')])
 
   function syncScopeForRole(nextRole: BusinessRoleCode) {
-    const scopes = allowedScopesByRole[nextRole] || ['SYSTEM']
+    const scopes = nextRole === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS' as BusinessScopeType] : (allowedScopesByRole[nextRole] || ['SYSTEM'])
+    const firstScope = scopes[0]
     setScopeSearch('')
-    setSelectedScopeIds(scopes[0] === 'SYSTEM' ? ['*'] : [])
-    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: scopes[0] }))
+    setSelectedScopeIds(firstScope === 'SYSTEM' ? ['*'] : (nextRole === 'CAMPUS_OWNER' && firstScope === 'BRANCH' ? ['poly'] : []))
+    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: firstScope }))
+  }
+
+  function selectScopeMode(nextMode: string) {
+    setScopeSearch('')
+    if (form.role_code === 'CAMPUS_OWNER') {
+      if (nextMode === 'BRANCH_POLY' || nextMode === 'BRANCH_PTCD') {
+        const branch = nextMode === 'BRANCH_PTCD' ? 'ptcd' : 'poly'
+        setSelectedScopeIds([branch])
+        setForm((prev) => ({ ...prev, scope_type: 'BRANCH' }))
+        return
+      }
+      setSelectedScopeIds([])
+      setForm((prev) => ({ ...prev, scope_type: 'CAMPUS' }))
+      return
+    }
+    const nextScope = nextMode as BusinessScopeType
+    setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : [])
+    setForm((prev) => ({ ...prev, scope_type: nextScope }))
   }
 
   async function loadAll(clearMessage = true) {
@@ -241,19 +264,21 @@ export default function UsersPage() {
     try {
       const headers = authHeaders()
       const canLoadBankGrantScopes = isSystemAdmin || businessPermissions.includes('subject.assign_owner') || businessPermissions.includes('reviewer.assign')
+      const canLoadPolyCampuses = isSystemAdmin || canScope('campus_owner.assign', { scopeType: 'BRANCH', scopeId: 'poly', branch: 'poly' })
+      const canLoadPtcdCampuses = isSystemAdmin || canScope('campus_owner.assign', { scopeType: 'BRANCH', scopeId: 'ptcd', branch: 'ptcd' })
       const [roleRows, assignmentRows, departmentRows, campusPolyRows, campusPtcdRows] = await Promise.all([
         getRBACRoles(headers),
         getRoleAssignments(headers, { includeRevoked }),
         canLoadBankGrantScopes ? searchDepartments(headers) : Promise.resolve([] as Department[]),
-        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),
-        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),
+        canLoadPolyCampuses ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),
+        canLoadPtcdCampuses ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),
       ])
       setRoles(roleRows)
       setAssignments(assignmentRows.items)
       setDepartments(departmentRows)
       const campusMap = new Map<string, AcademicCampus>()
       ;[...campusPolyRows, ...campusPtcdRows].forEach((campus) => {
-        const key = campus.campus_code.toLowerCase()
+        const key = `${String(campus.branch || '').toLowerCase()}:${campus.campus_code.toLowerCase()}`
         if (!campusMap.has(key)) campusMap.set(key, campus)
       })
       setCampuses(Array.from(campusMap.values()).sort((a, b) => a.campus_code.localeCompare(b.campus_code)))
@@ -305,7 +330,15 @@ export default function UsersPage() {
         grant_reason: form.grant_reason.trim() || 'Gán từ màn phân quyền',
         sync_openedx: true,
       }, authHeaders(true))
-      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.` })
+      const rawProvisioning = result.items[0]?.metadata_json?.cms_provisioning
+      const provisioning = rawProvisioning && typeof rawProvisioning === 'object' ? rawProvisioning as Record<string, unknown> : null
+      const provisionedUsername = String(provisioning?.username || derivedUsername)
+      const accountMessage = provisioning?.status === 'created'
+        ? ` Đã tạo tài khoản CMS: ${provisionedUsername}.`
+        : provisioning?.status === 'verified'
+          ? ` Tài khoản CMS đã tồn tại: ${provisionedUsername}.`
+          : ''
+      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.${accountMessage}` })
       setForm((prev) => ({ ...prev, user_id: '', email: '', grant_reason: '', sync_openedx: false }))
       setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : [])
       setGrantOpen(false)
@@ -432,16 +465,16 @@ export default function UsersPage() {
       {!visibleRoles.length ? <ContentNotice tone="warning">Bạn không có quyền gán thêm vai trò trong phạm vi hiện tại.</ContentNotice> : <div className="rbac-grant-form">
         <div className="form-grid two-columns">
           <label>Vai trò<select className="input" value={form.role_code} onChange={(event) => syncScopeForRole(event.target.value as BusinessRoleCode)}>{visibleRoles.map((role) => <option key={role.code} value={role.code}>{roleLabels[role.code] || role.name}</option>)}</select></label>
-          <label>Loại phạm vi<select className="input" value={form.scope_type} onChange={(event) => { const nextScope = event.target.value as BusinessScopeType; setScopeSearch(''); setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : []); setForm({ ...form, scope_type: nextScope }) }}>{availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>
+          <label>Loại phạm vi<select className="input" value={campusScopeMode} onChange={(event) => selectScopeMode(event.target.value)}>{form.role_code === 'CAMPUS_OWNER' ? <>{isSystemAdmin && <option value="BRANCH_POLY">Admin Poly</option>}{isSystemAdmin && <option value="BRANCH_PTCD">Admin PTCĐ</option>}<option value="CAMPUS">Admin cơ sở</option></> : availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>
           <label>Email CMS<input className="input" type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value, user_id: usernameFromEmail(event.target.value) })} placeholder="user@fpt.edu.vn" /><small>Username tự tạo: <b>{usernameFromEmail(form.email) || '—'}</b></small></label>
         </div>
         <div className="permission-role-description"><b>{roleLabels[form.role_code]}</b><span>{selectedRole?.description || roleSubtitles[form.role_code]}</span></div>
-        {form.scope_type !== 'SYSTEM' ? <div className="rbac-multi-scope-picker">
+        {form.scope_type !== 'SYSTEM' && !isBranchAdminGrant ? <div className="rbac-multi-scope-picker">
           <div className="rbac-scope-toolbar"><label className="rbac-scope-search">Tìm phạm vi<input className="input" value={scopeSearch} onChange={(event) => setScopeSearch(event.target.value)} placeholder="Mã hoặc tên phạm vi..." /></label><div className="button-row"><button className="btn small secondary" type="button" onClick={selectAllVisibleScopes} disabled={!scopeOptions.length}>Chọn kết quả đang hiển thị</button><button className="btn small secondary" type="button" onClick={() => setSelectedScopeIds([])} disabled={!selectedScopeIds.length}>Bỏ chọn</button></div></div>
           <div className="rbac-scope-selection-summary"><b>{selectedScopeIds.length}</b><span>phạm vi đã chọn</span>{scopeOptionsLoading ? <small>Đang tải danh mục...</small> : null}</div>
           <div className="rbac-scope-option-list">{scopeOptions.map((item) => <label className={`rbac-scope-option ${selectedScopeIds.includes(item.id) ? 'selected' : ''}`} key={item.id}><input type="checkbox" checked={selectedScopeIds.includes(item.id)} onChange={() => toggleScopeOption(item.id)} /><span><b>{item.label}</b><small>{item.path}</small></span></label>)}{!scopeOptionsLoading && !scopeOptions.length ? <div className="empty-state small-empty">Không tìm thấy phạm vi phù hợp.</div> : null}</div>
-        </div> : <div className="permission-effect-preview"><span>Quyền sẽ có hiệu lực</span><b>{roleLabels[form.role_code]} · Toàn hệ thống</b></div>}
-        {selectedScopeOptions.length ? <div className="permission-effect-preview"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}
+        </div> : <div className="permission-effect-preview"><span>Quyền sẽ có hiệu lực</span><b>{isBranchAdminGrant ? (selectedScopeIds[0] === 'ptcd' ? 'Admin PTCĐ' : 'Admin Poly') : `${roleLabels[form.role_code]} · Toàn hệ thống`}</b></div>}
+        {!isBranchAdminGrant && selectedScopeOptions.length ? <div className="permission-effect-preview"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}
         <label>Lý do cấp quyền<input className="input" value={form.grant_reason} onChange={(event) => setForm({ ...form, grant_reason: event.target.value })} placeholder="Ví dụ: Phụ trách COM1071 và COM1072 Summer 2026" /></label>
         <ContentNotice tone="info">Khi gán quyền, hệ thống tự tạo/kiểm tra tài khoản CMS và UserProfile. Tài khoản mới không có mật khẩu local; đăng nhập bằng SSO.</ContentNotice>
       </div>}

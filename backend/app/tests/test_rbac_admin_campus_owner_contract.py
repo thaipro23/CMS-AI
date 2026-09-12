@@ -33,7 +33,8 @@ def assignment(scope_type: str, scope_id: str, role_code: str = 'CAMPUS_OWNER'):
 
 
 def test_only_all_campus_owner_gets_small_campus_operations_bundle():
-    assert _is_all_campus_assignment(assignment('CAMPUS', '*')) is True
+    assert _is_all_campus_assignment(assignment('BRANCH', 'poly')) is True
+    assert _is_all_campus_assignment(assignment('CAMPUS', '*')) is False
     assert _is_all_campus_assignment(assignment('SYSTEM', '*')) is True
     assert _is_all_campus_assignment(assignment('CAMPUS', 'HN')) is False
     assert 'academic.catalog.manage' in CAMPUS_OWNER_ALL_CAMPUS_PERMISSIONS
@@ -77,7 +78,7 @@ def db(monkeypatch):
     engine.dispose()
 
 
-def grant(db, role='CAMPUS_OWNER', scope_type='CAMPUS', scope_id='*', user_id='owner'):
+def grant(db, role='CAMPUS_OWNER', scope_type='BRANCH', scope_id='poly', user_id='owner'):
     item = UserRoleAssignment(user_id=user_id, role_code=role, scope_type=scope_type, scope_id=scope_id)
     db.add(item)
     db.commit()
@@ -107,9 +108,9 @@ def test_database_admin_grant_and_revocation_apply_to_existing_viewer_session(db
         require_permission('manage_settings')(user, db)
 
 
-@pytest.mark.parametrize('scope_type', ['CAMPUS', 'SYSTEM'])
-def test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses(db, scope_type):
-    own = grant(db, scope_type=scope_type)
+@pytest.mark.parametrize(('scope_type', 'scope_id'), [('BRANCH', 'poly'), ('SYSTEM', '*')])
+def test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses(db, scope_type, scope_id):
+    own = grant(db, scope_type=scope_type, scope_id=scope_id)
     user = actor(db)
     service = BusinessRBACService(db)
     assert _require_academic_catalog_admin(user, db) is user
@@ -120,10 +121,13 @@ def test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses
     rows = list_assignments(user=user, db=db)['items']
     assert {row['id']: row['can_revoke'] for row in rows} == {own.id: False, child.id: True}
     assert service.revoke_assignment(child.id, user).revoked_at is not None
-    for role, target_type, target_id in [('SYSTEM_ADMIN', 'SYSTEM', '*'), ('CAMPUS_OWNER', 'CAMPUS', '*'), ('CAMPUS_OWNER', 'SYSTEM', '*')]:
+    for role, target_type, target_id in [('SYSTEM_ADMIN', 'SYSTEM', '*'), ('CAMPUS_OWNER', 'BRANCH', 'poly'), ('CAMPUS_OWNER', 'SYSTEM', '*')]:
         with pytest.raises(HTTPException) as caught:
             service.create_assignment(actor=user, user_id='other', email=None, role_code=role, scope_type=target_type, scope_id=target_id)
         assert caught.value.status_code == 403
+    with pytest.raises(HTTPException) as caught:
+        service.create_assignment(actor=user, user_id='other', email=None, role_code='CAMPUS_OWNER', scope_type='CAMPUS', scope_id='*')
+    assert caught.value.status_code == 400
     assert not service.can_grant(user, 'SUBJECT_OWNER', 'SUBJECT', 'any-subject')
     assert not service.can_grant(user, 'DEPARTMENT_HEAD', 'DEPARTMENT', 'any-department')
     with pytest.raises(HTTPException):
@@ -131,7 +135,7 @@ def test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses
 
 
 def test_individual_campus_owner_cannot_manage_global_catalog_or_delegate(db):
-    grant(db, scope_id='hn')
+    grant(db, scope_type='CAMPUS', scope_id='hn')
     user = actor(db)
     service = BusinessRBACService(db)
     assert service.has_any_business_permission(user, 'academic.manage_campus')
@@ -179,6 +183,7 @@ def test_all_campus_owner_can_save_read_and_retire_semester_through_http(db):
         assert client.get(f'/academic/terms/{term_id}/with-blocks').status_code == 200
         assert client.delete(f'/academic/terms/{term_id}').status_code == 200
         row = db.query(UserRoleAssignment).filter_by(user_id='owner').one()
+        row.scope_type = 'CAMPUS'
         row.scope_id = 'hn'
         db.commit()
         assert client.post('/academic/terms', json={'term_code': 'SP27', 'term_name': 'Spring 2027', 'branch': 'poly'}).status_code == 403

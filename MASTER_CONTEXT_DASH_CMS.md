@@ -339,3 +339,15 @@ NEXT ACTION:
 - GitHub Actions RED→GREEN verification run `34604486553` completed successfully: RED reproduced before patch, GREEN passed after patch, and `py_compile` passed for changed production modules.
 - This verifies source/tests only. Kubernetes deployment and production runtime verification have not been performed in this change.
 
+## 2026-09-12 — RBAC branch admins and email-first CMS provisioning
+
+- Permission grant UI is email-first; CMS/Open edX username is derived from the email local-part.
+- SYSTEM_ADMIN can grant Admin Poly (`CAMPUS_OWNER + BRANCH:poly`), Admin PTCĐ (`BRANCH:ptcd`), or Admin cơ sở (`CAMPUS:<code>`).
+- Branch admins can delegate only individual campuses inside their own branch. Campus-scoped admins cannot delegate any permission. Backend remains authoritative.
+- Campus loading and picker filtering are branch-aware and the UI no longer deduplicates only by campus_code.
+- CMS identity is provisioned/verified before RBAC assignment commit. The UI reports whether the CMS account was created or already existed.
+- Regression: `backend/app/tests/test_rbac_branch_admin_provisioning_contract.py`.
+- Verification includes RBAC tests, existing Sonar source-contract tests, backend compile/Ruff fatal checks, frontend lint/typecheck/production build, standalone build assertion, and `git diff --check`.
+- External SonarQube Quality Gate is not claimed without an observed Sonar/Jenkins gate result.
+- Kubernetes deployment and production runtime verification remain separate.
+
