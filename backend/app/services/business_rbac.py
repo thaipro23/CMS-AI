@@ -13,6 +13,7 @@ from app.models.rbac import RBACPermission, RBACRole, RBACRolePermission, UserRo
 from app.models.question_bank import Department, Subject, SubjectChapter, SubjectOffering, QuestionBankRelease, QuestionBankVersion
 from app.core.config import settings
 from app.services.identity import login_by_user_ids, normalize_email_identity
+from app.services.cms_staff_policy import cms_staff_required_for_role, validate_cms_provisioning
 
 SYSTEM_ADMIN = 'SYSTEM_ADMIN'
 DEPARTMENT_HEAD = 'DEPARTMENT_HEAD'
@@ -263,7 +264,7 @@ class BusinessRBACService:
         return raw_user_id, None
 
     @staticmethod
-    def _provision_cms_identity(*, username: str, email: str) -> dict[str, Any]:
+    def _provision_cms_identity(*, username: str, email: str, require_staff: bool = False) -> dict[str, Any]:
         """Create/verify the CMS account before committing a new permission."""
         from app.services.openedx_student_insight import OpenEdXConnectorClient
 
@@ -275,13 +276,11 @@ class BusinessRBACService:
                 'person_type': 'teacher',
                 'role': 'teacher',
                 'full_name': username,
+                'require_staff': bool(require_staff),
             },
         ], create_missing=True)
         match = next((row for row in rows if str(row.get('username') or row.get('openedx_username') or row.get('ap_username') or '').strip().lower() == username.lower()), None)
-        if not match or match.get('exists') is not True:
-            raise RuntimeError('Open edX Connector chưa xác nhận tài khoản CMS đã tồn tại.')
-        if match.get('user_profile_ok') is False:
-            raise RuntimeError('Tài khoản CMS chưa có UserProfile hợp lệ.')
+        match = validate_cms_provisioning(match or {}, require_staff=require_staff)
         if match.get('created') and match.get('password_login_enabled') is True:
             raise RuntimeError('Tài khoản CMS mới không được phép có mật khẩu local.')
         return {
@@ -291,6 +290,9 @@ class BusinessRBACService:
             'openedx_user_id': match.get('openedx_user_id'),
             'profile_ok': match.get('user_profile_ok') is not False,
             'password_policy': match.get('password_policy') or ('unusable_password' if match.get('created') else 'existing'),
+            'is_staff': match.get('is_staff') is True,
+            'is_superuser': match.get('is_superuser') is True,
+            'staff_updated': match.get('staff_updated') is True,
         }
 
     def is_legacy_system_admin(self, user: Any) -> bool:
@@ -577,6 +579,8 @@ class BusinessRBACService:
         role_code = role_code.strip().upper()
         if role_code == CAMPUS_MANAGER:
             raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
+        if cms_staff_required_for_role(role_code) and not email:
+            raise HTTPException(status_code=422, detail='Chủ cơ sở cần email để tạo và xác nhận quyền CMS staff.')
         scope_type = scope_type.strip().upper()
         scope_id = (scope_id or '*').strip() or '*'
         if scope_type in {'BRANCH', 'CAMPUS'}:
@@ -584,7 +588,11 @@ class BusinessRBACService:
         self._validate_assignment_scope(role_code, scope_type, scope_id)
         if not self.can_grant(actor, role_code, scope_type, scope_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được cấp vai trò này trong phạm vi đã chọn.')
-        provisioning = self._provision_cms_identity(username=user_id, email=email) if email else None
+        provisioning = self._provision_cms_identity(
+            username=user_id,
+            email=email,
+            require_staff=cms_staff_required_for_role(role_code),
+        ) if email else None
         existing = self.active_assignments_query().filter(
             UserRoleAssignment.user_id == user_id,
             UserRoleAssignment.role_code == role_code,
@@ -633,6 +641,8 @@ class BusinessRBACService:
         role_code = role_code.strip().upper()
         if role_code == CAMPUS_MANAGER:
             raise HTTPException(status_code=400, detail='Hãy chọn vai trò Chủ cơ sở khi cấp quyền mới.')
+        if cms_staff_required_for_role(role_code) and not email:
+            raise HTTPException(status_code=422, detail='Chủ cơ sở cần email để tạo và xác nhận quyền CMS staff.')
         scope_type = scope_type.strip().upper()
         normalized_ids = list(dict.fromkeys(((value or '*').strip() or '*') for value in scope_ids))
         if scope_type in {'BRANCH', 'CAMPUS'}:
@@ -648,7 +658,11 @@ class BusinessRBACService:
             if not self.can_grant(actor, role_code, scope_type, scope_id):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Bạn không được cấp vai trò này trong phạm vi đã chọn.')
 
-        provisioning = self._provision_cms_identity(username=user_id, email=email) if email else None
+        provisioning = self._provision_cms_identity(
+            username=user_id,
+            email=email,
+            require_staff=cms_staff_required_for_role(role_code),
+        ) if email else None
 
         existing_rows = self.active_assignments_query().filter(
             UserRoleAssignment.user_id == user_id,

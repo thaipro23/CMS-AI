@@ -1486,6 +1486,58 @@ def _should_log_academic_class_sync_success(request_json: dict | None) -> bool:
     return True
 
 
+def _enqueue_delayed_learning_sync_followup(
+    db,
+    *,
+    requested_by: str | None,
+    class_id: str,
+    force: bool,
+    limit: int,
+    requester_context: dict | None,
+    parent_job_id: str | None,
+):
+    """Create/reuse the replica-safe second pass and schedule it with countdown."""
+    from app.models.academic import AcademicClassSyncJob
+    from app.services.academic.two_pass_sync import build_learning_sync_followup
+
+    _advisory_xact_lock_for_key(db, f'academic-learning-followup:{class_id}')
+    existing = (
+        db.query(AcademicClassSyncJob)
+        .filter(
+            AcademicClassSyncJob.class_id == class_id,
+            AcademicClassSyncJob.job_type == 'learning_sync',
+            AcademicClassSyncJob.status.in_(['queued', 'running']),
+        )
+        .order_by(AcademicClassSyncJob.created_at.desc())
+        .first()
+    )
+    if existing:
+        return existing, True
+
+    spec = build_learning_sync_followup(
+        requested_by=requested_by,
+        class_id=class_id,
+        force=force,
+        limit=limit,
+        requester_context=requester_context,
+        parent_job_id=parent_job_id,
+        delay_seconds=getattr(settings, 'academic_learning_sync_replica_delay_seconds', 60),
+    )
+    countdown = int(spec.pop('countdown'))
+    job = AcademicClassSyncJob(
+        **spec,
+        progress_current=0,
+        progress_total=100,
+        progress_label=f'Chờ {countdown} giây để replica đồng bộ enrollment',
+        result_json={},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    academic_class_sync_task.apply_async(args=[job.id], countdown=countdown)
+    return job, False
+
+
 @celery_app.task(name='academic_class_sync_task')
 def academic_class_sync_task(job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
@@ -1588,6 +1640,9 @@ def academic_class_sync_task(job_id: str):
             action = 'academic.learning_sync.class.async'
             label = 'Hoàn tất cập nhật điểm'
         elif job.job_type == 'full_cms_sync':
+            from app.services.academic.two_pass_sync import should_enqueue_learning_followup
+
+            learning_requested = bool(request_json.get('sync_learning', True))
             result = service.sync_class_full_cms_flow(
                 worker_user,
                 job.class_id,
@@ -1595,10 +1650,32 @@ def academic_class_sync_task(job_id: str):
                 limit=limit,
                 mode=job.mode,
                 auto_map_course=bool(request_json.get('auto_map_course', True)),
-                sync_learning=bool(request_json.get('sync_learning', True)),
+                sync_learning=False,
             )
+            if should_enqueue_learning_followup(
+                requested=learning_requested,
+                enabled=bool(getattr(settings, 'academic_full_sync_learning_after_enrollment', True)),
+                flow_status=result.get('status'),
+            ):
+                followup, reused = _enqueue_delayed_learning_sync_followup(
+                    db,
+                    requested_by=job.requested_by,
+                    class_id=job.class_id,
+                    force=force,
+                    limit=configured_limit,
+                    requester_context=request_json.get('requester_context') if isinstance(request_json.get('requester_context'), dict) else {},
+                    parent_job_id=job.id,
+                )
+                result['learning'] = {
+                    'status': 'queued',
+                    'job_id': followup.id,
+                    'delayed_after_enrollment': True,
+                    'reused': reused,
+                    'message': followup.progress_label,
+                }
+                result['message'] = 'Đã tạo/kiểm tra tài khoản và enroll CMS; lượt cập nhật điểm đã được xếp hàng sau thời gian chờ replica.'
             action = 'academic.full_cms_sync.class.async'
-            label = 'Hoàn tất đồng bộ CMS'
+            label = 'Đã enroll CMS và xếp hàng lượt cập nhật điểm' if learning_requested and result.get('learning') else 'Hoàn tất đồng bộ CMS'
         else:
             raise ValueError(f'Unsupported academic class sync job_type: {job.job_type}')
 

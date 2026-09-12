@@ -48,14 +48,17 @@ def test_branch_admin_delegates_only_own_branch_and_campus_admin_cannot_delegate
 def test_email_provisioning_precedes_assignment_and_returns_metadata(db, monkeypatch):
     root = get_user_context(Principal(user_id='root', role='admin', raw_claims={'is_superuser': True}), db)
     calls = []
-    def fake(*, username: str, email: str):
-        calls.append((username, email)); return {'status': 'created', 'username': username, 'email': email, 'openedx_user_id': 123, 'profile_ok': True, 'password_policy': 'unusable_password'}
+    def fake(*, username: str, email: str, require_staff: bool = False):
+        calls.append((username, email, require_staff))
+        return {'status': 'created', 'username': username, 'email': email, 'openedx_user_id': 123, 'profile_ok': True, 'password_policy': 'unusable_password', 'is_staff': require_staff, 'is_superuser': False}
     monkeypatch.setattr(BusinessRBACService, '_provision_cms_identity', staticmethod(fake))
     items, created, reused = BusinessRBACService(db).create_assignments_batch(actor=root, user_id='wrong', email='New.Admin@fpt.edu.vn', role_code='CAMPUS_OWNER', scope_type='BRANCH', scope_ids=['poly'])
-    assert calls == [('new.admin', 'new.admin@fpt.edu.vn')]
+    assert calls == [('new.admin', 'new.admin@fpt.edu.vn', True)]
     assert (created, reused) == (1, 0)
     assert items[0].user_id == 'new.admin'
     assert items[0].metadata_json['cms_provisioning']['status'] == 'created'
+    assert items[0].metadata_json['cms_provisioning']['is_staff'] is True
+    assert items[0].metadata_json['cms_provisioning']['is_superuser'] is False
 
 def test_failed_provisioning_creates_no_assignment(db, monkeypatch):
     root = get_user_context(Principal(user_id='root', role='admin', raw_claims={'is_superuser': True}), db)
@@ -65,9 +68,22 @@ def test_failed_provisioning_creates_no_assignment(db, monkeypatch):
         BusinessRBACService(db).create_assignments_batch(actor=root, user_id='ignored', email='fail.user@fpt.edu.vn', role_code='CAMPUS_OWNER', scope_type='BRANCH', scope_ids=['ptcd'])
     assert db.query(UserRoleAssignment).filter_by(user_id='fail.user').count() == 0
 
+def test_campus_owner_without_email_is_rejected_before_assignment(db):
+    root = get_user_context(Principal(user_id='root', role='admin', raw_claims={'is_superuser': True}), db)
+    with pytest.raises(Exception, match='email'):
+        BusinessRBACService(db).create_assignments_batch(
+            actor=root,
+            user_id='campus.owner',
+            email=None,
+            role_code='CAMPUS_OWNER',
+            scope_type='BRANCH',
+            scope_ids=['poly'],
+        )
+    assert db.query(UserRoleAssignment).filter_by(user_id='campus.owner').count() == 0
+
 def test_users_ui_contract():
     page = (ROOT / 'frontend/app/users/page.tsx').read_text(encoding='utf-8')
-    for marker in ['Admin Poly', 'Admin PTCĐ', 'Admin cơ sở', 'canLoadPolyCampuses', 'canLoadPtcdCampuses', 'cms_provisioning', 'Đã tạo tài khoản CMS', 'Tài khoản CMS đã tồn tại', 'branch: campus.branch']:
+    for marker in ['Admin Poly', 'Admin PTCĐ', 'Admin cơ sở', 'canLoadPolyCampuses', 'canLoadPtcdCampuses', 'cms_provisioning', 'Đã tạo tài khoản CMS', 'Tài khoản CMS đã tồn tại', 'Đã xác nhận quyền CMS staff', 'branch: campus.branch']:
         assert marker in page
     assert 'Tài khoản Open edX' not in page
     assert "form.role_code === 'CAMPUS_OWNER' ? 'campus_owner.assign'" in page

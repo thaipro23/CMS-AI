@@ -338,7 +338,10 @@ export default function UsersPage() {
         : provisioning?.status === 'verified'
           ? ` Tài khoản CMS đã tồn tại: ${provisionedUsername}.`
           : ''
-      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.${accountMessage}` })
+      const staffMessage = form.role_code === 'CAMPUS_OWNER' && provisioning?.is_staff === true
+        ? ' Đã xác nhận quyền CMS staff.'
+        : ''
+      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.${accountMessage}${staffMessage}` })
       setForm((prev) => ({ ...prev, user_id: '', email: '', grant_reason: '', sync_openedx: false }))
       setSelectedScopeIds(form.scope_type === 'SYSTEM' ? ['*'] : [])
       setGrantOpen(false)

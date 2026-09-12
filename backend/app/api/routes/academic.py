@@ -3117,8 +3117,34 @@ def sync_class_full_cms_flow(
             limit=payload.limit,
             mode=payload.mode,
             auto_map_course=payload.auto_map_course,
-            sync_learning=payload.sync_learning,
+            sync_learning=False,
         )
+        from app.services.academic.two_pass_sync import should_enqueue_learning_followup
+
+        if should_enqueue_learning_followup(
+            requested=payload.sync_learning,
+            enabled=settings.academic_full_sync_learning_after_enrollment,
+            flow_status=result.get('status'),
+        ):
+            from app.worker import _enqueue_delayed_learning_sync_followup
+
+            followup, reused = _enqueue_delayed_learning_sync_followup(
+                db,
+                requested_by=user.user_id,
+                class_id=class_id,
+                force=payload.force,
+                limit=settings.academic_class_sync_max_students,
+                requester_context=_requester_context_json(user),
+                parent_job_id=None,
+            )
+            result['learning'] = {
+                'status': 'queued',
+                'job_id': followup.id,
+                'delayed_after_enrollment': True,
+                'reused': reused,
+                'message': followup.progress_label,
+            }
+            result['message'] = 'Đã tạo/kiểm tra tài khoản và enroll CMS; lượt cập nhật điểm đã được xếp hàng sau thời gian chờ replica.'
         log_audit(
             db,
             action='academic.full_cms_sync.class',
