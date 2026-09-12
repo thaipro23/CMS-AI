@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
@@ -805,6 +805,43 @@ class AcademicTeacherReportWorkflowService:
             'error_type': exc.__class__.__name__,
         }
 
+    def _teacher_report_class_snapshot_is_fresh(
+        self,
+        cls: AcademicClass,
+        course_id: str,
+        *,
+        max_age_seconds: int,
+        now: datetime | None = None,
+    ) -> bool:
+        """Return true only when every AP roster member has a recent learning snapshot."""
+        age_seconds = max(0, int(max_age_seconds or 0))
+        if age_seconds <= 0:
+            return False
+        student_ids = {
+            str(row[0])
+            for row in self.db.query(AcademicClassStudent.student_id).filter(
+                AcademicClassStudent.class_id == str(cls.id),
+            ).all()
+        }
+        if not student_ids:
+            return True
+        cutoff = (now or datetime.utcnow()) - timedelta(seconds=age_seconds)
+        snapshots = self.db.query(AcademicStudentLearningSnapshot).filter(
+            AcademicStudentLearningSnapshot.class_id == str(cls.id),
+            AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+            AcademicStudentLearningSnapshot.student_id.in_(sorted(student_ids)),
+        ).all()
+        by_student = {str(snapshot.student_id): snapshot for snapshot in snapshots}
+        if set(by_student) != student_ids:
+            return False
+        for snapshot in by_student.values():
+            synced_at = snapshot.learning_synced_at or snapshot.last_synced_at
+            if synced_at is None or synced_at < cutoff:
+                return False
+            if isinstance(snapshot.raw_json, dict) and snapshot.raw_json.get('grade_preserved') is True:
+                return False
+        return True
+
     def refresh_training_teacher_learning_data(
         self,
         user: UserContext,
@@ -816,6 +853,7 @@ class AcademicTeacherReportWorkflowService:
         class_id: str | None = None,
         strict: bool = True,
         progress_callback: Any | None = None,
+        max_snapshot_age_seconds: int = 0,
     ) -> dict[str, Any]:
         """Pull current CMS/Open edX grades before materializing reports.
 
@@ -834,6 +872,7 @@ class AcademicTeacherReportWorkflowService:
                 'refreshed_class_count': 0,
                 'skipped_unmapped_class_count': 0,
                 'failed_class_count': 0,
+                'snapshot_reused_class_count': 0,
                 'failures': [],
                 'message': 'Nguồn Udemy dùng dữ liệu import mới nhất; không gọi CMS/Open edX.',
             }
@@ -843,12 +882,22 @@ class AcademicTeacherReportWorkflowService:
         )
         cms_classes, mapped, skipped_unmapped = self._teacher_report_refresh_targets(classes)
         refreshed = 0
+        snapshot_reused = 0
         failures: list[dict[str, Any]] = []
         total = len(mapped)
 
         for index, (cls, course_id) in enumerate(mapped, start=1):
             if callable(progress_callback):
                 progress_callback(index - 1, total, f'Đang lấy điểm CMS mới nhất: {cls.class_code or cls.id}')
+            if self._teacher_report_class_snapshot_is_fresh(
+                cls,
+                course_id,
+                max_age_seconds=max_snapshot_age_seconds,
+            ):
+                snapshot_reused += 1
+                if callable(progress_callback):
+                    progress_callback(index, total, f'Dùng snapshot mới nhất: {cls.class_code or cls.id}')
+                continue
             try:
                 refresh_result = self.sync_class_learning_insight(
                     user, str(cls.id), force=True, limit=20000,
@@ -872,6 +921,7 @@ class AcademicTeacherReportWorkflowService:
             'class_count': len(cms_classes),
             'mapped_class_count': total,
             'refreshed_class_count': refreshed,
+            'snapshot_reused_class_count': snapshot_reused,
             'skipped_unmapped_class_count': skipped_unmapped,
             'failed_class_count': len(failures),
             'failures': failures[:50],
@@ -1716,4 +1766,3 @@ class AcademicTeacherReportWorkflowService:
                     break
             result['student_watch_rows'] = watch_rows
         return result
-

@@ -122,6 +122,12 @@ from app.services.business_rbac import BusinessRBACService
 from app.core.json_safe import json_safe_value
 from app.core.operation_rate_limit import enforce_operation_rate_limit
 from app.core.config import settings
+from app.services.academic.job_runtime import (
+    enqueue_job_task,
+    mark_enqueue_failed,
+    persist_enqueue_metadata,
+    reconcile_stale_rows,
+)
 from app.core.errors import public_http_exception
 from app.services.question_bank.helpers import safe_upload_filename
 
@@ -786,6 +792,22 @@ def _require_training_write_permission(
         detail='Bạn không có quyền cấu hình đào tạo.',
     )
 
+
+def reconcile_teacher_report_jobs(db: Session, *, now: datetime | None = None) -> int:
+    rows = db.query(AcademicTeacherReportJob).filter(
+        AcademicTeacherReportJob.status.in_(['queued', 'running']),
+    ).all()
+    changed = reconcile_stale_rows(
+        rows,
+        now=now,
+        queued_timeout_seconds=int(settings.academic_job_queued_stale_seconds),
+        running_timeout_seconds=int(settings.academic_teacher_report_stale_seconds),
+    )
+    if changed:
+        db.add_all(changed)
+        db.commit()
+    return len(changed)
+
 def _enqueue_teacher_report_job(
     *,
     db: Session,
@@ -800,6 +822,7 @@ def _enqueue_teacher_report_job(
     teacher_id: str | None = None,
     class_id: str | None = None,
 ) -> AcademicTeacherReportJob:
+    reconcile_teacher_report_jobs(db)
     if not term_id:
         raise HTTPException(status_code=422, detail='Thiếu học kỳ để chạy báo cáo giáo viên')
     rbac = BusinessRBACService(db)
@@ -885,7 +908,20 @@ def _enqueue_teacher_report_job(
     db.commit()
     db.refresh(job)
     from app.worker import academic_teacher_report_job_task
-    academic_teacher_report_job_task.delay(job.id)
+    try:
+        metadata = enqueue_job_task(academic_teacher_report_job_task, job.id, queue='exports')
+    except Exception as exc:
+        mark_enqueue_failed(job, exc)
+        db.add(job)
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail='Không đưa được báo cáo vào hàng đợi Celery/Redis. Kiểm tra worker-heavy rồi thử lại.',
+        ) from exc
+    persist_enqueue_metadata(job, metadata)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
     return job
 
 
@@ -967,6 +1003,7 @@ def list_training_teacher_report_jobs(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    reconcile_teacher_report_jobs(db)
     query = db.query(AcademicTeacherReportJob)
     if status_filter == 'active':
         query = query.filter(AcademicTeacherReportJob.status.in_(['queued', 'running']))
@@ -989,6 +1026,7 @@ def get_training_teacher_report_job(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
+    reconcile_teacher_report_jobs(db)
     job = db.get(AcademicTeacherReportJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail='Không tìm thấy job báo cáo giáo viên')
