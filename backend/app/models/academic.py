@@ -590,6 +590,8 @@ class AcademicClassSyncJob(Base):
     job_type: Mapped[str] = mapped_column(String(80), index=True)  # cms_sync_check | cms_enrollment_sync | learning_sync
     status: Mapped[str] = mapped_column(String(50), default='queued', index=True)  # queued | running | completed | failed
     class_id: Mapped[str] = mapped_column(String, ForeignKey('academic_classes.id'), index=True)
+    parent_job_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True, index=True)
     requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     force: Mapped[bool] = mapped_column(Boolean, default=False)
     limit: Mapped[int] = mapped_column(Integer, default=500)
