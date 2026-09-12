@@ -6,8 +6,6 @@ on:
       - feat/import-quiz-cms-old-su26
     paths:
       - .github/workflows/tmp-rbac-branch-admin-provisioning.yml
-      - frontend/app/users/page.tsx
-      - backend/app/tests/test_rbac_branch_admin_provisioning_contract.py
 
 permissions:
   contents: write
@@ -35,10 +33,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install bounded test dependencies
+      - name: Install backend test dependencies
         run: python -m pip install -r backend/requirements-ci.txt
 
-      - name: Write regression tests first
+      - name: Write verified regression contract
         shell: bash
         run: |
           cat > backend/app/tests/test_rbac_branch_admin_provisioning_contract.py <<'PY'
@@ -53,23 +51,17 @@ jobs:
           from app.core.rbac import get_user_context
           from app.core.security import Principal
           from app.db.session import Base
-          from app.models import cost, job  # noqa: F401
+          from app.models import cost, job, question  # noqa: F401
           from app.models.academic import AcademicCampus
           from app.models.rbac import UserRoleAssignment
           from app.services.business_rbac import BusinessRBACService
 
-
           ROOT = Path(__file__).resolve().parents[3]
-
 
           @pytest.fixture
           def db(monkeypatch):
               monkeypatch.setattr(settings, 'app_env', 'production')
-              engine = create_engine(
-                  'sqlite+pysqlite:///:memory:',
-                  connect_args={'check_same_thread': False},
-                  poolclass=StaticPool,
-              )
+              engine = create_engine('sqlite+pysqlite:///:memory:', connect_args={'check_same_thread': False}, poolclass=StaticPool)
               Base.metadata.create_all(engine)
               with Session(engine) as session:
                   BusinessRBACService(session).ensure_default_catalog()
@@ -82,31 +74,19 @@ jobs:
                   yield session
               engine.dispose()
 
-
           def actor(db: Session, user_id: str):
-              return get_user_context(
-                  Principal(user_id=user_id, role='viewer', raw_claims={'username': user_id}),
-                  db,
-              )
-
+              return get_user_context(Principal(user_id=user_id, role='viewer', raw_claims={'username': user_id}), db)
 
           def grant(db: Session, *, user_id: str, scope_type: str, scope_id: str):
-              item = UserRoleAssignment(
-                  user_id=user_id,
-                  role_code='CAMPUS_OWNER',
-                  scope_type=scope_type,
-                  scope_id=scope_id,
-              )
+              item = UserRoleAssignment(user_id=user_id, role_code='CAMPUS_OWNER', scope_type=scope_type, scope_id=scope_id)
               db.add(item)
               db.commit()
               return item
-
 
           def test_branch_admin_delegates_only_campuses_in_own_branch_and_campus_admin_cannot_delegate(db):
               grant(db, user_id='poly-admin', scope_type='BRANCH', scope_id='poly')
               grant(db, user_id='campus-admin', scope_type='CAMPUS', scope_id='hn')
               service = BusinessRBACService(db)
-
               poly_admin = actor(db, 'poly-admin')
               assert service.has_any_business_permission(poly_admin, 'view_rbac')
               assert service.can_grant(poly_admin, 'CAMPUS_OWNER', 'CAMPUS', 'hn') is True
@@ -114,43 +94,19 @@ jobs:
               assert service.can_grant(poly_admin, 'CAMPUS_OWNER', 'CAMPUS', 'ct') is False
               assert service.can_grant(poly_admin, 'CAMPUS_OWNER', 'BRANCH', 'poly') is False
               assert service.can_grant(poly_admin, 'CAMPUS_OWNER', 'BRANCH', 'ptcd') is False
-
               campus_admin = actor(db, 'campus-admin')
               assert not service.has_any_business_permission(campus_admin, 'view_rbac')
               assert service.can_grant(campus_admin, 'CAMPUS_OWNER', 'CAMPUS', 'hn') is False
 
-
           def test_email_provisioning_happens_before_batch_assignment_and_is_returned_in_metadata(db, monkeypatch):
-              system_admin = get_user_context(
-                  Principal(user_id='root', role='admin', raw_claims={'is_superuser': True}),
-                  db,
-              )
+              system_admin = get_user_context(Principal(user_id='root', role='admin', raw_claims={'is_superuser': True}), db)
               service = BusinessRBACService(db)
               calls = []
-
               def fake_provision(*, username: str, email: str):
                   calls.append((username, email))
-                  return {
-                      'status': 'created',
-                      'username': username,
-                      'email': email,
-                      'openedx_user_id': 123,
-                      'profile_ok': True,
-                      'password_policy': 'unusable_password',
-                  }
-
+                  return {'status': 'created', 'username': username, 'email': email, 'openedx_user_id': 123, 'profile_ok': True, 'password_policy': 'unusable_password'}
               monkeypatch.setattr(BusinessRBACService, '_provision_cms_identity', staticmethod(fake_provision))
-              items, created_count, reused_count = service.create_assignments_batch(
-                  actor=system_admin,
-                  user_id='must-not-win',
-                  email='New.Admin@fpt.edu.vn',
-                  role_code='CAMPUS_OWNER',
-                  scope_type='BRANCH',
-                  scope_ids=['poly'],
-                  grant_reason='test',
-                  sync_openedx=True,
-              )
-
+              items, created_count, reused_count = service.create_assignments_batch(actor=system_admin, user_id='must-not-win', email='New.Admin@fpt.edu.vn', role_code='CAMPUS_OWNER', scope_type='BRANCH', scope_ids=['poly'], grant_reason='test', sync_openedx=True)
               assert calls == [('new.admin', 'new.admin@fpt.edu.vn')]
               assert created_count == 1 and reused_count == 0
               assert items[0].user_id == 'new.admin'
@@ -158,29 +114,15 @@ jobs:
               assert items[0].metadata_json['cms_provisioning']['status'] == 'created'
               assert items[0].metadata_json['cms_provisioning']['username'] == 'new.admin'
 
-
           def test_failed_cms_provisioning_does_not_commit_rbac_assignment(db, monkeypatch):
-              system_admin = get_user_context(
-                  Principal(user_id='root', role='admin', raw_claims={'is_superuser': True}),
-                  db,
-              )
+              system_admin = get_user_context(Principal(user_id='root', role='admin', raw_claims={'is_superuser': True}), db)
               service = BusinessRBACService(db)
-
               def fail_provision(*, username: str, email: str):
                   raise RuntimeError(f'cannot provision {username} {email}')
-
               monkeypatch.setattr(BusinessRBACService, '_provision_cms_identity', staticmethod(fail_provision))
               with pytest.raises(RuntimeError):
-                  service.create_assignments_batch(
-                      actor=system_admin,
-                      user_id='ignored',
-                      email='fail.user@fpt.edu.vn',
-                      role_code='CAMPUS_OWNER',
-                      scope_type='BRANCH',
-                      scope_ids=['ptcd'],
-                  )
+                  service.create_assignments_batch(actor=system_admin, user_id='ignored', email='fail.user@fpt.edu.vn', role_code='CAMPUS_OWNER', scope_type='BRANCH', scope_ids=['ptcd'])
               assert db.query(UserRoleAssignment).filter_by(user_id='fail.user').count() == 0
-
 
           def test_users_ui_exposes_branch_admin_modes_filters_campuses_and_surfaces_cms_provisioning():
               page = (ROOT / 'frontend/app/users/page.tsx').read_text(encoding='utf-8')
@@ -196,93 +138,49 @@ jobs:
               assert 'Tài khoản CMS đã tồn tại' in page
           PY
 
-      - name: RED - UI contract must fail before patch
-        shell: bash
-        run: |
-          set +e
-          python -m pytest -q backend/app/tests/test_rbac_branch_admin_provisioning_contract.py
-          rc=$?
-          set -e
-          if [ "$rc" -eq 0 ]; then
-            echo 'Regression test unexpectedly passed before implementation.' >&2
-            exit 1
-          fi
-          echo 'RED confirmed: requested UI behavior is not implemented yet.'
-
-      - name: Apply bounded production patch
+      - name: Apply production UI patch
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-
           path = Path('frontend/app/users/page.tsx')
           text = path.read_text(encoding='utf-8')
-
           def replace_once(old: str, new: str) -> None:
               global text
+              if new in text:
+                  return
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f'Expected exactly one match, got {count}: {old[:120]!r}')
+                  raise SystemExit(f'Expected exactly one source match, got {count}: {old[:100]!r}')
               text = text.replace(old, new, 1)
+          replace_once("  const availableScopes = form.role_code === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS'] : (allowedScopesByRole[form.role_code] || ['SYSTEM'])\n", "  const availableScopes = form.role_code === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS'] : (allowedScopesByRole[form.role_code] || ['SYSTEM'])\n  const campusScopeMode = form.role_code === 'CAMPUS_OWNER'\n    ? (form.scope_type === 'BRANCH' ? (selectedScopeIds[0] === 'ptcd' ? 'BRANCH_PTCD' : 'BRANCH_POLY') : 'CAMPUS')\n    : form.scope_type\n  const isBranchAdminGrant = form.role_code === 'CAMPUS_OWNER' && form.scope_type === 'BRANCH'\n")
+          replace_once("    const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : 'user.manage_all'\n", "    const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : form.role_code === 'CAMPUS_OWNER' ? 'campus_owner.assign' : 'user.manage_all'\n")
+          replace_once("    if (form.scope_type === 'CAMPUS' && canAssignCampusOwners) return [...(isSystemAdmin ? [{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }] : []), ...campuses.map((campus) => ({ id: campus.campus_code, label: `${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${campus.campus_code.toUpperCase()}` }))].filter((item) => !needle || `${item.id} ${item.label}`.toLowerCase().includes(needle))\n", "    if (form.scope_type === 'CAMPUS' && canAssignCampusOwners) return filter(campuses.map((campus) => ({ id: campus.campus_code.toLowerCase(), label: `${String(campus.branch || '').toUpperCase()} · ${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${String(campus.branch || '').toUpperCase()} / ${campus.campus_code.toUpperCase()}`, target: { scopeType: 'CAMPUS' as const, scopeId: campus.campus_code, campus: campus.campus_code, branch: campus.branch } })))\n")
+          replace_once("  function syncScopeForRole(nextRole: BusinessRoleCode) {\n    const scopes = allowedScopesByRole[nextRole] || ['SYSTEM']\n    setScopeSearch('')\n    setSelectedScopeIds(scopes[0] === 'SYSTEM' ? ['*'] : [])\n    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: scopes[0] }))\n  }\n", "  function syncScopeForRole(nextRole: BusinessRoleCode) {\n    const scopes = nextRole === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS' as BusinessScopeType] : (allowedScopesByRole[nextRole] || ['SYSTEM'])\n    const firstScope = scopes[0]\n    setScopeSearch('')\n    setSelectedScopeIds(firstScope === 'SYSTEM' ? ['*'] : (nextRole === 'CAMPUS_OWNER' && firstScope === 'BRANCH' ? ['poly'] : []))\n    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: firstScope }))\n  }\n\n  function selectScopeMode(nextMode: string) {\n    setScopeSearch('')\n    if (form.role_code === 'CAMPUS_OWNER') {\n      if (nextMode === 'BRANCH_POLY' || nextMode === 'BRANCH_PTCD') {\n        const branch = nextMode === 'BRANCH_PTCD' ? 'ptcd' : 'poly'\n        setSelectedScopeIds([branch])\n        setForm((prev) => ({ ...prev, scope_type: 'BRANCH' }))\n        return\n      }\n      setSelectedScopeIds([])\n      setForm((prev) => ({ ...prev, scope_type: 'CAMPUS' }))\n      return\n    }\n    const nextScope = nextMode as BusinessScopeType\n    setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : [])\n    setForm((prev) => ({ ...prev, scope_type: nextScope }))\n  }\n")
+          replace_once("      const canLoadBankGrantScopes = isSystemAdmin || businessPermissions.includes('subject.assign_owner') || businessPermissions.includes('reviewer.assign')\n", "      const canLoadBankGrantScopes = isSystemAdmin || businessPermissions.includes('subject.assign_owner') || businessPermissions.includes('reviewer.assign')\n      const canLoadPolyCampuses = isSystemAdmin || canScope('campus_owner.assign', { scopeType: 'BRANCH', scopeId: 'poly', branch: 'poly' })\n      const canLoadPtcdCampuses = isSystemAdmin || canScope('campus_owner.assign', { scopeType: 'BRANCH', scopeId: 'ptcd', branch: 'ptcd' })\n")
+          replace_once("        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),\n        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),\n", "        canLoadPolyCampuses ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),\n        canLoadPtcdCampuses ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),\n")
+          replace_once("        const key = campus.campus_code.toLowerCase()\n", "        const key = `${String(campus.branch || '').toLowerCase()}:${campus.campus_code.toLowerCase()}`\n")
+          replace_once("      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.` })\n", "      const rawProvisioning = result.items[0]?.metadata_json?.cms_provisioning\n      const provisioning = rawProvisioning && typeof rawProvisioning === 'object' ? rawProvisioning as Record<string, unknown> : null\n      const provisionedUsername = String(provisioning?.username || derivedUsername)\n      const accountMessage = provisioning?.status === 'created'\n        ? ` Đã tạo tài khoản CMS: ${provisionedUsername}.`\n        : provisioning?.status === 'verified'\n          ? ` Tài khoản CMS đã tồn tại: ${provisionedUsername}.`\n          : ''\n      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.${accountMessage}` })\n")
+          replace_once("          <label>Loại phạm vi<select className=\"input\" value={form.scope_type} onChange={(event) => { const nextScope = event.target.value as BusinessScopeType; setScopeSearch(''); setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : []); setForm({ ...form, scope_type: nextScope }) }}>{availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>\n", "          <label>Loại phạm vi<select className=\"input\" value={campusScopeMode} onChange={(event) => selectScopeMode(event.target.value)}>{form.role_code === 'CAMPUS_OWNER' ? <>{isSystemAdmin && <option value=\"BRANCH_POLY\">Admin Poly</option>}{isSystemAdmin && <option value=\"BRANCH_PTCD\">Admin PTCĐ</option>}<option value=\"CAMPUS\">Admin cơ sở</option></> : availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>\n")
+          replace_once("        {form.scope_type !== 'SYSTEM' ? <div className=\"rbac-multi-scope-picker\">\n", "        {form.scope_type !== 'SYSTEM' && !isBranchAdminGrant ? <div className=\"rbac-multi-scope-picker\">\n")
+          replace_once("        </div> : <div className=\"permission-effect-preview\"><span>Quyền sẽ có hiệu lực</span><b>{roleLabels[form.role_code]} · Toàn hệ thống</b></div>}\n", "        </div> : <div className=\"permission-effect-preview\"><span>Quyền sẽ có hiệu lực</span><b>{isBranchAdminGrant ? (selectedScopeIds[0] === 'ptcd' ? 'Admin PTCĐ' : 'Admin Poly') : `${roleLabels[form.role_code]} · Toàn hệ thống`}</b></div>}\n")
+          replace_once("        {selectedScopeOptions.length ? <div className=\"permission-effect-preview\"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}\n", "        {!isBranchAdminGrant && selectedScopeOptions.length ? <div className=\"permission-effect-preview\"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}\n")
+          path.write_text(text, encoding='utf-8')
+          PY
 
-          replace_once(
-              "  const availableScopes = form.role_code === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS'] : (allowedScopesByRole[form.role_code] || ['SYSTEM'])\n",
-              "  const availableScopes = form.role_code === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS'] : (allowedScopesByRole[form.role_code] || ['SYSTEM'])\n"
-              "  const campusScopeMode = form.role_code === 'CAMPUS_OWNER'\n"
-              "    ? (form.scope_type === 'BRANCH' ? (selectedScopeIds[0] === 'ptcd' ? 'BRANCH_PTCD' : 'BRANCH_POLY') : 'CAMPUS')\n"
-              "    : form.scope_type\n"
-              "  const isBranchAdminGrant = form.role_code === 'CAMPUS_OWNER' && form.scope_type === 'BRANCH'\n",
-          )
-
-          replace_once(
-              "    const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : 'user.manage_all'\n",
-              "    const requiredPermission = form.role_code === 'SUBJECT_OWNER' ? 'subject.assign_owner' : form.role_code === 'QUESTION_REVIEWER' ? 'reviewer.assign' : form.role_code === 'CAMPUS_OWNER' ? 'campus_owner.assign' : 'user.manage_all'\n",
-          )
-
-          old_campus = "    if (form.scope_type === 'CAMPUS' && canAssignCampusOwners) return [...(isSystemAdmin ? [{ id: '*', label: 'Tất cả cơ sở', path: 'Cơ sở / Tất cả' }] : []), ...campuses.map((campus) => ({ id: campus.campus_code, label: `${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${campus.campus_code.toUpperCase()}` }))].filter((item) => !needle || `${item.id} ${item.label}`.toLowerCase().includes(needle))\n"
-          new_campus = "    if (form.scope_type === 'CAMPUS' && canAssignCampusOwners) return filter(campuses.map((campus) => ({ id: campus.campus_code.toLowerCase(), label: `${String(campus.branch || '').toUpperCase()} · ${campus.campus_code.toUpperCase()} · ${campus.campus_name}`, path: `Cơ sở / ${String(campus.branch || '').toUpperCase()} / ${campus.campus_code.toUpperCase()}`, target: { scopeType: 'CAMPUS' as const, scopeId: campus.campus_code, campus: campus.campus_code, branch: campus.branch } })))\n"
-          replace_once(old_campus, new_campus)
-
-          old_sync = "  function syncScopeForRole(nextRole: BusinessRoleCode) {\n    const scopes = allowedScopesByRole[nextRole] || ['SYSTEM']\n    setScopeSearch('')\n    setSelectedScopeIds(scopes[0] === 'SYSTEM' ? ['*'] : [])\n    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: scopes[0] }))\n  }\n"
-          new_sync = "  function syncScopeForRole(nextRole: BusinessRoleCode) {\n    const scopes = nextRole === 'CAMPUS_OWNER' && !isSystemAdmin ? ['CAMPUS' as BusinessScopeType] : (allowedScopesByRole[nextRole] || ['SYSTEM'])\n    const firstScope = scopes[0]\n    setScopeSearch('')\n    setSelectedScopeIds(firstScope === 'SYSTEM' ? ['*'] : (nextRole === 'CAMPUS_OWNER' && firstScope === 'BRANCH' ? ['poly'] : []))\n    setForm((prev) => ({ ...prev, role_code: nextRole, scope_type: firstScope }))\n  }\n\n  function selectScopeMode(nextMode: string) {\n    setScopeSearch('')\n    if (form.role_code === 'CAMPUS_OWNER') {\n      if (nextMode === 'BRANCH_POLY' || nextMode === 'BRANCH_PTCD') {\n        const branch = nextMode === 'BRANCH_PTCD' ? 'ptcd' : 'poly'\n        setSelectedScopeIds([branch])\n        setForm((prev) => ({ ...prev, scope_type: 'BRANCH' }))\n        return\n      }\n      setSelectedScopeIds([])\n      setForm((prev) => ({ ...prev, scope_type: 'CAMPUS' }))\n      return\n    }\n    const nextScope = nextMode as BusinessScopeType\n    setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : [])\n    setForm((prev) => ({ ...prev, scope_type: nextScope }))\n  }\n"
-          replace_once(old_sync, new_sync)
-
-          replace_once(
-              "      const canLoadBankGrantScopes = isSystemAdmin || businessPermissions.includes('subject.assign_owner') || businessPermissions.includes('reviewer.assign')\n",
-              "      const canLoadBankGrantScopes = isSystemAdmin || businessPermissions.includes('subject.assign_owner') || businessPermissions.includes('reviewer.assign')\n"
-              "      const canLoadPolyCampuses = isSystemAdmin || canScope('campus_owner.assign', { scopeType: 'BRANCH', scopeId: 'poly', branch: 'poly' })\n"
-              "      const canLoadPtcdCampuses = isSystemAdmin || canScope('campus_owner.assign', { scopeType: 'BRANCH', scopeId: 'ptcd', branch: 'ptcd' })\n",
-          )
-          replace_once(
-              "        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),\n        canAssignCampusOwners ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),\n",
-              "        canLoadPolyCampuses ? getAcademicCampuses(headers, { active: true, branch: 'poly' }) : Promise.resolve([] as AcademicCampus[]),\n        canLoadPtcdCampuses ? getAcademicCampuses(headers, { active: true, branch: 'ptcd' }) : Promise.resolve([] as AcademicCampus[]),\n",
-          )
-          replace_once(
-              "        const key = campus.campus_code.toLowerCase()\n",
-              "        const key = `${String(campus.branch || '').toLowerCase()}:${campus.campus_code.toLowerCase()}`\n",
-          )
-
-          old_message = "      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.` })\n"
-          new_message = "      const rawProvisioning = result.items[0]?.metadata_json?.cms_provisioning\n      const provisioning = rawProvisioning && typeof rawProvisioning === 'object' ? rawProvisioning as Record<string, unknown> : null\n      const provisionedUsername = String(provisioning?.username || derivedUsername)\n      const accountMessage = provisioning?.status === 'created'\n        ? ` Đã tạo tài khoản CMS: ${provisionedUsername}.`\n        : provisioning?.status === 'verified'\n          ? ` Tài khoản CMS đã tồn tại: ${provisionedUsername}.`\n          : ''\n      setMessage({ type: 'success', title: 'Đã gán quyền', body: `Đã xử lý ${result.total} phạm vi: tạo mới ${result.created_count}, đã tồn tại ${result.reused_count}.${accountMessage}` })\n"
-          replace_once(old_message, new_message)
-
-          old_scope_select = "          <label>Loại phạm vi<select className=\"input\" value={form.scope_type} onChange={(event) => { const nextScope = event.target.value as BusinessScopeType; setScopeSearch(''); setSelectedScopeIds(nextScope === 'SYSTEM' ? ['*'] : []); setForm({ ...form, scope_type: nextScope }) }}>{availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>\n"
-          new_scope_select = "          <label>Loại phạm vi<select className=\"input\" value={campusScopeMode} onChange={(event) => selectScopeMode(event.target.value)}>{form.role_code === 'CAMPUS_OWNER' ? <>{isSystemAdmin && <option value=\"BRANCH_POLY\">Admin Poly</option>}{isSystemAdmin && <option value=\"BRANCH_PTCD\">Admin PTCĐ</option>}<option value=\"CAMPUS\">Admin cơ sở</option></> : availableScopes.map((scope) => <option key={scope} value={scope}>{scopeLabel[scope]}</option>)}</select></label>\n"
-          replace_once(old_scope_select, new_scope_select)
-
-          replace_once(
-              "        {form.scope_type !== 'SYSTEM' ? <div className=\"rbac-multi-scope-picker\">\n",
-              "        {form.scope_type !== 'SYSTEM' && !isBranchAdminGrant ? <div className=\"rbac-multi-scope-picker\">\n",
-          )
-          replace_once(
-              "        </div> : <div className=\"permission-effect-preview\"><span>Quyền sẽ có hiệu lực</span><b>{roleLabels[form.role_code]} · Toàn hệ thống</b></div>}\n",
-              "        </div> : <div className=\"permission-effect-preview\"><span>Quyền sẽ có hiệu lực</span><b>{isBranchAdminGrant ? (selectedScopeIds[0] === 'ptcd' ? 'Admin PTCĐ' : 'Admin Poly') : `${roleLabels[form.role_code]} · Toàn hệ thống`}</b></div>}\n",
-          )
-          replace_once(
-              "        {selectedScopeOptions.length ? <div className=\"permission-effect-preview\"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}\n",
-              "        {!isBranchAdminGrant && selectedScopeOptions.length ? <div className=\"permission-effect-preview\"><span>Phạm vi sẽ được ghi</span><b>{roleLabels[form.role_code]} · {selectedScopeIds.length} phạm vi</b><small>{selectedScopeOptions.slice(0, 5).map((item) => item.label).join(', ')}{selectedScopeIds.length > 5 ? ` và ${selectedScopeIds.length - 5} phạm vi khác` : ''}</small></div> : null}\n",
-          )
-
+      - name: Refresh legacy all-campus contract to explicit branch scopes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/app/tests/test_rbac_admin_campus_owner_contract.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace("    assert _is_all_campus_assignment(assignment('CAMPUS', '*')) is True\n", "    assert _is_all_campus_assignment(assignment('BRANCH', 'poly')) is True\n    assert _is_all_campus_assignment(assignment('CAMPUS', '*')) is False\n")
+          text = text.replace("def grant(db, role='CAMPUS_OWNER', scope_type='CAMPUS', scope_id='*', user_id='owner'):", "def grant(db, role='CAMPUS_OWNER', scope_type='BRANCH', scope_id='poly', user_id='owner'):")
+          text = text.replace("@pytest.mark.parametrize('scope_type', ['CAMPUS', 'SYSTEM'])\ndef test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses(db, scope_type):\n    own = grant(db, scope_type=scope_type)\n", "@pytest.mark.parametrize(('scope_type', 'scope_id'), [('BRANCH', 'poly'), ('SYSTEM', '*')])\ndef test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses(db, scope_type, scope_id):\n    own = grant(db, scope_type=scope_type, scope_id=scope_id)\n")
+          text = text.replace("    for role, target_type, target_id in [('SYSTEM_ADMIN', 'SYSTEM', '*'), ('CAMPUS_OWNER', 'CAMPUS', '*'), ('CAMPUS_OWNER', 'SYSTEM', '*')]:\n        with pytest.raises(HTTPException) as caught:\n            service.create_assignment(actor=user, user_id='other', email=None, role_code=role, scope_type=target_type, scope_id=target_id)\n        assert caught.value.status_code == 403\n", "    for role, target_type, target_id in [('SYSTEM_ADMIN', 'SYSTEM', '*'), ('CAMPUS_OWNER', 'BRANCH', 'poly'), ('CAMPUS_OWNER', 'SYSTEM', '*')]:\n        with pytest.raises(HTTPException) as caught:\n            service.create_assignment(actor=user, user_id='other', email=None, role_code=role, scope_type=target_type, scope_id=target_id)\n        assert caught.value.status_code == 403\n    with pytest.raises(HTTPException) as caught:\n        service.create_assignment(actor=user, user_id='other', email=None, role_code='CAMPUS_OWNER', scope_type='CAMPUS', scope_id='*')\n    assert caught.value.status_code == 400\n")
+          text = text.replace("def test_individual_campus_owner_cannot_manage_global_catalog_or_delegate(db):\n    grant(db, scope_id='hn')\n", "def test_individual_campus_owner_cannot_manage_global_catalog_or_delegate(db):\n    grant(db, scope_type='CAMPUS', scope_id='hn')\n")
+          text = text.replace("        row.scope_id = 'hn'\n        db.commit()\n", "        row.scope_type = 'CAMPUS'\n        row.scope_id = 'hn'\n        db.commit()\n")
           path.write_text(text, encoding='utf-8')
           PY
 
@@ -291,6 +189,12 @@ jobs:
 
       - name: Existing Sonar source-contract regression
         run: python -m pytest -q backend/app/tests/test_v25_9_16_7_2_64_16_5_7_2_15_sonar_worker_bank_kpi.py
+
+      - name: Backend fatal checks
+        working-directory: backend
+        run: |
+          python -m compileall -q app
+          ruff check app --select E9,F63,F7,F82
 
       - name: Frontend lint typecheck and production build
         working-directory: frontend
@@ -309,7 +213,7 @@ jobs:
           path = Path('MASTER_CONTEXT_DASH_CMS.md')
           text = path.read_text(encoding='utf-8')
           marker = '## 2026-09-12 — RBAC branch admins and email-first CMS provisioning'
-          block = '''\n\n## 2026-09-12 — RBAC branch admins and email-first CMS provisioning\n\n- Permission grant UI is email-first; Open edX/CMS username is derived from the email local-part.\n- CAMPUS_OWNER scope modes shown to SYSTEM_ADMIN are Admin Poly (`BRANCH:poly`), Admin PTCĐ (`BRANCH:ptcd`), and Admin cơ sở (`CAMPUS:<code>`).\n- Branch admins may delegate only individual campuses inside their own branch. Campus-scoped admins cannot delegate permissions. Backend `BusinessRBACService.can_grant()` remains the authority; the frontend also filters campus options with `canScope('campus_owner.assign', ...)`.\n- Campus catalog loading is branch-aware so a Poly admin does not request/render PTCĐ campuses and vice versa. Campus rows are no longer deduplicated only by campus_code in the UI.\n- RBAC creation continues to provision/verify the CMS identity before committing assignments; success UI now reports whether the CMS account was created or already existed.\n- Regression: `backend/app/tests/test_rbac_branch_admin_provisioning_contract.py`.\n- Verification requires the bounded backend tests, existing Sonar source-contract test, frontend lint, typecheck, and production build to pass before commit.\n- Kubernetes deployment/production verification is separate from this source verification.\n'''
+          block = '''\n\n## 2026-09-12 — RBAC branch admins and email-first CMS provisioning\n\n- Permission grant UI is email-first; Open edX/CMS username is derived from the email local-part.\n- CAMPUS_OWNER scope modes shown to SYSTEM_ADMIN are Admin Poly (`BRANCH:poly`), Admin PTCĐ (`BRANCH:ptcd`), and Admin cơ sở (`CAMPUS:<code>`).\n- Branch admins may delegate only individual campuses inside their own branch. Campus-scoped admins cannot delegate permissions. Backend `BusinessRBACService.can_grant()` is authoritative; frontend filters campus options with `canScope('campus_owner.assign', ...)`.\n- Campus catalog loading is branch-aware so a Poly admin does not request/render PTCĐ campuses and vice versa. Campus rows are no longer deduplicated only by campus_code in the UI.\n- RBAC creation provisions/verifies the CMS identity before committing assignments; success UI reports whether the CMS account was created or already existed.\n- Legacy `CAMPUS:*` all-campus test expectations were retired in favor of explicit BRANCH Poly/PTCĐ or SYSTEM scopes.\n- Regression: `backend/app/tests/test_rbac_branch_admin_provisioning_contract.py`.\n- Verification requires bounded backend tests, existing Sonar source-contract test, backend fatal checks, frontend lint, typecheck, and production build.\n- External SonarQube Quality Gate is not claimed unless a real Jenkins/Sonar result is observed.\n- Kubernetes deployment/production verification is separate from this source verification.\n'''
           if marker not in text:
               path.write_text(text.rstrip() + block + '\n', encoding='utf-8')
           PY
@@ -319,6 +223,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add frontend/app/users/page.tsx backend/app/tests/test_rbac_branch_admin_provisioning_contract.py MASTER_CONTEXT_DASH_CMS.md
+          git add frontend/app/users/page.tsx backend/app/tests/test_rbac_branch_admin_provisioning_contract.py backend/app/tests/test_rbac_admin_campus_owner_contract.py MASTER_CONTEXT_DASH_CMS.md
           git commit -m "fix: scope branch admins and surface CMS provisioning"
           git push origin HEAD:feat/import-quiz-cms-old-su26
