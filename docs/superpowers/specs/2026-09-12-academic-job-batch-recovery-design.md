@@ -55,7 +55,7 @@ This prevents a Redis/network error from creating a false `queued` job.
 
 Academic job services reconcile active rows before listing, fetching, reusing, or creating jobs. A row is orphaned when its last durable heartbeat is older than its task-specific lease:
 
-- bulk coordinator: 10 minutes;
+- bulk coordinator: 10 minutes only when it has no active child; while a child is active, the parent inherits the 40-minute class-sync lease so a legitimate long connector call is not failed early;
 - class sync: hard limit plus 10 minutes, default 40 minutes;
 - teacher report/export: hard limit plus 10 minutes, default 105 minutes;
 - never-started queued job: 15 minutes.
