@@ -387,6 +387,13 @@ class Settings(BaseSettings):
     academic_teacher_report_sync_export_max_teachers: int = 20
     academic_teacher_report_sync_export_max_students: int = 1000
     academic_teacher_report_file_retention_hours: int = 48
+    academic_bulk_sync_dispatch_window: int = 4
+    academic_bulk_sync_continue_delay_seconds: int = 10
+    academic_job_queued_stale_seconds: int = 900
+    academic_class_sync_stale_seconds: int = 2400
+    academic_bulk_sync_stale_seconds: int = 600
+    academic_teacher_report_stale_seconds: int = 6300
+    academic_teacher_report_export_snapshot_max_age_seconds: int = 300
 
     # Batch 35 — Udemy production hardening. These limits are deployment knobs,
     # not user input, and are validated for hardened environments below.
@@ -615,6 +622,18 @@ def validate_security_settings() -> None:
         errors.append('ACADEMIC_TEACHER_REPORT_SYNC_EXPORT_MAX_TEACHERS must be at least 1')
     if settings.academic_teacher_report_sync_export_max_students < 1:
         errors.append('ACADEMIC_TEACHER_REPORT_SYNC_EXPORT_MAX_STUDENTS must be at least 1')
+    if settings.academic_bulk_sync_dispatch_window < 1 or settings.academic_bulk_sync_dispatch_window > 20:
+        errors.append('ACADEMIC_BULK_SYNC_DISPATCH_WINDOW must be between 1 and 20')
+    if settings.academic_bulk_sync_continue_delay_seconds < 1 or settings.academic_bulk_sync_continue_delay_seconds > 300:
+        errors.append('ACADEMIC_BULK_SYNC_CONTINUE_DELAY_SECONDS must be between 1 and 300')
+    if settings.academic_job_queued_stale_seconds < 60:
+        errors.append('ACADEMIC_JOB_QUEUED_STALE_SECONDS must be at least 60')
+    if settings.academic_class_sync_stale_seconds <= settings.celery_default_time_limit_seconds:
+        errors.append('ACADEMIC_CLASS_SYNC_STALE_SECONDS must exceed the default Celery hard time limit')
+    if settings.academic_teacher_report_stale_seconds <= 5700:
+        errors.append('ACADEMIC_TEACHER_REPORT_STALE_SECONDS must exceed the teacher report hard time limit')
+    if settings.academic_teacher_report_export_snapshot_max_age_seconds < 0:
+        errors.append('ACADEMIC_TEACHER_REPORT_EXPORT_SNAPSHOT_MAX_AGE_SECONDS must be non-negative')
     if settings.academic_udemy_import_max_files < 1 or settings.academic_udemy_import_max_files > 100:
         errors.append('ACADEMIC_UDEMY_IMPORT_MAX_FILES must be between 1 and 100')
     if settings.academic_udemy_import_max_file_bytes < 1024 * 1024 or settings.academic_udemy_import_max_file_bytes > 100 * 1024 * 1024:
