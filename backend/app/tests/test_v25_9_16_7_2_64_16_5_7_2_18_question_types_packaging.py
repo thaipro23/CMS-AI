@@ -34,7 +34,7 @@ from app.services.question_type_quota import (
 
 ROOT = Path(__file__).resolve().parents[3]
 VERSION = '25.9.16.7.2.64.16.5.7.2.18'
-HEAD = '0061_v25_9_16_7_2_64_39'
+HEAD = '0065_academic_job_batch_recovery'
 
 
 def read(rel: str) -> str:
@@ -56,10 +56,22 @@ def test_release_version_and_migration_head_contract_are_synchronized() -> None:
 
     migration_60 = read('backend/alembic/versions/0060_v25_9_16_7_2_64_38_question_authoring_types_media.py')
     migration_61 = read('backend/alembic/versions/0061_v25_9_16_7_2_64_39_quiz_blueprint_type_quota.py')
+    migration_62 = read('backend/alembic/versions/0062_v25_9_16_7_2_64_40_training_scope_indexes.py')
+    migration_63 = read('backend/alembic/versions/0063_subject_platform_other.py')
+    migration_64 = read('backend/alembic/versions/0064_rbac_identity_login.py')
+    migration_65 = read('backend/alembic/versions/0065_academic_job_batch_recovery.py')
     assert "revision = '0060_v25_9_16_7_2_64_38'" in migration_60
     assert "down_revision = '0059_v25_9_16_7_2_64_37'" in migration_60
-    assert f"revision = '{HEAD}'" in migration_61
+    assert "revision = '0061_v25_9_16_7_2_64_39'" in migration_61
     assert "down_revision = '0060_v25_9_16_7_2_64_38'" in migration_61
+    assert "revision = '0062_v25_9_16_7_2_64_40'" in migration_62
+    assert "down_revision = '0061_v25_9_16_7_2_64_39'" in migration_62
+    assert "revision = '0063_subject_platform_other'" in migration_63
+    assert "down_revision = '0062_v25_9_16_7_2_64_40'" in migration_63
+    assert "revision = '0064_rbac_identity_login'" in migration_64
+    assert "down_revision = '0063_subject_platform_other'" in migration_64
+    assert f"revision = '{HEAD}'" in migration_65
+    assert "down_revision = '0064_rbac_identity_login'" in migration_65
 
 
 def test_generation_type_mix_rounding_and_bucket_allocation_are_exact() -> None:

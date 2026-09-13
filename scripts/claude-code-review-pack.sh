@@ -72,7 +72,7 @@ for f in "${VERSION_TARGETS[@]}"; do
 done
 
 # 3) Confirm the migration graph has one intentional head.
-EXPECTED_ALEMBIC_HEAD='0061_v25_9_16_7_2_64_39'
+EXPECTED_ALEMBIC_HEAD='0065_academic_job_batch_recovery'
 if command -v alembic >/dev/null 2>&1; then
   (cd backend && DATABASE_URL='sqlite+pysqlite:///:memory:' alembic -c alembic.ini heads) > "$OUT_DIR/alembic-heads.txt" 2>&1 || true
   HEAD_COUNT=$(grep -c '(head)' "$OUT_DIR/alembic-heads.txt" 2>/dev/null || true)
@@ -340,7 +340,7 @@ This version extends the Question Bank end-to-end. Reviewers should inspect cano
 
 ## Reviewer guardrails
 
-- Alembic graph must have one intentional head; current expected head is `0061_v25_9_16_7_2_64_39`.
+- Alembic graph must have one intentional head; current expected head is `0065_academic_job_batch_recovery`.
 - UI must not use hard wording such as “gian lận/cheating/vi phạm chắc chắn”.
 - Heavy analytics work must be queued as jobs, not executed in HTTP requests.
 - Production destructive cleanup must remain disabled unless explicit UAT env and confirm phrase are supplied.

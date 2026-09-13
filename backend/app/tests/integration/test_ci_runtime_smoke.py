@@ -15,7 +15,7 @@ def test_postgres_migration_head_and_idempotency_contract() -> None:
     engine = create_engine(os.environ['DATABASE_URL'], pool_pre_ping=True)
     with engine.begin() as connection:
         version = connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()
-        assert version == '0062_v25_9_16_7_2_64_40'
+        assert version == '0065_academic_job_batch_recovery'
         column_exists = connection.execute(text("""
             SELECT EXISTS (
                 SELECT 1 FROM information_schema.columns
@@ -32,6 +32,24 @@ def test_postgres_migration_head_and_idempotency_contract() -> None:
             )
         """)).scalar_one()
         assert constraint_exists is True
+        batch_recovery_columns = connection.execute(text("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'academic_class_sync_jobs'
+              AND column_name IN ('parent_job_id', 'idempotency_key')
+        """)).scalars().all()
+        assert set(batch_recovery_columns) == {'parent_job_id', 'idempotency_key'}
+        idempotency_index_exists = connection.execute(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = 'academic_class_sync_jobs'
+                  AND indexname = 'ix_academic_class_sync_jobs_idempotency_key'
+                  AND indexdef ILIKE '%UNIQUE%'
+            )
+        """)).scalar_one()
+        assert idempotency_index_exists is True
 
 
 def test_redis_supports_single_use_and_ttl_contract() -> None:

@@ -25,10 +25,13 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0062_v25_9_16_7_2_64_40'
+_EXPECTED_ALEMBIC_REVISION = '0065_academic_job_batch_recovery'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {
+    'academic_class_sync_jobs': {
+        'id', 'parent_job_id', 'idempotency_key',
+    },
     'ai_questions': {
         'id', 'bank_version_id', 'status', 'is_retired', 'is_duplicate',
         'openedx_publish_status', 'publish_status', 'pedagogy_json',

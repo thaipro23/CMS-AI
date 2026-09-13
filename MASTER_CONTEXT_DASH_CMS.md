@@ -361,3 +361,10 @@ NEXT ACTION:
 - Rollout bắt buộc cả `worker` (`interactive,sync`) và `worker-heavy` (`generation,exports`). Runbook: `RUN_ACADEMIC_JOB_BATCH_RECOVERY_2026-09-12.md`.
 - Verification của phạm vi thay đổi: 38 targeted backend tests pass; Ruff trên các file thay đổi và fatal Python checks pass; `compileall` pass; Alembic head là `0065_academic_job_batch_recovery`; frontend `tsc --noEmit` và Next production build pass.
 - Full historical pytest không phải release gate sạch ở checkout này: 736 pass, 306 fail, 2 skip. Các failure gồm integration cần PostgreSQL/Redis thật và nhiều source/version contract của release cũ mâu thuẫn source hiện tại; không tuyên bố full suite pass và không sửa lan ngoài phạm vi recovery.
+
+## 2026-09-13 — Đồng bộ contract Alembic head 0065
+
+- Root cause lỗi build/readiness sau khi thêm batch recovery: migration graph đã lên `0065_academic_job_batch_recovery`, nhưng health runtime, UAT build gate, review-pack gate, question-bank health script và PostgreSQL CI smoke vẫn khóa cứng `0061` hoặc `0062`.
+- Giữ nguyên revision `0065_academic_job_batch_recovery`; tên dài đúng 32 ký tự và `backend/alembic/env.py` đã nới cột `alembic_version.version_num` lên 255 trên runtime online. Không rewrite migration đã phát hành.
+- Tất cả operational consumer hiện thống nhất `0065`. Readiness cũng yêu cầu `academic_class_sync_jobs.parent_job_id` và `idempotency_key`, còn CI PostgreSQL xác nhận hai cột cùng unique index `ix_academic_class_sync_jobs_idempotency_key` tồn tại sau `upgrade head`.
+- Regression `backend/app/tests/test_current_alembic_head_contract.py` tính head từ toàn bộ graph và chặn việc thêm migration mới mà quên cập nhật health/build consumers.

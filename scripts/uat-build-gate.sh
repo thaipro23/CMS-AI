@@ -98,7 +98,7 @@ done
 
 # Alembic revision chain guard. Keep the expected production head explicit,
 # but ask Alembic itself to verify the graph has exactly one head.
-EXPECTED_ALEMBIC_HEAD='0062_v25_9_16_7_2_64_40'
+EXPECTED_ALEMBIC_HEAD='0065_academic_job_batch_recovery'
 if command -v alembic >/dev/null 2>&1; then
   (cd backend && DATABASE_URL='sqlite+pysqlite:///:memory:' alembic -c alembic.ini heads) > "$OUT_DIR/alembic-heads.txt" 2>&1 || true
   HEAD_COUNT=$(grep -c '(head)' "$OUT_DIR/alembic-heads.txt" 2>/dev/null || true)

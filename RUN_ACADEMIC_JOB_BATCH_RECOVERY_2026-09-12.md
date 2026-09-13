@@ -2,6 +2,8 @@
 
 Phạm vi release này là CMS-AI branch `feat/import-quiz-cms-old-su26`. Release có migration mới `0065_academic_job_batch_recovery` và phải rollout đồng thời `backend`, `frontend`, `worker` và `worker-heavy`.
 
+> Cập nhật 2026-09-13: health runtime, UAT/review build gate, data-health script và PostgreSQL CI smoke đã được đồng bộ cùng head `0065`. Không đổi/stamp thủ công revision và không quay lại head `0061/0062`.
+
 Không chạy `docker compose down -v`, không xóa volume và không sửa tay bảng `alembic_version`.
 
 ## 1. Lấy source và kiểm tra cấu hình
