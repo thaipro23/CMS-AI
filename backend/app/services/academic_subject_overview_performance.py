@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 
 from app.models.academic import (
     AcademicClass,
@@ -75,6 +75,12 @@ def _learning_summary_by_class_ids_fast(
         AcademicStudentLearningSnapshot.last_activity_at,
         AcademicStudentLearningSnapshot.learning_synced_at,
         AcademicStudentLearningSnapshot.last_synced_at,
+    ).join(
+        AcademicClassStudent,
+        and_(
+            AcademicClassStudent.class_id == AcademicStudentLearningSnapshot.class_id,
+            AcademicClassStudent.student_id == AcademicStudentLearningSnapshot.student_id,
+        ),
     ).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
     if expected_courses:
         query = query.filter(AcademicStudentLearningSnapshot.openedx_course_id.in_(sorted(expected_courses)))

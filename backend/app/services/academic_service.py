@@ -1851,7 +1851,13 @@ class AcademicService:
         if not class_ids:
             return {}
         totals = dict(self.db.query(AcademicClassStudent.class_id, func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(AcademicClassStudent.class_id).all())
-        snapshot_query = self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
+        snapshot_query = self.db.query(AcademicStudentLearningSnapshot).join(
+            AcademicClassStudent,
+            and_(
+                AcademicClassStudent.class_id == AcademicStudentLearningSnapshot.class_id,
+                AcademicClassStudent.student_id == AcademicStudentLearningSnapshot.student_id,
+            ),
+        ).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
         expected_courses = {course for course in (course_by_class or {}).values() if course}
         if expected_courses:
             snapshot_query = snapshot_query.filter(AcademicStudentLearningSnapshot.openedx_course_id.in_(sorted(expected_courses)))
@@ -1921,7 +1927,13 @@ class AcademicService:
             return {sid: {'learning_enrolled_count': 0, 'learning_active_count': 0, 'learning_synced_count': 0, 'learning_not_enrolled_count': 0, 'learning_avg_progress_percent': None, 'learning_avg_grade_percent': None, 'learning_last_synced_at': None, 'learning_component_summaries': [], 'learning_alerts': ['Chưa có lớp active']} for sid in subject_ids}
         totals_rows = self.db.query(AcademicClass.subject_id, func.count(AcademicClassStudent.id)).join(AcademicClassStudent, AcademicClassStudent.class_id == AcademicClass.id).filter(AcademicClass.id.in_(class_ids)).group_by(AcademicClass.subject_id).all()
         totals = {str(subject_id): int(count or 0) for subject_id, count in totals_rows}
-        snapshot_query = self.db.query(AcademicStudentLearningSnapshot).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
+        snapshot_query = self.db.query(AcademicStudentLearningSnapshot).join(
+            AcademicClassStudent,
+            and_(
+                AcademicClassStudent.class_id == AcademicStudentLearningSnapshot.class_id,
+                AcademicClassStudent.student_id == AcademicStudentLearningSnapshot.student_id,
+            ),
+        ).filter(AcademicStudentLearningSnapshot.class_id.in_(class_ids))
         expected_courses = {course for course in (course_by_subject or {}).values() if course}
         if expected_courses:
             snapshot_query = snapshot_query.filter(AcademicStudentLearningSnapshot.openedx_course_id.in_(sorted(expected_courses)))

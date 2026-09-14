@@ -368,3 +368,10 @@ NEXT ACTION:
 - Giữ nguyên revision `0065_academic_job_batch_recovery`; tên dài đúng 32 ký tự và `backend/alembic/env.py` đã nới cột `alembic_version.version_num` lên 255 trên runtime online. Không rewrite migration đã phát hành.
 - Tất cả operational consumer hiện thống nhất `0065`. Readiness cũng yêu cầu `academic_class_sync_jobs.parent_job_id` và `idempotency_key`, còn CI PostgreSQL xác nhận hai cột cùng unique index `ix_academic_class_sync_jobs_idempotency_key` tồn tại sau `upgrade head`.
 - Regression `backend/app/tests/test_current_alembic_head_contract.py` tính head từ toàn bộ graph và chặn việc thêm migration mới mà quên cập nhật health/build consumers.
+
+## 2026-09-14 — Sửa tổng ghi danh CMS vượt sĩ số AP
+
+- Triệu chứng trên `/student-management/cms`: một số môn hiển thị số đã ghi danh lớn hơn sĩ số hiện tại, ví dụ `59/55` và `66/65`.
+- Root cause: các helper tổng hợp học tập lọc snapshot theo `class_id`/Course hiện hành nhưng chưa join lại `academic_class_students`. Snapshot lịch sử của sinh viên đã bị AP loại khỏi lớp vẫn tồn tại để audit và bị cộng vào enrolled/synced/active/điểm trung bình.
+- Fix giữ nguyên snapshot lịch sử, nhưng mọi query tổng hợp class/subject/fast overview chỉ nhận snapshot có cặp `(class_id, student_id)` còn nằm trong roster hiện tại. Không cần xóa dữ liệu và chỉ cần rollout backend để số liệu được tính lại khi tải trang.
+- Regression `backend/app/tests/test_academic_enrollment_count_current_roster.py` tái hiện roster 2 sinh viên cùng 1 snapshot cũ; cả fast overview và class-detail summary phải trả `2/2`, active `1`, progress trung bình `5%`.
