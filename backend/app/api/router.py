@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.routes import health, cost, courses, generation, questions, jobs, auth, analytics, publish, users, settings, libraries, audit, concepts, question_bank_v2, rbac, academic, academic_scope, learning_analytics
+from app.api.routes import health, cost, courses, generation, questions, jobs, auth, analytics, publish, users, settings, libraries, audit, concepts, question_bank_v2, rbac, academic, academic_scope, learning_analytics, teacher_report_artifacts
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=['health'])
@@ -17,6 +17,7 @@ api_router.include_router(users.router, prefix='/users', tags=['users'])
 api_router.include_router(rbac.router, prefix='/rbac', tags=['rbac'])
 api_router.include_router(academic.router, prefix='/academic', tags=['academic'])
 api_router.include_router(academic_scope.router, prefix='/academic', tags=['academic-scope'])
+api_router.include_router(teacher_report_artifacts.router, prefix='/academic', tags=['academic'])
 
 api_router.include_router(settings.router, prefix='/settings', tags=['settings'])
 
