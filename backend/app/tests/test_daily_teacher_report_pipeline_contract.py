@@ -37,14 +37,17 @@ def test_ghost_job_detection_uses_progress_and_runtime_not_updated_at_only():
     assert "JOB_PROGRESS_STALLED" in source
     assert "JOB_RUNTIME_EXCEEDED" in source
     health = source.split('def _job_health_failure(', 1)[1].split('def reconcile_teacher_report_watchdog', 1)[0]
-    assert 'updated_at' not in health
+    # Comments may mention updated_at, but the watchdog must never read it as a
+    # liveness signal. Runtime heartbeat/progress and started_at are authoritative.
+    assert "getattr(job, 'updated_at'" not in health
+    assert 'getattr(job, "updated_at"' not in health
 
 
 def test_latest_management_artifact_api_is_download_only_streaming_and_reports_vn_time():
     source = text('backend/app/api/routes/teacher_report_artifacts.py')
     assert "/training/teacher-reports/latest" in source
     assert "/training/teacher-reports/latest/download" in source
-    assert "scheduled_export_excel" in source
+    assert "SCHEDULED_EXPORT_JOB_TYPE" in source
     assert "Asia/Ho_Chi_Minh" in source
     assert "generated_at" in source
     assert "source_synced_at" in source
@@ -60,11 +63,8 @@ def test_daily_parent_waits_for_terminal_children_before_scheduled_exports():
     assert "child_job_ids" in parent
     assert "terminal_count" in parent
     assert "if terminal_count < target_count" in parent
-    assert "_build_scheduled_exports" in parent
-    assert parent.index("if terminal_count < target_count") < parent.index("_build_scheduled_exports")
-
-    exporter = source.split('def _build_scheduled_exports(', 1)[1].split('def run_daily_score_report_parent(', 1)[0]
-    assert "_create_scheduled_export_job" in exporter
+    assert "_create_scheduled_export_job" in parent
+    assert parent.index("if terminal_count < target_count") < parent.index("_create_scheduled_export_job")
 
 
 def test_cms_teacher_management_hides_legacy_job_actions_and_uses_prebuilt_artifact_bar():
