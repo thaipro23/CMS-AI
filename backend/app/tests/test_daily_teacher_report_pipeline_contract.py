@@ -40,7 +40,7 @@ def test_ghost_job_detection_uses_progress_and_runtime_not_updated_at_only():
     assert 'updated_at' not in health
 
 
-def test_latest_management_artifact_api_is_download_only_and_reports_vn_time():
+def test_latest_management_artifact_api_is_download_only_streaming_and_reports_vn_time():
     source = text('backend/app/api/routes/teacher_report_artifacts.py')
     assert "/training/teacher-reports/latest" in source
     assert "/training/teacher-reports/latest/download" in source
@@ -48,6 +48,9 @@ def test_latest_management_artifact_api_is_download_only_and_reports_vn_time():
     assert "Asia/Ho_Chi_Minh" in source
     assert "generated_at" in source
     assert "source_synced_at" in source
+    assert "StreamingResponse" in source
+    assert "storage.iter_bytes" in source
+    assert "storage.read_bytes" not in source
     assert "refresh_training_teacher_learning_data" not in source
 
 
