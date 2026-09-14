@@ -60,8 +60,11 @@ def test_daily_parent_waits_for_terminal_children_before_scheduled_exports():
     assert "child_job_ids" in parent
     assert "terminal_count" in parent
     assert "if terminal_count < target_count" in parent
-    assert "_create_scheduled_export_job" in parent
-    assert parent.index("if terminal_count < target_count") < parent.index("_create_scheduled_export_job")
+    assert "_build_scheduled_exports" in parent
+    assert parent.index("if terminal_count < target_count") < parent.index("_build_scheduled_exports")
+
+    exporter = source.split('def _build_scheduled_exports(', 1)[1].split('def run_daily_score_report_parent(', 1)[0]
+    assert "_create_scheduled_export_job" in exporter
 
 
 def test_cms_teacher_management_hides_legacy_job_actions_and_uses_prebuilt_artifact_bar():
