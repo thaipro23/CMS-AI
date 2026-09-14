@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.rbac import UserContext
 from app.models.academic import (
     AcademicBlock, AcademicClass, AcademicClassCourseMapping, AcademicCourseMapping,
     AcademicSubject, AcademicSubjectDelivery, AcademicTerm,
@@ -116,7 +117,13 @@ def test_auto_map_repairs_invalid_org_when_one_safe_live_course_exists(scope):
     cache_course(service, 'course-v1:FPS+MAR2023+FA26')
 
     result = service.auto_map_subject_course(
-        SimpleNamespace(user_id='admin', username='admin'),
+        UserContext(
+            user_id='admin',
+            username='admin',
+            role='admin',
+            permissions={'manage_settings'},
+            raw_claims={'ai_system_admin': True},
+        ),
         term_id=term.id,
         subject_id=subject.id,
         branch='ptcd',

@@ -382,3 +382,4 @@ NEXT ACTION:
 - Kustomize migration Job dùng hậu tố Kubernetes-safe `-0065-academic-job-batch-recovery`, tránh tái sử dụng Job `Completed` cùng tên từ release trước. Production vẫn phải chạy migration Job hoàn tất trước khi rollout backend/worker/worker-heavy/beat.
 - Auto-map không còn lặp lỗi khi scope có mapping lịch sử sai Org. Nếu và chỉ nếu tìm được đúng một Course CMS qua kiểm tra live, đúng Org/mã môn/kỳ, hệ thống cập nhật mapping duy nhất tại chỗ và lưu toàn bộ bằng chứng mapping cũ trong `validation_json.replaced_invalid_mapping`.
 - Không thêm migration `0066`, không xóa dữ liệu và không nới chính sách báo cáo điểm/Excel.
+- CI follow-up: fixture auto-repair dùng `UserContext` system admin tin cậy để đi qua RBAC thật mà không truy vấn bảng assignment chưa được dựng trong SQLite test. Worker gọi `_write_training_teacher_report_xlsx(report, path)` đúng signature hiện tại; bỏ keyword `write_only` không tồn tại để tránh lỗi runtime khi bắt đầu ghi Excel.

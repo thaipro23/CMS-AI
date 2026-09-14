@@ -3171,7 +3171,7 @@ def academic_teacher_report_job_task(job_id: str):
             tmp_dir = Path(tempfile.mkdtemp())
             path = tmp_dir / filename
             try:
-                _write_training_teacher_report_xlsx(report, path, write_only=True)
+                _write_training_teacher_report_xlsx(report, path)
                 raw = path.read_bytes()
                 job.file_path = storage.put_bytes(
                     f'teacher-reports/{filename}',
