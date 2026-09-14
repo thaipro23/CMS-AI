@@ -1,0 +1,106 @@
+name: Apply missing_user learning guard
+
+on:
+  push:
+    branches: [fix/daily-teacher-report-pipeline]
+    paths:
+      - '.github/workflows/apply-missing-user-learning-guard.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/daily-teacher-report-pipeline
+          fetch-depth: 0
+      - name: Patch learning enrollment preservation semantics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/app/services/academic/sync_enrollment.py')
+          source = path.read_text(encoding='utf-8')
+          start = source.index('def _preserve_confirmed_enrollment_for_learning(')
+          end = source.index('\ndef _normalize_class_sync_limit', start)
+          replacement = '''def _preserve_confirmed_enrollment_for_learning(
+              snapshot: AcademicStudentLearningSnapshot | Any | None,
+              result: dict[str, Any],
+          ) -> dict[str, Any]:
+              """Keep write-confirmed enrollment when learning analytics is incomplete.
+
+              Learning analytics is read-side enrichment, not the source of truth for
+              a successful enrollment write. ``missing_user`` means the read-side
+              lookup could not resolve the Open edX identity; it is indeterminate and
+              must not erase a previously confirmed enrollment even when the compact
+              connector payload also carries ``is_enrolled=False``. Only explicit
+              enrollment states such as ``not_enrolled``/``unenrolled``/``inactive``
+              are allowed to downgrade a write-confirmed enrollment.
+              """
+              normalized = dict(result or {})
+              enrollment = normalized.get('enrollment') if isinstance(normalized.get('enrollment'), dict) else {}
+              raw_status = normalized.get('enrollment_status') or enrollment.get('status')
+              incoming_status = str(raw_status or '').strip().lower()
+              is_enrolled = normalized.get('is_enrolled')
+              if is_enrolled is None:
+                  is_enrolled = enrollment.get('is_enrolled')
+
+              positive = (
+                  incoming_status in {'enrolled', 'already_enrolled', 'created', 'reactivated'}
+                  or is_enrolled is True
+              )
+              indeterminate = incoming_status in {'unknown', 'missing', 'missing_user'}
+              no_enrollment_signal = incoming_status == '' and is_enrolled is None
+              explicit_negative = (
+                  incoming_status in {'not_enrolled', 'unenrolled', 'inactive'}
+                  or (incoming_status == '' and is_enrolled is False)
+              )
+              previous_status = str(getattr(snapshot, 'enrollment_status', '') or '').strip().lower()
+              previous_synced_at = getattr(snapshot, 'enrollment_synced_at', None)
+
+              if (
+                  snapshot is not None
+                  and previous_status == 'enrolled'
+                  and previous_synced_at is not None
+                  and not positive
+                  and not explicit_negative
+                  and (indeterminate or no_enrollment_signal)
+              ):
+                  normalized['learning_analytics_enrollment_status'] = incoming_status or None
+                  normalized['learning_analytics_is_enrolled'] = is_enrolled
+                  normalized['enrollment_status'] = 'enrolled'
+                  normalized['is_enrolled'] = True
+                  previous_mode = str(getattr(snapshot, 'enrollment_mode', '') or '').strip()
+                  if not str(normalized.get('enrollment_mode') or '').strip() and previous_mode:
+                      normalized['enrollment_mode'] = previous_mode
+                  normalized['enrollment_preserved_from_snapshot'] = True
+
+              return normalized
+          '''
+          source = source[:start] + replacement + source[end:]
+          path.write_text(source, encoding='utf-8')
+
+          context = Path('MASTER_CONTEXT_DASH_CMS.md')
+          text = context.read_text(encoding='utf-8')
+          marker = '## Addendum 2026-09-14 — missing_user enrollment/read-side guard'
+          if marker not in text:
+              text += f'''\n\n{marker}\n\n- Audit production COM109/Fall 2026 found 7,670 learning snapshots: 7,550 `enrolled` and 120 `missing_user`. Many `missing_user` rows already had `enrollment_synced_at`, so `missing_user` must be treated as an identity-resolution/read-side indeterminate state, not as proof of unenrollment.\n- Learning analytics may enrich progress/grade/activity but must not downgrade a previously write-confirmed `enrolled` snapshot to `missing_user`, `unknown`, or `missing`, even when a compact read-side result carries `is_enrolled=false`.\n- Explicit negative enrollment states (`not_enrolled`, `unenrolled`, `inactive`) remain authoritative and are never hidden. An unconfirmed `missing_user` snapshot is never auto-promoted. Do not mass-update the 120 production rows; repair only through normal enrollment/learning sync after deployment.\n- Public/report timestamps for this pipeline use `Asia/Ho_Chi_Minh` (+07:00).\n'''
+              context.write_text(text, encoding='utf-8')
+
+          workflow = Path('.github/workflows/apply-missing-user-learning-guard.yml')
+          workflow.unlink()
+          PY
+      - name: Syntax check patched source
+        run: python -m py_compile backend/app/services/academic/sync_enrollment.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/app/services/academic/sync_enrollment.py MASTER_CONTEXT_DASH_CMS.md .github/workflows/apply-missing-user-learning-guard.yml
+          git commit -m 'fix: preserve confirmed enrollment on missing_user analytics'
+          git push origin HEAD:fix/daily-teacher-report-pipeline
