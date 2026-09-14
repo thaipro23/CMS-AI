@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.academic.sync_enrollment import _preserve_confirmed_enrollment_for_learning
 
 
@@ -46,21 +48,23 @@ def test_missing_learning_enrollment_fields_preserve_confirmed_enrollment():
     assert result['enrollment_preserved_from_snapshot'] is True
 
 
-def test_missing_user_from_learning_cannot_downgrade_confirmed_enrollment_even_with_false_flag():
+@pytest.mark.parametrize('read_status', ['missing_user', 'unknown', 'missing'])
+def test_indeterminate_learning_result_cannot_downgrade_confirmed_enrollment_even_with_false_flag(read_status):
     result = _preserve_confirmed_enrollment_for_learning(
         _snapshot(mode='honor'),
         {
             'student_code': 'PH12345',
-            'enrollment_status': 'missing_user',
+            'enrollment_status': read_status,
             'is_enrolled': False,
-            'note': 'Không resolve được Open edX user ở read-side learning analytics',
+            'note': 'Read-side learning analytics không xác nhận được enrollment',
         },
     )
 
     assert result['enrollment_status'] == 'enrolled'
     assert result['is_enrolled'] is True
     assert result['enrollment_mode'] == 'honor'
-    assert result['learning_analytics_enrollment_status'] == 'missing_user'
+    assert result['learning_analytics_enrollment_status'] == read_status
+    assert result['learning_analytics_is_enrolled'] is False
     assert result['enrollment_preserved_from_snapshot'] is True
 
 
