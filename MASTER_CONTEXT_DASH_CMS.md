@@ -406,3 +406,11 @@ NEXT ACTION:
 - `0 đã học` with full enrollment remains valid when Open edX has no progress/grade/activity for those learners.
 - Regression: `backend/app/tests/test_learning_sync_preserves_confirmed_enrollment.py`.
 - All public report timestamps remain `Asia/Ho_Chi_Minh` (+07:00).
+
+
+## Addendum 2026-09-14 — missing_user enrollment/read-side guard
+
+- Audit production COM109/Fall 2026 found 7,670 learning snapshots: 7,550 `enrolled` and 120 `missing_user`. Many `missing_user` rows already had `enrollment_synced_at`, so `missing_user` must be treated as an identity-resolution/read-side indeterminate state, not as proof of unenrollment.
+- Learning analytics may enrich progress/grade/activity but must not downgrade a previously write-confirmed `enrolled` snapshot to `missing_user`, `unknown`, or `missing`, even when a compact read-side result carries `is_enrolled=false`.
+- Explicit negative enrollment states (`not_enrolled`, `unenrolled`, `inactive`) remain authoritative and are never hidden. An unconfirmed `missing_user` snapshot is never auto-promoted. Do not mass-update the 120 production rows; repair only through normal enrollment/learning sync after deployment.
+- Public/report timestamps for this pipeline use `Asia/Ho_Chi_Minh` (+07:00).

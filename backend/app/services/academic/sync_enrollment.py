@@ -49,50 +49,58 @@ class AcademicSyncEnrollmentWorkflowService:
         return getattr(self.parent, name)
 
 def _preserve_confirmed_enrollment_for_learning(
-        snapshot: AcademicStudentLearningSnapshot | Any | None,
-        result: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Keep write-confirmed enrollment when learning analytics is incomplete.
+    snapshot: AcademicStudentLearningSnapshot | Any | None,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep write-confirmed enrollment when learning analytics is incomplete.
 
-        Learning analytics is a read-side enrichment. A replica miss or omitted
-        learner must never downgrade an enrollment previously confirmed by the
-        enrollment workflow. Explicit negative enrollment evidence is not hidden.
-        The raw learning-side status is retained for diagnostics.
-        """
-        normalized = dict(result or {})
-        enrollment = normalized.get('enrollment') if isinstance(normalized.get('enrollment'), dict) else {}
-        raw_status = normalized.get('enrollment_status') or enrollment.get('status')
-        incoming_status = str(raw_status or '').strip().lower()
-        is_enrolled = normalized.get('is_enrolled')
-        if is_enrolled is None:
-            is_enrolled = enrollment.get('is_enrolled')
+    Learning analytics is read-side enrichment, not the source of truth for
+    a successful enrollment write. ``missing_user`` means the read-side
+    lookup could not resolve the Open edX identity; it is indeterminate and
+    must not erase a previously confirmed enrollment even when the compact
+    connector payload also carries ``is_enrolled=False``. Only explicit
+    enrollment states such as ``not_enrolled``/``unenrolled``/``inactive``
+    are allowed to downgrade a write-confirmed enrollment.
+    """
+    normalized = dict(result or {})
+    enrollment = normalized.get('enrollment') if isinstance(normalized.get('enrollment'), dict) else {}
+    raw_status = normalized.get('enrollment_status') or enrollment.get('status')
+    incoming_status = str(raw_status or '').strip().lower()
+    is_enrolled = normalized.get('is_enrolled')
+    if is_enrolled is None:
+        is_enrolled = enrollment.get('is_enrolled')
 
-        positive = (
-            incoming_status in {'enrolled', 'already_enrolled', 'created', 'reactivated'}
-            or is_enrolled is True
-        )
-        explicit_negative = (
-            incoming_status in {'not_enrolled', 'unenrolled', 'inactive'}
-            or is_enrolled is False
-        )
-        previous_status = str(getattr(snapshot, 'enrollment_status', '') or '').strip().lower()
-        previous_synced_at = getattr(snapshot, 'enrollment_synced_at', None)
+    positive = (
+        incoming_status in {'enrolled', 'already_enrolled', 'created', 'reactivated'}
+        or is_enrolled is True
+    )
+    indeterminate = incoming_status in {'unknown', 'missing', 'missing_user'}
+    no_enrollment_signal = incoming_status == '' and is_enrolled is None
+    explicit_negative = (
+        incoming_status in {'not_enrolled', 'unenrolled', 'inactive'}
+        or (incoming_status == '' and is_enrolled is False)
+    )
+    previous_status = str(getattr(snapshot, 'enrollment_status', '') or '').strip().lower()
+    previous_synced_at = getattr(snapshot, 'enrollment_synced_at', None)
 
-        if (
-            snapshot is not None
-            and previous_status == 'enrolled'
-            and previous_synced_at is not None
-            and not positive
-            and not explicit_negative
-        ):
-            normalized['learning_analytics_enrollment_status'] = incoming_status or None
-            normalized['enrollment_status'] = 'enrolled'
-            previous_mode = str(getattr(snapshot, 'enrollment_mode', '') or '').strip()
-            if not str(normalized.get('enrollment_mode') or '').strip() and previous_mode:
-                normalized['enrollment_mode'] = previous_mode
-            normalized['enrollment_preserved_from_snapshot'] = True
+    if (
+        snapshot is not None
+        and previous_status == 'enrolled'
+        and previous_synced_at is not None
+        and not positive
+        and not explicit_negative
+        and (indeterminate or no_enrollment_signal)
+    ):
+        normalized['learning_analytics_enrollment_status'] = incoming_status or None
+        normalized['learning_analytics_is_enrolled'] = is_enrolled
+        normalized['enrollment_status'] = 'enrolled'
+        normalized['is_enrolled'] = True
+        previous_mode = str(getattr(snapshot, 'enrollment_mode', '') or '').strip()
+        if not str(normalized.get('enrollment_mode') or '').strip() and previous_mode:
+            normalized['enrollment_mode'] = previous_mode
+        normalized['enrollment_preserved_from_snapshot'] = True
 
-        return normalized
+    return normalized
 
 def _normalize_class_sync_limit(self, value: int | None, *, default: int = 1000) -> int:
         """Normalize class roster limits without the historical 500-student truncation."""
