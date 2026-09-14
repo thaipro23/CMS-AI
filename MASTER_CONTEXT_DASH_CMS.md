@@ -395,3 +395,14 @@ NEXT ACTION:
 - Root cause: nhánh `include_classes=false` vẫn hydrate toàn bộ teacher/class/roster/snapshot của cả kỳ bằng ORM rồi mới cắt trang; cache lại thường xuyên bị xóa trong lúc `learning_sync`.
 - CMS list path nay lấy danh sách `teacher_id` distinct bằng `OFFSET/LIMIT` trước, chỉ hydrate lớp của tối đa 50 giáo viên hiện tại. KPI toàn bộ scope dùng aggregate SQL và snapshot hiện hành theo `(class_id, student_id)`; drill-down/status-filter vẫn giữ workflow đầy đủ.
 - Không thêm migration. Regression contract mới bảo đảm page IDs được chọn trước `class_ids`; cần build image mới và rollout backend/worker theo quy trình hiện hành.
+
+
+## Update 2026-09-14 — Enrollment snapshot preservation during CMS learning sync
+
+- Production evidence: COM109 showed 7174/7174 CMS matches but only 7143/7174 enrolled in the learning KPI.
+- Root cause: enrollment sync and learning analytics share `AcademicStudentLearningSnapshot`; a later learning read could overwrite a write-confirmed `enrolled` value with `unknown` when the connector/replica omitted a learner.
+- Fix: learning analytics may enrich progress/grades but cannot downgrade a previously confirmed enrollment to `unknown`/missing. Explicit negative evidence such as `not_enrolled` is still preserved.
+- Connector health accounting is computed before the preservation guard, so replica/plugin failures remain visible and are not falsely counted as connector-confirmed enrollment.
+- `0 đã học` with full enrollment remains valid when Open edX has no progress/grade/activity for those learners.
+- Regression: `backend/app/tests/test_learning_sync_preserves_confirmed_enrollment.py`.
+- All public report timestamps remain `Asia/Ho_Chi_Minh` (+07:00).
