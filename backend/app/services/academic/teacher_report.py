@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, func, or_
 
 from app.core.rbac import UserContext
 
@@ -352,6 +352,114 @@ class AcademicTeacherReportWorkflowService:
                 context['average_progress_percent'] = round(float(context.get('progress_sum') or 0) / count, 2)
         return result
 
+    def _training_teacher_report_lite_scope_summary(self, query, *, platform: str) -> dict[str, Any]:
+        """Build list-page KPIs with aggregate SQL instead of ORM hydration.
+
+        ``query`` already contains the caller's term, branch, campus, search,
+        platform and RBAC filters.  The distinct scope keeps one row per
+        teacher/class pair so shared classes retain the teacher-centric totals
+        used by the existing dashboard without loading every learner snapshot
+        into Python.
+        """
+        scope = query.with_entities(
+            AcademicTeacher.id.label('teacher_id'),
+            AcademicClass.id.label('class_id'),
+            AcademicSubject.subject_code.label('subject_code'),
+        ).order_by(None).distinct().subquery()
+        teacher_count, class_count, subject_count = self.db.query(
+            func.count(func.distinct(scope.c.teacher_id)),
+            func.count(scope.c.class_id),
+            func.count(func.distinct(scope.c.subject_code)),
+        ).select_from(scope).one()
+
+        student_count, cms_synced_count = self.db.query(
+            func.count(AcademicClassStudent.id),
+            func.coalesce(func.sum(case((OpenEdXUserMapping.match_status == 'matched', 1), else_=0)), 0),
+        ).select_from(scope).join(
+            AcademicClassStudent,
+            AcademicClassStudent.class_id == scope.c.class_id,
+        ).outerjoin(
+            OpenEdXUserMapping,
+            OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
+        ).one()
+
+        ranked_snapshots = self.db.query(
+            AcademicStudentLearningSnapshot.id.label('snapshot_id'),
+            AcademicStudentLearningSnapshot.class_id.label('class_id'),
+            AcademicStudentLearningSnapshot.student_id.label('student_id'),
+            AcademicStudentLearningSnapshot.enrollment_status.label('enrollment_status'),
+            AcademicStudentLearningSnapshot.progress_percent.label('progress_percent'),
+            AcademicStudentLearningSnapshot.grade_percent.label('grade_percent'),
+            AcademicStudentLearningSnapshot.completed_blocks.label('completed_blocks'),
+            AcademicStudentLearningSnapshot.last_activity_at.label('last_activity_at'),
+            func.row_number().over(
+                partition_by=(AcademicStudentLearningSnapshot.class_id, AcademicStudentLearningSnapshot.student_id),
+                order_by=(AcademicStudentLearningSnapshot.updated_at.desc(), AcademicStudentLearningSnapshot.id.desc()),
+            ).label('snapshot_rank'),
+        ).subquery()
+        current_snapshot = self.db.query(ranked_snapshots).filter(ranked_snapshots.c.snapshot_rank == 1).subquery()
+        is_enrolled = func.lower(func.coalesce(current_snapshot.c.enrollment_status, '')) == 'enrolled'
+        has_activity = and_(
+            is_enrolled,
+            or_(
+                current_snapshot.c.progress_percent > 0,
+                current_snapshot.c.grade_percent.is_not(None),
+                current_snapshot.c.completed_blocks > 0,
+                current_snapshot.c.last_activity_at.is_not(None),
+            ),
+        )
+        has_risk = or_(
+            func.coalesce(OpenEdXUserMapping.match_status, '') != 'matched',
+            current_snapshot.c.snapshot_id.is_(None),
+            func.lower(func.coalesce(current_snapshot.c.enrollment_status, '')) != 'enrolled',
+            ~has_activity,
+            current_snapshot.c.progress_percent < self._low_progress_threshold(),
+            current_snapshot.c.grade_percent < self._low_grade_threshold(),
+        )
+        enrolled_count, active_count, risk_count = self.db.query(
+            func.coalesce(func.sum(case((is_enrolled, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((has_activity, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((has_risk, 1), else_=0)), 0),
+        ).select_from(scope).join(
+            AcademicClassStudent,
+            AcademicClassStudent.class_id == scope.c.class_id,
+        ).outerjoin(
+            OpenEdXUserMapping,
+            OpenEdXUserMapping.student_id == AcademicClassStudent.student_id,
+        ).outerjoin(
+            current_snapshot,
+            and_(
+                current_snapshot.c.class_id == scope.c.class_id,
+                current_snapshot.c.student_id == AcademicClassStudent.student_id,
+            ),
+        ).one()
+
+        scope_class_ids = [str(row[0]) for row in self.db.query(scope.c.class_id).distinct().all()]
+        scope_classes = self.db.query(AcademicClass).filter(AcademicClass.id.in_(scope_class_ids)).all() if scope_class_ids else []
+        mapped_class_ids = set(self.effective_course_mappings_for_classes(scope_classes))
+        classes_without_course_count = int(self.db.query(func.count(scope.c.class_id)).select_from(scope).filter(
+            ~scope.c.class_id.in_(mapped_class_ids)
+        ).scalar() or 0) if scope_class_ids else 0
+
+        students = int(student_count or 0)
+        classes = int(class_count or 0)
+        summary = self._teacher_report_summary_from_items([])
+        summary.update({
+            'teacher_count': int(teacher_count or 0),
+            'class_count': classes,
+            'subject_count': int(subject_count or 0),
+            'student_count': students,
+            'unique_student_count': students,
+            'cms_class_count': classes if platform == 'cms' else 0,
+            'cms_student_count': students if platform == 'cms' else 0,
+            'cms_synced_count': min(students, int(cms_synced_count or 0)) if platform == 'cms' else 0,
+            'learning_enrolled_count': min(students, int(enrolled_count or 0)) if platform == 'cms' else 0,
+            'learning_active_count': min(students, int(active_count or 0)) if platform == 'cms' else 0,
+            'risk_student_count': min(students, int(risk_count or 0)) if platform == 'cms' else 0,
+            'classes_without_course_count': classes_without_course_count if platform == 'cms' else 0,
+        })
+        return summary
+
     def _training_teacher_report_lite_fast(
         self,
         user: UserContext,
@@ -375,7 +483,7 @@ class AcademicTeacherReportWorkflowService:
         available from the teacher drill-down/export paths.
         """
         status_filter = self._normalize_learning_list_filter(learning_status)
-        if teacher_id or status_filter in {'deadline_late', 'exam_not_eligible', 'exam_insufficient_data'}:
+        if teacher_id or status_filter != 'all':
             return None
 
         query = self.db.query(
@@ -427,24 +535,42 @@ class AcademicTeacherReportWorkflowService:
                 AcademicSubject.subject_name.ilike(like),
             ))
 
-        rows = query.order_by(
+        platform = self._normalize_report_platform(learning_platform)
+        if platform != 'cms':
+            return None
+        teacher_scope_query = query.with_entities(
+            AcademicTeacher.id.label('teacher_id'),
+            AcademicTeacher.full_name.label('teacher_name'),
+            AcademicTeacher.username.label('teacher_username'),
+        ).order_by(None).distinct()
+        total = int(self.db.query(func.count()).select_from(teacher_scope_query.subquery()).scalar() or 0)
+        page_teacher_rows = teacher_scope_query.order_by(
+            AcademicTeacher.full_name.asc().nullslast(),
+            AcademicTeacher.username.asc(),
+            AcademicTeacher.id.asc(),
+        ).offset((page - 1) * page_size).limit(page_size).all()
+        page_teacher_ids = [str(row.teacher_id) for row in page_teacher_rows]
+        summary = self._training_teacher_report_lite_scope_summary(query, platform=platform)
+        if not page_teacher_ids:
+            total_pages = math.ceil(total / page_size) if total else 0
+            return {
+                'items': [],
+                'summary': summary,
+                'summary_scope': 'lite_aggregate',
+                'total': total,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'cache': {'status': 'lite', 'scope_key': self._teacher_report_scope_key(term_id, branch, campus), 'row_count': 0},
+            }
+
+        rows = query.filter(AcademicTeacher.id.in_(page_teacher_ids)).order_by(
             AcademicTeacher.full_name.asc().nullslast(),
             AcademicTeacher.username.asc(),
             AcademicSubject.subject_code.asc(),
             AcademicClass.class_code.asc(),
         ).all()
-        if not rows:
-            return {
-                'items': [],
-                'summary': self._teacher_report_summary_from_items([]),
-                'summary_scope': 'lite_filtered',
-                'total': 0,
-                'page': page,
-                'page_size': page_size,
-                'total_pages': 0,
-                'has_next': False,
-                'cache': {'status': 'lite', 'scope_key': self._teacher_report_scope_key(term_id, branch, campus), 'row_count': 0},
-            }
 
         class_by_id: dict[str, AcademicClass] = {}
         teacher_rows: list[tuple[AcademicTeacher, AcademicClass, AcademicSubject]] = []
@@ -637,15 +763,13 @@ class AcademicTeacherReportWorkflowService:
                 'learning_alerts': learning_alerts,
                 'last_synced_at': bucket['last_synced_at'],
             })
-        filtered_items = [item for item in items if self._teacher_report_item_matches_filter(item, status_filter)]
-        filtered_items.sort(key=lambda item: (str(item.get('teacher_name') or ''), str(item.get('teacher_username') or '')))
-        total = len(filtered_items)
+        page_order = {teacher_id: index for index, teacher_id in enumerate(page_teacher_ids)}
+        items.sort(key=lambda item: page_order.get(str(item.get('teacher_id') or ''), len(page_order)))
         total_pages = math.ceil(total / page_size) if total else 0
-        page_items = filtered_items[(page - 1) * page_size: page * page_size]
         return {
-            'items': page_items,
-            'summary': self._teacher_report_summary_from_items(filtered_items),
-            'summary_scope': 'lite_filtered',
+            'items': items,
+            'summary': summary,
+            'summary_scope': 'lite_aggregate',
             'total': total,
             'page': page,
             'page_size': page_size,

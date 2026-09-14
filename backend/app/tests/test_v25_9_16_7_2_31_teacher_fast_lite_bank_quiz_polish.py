@@ -4,12 +4,26 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_teacher_management_has_fast_lite_report_path():
-    source = (ROOT / 'backend/app/services/academic_service.py').read_text()
-    assert 'def _training_teacher_report_lite_fast(' in source
-    assert "'cache': {" in source
-    assert "'status': 'lite'" in source
-    assert 'avoids hydrating nested classes' in source
-    assert 'not include_all and not include_students and not include_classes and not teacher_id' in source
+    service = (ROOT / 'backend/app/services/academic_service.py').read_text()
+    workflow = (ROOT / 'backend/app/services/academic/teacher_report.py').read_text()
+    assert 'def _training_teacher_report_lite_fast(' in service
+    assert "'cache': {" in workflow
+    assert "'status': 'lite'" in workflow
+    assert 'avoids hydrating nested classes' in workflow
+    assert 'not include_all and not include_students and not include_classes and not teacher_id' in workflow
+
+
+def test_teacher_management_lite_pages_teachers_before_hydrating_learning_rows():
+    source = (ROOT / 'backend/app/services/academic/teacher_report.py').read_text()
+    body = source.split('def _training_teacher_report_lite_fast(', 1)[1].split('def _training_teacher_report_from_cache(', 1)[0]
+
+    assert 'teacher_scope_query =' in body
+    assert '.offset((page - 1) * page_size)' in body
+    assert '.limit(page_size)' in body
+    assert 'AcademicTeacher.id.in_(page_teacher_ids)' in body
+    assert 'summary = self._training_teacher_report_lite_scope_summary(' in body
+    assert body.index('page_teacher_ids =') < body.index('rows = query.filter(')
+    assert body.index('rows = query.filter(') < body.index('class_ids = list(class_by_id.keys())')
 
 
 def test_bank_quiz_uses_explicit_notice_tone_not_keyword_heuristic():

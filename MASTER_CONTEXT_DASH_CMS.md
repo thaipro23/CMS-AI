@@ -389,3 +389,9 @@ NEXT ACTION:
 - Jenkins đã chạy migration `0065` và 37 backend regression tests thành công; release contract còn lỗi vì `SubjectPlatformImportDialog` tự dựng `role="dialog"` thay vì dùng primitive chung.
 - Dialog import kế hoạch nền tảng nay dùng `AccessibleDialog`, kế thừa focus trap, Escape/backdrop handling, khóa body scroll và chặn đóng trong lúc request đang chạy; luồng preview/apply giữ nguyên.
 - Contract `test_accessible_dialog_is_the_only_active_dialog_primitive` đã pass sau thay đổi.
+
+## 2026-09-14 — Chặn 502 khi mở Quản lý giảng viên
+
+- Root cause: nhánh `include_classes=false` vẫn hydrate toàn bộ teacher/class/roster/snapshot của cả kỳ bằng ORM rồi mới cắt trang; cache lại thường xuyên bị xóa trong lúc `learning_sync`.
+- CMS list path nay lấy danh sách `teacher_id` distinct bằng `OFFSET/LIMIT` trước, chỉ hydrate lớp của tối đa 50 giáo viên hiện tại. KPI toàn bộ scope dùng aggregate SQL và snapshot hiện hành theo `(class_id, student_id)`; drill-down/status-filter vẫn giữ workflow đầy đủ.
+- Không thêm migration. Regression contract mới bảo đảm page IDs được chọn trước `class_ids`; cần build image mới và rollout backend/worker theo quy trình hiện hành.
