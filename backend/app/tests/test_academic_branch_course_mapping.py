@@ -110,13 +110,25 @@ def test_wrong_direct_mapping_does_not_hide_valid_inherited_course(scope):
     assert service.effective_course_mapping_for_class(cls) is valid
 
 
-def test_auto_create_never_reuses_or_overwrites_invalid_existing_mapping(scope):
-    service, _, _, _ = scope
+def test_auto_map_repairs_invalid_org_when_one_safe_live_course_exists(scope):
+    service, term, subject, _ = scope
     row = stored_mapping(service)
-    result = service._auto_create_subject_course_mapping_if_safe(SimpleNamespace(user_id='admin'), term_id='term', subject_id='subject', branch_value='ptcd', candidate='course-v1:FPS+MAR2023+FA26', suggested='course-v1:FPS+MAR2023+FA26')
-    assert result is None
+    cache_course(service, 'course-v1:FPS+MAR2023+FA26')
+
+    result = service.auto_map_subject_course(
+        SimpleNamespace(user_id='admin', username='admin'),
+        term_id=term.id,
+        subject_id=subject.id,
+        branch='ptcd',
+    )
+
+    assert result['ok'] is True
+    assert result['status'] == 'auto_repaired'
     assert service.db.query(AcademicCourseMapping).count() == 1
-    assert row.openedx_course_id == 'course-v1:FPL+MAR2023+FA26'
+    service.db.refresh(row)
+    assert row.openedx_course_id == 'course-v1:FPS+MAR2023+FA26'
+    assert row.validation_status == 'auto_mapped'
+    assert row.validation_json['replaced_invalid_mapping']['openedx_course_id'] == 'course-v1:FPL+MAR2023+FA26'
 
 
 def test_valid_stored_mapping_remains_reusable(scope):

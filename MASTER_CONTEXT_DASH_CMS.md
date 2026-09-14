@@ -375,3 +375,10 @@ NEXT ACTION:
 - Root cause: các helper tổng hợp học tập lọc snapshot theo `class_id`/Course hiện hành nhưng chưa join lại `academic_class_students`. Snapshot lịch sử của sinh viên đã bị AP loại khỏi lớp vẫn tồn tại để audit và bị cộng vào enrolled/synced/active/điểm trung bình.
 - Fix giữ nguyên snapshot lịch sử, nhưng mọi query tổng hợp class/subject/fast overview chỉ nhận snapshot có cặp `(class_id, student_id)` còn nằm trong roster hiện tại. Không cần xóa dữ liệu và chỉ cần rollout backend để số liệu được tính lại khi tải trang.
 - Regression `backend/app/tests/test_academic_enrollment_count_current_roster.py` tái hiện roster 2 sinh viên cùng 1 snapshot cũ; cả fast overview và class-detail summary phải trả `2/2`, active `1`, progress trung bình `5%`.
+
+## 2026-09-14 — Phục hồi migration Job và auto-repair mapping sai Org
+
+- Production chạy image có model `academic_class_sync_jobs.parent_job_id/idempotency_key` trước khi DB lên `0065`, làm scheduler đồng bộ điểm lỗi `UndefinedColumn`; các job Excel sau đó dừng đúng chính sách fail-closed vì không xác nhận được điểm mới nhất.
+- Kustomize migration Job dùng hậu tố Kubernetes-safe `-0065-academic-job-batch-recovery`, tránh tái sử dụng Job `Completed` cùng tên từ release trước. Production vẫn phải chạy migration Job hoàn tất trước khi rollout backend/worker/worker-heavy/beat.
+- Auto-map không còn lặp lỗi khi scope có mapping lịch sử sai Org. Nếu và chỉ nếu tìm được đúng một Course CMS qua kiểm tra live, đúng Org/mã môn/kỳ, hệ thống cập nhật mapping duy nhất tại chỗ và lưu toàn bộ bằng chứng mapping cũ trong `validation_json.replaced_invalid_mapping`.
+- Không thêm migration `0066`, không xóa dữ liệu và không nới chính sách báo cáo điểm/Excel.

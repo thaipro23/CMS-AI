@@ -52,6 +52,34 @@ Kết quả cuối phải có:
 
 Migration chỉ bổ sung `parent_job_id`, `idempotency_key` và index cho `academic_class_sync_jobs`; không xóa dữ liệu job cũ.
 
+### Kubernetes production
+
+Migration Job có hậu tố Kubernetes-safe theo Alembic head (`ai-server-migrate-0065-academic-job-batch-recovery`). Vì vậy `kubectl apply` tạo Job mới cho revision này thay vì dùng lại Job `Completed` của release trước. Cập nhật image trong overlay production rồi chạy Job trước khi rollout Deployment:
+
+```bash
+kubectl apply -k deploy/k8s/jobs
+kubectl -n openedx wait --for=condition=complete \
+  job/ai-server-migrate-0065-academic-job-batch-recovery --timeout=10m
+kubectl -n openedx logs \
+  job/ai-server-migrate-0065-academic-job-batch-recovery --all-containers=true
+```
+
+Xác nhận revision và schema từ pod backend dùng cùng image vừa build:
+
+```bash
+POD=$(kubectl -n openedx get pod -l app=ai-server-backend -o jsonpath='{.items[0].metadata.name}')
+kubectl -n openedx exec "$POD" -- sh -lc 'cd /app && alembic -c alembic.ini current'
+kubectl -n openedx exec -i "$POD" -- python - <<'PY'
+from sqlalchemy import create_engine, inspect
+from app.core.config import settings
+
+columns = {item['name'] for item in inspect(create_engine(settings.database_url)).get_columns('academic_class_sync_jobs')}
+required = {'parent_job_id', 'idempotency_key'}
+print('OK' if required <= columns else f'MISSING: {sorted(required - columns)}')
+raise SystemExit(0 if required <= columns else 1)
+PY
+```
+
 ## 3. Rollout đủ API, UI và hai worker
 
 ```bash

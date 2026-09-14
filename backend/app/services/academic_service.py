@@ -70,6 +70,55 @@ from app.services.academic.udemy_progress import UdemyProgressService
 COURSE_MAPPING_MAPPED_STATUSES = frozenset({'mapped', 'mapped_multiple', 'already_mapped', 'auto_mapped'})
 COURSE_MAPPING_MISSING_STATUSES = frozenset({'not_found', 'multiple_candidates'})
 
+
+def _replace_invalid_course_mapping(
+    mapping: Any,
+    *,
+    candidate: str,
+    openedx_course_title: str | None,
+    validation: dict[str, Any],
+    suggested: str,
+    candidate_source: str,
+    actor: str,
+    now: datetime,
+) -> Any:
+    """Repair one unique mapping scope while retaining its previous evidence."""
+
+    def history_value(value: Any) -> Any:
+        return value.isoformat() if hasattr(value, 'isoformat') else value
+
+    previous = {
+        'openedx_course_id': mapping.openedx_course_id,
+        'openedx_course_title': mapping.openedx_course_title,
+        'validation_status': mapping.validation_status,
+        'validation_json': mapping.validation_json,
+        'validated_at': history_value(mapping.validated_at),
+        'updated_by': mapping.updated_by,
+        'updated_at': history_value(mapping.updated_at),
+        'note': mapping.note,
+    }
+    mapping.openedx_course_id = candidate
+    mapping.openedx_course_title = openedx_course_title
+    mapping.validation_status = 'auto_mapped'
+    mapping.validation_json = {
+        **validation,
+        'auto_map': True,
+        'auto_map_rule': 'exact subject_code + term_run course_id',
+        'suggested_openedx_course_id': suggested,
+        'candidate_source': candidate_source,
+        'replaced_invalid_mapping': previous,
+    }
+    mapping.validated_at = now
+    mapping.updated_by = actor
+    mapping.updated_at = now
+    mapping.note = (
+        f'Auto map đã thay mapping sai Org bằng Course CMS được xác nhận an toàn. '
+        f'Nguồn: {candidate_source}. Mapping trước: {previous["openedx_course_id"]}.'
+    )[:4000]
+    mapping.active = True
+    return mapping
+
+
 class AcademicService:
     CONNECTOR_MIN_CONTRACT_VERSION = 'learning-sync/v25.9.16.5.98'
     CONNECTOR_MIN_RUNTIME_VERSION = '25.9.16.5.98'
@@ -2143,8 +2192,8 @@ class AcademicService:
             campus=None,
             branch=branch_value,
         ).first()
-        if current:
-            return current if self._course_mapping_org_is_valid(current) else None
+        if current and self._course_mapping_org_is_valid(current):
+            return current
         validation = self.validate_course_mapping_payload(
             term_id=term_id,
             subject_id=subject_id,
@@ -2158,24 +2207,37 @@ class AcademicService:
         if not validation.get('can_save') or not live_check or live_check.get('status') != 'pass':
             return None
         now = datetime.utcnow()
-        mapping = AcademicCourseMapping(
-            term_id=term_id,
-            block_id=None,
-            subject_id=subject_id,
-            campus=None,
-            branch=branch_value,
-            openedx_course_id=candidate,
-            openedx_course_title=openedx_course_title,
-            validation_status='auto_mapped',
-            validation_json={**validation, 'auto_map': True, 'auto_map_rule': 'exact subject_code + term_run course_id', 'suggested_openedx_course_id': suggested, 'candidate_source': candidate_source},
-            validated_at=now,
-            created_by=user.user_id or user.username or 'system_auto',
-            updated_by=user.user_id or user.username or 'system_auto',
-            note=f'Auto map an toàn theo mã môn + kỳ; chỉ chạy khi tìm thấy đúng một Course CMS khớp. Nguồn: {candidate_source}.',
-            active=True,
-            created_at=now,
-            updated_at=now,
-        )
+        actor = user.user_id or user.username or 'system_auto'
+        if current:
+            mapping = _replace_invalid_course_mapping(
+                current,
+                candidate=candidate,
+                openedx_course_title=openedx_course_title,
+                validation=validation,
+                suggested=suggested,
+                candidate_source=candidate_source,
+                actor=actor,
+                now=now,
+            )
+        else:
+            mapping = AcademicCourseMapping(
+                term_id=term_id,
+                block_id=None,
+                subject_id=subject_id,
+                campus=None,
+                branch=branch_value,
+                openedx_course_id=candidate,
+                openedx_course_title=openedx_course_title,
+                validation_status='auto_mapped',
+                validation_json={**validation, 'auto_map': True, 'auto_map_rule': 'exact subject_code + term_run course_id', 'suggested_openedx_course_id': suggested, 'candidate_source': candidate_source},
+                validated_at=now,
+                created_by=actor,
+                updated_by=actor,
+                note=f'Auto map an toàn theo mã môn + kỳ; chỉ chạy khi tìm thấy đúng một Course CMS khớp. Nguồn: {candidate_source}.',
+                active=True,
+                created_at=now,
+                updated_at=now,
+            )
         self.db.add(mapping)
         self.db.flush()
         if commit:
@@ -2203,15 +2265,8 @@ class AcademicService:
             branch=branch_value,
         ).first()
         suggested = self.suggested_course_id_for_scope(term_id, subject_id, branch=branch)
-        if current and not self._course_mapping_org_is_valid(current):
-            return {
-                'ok': False,
-                'status': 'invalid_org_match',
-                'message': 'Mapping hiện tại sai org của nhánh. Admin cần kiểm tra và sửa mapping trước khi auto map.',
-                'suggested_openedx_course_id': suggested,
-                'mapping': self._course_mapping_item(current),
-            }
-        if current:
+        replacing_invalid = bool(current and not self._course_mapping_org_is_valid(current))
+        if current and not replacing_invalid:
             return {
                 'ok': True,
                 'status': 'already_mapped',
@@ -2257,8 +2312,8 @@ class AcademicService:
             }
         return {
             'ok': True,
-            'status': 'auto_mapped',
-            'message': 'Đã tự động map môn với Course CMS.',
+            'status': 'auto_repaired' if replacing_invalid else 'auto_mapped',
+            'message': 'Đã thay mapping sai Org bằng Course CMS đúng nhánh.' if replacing_invalid else 'Đã tự động map môn với Course CMS.',
             'suggested_openedx_course_id': suggested,
             'mapping': self._course_mapping_item(mapping),
         }

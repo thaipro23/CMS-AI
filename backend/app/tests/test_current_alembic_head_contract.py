@@ -58,6 +58,12 @@ class CurrentAlembicHeadContractTest(unittest.TestCase):
             self.assertIsNotNone(match, relative_path)
             self.assertEqual(match.group(1), EXPECTED_HEAD, relative_path)
 
+    def test_kubernetes_migration_job_name_changes_with_schema_head(self) -> None:
+        source = (ROOT / 'deploy/k8s/jobs/kustomization.yaml').read_text(encoding='utf-8')
+        match = re.search(r'^nameSuffix:\s*(\S+)$', source, re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), f'-{EXPECTED_HEAD.replace("_", "-")}')
+
 
 if __name__ == '__main__':
     unittest.main()
