@@ -137,8 +137,14 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: e2e/package-lock.json
-      - run: npm ci --no-audit --no-fund
+          cache-dependency-path: |
+            e2e/package-lock.json
+            frontend/package-lock.json
+      - name: Install frontend dependencies for Playwright webserver
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+      - name: Install Playwright test dependencies
+        run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ci
       - name: Upload Playwright evidence
