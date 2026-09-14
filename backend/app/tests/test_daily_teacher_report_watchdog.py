@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.models.academic import AcademicTeacherReportJob
+from app.models.academic import AcademicBulkOperationJob, AcademicTeacherReportJob
 from app.services.academic.daily_teacher_report_runtime import (
     JOB_RUNTIME_EXCEEDED,
     reconcile_teacher_report_watchdog,
@@ -17,7 +17,10 @@ NOW = datetime(2026, 9, 14, 14, 10, 0)
 
 def _engine():
     engine = create_engine('sqlite+pysqlite:///:memory:')
+    # The watchdog reconciles both teacher-report rows and durable 05:00 parent
+    # rows, so its isolated SQLite fixture must expose both tables.
     AcademicTeacherReportJob.__table__.create(engine)
+    AcademicBulkOperationJob.__table__.create(engine)
     return engine
 
 
