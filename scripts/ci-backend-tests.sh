@@ -6,6 +6,8 @@ pytest -q \
   app/tests/test_academic_auto_map_invalid_org_repair.py \
   app/tests/test_academic_branch_course_mapping.py \
   app/tests/test_current_alembic_head_contract.py \
+  app/tests/test_daily_teacher_report_pipeline_contract.py \
+  app/tests/test_daily_teacher_report_watchdog.py \
   app/tests/test_v25_9_16_7_2_64_16_5_4_production_security_closure.py \
   app/tests/test_v25_9_16_7_2_64_16_5_5_performance_worker_reliability.py \
   app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py
