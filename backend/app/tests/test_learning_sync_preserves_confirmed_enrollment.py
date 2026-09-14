@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.academic.sync_enrollment import _preserve_confirmed_enrollment_for_learning
+
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def _snapshot(*, status: str = 'enrolled', synced: bool = True, mode: str | None = 'audit'):
@@ -64,3 +68,16 @@ def test_unconfirmed_snapshot_is_not_promoted_to_enrolled():
 
     assert result['enrollment_status'] == 'unknown'
     assert result.get('enrollment_preserved_from_snapshot') is not True
+
+
+def test_learning_sync_observes_connector_before_preserving_local_enrollment_truth():
+    source = (ROOT / 'backend/app/services/academic/sync_enrollment.py').read_text(encoding='utf-8')
+    learning = source.split('def sync_class_learning_insight(', 1)[1].split('def _try_auto_map_course_for_class(', 1)[0]
+    observed = 'connector_enrolled_seen += 1'
+    guarded = 'result = _preserve_confirmed_enrollment_for_learning(_snapshot, result)'
+    persisted = 'self._upsert_learning_snapshot('
+
+    assert observed in learning
+    assert guarded in learning
+    assert persisted in learning
+    assert learning.index(observed) < learning.index(guarded) < learning.index(persisted)
