@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -24,10 +25,6 @@ from app.services.object_storage import StorageError, get_object_storage
 router = APIRouter()
 VN_TZ = ZoneInfo('Asia/Ho_Chi_Minh')
 XLSX_MEDIA_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-
-
-def _utc_now_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _local_date_from_iso(value: str | None):
@@ -235,17 +232,24 @@ def download_latest_teacher_report_artifact(
     )
     if not job or not job.file_path:
         raise HTTPException(status_code=404, detail='Chưa có file báo cáo 05:00 thành công để tải.')
+
+    storage = get_object_storage()
     try:
-        raw = get_object_storage().read_bytes(job.file_path)
+        metadata = storage.stat(job.file_path)
+        if metadata is None:
+            raise StorageError('File báo cáo không còn tồn tại trong kho lưu trữ.')
+        stream = storage.iter_bytes(job.file_path, chunk_size=256 * 1024)
     except StorageError as exc:
         raise HTTPException(status_code=503, detail='File báo cáo đang không đọc được từ kho lưu trữ.') from exc
+
     file_name = job.file_name or f'teacher-report-{term_id}.xlsx'
     encoded = quote(file_name, safe='')
-    return Response(
-        content=raw,
+    return StreamingResponse(
+        stream,
         media_type=XLSX_MEDIA_TYPE,
         headers={
             'Content-Disposition': f"attachment; filename*=UTF-8''{encoded}",
+            'Content-Length': str(metadata.size),
             'X-Report-Generated-At': str((job.result_json or {}).get('generated_at') or vn_iso(job.finished_at)),
             'X-Report-Timezone': 'Asia/Ho_Chi_Minh',
         },
