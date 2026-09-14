@@ -1,5 +1,6 @@
 name: Apply learning enrollment preservation patch
 
+# One-shot workflow; it deletes itself after the bounded patch passes focused tests.
 on:
   push:
     branches: [fix/daily-teacher-report-pipeline]
