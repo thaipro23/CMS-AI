@@ -46,6 +46,39 @@ def test_missing_learning_enrollment_fields_preserve_confirmed_enrollment():
     assert result['enrollment_preserved_from_snapshot'] is True
 
 
+def test_missing_user_from_learning_cannot_downgrade_confirmed_enrollment_even_with_false_flag():
+    result = _preserve_confirmed_enrollment_for_learning(
+        _snapshot(mode='honor'),
+        {
+            'student_code': 'PH12345',
+            'enrollment_status': 'missing_user',
+            'is_enrolled': False,
+            'note': 'Không resolve được Open edX user ở read-side learning analytics',
+        },
+    )
+
+    assert result['enrollment_status'] == 'enrolled'
+    assert result['is_enrolled'] is True
+    assert result['enrollment_mode'] == 'honor'
+    assert result['learning_analytics_enrollment_status'] == 'missing_user'
+    assert result['enrollment_preserved_from_snapshot'] is True
+
+
+def test_missing_user_without_confirmed_enrollment_is_not_promoted():
+    result = _preserve_confirmed_enrollment_for_learning(
+        _snapshot(status='missing_user', synced=False),
+        {
+            'student_code': 'PH12345',
+            'enrollment_status': 'missing_user',
+            'is_enrolled': False,
+        },
+    )
+
+    assert result['enrollment_status'] == 'missing_user'
+    assert result['is_enrolled'] is False
+    assert result.get('enrollment_preserved_from_snapshot') is not True
+
+
 def test_explicit_negative_learning_enrollment_is_not_hidden():
     result = _preserve_confirmed_enrollment_for_learning(
         _snapshot(),
