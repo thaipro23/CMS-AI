@@ -383,3 +383,9 @@ NEXT ACTION:
 - Auto-map không còn lặp lỗi khi scope có mapping lịch sử sai Org. Nếu và chỉ nếu tìm được đúng một Course CMS qua kiểm tra live, đúng Org/mã môn/kỳ, hệ thống cập nhật mapping duy nhất tại chỗ và lưu toàn bộ bằng chứng mapping cũ trong `validation_json.replaced_invalid_mapping`.
 - Không thêm migration `0066`, không xóa dữ liệu và không nới chính sách báo cáo điểm/Excel.
 - CI follow-up: fixture auto-repair dùng `UserContext` system admin tin cậy để đi qua RBAC thật mà không truy vấn bảng assignment chưa được dựng trong SQLite test. Worker gọi `_write_training_teacher_report_xlsx(report, path)` đúng signature hiện tại; bỏ keyword `write_only` không tồn tại để tránh lỗi runtime khi bắt đầu ghi Excel.
+
+## 2026-09-14 — Chuẩn hóa dialog import kế hoạch nền tảng
+
+- Jenkins đã chạy migration `0065` và 37 backend regression tests thành công; release contract còn lỗi vì `SubjectPlatformImportDialog` tự dựng `role="dialog"` thay vì dùng primitive chung.
+- Dialog import kế hoạch nền tảng nay dùng `AccessibleDialog`, kế thừa focus trap, Escape/backdrop handling, khóa body scroll và chặn đóng trong lúc request đang chạy; luồng preview/apply giữ nguyên.
+- Contract `test_accessible_dialog_is_the_only_active_dialog_primitive` đã pass sau thay đổi.
