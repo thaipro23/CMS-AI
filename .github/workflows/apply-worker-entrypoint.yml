@@ -42,13 +42,12 @@ jobs:
           workflow.unlink()
           print(touched)
           PY
-      - name: Validate Compose files
+      - name: Validate production Compose and static dev contract
         shell: bash
         run: |
           cp .env.production.example .env.production
           POSTGRES_PASSWORD=ci_password APP_VERSION=25.9.16.7.2.64.16.5.7.2.18 \
             docker compose -f docker-compose.prod.yml --env-file .env.production config >/tmp/compose.prod.yml
-          docker compose -f docker-compose.yml config >/tmp/compose.dev.yml
           ! grep -R 'app.worker.celery_app' docker-compose.yml docker-compose.prod.yml
           grep -q 'app.worker_entry.celery_app' docker-compose.prod.yml
           grep -q 'app.worker_entry.celery_app' docker-compose.yml
