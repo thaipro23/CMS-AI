@@ -1,0 +1,39 @@
+name: Temporary progress email personalization TDD
+
+on:
+  push:
+    branches: [feat/import-quiz-cms-old-su26]
+    paths:
+      - '.github/workflows/tmp-progress-email-personalization.yml'
+      - 'backend/app/tests/test_academic_progress_email.py'
+      - 'backend/app/services/academic/progress_email.py'
+      - 'backend/app/worker.py'
+
+permissions:
+  contents: read
+
+jobs:
+  targeted:
+    runs-on: ubuntu-24.04
+    env:
+      APP_ENV: test
+      DEBUG: 'false'
+      MOCK_LLM: 'true'
+      USE_MOCK_OPENEDX: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/import-quiz-cms-old-su26
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-runtime.txt
+            backend/requirements-ci.txt
+      - name: Install backend CI dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements-ci.txt
+      - name: Run progress-email tests
+        working-directory: backend
+        run: pytest -q app/tests/test_academic_progress_email.py
