@@ -17,11 +17,26 @@ jobs:
       - name: Find possible raw email rendering
         shell: bash
         run: |
-          echo '=== JSX expressions containing email ==='
-          rg -n --glob '*.tsx' '\{[^}\n]*(\.email|_email|email)[^}\n]*\}' frontend || true
-          echo
-          echo '=== Template interpolations containing email ==='
-          rg -n --glob '*.{ts,tsx}' '\$\{[^}\n]*(\.email|_email|email)[^}\n]*\}' frontend || true
-          echo
-          echo '=== HTML-like output / labels with email ==='
-          rg -n --glob '*.tsx' '(email|Email|EMAIL)' frontend || true
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          patterns = [
+              re.compile(r'\{[^}\n]*(?:\.email|_email|\bemail\b)[^}\n]*\}', re.I),
+              re.compile(r'\$\{[^}\n]*(?:\.email|_email|\bemail\b)[^}\n]*\}', re.I),
+          ]
+          for path in sorted(Path('frontend').rglob('*')):
+              if path.suffix not in {'.ts', '.tsx'}:
+                  continue
+              text = path.read_text(encoding='utf-8')
+              hits = []
+              for no, line in enumerate(text.splitlines(), 1):
+                  if 'email' not in line.lower():
+                      continue
+                  if any(pattern.search(line) for pattern in patterns) or path.suffix == '.tsx':
+                      hits.append((no, line.strip()))
+              if hits:
+                  print(f'\n### {path}')
+                  for no, line in hits:
+                      print(f'{no}: {line}')
+          PY
