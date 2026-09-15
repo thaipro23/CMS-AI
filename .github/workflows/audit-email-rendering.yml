@@ -14,26 +14,36 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Find possible raw email rendering
+      - name: Find possible raw email exposure
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
-          patterns = [
-              re.compile(r'\{[^}\n]*(?:\.email|_email|\bemail\b)[^}\n]*\}', re.I),
-              re.compile(r'\$\{[^}\n]*(?:\.email|_email|\bemail\b)[^}\n]*\}', re.I),
-          ]
+          print('=== FRONTEND EMAIL REFERENCES ===')
           for path in sorted(Path('frontend').rglob('*')):
               if path.suffix not in {'.ts', '.tsx'}:
                   continue
-              text = path.read_text(encoding='utf-8')
               hits = []
-              for no, line in enumerate(text.splitlines(), 1):
-                  if 'email' not in line.lower():
+              for no, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+                  if 'email' in line.lower() and path.suffix == '.tsx':
+                      hits.append((no, line.strip()))
+              if hits:
+                  print(f'\n### {path}')
+                  for no, line in hits:
+                      print(f'{no}: {line}')
+
+          print('\n=== BACKEND EMAIL SERIALIZATION / EXPORT REFERENCES ===')
+          for path in sorted(Path('backend').rglob('*.py')):
+              hits = []
+              for no, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+                  lower = line.lower()
+                  if 'email' not in lower:
                       continue
-                  if any(pattern.search(line) for pattern in patterns) or path.suffix == '.tsx':
+                  if any(token in lower for token in (
+                      '.email', "['email']", '.get(\'email\')', '.get("email")',
+                      'teacher_email', 'masked_email', 'private_email', "'email'", '"email"',
+                  )):
                       hits.append((no, line.strip()))
               if hits:
                   print(f'\n### {path}')
