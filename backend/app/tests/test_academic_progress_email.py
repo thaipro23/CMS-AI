@@ -3,6 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.services.academic import progress_email as progress_email_module
 from app.services.academic.progress_email import mask_recipient_email, plain_text_mail_template
 from app.services.mailsend_proxy import MailSendProxyClient, MailSendProxyError
 
@@ -105,6 +106,23 @@ def test_progress_email_helpers_mask_address_and_escape_teacher_text():
     assert '>CMS</a>' in linked
 
 
+def test_ai_server_resolves_student_name_and_code_before_mail_send():
+    render = getattr(progress_email_module, 'render_recipient_body_text', None)
+    assert callable(render), 'AI Server must own progress-email recipient personalization'
+
+    body = render(
+        'Xin chào {{tên sinh viên}}-{{maHs}},\nVui lòng vào CMS để kiểm tra.',
+        full_name='Nguyễn Văn An',
+        student_code='PH12345',
+    )
+    assert body.startswith('Xin chào Nguyễn Văn An-PH12345,')
+    assert '{{tên sinh viên}}' not in body
+    assert '{{maHs}}' not in body
+
+    with pytest.raises(ValueError, match='student_code'):
+        render('Xin chào {{maHs}}', full_name='Nguyễn Văn An', student_code=None)
+
+
 def test_worker_refreshes_cms_before_creating_mail_send_session():
     root = Path(__file__).resolve().parents[1]
     worker = (root / 'worker.py').read_text(encoding='utf-8')
@@ -114,8 +132,10 @@ def test_worker_refreshes_cms_before_creating_mail_send_session():
 
     assert "acks_late=False" in body
     assert body.index('sync_class_learning_insight(') < body.index('create_bulk_session(')
-    assert body.index("'mail_send_session_id': session_id") < body.index('wait_for_terminal(')
-    assert "terminal_status != 'COMPLETED'" in body
+    assert "resolved.pop('recipients')" in body
+    assert 'render_recipient_body_text(' in body
+    assert 'emails=[recipient_email]' in body
+    assert "'mail_send_deliveries'" in body
     assert "'recipient_addresses_logged': False" in body
 
 
