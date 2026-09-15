@@ -422,3 +422,11 @@ NEXT ACTION:
 - Email thật chỉ tồn tại ở storage và các luồng backend nội bộ thật sự cần nó (identity matching, enrollment, Mail Send recipients); không đưa recipient email thật vào public job/audit/log.
 - Progress-email mặc định dùng tiêu đề `[CMS Server] Nhắc nhở tiến độ học tập - {subject} · {class}` và chữ `CMS` trong body được render thành link cố định `https://edx.cms.fpl.edu.vn/learner-dashboard/` sau bước HTML escape.
 - Frontend vẫn mask lần cuối để phòng legacy API trả raw email; backend output serializers/exporters cũng mask để DevTools/API/Excel không lộ địa chỉ đầy đủ.
+
+## Addendum 2026-09-15 — AI-side progress email personalization
+
+- AI Server tự resolve `{{tên sinh viên}}` từ `AcademicStudent.full_name` và `{{maHs}}` từ `AcademicStudent.student_code` trước khi render HTML/gửi Mail Send.
+- Vì Mail Send nhận một `bodyTemplate` cho mỗi bulk session, progress reminder tạo một session cho từng recipient để nội dung được personalize đúng người. Session được persist trước khi poll để retry/resume không gửi trùng.
+- `mail_send_deliveries` chỉ lưu `student_id`, `session_id`, trạng thái và counters; không lưu email thật hoặc body đã personalize. Email thật chỉ tồn tại trong memory/backend khi gọi Mail Send.
+- Recipient thiếu dữ liệu cho một placeholder đang được dùng sẽ bị đánh dấu `PERSONALIZATION_MISSING` và không gửi template còn nguyên biến.
+

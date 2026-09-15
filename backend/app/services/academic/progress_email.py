@@ -40,6 +40,25 @@ def mask_recipient_email(value: Any) -> str | None:
 
 
 CMS_LEARNER_DASHBOARD_URL = 'https://edx.cms.fpl.edu.vn/learner-dashboard/'
+_STUDENT_NAME_TOKEN = '{{tên sinh viên}}'
+_STUDENT_CODE_TOKEN = '{{maHs}}'
+
+
+def render_recipient_body_text(
+    value: str,
+    *,
+    full_name: str | None,
+    student_code: str | None,
+) -> str:
+    """Resolve AI-owned recipient variables before handing HTML to Mail Send."""
+    body = str(value or '')
+    clean_name = str(full_name or '').strip()
+    clean_code = str(student_code or '').strip()
+    if _STUDENT_NAME_TOKEN in body and not clean_name:
+        raise ValueError('missing_full_name_for_progress_email')
+    if _STUDENT_CODE_TOKEN in body and not clean_code:
+        raise ValueError('missing_student_code_for_progress_email')
+    return body.replace(_STUDENT_NAME_TOKEN, clean_name).replace(_STUDENT_CODE_TOKEN, clean_code)
 
 
 def plain_text_mail_template(value: str) -> str:
@@ -294,12 +313,21 @@ class AcademicProgressEmailService:
             minimum_synced_at=minimum_synced_at,
         )
         current_candidate_ids = {item['student_id'] for item in result['selected_candidates']}
-        emails = [str(item['private_email']) for item in result['deliverable']]
+        recipients = [
+            {
+                'student_id': str(item['student_id']),
+                'student_code': item.get('student_code'),
+                'full_name': item.get('full_name'),
+                'private_email': str(item['private_email']),
+            }
+            for item in result['deliverable']
+            if item.get('private_email')
+        ]
         return {
-            'emails': emails,
+            'recipients': recipients,
             'selected_count': len(selected_student_ids),
             'eligible_after_refresh_count': len(result['selected_candidates']),
-            'deliverable_count': len(emails),
+            'deliverable_count': len(recipients),
             'caught_up_or_no_longer_late_count': len(selected_student_ids - current_candidate_ids),
             'missing_email_count': int(result['issue_counts'].get('missing_email', 0)),
             'inactive_student_count': int(result['issue_counts'].get('inactive_student', 0)),

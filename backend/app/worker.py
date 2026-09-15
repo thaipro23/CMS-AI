@@ -1775,9 +1775,13 @@ def academic_sync_all_student_scores_task():
 
 @celery_app.task(name='academic_progress_email_task', acks_late=False)
 def academic_progress_email_task(job_id: str):
-    """Refresh CMS progress, re-resolve recipients, then track Mail Send to terminal."""
+    """Refresh CMS progress, personalize each reminder locally, then track Mail Send."""
     from app.models.academic import AcademicBulkOperationJob, AcademicClassStudent
-    from app.services.academic.progress_email import AcademicProgressEmailService, plain_text_mail_template
+    from app.services.academic.progress_email import (
+        AcademicProgressEmailService,
+        plain_text_mail_template,
+        render_recipient_body_text,
+    )
     from app.services.academic_service import AcademicService
     from app.services.audit_log import AuditErrorType, log_audit
     from app.services.mailsend_proxy import MailSendProxyClient, MailSendProxyError
@@ -1825,33 +1829,61 @@ def academic_progress_email_task(job_id: str):
         academic.assert_can_access_class(worker_user, class_id)
         progress_service = AcademicProgressEmailService(db)
         existing_result = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
-        session_id = str(existing_result.get('mail_send_session_id') or '').strip()
+        legacy_session_id = str(existing_result.get('mail_send_session_id') or '').strip()
 
         job.status = 'running'
         job.started_at = job.started_at or datetime.utcnow()
         job.updated_at = datetime.utcnow()
         job.progress_total = 100
-        job.progress_current = 70 if session_id else 10
-        job.progress_label = 'Đang theo dõi Mail Send' if session_id else 'Đang lấy tiến độ CMS mới nhất'
+        job.progress_current = 70 if legacy_session_id else 10
+        job.progress_label = 'Đang theo dõi Mail Send' if legacy_session_id else 'Đang lấy tiến độ CMS mới nhất'
         db.add(job)
         db.commit()
 
-        delivery_summary = {
-            key: existing_result.get(key)
-            for key in (
-                'selected_count',
-                'eligible_after_refresh_count',
-                'deliverable_count',
-                'caught_up_or_no_longer_late_count',
-                'missing_email_count',
-                'inactive_student_count',
-                'duplicate_email_count',
-                'stale_after_refresh_count',
-            )
-            if key in existing_result
-        }
+        # Finish a session created by the pre-personalization implementation
+        # without submitting duplicate mail after a rolling deployment.
+        if legacy_session_id and not existing_result.get('mail_send_deliveries'):
+            client = MailSendProxyClient()
+            terminal = client.wait_for_terminal(legacy_session_id)
+            terminal_status = str(terminal.get('status') or '').upper()
+            if terminal_status != 'COMPLETED':
+                raise MailSendProxyError(
+                    f'MAILSEND_{terminal_status or "FAILED"}',
+                    f'Mail Send kết thúc với trạng thái {terminal_status or "không xác định"}.',
+                )
+            sent_count = int(terminal.get('sent_count') or 0)
+            failed_count = int(terminal.get('failed_count') or 0)
+            final_result = json_safe_value({
+                **existing_result,
+                'ok': True,
+                'mail_send_status': 'COMPLETED',
+                'mail_send_confirmed': True,
+                'sent_count': sent_count,
+                'failed_count': failed_count,
+                'message': 'Mail Send đã xác nhận session cũ hoàn tất.',
+            })
+            job = db.get(AcademicBulkOperationJob, job_id)
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = f'Đã gửi {sent_count} email' + (f' · {failed_count} lỗi' if failed_count else '')
+            job.result_json = final_result
+            job.error_message = None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            return final_result
 
-        if not session_id:
+        refresh_started: datetime | None = None
+        refresh_started_raw = str(existing_result.get('cms_refresh_started_at') or '').strip()
+        if bool(existing_result.get('cms_refresh_confirmed')) and refresh_started_raw:
+            try:
+                refresh_started = datetime.fromisoformat(refresh_started_raw)
+            except ValueError:
+                refresh_started = None
+
+        if refresh_started is None:
             refresh_started = datetime.utcnow()
             roster_size = int(
                 db.query(AcademicClassStudent)
@@ -1877,149 +1909,213 @@ def academic_progress_email_task(job_id: str):
                 **existing_result,
                 'selected_count': len(selected_ids),
                 'cms_refresh_confirmed': True,
+                'cms_refresh_started_at': refresh_started.isoformat(),
                 'cms_refreshed_count': int(sync_result.get('updated') or 0),
                 'mail_send_status': 'NOT_CREATED',
-            })
-            db.add(job)
-            db.commit()
-
-            resolved = progress_service.resolve_selected_after_refresh(
-                worker_user,
-                class_id,
-                selected_student_ids=selected_ids,
-                minimum_synced_at=refresh_started,
-            )
-            emails = list(resolved.pop('emails'))
-            delivery_summary = json_safe_value(resolved)
-            if not emails:
-                result = json_safe_value({
-                    'ok': True,
-                    **delivery_summary,
-                    'cms_refresh_confirmed': True,
-                    'cms_refreshed_count': int(sync_result.get('updated') or 0),
-                    'mail_send_status': 'NOT_CREATED',
-                    'mail_send_confirmed': False,
-                    'message': 'Không còn sinh viên đủ điều kiện gửi sau khi cập nhật tiến độ CMS.',
-                })
-                job = db.get(AcademicBulkOperationJob, job_id)
-                job.status = 'completed'
-                job.progress_current = 100
-                job.progress_total = 100
-                job.progress_label = 'Không còn sinh viên chậm tiến độ cần gửi'
-                job.result_json = result
-                job.error_message = None
-                job.finished_at = datetime.utcnow()
-                job.updated_at = datetime.utcnow()
-                db.add(job)
-                db.commit()
-                try:
-                    log_audit(
-                        db,
-                        action='academic.progress_email.no_recipients_after_refresh',
-                        status='success',
-                        message=job.progress_label,
-                        user=None,
-                        target_type='academic_bulk_operation_job',
-                        target_id=job.id,
-                        metadata=json_safe_value({
-                            'class_id': class_id,
-                            'requested_by': job.requested_by,
-                            **delivery_summary,
-                            'recipient_addresses_logged': False,
-                        }),
-                    )
-                except Exception:
-                    logger.exception('Could not write no-recipient progress email audit for job %s', job_id)
-                return result
-
-            client = MailSendProxyClient()
-            created = client.create_bulk_session(
-                subject=subject,
-                body_template=plain_text_mail_template(body_text),
-                emails=emails,
-            )
-            session_id = str(created['session_id'])
-            # Persist sessionId immediately. If the worker is interrupted, an
-            # operator can resume polling without submitting a second session.
-            job = db.get(AcademicBulkOperationJob, job_id)
-            job.progress_current = 70
-            job.progress_label = 'Mail Send đã nhận session; đang chờ kết quả'
-            job.updated_at = datetime.utcnow()
-            job.result_json = json_safe_value({
-                **(job.result_json or {}),
-                **delivery_summary,
-                'mail_send_session_id': session_id,
-                'mail_send_status': created.get('status') or 'QUEUED',
                 'mail_send_confirmed': False,
             })
             db.add(job)
             db.commit()
-        else:
-            client = MailSendProxyClient()
+            existing_result = dict(job.result_json or {})
 
-        last_progress_state: tuple[Any, ...] | None = None
+        resolved = progress_service.resolve_selected_after_refresh(
+            worker_user,
+            class_id,
+            selected_student_ids=selected_ids,
+            minimum_synced_at=refresh_started,
+        )
+        recipients = list(resolved.pop('recipients'))
+        delivery_summary = json_safe_value(resolved)
+        if not recipients:
+            result = json_safe_value({
+                'ok': True,
+                **delivery_summary,
+                'cms_refresh_confirmed': True,
+                'cms_refresh_started_at': refresh_started.isoformat(),
+                'cms_refreshed_count': int(existing_result.get('cms_refreshed_count') or 0),
+                'mail_send_status': 'NOT_CREATED',
+                'mail_send_confirmed': False,
+                'message': 'Không còn sinh viên đủ điều kiện gửi sau khi cập nhật tiến độ CMS.',
+            })
+            job = db.get(AcademicBulkOperationJob, job_id)
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = 'Không còn sinh viên chậm tiến độ cần gửi'
+            job.result_json = result
+            job.error_message = None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(
+                    db,
+                    action='academic.progress_email.no_recipients_after_refresh',
+                    status='success',
+                    message=job.progress_label,
+                    user=None,
+                    target_type='academic_bulk_operation_job',
+                    target_id=job.id,
+                    metadata=json_safe_value({
+                        'class_id': class_id,
+                        'requested_by': job.requested_by,
+                        **delivery_summary,
+                        'recipient_addresses_logged': False,
+                    }),
+                )
+            except Exception:
+                logger.exception('Could not write no-recipient progress email audit for job %s', job_id)
+            return result
 
-        def update_mail_status(status_payload: dict[str, Any]) -> None:
-            nonlocal last_progress_state
-            state = (
-                status_payload.get('status'),
-                status_payload.get('sent_count'),
-                status_payload.get('failed_count'),
-                status_payload.get('finished_at'),
-            )
-            if state == last_progress_state:
-                return
-            last_progress_state = state
+        current_job = db.get(AcademicBulkOperationJob, job_id)
+        current_result = dict(current_job.result_json or {}) if isinstance(current_job.result_json, dict) else {}
+        raw_states = current_result.get('mail_send_deliveries')
+        delivery_states: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_states, list):
+            for item in raw_states:
+                if not isinstance(item, dict):
+                    continue
+                student_id = str(item.get('student_id') or '').strip()
+                if student_id:
+                    delivery_states[student_id] = dict(item)
+
+        client = MailSendProxyClient()
+        processed = 0
+        total = len(recipients)
+        sent_count = 0
+        failed_count = 0
+        personalization_missing_count = 0
+
+        def persist_states(*, label: str, status: str = 'RUNNING') -> None:
             current = db.get(AcademicBulkOperationJob, job_id)
             if not current:
                 return
             current_result = dict(current.result_json or {}) if isinstance(current.result_json, dict) else {}
             current_result.update({
-                'mail_send_session_id': session_id,
-                'mail_send_status': status_payload.get('status'),
-                'sent_count': status_payload.get('sent_count'),
-                'failed_count': status_payload.get('failed_count'),
+                **delivery_summary,
+                'cms_refresh_confirmed': True,
+                'cms_refresh_started_at': refresh_started.isoformat(),
+                'mail_send_deliveries': list(delivery_states.values()),
+                'mail_send_status': status,
                 'mail_send_confirmed': False,
+                'sent_count': sent_count,
+                'failed_count': failed_count,
+                'personalization_missing_count': personalization_missing_count,
             })
             current.result_json = json_safe_value(current_result)
-            current.progress_current = 85
-            current.progress_label = f"Mail Send: {status_payload.get('status') or 'đang xử lý'}"
+            current.progress_current = min(95, 55 + int((processed / max(1, total)) * 40))
+            current.progress_label = label[:255]
             current.updated_at = datetime.utcnow()
             db.add(current)
             db.commit()
 
-        terminal = client.wait_for_terminal(session_id, on_status=update_mail_status)
-        terminal_status = str(terminal.get('status') or '').upper()
-        if terminal_status != 'COMPLETED':
-            raise MailSendProxyError(
-                f'MAILSEND_{terminal_status or "FAILED"}',
-                f'Mail Send kết thúc với trạng thái {terminal_status or "không xác định"}.',
-            )
-        sent_count = terminal.get('sent_count')
-        failed_count = terminal.get('failed_count')
-        job = db.get(AcademicBulkOperationJob, job_id)
-        final_result = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
-        final_result.update({
-            'ok': True,
+        for recipient in recipients:
+            student_id = str(recipient.get('student_id') or '').strip()
+            recipient_email = str(recipient.get('private_email') or '').strip().lower()
+            state = delivery_states.get(student_id, {'student_id': student_id})
+            delivery_states[student_id] = state
+
+            if str(state.get('status') or '').upper() == 'COMPLETED':
+                sent_count += int(state.get('sent_count') or 1)
+                failed_count += int(state.get('failed_count') or 0)
+                processed += 1
+                continue
+
+            session_id = str(state.get('session_id') or '').strip()
+            if not session_id:
+                try:
+                    personalized_text = render_recipient_body_text(
+                        body_text,
+                        full_name=recipient.get('full_name'),
+                        student_code=recipient.get('student_code'),
+                    )
+                except ValueError as exc:
+                    state.update({
+                        'status': 'PERSONALIZATION_MISSING',
+                        'error_code': str(exc),
+                    })
+                    personalization_missing_count += 1
+                    failed_count += 1
+                    processed += 1
+                    persist_states(label=f'Đã xử lý {processed}/{total} sinh viên')
+                    continue
+
+                try:
+                    created = client.create_bulk_session(
+                        subject=subject,
+                        body_template=plain_text_mail_template(personalized_text),
+                        emails=[recipient_email],
+                    )
+                except MailSendProxyError as exc:
+                    state.update({
+                        'status': 'CREATE_FAILED',
+                        'error_code': exc.code,
+                    })
+                    failed_count += 1
+                    processed += 1
+                    persist_states(label=f'Đã xử lý {processed}/{total} sinh viên')
+                    continue
+
+                session_id = str(created['session_id'])
+                state.update({
+                    'session_id': session_id,
+                    'status': str(created.get('status') or 'QUEUED').upper(),
+                })
+                # Persist the session before polling so retry/resume never creates
+                # a duplicate email for this student.
+                persist_states(label=f'Mail Send đã nhận {processed + 1}/{total} session')
+
+            try:
+                terminal = client.wait_for_terminal(session_id)
+                terminal_status = str(terminal.get('status') or '').upper()
+                state.update({
+                    'status': terminal_status or 'UNKNOWN',
+                    'sent_count': int(terminal.get('sent_count') or 0),
+                    'failed_count': int(terminal.get('failed_count') or 0),
+                })
+                if terminal_status == 'COMPLETED':
+                    sent_count += int(terminal.get('sent_count')) if terminal.get('sent_count') is not None else 1
+                    failed_count += int(terminal.get('failed_count') or 0)
+                else:
+                    failed_count += max(1, int(terminal.get('failed_count') or 0))
+            except MailSendProxyError as exc:
+                state.update({
+                    'status': 'POLL_FAILED',
+                    'error_code': exc.code,
+                })
+                failed_count += 1
+
+            processed += 1
+            persist_states(label=f'Đã xử lý {processed}/{total} sinh viên')
+
+        all_failed = sent_count <= 0 and failed_count > 0
+        final_status = 'FAILED' if all_failed else ('COMPLETED_WITH_ERRORS' if failed_count else 'COMPLETED')
+        final_result = json_safe_value({
+            **(db.get(AcademicBulkOperationJob, job_id).result_json or {}),
+            'ok': not all_failed,
             **delivery_summary,
-            'mail_send_session_id': session_id,
-            'mail_send_status': 'COMPLETED',
+            'mail_send_deliveries': list(delivery_states.values()),
+            'mail_send_status': final_status,
             'mail_send_confirmed': True,
             'sent_count': sent_count,
             'failed_count': failed_count,
-            'message': 'Mail Send đã xác nhận session hoàn tất.',
+            'personalization_missing_count': personalization_missing_count,
+            'message': (
+                'Không gửi được email nào.'
+                if all_failed
+                else f'Đã xử lý {total} sinh viên qua Mail Send.'
+            ),
         })
-        job.status = 'completed'
+        job = db.get(AcademicBulkOperationJob, job_id)
+        job.status = 'failed' if all_failed else 'completed'
         job.progress_current = 100
         job.progress_total = 100
-        if sent_count is None:
-            job.progress_label = 'Mail Send đã xác nhận session hoàn tất'
-        else:
-            job.progress_label = f'Đã gửi {int(sent_count or 0)} email'
-            if int(failed_count or 0) > 0:
-                job.progress_label += f' · {int(failed_count or 0)} lỗi'
-        job.result_json = json_safe_value(final_result)
-        job.error_message = None
+        job.progress_label = f'Đã gửi {sent_count} email'
+        if failed_count:
+            job.progress_label += f' · {failed_count} lỗi'
+        job.result_json = final_result
+        job.error_message = 'Không gửi được email nào.' if all_failed else None
         job.finished_at = datetime.utcnow()
         job.updated_at = datetime.utcnow()
         db.add(job)
@@ -2027,8 +2123,9 @@ def academic_progress_email_task(job_id: str):
         try:
             log_audit(
                 db,
-                action='academic.progress_email.completed',
-                status='success',
+                action='academic.progress_email.completed' if not all_failed else 'academic.progress_email.failed',
+                status='success' if not all_failed else 'failed',
+                error_type=None if not all_failed else AuditErrorType.EXTERNAL_SERVICE_ERROR,
                 message=job.progress_label,
                 user=None,
                 target_type='academic_bulk_operation_job',
@@ -2038,15 +2135,15 @@ def academic_progress_email_task(job_id: str):
                     'requested_by': job.requested_by,
                     'selected_count': len(selected_ids),
                     'deliverable_count': delivery_summary.get('deliverable_count'),
-                    'mail_send_session_id': session_id,
-                    'mail_send_status': terminal_status,
+                    'personalized_session_count': len(delivery_states),
                     'sent_count': sent_count,
                     'failed_count': failed_count,
+                    'personalization_missing_count': personalization_missing_count,
                     'recipient_addresses_logged': False,
                 }),
             )
         except Exception:
-            logger.exception('Could not write completed progress email audit for job %s', job_id)
+            logger.exception('Could not write progress email audit for job %s', job_id)
         return final_result
     except Exception as exc:
         db.rollback()
@@ -2090,7 +2187,7 @@ def academic_progress_email_task(job_id: str):
                     metadata=json_safe_value({
                         'class_id': (job.request_json or {}).get('class_id') if isinstance(job.request_json, dict) else None,
                         'error_code': error_code,
-                        'mail_send_session_id': previous.get('mail_send_session_id'),
+                        'personalized_session_count': len(previous.get('mail_send_deliveries') or []),
                         'recipient_addresses_logged': False,
                     }),
                 )
@@ -2099,7 +2196,6 @@ def academic_progress_email_task(job_id: str):
         raise
     finally:
         db.close()
-
 
 def _enqueue_academic_class_sync_child_job(
     db,
