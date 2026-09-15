@@ -1,0 +1,27 @@
+name: Audit frontend email rendering
+
+on:
+  push:
+    branches: [feat/import-quiz-cms-old-su26]
+    paths:
+      - '.github/workflows/audit-email-rendering.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find possible raw email rendering
+        shell: bash
+        run: |
+          echo '=== JSX expressions containing email ==='
+          rg -n --glob '*.tsx' '\{[^}\n]*(\.email|_email|email)[^}\n]*\}' frontend || true
+          echo
+          echo '=== Template interpolations containing email ==='
+          rg -n --glob '*.{ts,tsx}' '\$\{[^}\n]*(\.email|_email|email)[^}\n]*\}' frontend || true
+          echo
+          echo '=== HTML-like output / labels with email ==='
+          rg -n --glob '*.tsx' '(email|Email|EMAIL)' frontend || true
