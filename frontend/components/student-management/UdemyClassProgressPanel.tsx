@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getUdemyProgressStudents } from "../../lib/api";
+import { maskEmailForDisplay } from "../../lib/privacy";
 import type { UdemyProgressStudent, UdemyProgressStudentList } from "../../types";
 import { CompactFilterBar, WorkspaceSection } from "../operations/OperationsWorkspace";
 import { EnterpriseDataTable, type EnterpriseTableColumn } from "../table/EnterpriseDataTable";
@@ -118,8 +119,8 @@ export function UdemyClassProgressPanel({
       hideable: false,
       render: (row) => <>
         <b>{row.student_code || row.student_username || "Chưa khớp AP"}</b>
-        <small>{row.display_name || row.email}</small>
-        {row.email ? <small>{row.email}</small> : null}
+        <small>{row.display_name || maskEmailForDisplay(row.email)}</small>
+        {row.email ? <small>{maskEmailForDisplay(row.email)}</small> : null}
       </>,
     },
     {

@@ -100,6 +100,9 @@ def test_progress_email_helpers_mask_address_and_escape_teacher_text():
     assert '<script>' not in rendered
     assert '&lt;script&gt;' in rendered
     assert '<br>' in rendered
+    linked = plain_text_mail_template('Vui lòng vào CMS để kiểm tra')
+    assert 'https://edx.cms.fpl.edu.vn/learner-dashboard/' in linked
+    assert '>CMS</a>' in linked
 
 
 def test_worker_refreshes_cms_before_creating_mail_send_session():

@@ -10,6 +10,7 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.privacy import mask_email, normalize_email
 from app.core.rbac import UserContext
 from app.models.academic import (
     AcademicBlock,
@@ -31,25 +32,24 @@ _ACTIVE_OVERDUE_QUIZ_STATUSES = {
 
 
 def normalize_recipient_email(value: Any) -> str | None:
-    email = str(value or '').strip().lower()
-    return email if email and _EMAIL_PATTERN.fullmatch(email) else None
+    return normalize_email(value)
 
 
 def mask_recipient_email(value: Any) -> str | None:
-    email = normalize_recipient_email(value)
-    if not email:
-        return None
-    local, domain = email.rsplit('@', 1)
-    if len(local) <= 1:
-        masked_local = f'{local[:1]}***'
-    else:
-        masked_local = f'{local[:1]}***{local[-1:]}'
-    return f'{masked_local}@{domain}'
+    return mask_email(value)
+
+
+CMS_LEARNER_DASHBOARD_URL = 'https://edx.cms.fpl.edu.vn/learner-dashboard/'
 
 
 def plain_text_mail_template(value: str) -> str:
-    """Convert teacher-authored plain text to conservative email HTML."""
+    """Escape authored text, then link the trusted literal CMS destination."""
     escaped = html.escape(str(value or '').strip(), quote=True)
+    escaped = re.sub(
+        r'\bCMS\b',
+        f'<a href="{CMS_LEARNER_DASHBOARD_URL}" target="_blank" rel="noopener noreferrer">CMS</a>',
+        escaped,
+    )
     paragraphs = [item.strip() for item in re.split(r'\n\s*\n', escaped) if item.strip()]
     if not paragraphs:
         return ''
@@ -100,7 +100,7 @@ class AcademicProgressEmailService:
         subject_code = str(subject.subject_code if subject else '').strip()
         class_code = str(cls.class_code or '').strip()
         scope = ' · '.join(item for item in (subject_code, class_code) if item)
-        return f'[AI Server] Nhắc tiến độ học tập{f" - {scope}" if scope else ""}'
+        return f'[CMS Server] Nhắc nhở tiến độ học tập{f" - {scope}" if scope else ""}'
 
     @staticmethod
     def _default_body(cls: AcademicClass, subject: AcademicSubject | None) -> str:
@@ -112,11 +112,9 @@ class AcademicProgressEmailService:
             ) if item
         ) or 'môn học trên CMS'
         return (
-            'Xin chào {{maHs}},\n\n'
+            'Xin chào {{tên sinh viên}}-{{maHs}},\n\n'
             f'AI Server ghi nhận bạn đang chậm một hoặc nhiều mốc Quiz của {subject_label}, lớp {class_code}. '
             'Vui lòng vào CMS để kiểm tra và hoàn thành các nội dung còn thiếu.\n\n'
-            'Deadline Quiz chỉ là mốc nhắc tiến độ học tập, không phải kết luận cấm thi. '
-            'Điều kiện dự thi chỉ được đánh giá sau ngày học cuối chính thức của lớp/block.\n\n'
             'Nếu bạn vừa hoàn thành, dữ liệu sẽ được cập nhật ở lần đồng bộ tiếp theo.\n\n'
             'Trân trọng,\nGiảng viên phụ trách'
         )

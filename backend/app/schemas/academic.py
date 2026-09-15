@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, field_serializer
+
+from app.core.privacy import mask_email
 
 from app.core.timezone import to_vn_naive_datetime
 
@@ -479,6 +481,10 @@ class UdemyProgressStudentOut(BaseModel):
     last_imported_at: datetime
     diagnostic: str | None = None
 
+    @field_serializer('email')
+    def serialize_email(self, value: str | None) -> str | None:
+        return mask_email(value)
+
 
 class UdemyProgressStudentListOut(BaseModel):
     items: list[UdemyProgressStudentOut] = Field(default_factory=list)
@@ -590,6 +596,10 @@ class AcademicStudentOut(BaseModel):
     branch: str | None = None
     active: bool
 
+    @field_serializer('email')
+    def serialize_email(self, value: str | None) -> str | None:
+        return mask_email(value)
+
     model_config = {'from_attributes': True}
 
 
@@ -654,6 +664,10 @@ class AcademicClassStudentOut(AcademicStudentOut):
     exam_reasons: list[str] = Field(default_factory=list)
     assignment_defense_status: str | None = None
     assignment_score_10: float | None = None
+
+    @field_serializer('openedx_email')
+    def serialize_openedx_email(self, value: str | None) -> str | None:
+        return mask_email(value)
 
 
 class AcademicClassListOut(BaseModel):

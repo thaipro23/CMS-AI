@@ -9,6 +9,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.privacy import mask_email
 from app.models.question import Question, QuestionReviewLog
 from app.core.timezone import to_vn_naive_datetime
 from app.models.question_bank import (
@@ -254,7 +255,7 @@ class BankSearchService:
         rows = self.db.query(UserRoleAssignment).filter(UserRoleAssignment.user_id.in_(values)).all()
         mapping: dict[str, str] = {}
         for row in rows:
-            label = row.email or row.user_id
+            label = mask_email(row.email) or row.user_id
             if row.user_id and label:
                 mapping.setdefault(str(row.user_id), str(label))
         return mapping

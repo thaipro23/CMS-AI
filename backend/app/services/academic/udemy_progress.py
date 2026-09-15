@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
+from app.core.privacy import mask_email
 from app.core.timezone import vn_now
 from app.services.object_storage import StorageError, get_object_storage
 from app.models.academic import (
@@ -962,7 +963,7 @@ class UdemyProgressService:
         ws.append(headers)
         for row in rows:
             ws.append([
-                row.row_number, subject.subject_code, row.email or '', row.display_name or '',
+                row.row_number, subject.subject_code, mask_email(row.email) or '', row.display_name or '',
                 row.normalized_progress if row.normalized_progress is not None else row.raw_progress or '',
                 row.reason_code, row.reason_message,
             ])
@@ -1275,7 +1276,7 @@ class UdemyProgressService:
                 'student_code': student.student_code if student else None,
                 'student_username': student.username if student else None,
                 'display_name': snapshot.display_name or (student.full_name if student else None) or snapshot.email,
-                'email': snapshot.email,
+                'email': mask_email(snapshot.email) or '',
                 'class_id': snapshot.class_id,
                 'class_code': class_row.class_code if class_row else None,
                 'class_name': class_row.class_name if class_row else None,
@@ -1375,7 +1376,7 @@ class UdemyProgressService:
         detail.append(headers)
         for index, item in enumerate(all_rows, 1):
             detail.append([
-                index, item.get('student_code'), item.get('student_username'), item.get('display_name'), item.get('email'),
+                index, item.get('student_code'), item.get('student_username'), item.get('display_name'), mask_email(item.get('email')),
                 item.get('class_code'), item.get('campus'), ', '.join(item.get('teacher_names') or []),
                 item.get('progress_percent'), item.get('required_progress_percent'), item.get('variance_percent'),
                 item.get('current_plan_week'), item.get('current_deadline_date'), item.get('status_label'),
@@ -1390,7 +1391,7 @@ class UdemyProgressService:
                 continue
             warning_index += 1
             warning.append([
-                warning_index, item.get('student_code'), item.get('student_username'), item.get('display_name'), item.get('email'),
+                warning_index, item.get('student_code'), item.get('student_username'), item.get('display_name'), mask_email(item.get('email')),
                 item.get('class_code'), item.get('campus'), ', '.join(item.get('teacher_names') or []),
                 item.get('progress_percent'), item.get('required_progress_percent'), item.get('variance_percent'),
                 item.get('current_plan_week'), item.get('current_deadline_date'), item.get('status_label'),

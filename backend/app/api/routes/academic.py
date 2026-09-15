@@ -120,6 +120,7 @@ from app.services.academic.progress_email import AcademicProgressEmailService
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
 from app.core.json_safe import json_safe_value
+from app.core.privacy import mask_email
 from app.core.operation_rate_limit import enforce_operation_rate_limit
 from app.core.config import settings
 from app.services.academic.job_runtime import (
@@ -224,7 +225,7 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
     ws = wb.active
     ws.title = 'TongQuanGV'
     overview_headers = [
-        'Hệ', 'Cơ sở', 'Giảng viên', 'Username', 'Email', 'Số môn', 'Môn', 'Tổng lớp',
+        'Hệ', 'Cơ sở', 'Giảng viên', 'Username', 'Email (đã che)', 'Số môn', 'Môn', 'Tổng lớp',
         'Lớp CMS', 'Lớp Udemy', 'SV lượt lớp', 'SV CMS', 'SV Udemy', 'SV riêng biệt',
         'SV học lại', 'Lượt học lại', 'Đã đồng bộ CMS', 'Đã enroll', 'Có hoạt động CMS',
         'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'SV Udemy đã import',
@@ -243,7 +244,7 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
     for item in report.get('items') or []:
         statuses = item.get('status_counts') or {}
         _append_row(ws, [
-            item.get('branch'), item.get('campus'), item.get('teacher_name'), item.get('teacher_username'), item.get('teacher_email'),
+            item.get('branch'), item.get('campus'), item.get('teacher_name'), item.get('teacher_username'), mask_email(item.get('teacher_email')),
             item.get('subject_count'), item.get('subject_codes'), item.get('class_count'), item.get('cms_class_count'), item.get('udemy_class_count'),
             item.get('student_count'), item.get('cms_student_count'), item.get('udemy_student_count'), item.get('unique_student_count'),
             item.get('relearn_student_count'), item.get('total_relearn_count'), item.get('cms_synced_count'), item.get('learning_enrolled_count'), item.get('learning_active_count'),
@@ -326,7 +327,7 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
     watch_ws = wb.create_sheet('SinhVienCanTheoDoi')
     watch_headers = [
         'Giảng viên', 'Username GV', 'Học kỳ', 'Block', 'Môn', 'Tên môn', 'Lớp', 'Mã SV',
-        'Username', 'Họ tên', 'Email', 'Học lại', 'Username CMS', 'Trạng thái', 'Enrollment',
+        'Username', 'Họ tên', 'Email (đã che)', 'Học lại', 'Username CMS', 'Trạng thái', 'Enrollment',
         'Course completion (%)', 'Điểm tổng (hệ 10)', 'Quiz đã đến hạn', 'Quiz đã hoàn thành đúng hạn',
         'Quiz chậm tiến độ', 'Danh sách Quiz chậm tiến độ', 'Đợt quiz kế tiếp', 'Mốc tiến độ kế tiếp', 'Hoạt động cuối', 'Cập nhật cuối'
     ]
@@ -334,7 +335,7 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
     for row in report.get('student_watch_rows') or []:
         _append_row(watch_ws, [
             row.get('teacher_name'), row.get('teacher_username'), row.get('term_name'), row.get('block_name'), row.get('subject_code'), row.get('subject_name'), row.get('class_code'),
-            row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('student_email'), row.get('total_relearn'), row.get('openedx_username'), row.get('status_label'),
+            row.get('student_code'), row.get('student_username'), row.get('student_name'), mask_email(row.get('student_email')), row.get('total_relearn'), row.get('openedx_username'), row.get('status_label'),
             row.get('enrollment_status'), row.get('progress_percent'), row.get('grade_10'), row.get('deadline_due_quiz_count'), row.get('deadline_completed_due_quiz_count'),
             row.get('deadline_late_quiz_count'), row.get('deadline_late_quizzes'), row.get('deadline_next_quiz_label'), row.get('deadline_next_quiz_due_date'), row.get('last_activity_at'), row.get('last_synced_at'),
         ])

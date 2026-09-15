@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, field_serializer
+
+from app.core.privacy import mask_email
 
 VALID_ROLE_CODES = {'SYSTEM_ADMIN', 'DEPARTMENT_HEAD', 'SUBJECT_OWNER', 'QUESTION_REVIEWER', 'CAMPUS_OWNER', 'CAMPUS_MANAGER', 'TEACHER_ASSIGNED'}
 VALID_SCOPE_TYPES = {'SYSTEM', 'DEPARTMENT', 'SUBJECT', 'SUBJECT_VERSION', 'CHAPTER', 'COURSE', 'BRANCH', 'CAMPUS', 'CLASS'}
@@ -130,6 +132,10 @@ class RoleAssignmentOut(BaseModel):
     updated_at: datetime
     last_login_at: datetime | None = None
 
+    @field_serializer('email')
+    def serialize_email(self, value: str | None) -> str | None:
+        return mask_email(value)
+
     class Config:
         from_attributes = True
 
@@ -167,6 +173,10 @@ class RoleAssignmentImportRowOut(BaseModel):
     scope_id: str = ''
     scope_label: str | None = None
     assignment: RoleAssignmentOut | None = None
+
+    @field_serializer('email')
+    def serialize_email(self, value: str | None) -> str | None:
+        return mask_email(value)
 
 
 class RoleAssignmentImportOut(BaseModel):

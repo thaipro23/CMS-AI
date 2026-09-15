@@ -23,6 +23,7 @@ import {
   AcademicTrainingTeacherReport,
 } from "../../types";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
+import { maskEmailForDisplay } from "../../lib/privacy";
 import { PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
 import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
@@ -567,7 +568,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   const columns = useMemo<EnterpriseTableColumn<AcademicTrainingTeacherReport>[]>(() => {
     const shared: EnterpriseTableColumn<AcademicTrainingTeacherReport>[] = [
       { key: "stt", header: "STT", kind: "index", width: 52, sticky: "left", hideable: false, render: (_item, index) => (page - 1) * pageSize + index + 1 },
-      { key: "teacher", header: "Giảng viên", kind: "identity", minWidth: 225, sticky: "left", priority: "required", hideable: false, render: (item) => <div className="teacher-identity teacher-identity-text-only"><b>{item.teacher_name || item.teacher_username}</b><small>{item.teacher_username}{item.teacher_email ? ` · ${item.teacher_email}` : ""}</small><small>{item.branch?.toUpperCase() || "N/A"}{item.campus ? ` · ${item.campus.toUpperCase()}` : ""}</small></div> },
+      { key: "teacher", header: "Giảng viên", kind: "identity", minWidth: 225, sticky: "left", priority: "required", hideable: false, render: (item) => <div className="teacher-identity teacher-identity-text-only"><b>{item.teacher_name || item.teacher_username}</b><small>{item.teacher_username}{item.teacher_email ? ` · ${maskEmailForDisplay(item.teacher_email)}` : ""}</small><small>{item.branch?.toUpperCase() || "N/A"}{item.campus ? ` · ${item.campus.toUpperCase()}` : ""}</small></div> },
       { key: "scale", header: "Quy mô", kind: "number", minWidth: 175, priority: "important", hideable: true, render: (item) => <><b>{item.class_count} lớp · {item.subject_count} môn</b><small>{platformLabel} · {platformStudentTotal(item, platform)} lượt sinh viên</small><small>{item.unique_student_count} sinh viên duy nhất</small></> },
     ];
 

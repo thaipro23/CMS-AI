@@ -9,6 +9,7 @@ from sqlalchemy import and_, case, func, or_
 
 from app.core.rbac import UserContext
 
+from app.core.privacy import mask_email
 from app.models.academic import (
     AcademicBlock,
     AcademicClass,
@@ -612,7 +613,7 @@ class AcademicTeacherReportWorkflowService:
                 'teacher_code': teacher.teacher_code,
                 'teacher_username': teacher.username,
                 'teacher_name': teacher.full_name or teacher.username,
-                'teacher_email': teacher.email,
+                'teacher_email': mask_email(teacher.email),
                 'campus': teacher.campus,
                 'branch': teacher.branch,
                 'subject_ids': set(),
@@ -1430,7 +1431,7 @@ class AcademicTeacherReportWorkflowService:
                 'teacher_code': teacher.teacher_code,
                 'teacher_username': teacher.username,
                 'teacher_name': teacher.full_name or teacher.username,
-                'teacher_email': teacher.email,
+                'teacher_email': mask_email(teacher.email),
                 'campus': teacher.campus or cls.campus,
                 'branch': teacher.branch or cls.branch,
                 'subject_ids': set(),
@@ -1479,7 +1480,7 @@ class AcademicTeacherReportWorkflowService:
                 'teacher_id': teacher.id,
                 'teacher_username': teacher.username,
                 'teacher_name': teacher.full_name or teacher.username,
-                'teacher_email': teacher.email,
+                'teacher_email': mask_email(teacher.email),
             })
             pair = (teacher.id, cls.id)
             if pair in seen_teacher_classes:
@@ -1854,7 +1855,7 @@ class AcademicTeacherReportWorkflowService:
                         'student_code': student.student_code,
                         'student_username': student.username,
                         'student_name': student.full_name,
-                        'student_email': student.email,
+                        'student_email': mask_email(student.email),
                         'total_relearn': self._metadata_total_relearn(class_student_meta, student.metadata_json),
                         'openedx_username': mapping.openedx_username if mapping else None,
                         'status': status_name,

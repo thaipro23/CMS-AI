@@ -12,6 +12,7 @@ from urllib.parse import quote, urljoin
 import httpx
 
 from app.core.config import settings
+from app.core.privacy import mask_email
 
 
 CONNECTOR_PREFIX = '/api/ai-connector/v1'
@@ -20,18 +21,6 @@ LEGACY_STUDENT_INSIGHT_PREFIX = '/api/ai-student-insight/v1'
 
 def normalize_username(value: Any) -> str:
     return str(value or '').strip().lower()
-
-
-def mask_email(value: Any) -> str | None:
-    raw = str(value or '').strip()
-    if not raw or '@' not in raw:
-        return raw or None
-    name, domain = raw.split('@', 1)
-    if len(name) <= 2:
-        masked = name[0:1] + '***'
-    else:
-        masked = f'{name[:2]}***{name[-1:]}'
-    return f'{masked}@{domain}'
 
 
 def _json_default(value: Any) -> Any:

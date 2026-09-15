@@ -30,6 +30,7 @@ import {
 } from '../../../../lib/api'
 import { AcademicAssignmentDefenseScore, AcademicBulkOperationJob, AcademicClass, AcademicClassSyncJob, AcademicProgressEmailPreview, AcademicTeacherReportJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent, AnalyticsLearningBehaviorRow, AnalyticsLearningBehaviorSummary, AnalyticsStudentLearningBehaviorDetail, AnalyticsStudentSessionProgress } from '../../../../types'
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
+import { maskEmailForDisplay } from '../../../../lib/privacy'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
 import { PageRoot } from '../../../../components/layout/PageHeader'
@@ -994,7 +995,7 @@ function ClassDetailContent() {
 
   const studentColumns: EnterpriseTableColumn<AcademicStudent>[] = [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_student, index) => (page - 1) * pageSize + index + 1 },
-    { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 250, sticky: 'left', hideable: false, render: (student) => <div className="student-identity-cell"><b>{student.student_code || '—'} · {student.full_name || 'Chưa có họ tên'}</b><small>{student.email || 'Chưa có email'}</small><small>Học lại: {student.total_relearn || 0}</small></div> },
+    { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 250, sticky: 'left', hideable: false, render: (student) => <div className="student-identity-cell"><b>{student.student_code || '—'} · {student.full_name || 'Chưa có họ tên'}</b><small>{maskEmailForDisplay(student.email) || 'Chưa có email'}</small><small>Học lại: {student.total_relearn || 0}</small></div> },
     { key: 'cms', header: 'Tài khoản CMS', kind: 'status', minWidth: 180, priority: 'important', hideable: true, render: (student) => <div className="student-status-cell"><span className={cmsSyncClass(student.match_status)}>{cmsSyncLabel(student.match_status)}</span><small>{student.openedx_username || student.username || 'Chưa có username'}</small></div> },
     { key: 'enrollment', header: 'Ghi danh', kind: 'status', minWidth: 150, priority: 'important', hideable: true, render: (student) => <span className={enrollmentClass(student.learning_enrollment_status)}>{enrollmentLabel(student.learning_enrollment_status)}</span> },
     { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 240, priority: 'important', hideable: true, render: (student) => <div className="learning-progress-cell compact-learning-progress-cell"><b>Hoàn thành: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><div className="student-learning-status-stack"><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{shouldSuggestFullCmsSync(student) ? <span className="cms-full-sync-hint">Cần đồng bộ full CMS</span> : null}</div></div> },

@@ -2,6 +2,7 @@
 
 import { formatVNDateTime } from '../../lib/time'
 import { useDebouncedValue } from '../../lib/useDebouncedValue'
+import { maskEmailForDisplay } from '../../lib/privacy'
 import { ChangeEvent, useEffect, useMemo, useState } from 'react'
 import {
   createRoleAssignmentsBatch,
@@ -411,7 +412,7 @@ export default function UsersPage() {
   useEffect(() => { loadAll() }, [includeRevoked]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const userColumns: EnterpriseTableColumn<UserAccessRow>[] = [
-    { key: 'user', header: 'Người dùng', kind: 'identity', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="rbac-user-summary"><b>{item.userId}</b><small>{item.email || 'Chưa có email'}</small><small>Đăng nhập lần cuối: {formatDate(item.lastLoginAt)}</small></div> },
+    { key: 'user', header: 'Người dùng', kind: 'identity', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="rbac-user-summary"><b>{item.userId}</b><small>{maskEmailForDisplay(item.email) || 'Chưa có email'}</small><small>Đăng nhập lần cuối: {formatDate(item.lastLoginAt)}</small></div> },
     { key: 'roles', header: 'Vai trò hiệu lực', kind: 'text', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="rbac-role-stack">{item.roleCodes.length ? item.roleCodes.map((code) => <span key={code} className={`rbac-role-chip ${code === 'SYSTEM_ADMIN' ? 'system' : ''}`}>{roleLabels[code] || code}</span>) : <span className="muted">Không có quyền hiệu lực</span>}</div> },
     { key: 'scope', header: 'Phạm vi', kind: 'identity', minWidth: 240, priority: 'important', hideable: true, render: (item) => <div className="rbac-scope-list">{item.scopes.slice(0, 2).map((scope) => <span key={scope}>{scope}</span>)}{item.scopes.length > 2 ? <small>+{item.scopes.length - 2} phạm vi khác</small> : null}</div> },
     { key: 'count', header: 'Số quyền', kind: 'number', width: 82, priority: 'important', hideable: true, render: (item) => item.activeAssignments.length },

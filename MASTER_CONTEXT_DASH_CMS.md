@@ -414,3 +414,11 @@ NEXT ACTION:
 - Learning analytics may enrich progress/grade/activity but must not downgrade a previously write-confirmed `enrolled` snapshot to `missing_user`, `unknown`, or `missing`, even when a compact read-side result carries `is_enrolled=false`.
 - Explicit negative enrollment states (`not_enrolled`, `unenrolled`, `inactive`) remain authoritative and are never hidden. An unconfirmed `missing_user` snapshot is never auto-promoted. Do not mass-update the 120 production rows; repair only through normal enrollment/learning sync after deployment.
 - Public/report timestamps for this pipeline use `Asia/Ho_Chi_Minh` (+07:00).
+
+
+## Addendum 2026-09-15 — email display privacy
+
+- Mọi email hiển thị ra UI/API report/Excel phải được mask; student/teacher/RBAC/Udemy đều dùng cùng policy `first***last@domain`.
+- Email thật chỉ tồn tại ở storage và các luồng backend nội bộ thật sự cần nó (identity matching, enrollment, Mail Send recipients); không đưa recipient email thật vào public job/audit/log.
+- Progress-email mặc định dùng tiêu đề `[CMS Server] Nhắc nhở tiến độ học tập - {subject} · {class}` và chữ `CMS` trong body được render thành link cố định `https://edx.cms.fpl.edu.vn/learner-dashboard/` sau bước HTML escape.
+- Frontend vẫn mask lần cuối để phòng legacy API trả raw email; backend output serializers/exporters cũng mask để DevTools/API/Excel không lộ địa chỉ đầy đủ.

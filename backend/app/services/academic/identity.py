@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.rbac import UserContext
+from app.core.privacy import mask_email
 from app.models.academic import (
     AcademicClass,
     AcademicClassStudent,
@@ -115,7 +116,7 @@ class AcademicIdentityReconciliationWorkflowService:
                 'student_id': student.id,
                 'student_code': student.student_code,
                 'full_name': student.full_name,
-                'email': student.email,
+                'email': mask_email(student.email),
                 'ap_username': ap_username,
                 'canonical_username': canonical_username,
                 'openedx_username': mapping.openedx_username if mapping else None,

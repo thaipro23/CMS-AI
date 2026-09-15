@@ -2080,7 +2080,7 @@ class LearningAnalyticsCoreService:
                 'username': item.username,
                 'student_code': item.student_code,
                 'full_name': item.full_name,
-                'email': item.email,
+                'email': mask_email(item.email),
             }
             for item in rows
             if item and item.username

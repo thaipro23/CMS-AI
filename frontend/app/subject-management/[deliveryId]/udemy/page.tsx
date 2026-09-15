@@ -12,6 +12,7 @@ import { PersistentJobNotice } from '../../../../components/ui/PersistentJobNoti
 import { StatusBadge } from '../../../../components/ui/StatusBadge'
 import { UdemyProgressImportDialog } from '../../../../components/subject-management/UdemyProgressImportDialog'
 import { useAppContext } from '../../../../context/AppContext'
+import { maskEmailForDisplay } from '../../../../lib/privacy'
 import {
   createUdemyProgressExportJob,
   downloadUdemyProgressExportJob,
@@ -290,7 +291,7 @@ export default function UdemyProgressPage() {
 
   const columns: EnterpriseTableColumn<UdemyProgressStudent>[] = [
     { key: 'stt', header: 'STT', kind: 'index', width: 54, render: (_row, index) => (page - 1) * pageSize + index + 1 },
-    { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 260, sticky: 'left', render: (row) => <div className="udemy-student-identity"><b>{row.student_code || row.student_username || 'Chưa khớp AP'}</b><span>{row.display_name}</span><small>{row.email}</small></div> },
+    { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 260, sticky: 'left', render: (row) => <div className="udemy-student-identity"><b>{row.student_code || row.student_username || 'Chưa khớp AP'}</b><span>{row.display_name}</span><small>{maskEmailForDisplay(row.email)}</small></div> },
     { key: 'class', header: 'Lớp', kind: 'identity', minWidth: 150, sortable: true, render: (row) => <div><b>{row.class_code || '—'}</b>{row.campus ? <small>{String(row.campus).toUpperCase()}</small> : null}</div> },
     { key: 'teacher', header: 'Giảng viên', kind: 'text', minWidth: 190, render: (row) => row.teacher_names.length ? row.teacher_names.join(', ') : '—' },
     { key: 'progress', header: 'Tiến độ', kind: 'progress', minWidth: 180, sortable: true, render: (row) => <div className="udemy-progress-meter" role="progressbar" aria-label={`Tiến độ của ${row.display_name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(Math.max(0, Math.min(100, row.progress_percent)))}><div aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, row.progress_percent))}%` }} /></div><b>{percent(row.progress_percent)}</b></div> },
