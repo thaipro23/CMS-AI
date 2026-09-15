@@ -18,6 +18,8 @@ jobs:
         with:
           ref: feat/import-quiz-cms-old-su26
           fetch-depth: 0
+      - name: Fix patcher whitespace target
+        run: sed -i 's/\\n              {row.email/\\n        {row.email/g' scripts/apply_email_privacy.py
       - name: Apply source patch
         run: python scripts/apply_email_privacy.py
       - name: Install backend CI dependencies
