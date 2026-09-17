@@ -24,14 +24,17 @@ def _child(class_id: str, status: str):
     return SimpleNamespace(class_id=class_id, status=status)
 
 
-def test_empty_batch_dispatches_only_the_four_slot_window():
+def test_empty_batch_dispatches_only_the_ten_slot_window():
+    assert settings.academic_bulk_sync_dispatch_window == 10
+
     plan = plan_batch_dispatch(
-        [f'class-{index}' for index in range(1, 11)],
+        [f'class-{index}' for index in range(1, 16)],
         [],
-        window=4,
+        window=settings.academic_bulk_sync_dispatch_window,
     )
 
-    assert plan.dispatch_class_ids == ['class-1', 'class-2', 'class-3', 'class-4']
+    assert plan.dispatch_class_ids == [f'class-{index}' for index in range(1, 11)]
+    assert plan.window == 10
     assert plan.active_count == 0
     assert plan.finished is False
 
