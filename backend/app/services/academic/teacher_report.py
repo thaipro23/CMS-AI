@@ -27,6 +27,7 @@ from app.models.academic import (
     UdemyStudentProgress,
 )
 from app.services.academic.helpers import AccessDecision, _json_safe_value as json_safe_value, _page
+from app.services.academic.platform import cms_delivery_predicate
 from app.services.training_policy_service import TrainingPolicyService
 from app.services.academic.udemy_progress import UdemyProgressService
 
@@ -52,7 +53,9 @@ class AcademicTeacherReportWorkflowService:
         clean_term = str(term_id or '').strip()
         clean_branch = str(branch or '').strip().lower() or '__all__'
         clean_campus = str(campus or '').strip().lower() or '__all__'
-        return f"term:{clean_term}|branch:{clean_branch}|campus:{clean_campus}"
+        # v2 invalidates materialized rows built before legacy classes without
+        # an AcademicSubjectDelivery were correctly treated as CMS.
+        return f"v2|term:{clean_term}|branch:{clean_branch}|campus:{clean_campus}"
 
     @staticmethod
     def _teacher_report_search_match(item: dict[str, Any], search: str | None) -> bool:
@@ -520,7 +523,11 @@ class AcademicTeacherReportWorkflowService:
         if platform == 'udemy':
             query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
         elif platform == 'cms':
-            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
+            # Subject delivery configuration was introduced after many CMS
+            # classes already existed.  No delivery row (or a NULL platform)
+            # therefore means the legacy/default CMS platform, matching
+            # _project_teacher_report_platform and the rest of training flows.
+            query = query.filter(cms_delivery_predicate())
         if branch:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:
@@ -1269,7 +1276,7 @@ class AcademicTeacherReportWorkflowService:
         if platform == 'udemy':
             query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
         elif platform == 'cms':
-            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
+            query = query.filter(cms_delivery_predicate())
         if branch:
             query = query.filter(AcademicClass.branch == branch.strip().lower())
         if campus:

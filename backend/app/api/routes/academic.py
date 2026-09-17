@@ -2861,6 +2861,59 @@ def retry_academic_bulk_operation_job(
     if job.job_type != 'subject_auto_map_all_sync':
         raise HTTPException(status_code=422, detail='Loại tác vụ hàng loạt này chưa hỗ trợ chạy lại an toàn.')
 
+    request_json = dict(job.request_json or {}) if isinstance(job.request_json, dict) else {}
+    approved_class_ids = [
+        str(value) for value in (request_json.get('approved_class_ids') or []) if str(value).strip()
+    ]
+    if not approved_class_ids:
+        # Jobs created before scope snapshots were introduced fail at 5% in the
+        # worker and would otherwise repeat the same failure on every retry.
+        # Rebuild the snapshot through the current caller's RBAC decision and
+        # the original filters; never trust or broaden the legacy job payload.
+        try:
+            approved_preview = AcademicService(db).auto_map_subject_courses_for_filter(
+                user,
+                term_id=str(request_json.get('term_id') or job.term_id or ''),
+                branch=request_json.get('branch') or job.branch,
+                campus=request_json.get('campus') or job.campus,
+                search=request_json.get('search'),
+                learning_status=request_json.get('learning_status'),
+                max_classes=max(1, min(5000, int(request_json.get('max_classes') or 3000))),
+                dry_run=True,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f'Không thể dựng lại phạm vi lớp an toàn cho job cũ: {exc}',
+            ) from exc
+        approved_class_ids = list(dict.fromkeys(
+            str(value) for value in (approved_preview.get('class_ids') or []) if str(value).strip()
+        ))
+        if not approved_class_ids:
+            raise HTTPException(
+                status_code=409,
+                detail='Bộ lọc của job cũ hiện không còn lớp CMS phù hợp để chạy lại.',
+            )
+        approved_campus_codes = sorted({
+            str(campus).strip().lower()
+            for (campus,) in (
+                db.query(AcademicClass.campus)
+                .filter(AcademicClass.id.in_(approved_class_ids))
+                .all()
+            )
+            if str(campus or '').strip()
+        })
+        request_json.update({
+            'approved_class_ids': approved_class_ids,
+            'approved_class_total': len(approved_class_ids),
+            'approved_subject_ids': list(approved_preview.get('subject_ids') or []),
+            'approved_campus_codes_from_preview': approved_campus_codes,
+            'scope_rebuilt_at_retry': datetime.utcnow().isoformat(),
+        })
+        job.request_json = json_safe_value(request_json)
+
     previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
     retry_count = int(previous.get('retry_count') or 0) + 1
     last_failure = {

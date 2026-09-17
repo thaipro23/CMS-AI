@@ -74,14 +74,21 @@ def test_daily_parent_waits_for_terminal_children_before_scheduled_exports():
     assert parent.index("if terminal_count < target_count") < parent.index("_create_scheduled_export_job")
 
 
-def test_cms_teacher_management_hides_legacy_job_actions_and_uses_prebuilt_artifact_bar():
+def test_cms_teacher_management_keeps_operations_visible_and_has_one_excel_flow():
     page = text('frontend/app/teacher-management/cms/page.tsx')
     api = text('frontend/lib/teacherReportArtifacts.ts')
-    bar = text('frontend/components/training/CmsTeacherReportArtifactBar.tsx')
-    assert 'CmsTeacherReportArtifactBar' in page
-    assert 'enterprise-page-identity__actions' in page
-    assert 'display: none !important' in page
+    management = text('frontend/app/teacher-management/TeacherManagementPlatformPage.tsx')
+    academic_bulk = text('frontend/lib/academicBulk.ts')
+    assert 'CmsTeacherReportArtifactBar' not in page
+    assert 'enterprise-page-identity__actions' not in page
+    assert 'display: none !important' not in page
     assert '/academic/training/teacher-reports/latest' in api
     assert '/academic/training/teacher-reports/latest/download' in api
-    assert "timeZone: 'Asia/Ho_Chi_Minh'" in bar
-    assert 'Tải Excel' in bar
+    assert 'downloadLatestTeacherReportArtifact' in management
+    assert 'getLatestTeacherReportArtifact' in management
+    assert 'Đồng bộ full CMS' in management
+    assert 'Cập nhật điểm' in management
+    assert 'syncLearning: false' in management
+    assert 'refreshLatestAcademicScores' in management
+    assert "import { API, apiFetch }" in academic_bulk
+    assert 'await apiFetch(' in academic_bulk

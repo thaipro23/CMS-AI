@@ -9,10 +9,10 @@ def read(rel: str) -> str:
 
 def test_teacher_management_requests_lite_teacher_rows_by_default() -> None:
     api = read('frontend/lib/api.ts')
-    page = read('frontend/app/teacher-management/page.tsx')
+    page = read('frontend/app/teacher-management/TeacherManagementPlatformPage.tsx')
     detail = read('frontend/app/teacher-management/teachers/[teacherId]/classes/page.tsx')
     route = read('backend/app/api/routes/academic.py')
-    service = read('backend/app/services/academic_service.py')
+    service = read('backend/app/services/academic/teacher_report.py')
 
     assert 'includeClasses?: boolean' in api
     assert 'params.set("include_classes"' in api
@@ -26,8 +26,8 @@ def test_teacher_management_requests_lite_teacher_rows_by_default() -> None:
 
 def test_notices_are_typed_and_action_buttons_equalized() -> None:
     css = read('frontend/app/globals.css')
-    student_page = read('frontend/app/student-management/page.tsx')
-    teacher_page = read('frontend/app/teacher-management/page.tsx')
+    student_page = read('frontend/app/student-management/StudentManagementPlatformPage.tsx')
+    teacher_page = read('frontend/app/teacher-management/TeacherManagementPlatformPage.tsx')
 
     assert '.academic-inline-notice.success' in css
     assert '.academic-inline-notice.error' in css

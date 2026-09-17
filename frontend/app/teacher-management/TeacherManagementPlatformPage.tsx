@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useAppContext } from "../../context/AppContext";
+import { useFeedback } from "../../components/ui/FeedbackProvider";
 import {
+  autoMapAllAcademicSubjectCoursesAndSync,
   createAcademicTrainingTeacherCacheJob,
   createAcademicTrainingTeacherExportJob,
   downloadAcademicTrainingTeacherReportJob,
@@ -15,6 +17,11 @@ import {
   retryAcademicTrainingTeacherReportJob,
   waitForAcademicTrainingTeacherReportJob,
 } from "../../lib/api";
+import {
+  downloadLatestTeacherReportArtifact,
+  getLatestTeacherReportArtifact,
+} from "../../lib/teacherReportArtifacts";
+import { refreshLatestAcademicScores } from "../../lib/academicBulk";
 import {
   AcademicCampus,
   AcademicLearningComponentScore,
@@ -270,9 +277,11 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export function TeacherManagementPlatformPage({ platform }: { platform: TrainingPlatform }) {
   const { authHeaders } = useAppContext();
+  const { confirmAction } = useFeedback();
   const isCms = platform === "cms";
   const platformLabel = isCms ? "CMS" : "Udemy";
   const headers = useMemo(() => authHeaders(), [authHeaders]);
+  const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders]);
   const [terms, setTerms] = useState<AcademicTerm[]>([]);
   const [campuses, setCampuses] = useState<AcademicCampus[]>([]);
   const [items, setItems] = useState<AcademicTrainingTeacherReport[]>([]);
@@ -282,7 +291,9 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   const debouncedSearch = useDebouncedValue(search, 350);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [artifactDownloading, setArtifactDownloading] = useState(false);
+  const [fullCmsSyncing, setFullCmsSyncing] = useState(false);
+  const [scoreRefreshing, setScoreRefreshing] = useState(false);
   const [exportJob, setExportJob] = useState<AcademicTeacherReportJob | null>(
     null,
   );
@@ -375,7 +386,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize, platform]);
 
   useEffect(() => {
-    if (!termId || exportJob) return
+    if (isCms || !termId || exportJob) return
     const controller = new AbortController()
     getAcademicTrainingTeacherReportJobs(headers, { status: "active", limit: 20 })
       .then((jobs) => {
@@ -394,7 +405,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
       })
       .catch(() => undefined)
     return () => controller.abort()
-  }, [branch, campus, debouncedSearch, exportJob, headers, learningStatus, termId, platform])
+  }, [branch, campus, debouncedSearch, exportJob, headers, isCms, learningStatus, termId, platform])
 
   useEffect(() => {
     if (!termId || cacheJob) return;
@@ -417,12 +428,12 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   }, [branch, cacheJob, campus, headers, platform, termId]);
 
   useEffect(() => {
-    if (!exportJob || !["queued", "running"].includes(exportJob.status)) return;
+    if (isCms || !exportJob || !["queued", "running"].includes(exportJob.status)) return;
     const controller = new AbortController();
     waitForAcademicTrainingTeacherReportJob(headers, exportJob.id, { signal: controller.signal })
       .then((latest) => {
         setExportJob(latest);
-        setMessage(noticeSuccess(platform === "cms" ? "File Excel đã sẵn sàng từ điểm CMS mới nhất." : "File Excel đã sẵn sàng."));
+        setMessage(noticeSuccess("File Excel đã sẵn sàng."));
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
@@ -434,7 +445,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
         setMessage(noticeError(error, "Không kiểm tra được trạng thái xuất Excel."));
       });
     return () => controller.abort();
-  }, [headers, exportJob?.id, exportJob?.status, platform]);
+  }, [headers, exportJob?.id, exportJob?.status, isCms, platform]);
 
 
   useEffect(() => {
@@ -510,6 +521,106 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
       setMessage(noticeInfo(platform === "cms" ? "Đã đưa yêu cầu lấy điểm CMS mới nhất và tính lại báo cáo vào hàng đợi." : "Đã đưa yêu cầu tính lại báo cáo Udemy vào hàng đợi."));
     } catch (error) {
       setMessage(noticeError(error, "Không tạo được tác vụ làm mới số liệu."));
+    }
+  };
+
+  const runFullCmsSync = async () => {
+    if (!isCms) return;
+    if (!termId) {
+      setMessage(noticeWarning("Chọn học kỳ trước khi đồng bộ full CMS."));
+      return;
+    }
+    const accepted = await confirmAction({
+      title: "Đồng bộ full CMS?",
+      description: "Hệ thống sẽ ghép Course còn thiếu, đồng bộ tài khoản và ghi danh cho các lớp trong bộ lọc hiện tại. Tác vụ này không lấy điểm.",
+      confirmLabel: "Tạo tác vụ nền",
+    });
+    if (!accepted) return;
+    setFullCmsSyncing(true);
+    setMessage(noticeInfo("Đang tạo tác vụ đồng bộ full CMS."));
+    try {
+      const result = await autoMapAllAcademicSubjectCoursesAndSync(jsonHeaders, {
+        termId,
+        branch,
+        campus,
+        search: debouncedSearch,
+        learningStatus,
+        force: true,
+        limit: 500,
+        syncLearning: false,
+        maxClasses: 3000,
+      });
+      setMessage({
+        ...noticeSuccess(result.message || "Đã tạo tác vụ đồng bộ full CMS."),
+        actionHref: "/jobs",
+        actionLabel: "Xem tác vụ nền",
+      });
+    } catch (error) {
+      setMessage(noticeError(error, "Không tạo được tác vụ đồng bộ full CMS."));
+    } finally {
+      setFullCmsSyncing(false);
+    }
+  };
+
+  const runLatestScoreRefresh = async () => {
+    if (!isCms) return;
+    if (!termId) {
+      setMessage(noticeWarning("Chọn học kỳ trước khi cập nhật điểm."));
+      return;
+    }
+    const accepted = await confirmAction({
+      title: "Cập nhật điểm CMS?",
+      description: "Hệ thống chỉ lấy điểm/tiến độ mới nhất cho các lớp đã ghép Course trong bộ lọc hiện tại. Không đồng bộ AP và không tự động ghép lại Course.",
+      confirmLabel: "Tạo tác vụ nền",
+    });
+    if (!accepted) return;
+    setScoreRefreshing(true);
+    setMessage(noticeInfo("Đang tạo tác vụ cập nhật điểm CMS."));
+    try {
+      const result = await refreshLatestAcademicScores(jsonHeaders, {
+        termId,
+        branch,
+        campus,
+        search: debouncedSearch,
+        learningStatus,
+        force: true,
+        limit: 500,
+        maxClasses: 3000,
+      });
+      setMessage({
+        ...noticeSuccess(result.message || "Đã tạo tác vụ cập nhật điểm CMS."),
+        actionHref: "/jobs",
+        actionLabel: "Xem tác vụ nền",
+      });
+    } catch (error) {
+      setMessage(noticeError(error, "Không tạo được tác vụ cập nhật điểm CMS."));
+    } finally {
+      setScoreRefreshing(false);
+    }
+  };
+
+  const downloadScheduledExcel = async () => {
+    if (!termId) {
+      setMessage(noticeWarning("Chọn học kỳ trước khi tải Excel."));
+      return;
+    }
+    setArtifactDownloading(true);
+    setMessage(null);
+    const scope = { termId, branch, campus: campus || null };
+    try {
+      const artifact = await getLatestTeacherReportArtifact(headers, scope);
+      if (!artifact.available) {
+        const progress = artifact.today_run?.progress_label;
+        setMessage(noticeWarning(progress || artifact.warning || "Chưa có file Excel 05:00 cho phạm vi hiện tại."));
+        return;
+      }
+      const result = await downloadLatestTeacherReportArtifact(headers, scope);
+      downloadBlob(result.blob, result.filename);
+      setMessage(noticeSuccess("Đã tải file Excel được tạo từ job 05:00."));
+    } catch (error) {
+      setMessage(noticeError(error, "Không tải được file Excel 05:00."));
+    } finally {
+      setArtifactDownloading(false);
     }
   };
 
@@ -598,12 +709,17 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
         icon="teachers"
         tone="blue"
         breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: `Quản lý giảng viên ${platformLabel}` }]}
-        primaryAction={<button className="btn" type="button" onClick={exportExcelBackground} disabled={!termId || exportJob?.status === "queued" || exportJob?.status === "running"}>{exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel"}</button>}
+        primaryAction={<button className="btn" type="button" onClick={isCms ? downloadScheduledExcel : exportExcelBackground} disabled={!termId || artifactDownloading || (!isCms && (exportJob?.status === "queued" || exportJob?.status === "running"))}>{isCms ? (artifactDownloading ? "Đang tải Excel..." : "Xuất Excel") : (exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel")}</button>}
         secondaryActions={<>
-          <button className="btn secondary" type="button" onClick={rebuildTeacherCache} disabled={!termId || cacheJob?.status === "queued" || cacheJob?.status === "running"}>
+          {isCms ? <button className="btn secondary" type="button" onClick={runFullCmsSync} disabled={!termId || fullCmsSyncing}>
+            {fullCmsSyncing ? "Đang tạo job..." : "Đồng bộ full CMS"}
+          </button> : null}
+          {isCms ? <button className="btn secondary" type="button" onClick={runLatestScoreRefresh} disabled={!termId || scoreRefreshing}>
+            {scoreRefreshing ? "Đang tạo job..." : "Cập nhật điểm"}
+          </button> : <button className="btn secondary" type="button" onClick={rebuildTeacherCache} disabled={!termId || cacheJob?.status === "queued" || cacheJob?.status === "running"}>
             {cacheJob && ["queued", "running"].includes(cacheJob.status) ? `Đang làm mới ${jobPercent(cacheJob)}%` : "Làm mới số liệu"}
-          </button>
-          {exportJob?.status === "completed" ? <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button> : null}
+          </button>}
+          {!isCms && exportJob?.status === "completed" ? <button className="btn secondary" type="button" onClick={downloadBackgroundExcel}>Tải Excel</button> : null}
         </>}
       />
       <section className="card academic-unified-card ux-surface-card teacher-workspace-card">
@@ -726,7 +842,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
             />
           )}
 
-        {exportJob &&
+        {!isCms && exportJob &&
           ["queued", "running", "failed"].includes(exportJob.status) && (
             <InlineNotice
               notice={{

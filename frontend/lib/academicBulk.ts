@@ -1,4 +1,4 @@
-import { API } from './api';
+import { API, apiFetch } from './api';
 
 export type LatestAcademicScoreRefreshPayload = {
   termId: string;
@@ -41,7 +41,7 @@ export async function refreshLatestAcademicScores(
   headers: HeadersInit,
   payload: LatestAcademicScoreRefreshPayload,
 ): Promise<LatestAcademicScoreRefreshResult> {
-  const response = await fetch(`${API}/academic/subjects/learning/refresh/jobs`, {
+  const response = await apiFetch(`${API}/academic/subjects/learning/refresh/jobs`, {
     method: 'POST',
     headers,
     body: JSON.stringify({

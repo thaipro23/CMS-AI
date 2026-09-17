@@ -3,18 +3,15 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass
-from datetime import date, datetime, time, timezone, timedelta
-from decimal import Decimal
-from uuid import UUID
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext
-from app.core.timezone import VN_TZ, to_vn_date, to_vn_naive_datetime
+from app.core.timezone import to_vn_date, to_vn_naive_datetime
 from app.models.academic import (
     AcademicBlock,
     AcademicClass,
@@ -30,20 +27,16 @@ from app.models.academic import (
     AcademicTeacherReportSummary,
     AcademicTerm,
     OpenEdXUserMapping,
-    UdemyStudentProgress,
 )
 from app.services.business_rbac import BusinessRBACService
 from app.services.openedx_student_insight import OpenEdXConnectorClient, normalize_username, mask_email
 from app.services.training_policy_service import TrainingPolicyService
 from app.core.config import settings
-from app.core.json_safe import json_safe_value
 from app.models.course import CourseSyncState
-from app.models.question_bank import Subject as BankSubject
 
 
 from app.services.academic.helpers import (
     AccessDecision,
-    _actor_names,
     _boolish,
     _check,
     _clean_token,
@@ -58,6 +51,7 @@ from app.services.academic.helpers import (
     _term_run_candidates,
     _validation_result,
 )
+from app.services.academic.platform import cms_delivery_predicate
 
 from app.services.academic.access import AcademicAccessWorkflowService
 from app.services.academic.roster import AcademicRosterWorkflowService
@@ -417,7 +411,7 @@ class AcademicService:
         if platform == 'udemy':
             query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
         else:
-            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
+            query = query.filter(cms_delivery_predicate())
         if not decision.unrestricted:
             access_conditions = []
             if decision.teacher_ids:
@@ -1551,7 +1545,6 @@ class AcademicService:
                     else:
                         category = str(item.get('category') or '').strip().lower()
                         name = str(item.get('name') or item.get('key') or '').strip().lower()
-                        source = str(item.get('source') or '').strip().lower()
                         if 'quiz' in category or 'quiz' in name or 'learning check' in name or name.startswith('lc '):
                             quiz_component_count += 1
             if quiz_count <= 0 and quiz_component_count > 0:
@@ -2465,7 +2458,7 @@ class AcademicService:
                     AcademicClass.active.is_(True),
                     AcademicClass.term_id == term_id,
                     AcademicClass.subject_id.in_(list(mapped_subject_ids)),
-                    AcademicSubjectDelivery.learning_platform == 'cms',
+                    cms_delivery_predicate(),
                 )
             )
             if branch_value:
@@ -2522,7 +2515,7 @@ class AcademicService:
         if platform == 'udemy':
             query = query.filter(AcademicSubjectDelivery.learning_platform == 'udemy')
         else:
-            query = query.filter(AcademicSubjectDelivery.learning_platform == 'cms')
+            query = query.filter(cms_delivery_predicate())
         if term_id:
             query = query.filter(AcademicClass.term_id == term_id)
         if branch:
