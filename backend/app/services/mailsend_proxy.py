@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Callable
 from urllib.parse import quote
@@ -46,8 +47,9 @@ def _status_value(payload: dict[str, Any]) -> str:
 class MailSendProxyClient:
     """Small client for Polytechnic Mail Send's ProxyKey bulk-session API.
 
-    Text form fields are deliberately sent as multipart parts with no filename.
-    Repeating ``sourceTo.inlineEmails`` preserves the API's email-array contract.
+    Mail Send expects one multipart ``payload`` field containing the JSON
+    CreateProxyBulkSessionRequestDto. File attachments, when supported by a
+    caller, are separate ``files`` form parts.
     """
 
     def __init__(
@@ -133,11 +135,27 @@ class MailSendProxyClient:
                 'MAILSEND_RECIPIENT_LIMIT',
                 f'Mỗi session Mail Send chỉ nhận tối đa {self.max_recipients} người.',
             )
-        multipart_parts: list[tuple[str, tuple[None, str]]] = [
-            ('subject', (None, subject)),
-            ('bodyTemplate', (None, body_template)),
+
+        request_payload = {
+            'subject': subject,
+            'bodyTemplate': body_template,
+            'isHtml': True,
+            'isAnonymous': False,
+            'deliveryMode': 'perRecipient',
+            'sourceTo': {
+                'inlineEmails': unique_emails,
+            },
+        }
+        multipart_parts = [
+            (
+                'payload',
+                (
+                    None,
+                    json.dumps(request_payload, ensure_ascii=False),
+                    'application/json',
+                ),
+            ),
         ]
-        multipart_parts.extend(('sourceTo.inlineEmails', (None, email)) for email in unique_emails)
         response = self._request(
             'POST',
             self._url(self.create_path),
@@ -183,7 +201,7 @@ class MailSendProxyClient:
             'status': _status_value(payload),
             'sent_count': payload.get('sentCount'),
             'failed_count': payload.get('failedCount'),
-            'total_count': payload.get('totalCount') or payload.get('recipientCount'),
+            'total_count': payload.get('totalRecipients') or payload.get('totalCount') or payload.get('recipientCount'),
             'finished_at': payload.get('finishedAt'),
         }
 
