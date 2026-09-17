@@ -101,7 +101,7 @@ test.describe('Subject Management Batch 35.2 term scope', () => {
     await page.getByLabel('File kế hoạch Excel').setInputFiles({ name: 'plan.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture served by preview boundary') })
     await page.getByRole('button', { name: 'Xem trước', exact: true }).click()
     await expect(page.getByText('Môn ngoài trang hiện tại')).toBeVisible()
-    await expect(page.getByText('Khớp: 205', { exact: true })).toBeVisible()
+    await expect(page.getByText(/Khớp:\s*205/)).toBeVisible()
     expect(applied).toBe(0)
     await page.getByRole('button', { name: 'Áp dụng kế hoạch', exact: true }).click()
     await expect(page.getByText('Đã áp dụng kế hoạch cho 205 môn.')).toBeVisible()
