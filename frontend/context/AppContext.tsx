@@ -234,7 +234,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (savedSession.user_id) setUserIdState(savedSession.user_id)
     }
     setClientReady(true)
-    if (!IS_PRODUCTION) setAuthReady(true)
+    // A stored session must be validated by /rbac/me before route guards run.
+    // Anonymous local development may still use the legacy role fallback immediately.
+    if (!IS_PRODUCTION && !savedSession) setAuthReady(true)
   }, [])
 
 
