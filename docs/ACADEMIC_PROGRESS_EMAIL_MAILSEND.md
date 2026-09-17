@@ -20,13 +20,33 @@ Deadline Quiz trong luồng này chỉ là **mốc nhắc tiến độ**, không
 - Tạo session: `POST https://mailsend.poly.edu.vn/api/proxy/bulk-sessions/with-files`
 - Xác thực: header `X-API-Key: <ProxyKey>`
 - Nội dung: `multipart/form-data`
-- Trường: `subject`, `bodyTemplate`, và một hoặc nhiều `sourceTo.inlineEmails`
+- Form field bắt buộc: `payload`
+- `payload` là JSON `CreateProxyBulkSessionRequestDto`, tối thiểu gồm `subject`, `bodyTemplate` và một nguồn người nhận như `sourceTo.inlineEmails`
+- AI Server hiện gửi `isHtml: true`, `isAnonymous: false`, `deliveryMode: perRecipient`
+- File đính kèm (nếu có) gửi bằng một hoặc nhiều form part `files`, nằm ngoài JSON `payload`
 - Kết quả tạo: HTTP `202`, JSON có `sessionId`
 - Xem trạng thái: `GET https://mailsend.poly.edu.vn/api/proxy/bulk-sessions/{sessionId}`
 - Trạng thái cuối: `COMPLETED`, `FAILED`, `CANCELLED`
-- Giới hạn mặc định: 1.000 người/session
+- Giới hạn `inlineEmails`: tối đa 1.000 người/session theo cấu hình AI Server
 
-Template mặc định dùng `{{maHs}}` để Mail Send cá nhân hóa mã sinh viên. AI Server không ghi `ProxyKey` hoặc địa chỉ email thật vào audit/job result.
+Ví dụ phần `payload` mà AI Server gửi:
+
+```json
+{
+  "subject": "Nhắc tiến độ học tập",
+  "bodyTemplate": "<p>Nội dung</p>",
+  "isHtml": true,
+  "isAnonymous": false,
+  "deliveryMode": "perRecipient",
+  "sourceTo": {
+    "inlineEmails": [
+      "student01@fpt.edu.vn"
+    ]
+  }
+}
+```
+
+Template mặc định dùng các placeholder mà AI Server xử lý trước khi gửi cho từng sinh viên. AI Server không ghi `ProxyKey` hoặc địa chỉ email thật vào audit/job result.
 
 ## Biến môi trường
 
