@@ -255,7 +255,7 @@ export function BankDashboardPage() {
   }), [])
 
   const columns = useMemo<EnterpriseTableColumn<BankCostAnalyticsRow>[]>(() => [
-    { key: 'stt', header: 'STT', kind: 'index', width: 58, hideable: false, render: (_row, index) => (data?.rows.page ? (data.rows.page - 1) * data.rows.page_size : 0) + index + 1 },
+    { key: 'stt', header: 'STT', kind: 'index', width: 58, hideable: false, render: (_row, index) => (data?.rows?.page ? (data.rows.page - 1) * (data.rows.page_size || tableState.pageSize) : 0) + index + 1 },
     { key: 'subject_code', header: 'Môn / phiên bản / bài', kind: 'identity', minWidth: 310, sticky: 'left', hideable: false, sortable: true, render: (row) => <Link href={row.href} className="bank-cost-identity"><b>{row.subject_code} · {row.chapter_title}</b><span>{row.subject_name}</span><small>{row.subject_offering_code || row.version_code}{row.term ? ` · ${row.term}` : ''}</small></Link> },
     { key: 'calls', header: 'Lượt gọi', kind: 'number', width: 88, sortable: true, render: (row) => formatNumber(row.calls) },
     { key: 'questions_generated', header: 'Câu AI tạo', kind: 'number', width: 104, sortable: true, render: (row) => formatNumber(row.questions_generated) },
@@ -266,7 +266,7 @@ export function BankDashboardPage() {
     { key: 'avg_cost_per_question_vnd', header: 'Bình quân/câu', kind: 'number', width: 128, sortable: true, defaultVisible: false, render: (row) => row.questions_generated ? formatVnd(row.avg_cost_per_question_vnd) : '—' },
     { key: 'latest_at', header: 'Gần nhất', kind: 'date', width: 148, sortable: true, defaultVisible: false, render: (row) => row.latest_at ? formatVNDateTime(row.latest_at) : '—' },
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 98, sticky: 'right', hideable: false, render: (row) => <Link className="btn small secondary" href={row.href}>Mở bài</Link> },
-  ], [data?.rows.page, data?.rows.page_size])
+  ], [data?.rows?.page, data?.rows?.page_size, tableState.pageSize])
 
   return <PageRoot className="page-stack bank-multipage bank-contract-page bank-cost-dashboard-page">
     <PageHeader eyebrow="Ngân hàng đề" title="Chi phí & Token" icon="money" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Chi phí & Token' }]} />
@@ -303,10 +303,10 @@ export function BankDashboardPage() {
     {error ? <InlineNotice notice={{ ...noticeError(error, 'Không tải được thống kê chi phí và token.'), title: 'Không tải được thống kê', onRetry: load }} /> : null}
 
     <section className="bank-cost-metric-grid" aria-label="Chỉ số chi phí và token">
-      <CostMetricCard label="Chi phí thực tế" value={loading ? '…' : formatVnd(data?.totals.cost_vnd)} helper={loading ? 'Đang tải dữ liệu' : formatUsd(data?.totals.cost_usd)} emphasis={loading ? undefined : deltaLabel(data?.deltas.cost_percent)} icon="money" tone="amber" />
-      <CostMetricCard label="Tổng token" value={loading ? '…' : formatNumber(data?.totals.total_tokens)} helper={loading ? 'Đang tải dữ liệu' : `${formatNumber(data?.totals.input_tokens)} input · ${formatNumber(data?.totals.output_tokens)} output`} emphasis={loading ? undefined : deltaLabel(data?.deltas.tokens_percent)} icon="database" tone="blue" />
-      <CostMetricCard label="Câu hỏi AI đã tạo" value={loading ? '…' : formatNumber(data?.totals.questions_generated)} helper={loading ? 'Đang tải dữ liệu' : `${formatVnd(data?.totals.avg_cost_per_question_vnd)} / câu`} emphasis={loading ? undefined : `${formatNumber(data?.totals.calls)} lượt gọi model`} icon="sparkles" tone="green" />
-      <CostMetricCard label="Token dùng cache" value={loading ? '…' : formatNumber(data?.totals.cached_input_tokens)} helper={loading ? 'Đang tải dữ liệu' : `${data?.totals.cache_ratio_percent || 0}% tổng input token`} emphasis={loading ? undefined : `${formatNumber(data?.totals.uncached_input_tokens)} input chưa cache`} icon="sync" tone="violet" />
+      <CostMetricCard label="Chi phí thực tế" value={loading ? '…' : formatVnd(data?.totals?.cost_vnd)} helper={loading ? 'Đang tải dữ liệu' : formatUsd(data?.totals?.cost_usd)} emphasis={loading ? undefined : deltaLabel(data?.deltas?.cost_percent)} icon="money" tone="amber" />
+      <CostMetricCard label="Tổng token" value={loading ? '…' : formatNumber(data?.totals?.total_tokens)} helper={loading ? 'Đang tải dữ liệu' : `${formatNumber(data?.totals?.input_tokens)} input · ${formatNumber(data?.totals?.output_tokens)} output`} emphasis={loading ? undefined : deltaLabel(data?.deltas?.tokens_percent)} icon="database" tone="blue" />
+      <CostMetricCard label="Câu hỏi AI đã tạo" value={loading ? '…' : formatNumber(data?.totals?.questions_generated)} helper={loading ? 'Đang tải dữ liệu' : `${formatVnd(data?.totals?.avg_cost_per_question_vnd)} / câu`} emphasis={loading ? undefined : `${formatNumber(data?.totals?.calls)} lượt gọi model`} icon="sparkles" tone="green" />
+      <CostMetricCard label="Token dùng cache" value={loading ? '…' : formatNumber(data?.totals?.cached_input_tokens)} helper={loading ? 'Đang tải dữ liệu' : `${data?.totals?.cache_ratio_percent || 0}% tổng input token`} emphasis={loading ? undefined : `${formatNumber(data?.totals?.uncached_input_tokens)} input chưa cache`} icon="sync" tone="violet" />
     </section>
 
     <section className="bank-cost-insight-grid">
@@ -334,14 +334,14 @@ export function BankDashboardPage() {
       description="Mỗi dòng là một Bank Version gắn với môn, phiên bản môn và bài học."
       icon="money"
       tone="amber"
-      meta={<span className="soft-tag">{formatNumber(data?.rows.total)} bộ đề có usage</span>}
+      meta={<span className="soft-tag">{formatNumber(data?.rows?.total)} bộ đề có usage</span>}
       actions={<form className="bank-cost-search" onSubmit={(event) => { event.preventDefault(); updateTableState({ q: searchDraft }, { resetPage: true }) }}><input className="input" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Tìm mã môn, phiên bản hoặc bài..." /><button className="btn small secondary" type="submit">Tìm</button>{tableState.q ? <button className="btn small ghost" type="button" onClick={() => { setSearchDraft(''); updateTableState({ q: '' }, { resetPage: true }) }}>Xóa lọc</button> : null}</form>}
       bodyClassName="bank-cost-table-section"
     >
       <EnterpriseDataTable
         tableId="bank-cost-analytics"
         caption="Chi tiết chi phí và token theo bộ đề"
-        rows={data?.rows.items || []}
+        rows={data?.rows?.items || []}
         columns={columns}
         rowKey={(row) => row.bank_version_id}
         density={tableState.density}
@@ -351,10 +351,10 @@ export function BankDashboardPage() {
         onRetry={load}
         emptyTitle="Chưa có chi phí thực tế"
         emptyDescription="Chưa có lượt tạo câu hỏi AI được ghi nhận trong thời gian hoặc phạm vi đang chọn."
-        page={data?.rows.page || tableState.page}
-        pageSize={data?.rows.page_size || tableState.pageSize}
-        total={data?.rows.total || 0}
-        totalPages={data?.rows.total_pages || 0}
+        page={data?.rows?.page || tableState.page}
+        pageSize={data?.rows?.page_size || tableState.pageSize}
+        total={data?.rows?.total || 0}
+        totalPages={data?.rows?.total_pages || 0}
         onPageChange={(page) => updateTableState({ page }, { resetPage: false })}
         onPageSizeChange={(pageSize) => updateTableState({ pageSize, page: 1 }, { resetPage: false })}
         sortKey={sortKey}
