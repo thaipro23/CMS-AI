@@ -66,7 +66,7 @@ test('progress reminder scroll reaches the message and keeps footer accessible @
   await page.getByRole('button', { name: 'Gửi nhắc tiến độ', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Gửi nhắc sinh viên chậm tiến độ' })
   const body = dialog.locator('.accessible-dialog-body')
-  const textarea = dialog.getByLabel('Nội dung', { exact: true })
+  const textarea = dialog.getByRole('textbox', { name: 'Nội dung', exact: true })
   await expect(textarea).toBeVisible()
   expect(await body.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0)
   await body.evaluate(el => { el.scrollTop = el.scrollHeight })

@@ -29,7 +29,7 @@ export function SubjectPlatformImportDialog({ open, headers, termId, branch, onC
     {preview ? <div className="import-preview">
       <p>{preview.can_apply ? 'Có thể áp dụng' : 'Có dòng lỗi, chưa thể áp dụng'}</p>
       <p>Khớp: {preview.matched_count} · Thiếu: {preview.missing_count} · Trùng: {preview.duplicate_count} · Lỗi: {preview.invalid_count}</p>
-      <ul>{preview.rows.slice(0, 20).map((row) => <li key={row.row_no}>Dòng {row.row_no}: {row.subject_code} · {row.message}</li>)}</ul>
+      <ul>{preview.rows.slice(0, 20).map((row) => <li key={row.row_no}>Dòng {row.row_no}: {row.subject_code}{row.subject_name ? <> · {row.subject_name}</> : null} · {row.message}</li>)}</ul>
     </div> : null}
     {error ? <p role="alert" className="danger-text">{error}</p> : null}
   </AccessibleDialog>

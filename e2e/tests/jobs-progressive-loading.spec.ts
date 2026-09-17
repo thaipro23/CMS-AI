@@ -95,7 +95,7 @@ test('late primary responses cannot overwrite jobs from a newer status filter @d
   try {
     await page.goto('/jobs')
     await requested.promise
-    await page.getByLabel('Trạng thái', { exact: true }).selectOption('running')
+    await page.getByRole('combobox', { name: 'Trạng thái', exact: true }).selectOption('running')
     await expect(page.getByText('Current import', { exact: true })).toBeVisible()
     const response = page.waitForResponse(r => r.url().includes('/question-bank-v2/operation-jobs?') && !r.url().includes('status_filter'))
     old.release()

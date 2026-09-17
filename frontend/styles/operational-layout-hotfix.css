@@ -1,0 +1,38 @@
+/* Operational layout hotfixes for responsive Bank pages and Udemy workspaces. */
+
+/* production-ui.css forces .page-stack to grid. Long Udemy panels can overflow
+   an undersized grid row and paint over the tab list. Keep this operational
+   page content-sized, matching the existing Student/Analytics recovery rule. */
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack.udemy-progress-page {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  align-content: normal !important;
+  gap: 16px !important;
+}
+
+.enterprise-app-shell.enterprise-unified-shell .enterprise-content.page-stack.udemy-progress-page > * {
+  flex: 0 0 auto !important;
+  align-self: stretch !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+
+/* At tablet widths the Bank action row becomes 100% wide. In a horizontal
+   identity flex row that leaves almost no width for the title/description.
+   Stack the action row below the identity instead of squeezing the heading. */
+@media (min-width: 681px) and (max-width: 900px) {
+  .bank-page-identity,
+  .bank-hierarchy-page-intro.bank-page-identity {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .bank-page-identity__main,
+  .bank-page-identity__actions {
+    width: 100% !important;
+  }
+}
