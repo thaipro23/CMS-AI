@@ -92,6 +92,7 @@ function JobsContent() {
   const { state, update } = useOpsTableState({ pageSize: 20 })
   const { status, group: operationGroup, q, page, pageSize, density } = state
   const [loading, setLoading] = useState(false)
+  const [quizLoading, setQuizLoading] = useState(false)
   const [message, setMessage] = useState<ActionMessageData | null>(null)
   const [quizOpen, setQuizOpen] = useState(false)
   const [selectedJob, setSelectedJob] = useState<OperationRow | null>(null)
@@ -104,29 +105,43 @@ function JobsContent() {
       setMessage(null)
       const headers = authHeaders()
       const statusParam = (status === 'all' ? 'all' : status) as JobsStatusFilter
-      // The operational tables are the first paint. The two large/optional
-      // endpoints below must not hold the page hostage when they are slow.
-      const [opJobs, nextAcademicRuns, nextClassSyncJobs, nextTeacherReportJobs, nextBulkOperationJobs] = await Promise.all([
-        getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }).catch(() => ({ items: [] as BankOperationJob[] })),
-        getAcademicApSyncJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicSyncRun[]),
-        getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 80 }).catch(() => [] as AcademicClassSyncJob[]),
-        getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicTeacherReportJob[]),
-        getAcademicBulkOperationJobs(headers, { status: statusParam, limit: 50 }).catch(() => [] as AcademicBulkOperationJob[]),
+      // The operational tables are the first paint. Keep every source independent:
+      // one failed endpoint must not hide successful jobs from the other sources.
+      const [opJobsResult, academicRunsResult, classSyncJobsResult, teacherReportJobsResult, bulkOperationJobsResult] = await Promise.allSettled([
+        getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }),
+        getAcademicApSyncJobs(headers, { status: statusParam, limit: 50 }),
+        getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 80 }),
+        getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }),
+        getAcademicBulkOperationJobs(headers, { status: statusParam, limit: 50 }),
       ])
       if (generation !== loadGeneration.current) return
+
+      const opJobs = opJobsResult.status === 'fulfilled' ? opJobsResult.value : { items: [] as BankOperationJob[] }
+      const nextAcademicRuns = academicRunsResult.status === 'fulfilled' ? academicRunsResult.value : [] as AcademicSyncRun[]
+      const nextClassSyncJobs = classSyncJobsResult.status === 'fulfilled' ? classSyncJobsResult.value : [] as AcademicClassSyncJob[]
+      const nextTeacherReportJobs = teacherReportJobsResult.status === 'fulfilled' ? teacherReportJobsResult.value : [] as AcademicTeacherReportJob[]
+      const nextBulkOperationJobs = bulkOperationJobsResult.status === 'fulfilled' ? bulkOperationJobsResult.value : [] as AcademicBulkOperationJob[]
+      const primaryFailure = [opJobsResult, academicRunsResult, classSyncJobsResult, teacherReportJobsResult, bulkOperationJobsResult]
+        .find((result): result is PromiseRejectedResult => result.status === 'rejected')
+
       setOperationJobs(opJobs.items || [])
       setAcademicRuns(nextAcademicRuns || [])
       setClassSyncJobs(nextClassSyncJobs || [])
       setTeacherReportJobs(nextTeacherReportJobs || [])
       setBulkOperationJobs(nextBulkOperationJobs || [])
+      if (primaryFailure) setMessage(toUserError(primaryFailure.reason))
       setLoading(false)
 
       // Supplemental data is allowed to arrive independently after the first
       // table render. A refresh started later owns the state and stale results
-      // are discarded.
+      // are discarded. Keep Quiz explicitly loading so an empty state is not
+      // shown while the request is still in flight.
+      setQuizLoading(true)
       getCourseQuizInstances(headers, { limit: 100 }).then((items) => {
         if (generation === loadGeneration.current) setQuizInstances(items || [])
-      }).catch(() => {})
+      }).catch(() => {}).finally(() => {
+        if (generation === loadGeneration.current) setQuizLoading(false)
+      })
       getAnalyticsOpsStatus(headers).then((value) => {
         if (generation === loadGeneration.current) setAnalyticsOps(value)
       }).catch(() => {})
@@ -134,6 +149,7 @@ function JobsContent() {
       if (generation === loadGeneration.current) {
         setMessage(toUserError(error))
         setLoading(false)
+        setQuizLoading(false)
       }
     }
   }, [authHeaders, status])
@@ -370,7 +386,7 @@ function JobsContent() {
     </SideDrawer>
 
     <SideDrawer open={quizOpen} title="Quiz gần đây" description="Các Quiz đã tạo trên Open edX CMS." onClose={() => setQuizOpen(false)}>
-      <EnterpriseDataTable tableId="ops-recent-quizzes" caption="Quiz gần đây" rows={quizInstances.slice(0, 50)} columns={quizColumns} rowKey={(item) => item.id} density="compact" label="Quiz" emptyTitle="Chưa có Quiz trên CMS" />
+      <EnterpriseDataTable tableId="ops-recent-quizzes" caption="Quiz gần đây" rows={quizInstances.slice(0, 50)} columns={quizColumns} rowKey={(item) => item.id} density="compact" loading={quizLoading} label="Quiz" emptyTitle="Chưa có Quiz trên CMS" />
     </SideDrawer>
   </PageRoot>
 }
