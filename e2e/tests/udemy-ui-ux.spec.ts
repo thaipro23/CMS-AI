@@ -315,7 +315,7 @@ test.describe('Udemy Batch 35.1 UI/UX contract', () => {
     await expect(dialog).toBeVisible()
     await expect(dialog).toContainText('file tổng hợp tiến độ 7 cột')
     await expect(dialog).not.toContainText('file tổng hợp ACMS')
-    await page.getByLabel('File Excel tiến độ').setInputFiles({
+    await page.getByLabel(/File tiến độ Udemy/).setInputFiles({
       name: 'SOF3032_progress.xlsx',
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       buffer: Buffer.from('PK\u0003\u0004mock-xlsx'),
