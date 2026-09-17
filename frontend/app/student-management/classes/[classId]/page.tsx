@@ -331,7 +331,7 @@ function ClassDetailContent() {
   const { authHeaders, can } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
-  const canRunFullCmsSync = can('manage_training_deadlines') || can('manage_settings')
+  const canRunFullCmsSync = can('academic.sync_assigned_class') || can('manage_training_deadlines') || can('manage_settings')
   const canSendProgressEmail = can('view_training_reports') || can('manage_training_deadlines') || can('manage_settings')
   const canManageAssignmentScores = false // v25.9.16.7.2.64.13: Assignment score entry is handled by an external system.
   const [classInfo, setClassInfo] = useState<AcademicClass | null>(null)
@@ -829,7 +829,7 @@ function ClassDetailContent() {
     setMessage('')
     try {
       if (await followExistingJobIfAny()) return
-      const queued = await enqueueAcademicClassFullCmsSyncJob(jsonHeaders, classId, { force: true, limit: 500, autoMapCourse: true, syncLearning: true })
+      const queued = await enqueueAcademicClassFullCmsSyncJob(jsonHeaders, classId, { force: true, limit: 500, autoMapCourse: true, syncLearning: false })
       if (queued.job_type !== 'full_cms_sync') {
         setMessage(`${jobTypeLabel(queued.job_type)} đang chạy.`)
         await waitForSyncJob(queued)
@@ -839,8 +839,8 @@ function ClassDetailContent() {
       const finished = await waitForSyncJob(queued)
       if (finished.status === 'failed') throw new Error(finished.error_message || 'Đồng bộ full CMS thất bại')
       const result = finished.result_json as any
-      const learned = result?.learning?.updated || 0
-      setMessage(`Đồng bộ xong: ${learned} sinh viên.`)
+      const enrolled = result?.enrollment?.enrolled || result?.counts?.enrolled || 0
+      setMessage(`Đồng bộ full CMS hoàn tất${enrolled ? `: ${enrolled} sinh viên đã ghi danh.` : '.'}`)
       await refreshAfterDataChange()
     } catch (error) {
       setErrorModal(error instanceof Error ? error.message : 'Đồng bộ full CMS thất bại')

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
@@ -19,7 +19,8 @@ from app.models.academic import (
     AcademicTeacherReportJob,
     AcademicTerm,
 )
-from app.services.academic.job_runtime import reconcile_stale_rows
+from app.services.academic.batch_coordinator import plan_batch_dispatch
+from app.services.academic.job_runtime import class_sync_queued_timeout_seconds, reconcile_stale_rows
 from app.services.academic_service import AcademicService
 from app.services.object_storage import get_object_storage
 
@@ -293,6 +294,134 @@ def _enqueue_task(celery_app, name: str, args: list[Any], *, queue: str, countdo
     return str(getattr(result, 'id', '') or '')
 
 
+def _daily_score_children(db, parent: AcademicBulkOperationJob, state: dict[str, Any]) -> list[AcademicClassSyncJob]:
+    tracked_ids = {
+        str(value)
+        for value in (state.get('child_job_ids_by_class') or {}).values()
+        if value
+    }
+    filters = [AcademicClassSyncJob.parent_job_id == parent.id]
+    if tracked_ids:
+        filters.append(AcademicClassSyncJob.id.in_(tracked_ids))
+    return (
+        db.query(AcademicClassSyncJob)
+        .filter(or_(*filters))
+        .order_by(AcademicClassSyncJob.created_at.desc())
+        .all()
+    )
+
+
+def _dispatch_daily_score_window(celery_app, db, parent: AcademicBulkOperationJob, state: dict[str, Any]):
+    target_class_ids = list(dict.fromkeys(
+        str(item)
+        for item in (state.get('target_class_ids') or [])
+        if str(item)
+    ))
+    children = _daily_score_children(db, parent, state)
+    stale = reconcile_stale_rows(
+        children,
+        now=utc_now_naive(),
+        queued_timeout_seconds=class_sync_queued_timeout_seconds(),
+        running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
+    )
+    if stale:
+        db.add_all(stale)
+        db.commit()
+        children = _daily_score_children(db, parent, state)
+    child_ids_by_class = {
+        str(key): str(value)
+        for key, value in (state.get('child_job_ids_by_class') or {}).items()
+        if key and value
+    }
+    for child in children:
+        child_ids_by_class.setdefault(str(child.class_id), str(child.id))
+    plan = plan_batch_dispatch(
+        target_class_ids,
+        children,
+        window=int(settings.academic_bulk_sync_dispatch_window),
+    )
+    request = parent.request_json if isinstance(parent.request_json, dict) else {}
+    requester_context = request.get('requester_context') if isinstance(request.get('requester_context'), dict) else {}
+    max_students = max(1000, min(int(request.get('limit') or getattr(settings, 'academic_class_sync_max_students', 5000) or 5000), 20000))
+    enqueue_failed = int(state.get('enqueue_failed_count') or 0)
+    queued_count = int(state.get('queued_count') or 0)
+    reused_count = int(state.get('reused_count') or 0)
+
+    for class_id in plan.dispatch_class_ids:
+        active = db.query(AcademicClassSyncJob).filter(
+            AcademicClassSyncJob.class_id == class_id,
+            AcademicClassSyncJob.job_type == 'learning_sync',
+            AcademicClassSyncJob.status.in_(['queued', 'running']),
+        ).order_by(AcademicClassSyncJob.created_at.desc()).first()
+        if active:
+            child_ids_by_class[class_id] = str(active.id)
+            reused_count += 1
+            continue
+        child = AcademicClassSyncJob(
+            job_type='learning_sync',
+            status='queued',
+            class_id=class_id,
+            parent_job_id=str(parent.id),
+            requested_by=SCHEDULER_ACTOR,
+            force=True,
+            limit=max_students,
+            progress_current=0,
+            progress_total=100,
+            progress_label='05:00 +07 · đang chờ cập nhật điểm CMS',
+            request_json=json_safe_value({
+                'force': True,
+                'limit': max_students,
+                'scheduled': True,
+                'schedule_timezone': 'Asia/Ho_Chi_Minh',
+                'schedule_time': '05:00',
+                'daily_parent_job_id': str(parent.id),
+                'requester_context': requester_context,
+                'approved_class_id': class_id,
+            }),
+            result_json={},
+        )
+        db.add(child)
+        db.commit()
+        db.refresh(child)
+        child_ids_by_class[class_id] = str(child.id)
+        try:
+            celery_task_id = _enqueue_task(celery_app, 'academic_class_sync_task', [child.id], queue='sync')
+            child.result_json = json_safe_value({
+                'daily_enqueue': {'celery_task_id': celery_task_id, 'enqueued_at': vn_iso()},
+            })
+            child.updated_at = utc_now_naive()
+            db.add(child)
+            db.commit()
+            queued_count += 1
+        except Exception as exc:
+            child.status = 'failed'
+            child.error_message = 'Không đưa được job cập nhật điểm 05:00 vào Celery.'
+            child.progress_label = 'Xếp hàng cập nhật điểm thất bại'
+            child.result_json = json_safe_value({'ok': False, 'error_type': exc.__class__.__name__})
+            child.finished_at = utc_now_naive()
+            child.updated_at = child.finished_at
+            db.add(child)
+            db.commit()
+            enqueue_failed += 1
+
+    state.update({
+        'child_job_ids_by_class': child_ids_by_class,
+        'child_job_ids': list(child_ids_by_class.values()),
+        'target_class_count': len(target_class_ids),
+        'enqueue_failed_count': enqueue_failed,
+        'queued_count': queued_count,
+        'reused_count': reused_count,
+        'dispatch_window': int(settings.academic_bulk_sync_dispatch_window),
+    })
+    children = _daily_score_children(db, parent, state)
+    plan = plan_batch_dispatch(
+        target_class_ids,
+        children,
+        window=int(settings.academic_bulk_sync_dispatch_window),
+    )
+    return children, plan
+
+
 def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
     """Create one durable 05:00 parent per active term/branch.
 
@@ -355,9 +484,7 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
             db.commit()
             db.refresh(parent)
 
-            child_job_ids: list[str] = []
-            class_ids: list[str] = []
-            enqueue_failed = 0
+            class_ids = [str(cls.id) for cls in classes]
             requester_context = {
                 'user_id': SCHEDULER_ACTOR,
                 'username': SCHEDULER_ACTOR,
@@ -366,82 +493,39 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
                 'authenticated_admin_claims': {'ai_system_admin': True},
             }
             max_students = max(1000, min(int(getattr(settings, 'academic_class_sync_max_students', 5000) or 5000), 20000))
-            for cls in classes:
-                class_id = str(cls.id)
-                class_ids.append(class_id)
-                active = db.query(AcademicClassSyncJob).filter(
-                    AcademicClassSyncJob.class_id == class_id,
-                    AcademicClassSyncJob.job_type == 'learning_sync',
-                    AcademicClassSyncJob.status.in_(['queued', 'running']),
-                ).order_by(AcademicClassSyncJob.created_at.desc()).first()
-                if active:
-                    child_job_ids.append(str(active.id))
-                    continue
-                child = AcademicClassSyncJob(
-                    job_type='learning_sync',
-                    status='queued',
-                    class_id=class_id,
-                    parent_job_id=str(parent.id),
-                    requested_by=SCHEDULER_ACTOR,
-                    force=True,
-                    limit=max_students,
-                    progress_current=0,
-                    progress_total=100,
-                    progress_label='05:00 +07 · đang chờ cập nhật điểm CMS',
-                    request_json=json_safe_value({
-                        'force': True,
-                        'limit': max_students,
-                        'scheduled': True,
-                        'schedule_timezone': 'Asia/Ho_Chi_Minh',
-                        'schedule_time': '05:00',
-                        'daily_parent_job_id': str(parent.id),
-                        'requester_context': requester_context,
-                        'approved_class_id': class_id,
-                    }),
-                    result_json={},
-                )
-                db.add(child)
-                db.commit()
-                db.refresh(child)
-                child_job_ids.append(str(child.id))
-                try:
-                    celery_task_id = _enqueue_task(celery_app, 'academic_class_sync_task', [child.id], queue='sync')
-                    child_result = dict(child.result_json or {})
-                    child_result['daily_enqueue'] = {'celery_task_id': celery_task_id, 'enqueued_at': vn_iso()}
-                    child.result_json = json_safe_value(child_result)
-                    child.updated_at = utc_now_naive()
-                    db.add(child)
-                    db.commit()
-                except Exception as exc:
-                    child.status = 'failed'
-                    child.error_message = 'Không đưa được job cập nhật điểm 05:00 vào Celery.'
-                    child.progress_label = 'Xếp hàng cập nhật điểm thất bại'
-                    child.result_json = json_safe_value({'ok': False, 'error_type': exc.__class__.__name__})
-                    child.finished_at = utc_now_naive()
-                    child.updated_at = child.finished_at
-                    db.add(child)
-                    db.commit()
-                    enqueue_failed += 1
-
             parent = db.get(AcademicBulkOperationJob, parent.id)
+            parent.request_json = json_safe_value({
+                **(parent.request_json or {}),
+                'approved_class_ids': class_ids,
+                'requester_context': requester_context,
+                'limit': max_students,
+            })
             parent_result = dict(parent.result_json or {})
             parent_result.update({
                 'phase': 'waiting_children',
                 'daily_score_report_pipeline': True,
                 'run_date_vn': run_date_vn,
-                'child_job_ids': child_job_ids,
                 'target_class_ids': class_ids,
                 'target_class_count': len(class_ids),
                 'terminal_count': 0,
-                'enqueue_failed_count': enqueue_failed,
+                'enqueue_failed_count': 0,
                 'report_job_ids': [],
                 'skipped_report_scopes': [],
             })
+            children, plan = _dispatch_daily_score_window(
+                celery_app,
+                db,
+                parent,
+                parent_result,
+            )
             parent.result_json = json_safe_value(parent_result)
             touch_job_runtime(
                 parent,
                 current=5,
-                label=f'05:00 +07 · đã xếp {len(child_job_ids)} lớp, đang chờ cập nhật điểm',
+                label=(
+                    f'05:00 +07 · đã xếp {len(children)}/{len(class_ids)} lớp; '
+                    f'tối đa {plan.window} lớp đang chạy/chờ'
+                ),
                 phase='waiting_children',
                 force_progress_changed=True,
             )
@@ -555,38 +639,31 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
         parent.started_at = parent.started_at or now
         state = dict(parent.result_json or {})
         phase = str(state.get('phase') or 'waiting_children')
-        child_job_ids = [str(item) for item in (state.get('child_job_ids') or []) if str(item)]
 
         if phase in {'dispatching', 'waiting_children'}:
-            children = db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.id.in_(child_job_ids)).all() if child_job_ids else []
-            stale = reconcile_stale_rows(
-                children,
-                now=now,
-                queued_timeout_seconds=int(settings.academic_job_queued_stale_seconds),
-                running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
-            )
-            if stale:
-                db.add_all(stale)
-                db.commit()
-                children = db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.id.in_(child_job_ids)).all() if child_job_ids else []
-
+            children, plan = _dispatch_daily_score_window(celery_app, db, parent, state)
             completed = [item for item in children if item.status == 'completed']
             failed = [item for item in children if item.status == 'failed']
-            terminal_count = len(completed) + len(failed)
-            target_count = len(child_job_ids)
+            terminal_count = plan.terminal_count
+            target_count = plan.target_count
             previous_terminal = int(state.get('terminal_count') or 0)
             state['terminal_count'] = terminal_count
             state['completed_class_count'] = len(completed)
             state['failed_class_count'] = len(failed)
             state['failed_class_ids'] = [str(item.class_id) for item in failed]
+            state['active_class_count'] = plan.active_count
+            state['dispatch_window'] = plan.window
             parent.result_json = json_safe_value(state)
 
-            if terminal_count < target_count:
+            if not plan.finished:
                 progress = min(64, 5 + int((terminal_count / max(1, target_count)) * 59))
                 touch_job_runtime(
                     parent,
                     current=progress,
-                    label=f'05:00 +07 · cập nhật điểm xong {terminal_count}/{target_count} lớp',
+                    label=(
+                        f'05:00 +07 · cập nhật điểm xong {terminal_count}/{target_count} lớp; '
+                        f'{plan.active_count} đang chạy/chờ (tối đa {plan.window})'
+                    ),
                     phase='waiting_children',
                     force_progress_changed=terminal_count != previous_terminal,
                 )

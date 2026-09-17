@@ -71,7 +71,11 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     # not grant Question Bank/Quiz permissions.
     CAMPUS_OWNER: {'academic.view', 'academic.manage_campus', 'view_training_reports', 'jobs.view'},
     CAMPUS_MANAGER: {'academic.view', 'academic.manage_campus', 'view_training_reports', 'jobs.view'},
-    TEACHER_ASSIGNED: {'academic.view', 'view_training_reports'},
+    TEACHER_ASSIGNED: {
+        'academic.view',
+        'view_training_reports',
+        'academic.sync_assigned_class',
+    },
 }
 
 
@@ -194,6 +198,7 @@ class BusinessRBACService:
             'bank.view': 'Xem ngân hàng đề',
             'academic.view': 'Xem báo cáo giáo viên/lớp trong cơ sở',
             'academic.manage_campus': 'Quản lý vận hành đào tạo theo cơ sở',
+            'academic.sync_assigned_class': 'Đồng bộ CMS và cập nhật điểm cho lớp được AP phân công',
             'academic.catalog.manage': 'Quản lý danh mục đào tạo và đồng bộ AP',
             'campus_owner.assign': 'Phân công Chủ cơ sở cho từng cơ sở',
             'view_training_reports': 'Xem báo cáo quản lý giáo viên',

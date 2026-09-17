@@ -324,7 +324,6 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
           branch,
           campus,
           search: debouncedSearch,
-          learningStatus,
           force: true,
           limit: 500,
           syncLearning: false,

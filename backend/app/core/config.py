@@ -387,7 +387,7 @@ class Settings(BaseSettings):
     academic_teacher_report_sync_export_max_teachers: int = 20
     academic_teacher_report_sync_export_max_students: int = 1000
     academic_teacher_report_file_retention_hours: int = 48
-    academic_bulk_sync_dispatch_window: int = 4
+    academic_bulk_sync_dispatch_window: int = 10
     academic_bulk_sync_continue_delay_seconds: int = 10
     academic_job_queued_stale_seconds: int = 900
     academic_class_sync_stale_seconds: int = 2400

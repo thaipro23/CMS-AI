@@ -67,11 +67,11 @@ def test_latest_management_artifact_api_is_download_only_streaming_and_reports_v
 def test_daily_parent_waits_for_terminal_children_before_scheduled_exports():
     source = text('backend/app/services/academic/daily_teacher_report_runtime.py')
     parent = source.split('def run_daily_score_report_parent(', 1)[1].split('def _job_request(', 1)[0]
-    assert "child_job_ids" in parent
+    assert "_dispatch_daily_score_window" in parent
     assert "terminal_count" in parent
-    assert "if terminal_count < target_count" in parent
+    assert "if not plan.finished" in parent
     assert "_create_scheduled_export_job" in parent
-    assert parent.index("if terminal_count < target_count") < parent.index("_create_scheduled_export_job")
+    assert parent.index("if not plan.finished") < parent.index("_create_scheduled_export_job")
 
 
 def test_cms_teacher_management_keeps_operations_visible_and_has_one_excel_flow():

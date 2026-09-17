@@ -924,7 +924,7 @@ class AcademicFullCmsSyncIn(BaseModel):
     limit: int = Field(500, ge=1, le=500)
     mode: str | None = Field(None, max_length=50, description='Enrollment mode CMS/Open edX, mặc định audit')
     auto_map_course: bool = True
-    sync_learning: bool = True
+    sync_learning: bool = False
 
 
 class AcademicLearningSummaryOut(BaseModel):
@@ -1215,7 +1215,7 @@ class AcademicSubjectAutoMapAllSyncIn(BaseModel):
     force: bool = True
     limit: int = Field(500, ge=1, le=500)
     mode: str | None = Field(None, max_length=50, description='Enrollment mode CMS/Open edX, mặc định audit')
-    sync_learning: bool = True
+    sync_learning: bool = False
     max_classes: int = Field(3000, ge=1, le=5000)
 
 

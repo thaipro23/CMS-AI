@@ -124,6 +124,7 @@ from app.core.privacy import mask_email
 from app.core.operation_rate_limit import enforce_operation_rate_limit
 from app.core.config import settings
 from app.services.academic.job_runtime import (
+    class_sync_queued_timeout_seconds,
     enqueue_job_task,
     mark_enqueue_failed,
     persist_enqueue_metadata,
@@ -483,7 +484,7 @@ def reconcile_class_sync_jobs(db: Session, *, now: datetime | None = None) -> in
     changed = reconcile_stale_rows(
         rows,
         now=now,
-        queued_timeout_seconds=int(settings.academic_job_queued_stale_seconds),
+        queued_timeout_seconds=class_sync_queued_timeout_seconds(),
         running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
     )
     if changed:
@@ -779,6 +780,34 @@ def _require_academic_sync_permission(
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail='Bạn không có quyền đồng bộ/thao tác học vụ CMS/Open edX.',
+    )
+
+
+def _require_academic_class_sync_permission(
+    user: UserContext = Depends(get_user_context),
+    db: Session = Depends(get_db),
+) -> UserContext:
+    """Admit class-scoped sync actions; the handler still enforces class access.
+
+    Campus/system operators retain their existing permission. AP-assigned teachers
+    receive only the dedicated permission and must still pass
+    ``AcademicService.assert_can_access_class`` for the requested class.
+    """
+    if 'manage_settings' in set(user.permissions or []):
+        return user
+    service = BusinessRBACService(db)
+    if any(
+        service.has_any_business_permission(user, permission)
+        for permission in (
+            'manage_settings',
+            'academic.manage_campus',
+            'academic.sync_assigned_class',
+        )
+    ):
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail='Bạn không có quyền đồng bộ lớp CMS/Open edX.',
     )
 
 
@@ -2647,11 +2676,13 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         'branch': branch_value,
         'campus': campus_value,
         'search': payload.search,
-        'learning_status': payload.learning_status,
+        # Course mapping is a class/subject operation. Student learning state
+        # must never shrink or reshape its authorization snapshot.
+        'learning_status': None,
         'force': bool(payload.force),
         'limit': max(1, min(500, int(payload.limit or 500))),
         'mode': payload.mode,
-        'sync_learning': bool(payload.sync_learning),
+        'sync_learning': False,
         'max_classes': max(1, min(5000, int(payload.max_classes or 3000))),
         'requester_context': _requester_context_json(user),
         'scope_enforced_in_worker': True,
@@ -2678,9 +2709,8 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         candidate_request = candidate.request_json if isinstance(candidate.request_json, dict) else {}
         if (
             (candidate_request.get('search') or None) == (payload.search or None)
-            and (candidate_request.get('learning_status') or None) == (payload.learning_status or None)
             and bool(candidate_request.get('force', True)) == bool(payload.force)
-            and bool(candidate_request.get('sync_learning', True)) == bool(payload.sync_learning)
+            and candidate_request.get('sync_learning') is False
         ):
             active = candidate
             break
@@ -2719,7 +2749,7 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
             branch=branch_value,
             campus=campus_value,
             search=payload.search,
-            learning_status=payload.learning_status,
+            learning_status=None,
             max_classes=max(1, min(5000, int(payload.max_classes or 3000))),
             dry_run=True,
         )
@@ -2770,12 +2800,12 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
     log_audit(
         db,
         action='academic.subject_course_mapping.auto_all_sync_job.enqueue',
-        status='queued',
+        status='success',
         message=message,
         user=user,
         target_type='academic_bulk_operation_job',
         target_id=job.id,
-        metadata=json_safe_value(request_json),
+        metadata=json_safe_value({**request_json, 'job_status': job.status}),
     )
     return {
         'ok': True,
@@ -2877,7 +2907,7 @@ def retry_academic_bulk_operation_job(
                 branch=request_json.get('branch') or job.branch,
                 campus=request_json.get('campus') or job.campus,
                 search=request_json.get('search'),
-                learning_status=request_json.get('learning_status'),
+                learning_status=None,
                 max_classes=max(1, min(5000, int(request_json.get('max_classes') or 3000))),
                 dry_run=True,
             )
@@ -3316,7 +3346,7 @@ def enqueue_class_cms_enrollment_sync(
 def enqueue_class_learning_sync(
     class_id: str,
     payload: AcademicLearningSyncIn,
-    user: UserContext = Depends(_require_academic_sync_permission),
+    user: UserContext = Depends(_require_academic_class_sync_permission),
     db: Session = Depends(get_db),
 ):
     return _enqueue_class_sync_job(db=db, user=user, class_id=class_id, job_type='learning_sync', force=payload.force, limit=payload.limit)
@@ -3368,7 +3398,7 @@ def enqueue_training_student_progress_email(
 def enqueue_class_full_cms_sync(
     class_id: str,
     payload: AcademicFullCmsSyncIn,
-    user: UserContext = Depends(_require_academic_sync_permission),
+    user: UserContext = Depends(_require_academic_class_sync_permission),
     db: Session = Depends(get_db),
 ):
     return _enqueue_class_sync_job(
@@ -3380,7 +3410,7 @@ def enqueue_class_full_cms_sync(
         limit=payload.limit,
         mode=payload.mode,
         auto_map_course=payload.auto_map_course,
-        sync_learning=payload.sync_learning,
+        sync_learning=False,
     )
 
 
@@ -3446,7 +3476,7 @@ def list_class_sync_jobs(
 def sync_class_full_cms_flow(
     class_id: str,
     payload: AcademicFullCmsSyncIn,
-    user: UserContext = Depends(_require_academic_sync_permission),
+    user: UserContext = Depends(_require_academic_class_sync_permission),
     db: Session = Depends(get_db),
 ):
     service = AcademicService(db)
@@ -3458,7 +3488,7 @@ def sync_class_full_cms_flow(
             limit=payload.limit,
             mode=payload.mode,
             auto_map_course=payload.auto_map_course,
-            sync_learning=payload.sync_learning,
+            sync_learning=False,
         )
         log_audit(
             db,
@@ -3521,7 +3551,7 @@ def sync_class_cms_enrollment(
 def sync_class_learning_insight(
     class_id: str,
     payload: AcademicLearningSyncIn,
-    user: UserContext = Depends(_require_academic_sync_permission),
+    user: UserContext = Depends(_require_academic_class_sync_permission),
     db: Session = Depends(get_db),
 ):
     service = AcademicService(db)

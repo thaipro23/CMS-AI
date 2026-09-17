@@ -10,6 +10,14 @@ from app.core.config import settings
 ORPHANED_JOB_CODE = 'CELERY_JOB_ORPHANED'
 
 
+def class_sync_queued_timeout_seconds() -> int:
+    """Use a queue lease no shorter than Redis/Celery visibility timeout."""
+    return max(
+        int(settings.academic_job_queued_stale_seconds),
+        int(settings.celery_broker_visibility_timeout_seconds),
+    )
+
+
 def enqueue_job_task(
     task: Any,
     job_id: str,

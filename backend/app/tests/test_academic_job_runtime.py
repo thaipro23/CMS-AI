@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from app.services.academic.job_runtime import (
+    class_sync_queued_timeout_seconds,
     enqueue_job_task,
     persist_enqueue_metadata,
     reconcile_stale_rows,
@@ -72,6 +73,10 @@ def test_never_started_queued_job_uses_queued_lease():
 
     assert job.status == 'failed'
     assert job.result_json['previous_status'] == 'queued'
+
+
+def test_class_sync_queue_lease_is_not_shorter_than_broker_visibility_timeout():
+    assert class_sync_queued_timeout_seconds() >= 7200
 
 
 def test_active_parent_is_protected_from_short_bulk_lease():

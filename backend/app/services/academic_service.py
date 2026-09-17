@@ -2489,6 +2489,139 @@ class AcademicService:
             'visible_subject_ids': visible_subject_ids,
         }
 
+    def auto_map_subject_courses_for_snapshot(
+        self,
+        user: UserContext,
+        *,
+        term_id: str,
+        approved_subject_ids: list[str],
+        approved_class_ids: list[str],
+        branch: str | None = None,
+    ) -> dict[str, Any]:
+        """Auto-map only the immutable class/subject scope approved at enqueue."""
+        term = self.db.get(AcademicTerm, term_id)
+        if not term:
+            raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ AP')
+        branch_value = (branch or term.branch or '').strip().lower() or None
+        subject_ids = list(dict.fromkeys(
+            str(value).strip() for value in approved_subject_ids if str(value or '').strip()
+        ))
+        class_ids = list(dict.fromkeys(
+            str(value).strip() for value in approved_class_ids if str(value or '').strip()
+        ))
+        if not class_ids:
+            return {
+                'ok': True,
+                'term_id': term_id,
+                'branch': branch_value,
+                'subject_total': 0,
+                'subject_mapped': 0,
+                'subject_already_mapped': 0,
+                'subject_failed': 0,
+                'class_total': 0,
+                'class_ids': [],
+                'approved_class_count': 0,
+                'subject_results': [],
+                'subject_ids': subject_ids,
+            }
+
+        class_query = self.db.query(AcademicClass).filter(
+            AcademicClass.id.in_(class_ids),
+            AcademicClass.term_id == term_id,
+            AcademicClass.active.is_(True),
+        )
+        if branch_value:
+            class_query = class_query.filter(func.lower(AcademicClass.branch) == branch_value)
+        class_query = self._apply_academic_access_filter(
+            class_query,
+            user,
+            self.access_decision(user),
+        )
+        approved_class_by_id = {str(item.id): item for item in class_query.all()}
+        approved_classes = [
+            approved_class_by_id[class_id]
+            for class_id in class_ids
+            if class_id in approved_class_by_id
+        ]
+        class_subject_ids = {str(item.subject_id) for item in approved_classes}
+        if subject_ids:
+            class_subject_ids.intersection_update(subject_ids)
+        subjects = (
+            self.db.query(AcademicSubject)
+            .filter(
+                AcademicSubject.id.in_(sorted(class_subject_ids)),
+                AcademicSubject.active.is_(True),
+            )
+            .all()
+            if class_subject_ids
+            else []
+        )
+        subject_by_id = {str(item.id): item for item in subjects}
+
+        mapped_subject_ids: set[str] = set()
+        subject_results: list[dict[str, Any]] = []
+        auto_mapped = already_mapped = failed = 0
+        for subject_id in subject_ids or sorted(class_subject_ids):
+            subject = subject_by_id.get(subject_id)
+            if not subject:
+                continue
+            try:
+                result = self.auto_map_subject_course(
+                    user,
+                    term_id=term_id,
+                    subject_id=subject_id,
+                    branch=branch_value,
+                )
+            except Exception as exc:
+                failed += 1
+                subject_results.append({
+                    'subject_id': subject_id,
+                    'subject_code': subject.subject_code,
+                    'status': 'failed',
+                    'ok': False,
+                    'message': str(exc),
+                })
+                continue
+            ok = bool(result.get('ok'))
+            status_value = str(result.get('status') or '')
+            if ok:
+                mapped_subject_ids.add(subject_id)
+                if status_value == 'already_mapped':
+                    already_mapped += 1
+                else:
+                    auto_mapped += 1
+            else:
+                failed += 1
+            mapping = result.get('mapping') if isinstance(result.get('mapping'), dict) else {}
+            subject_results.append({
+                'subject_id': subject_id,
+                'subject_code': subject.subject_code,
+                'status': status_value,
+                'ok': ok,
+                'openedx_course_id': mapping.get('openedx_course_id'),
+                'message': result.get('message'),
+            })
+
+        dispatch_class_ids = [
+            str(item.id)
+            for item in approved_classes
+            if str(item.subject_id) in mapped_subject_ids
+        ]
+        return {
+            'ok': True,
+            'term_id': term_id,
+            'branch': branch_value,
+            'subject_total': len(subjects),
+            'subject_mapped': auto_mapped,
+            'subject_already_mapped': already_mapped,
+            'subject_failed': failed,
+            'class_total': len(dispatch_class_ids),
+            'class_ids': dispatch_class_ids,
+            'approved_class_count': len(class_ids),
+            'subject_results': subject_results,
+            'subject_ids': subject_ids,
+        }
+
     def list_teacher_subjects(
         self,
         user: UserContext,

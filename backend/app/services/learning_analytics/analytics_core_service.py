@@ -6,14 +6,14 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, case, func, or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
 from app.core.privacy import mask_email
-from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot, AcademicSubject, AcademicTerm
+from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot
 from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
@@ -1106,10 +1106,6 @@ class LearningAnalyticsCoreService:
 
 
 
-    @staticmethod
-    @staticmethod
-    @staticmethod
-    @staticmethod
     def _class_matches_rollout(self, cls: AcademicClass | None, course_id: str | None = None) -> tuple[bool, list[str]]:
         """Check env-only rollout scope; does not require new tables."""
         reasons: list[str] = []
@@ -2192,10 +2188,6 @@ class LearningAnalyticsCoreService:
         return self._analytics_results_workflow().class_behavior_overview(*args, **kwargs)
 
 
-    @staticmethod
-    @staticmethod
-    @staticmethod
-    @staticmethod
     def _class_course_mapping_diagnostics(self, *, class_id: str, preferred_course_id: str | None = None) -> dict[str, Any]:
         """Inspect class -> Open edX course resolution without writing data.
 
@@ -2323,4 +2315,3 @@ class LearningAnalyticsCoreService:
 
     def behavior_rows(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._analytics_results_workflow().behavior_rows(*args, **kwargs)
-

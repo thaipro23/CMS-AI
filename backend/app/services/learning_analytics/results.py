@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from typing import Any
-import io
 
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 
 from app.core.config import settings
 
-from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicSubject, AcademicTerm
+from app.models.academic import AcademicClass, AcademicClassStudent, AcademicClassSyncJob, AcademicSubject, AcademicTerm
 from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsLearningBehaviorSnapshot,
@@ -32,6 +31,7 @@ class LearningAnalyticsResultsWorkflowService:
         return getattr(self.parent, name)
 
     def learning_dashboard(self, *, campus: str | None = None, branch: str | None = None, course_id: str | None = None, class_id: str | None = None, classification: str | None = None, date_from: str | None = None, date_to: str | None = None, limit: int = 50, allowed_class_ids: set[str] | None = None) -> dict[str, Any]:
+        safe_limit = min(max(1, int(limit or 50)), 500)
         q = self._apply_behavior_common_filters(
             self.db.query(AnalyticsLearningBehaviorSnapshot),
             campus=campus,
@@ -43,38 +43,100 @@ class LearningAnalyticsResultsWorkflowService:
             date_to=date_to,
             allowed_class_ids=allowed_class_ids,
         )
-        rows = q.all()
-        counts = Counter(r.classification for r in rows)
-        quality = Counter(r.data_quality for r in rows)
-        class_ids = sorted({r.class_id for r in rows if r.class_id})
-        classes = {c.id: c for c in self.db.query(AcademicClass).filter(AcademicClass.id.in_(class_ids)).all()} if class_ids else {}
-        by_class: dict[str, list[AnalyticsLearningBehaviorSnapshot]] = defaultdict(list)
-        for row in rows:
-            by_class[str(row.class_id or '')].append(row)
+        snapshot = AnalyticsLearningBehaviorSnapshot
+        suspicious_case = case((snapshot.classification.in_(['POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING']), 1), else_=0)
+        idle_case = case((snapshot.classification == 'POSSIBLE_IDLE', 1), else_=0)
+        likely_case = case((snapshot.classification == 'LIKELY_REAL_LEARNING', 1), else_=0)
+        insufficient_case = case((snapshot.classification == 'INSUFFICIENT_DATA', 1), else_=0)
+        normal_case = case((snapshot.classification == 'NORMAL', 1), else_=0)
+
+        totals = q.with_entities(
+            func.count(snapshot.id),
+            func.coalesce(func.sum(likely_case), 0),
+            func.coalesce(func.sum(idle_case), 0),
+            func.coalesce(func.sum(suspicious_case), 0),
+            func.coalesce(func.sum(insufficient_case), 0),
+            func.coalesce(func.sum(normal_case), 0),
+        ).one()
+        quality = {
+            str(name or 'MISSING'): int(count or 0)
+            for name, count in q.with_entities(
+                snapshot.data_quality,
+                func.count(snapshot.id),
+            ).group_by(snapshot.data_quality).all()
+        }
+        class_rows = q.with_entities(
+            snapshot.class_id,
+            func.min(snapshot.course_id),
+            func.count(snapshot.id),
+            func.coalesce(func.sum(likely_case), 0),
+            func.coalesce(func.sum(idle_case), 0),
+            func.coalesce(func.sum(suspicious_case), 0),
+            func.coalesce(func.sum(insufficient_case), 0),
+            func.coalesce(func.sum(normal_case), 0),
+            func.avg(snapshot.confidence_score),
+            func.avg(snapshot.deadline_compliance_percent),
+        ).group_by(snapshot.class_id).order_by(
+            func.sum(suspicious_case).desc(),
+            func.sum(idle_case).desc(),
+        ).limit(safe_limit).all()
+        top_suspicious = q.filter(or_(
+            snapshot.classification.in_(['POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING']),
+            snapshot.suspicious_score > 0,
+        )).order_by(
+            snapshot.suspicious_score.desc(),
+            snapshot.confidence_score.desc(),
+        ).limit(safe_limit).all()
+        top_idle = q.filter(or_(
+            snapshot.classification == 'POSSIBLE_IDLE',
+            snapshot.idle_score > 0,
+        )).order_by(
+            snapshot.idle_score.desc(),
+            snapshot.confidence_score.desc(),
+        ).limit(safe_limit).all()
+        overdue = q.filter(or_(
+            snapshot.crammed_session_count > 0,
+            (snapshot.deadline_compliance_percent.is_not(None))
+            & (snapshot.deadline_compliance_percent < 60),
+        )).order_by(
+            snapshot.crammed_session_count.desc(),
+            case((snapshot.deadline_compliance_percent.is_(None), 0), else_=1).asc(),
+            snapshot.deadline_compliance_percent.asc(),
+        ).limit(safe_limit).all()
+        class_ids = {
+            str(value)
+            for value in [
+                *(row[0] for row in class_rows),
+                *(row.class_id for row in top_suspicious),
+                *(row.class_id for row in top_idle),
+                *(row.class_id for row in overdue),
+            ]
+            if value
+        }
+        classes = {
+            item.id: item
+            for item in self.db.query(AcademicClass).filter(AcademicClass.id.in_(sorted(class_ids))).all()
+        } if class_ids else {}
         class_items: list[dict[str, Any]] = []
-        for cid, group in by_class.items():
+        for row in class_rows:
+            cid = str(row[0] or '')
             cls = classes.get(cid)
-            cc = Counter(r.classification for r in group)
             class_items.append({
                 'class_id': cid,
                 'class_code': cls.class_code if cls else cid,
                 'class_name': cls.class_name if cls else '',
                 'campus': cls.campus if cls else None,
                 'branch': cls.branch if cls else None,
-                'course_id': group[0].course_id if group else None,
-                'total_students': len(group),
-                'likely_real_learning_count': cc.get('LIKELY_REAL_LEARNING', 0),
-                'possible_idle_count': cc.get('POSSIBLE_IDLE', 0),
-                'possible_suspicious_count': cc.get('POSSIBLE_ANOMALY', 0) + cc.get('POSSIBLE_CHEATING', 0),
-                'insufficient_data_count': cc.get('INSUFFICIENT_DATA', 0),
-                'normal_count': cc.get('NORMAL', 0),
-                'avg_confidence_score': round(sum(float(r.confidence_score or 0) for r in group) / len(group), 2) if group else 0,
-                'avg_deadline_compliance_percent': round(sum(float(r.deadline_compliance_percent or 0) for r in group if r.deadline_compliance_percent is not None) / max(1, len([r for r in group if r.deadline_compliance_percent is not None])), 2) if group else None,
+                'course_id': row[1],
+                'total_students': int(row[2] or 0),
+                'likely_real_learning_count': int(row[3] or 0),
+                'possible_idle_count': int(row[4] or 0),
+                'possible_suspicious_count': int(row[5] or 0),
+                'insufficient_data_count': int(row[6] or 0),
+                'normal_count': int(row[7] or 0),
+                'avg_confidence_score': round(float(row[8] or 0), 2),
+                'avg_deadline_compliance_percent': round(float(row[9]), 2) if row[9] is not None else None,
             })
-        class_items.sort(key=lambda item: (item['possible_suspicious_count'], item['possible_idle_count']), reverse=True)
-        top_suspicious = sorted(rows, key=lambda r: (float(r.suspicious_score or 0), float(r.confidence_score or 0)), reverse=True)[:limit]
-        top_idle = sorted(rows, key=lambda r: (float(r.idle_score or 0), float(r.confidence_score or 0)), reverse=True)[:limit]
-        overdue = [r for r in rows if (r.crammed_session_count or 0) > 0 or (r.deadline_compliance_percent is not None and r.deadline_compliance_percent < 60)]
         def row_item(r: AnalyticsLearningBehaviorSnapshot) -> dict[str, Any]:
             cls = classes.get(str(r.class_id or ''))
             return {
@@ -101,17 +163,17 @@ class LearningAnalyticsResultsWorkflowService:
             }
         return {
             'filters': {'campus': campus, 'branch': branch, 'course_id': course_id, 'class_id': class_id, 'classification': classification or 'all', 'date_from': date_from, 'date_to': date_to},
-            'total_students': len(rows),
-            'likely_real_learning_count': counts.get('LIKELY_REAL_LEARNING', 0),
-            'possible_idle_count': counts.get('POSSIBLE_IDLE', 0),
-            'possible_suspicious_count': counts.get('POSSIBLE_ANOMALY', 0) + counts.get('POSSIBLE_CHEATING', 0),
-            'insufficient_data_count': counts.get('INSUFFICIENT_DATA', 0),
-            'normal_count': counts.get('NORMAL', 0),
-            'data_quality_breakdown': dict(quality),
-            'class_items': class_items[:limit],
-            'top_possible_suspicious': [row_item(r) for r in top_suspicious if r.classification in {'POSSIBLE_ANOMALY', 'POSSIBLE_CHEATING'} or (r.suspicious_score or 0) > 0],
-            'top_possible_idle': [row_item(r) for r in top_idle if r.classification == 'POSSIBLE_IDLE' or (r.idle_score or 0) > 0],
-            'deadline_attention': [row_item(r) for r in sorted(overdue, key=lambda r: (r.crammed_session_count or 0, 100 - float(r.deadline_compliance_percent or 0)), reverse=True)[:limit]],
+            'total_students': int(totals[0] or 0),
+            'likely_real_learning_count': int(totals[1] or 0),
+            'possible_idle_count': int(totals[2] or 0),
+            'possible_suspicious_count': int(totals[3] or 0),
+            'insufficient_data_count': int(totals[4] or 0),
+            'normal_count': int(totals[5] or 0),
+            'data_quality_breakdown': quality,
+            'class_items': class_items,
+            'top_possible_suspicious': [row_item(r) for r in top_suspicious],
+            'top_possible_idle': [row_item(r) for r in top_idle],
+            'deadline_attention': [row_item(r) for r in overdue],
             'disclaimer': 'Dữ liệu chỉ phản ánh dấu hiệu từ log hệ thống, không phải kết luận vi phạm.',
         }
 

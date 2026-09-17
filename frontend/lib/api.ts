@@ -4044,7 +4044,6 @@ export async function autoMapAllAcademicSubjectCoursesAndSync(
     branch?: string;
     campus?: string;
     search?: string;
-    learningStatus?: string;
     force?: boolean;
     limit?: number;
     syncLearning?: boolean;
@@ -4063,10 +4062,6 @@ export async function autoMapAllAcademicSubjectCoursesAndSync(
           branch: payload.branch || null,
           campus: payload.campus || null,
           search: payload.search || null,
-          learning_status:
-            payload.learningStatus && payload.learningStatus !== "all"
-              ? payload.learningStatus
-              : null,
           force: payload.force !== false,
           limit: Math.max(1, Math.min(500, payload.limit || 500)),
           sync_learning: payload.syncLearning !== false,

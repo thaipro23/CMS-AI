@@ -2434,9 +2434,10 @@ def academic_subject_catalog_refresh_task(job_id: str):
 @celery_app.task(name='academic_subject_auto_map_all_sync_task')
 def academic_subject_auto_map_all_sync_task(job_id: str):
     """Map Course CMS once, then coordinate a bounded window of class sync jobs."""
-    from app.models.academic import AcademicBulkOperationJob, AcademicClassSyncJob
+    from app.models.academic import AcademicBulkOperationJob, AcademicClass, AcademicClassSyncJob
     from app.services.academic.batch_coordinator import plan_batch_dispatch
     from app.services.academic.job_runtime import (
+        class_sync_queued_timeout_seconds,
         enqueue_job_task,
         persist_enqueue_metadata,
         reconcile_stale_rows,
@@ -2485,14 +2486,25 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                     'Job Auto map tất cả không có phạm vi lớp đã được duyệt; '
                     'dừng để tránh mở rộng quyền.'
                 )
-            prepared = AcademicService(db).auto_map_subject_courses_for_filter(
+            approved_subject_ids = [
+                str(item)
+                for item in (request_json.get('approved_subject_ids') or [])
+                if str(item)
+            ]
+            if not approved_subject_ids:
+                approved_subject_ids = [
+                    str(value)
+                    for (value,) in db.query(AcademicClass.subject_id).filter(
+                        AcademicClass.id.in_(approved_class_ids),
+                    ).distinct().all()
+                    if value
+                ]
+            prepared = AcademicService(db).auto_map_subject_courses_for_snapshot(
                 worker_user,
                 term_id=str(request_json.get('term_id') or job.term_id or ''),
                 branch=request_json.get('branch') or job.branch,
-                campus=request_json.get('campus') or job.campus,
-                search=request_json.get('search'),
-                learning_status=request_json.get('learning_status'),
-                max_classes=int(request_json.get('max_classes') or 3000),
+                approved_subject_ids=approved_subject_ids,
+                approved_class_ids=sorted(approved_class_ids),
             )
             raw_class_ids = [str(item) for item in (prepared.get('class_ids') or [])]
             class_ids = list(dict.fromkeys(
@@ -2546,7 +2558,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         stale_children = reconcile_stale_rows(
             children,
             now=datetime.utcnow(),
-            queued_timeout_seconds=int(settings.academic_job_queued_stale_seconds),
+            queued_timeout_seconds=class_sync_queued_timeout_seconds(),
             running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
         )
         if stale_children:
@@ -2600,7 +2612,10 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                     limit=int(request_json.get('limit') or 500),
                     mode=request_json.get('mode'),
                     auto_map_course=True,
-                    sync_learning=bool(request_json.get('sync_learning', True)),
+                    # Auto-map/full CMS intentionally stops after account and
+                    # enrollment synchronization. Scores use the dedicated
+                    # learning-refresh operation (and the 05:00 pipeline).
+                    sync_learning=False,
                     requester_context=(
                         request_json.get('requester_context')
                         if isinstance(request_json.get('requester_context'), dict)

@@ -6,8 +6,9 @@ from typing import Any
 
 from celery.schedules import crontab
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
+from app.core.config import settings
 from app.core.json_safe import json_safe_value
 from app.core.rbac import UserContext
 from app.db.session import SessionLocal
@@ -22,6 +23,11 @@ from app.models.academic import (
 )
 from app.schemas.academic import AcademicAPSyncIn
 from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
+from app.services.academic.batch_coordinator import plan_batch_dispatch
+from app.services.academic.job_runtime import (
+    class_sync_queued_timeout_seconds,
+    reconcile_stale_rows,
+)
 from app.services.academic_service import AcademicService
 
 
@@ -128,6 +134,182 @@ def _campus_codes_for_term(db, term: AcademicTerm, branch: str) -> list[str]:
     return list(dict.fromkeys(existing))
 
 
+def _load_latest_score_children(db, parent: AcademicBulkOperationJob, state: dict[str, Any]) -> list[AcademicClassSyncJob]:
+    tracked_ids = {
+        str(value)
+        for value in (state.get('child_job_ids_by_class') or {}).values()
+        if value
+    }
+    filters = [AcademicClassSyncJob.parent_job_id == parent.id]
+    if tracked_ids:
+        filters.append(AcademicClassSyncJob.id.in_(tracked_ids))
+    return (
+        db.query(AcademicClassSyncJob)
+        .filter(or_(*filters))
+        .order_by(AcademicClassSyncJob.created_at.desc())
+        .all()
+    )
+
+
+def _dispatch_latest_score_window(celery_app, db, parent: AcademicBulkOperationJob) -> tuple[dict[str, Any], Any]:
+    request = parent.request_json if isinstance(parent.request_json, dict) else {}
+    targets = list(dict.fromkeys(
+        str(item).strip()
+        for item in (request.get('approved_class_ids') or [])
+        if str(item or '').strip()
+    ))
+    state = dict(parent.result_json or {}) if isinstance(parent.result_json, dict) else {}
+    children = _load_latest_score_children(db, parent, state)
+    stale = reconcile_stale_rows(
+        children,
+        now=_now(),
+        queued_timeout_seconds=class_sync_queued_timeout_seconds(),
+        running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
+    )
+    if stale:
+        db.add_all(stale)
+        db.commit()
+        children = _load_latest_score_children(db, parent, state)
+
+    child_ids_by_class = {
+        str(key): str(value)
+        for key, value in (state.get('child_job_ids_by_class') or {}).items()
+        if key and value
+    }
+    for child in children:
+        child_ids_by_class.setdefault(str(child.class_id), str(child.id))
+
+    plan = plan_batch_dispatch(
+        targets,
+        children,
+        window=int(settings.academic_bulk_sync_dispatch_window),
+    )
+    queued = int(state.get('queued') or 0)
+    reused = int(state.get('reused') or 0)
+    failed_to_enqueue = int(state.get('failed_to_enqueue') or 0)
+    requester_context = request.get('requester_context') if isinstance(request.get('requester_context'), dict) else {}
+    force = bool(request.get('force', True))
+    limit = max(1, min(500, int(request.get('limit') or 500)))
+    mode = request.get('mode')
+
+    for class_id in plan.dispatch_class_ids:
+        active = (
+            db.query(AcademicClassSyncJob)
+            .filter(
+                AcademicClassSyncJob.class_id == class_id,
+                AcademicClassSyncJob.job_type == 'learning_sync',
+                AcademicClassSyncJob.status.in_(['queued', 'running']),
+            )
+            .order_by(AcademicClassSyncJob.created_at.desc())
+            .first()
+        )
+        if active:
+            child_ids_by_class[class_id] = str(active.id)
+            reused += 1
+            continue
+        child = AcademicClassSyncJob(
+            job_type='learning_sync',
+            status='queued',
+            class_id=class_id,
+            parent_job_id=parent.id,
+            idempotency_key=f'bulk:{parent.id}:learning_sync:{class_id}',
+            requested_by=parent.requested_by,
+            force=force,
+            limit=limit,
+            mode=mode,
+            progress_current=0,
+            progress_total=100,
+            progress_label='Đang chờ lấy điểm CMS mới nhất',
+            request_json=json_safe_value({
+                'force': force,
+                'limit': limit,
+                'mode': mode,
+                'requester_context': requester_context,
+                'approved_class_id': class_id,
+                'parent_job_id': parent.id,
+                'parent_job_type': LATEST_SCORE_JOB_TYPE,
+                'operation': 'latest_learning_scores_only',
+            }),
+            result_json={},
+        )
+        db.add(child)
+        db.commit()
+        db.refresh(child)
+        child_ids_by_class[class_id] = str(child.id)
+        try:
+            celery_app.send_task(CLASS_SYNC_TASK, args=[child.id], queue='sync')
+            queued += 1
+        except Exception as exc:
+            child.status = 'failed'
+            child.progress_label = 'Không đưa được job lấy điểm vào hàng đợi'
+            child.error_message = str(exc)[:4000]
+            child.result_json = json_safe_value({'ok': False, 'message': child.progress_label})
+            child.finished_at = _now()
+            child.updated_at = _now()
+            db.add(child)
+            db.commit()
+            failed_to_enqueue += 1
+
+    state.update({
+        'ok': True,
+        'child_job_ids_by_class': child_ids_by_class,
+        'child_job_ids': list(child_ids_by_class.values()),
+        'class_total': len(targets),
+        'queued': queued,
+        'reused': reused,
+        'failed_to_enqueue': failed_to_enqueue,
+        'skipped_unmapped_count': int(request.get('skipped_unmapped_count') or 0),
+        'operation': 'latest_learning_scores_only',
+    })
+    children = _load_latest_score_children(db, parent, state)
+    plan = plan_batch_dispatch(
+        targets,
+        children,
+        window=int(settings.academic_bulk_sync_dispatch_window),
+    )
+    state.update({
+        'active': plan.active_count,
+        'completed': plan.completed_count,
+        'failed': plan.failed_count,
+        'terminal': plan.terminal_count,
+        'dispatch_window': plan.window,
+    })
+    return state, plan
+
+
+def _persist_latest_score_progress(db, parent: AcademicBulkOperationJob, state: dict[str, Any], plan: Any) -> None:
+    parent.progress_total = 100
+    parent.updated_at = _now()
+    if plan.finished:
+        parent.progress_current = 100
+        parent.finished_at = _now()
+        if plan.completed_count > 0 or plan.target_count == 0:
+            parent.status = 'completed'
+            parent.progress_label = (
+                f'Đã lấy điểm mới nhất cho {plan.completed_count}/{plan.target_count} lớp'
+                + (f' · {plan.failed_count} lỗi' if plan.failed_count else '')
+            )
+            state['ok'] = True
+        else:
+            parent.status = 'failed'
+            parent.progress_label = 'Không lớp nào lấy điểm thành công'
+            parent.error_message = f'{plan.failed_count} job lỗi'[:4000]
+            state['ok'] = False
+    else:
+        parent.status = 'running'
+        parent.progress_current = min(
+            99,
+            10 + int((plan.terminal_count / max(plan.target_count, 1)) * 89),
+        )
+        parent.progress_label = (
+            f'Đang lấy điểm: {plan.terminal_count}/{plan.target_count} lớp hoàn tất; '
+            f'{plan.active_count} đang chạy/chờ (tối đa {plan.window})'
+        )
+    parent.result_json = json_safe_value(state)
+    db.add(parent)
+    db.commit()
+
+
 def _enqueue_latest_score_children(celery_app, parent: AcademicBulkOperationJob) -> dict[str, Any]:
     db = SessionLocal()
     try:
@@ -138,123 +320,22 @@ def _enqueue_latest_score_children(celery_app, parent: AcademicBulkOperationJob)
             raise RuntimeError(f'Unsupported bulk job_type: {parent.job_type}')
         if parent.status not in {'queued', 'running'}:
             return parent.result_json or {'ok': parent.status == 'completed', 'status': parent.status}
-
-        request = parent.request_json if isinstance(parent.request_json, dict) else {}
-        class_ids = [
-            str(item).strip()
-            for item in (request.get('approved_class_ids') or [])
-            if str(item or '').strip()
-        ]
-        requester_context = request.get('requester_context') if isinstance(request.get('requester_context'), dict) else {}
-        force = bool(request.get('force', True))
-        limit = max(1, min(500, int(request.get('limit') or 500)))
-        mode = request.get('mode')
-
         parent.status = 'running'
         parent.started_at = parent.started_at or _now()
-        parent.progress_current = 5
-        parent.progress_total = 100
-        parent.progress_label = f'Đang xếp hàng lấy điểm cho {len(class_ids)} lớp'
         parent.updated_at = _now()
         db.add(parent)
         db.commit()
 
-        child_ids: list[str] = []
-        queued = reused = failed_to_enqueue = 0
-        for class_id in class_ids:
-            active = (
-                db.query(AcademicClassSyncJob)
-                .filter(
-                    AcademicClassSyncJob.class_id == class_id,
-                    AcademicClassSyncJob.job_type == 'learning_sync',
-                    AcademicClassSyncJob.status.in_(['queued', 'running']),
-                )
-                .order_by(AcademicClassSyncJob.created_at.desc())
-                .first()
+        state, plan = _dispatch_latest_score_window(celery_app, db, parent)
+        _persist_latest_score_progress(db, parent, state, plan)
+        if not plan.finished:
+            celery_app.send_task(
+                LATEST_SCORE_WATCHDOG_TASK,
+                args=[parent.id],
+                queue='sync',
+                countdown=10,
             )
-            if active:
-                child_ids.append(str(active.id))
-                reused += 1
-                continue
-
-            child = AcademicClassSyncJob(
-                job_type='learning_sync',
-                status='queued',
-                class_id=class_id,
-                parent_job_id=parent.id,
-                idempotency_key=f'bulk:{parent.id}:learning_sync:{class_id}',
-                requested_by=parent.requested_by,
-                force=force,
-                limit=limit,
-                mode=mode,
-                progress_current=0,
-                progress_total=100,
-                progress_label='Đang chờ lấy điểm CMS mới nhất',
-                request_json=json_safe_value({
-                    'force': force,
-                    'limit': limit,
-                    'mode': mode,
-                    'requester_context': requester_context,
-                    'approved_class_id': class_id,
-                    'parent_job_id': parent.id,
-                    'parent_job_type': LATEST_SCORE_JOB_TYPE,
-                    'operation': 'latest_learning_scores_only',
-                }),
-                result_json={},
-            )
-            db.add(child)
-            db.commit()
-            db.refresh(child)
-            child_ids.append(str(child.id))
-            try:
-                celery_app.send_task(CLASS_SYNC_TASK, args=[child.id], queue='sync')
-                queued += 1
-            except Exception as exc:
-                child.status = 'failed'
-                child.progress_label = 'Không đưa được job lấy điểm vào hàng đợi'
-                child.error_message = str(exc)[:4000]
-                child.result_json = json_safe_value({'ok': False, 'message': child.progress_label})
-                child.finished_at = _now()
-                child.updated_at = _now()
-                db.add(child)
-                db.commit()
-                failed_to_enqueue += 1
-
-        parent = db.get(AcademicBulkOperationJob, parent.id)
-        parent.result_json = json_safe_value({
-            **(parent.result_json or {}),
-            'ok': True,
-            'child_job_ids': child_ids,
-            'class_total': len(class_ids),
-            'queued': queued,
-            'reused': reused,
-            'failed_to_enqueue': failed_to_enqueue,
-            'skipped_unmapped_count': int(request.get('skipped_unmapped_count') or 0),
-            'operation': 'latest_learning_scores_only',
-        })
-        parent.progress_current = 10
-        parent.progress_label = f'Đã xếp hàng {len(child_ids)}/{len(class_ids)} lớp; đang chờ điểm'
-        parent.updated_at = _now()
-        db.add(parent)
-        db.commit()
-
-        if not child_ids:
-            parent.status = 'completed'
-            parent.progress_current = 100
-            parent.progress_label = 'Không có lớp cần lấy điểm'
-            parent.finished_at = _now()
-            parent.updated_at = _now()
-            db.add(parent)
-            db.commit()
-            return parent.result_json or {'ok': True, 'class_total': 0}
-
-        celery_app.send_task(
-            LATEST_SCORE_WATCHDOG_TASK,
-            args=[parent.id],
-            queue='sync',
-            countdown=10,
-        )
-        return parent.result_json or {'ok': True, 'class_total': len(class_ids)}
+        return parent.result_json or state
     finally:
         db.close()
 
@@ -267,77 +348,16 @@ def _watch_latest_score_children(celery_app, parent_job_id: str) -> dict[str, An
             return {'ok': False, 'error': 'job_not_found'}
         if parent.status not in {'queued', 'running'}:
             return parent.result_json or {'ok': parent.status == 'completed', 'status': parent.status}
-
-        result = dict(parent.result_json or {}) if isinstance(parent.result_json, dict) else {}
-        child_ids = [str(item) for item in (result.get('child_job_ids') or []) if str(item or '').strip()]
-        rows = (
-            db.query(AcademicClassSyncJob)
-            .filter(AcademicClassSyncJob.id.in_(child_ids))
-            .all()
-            if child_ids
-            else []
-        )
-        by_id = {str(item.id): item for item in rows}
-        completed = failed = active = missing = 0
-        for child_id in child_ids:
-            child = by_id.get(child_id)
-            if child is None:
-                missing += 1
-            elif child.status == 'completed':
-                completed += 1
-            elif child.status == 'failed':
-                failed += 1
-            else:
-                active += 1
-
-        terminal = completed + failed + missing
-        total = max(1, len(child_ids))
-        parent.progress_current = min(99, 10 + int((terminal / total) * 89))
-        parent.progress_label = (
-            f'Đang lấy điểm: {terminal}/{len(child_ids)} lớp hoàn tất'
-            if active
-            else f'Đã xử lý {terminal}/{len(child_ids)} lớp'
-        )
-        parent.updated_at = _now()
-        result.update({
-            'completed': completed,
-            'failed': failed,
-            'missing': missing,
-            'active': active,
-        })
-        parent.result_json = json_safe_value(result)
-
-        if active:
-            db.add(parent)
-            db.commit()
+        state, plan = _dispatch_latest_score_window(celery_app, db, parent)
+        _persist_latest_score_progress(db, parent, state, plan)
+        if not plan.finished:
             celery_app.send_task(
                 LATEST_SCORE_WATCHDOG_TASK,
                 args=[parent.id],
                 queue='sync',
                 countdown=15,
             )
-            return parent.result_json or result
-
-        parent.progress_current = 100
-        parent.progress_total = 100
-        parent.finished_at = _now()
-        if completed > 0 or not child_ids:
-            parent.status = 'completed'
-            parent.progress_label = (
-                f'Đã lấy điểm mới nhất cho {completed}/{len(child_ids)} lớp'
-                + (f' · {failed + missing} lỗi' if failed or missing else '')
-            )
-            result['ok'] = True
-        else:
-            parent.status = 'failed'
-            parent.progress_label = 'Không lớp nào lấy điểm thành công'
-            parent.error_message = f'{failed} job lỗi; {missing} job không còn tồn tại'[:4000]
-            result['ok'] = False
-        parent.result_json = json_safe_value(result)
-        parent.updated_at = _now()
-        db.add(parent)
-        db.commit()
-        return parent.result_json or result
+        return parent.result_json or state
     finally:
         db.close()
 
