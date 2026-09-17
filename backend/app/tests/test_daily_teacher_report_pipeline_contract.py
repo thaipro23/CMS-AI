@@ -86,6 +86,7 @@ def test_cms_teacher_management_keeps_operations_visible_and_has_one_excel_flow(
     assert '/academic/training/teacher-reports/latest/download' in api
     assert 'downloadLatestTeacherReportArtifact' in management
     assert 'getLatestTeacherReportArtifact' in management
+    assert 'artifactDownloading ? "Đang tải Excel..." : "Tải Excel"' in management
     assert 'Đồng bộ full CMS' in management
     assert 'Cập nhật điểm' in management
     assert 'syncLearning: false' in management

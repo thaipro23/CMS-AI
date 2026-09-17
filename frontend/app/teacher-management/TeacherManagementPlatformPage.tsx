@@ -709,7 +709,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
         icon="teachers"
         tone="blue"
         breadcrumbs={[{ label: 'Vận hành đào tạo' }, { label: `Quản lý giảng viên ${platformLabel}` }]}
-        primaryAction={<button className="btn" type="button" onClick={isCms ? downloadScheduledExcel : exportExcelBackground} disabled={!termId || artifactDownloading || (!isCms && (exportJob?.status === "queued" || exportJob?.status === "running"))}>{isCms ? (artifactDownloading ? "Đang tải Excel..." : "Xuất Excel") : (exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel")}</button>}
+        primaryAction={<button className="btn" type="button" onClick={isCms ? downloadScheduledExcel : exportExcelBackground} disabled={!termId || artifactDownloading || (!isCms && (exportJob?.status === "queued" || exportJob?.status === "running"))}>{isCms ? (artifactDownloading ? "Đang tải Excel..." : "Tải Excel") : (exportJob && ["queued", "running"].includes(exportJob.status) ? `Đang xuất ${jobPercent(exportJob)}%` : "Xuất Excel")}</button>}
         secondaryActions={<>
           {isCms ? <button className="btn secondary" type="button" onClick={runFullCmsSync} disabled={!termId || fullCmsSyncing}>
             {fullCmsSyncing ? "Đang tạo job..." : "Đồng bộ full CMS"}
