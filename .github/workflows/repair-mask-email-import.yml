@@ -1,0 +1,72 @@
+name: Repair learning analytics mask_email import
+
+on:
+  push:
+    branches: [fix/split-course-score-03-scheduler]
+    paths:
+      - '.github/workflows/repair-mask-email-import.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/split-course-score-03-scheduler
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ruff
+        run: python -m pip install 'ruff==0.9.10'
+
+      - name: RED - reproduce missing mask_email binding
+        shell: bash
+        run: |
+          set +e
+          cd backend
+          OUTPUT=$(ruff check app/services/learning_analytics/analytics_core_service.py --select F821 2>&1)
+          RC=$?
+          set -e
+          printf '%s\n' "$OUTPUT"
+          test "$RC" -ne 0
+          printf '%s\n' "$OUTPUT" | grep -E 'F821 Undefined name .*mask_email'
+
+      - name: Apply minimal import fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/app/services/learning_analytics/analytics_core_service.py')
+          text = path.read_text(encoding='utf-8')
+          marker = 'from app.core.json_safe import json_safe_value\n'
+          import_line = 'from app.core.privacy import mask_email\n'
+          if import_line not in text:
+              if marker not in text:
+                  raise SystemExit('Expected import anchor not found')
+              text = text.replace(marker, marker + import_line, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: GREEN - Ruff and compile verification
+        shell: bash
+        run: |
+          cd backend
+          ruff check app/services/learning_analytics/analytics_core_service.py --select E9,F63,F7,F82
+          python -m compileall -q app/services/learning_analytics/analytics_core_service.py
+
+      - name: Commit verified repair and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/repair-mask-email-import.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/app/services/learning_analytics/analytics_core_service.py .github/workflows/repair-mask-email-import.yml
+          git commit -m 'fix: import mask_email in learning analytics'
+          git push origin HEAD:fix/split-course-score-03-scheduler
