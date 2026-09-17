@@ -4,11 +4,13 @@ from celery.schedules import crontab
 
 from app.worker import celery_app
 from app.services.academic.daily_teacher_report_runtime import register_daily_teacher_report_tasks
+from app.services.academic.student_management_runtime import register_student_management_runtime_tasks
 
 
 # Register production-safe replacements under the legacy public task names so
 # existing API enqueue code does not need to know about the runtime split.
 register_daily_teacher_report_tasks(celery_app)
+register_student_management_runtime_tasks(celery_app)
 
 # Make routing explicit for the new coordinator/watchdog tasks.
 _routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})

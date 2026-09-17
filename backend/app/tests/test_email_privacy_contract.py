@@ -5,12 +5,17 @@ from app.core.privacy import mask_email
 from app.schemas.academic import AcademicStudentOut, UdemyProgressStudentOut
 from app.schemas.rbac import RoleAssignmentOut
 from app.services.academic.progress_email import AcademicProgressEmailService, plain_text_mail_template
+from app.services.learning_analytics import analytics_core_service
 
 
 def test_mask_email_is_deterministic_and_idempotent():
     assert mask_email('student01@fpt.edu.vn') == 's***1@fpt.edu.vn'
     assert mask_email('s***1@fpt.edu.vn') == 's***1@fpt.edu.vn'
     assert mask_email(None) is None
+
+
+def test_learning_analytics_module_binds_mask_email_helper():
+    assert analytics_core_service.mask_email('student01@fpt.edu.vn') == 's***1@fpt.edu.vn'
 
 
 def test_academic_api_schemas_mask_student_email():

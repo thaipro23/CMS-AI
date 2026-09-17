@@ -12,6 +12,7 @@ import {
   getAcademicTeacherSubjects,
   getAcademicTerms,
 } from "../../lib/api";
+import { refreshLatestAcademicScores } from "../../lib/academicBulk";
 import {
   AcademicBulkOperationJob,
   AcademicCampus,
@@ -168,6 +169,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   const [message, setMessage] = useState<InlineNoticeData | null>(null);
   const [mappingSubjectId, setMappingSubjectId] = useState("");
   const [bulkMapping, setBulkMapping] = useState(false);
+  const [bulkScoreRefreshing, setBulkScoreRefreshing] = useState(false);
   const [bulkJobs, setBulkJobs] = useState<AcademicBulkOperationJob[]>([]);
   const [currentBulkJobId, setCurrentBulkJobId] = useState("");
   const [bulkUdemyImportOpen, setBulkUdemyImportOpen] = useState(false);
@@ -272,7 +274,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
           const sameCampus =
             !campus || job.campus === campus || request.campus === campus;
           return (
-            job.job_type === "subject_auto_map_all_sync" &&
+            ["subject_auto_map_all_sync", "learning_refresh_filter"].includes(job.job_type) &&
             sameTerm &&
             sameBranch &&
             sameCampus
@@ -298,7 +300,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
     return () => window.clearInterval(timer);
   }, [headers, scopeReady, termId, branch, campus, isCms]);
 
-  const runAutoMapAllAndSync = async () => {
+  const runAutoMapAll = async () => {
     if (!isCms) return;
     if (!termId) {
       setMessage(
@@ -308,12 +310,12 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
     }
     const accepted = await confirmAction({
       title: "Tự động ghép Course CMS?",
-      description: "Hệ thống sẽ ghép các môn trong bộ lọc hiện tại, sau đó đưa lớp phù hợp vào hàng đợi đồng bộ tài khoản CMS, ghi danh và dữ liệu học tập.",
+      description: "Hệ thống sẽ ghép các môn trong bộ lọc hiện tại và xử lý tài khoản/ghi danh CMS cần thiết. Tác vụ này không lấy điểm; điểm mới nhất được tách sang nút riêng.",
       confirmLabel: "Tạo tác vụ nền",
     });
     if (!accepted) return;
     setBulkMapping(true);
-    setMessage(noticeInfo("Đang tạo tác vụ nền."));
+    setMessage(noticeInfo("Đang tạo tác vụ tự động ghép Course."));
     try {
       const result = await autoMapAllAcademicSubjectCoursesAndSync(
         jsonHeaders,
@@ -325,13 +327,13 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
           learningStatus,
           force: true,
           limit: 500,
-          syncLearning: true,
+          syncLearning: false,
           maxClasses: 3000,
         },
       );
       setCurrentBulkJobId(result.job_id || "");
       setMessage({
-        ...noticeSuccess(result.message || "Đã tạo tác vụ nền."),
+        ...noticeSuccess(result.message || "Đã tạo tác vụ tự động ghép Course."),
         actionHref: "/jobs",
         actionLabel: "Xem tác vụ nền",
       });
@@ -342,6 +344,45 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
       );
     } finally {
       setBulkMapping(false);
+    }
+  };
+
+  const runLatestScoreRefresh = async () => {
+    if (!isCms) return;
+    if (!termId) {
+      setMessage(noticeWarning("Chọn học kỳ trước khi lấy điểm mới nhất."));
+      return;
+    }
+    const accepted = await confirmAction({
+      title: "Lấy điểm mới nhất?",
+      description: "Hệ thống chỉ cập nhật điểm/tiến độ CMS cho các lớp đã ghép Course trong bộ lọc hiện tại. Không đồng bộ AP và không tự động ghép lại Course.",
+      confirmLabel: "Tạo tác vụ nền",
+    });
+    if (!accepted) return;
+    setBulkScoreRefreshing(true);
+    setMessage(noticeInfo("Đang tạo tác vụ lấy điểm mới nhất."));
+    try {
+      const result = await refreshLatestAcademicScores(jsonHeaders, {
+        termId,
+        branch,
+        campus,
+        search: debouncedSearch,
+        learningStatus,
+        force: true,
+        limit: 500,
+        maxClasses: 3000,
+      });
+      setCurrentBulkJobId(result.job_id || "");
+      setMessage({
+        ...noticeSuccess(result.message || "Đã tạo tác vụ lấy điểm mới nhất."),
+        actionHref: "/jobs",
+        actionLabel: "Xem tác vụ nền",
+      });
+      await loadBulkJobs();
+    } catch (error) {
+      setMessage(noticeError(error, "Không tạo được tác vụ lấy điểm mới nhất."));
+    } finally {
+      setBulkScoreRefreshing(false);
     }
   };
 
@@ -529,7 +570,10 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
       <WorkspaceSection
         title={`Danh sách môn ${platformLabel}`}
         description={isCms ? `${countLabel(summary.course_missing_count)} môn chưa ghép Course CMS trong phạm vi hiện tại.` : `${countLabel(summary.udemy_progress_late_count)} sinh viên đang chậm tiến độ Udemy trong phạm vi hiện tại.`}
-        actions={isCms ? <button className="btn" type="button" disabled={!scopeReady || !termId || bulkMapping} onClick={runAutoMapAllAndSync}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course CMS"}</button> : canImportUdemy ? <button className="btn" type="button" disabled={!scopeReady || !termId} onClick={() => setBulkUdemyImportOpen(true)}>Import hàng loạt Udemy</button> : undefined}
+        actions={isCms ? <div className="row-actions">
+          <button className="btn" type="button" disabled={!scopeReady || !termId || bulkMapping || bulkScoreRefreshing} onClick={runAutoMapAll}>{bulkMapping ? "Đang tạo job..." : "Tự động ghép Course"}</button>
+          <button className="btn secondary" type="button" disabled={!scopeReady || !termId || bulkMapping || bulkScoreRefreshing} onClick={runLatestScoreRefresh}>{bulkScoreRefreshing ? "Đang tạo job..." : "Lấy điểm mới nhất"}</button>
+        </div> : canImportUdemy ? <button className="btn" type="button" disabled={!scopeReady || !termId} onClick={() => setBulkUdemyImportOpen(true)}>Import hàng loạt Udemy</button> : undefined}
         icon="book"
         tone={isCms ? (summary.course_missing_count > 0 ? "amber" : "green") : ((summary.udemy_progress_late_count || 0) > 0 ? "amber" : "green")}
       >
