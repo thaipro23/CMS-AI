@@ -829,7 +829,7 @@ function ClassDetailContent() {
     setMessage('')
     try {
       if (await followExistingJobIfAny()) return
-      const queued = await enqueueAcademicClassFullCmsSyncJob(jsonHeaders, classId, { force: true, limit: 500, autoMapCourse: true, syncLearning: false })
+      const queued = await enqueueAcademicClassFullCmsSyncJob(jsonHeaders, classId, { force: false, limit: 500, autoMapCourse: true, syncLearning: false })
       if (queued.job_type !== 'full_cms_sync') {
         setMessage(`${jobTypeLabel(queued.job_type)} đang chạy.`)
         await waitForSyncJob(queued)

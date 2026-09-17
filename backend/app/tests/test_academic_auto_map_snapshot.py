@@ -24,6 +24,7 @@ def test_auto_map_enqueue_ignores_student_learning_status_and_audits_enqueue_suc
     )
 
     assert "'learning_status': None" in source
+    assert "'force': False" in source
     assert "'sync_learning': False" in source
     assert 'learning_status=None' in source
     assert "candidate_request.get('learning_status')" not in source
@@ -31,6 +32,7 @@ def test_auto_map_enqueue_ignores_student_learning_status_and_audits_enqueue_suc
     assert "'job_status': job.status" in source
 
     worker_source = inspect.getsource(worker.academic_subject_auto_map_all_sync_task.run)
+    assert 'force=False' in worker_source
     assert 'sync_learning=False' in worker_source
 
 

@@ -2608,7 +2608,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                     db,
                     requested_by=job.requested_by,
                     class_id=class_id,
-                    force=bool(request_json.get('force', True)),
+                    force=False,
                     limit=int(request_json.get('limit') or 500),
                     mode=request_json.get('mode'),
                     auto_map_course=True,

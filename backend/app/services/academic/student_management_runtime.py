@@ -574,7 +574,7 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             'campus': None,
             'search': None,
             'learning_status': None,
-            'force': True,
+            'force': False,
             'limit': 500,
             'mode': None,
             'sync_learning': False,

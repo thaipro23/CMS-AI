@@ -178,5 +178,6 @@ def test_full_cms_endpoint_never_combines_learning_score_refresh(monkeypatch):
     )
 
     assert captured['job_type'] == 'full_cms_sync'
+    assert captured['force'] is False
     assert captured['auto_map_course'] is True
     assert captured['sync_learning'] is False

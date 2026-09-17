@@ -2679,7 +2679,9 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         # Course mapping is a class/subject operation. Student learning state
         # must never shrink or reshape its authorization snapshot.
         'learning_status': None,
-        'force': bool(payload.force),
+        # Full CMS is incremental: existing exact user mappings and confirmed
+        # enrollments are skipped while new/changed AP roster rows are handled.
+        'force': False,
         'limit': max(1, min(500, int(payload.limit or 500))),
         'mode': payload.mode,
         'sync_learning': False,
@@ -2709,7 +2711,7 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         candidate_request = candidate.request_json if isinstance(candidate.request_json, dict) else {}
         if (
             (candidate_request.get('search') or None) == (payload.search or None)
-            and bool(candidate_request.get('force', True)) == bool(payload.force)
+            and candidate_request.get('force') is False
             and candidate_request.get('sync_learning') is False
         ):
             active = candidate
@@ -3406,7 +3408,7 @@ def enqueue_class_full_cms_sync(
         user=user,
         class_id=class_id,
         job_type='full_cms_sync',
-        force=payload.force,
+        force=False,
         limit=payload.limit,
         mode=payload.mode,
         auto_map_course=payload.auto_map_course,
@@ -3484,7 +3486,7 @@ def sync_class_full_cms_flow(
         result = service.sync_class_full_cms_flow(
             user,
             class_id,
-            force=payload.force,
+            force=False,
             limit=payload.limit,
             mode=payload.mode,
             auto_map_course=payload.auto_map_course,

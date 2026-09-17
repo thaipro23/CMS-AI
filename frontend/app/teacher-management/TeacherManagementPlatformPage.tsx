@@ -544,7 +544,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
         branch,
         campus,
         search: debouncedSearch,
-        force: true,
+        force: false,
         limit: 500,
         syncLearning: false,
         maxClasses: 3000,

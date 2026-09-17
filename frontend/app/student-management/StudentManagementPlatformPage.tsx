@@ -324,7 +324,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
           branch,
           campus,
           search: debouncedSearch,
-          force: true,
+          force: false,
           limit: 500,
           syncLearning: false,
           maxClasses: 3000,
