@@ -135,23 +135,14 @@ test.describe('production UI smoke', () => {
     expect(runtimePageErrors.get(page) || [], 'browser runtime errors').toEqual([])
   })
 
-  test('desktop shell, dashboard and accessible modal work @desktop', async ({ page }) => {
+  test('desktop shell and current Bank cost dashboard work @desktop', async ({ page }) => {
     await page.goto('/bank')
-    await expect(page.getByRole('heading', { level: 1, name: 'Tổng quan' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Chi phí & Token ngân hàng đề' })).toBeVisible()
     await expect(page.getByRole('navigation', { name: 'Chức năng hệ thống' })).toBeVisible()
-    await expect(page.getByText('Tổng câu hỏi')).toBeVisible()
+    await expect(page.getByText('Chi phí thực tế', { exact: true })).toBeVisible()
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
     expect(overflow).toBeLessThanOrEqual(1)
-
-    const alertButton = page.getByRole('button', { name: /Cảnh báo \(1\)/ })
-    await alertButton.focus()
-    await alertButton.click()
-    const dialog = page.getByRole('dialog', { name: 'Cảnh báo cần xử lý' })
-    await expect(dialog).toBeVisible()
-    await page.keyboard.press('Escape')
-    await expect(dialog).toBeHidden()
-    await expect(alertButton).toBeFocused()
   })
 
   test('department list applies the batch-one shell and table contract @desktop', async ({ page }) => {
@@ -159,7 +150,7 @@ test.describe('production UI smoke', () => {
     await page.goto('/bank/departments')
 
     await expect(page.getByRole('heading', { level: 1, name: 'Bộ môn' })).toBeVisible()
-    await expect(page.getByRole('heading', { level: 2, name: 'Danh sách bộ môn' })).toBeVisible()
+    await expect(page.getByRole('table', { name: 'Danh sách bộ môn' })).toBeVisible()
     await expect(page.getByRole('link', { name: /Công nghệ thông tin/ })).toBeVisible()
     await expect(page.getByText('Kinh tế', { exact: true })).toBeVisible()
 
