@@ -20,11 +20,15 @@ def test_mail_send_proxy_creates_multipart_session_and_polls_to_completed():
             assert request.headers['X-API-Key'] == 'proxy-secret'
             assert request.headers['Content-Type'].startswith('multipart/form-data; boundary=')
             content = request.read()
-            assert b'name="subject"' in content
-            assert b'name="bodyTemplate"' in content
-            assert content.count(b'name="sourceTo.inlineEmails"') == 2
-            assert b'sv001@example.edu.vn' in content
-            assert b'sv002@example.edu.vn' in content
+            assert b'name="payload"' in content
+            assert b'Content-Type: application/json' in content
+            assert b'name="subject"' not in content
+            assert b'name="bodyTemplate"' not in content
+            assert b'name="sourceTo.inlineEmails"' not in content
+            assert b'"deliveryMode": "perRecipient"' in content
+            assert b'"isAnonymous": false' in content
+            assert b'"isHtml": true' in content
+            assert b'"inlineEmails": ["sv001@example.edu.vn", "sv002@example.edu.vn"]' in content
             return httpx.Response(202, json={'sessionId': 'session-123', 'status': 'QUEUED'})
 
         status_calls += 1
