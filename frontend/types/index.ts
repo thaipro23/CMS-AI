@@ -186,6 +186,16 @@ export type Job = {
   openai_response_ids?: string | null
   model_parse_error?: string | null
   error_message?: string | null
+  created_at?: string | null
+  batch_summary?: {
+    total?: number
+    queued?: number
+    running?: number
+    completed?: number
+    partial?: number
+    failed?: number
+    tail?: number
+  } | null
 }
 
 
