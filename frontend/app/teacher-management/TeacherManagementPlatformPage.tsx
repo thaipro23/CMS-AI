@@ -276,7 +276,7 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 export function TeacherManagementPlatformPage({ platform }: { platform: TrainingPlatform }) {
-  const { authHeaders } = useAppContext();
+  const { authHeaders, academicBranches } = useAppContext();
   const { confirmAction } = useFeedback();
   const isCms = platform === "cms";
   const platformLabel = isCms ? "CMS" : "Udemy";
@@ -289,6 +289,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   const { state, update } = useAcademicTableState({ branch: "poly", status: "all", pageSize: 50 });
   const { termId, branch, campus, q: search, status: learningStatus, page, pageSize, density } = state;
   const debouncedSearch = useDebouncedValue(search, 350);
+  const branchAllowed = academicBranches.includes(branch as 'poly' | 'ptcd');
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [artifactDownloading, setArtifactDownloading] = useState(false);
@@ -303,6 +304,15 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   const [message, setMessage] = useState<InlineNoticeData | null>(null);
 
   useEffect(() => {
+    if (branchAllowed || !academicBranches.length) return;
+    update({ branch: academicBranches[0], campus: "", termId: "" });
+  }, [academicBranches, branchAllowed, update]);
+
+  useEffect(() => {
+    if (!branchAllowed) {
+      setTerms([]);
+      return;
+    }
     let cancelled = false;
     getAcademicTerms(headers, { branch, active: true })
       .then((data) => {
@@ -322,6 +332,10 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   }, [headers, branch, termId]);
 
   useEffect(() => {
+    if (!branchAllowed) {
+      setCampuses([]);
+      return;
+    }
     let cancelled = false;
     getAcademicCampuses(headers, { branch, active: true })
       .then((data) => {
@@ -342,7 +356,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   };
 
   const loadReport = async (cancelledRef?: { cancelled: boolean }, fresh = false) => {
-    if (!termId) {
+    if (!branchAllowed || !termId) {
       resetReportState();
       setLoading(false);
       return;
@@ -732,8 +746,8 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
                 update({ branch: event.target.value, campus: "" });
               }}
             >
-              <option value="poly">Poly</option>
-              <option value="ptcd">PTCĐ</option>
+              {academicBranches.includes('poly') && <option value="poly">Poly</option>}
+              {academicBranches.includes('ptcd') && <option value="ptcd">PTCĐ</option>}
             </select>
           </label>
           <label>
