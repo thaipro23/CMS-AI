@@ -389,6 +389,11 @@ class Settings(BaseSettings):
     academic_teacher_report_file_retention_hours: int = 48
     academic_bulk_sync_dispatch_window: int = 10
     academic_bulk_sync_continue_delay_seconds: int = 10
+    # Per-class CMS sync retries only transient connector/network failures.
+    # Three retries means one initial attempt plus up to three automatic retries.
+    academic_class_sync_retry_max_attempts: int = 3
+    academic_class_sync_retry_base_seconds: int = 15
+    academic_class_sync_retry_max_seconds: int = 120
     academic_job_queued_stale_seconds: int = 900
     academic_class_sync_stale_seconds: int = 2400
     academic_bulk_sync_stale_seconds: int = 600
@@ -626,6 +631,12 @@ def validate_security_settings() -> None:
         errors.append('ACADEMIC_BULK_SYNC_DISPATCH_WINDOW must be between 1 and 20')
     if settings.academic_bulk_sync_continue_delay_seconds < 1 or settings.academic_bulk_sync_continue_delay_seconds > 300:
         errors.append('ACADEMIC_BULK_SYNC_CONTINUE_DELAY_SECONDS must be between 1 and 300')
+    if settings.academic_class_sync_retry_max_attempts < 0 or settings.academic_class_sync_retry_max_attempts > 8:
+        errors.append('ACADEMIC_CLASS_SYNC_RETRY_MAX_ATTEMPTS must be between 0 and 8')
+    if settings.academic_class_sync_retry_base_seconds < 1 or settings.academic_class_sync_retry_base_seconds > 300:
+        errors.append('ACADEMIC_CLASS_SYNC_RETRY_BASE_SECONDS must be between 1 and 300')
+    if settings.academic_class_sync_retry_max_seconds < settings.academic_class_sync_retry_base_seconds:
+        errors.append('ACADEMIC_CLASS_SYNC_RETRY_MAX_SECONDS must be >= ACADEMIC_CLASS_SYNC_RETRY_BASE_SECONDS')
     if settings.academic_job_queued_stale_seconds < 60:
         errors.append('ACADEMIC_JOB_QUEUED_STALE_SECONDS must be at least 60')
     if settings.academic_class_sync_stale_seconds <= settings.celery_default_time_limit_seconds:
