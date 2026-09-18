@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from app.db.session import Base
 from app.api.routes import academic  # noqa: F401
 from app.models import cost, job, question  # noqa: F401
-from app.models.academic import AcademicCampus, AcademicTerm
+from app.models.academic import AcademicCampus, AcademicSubject, AcademicSyncRun, AcademicTerm
 from app.models.rbac import UserRoleAssignment
+from app.schemas.academic import AcademicAPSyncIn, AcademicCampusUpsertIn, AcademicImportFromJsonIn
 from app.schemas.rbac import RoleAssignmentCreate
 from app.services.business_rbac import BusinessRBACService
 
@@ -107,3 +108,120 @@ def test_unique_campus_scope_resolves_its_branch_and_ambiguous_scope_does_not(sc
     scope_db.commit()
     assert service.accessible_branch_codes(user) == set()
     assert service.accessible_campus_codes(user) == set()
+
+
+
+def test_branch_owner_academic_routes_fail_closed_across_poly_ptcd(scope_db):
+    user, _service = grant(scope_db)
+    scope_db.add_all([
+        AcademicSubject(id='poly-subject', subject_code='POLY101', subject_name='Poly subject', branch='poly'),
+        AcademicSubject(id='ptcd-subject', subject_code='PTCD101', subject_name='PTCD subject', branch='ptcd'),
+        AcademicSyncRun(id='poly-run', source='ap', mode='api_all', status='completed', requested_by='owner', term_name='Poly', branch='poly'),
+        AcademicSyncRun(id='ptcd-run', source='ap', mode='api_all', status='completed', requested_by='other', term_name='PTCD', branch='ptcd'),
+    ])
+    scope_db.commit()
+
+    # Omitted branch filters must still return only the actor's branch.
+    subjects = academic.list_subjects(
+        term_id=None,
+        block_id=None,
+        search=None,
+        branch=None,
+        user=user,
+        db=scope_db,
+    )
+    assert [item.subject_code for item in subjects] == ['POLY101']
+
+    jobs = academic.list_ap_sync_jobs(
+        term_name='',
+        branch='',
+        status_filter='all',
+        limit=10,
+        user=user,
+        db=scope_db,
+    )
+    assert [item.id for item in jobs] == ['poly-run']
+
+    # Explicit cross-branch reads and writes are rejected before any catalog/AP work.
+    forbidden_calls = [
+        lambda: academic.list_subjects(
+            term_id=None,
+            block_id=None,
+            search=None,
+            branch='ptcd',
+            user=user,
+            db=scope_db,
+        ),
+        lambda: academic.get_term_with_blocks(
+            term_id='ptcd-term',
+            active_blocks=None,
+            user=user,
+            db=scope_db,
+        ),
+        lambda: academic.get_ap_sync_options(
+            term_name='',
+            branch='ptcd',
+            campus=None,
+            include_subjects=False,
+            user=user,
+            db=scope_db,
+        ),
+        lambda: academic.get_ap_sync_job(
+            run_id='ptcd-run',
+            user=user,
+            db=scope_db,
+        ),
+        lambda: academic.upsert_academic_campus(
+            payload=AcademicCampusUpsertIn(campus_code='new-ptcd', campus_name='PTCD', branch='ptcd'),
+            user=user,
+            db=scope_db,
+        ),
+        lambda: academic.enqueue_sync_from_ap_job(
+            payload=AcademicAPSyncIn(term_name='PTCD', sync_scope='campus', campuses=['dn'], branch='ptcd'),
+            user=user,
+            db=scope_db,
+        ),
+        lambda: academic.sync_from_json(
+            payload=AcademicImportFromJsonIn(payload={}, campus='dn', branch='ptcd'),
+            user=user,
+            db=scope_db,
+        ),
+    ]
+    for call in forbidden_calls:
+        with pytest.raises(HTTPException) as caught:
+            call()
+        assert caught.value.status_code == 403
+
+    ptcd_campus = scope_db.query(AcademicCampus).filter(
+        AcademicCampus.campus_code == 'dn',
+        AcademicCampus.branch == 'ptcd',
+    ).one()
+    with pytest.raises(HTTPException) as caught:
+        academic.delete_academic_campus(campus_id=ptcd_campus.id, user=user, db=scope_db)
+    assert caught.value.status_code == 403
+
+
+def test_branch_admin_frontend_uses_rbac_branch_choices():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    context = (root / 'frontend/context/AppContext.tsx').read_text(encoding='utf-8')
+    assert "academicBranches: Array<'poly' | 'ptcd'>" in context
+    assert "scope_type || '').toUpperCase() === 'BRANCH'" in context
+
+    scoped_pages = [
+        'frontend/app/student-management/StudentManagementPlatformPage.tsx',
+        'frontend/app/teacher-management/TeacherManagementPlatformPage.tsx',
+        'frontend/app/subject-management/page.tsx',
+        'frontend/app/analytics/learning/page.tsx',
+        'frontend/app/premises/page.tsx',
+        'frontend/app/semesters/page.tsx',
+        'frontend/app/ap-sync/page.tsx',
+    ]
+    for relative in scoped_pages:
+        source = (root / relative).read_text(encoding='utf-8')
+        assert 'academicBranches' in source, relative
+
+    ap_sync = (root / 'frontend/app/ap-sync/page.tsx').read_text(encoding='utf-8')
+    assert 'availableBranches.map' in ap_sync
+    assert "requestRunForBranches(['poly', 'ptcd'])" not in ap_sync
