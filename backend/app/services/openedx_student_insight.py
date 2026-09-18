@@ -92,6 +92,10 @@ class OpenEdXConnectorClient:
             or getattr(settings, 'openedx_student_insight_timeout_seconds', 30)
             or 30
         )
+        # Public Open edX traffic currently traverses HAProxy with a 60-second
+        # server/client timeout. Keep long connector calls below that edge
+        # budget so AI Server owns timeout/retry instead of the gateway.
+        self.long_timeout_seconds = max(self.timeout_seconds, 50)
         self.client_id = (
             getattr(settings, 'openedx_connector_client_id', None)
             or getattr(settings, 'openedx_student_insight_client_id', None)
@@ -405,7 +409,7 @@ class OpenEdXConnectorClient:
             path=self.enrollment_remove_endpoint,
             body={'course_id': course_id, 'students': students or [], 'teachers': teachers or []},
             operation='dọn enrollment/quyền Course cũ',
-            timeout=max(self.timeout_seconds, 60),
+            timeout=self.long_timeout_seconds,
             legacy_fallback=False,
         )
         if isinstance(data, dict):
@@ -445,7 +449,7 @@ class OpenEdXConnectorClient:
             path=self.class_analytics_endpoint,
             body=body,
             operation='lấy tiến độ/điểm CMS',
-            timeout=max(self.timeout_seconds, 60),
+            timeout=self.long_timeout_seconds,
         )
         if isinstance(data, dict):
             rows = data.get('results') or data.get('items') or data.get('students') or []
@@ -492,7 +496,7 @@ class OpenEdXConnectorClient:
             path=self.enrollment_enroll_endpoint,
             body=body,
             operation='enroll Course CMS',
-            timeout=max(self.timeout_seconds, 60),
+            timeout=self.long_timeout_seconds,
         )
         if isinstance(data, dict):
             rows = data.get('results') or data.get('items') or data.get('students') or []
