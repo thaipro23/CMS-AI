@@ -34,6 +34,12 @@ spec:
             - secretRef:
                 name: ai-server-env
           env:
+            # Explicit values override any stale values inherited from ai-server-env.
+            # Production currently uses one large sync worker pod.
+            - name: CELERY_CONCURRENCY
+              value: "10"
+            - name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW
+              value: "10"
             - name: LOCAL_STORAGE_PATH
               value: /app/.runtime
             - name: HOME
