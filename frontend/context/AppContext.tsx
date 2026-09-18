@@ -18,6 +18,7 @@ type AppContextValue = {
   businessPermissions: string[]
   isSystemAdmin: boolean
   assignments: EffectiveAssignment[]
+  academicBranches: Array<'poly' | 'ptcd'>
   applyAuthSession: (session: { access_token?: string; user_id: string; role: Role; email?: string | null; course_ids?: string[] }) => void
   refreshAuthSession: (sessionToken?: string) => Promise<boolean>
   clearAuthSession: () => void
@@ -323,6 +324,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const academicBranches = useMemo<Array<'poly' | 'ptcd'>>(() => {
+    if (isSystemAdmin) return ['poly', 'ptcd']
+    const directBranches = Array.from(new Set(
+      assignments
+        .filter((assignment) => String(assignment.scope_type || '').toUpperCase() === 'BRANCH')
+        .map((assignment) => normalized(assignment.scope_id))
+        .filter((value): value is 'poly' | 'ptcd' => value === 'poly' || value === 'ptcd'),
+    ))
+    // Direct BRANCH assignments are authoritative for Admin Poly/PTCĐ.
+    // Other scoped roles (for example one CAMPUS) keep the legacy selector;
+    // backend campus/class scope still enforces their narrower boundary.
+    return directBranches.length ? directBranches : ['poly', 'ptcd']
+  }, [assignments, isSystemAdmin])
+
   const clearAuthSession = () => {
     authRequestSequenceRef.current += 1
     accessTokenRef.current = ''
@@ -356,6 +371,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       businessPermissions,
       isSystemAdmin,
       assignments,
+      academicBranches,
       applyAuthSession,
       refreshAuthSession,
       clearAuthSession,
@@ -388,7 +404,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return headers
       },
     }
-  }, [authReady, courseId, role, userId, accessToken, businessPermissions, cookieAuthenticated, isSystemAdmin, assignments, refreshAuthSession])
+  }, [authReady, courseId, role, userId, accessToken, businessPermissions, cookieAuthenticated, isSystemAdmin, assignments, academicBranches, refreshAuthSession])
 
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
