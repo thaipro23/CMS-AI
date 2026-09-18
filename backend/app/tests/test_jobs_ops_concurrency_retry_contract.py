@@ -16,6 +16,9 @@ def test_single_large_sync_worker_runs_ten_slots():
     deploy = WORKER_DEPLOY.read_text(encoding='utf-8')
     assert 'replicas: 1' in deploy
     assert '--concurrency=${CELERY_CONCURRENCY:-10}' in deploy
+    assert '- name: CELERY_CONCURRENCY' in deploy
+    assert 'value: "10"' in deploy
+    assert '- name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW' in deploy
     assert '--prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}' in deploy
 
 
