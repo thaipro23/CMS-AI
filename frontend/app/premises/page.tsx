@@ -21,7 +21,7 @@ function codeLabel(code?: string | null) { return (code || '').toUpperCase() }
 function branchLabel(branch?: string | null) { return (branch || '').toLowerCase() === 'ptcd' ? 'PTCĐ' : 'Poly' }
 
 export default function PremisesPage() {
-  const { authHeaders, can } = useAppContext()
+  const { authHeaders, can, academicBranches } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const [items, setItems] = useState<AcademicCampus[]>([])
@@ -30,6 +30,7 @@ export default function PremisesPage() {
   const [message, setMessage] = useState<InlineNoticeData | null>(null)
   const notify = (body: string, type: InlineNoticeData['type'] = 'error') => setMessage({ type, body })
   const [branch, setBranch] = useState('poly')
+  const branchAllowed = academicBranches.includes(branch as 'poly' | 'ptcd')
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('active')
   const [search, setSearch] = useState('')
   const [form, setForm] = useState<CampusForm>({ ...EMPTY_FORM })
@@ -38,7 +39,17 @@ export default function PremisesPage() {
   const [deleteTarget, setDeleteTarget] = useState<AcademicCampus | null>(null)
   const canManageCampusCatalog = can('academic.catalog.manage')
 
+  useEffect(() => {
+    if (branchAllowed || !academicBranches.length) return
+    setBranch(academicBranches[0])
+    setForm((value) => ({ ...value, branch: academicBranches[0] }))
+  }, [academicBranches, branchAllowed])
+
   const load = async (clearMessage = true) => {
+    if (!branchAllowed) {
+      setItems([])
+      return
+    }
     setLoading(true); if (clearMessage) setMessage(null)
     try {
       const active = activeFilter === 'all' ? null : activeFilter === 'active'
@@ -104,8 +115,8 @@ export default function PremisesPage() {
       { label: 'Hệ', value: branchLabel(branch), hint: 'Phạm vi danh mục hiện tại' },
       { label: 'Trạng thái', value: activeFilter === 'all' ? 'Tất cả' : activeFilter === 'active' ? 'Đang dùng' : 'Đã xóa', hint: 'Bộ lọc hiện tại' },
     ]} />
-    <CompactFilterBar actions={<button className="btn secondary" type="button" onClick={() => { setBranch('poly'); setActiveFilter('active'); setSearch('') }} disabled={branch === 'poly' && activeFilter === 'active' && !search}>Xóa lọc</button>}>
-      <label>Hệ<select className="input" value={branch} onChange={(event) => setBranch(event.target.value)}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label>
+    <CompactFilterBar actions={<button className="btn secondary" type="button" onClick={() => { setBranch(academicBranches[0] || 'poly'); setActiveFilter('active'); setSearch('') }} disabled={branch === (academicBranches[0] || 'poly') && activeFilter === 'active' && !search}>Xóa lọc</button>}>
+      <label>Hệ<select className="input" value={branch} onChange={(event) => setBranch(event.target.value)}>{academicBranches.includes('poly') && <option value="poly">Poly</option>}{academicBranches.includes('ptcd') && <option value="ptcd">PTCĐ</option>}</select></label>
       <label>Trạng thái<select className="input" value={activeFilter} onChange={(event) => setActiveFilter(event.target.value as ActiveFilter)}><option value="active">Đang dùng</option><option value="inactive">Đã xóa</option><option value="all">Tất cả</option></select></label>
       <label>Tìm kiếm<input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Mã hoặc tên cơ sở..." /></label>
     </CompactFilterBar>
@@ -125,7 +136,7 @@ export default function PremisesPage() {
       <div className="academic-modal-form">
         <label>Mã cơ sở<input className="input" value={form.campus_code} onChange={(event) => setForm((value) => ({ ...value, campus_code: event.target.value.toUpperCase() }))} placeholder="PT" /></label>
         <label>Tên cơ sở<input className="input" value={form.campus_name} onChange={(event) => setForm((value) => ({ ...value, campus_name: event.target.value }))} placeholder="Thái Nguyên" /></label>
-        <label>Hệ<select className="input" value={form.branch} onChange={(event) => setForm((value) => ({ ...value, branch: event.target.value }))}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label>
+        <label>Hệ<select className="input" value={form.branch} onChange={(event) => setForm((value) => ({ ...value, branch: event.target.value }))}>{academicBranches.includes('poly') && <option value="poly">Poly</option>}{academicBranches.includes('ptcd') && <option value="ptcd">PTCĐ</option>}</select></label>
         <label>Trạng thái<select className="input" value={form.active ? 'true' : 'false'} onChange={(event) => setForm((value) => ({ ...value, active: event.target.value === 'true' }))}><option value="true">Đang dùng</option><option value="false">Đã xóa</option></select></label>
       </div>
     </AccessibleDialog>
