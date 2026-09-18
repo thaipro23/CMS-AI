@@ -128,12 +128,13 @@ function blockDelivery(item: AcademicSubjectDelivery, block: AcademicSubjectDeli
 }
 
 export default function SubjectManagementPage() {
-  const { authHeaders, can } = useAppContext()
+  const { authHeaders, can, academicBranches } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const canManage = can('academic.catalog.manage')
 
   const [branch, setBranch] = useState<Branch>('poly')
+  const branchAllowed = academicBranches.includes(branch)
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [termId, setTermId] = useState('')
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('all')
@@ -156,8 +157,15 @@ export default function SubjectManagementPage() {
 
   const selectedTerm = useMemo(() => terms.find((item) => item.id === termId) || null, [terms, termId])
 
+  useEffect(() => {
+    if (branchAllowed || !academicBranches.length) return
+    setBranch(academicBranches[0])
+    setTermId('')
+    setPage(1)
+  }, [academicBranches, branchAllowed])
+
   const loadTerms = useCallback(async () => {
-    if (!canManage) return
+    if (!canManage || !branchAllowed) return
     setError('')
     try {
       const rows = (await getAcademicTerms(headers, { branch, active: true })).filter((item) => String(item.branch || branch).toLowerCase() === branch)
@@ -167,10 +175,10 @@ export default function SubjectManagementPage() {
       setTerms([]); setTermId('')
       setError(err instanceof Error ? err.message : 'Không tải được danh sách học kỳ.')
     }
-  }, [branch, canManage, headers])
+  }, [branch, branchAllowed, canManage, headers])
 
   const loadDeliveries = useCallback(async () => {
-    if (!canManage || !termId) { setResult(EMPTY_RESULT); return }
+    if (!canManage || !branchAllowed || !termId) { setResult(EMPTY_RESULT); return }
     setLoading(true); setError('')
     try {
       const response = await getAcademicSubjectDeliveries(headers, {
@@ -193,7 +201,7 @@ export default function SubjectManagementPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không tải được danh sách môn học.')
     } finally { setLoading(false) }
-  }, [appliedSearch, branch, canManage, headers, page, pageSize, platformFilter, termId])
+  }, [appliedSearch, branch, branchAllowed, canManage, headers, page, pageSize, platformFilter, termId])
 
   const findActiveCatalogJob = useCallback(async () => {
     if (!termId) { setCatalogJob(null); setProgressJob(null); return }
@@ -340,7 +348,7 @@ export default function SubjectManagementPage() {
     ]} />
 
     <CompactFilterBar actions={<div className="subject-filter-actions"><button className="btn secondary" type="button" onClick={() => { setAppliedSearch(search.trim()); setPage(1) }}>Áp dụng</button><button className="btn secondary" type="button" disabled={!search && platformFilter === 'all'} onClick={() => { setSearch(''); setAppliedSearch(''); setPlatformFilter('all'); setPage(1) }}>Xóa lọc</button></div>}>
-      <label>Hệ<select className="input" value={branch} onChange={(event) => { setBranch(event.target.value as Branch); setTermId(''); setPage(1) }}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label>
+      <label>Hệ<select className="input" value={branch} onChange={(event) => { setBranch(event.target.value as Branch); setTermId(''); setPage(1) }}>{academicBranches.includes('poly') && <option value="poly">Poly</option>}{academicBranches.includes('ptcd') && <option value="ptcd">PTCĐ</option>}</select></label>
       <label>Học kỳ<select className="input" value={termId} onChange={(event) => { setTermId(event.target.value); setPage(1) }}><option value="">Chọn học kỳ</option>{terms.map((item) => <option value={item.id} key={item.id}>{item.term_name}</option>)}</select></label>
       <label>Nền tảng<select className="input" value={platformFilter} onChange={(event) => { setPlatformFilter(event.target.value as PlatformFilter); setPage(1) }}><option value="all">Tất cả</option><option value="unassigned">Chưa chọn</option><option value="cms">CMS</option><option value="udemy">Udemy</option><option value="other">Khác</option><option value="mixed">Chưa đồng nhất giữa Block</option></select></label>
       <label>Tìm kiếm<input className="input" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { setAppliedSearch(search.trim()); setPage(1) } }} placeholder="Mã hoặc tên môn..." /></label>
