@@ -2711,6 +2711,7 @@ export type AcademicClassSyncJob = {
   job_type: 'cms_sync_check' | 'cms_enrollment_sync' | 'learning_sync' | string
   status: 'queued' | 'running' | 'completed' | 'failed' | string
   class_id: string
+  parent_job_id?: string | null
   requested_by?: string | null
   force?: boolean
   limit?: number
