@@ -506,7 +506,10 @@ def reconcile_bulk_operation_jobs(db: Session, *, now: datetime | None = None) -
         if value
     }
     rows = db.query(AcademicBulkOperationJob).filter(
-        AcademicBulkOperationJob.job_type == 'subject_auto_map_all_sync',
+        AcademicBulkOperationJob.job_type.in_([
+            'subject_auto_map_all_sync',
+            'learning_refresh_filter',
+        ]),
         AcademicBulkOperationJob.status.in_(['queued', 'running']),
     ).all()
     changed = reconcile_stale_rows(
