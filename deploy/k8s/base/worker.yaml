@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: ai-server-worker
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: ai-server-worker
@@ -25,7 +25,7 @@ spec:
           args:
             - >-
               exec celery -A app.worker.celery_app worker
-              --loglevel=INFO --queues=interactive,sync --concurrency=${CELERY_CONCURRENCY:-2}
+              --loglevel=INFO --queues=interactive,sync --concurrency=${CELERY_CONCURRENCY:-10}
               --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
               --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}
               --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
