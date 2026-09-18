@@ -125,11 +125,12 @@ function JobsContent() {
       setMessage(null)
       const headers = authHeaders()
       const statusParam = (status === 'all' ? 'all' : status) as JobsStatusFilter
+      const canViewGenerationJobs = can('view_questions')
       // The operational tables are the first paint. Keep every source independent:
       // one failed endpoint must not hide successful jobs from the other sources.
       const [opJobsResult, generationJobsResult, academicRunsResult, classSyncJobsResult, teacherReportJobsResult, bulkOperationJobsResult] = await Promise.allSettled([
         getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }),
-        getJobs(null, headers),
+        canViewGenerationJobs ? getJobs(null, headers) : Promise.resolve([] as Job[]),
         getAcademicApSyncJobs(headers, { status: statusParam, limit: 50 }),
         getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 100 }),
         getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }),
@@ -175,7 +176,7 @@ function JobsContent() {
         setQuizLoading(false)
       }
     }
-  }, [authHeaders, status])
+  }, [authHeaders, can, status])
 
   const retryJob = useCallback(async (job: OperationRow) => {
     setLoading(true)
