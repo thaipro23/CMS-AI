@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import httpx
 from datetime import datetime
 from collections import defaultdict
 from typing import Any
@@ -67,6 +68,7 @@ celery_app.conf.update(
         'bank_quiz_create_task': {'queue': 'sync'},
         'academic_ap_sync_task': {'queue': 'sync'},
         'academic_class_sync_task': {'queue': 'sync'},
+        'academic_learning_refresh_filter_task': {'queue': 'sync'},
         'academic_sync_all_student_scores_task': {'queue': 'sync'},
         'academic_subject_auto_map_all_sync_task': {'queue': 'sync'},
         'academic_subject_catalog_refresh_task': {'queue': 'sync'},
@@ -89,6 +91,7 @@ celery_app.conf.update(
         'bank_quiz_create_task': {'soft_time_limit': 1500, 'time_limit': 1800},
         'academic_ap_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
         'academic_class_sync_task': {'soft_time_limit': 1500, 'time_limit': 1800},
+        'academic_learning_refresh_filter_task': {'soft_time_limit': 3300, 'time_limit': 3600},
         'academic_sync_all_student_scores_task': {'soft_time_limit': 300, 'time_limit': 600},
         'academic_subject_auto_map_all_sync_task': {'soft_time_limit': 3300, 'time_limit': 3600},
         'academic_subject_catalog_refresh_task': {'soft_time_limit': 900, 'time_limit': 1200},
@@ -122,11 +125,31 @@ celery_app.conf.beat_schedule = _beat_schedule
 
 
 def _is_transient_worker_error(exc: Exception) -> bool:
-    if isinstance(exc, (OperationalError, ConnectionError, TimeoutError)):
+    """Return True only for failures that are safe to retry automatically."""
+    if isinstance(exc, (OperationalError, ConnectionError, TimeoutError, httpx.TimeoutException, httpx.NetworkError)):
         return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = getattr(exc, 'response', None)
+        return bool(response is not None and int(response.status_code) in {408, 425, 429, 502, 503, 504})
     if isinstance(exc, DBAPIError):
         return bool(getattr(exc, 'connection_invalidated', False))
-    return False
+    text_value = str(exc or '').lower()
+    return any(marker in text_value for marker in (
+        'read operation timed out',
+        'read timeout',
+        'connect timeout',
+        'connection timed out',
+        '504 gateway timeout',
+        '502 bad gateway',
+        '503 service unavailable',
+        'temporarily unavailable',
+    ))
+
+
+def _class_sync_retry_delay_seconds(retry_number: int) -> int:
+    base = max(1, int(settings.academic_class_sync_retry_base_seconds))
+    ceiling = max(base, int(settings.academic_class_sync_retry_max_seconds))
+    return min(ceiling, base * (2 ** max(0, int(retry_number) - 1)))
 
 
 @celery_app.task(name='generate_questions_task')
@@ -1486,8 +1509,12 @@ def _should_log_academic_class_sync_success(request_json: dict | None) -> bool:
     return True
 
 
-@celery_app.task(name='academic_class_sync_task')
-def academic_class_sync_task(job_id: str):
+@celery_app.task(
+    bind=True,
+    name='academic_class_sync_task',
+    max_retries=int(settings.academic_class_sync_retry_max_attempts),
+)
+def academic_class_sync_task(self, job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
     from fastapi import HTTPException
     from app.models.academic import AcademicClassSyncJob
@@ -1632,12 +1659,70 @@ def academic_class_sync_task(job_id: str):
         db.rollback()
         job = db.get(AcademicClassSyncJob, job_id)
         if job:
+            retries_done = int(getattr(self.request, 'retries', 0) or 0)
+            max_retries = max(0, int(settings.academic_class_sync_retry_max_attempts))
+            if _is_transient_worker_error(exc) and retries_done < max_retries:
+                retry_number = retries_done + 1
+                delay_seconds = _class_sync_retry_delay_seconds(retry_number)
+                previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+                job.status = 'queued'
+                job.progress_current = max(0, int(job.progress_current or 0))
+                job.progress_total = 100
+                job.progress_label = (
+                    f'CMS tạm thời timeout/lỗi kết nối; tự chạy lại '
+                    f'{retry_number}/{max_retries} sau {delay_seconds}s'
+                )[:255]
+                job.error_message = str(exc)[:4000] or 'Open edX/CMS tạm thời không phản hồi.'
+                job.result_json = json_safe_value({
+                    **previous,
+                    'ok': False,
+                    'code': 'CLASS_SYNC_TRANSIENT_RETRY',
+                    'retry_count': retry_number,
+                    'retry_max': max_retries,
+                    'retry_in_seconds': delay_seconds,
+                    'last_error': job.error_message,
+                    'last_retry_at': datetime.utcnow().isoformat(),
+                })
+                job.started_at = None
+                job.finished_at = None
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+                try:
+                    log_audit(
+                        db,
+                        action='academic.class_sync.async.retry',
+                        status='queued',
+                        error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
+                        message=job.progress_label,
+                        user=None,
+                        target_type='academic_class_sync_job',
+                        target_id=job.id,
+                        metadata=json_safe_value({
+                            'class_id': job.class_id,
+                            'job_type': job.job_type,
+                            'retry_count': retry_number,
+                            'retry_max': max_retries,
+                            'retry_in_seconds': delay_seconds,
+                        }),
+                    )
+                except Exception:
+                    pass
+                raise self.retry(exc=exc, countdown=delay_seconds, max_retries=max_retries)
+
             job.status = 'failed'
             job.progress_current = job.progress_current or 0
             job.progress_total = 100
             job.progress_label = 'Đồng bộ thất bại'
             job.error_message = str(exc)[:4000] or 'Không thể hoàn tất đồng bộ lớp.'
-            job.result_json = json_safe_value({'ok': False, 'message': job.error_message})
+            previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+            job.result_json = json_safe_value({
+                **previous,
+                'ok': False,
+                'code': previous.get('code') or 'CLASS_SYNC_FAILED',
+                'message': job.error_message,
+                'retry_exhausted': bool(_is_transient_worker_error(exc) and max_retries > 0),
+            })
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
             db.add(job)
@@ -2209,15 +2294,22 @@ def _enqueue_academic_class_sync_child_job(
     sync_learning: bool,
     requester_context: dict | None = None,
     parent_job_id: str | None = None,
+    job_type: str = 'full_cms_sync',
+    parent_job_type: str = 'subject_auto_map_all_sync',
+    progress_label: str | None = None,
 ):
-    """Create/reuse a durable per-class full CMS sync job from a parent bulk job."""
+    """Create/reuse one durable per-class sync child from a parent bulk job."""
     from app.models.academic import AcademicClassSyncJob
+
+    job_type = str(job_type or 'full_cms_sync').strip()
+    if job_type not in {'full_cms_sync', 'learning_sync'}:
+        raise ValueError(f'Unsupported child class sync type: {job_type}')
 
     from app.services.academic.job_runtime import enqueue_job_task, mark_enqueue_failed, persist_enqueue_metadata
 
     _advisory_xact_lock_for_key(db, f'academic-class-sync:{class_id}')
 
-    idempotency_key = f'bulk:{parent_job_id}:full_cms_sync:{class_id}' if parent_job_id else None
+    idempotency_key = f'bulk:{parent_job_id}:{job_type}:{class_id}' if parent_job_id else None
     if idempotency_key:
         existing = db.query(AcademicClassSyncJob).filter(
             AcademicClassSyncJob.idempotency_key == idempotency_key,
@@ -2239,7 +2331,7 @@ def _enqueue_academic_class_sync_child_job(
 
     clean_limit = max(1, min(500, int(limit or 500)))
     job = AcademicClassSyncJob(
-        job_type='full_cms_sync',
+        job_type=job_type,
         status='queued',
         class_id=class_id,
         parent_job_id=parent_job_id,
@@ -2250,14 +2342,18 @@ def _enqueue_academic_class_sync_child_job(
         mode=mode,
         progress_current=0,
         progress_total=100,
-        progress_label='Đang chờ đồng bộ từ Auto map tất cả',
+        progress_label=progress_label or (
+            'Đang chờ cập nhật điểm theo bộ lọc'
+            if job_type == 'learning_sync'
+            else 'Đang chờ đồng bộ từ Auto map tất cả'
+        ),
         request_json=json_safe_value({
             'force': bool(force),
             'limit': clean_limit,
             'mode': mode,
             'auto_map_course': auto_map_course,
             'sync_learning': sync_learning,
-            'parent_job_type': 'subject_auto_map_all_sync',
+            'parent_job_type': parent_job_type,
             'parent_job_id': parent_job_id,
             'requester_context': requester_context or {},
             'approved_class_id': class_id,
@@ -2331,6 +2427,242 @@ def _restart_academic_class_sync_child_job(db, job):
     db.commit()
     db.refresh(job)
     return job
+
+
+@celery_app.task(name='academic_learning_refresh_filter_task')
+def academic_learning_refresh_filter_task(job_id: str):
+    """Fan out score refresh children with a bounded 10-class execution window."""
+    from app.models.academic import AcademicBulkOperationJob, AcademicClassSyncJob
+    from app.services.academic.batch_coordinator import plan_batch_dispatch
+    from app.services.academic.job_runtime import (
+        class_sync_queued_timeout_seconds,
+        enqueue_job_task,
+        persist_enqueue_metadata,
+        reconcile_stale_rows,
+    )
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if not job:
+            return {'ok': False, 'error': 'job_not_found'}
+        if job.job_type != 'learning_refresh_filter':
+            return {'ok': False, 'error': 'unsupported_job_type'}
+        if job.status not in {'queued', 'running'}:
+            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+
+        request_json = job.request_json if isinstance(job.request_json, dict) else {}
+        state = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+        target_class_ids = list(dict.fromkeys(
+            str(value)
+            for value in (request_json.get('approved_class_ids') or [])
+            if str(value or '').strip()
+        ))
+        approved_set = set(target_class_ids)
+        if not approved_set:
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = 'Không có lớp cần cập nhật điểm'
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            return {'ok': True, 'status': 'completed', 'class_total': 0}
+
+        job.status = 'running'
+        job.started_at = job.started_at or datetime.utcnow()
+        job.updated_at = datetime.utcnow()
+        job.progress_current = max(5, int(job.progress_current or 0))
+        job.progress_total = 100
+        job.progress_label = 'Đang điều phối cập nhật điểm CMS theo bộ lọc'
+        db.add(job)
+        db.commit()
+
+        child_ids_by_class = {
+            str(key): str(value)
+            for key, value in (state.get('child_job_ids_by_class') or {}).items()
+            if str(key) in approved_set and value
+        }
+        tracked_ids = set(child_ids_by_class.values())
+
+        def load_children():
+            filters = [AcademicClassSyncJob.parent_job_id == job.id]
+            if tracked_ids:
+                filters.append(AcademicClassSyncJob.id.in_(tracked_ids))
+            return (
+                db.query(AcademicClassSyncJob)
+                .filter(or_(*filters))
+                .order_by(AcademicClassSyncJob.created_at.desc())
+                .all()
+            )
+
+        children = load_children()
+        stale_children = reconcile_stale_rows(
+            children,
+            now=datetime.utcnow(),
+            queued_timeout_seconds=class_sync_queued_timeout_seconds(),
+            running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
+        )
+        if stale_children:
+            db.add_all(stale_children)
+            db.commit()
+            children = load_children()
+
+        window = max(1, min(10, int(settings.academic_bulk_sync_dispatch_window)))
+        plan = plan_batch_dispatch(target_class_ids, children, window=window)
+        queued_now = 0
+        reused_now = 0
+        blocked_now = 0
+
+        for class_id in plan.dispatch_class_ids:
+            child, reused = _enqueue_academic_class_sync_child_job(
+                db,
+                requested_by=job.requested_by,
+                class_id=class_id,
+                force=bool(request_json.get('force', True)),
+                limit=int(request_json.get('limit') or 500),
+                mode=request_json.get('mode'),
+                auto_map_course=False,
+                sync_learning=True,
+                requester_context=(
+                    request_json.get('requester_context')
+                    if isinstance(request_json.get('requester_context'), dict)
+                    else {}
+                ),
+                parent_job_id=job.id,
+                job_type='learning_sync',
+                parent_job_type='learning_refresh_filter',
+                progress_label='Đang chờ cập nhật điểm theo bộ lọc',
+            )
+            # A different active class mutation may be safely reused as a lock,
+            # but it does not count as score refresh completion. Try again on the
+            # next coordinator pass after that conflicting job finishes.
+            if str(child.job_type) != 'learning_sync':
+                blocked_now += 1
+                continue
+            child_ids_by_class[class_id] = child.id
+            tracked_ids.add(child.id)
+            if reused:
+                reused_now += 1
+            else:
+                queued_now += 1
+
+        children = load_children()
+        plan = plan_batch_dispatch(target_class_ids, children, window=window)
+        terminal_count = plan.completed_count + plan.failed_count
+        progress = 100 if plan.finished else min(
+            95,
+            5 + int((terminal_count / max(plan.target_count, 1)) * 90),
+        )
+        state.update({
+            'phase': 'finished' if plan.finished else 'dispatching',
+            'child_job_ids_by_class': child_ids_by_class,
+            'class_target_count': plan.target_count,
+            'class_active_count': plan.active_count,
+            'class_completed_count': plan.completed_count,
+            'class_failed_count': plan.failed_count,
+            'queued_last_pass': queued_now,
+            'reused_last_pass': reused_now,
+            'blocked_last_pass': blocked_now,
+            'dispatch_window': window,
+        })
+
+        if plan.finished:
+            all_failed = plan.target_count > 0 and plan.failed_count == plan.target_count
+            message = f'Cập nhật điểm xong {plan.completed_count}/{plan.target_count} lớp'
+            if plan.failed_count:
+                message += f'; {plan.failed_count} lớp thất bại sau retry'
+            state['message'] = message
+            state['finished_at'] = datetime.utcnow().isoformat()
+            job.status = 'failed' if all_failed else 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = message[:255]
+            job.result_json = json_safe_value(state)
+            job.error_message = message[:4000] if all_failed else None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(
+                    db,
+                    action='academic.learning_refresh_filter.finish',
+                    status='failed' if all_failed else 'success',
+                    error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR if all_failed else None,
+                    message=message,
+                    user=None,
+                    target_type='academic_bulk_operation_job',
+                    target_id=job.id,
+                    metadata=json_safe_value(state),
+                )
+            except Exception:
+                pass
+            return {'ok': not all_failed, 'status': job.status, **json_safe_value(state)}
+
+        continuation = int(state.get('continuation_attempt') or 0) + 1
+        state['continuation_attempt'] = continuation
+        job.status = 'running'
+        job.progress_current = progress
+        job.progress_total = 100
+        job.progress_label = (
+            f'Cập nhật điểm: {terminal_count}/{plan.target_count} xong; '
+            f'{plan.active_count} đang chạy/chờ (tối đa {window})'
+        )[:255]
+        job.result_json = json_safe_value(state)
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+
+        metadata = enqueue_job_task(
+            academic_learning_refresh_filter_task,
+            job.id,
+            queue='sync',
+            attempt=continuation + 1,
+            countdown_seconds=int(settings.academic_bulk_sync_continue_delay_seconds),
+        )
+        job = db.get(AcademicBulkOperationJob, job.id)
+        persist_enqueue_metadata(job, metadata)
+        job.updated_at = datetime.utcnow()
+        db.add(job)
+        db.commit()
+        return {'ok': True, 'status': 'running', 'progress_current': progress, **json_safe_value(state)}
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicBulkOperationJob, job_id)
+        if job:
+            job.status = 'failed'
+            job.progress_label = 'Cập nhật điểm theo bộ lọc thất bại'
+            job.error_message = str(exc)[:4000] or 'Không thể điều phối cập nhật điểm.'
+            previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+            job.result_json = json_safe_value({
+                **previous,
+                'ok': False,
+                'code': 'LEARNING_REFRESH_FILTER_FAILED',
+                'message': job.error_message,
+            })
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            try:
+                log_audit(
+                    db,
+                    action='academic.learning_refresh_filter.failed',
+                    status='failed',
+                    error_type=AuditErrorType.SYSTEM_ERROR,
+                    message=job.error_message,
+                    user=None,
+                    target_type='academic_bulk_operation_job',
+                    target_id=job.id,
+                )
+            except Exception:
+                pass
+        raise
+    finally:
+        db.close()
 
 
 @celery_app.task(name='academic_subject_catalog_refresh_task')
