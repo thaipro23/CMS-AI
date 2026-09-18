@@ -10,6 +10,7 @@ import {
   getAnalyticsOpsStatus,
   getBankOperationJobs,
   getCourseQuizInstances,
+  getJobs,
   getRecentAcademicClassSyncJobs,
   retryAcademicBulkOperationJob,
   retryAcademicTrainingTeacherReportJob,
@@ -17,7 +18,7 @@ import {
 } from '../../lib/api'
 import { useAppContext } from '../../context/AppContext'
 import { ActionMessage, ActionMessageData, toUserError } from '../../components/ui/ActionMessage'
-import { AcademicBulkOperationJob, AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, JsonObject } from '../../types'
+import { AcademicBulkOperationJob, AcademicClassSyncJob, AcademicSyncRun, AcademicTeacherReportJob, AnalyticsOpsStatus, BankOperationJob, CourseQuizInstance, Job, JsonObject } from '../../types'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { PageRoot } from '../../components/layout/PageHeader'
 import { EnterpriseScreenHeader } from '../../components/layout/EnterpriseDesignContract'
@@ -32,7 +33,7 @@ function statusText(v: string) { return ({ queued: 'Đang chờ', running: 'Đan
 function jobLabel(v: string) { return ({ material_extract: 'Tách tài liệu', bank_generate: 'Tạo câu hỏi', question_import: 'Import câu hỏi', legacy_quiz_import: 'Import Quiz CMS cũ', release_publish: 'Đưa bộ đề lên CMS', quiz_create: 'Tạo Quiz' } as Record<string,string>)[v] || v }
 function academicJobLabel(v: string) { return ({ cms_sync_check: 'Kiểm tra CMS', cms_enrollment_sync: 'Ghi danh CMS', learning_sync: 'Cập nhật điểm', full_cms_sync: 'Đồng bộ full CMS', learning_analytics_recalculate: 'Tính lại học online' } as Record<string,string>)[v] || v }
 function reportJobLabel(v: string) { return ({ rebuild_cache: 'Tính lại báo cáo GV', export_excel: 'Xuất Excel GV' } as Record<string,string>)[v] || v }
-function bulkJobLabel(v: string) { return ({ subject_auto_map_all_sync: 'Tự động ghép Course CMS + đồng bộ CMS', subject_catalog_refresh: 'Lấy danh sách môn từ AP', progress_reminder_email: 'Gửi mail nhắc chậm tiến độ' } as Record<string,string>)[v] || v }
+function bulkJobLabel(v: string) { return ({ subject_auto_map_all_sync: 'Tự động ghép Course CMS + đồng bộ CMS', learning_refresh_filter: 'Cập nhật điểm CMS theo bộ lọc', subject_catalog_refresh: 'Lấy danh sách môn từ AP', progress_reminder_email: 'Gửi mail nhắc chậm tiến độ' } as Record<string,string>)[v] || v }
 function safeNumber(v: unknown) { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 function progressPercent(current?: number, total?: number, explicit?: number) {
   if (typeof explicit === 'number' && Number.isFinite(explicit)) return Math.max(0, Math.min(100, explicit))
@@ -46,7 +47,7 @@ function includesNeedle(values: Array<unknown>, needle: string) {
 
 type OperationRow = {
   id: string
-  group: 'bank' | 'class_sync' | 'ap_sync' | 'teacher_report' | 'analytics' | 'bulk_sync'
+  group: 'bank' | 'generation' | 'class_sync' | 'ap_sync' | 'teacher_report' | 'analytics' | 'bulk_sync'
   label: string
   status: string
   progressCurrent: number
@@ -59,6 +60,7 @@ type OperationRow = {
   message?: string | null
   error?: string | null
   rawType?: string | null
+  parentJobId?: string | null
   canRetry?: boolean
 }
 
@@ -77,12 +79,30 @@ function academicJobError(error: string | null | undefined, resultValue: unknown
   if (result.code === 'CELERY_JOB_ORPHANED') {
     return 'Worker bị gián đoạn hoặc không nhận job trong thời gian cho phép. Tác vụ đã được dừng an toàn; hãy chạy lại sau khi kiểm tra worker.'
   }
+  if (result.code === 'CLASS_SYNC_TRANSIENT_RETRY') return null
   return error || null
+}
+
+function operationStatusLabel(job: OperationRow) {
+  if (job.status === 'queued' && /tự chạy lại/i.test(job.message || '')) return 'Chờ tự chạy lại'
+  if (job.status === 'queued') return 'Chờ worker'
+  if (job.status === 'running' && (job.group === 'bulk_sync' || job.rawType === 'learning_refresh_filter')) return 'Đang điều phối'
+  return statusText(job.status)
+}
+
+function jobProgressText(job: OperationRow) {
+  if (job.status === 'queued') return job.message || 'Chờ worker nhận tác vụ'
+  if (job.group === 'generation') return `${job.progressCurrent}/${job.progressTotal || 0} câu`
+  if (job.group === 'class_sync' && job.status === 'running' && job.progressCurrent <= 10) {
+    return job.message || 'Worker đã nhận tác vụ'
+  }
+  return `${Math.round(job.progressPercent)}% · ${job.progressCurrent}/${job.progressTotal || 100}`
 }
 
 function JobsContent() {
   const { authHeaders, can } = useAppContext()
   const [operationJobs, setOperationJobs] = useState<BankOperationJob[]>([])
+  const [generationJobs, setGenerationJobs] = useState<Job[]>([])
   const [classSyncJobs, setClassSyncJobs] = useState<AcademicClassSyncJob[]>([])
   const [bulkOperationJobs, setBulkOperationJobs] = useState<AcademicBulkOperationJob[]>([])
   const [teacherReportJobs, setTeacherReportJobs] = useState<AcademicTeacherReportJob[]>([])
@@ -107,24 +127,27 @@ function JobsContent() {
       const statusParam = (status === 'all' ? 'all' : status) as JobsStatusFilter
       // The operational tables are the first paint. Keep every source independent:
       // one failed endpoint must not hide successful jobs from the other sources.
-      const [opJobsResult, academicRunsResult, classSyncJobsResult, teacherReportJobsResult, bulkOperationJobsResult] = await Promise.allSettled([
+      const [opJobsResult, generationJobsResult, academicRunsResult, classSyncJobsResult, teacherReportJobsResult, bulkOperationJobsResult] = await Promise.allSettled([
         getBankOperationJobs(headers, { status: statusParam, page: 1, pageSize: 80 }),
+        getJobs(null, headers),
         getAcademicApSyncJobs(headers, { status: statusParam, limit: 50 }),
-        getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 80 }),
+        getRecentAcademicClassSyncJobs(headers, { status: statusParam, limit: 100 }),
         getAcademicTrainingTeacherReportJobs(headers, { status: statusParam, limit: 50 }),
         getAcademicBulkOperationJobs(headers, { status: statusParam, limit: 50 }),
       ])
       if (generation !== loadGeneration.current) return
 
       const opJobs = opJobsResult.status === 'fulfilled' ? opJobsResult.value : { items: [] as BankOperationJob[] }
+      const nextGenerationJobs = generationJobsResult.status === 'fulfilled' ? generationJobsResult.value : [] as Job[]
       const nextAcademicRuns = academicRunsResult.status === 'fulfilled' ? academicRunsResult.value : [] as AcademicSyncRun[]
       const nextClassSyncJobs = classSyncJobsResult.status === 'fulfilled' ? classSyncJobsResult.value : [] as AcademicClassSyncJob[]
       const nextTeacherReportJobs = teacherReportJobsResult.status === 'fulfilled' ? teacherReportJobsResult.value : [] as AcademicTeacherReportJob[]
       const nextBulkOperationJobs = bulkOperationJobsResult.status === 'fulfilled' ? bulkOperationJobsResult.value : [] as AcademicBulkOperationJob[]
-      const primaryFailure = [opJobsResult, academicRunsResult, classSyncJobsResult, teacherReportJobsResult, bulkOperationJobsResult]
+      const primaryFailure = [opJobsResult, generationJobsResult, academicRunsResult, classSyncJobsResult, teacherReportJobsResult, bulkOperationJobsResult]
         .find((result): result is PromiseRejectedResult => result.status === 'rejected')
 
       setOperationJobs(opJobs.items || [])
+      setGenerationJobs(nextGenerationJobs || [])
       setAcademicRuns(nextAcademicRuns || [])
       setClassSyncJobs(nextClassSyncJobs || [])
       setTeacherReportJobs(nextTeacherReportJobs || [])
@@ -211,6 +234,7 @@ function JobsContent() {
       message: job.progress_label,
       error: academicJobError(job.error_message, job.result_json),
       rawType: job.job_type,
+      parentJobId: job.parent_job_id,
       canRetry: false,
     }))
     const bulkRows = bulkOperationJobs.map((job): OperationRow => {
@@ -222,9 +246,17 @@ function JobsContent() {
       const queued = safeNumber(result.jobs_queued)
       const reused = safeNumber(result.jobs_reused)
       const skipped = safeNumber(result.jobs_skipped)
+      const children = classSyncJobs.filter((child) => child.parent_job_id === job.id)
+      const childRunning = children.filter((child) => child.status === 'running').length
+      const childQueued = children.filter((child) => child.status === 'queued').length
+      const childCompleted = children.filter((child) => child.status === 'completed').length
+      const childFailed = children.filter((child) => child.status === 'failed').length
+      const childSummary = children.length
+        ? `${childRunning} đang chạy · ${childQueued} chờ worker · ${childCompleted} hoàn tất${childFailed ? ` · ${childFailed} lỗi` : ''}`
+        : ''
       return {
         id: job.id,
-        group: 'bulk_sync',
+        group: job.job_type === 'learning_refresh_filter' ? 'class_sync' : 'bulk_sync',
         label: bulkJobLabel(job.job_type),
         status: job.status,
         progressCurrent: safeNumber(job.progress_current),
@@ -234,7 +266,7 @@ function JobsContent() {
         scopeDetail: scopeText,
         requestedBy: job.requested_by || 'Hệ thống',
         createdAt: job.created_at,
-        message: job.progress_label || `Map ${mapped}+${already} môn · queue ${queued} lớp · reuse ${reused} · bỏ qua ${skipped}`,
+        message: childSummary || job.progress_label || `Map ${mapped}+${already} môn · queue ${queued} lớp · reuse ${reused} · bỏ qua ${skipped}`,
         error: academicJobError(job.error_message, job.result_json),
         rawType: job.job_type,
         canRetry: job.job_type === 'subject_auto_map_all_sync' && job.status === 'failed',
@@ -278,6 +310,34 @@ function JobsContent() {
       rawType: job.job_type,
       canRetry: job.status === 'failed',
     }))
+    const generationRows = generationJobs.map((job): OperationRow => {
+      const total = Math.max(0, safeNumber(job.question_count))
+      const completed = Math.max(0, safeNumber(job.completed_question_count))
+      const batches = job.batch_summary || {}
+      const batchText = [
+        safeNumber(batches.running) ? `${safeNumber(batches.running)} batch chạy` : '',
+        safeNumber(batches.queued) ? `${safeNumber(batches.queued)} batch chờ` : '',
+        safeNumber(batches.failed) ? `${safeNumber(batches.failed)} batch lỗi` : '',
+      ].filter(Boolean).join(' · ')
+      return {
+        id: job.id,
+        group: 'generation',
+        label: 'Gen câu hỏi',
+        status: job.status,
+        progressCurrent: completed,
+        progressTotal: total,
+        progressPercent: progressPercent(completed, total),
+        scope: job.course_id || 'Ngân hàng câu hỏi',
+        scopeDetail: total ? `${total} câu yêu cầu` : null,
+        requestedBy: 'Hệ thống',
+        createdAt: job.created_at,
+        message: batchText || (total ? `Đã tạo ${completed}/${total} câu` : 'Đang chuẩn bị kế hoạch sinh câu hỏi'),
+        error: job.error_message || job.model_parse_error || null,
+        rawType: 'question_generation',
+        canRetry: false,
+      }
+    })
+
     const analyticsRows: OperationRow[] = []
     if (analyticsOps) {
       const ingest = jsonObject(analyticsOps.ingest)
@@ -299,9 +359,11 @@ function JobsContent() {
         canRetry: false,
       })
     }
-    return [...analyticsRows, ...bulkRows, ...classRows, ...apRows, ...reportRows, ...bankRows]
+    const loadedParentIds = new Set(bulkOperationJobs.map((job) => job.id))
+    const topLevelClassRows = classRows.filter((row) => !row.parentJobId || !loadedParentIds.has(row.parentJobId))
+    return [...analyticsRows, ...bulkRows, ...topLevelClassRows, ...apRows, ...reportRows, ...generationRows, ...bankRows]
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-  }, [operationJobs, classSyncJobs, academicRuns, teacherReportJobs, bulkOperationJobs, analyticsOps])
+  }, [operationJobs, generationJobs, classSyncJobs, academicRuns, teacherReportJobs, bulkOperationJobs, analyticsOps])
 
   const filteredRows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -324,8 +386,8 @@ function JobsContent() {
   const columns = useMemo<EnterpriseTableColumn<OperationRow>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => (safePage - 1) * pageSize + index + 1 },
     { key: 'job', header: 'Việc', kind: 'identity', minWidth: 250, sticky: 'left', priority: 'required', hideable: false, render: (job) => <><b>{job.label}</b><small>{job.scope}{job.scopeDetail ? ` · ${shortId(job.scopeDetail)}` : ''}</small></> },
-    { key: 'status', header: 'Trạng thái', kind: 'status', width: 116, priority: 'required', hideable: false, render: (job) => <StatusBadge status={job.status} /> },
-    { key: 'progress', header: 'Tiến độ', kind: 'progress', minWidth: 165, priority: 'important', hideable: true, render: (job) => <><div className="job-progress table-progress" role="progressbar" aria-label={`Tiến độ ${job.label}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progressPercent)}><i style={{ width: `${job.progressPercent}%` }} /></div><small>{Math.round(job.progressPercent)}% · {job.progressCurrent}/{job.progressTotal || 100}</small></> },
+    { key: 'status', header: 'Trạng thái', kind: 'status', width: 132, priority: 'required', hideable: false, render: (job) => <StatusBadge status={job.status} label={operationStatusLabel(job)} /> },
+    { key: 'progress', header: 'Tiến độ / công đoạn', kind: 'progress', minWidth: 220, priority: 'important', hideable: true, render: (job) => <><div className="job-progress table-progress" role="progressbar" aria-label={`Tiến độ ${job.label}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progressPercent)}><i style={{ width: `${job.progressPercent}%` }} /></div><small>{jobProgressText(job)}</small></> },
     { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 138, priority: 'important', hideable: true, render: (job) => <small>{dateText(job.createdAt)}</small> },
     { key: 'scope', header: 'Phạm vi chi tiết', kind: 'text', minWidth: 175, priority: 'optional', hideable: true, defaultVisible: false, render: (job) => <><span>{job.scope}</span><small>{job.scopeDetail || '—'}</small></> },
     { key: 'requested_by', header: 'Người tạo', kind: 'text', width: 120, priority: 'optional', hideable: true, defaultVisible: false, render: (job) => job.requestedBy || 'Hệ thống' },
@@ -334,8 +396,11 @@ function JobsContent() {
   ], [pageSize, safePage])
 
   const failed = rows.filter((j) => j.status === 'failed').length
-  const running = rows.filter((j) => ['queued', 'running'].includes(j.status)).length
+  const running = rows.filter((j) => j.status === 'running').length
+  const queued = rows.filter((j) => j.status === 'queued').length
   const completed = rows.filter((j) => j.status === 'completed').length
+  const generationActive = rows.filter((j) => j.group === 'generation' && ['queued', 'running'].includes(j.status)).length
+  const syncRunning = classSyncJobs.filter((job) => job.status === 'running').length
   const resetFilters = () => update({ q: '', status: 'all', group: 'all', page: 1 }, { resetPage: false })
 
   const quizColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
@@ -360,15 +425,16 @@ function JobsContent() {
     />
     <ActionMessage message={message} onClose={() => setMessage(null)} />
     <OperationsKpiStrip items={[
-      { label: 'Đang xử lý', value: running, hint: 'Đang chờ hoặc đang chạy', tone: running ? 'info' : 'neutral' },
+      { label: 'Đang chạy', value: running, hint: `${Math.min(syncRunning, 10)}/10 slot đồng bộ lớp đang dùng`, tone: running ? 'info' : 'neutral' },
+      { label: 'Đang chờ', value: queued, hint: queued ? 'Chờ worker hoặc chờ tự chạy lại' : 'Không có hàng đợi', tone: queued ? 'info' : 'neutral' },
+      { label: 'Gen câu hỏi', value: generationActive, hint: 'Job sinh câu hỏi đang hoạt động', tone: generationActive ? 'info' : 'neutral' },
       { label: 'Hoàn tất', value: completed, hint: 'Trong dữ liệu vừa tải', tone: 'success' },
       { label: 'Thất bại', value: failed, hint: failed ? 'Cần mở chi tiết để xử lý' : 'Không có lỗi gần đây', tone: failed ? 'danger' : 'neutral' },
-      { label: 'Đồng bộ AP', value: academicRuns.length, hint: 'Lần chạy gần đây' },
     ]} />
     <CompactFilterBar actions={<button className="btn secondary" type="button" onClick={resetFilters} disabled={!q && status === 'all' && operationGroup === 'all'}>Xóa lọc</button>}>
       <label>Tìm việc<input className="input" value={q} onChange={(event) => update({ q: event.target.value })} placeholder="Mã việc, lớp, phạm vi..." /></label>
       <label>Trạng thái<select className="input" value={status} onChange={(event) => update({ status: event.target.value })}><option value="all">Tất cả</option><option value="active">Đang xử lý</option><option value="queued">Đang chờ</option><option value="running">Đang chạy</option><option value="completed">Hoàn tất</option><option value="failed">Thất bại</option></select></label>
-      <label>Nhóm việc<select className="input" value={operationGroup} onChange={(event) => update({ group: event.target.value })}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giảng viên</option><option value="analytics">Học online</option><option value="bulk_sync">Ghép Course CMS hàng loạt</option><option value="bank">Bank / Quiz</option></select></label>
+      <label>Nhóm việc<select className="input" value={operationGroup} onChange={(event) => update({ group: event.target.value })}><option value="all">Tất cả</option><option value="class_sync">Đồng bộ lớp/CMS</option><option value="generation">Gen câu hỏi</option><option value="ap_sync">Đồng bộ AP</option><option value="teacher_report">Báo cáo giảng viên</option><option value="analytics">Học online</option><option value="bulk_sync">Ghép Course CMS hàng loạt</option><option value="bank">Bank / Quiz</option></select></label>
     </CompactFilterBar>
     <EnterpriseDataTable tableId="ops-jobs-v2" caption="Danh sách việc" rows={pageRows} columns={columns} rowKey={(job) => `${job.group}-${job.id}`} density={density} onDensityChange={(value) => update({ density: value }, { resetPage: false })} loading={loading} emptyTitle="Không có việc phù hợp" emptyDescription="Thử thay đổi từ khóa, trạng thái hoặc nhóm việc." page={safePage} pageSize={pageSize} total={filteredRows.length} totalPages={totalPages} onPageChange={(value) => update({ page: value }, { resetPage: false })} onPageSizeChange={(value) => update({ pageSize: value, page: 1 }, { resetPage: false })} label="việc" getRowClassName={(job) => `row-${job.status}`} />
 
@@ -380,9 +446,18 @@ function JobsContent() {
         { label: 'Đối tượng', value: selectedJob.scopeDetail || '—' },
         { label: 'Người tạo', value: selectedJob.requestedBy || 'Hệ thống' },
         { label: 'Thời điểm', value: dateText(selectedJob.createdAt) },
-        { label: 'Tiến độ', value: `${Math.round(selectedJob.progressPercent)}% · ${selectedJob.progressCurrent}/${selectedJob.progressTotal || 100}`, wide: true },
+        { label: 'Tiến độ', value: jobProgressText(selectedJob), wide: true },
         { label: selectedJob.error ? 'Lỗi' : 'Nội dung', value: selectedJob.error || selectedJob.message || 'Không có mô tả.', wide: true },
-      ]} /></div> : null}
+      ]} />
+      {classSyncJobs.some((child) => child.parent_job_id === selectedJob.id) ? <section className="page-stack compact-stack">
+        <b>Các lớp trong tác vụ này</b>
+        {classSyncJobs.filter((child) => child.parent_job_id === selectedJob.id).slice(0, 20).map((child) => <div className="stat-row" key={child.id}>
+          <span>{shortId(child.class_id)} · {academicJobLabel(child.job_type)}</span>
+          <StatusBadge status={child.status} label={child.status === 'queued' ? (/tự chạy lại/i.test(child.progress_label || '') ? 'Chờ tự chạy lại' : 'Chờ worker') : statusText(child.status)} />
+          <small>{child.progress_label || (child.status === 'queued' ? 'Chờ worker' : 'Đang xử lý')}</small>
+        </div>)}
+      </section> : null}
+      </div> : null}
     </SideDrawer>
 
     <SideDrawer open={quizOpen} title="Quiz gần đây" description="Các Quiz đã tạo trên Open edX CMS." onClose={() => setQuizOpen(false)}>
