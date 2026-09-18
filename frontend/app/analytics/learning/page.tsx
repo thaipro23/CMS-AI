@@ -512,7 +512,7 @@ export default function AnalyticsLearningPage() {
   const queryClassification = searchParams.get('classification') || 'all'
   const initialStep = queryClassId ? 'results' : (querySubjectId ? normalizeStep(searchParams.get('step') || 'classes') : 'subjects')
 
-  const { authHeaders, can } = useAppContext()
+  const { authHeaders, can, academicBranches } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [campuses, setCampuses] = useState<AcademicCampus[]>([])
@@ -525,6 +525,7 @@ export default function AnalyticsLearningPage() {
   const [classOverviewTotal, setClassOverviewTotal] = useState(0)
   const [classOverviewSummary, setClassOverviewSummary] = useState<AnalyticsClassBehaviorOverviewSummary>(EMPTY_CLASS_OVERVIEW_SUMMARY)
   const [branch, setBranch] = useState(queryBranch)
+  const branchAllowed = academicBranches.includes(branch as 'poly' | 'ptcd')
   const [termId, setTermId] = useState(queryTermId)
   const [campus, setCampus] = useState(queryCampus)
   const [subjectId, setSubjectId] = useState(querySubjectId)
@@ -585,6 +586,18 @@ export default function AnalyticsLearningPage() {
     if (nextSearch) params.set('search', nextSearch)
     router.replace(`/analytics/learning?${params.toString()}`, { scroll: false })
   }
+
+  useEffect(() => {
+    if (branchAllowed || !academicBranches.length) return
+    const nextBranch = academicBranches[0]
+    setBranch(nextBranch)
+    setTermId('')
+    setCampus('')
+    setSubjectId('')
+    setClassId('')
+    setStep('subjects')
+    router.replace(`/analytics/learning?step=subjects&branch=${nextBranch}&campus=all`, { scroll: false })
+  }, [academicBranches, branchAllowed, router])
 
   const setFlowStep = (nextStep: AnalyticsFlowStep, overrides: Partial<{ subjectId: string; classId: string }> = {}) => {
     const nextSubjectId = overrides.subjectId ?? subjectId
@@ -695,6 +708,11 @@ export default function AnalyticsLearningPage() {
   }, [headers, branch, campus, termId, subjectId, classId, effectiveCourseId, showOperations, can])
 
   useEffect(() => {
+    if (!branchAllowed) {
+      setTerms([])
+      setLoadingTerms(false)
+      return
+    }
     let cancelled = false
     setLoadingTerms(true)
     getAcademicTerms(headers, { branch, active: true })
@@ -707,9 +725,13 @@ export default function AnalyticsLearningPage() {
       .catch((error) => { if (!cancelled) setMessage(analyticsErrorMessage(error, 'Không tải được học kỳ')) })
       .finally(() => { if (!cancelled) setLoadingTerms(false) })
     return () => { cancelled = true }
-  }, [headers, branch])
+  }, [headers, branch, branchAllowed])
 
   useEffect(() => {
+    if (!branchAllowed) {
+      setCampuses([])
+      return
+    }
     let cancelled = false
     getAcademicCampuses(headers, { branch, active: true })
       .then((items) => {
@@ -719,7 +741,7 @@ export default function AnalyticsLearningPage() {
       })
       .catch(() => { if (!cancelled) setCampuses([]) })
     return () => { cancelled = true }
-  }, [headers, branch])
+  }, [headers, branch, branchAllowed])
 
   useEffect(() => {
     if (!termId) {
@@ -967,8 +989,8 @@ export default function AnalyticsLearningPage() {
       <div className="academic-filter-bar analytics-learning-flow-filters">
         <label>Hệ
           <select className="input" value={branch} onChange={(event) => resetScope({ branch: event.target.value })}>
-            <option value="poly">Poly</option>
-            <option value="ptcd">PTCĐ</option>
+            {academicBranches.includes('poly') && <option value="poly">Poly</option>}
+            {academicBranches.includes('ptcd') && <option value="ptcd">PTCĐ</option>}
           </select>
         </label>
         <label>Học kỳ

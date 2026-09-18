@@ -93,7 +93,7 @@ function isRunActive(run?: AcademicSyncRun | null) {
 }
 
 export default function ApSyncPage() {
-  const { authHeaders, can } = useAppContext()
+  const { authHeaders, can, academicBranches } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const [termName, setTermName] = useState('')
@@ -108,22 +108,35 @@ export default function ApSyncPage() {
   const [activeRuns, setActiveRuns] = useState<Array<{ branch: BranchCode; run: AcademicSyncRun }>>([])
   const [syncConfirm, setSyncConfirm] = useState<SyncConfirm>(null)
 
+  const availableBranches = useMemo(
+    () => BRANCHES.filter((item) => academicBranches.includes(item.value)),
+    [academicBranches],
+  )
   const termOptions = useMemo(() => uniqueTermOptions(optionsByBranch), [optionsByBranch])
   const currentBranchOptions = optionsByBranch[selectedBranch] || EMPTY_OPTIONS
-  const totalCampuses = BRANCHES.reduce((sum, branch) => sum + (optionsByBranch[branch.value].campuses?.length || 0), 0)
-  const totalSelectedSubjects = BRANCHES.reduce((sum, branch) => sum + Number(optionsByBranch[branch.value].selected_subject_count || 0), 0)
+  const totalCampuses = availableBranches.reduce((sum, branch) => sum + (optionsByBranch[branch.value].campuses?.length || 0), 0)
+  const totalSelectedSubjects = availableBranches.reduce((sum, branch) => sum + Number(optionsByBranch[branch.value].selected_subject_count || 0), 0)
+  const totalCmsSubjects = availableBranches.reduce((sum, branch) => sum + Number(optionsByBranch[branch.value].cms_subject_count || 0), 0)
+  const totalUdemySubjects = availableBranches.reduce((sum, branch) => sum + Number(optionsByBranch[branch.value].udemy_subject_count || 0), 0)
   const canManageAcademicOps = can('academic.catalog.manage')
+
+  useEffect(() => {
+    if (availableBranches.some((item) => item.value === selectedBranch)) return
+    if (availableBranches[0]) setSelectedBranch(availableBranches[0].value)
+  }, [availableBranches, selectedBranch])
 
   const loadOptions = async (clearMessage = true) => {
     setLoadingOptions(true)
     if (clearMessage) setMessage(null)
     try {
-      const [poly, ptcd] = await Promise.all([
-        getAcademicApSyncOptions(headers, { termName, branch: 'poly', includeSubjects: false }),
-        getAcademicApSyncOptions(headers, { termName, branch: 'ptcd', includeSubjects: false }),
-      ])
-      setOptionsByBranch({ poly, ptcd })
-      const availableTerms = uniqueTermOptions({ poly, ptcd })
+      const loaded = await Promise.all(availableBranches.map(async (branchOption) => [
+        branchOption.value,
+        await getAcademicApSyncOptions(headers, { termName, branch: branchOption.value, includeSubjects: false }),
+      ] as const))
+      const nextOptions: BranchState = { poly: EMPTY_OPTIONS, ptcd: EMPTY_OPTIONS }
+      for (const [branchCode, options] of loaded) nextOptions[branchCode] = options
+      setOptionsByBranch(nextOptions)
+      const availableTerms = uniqueTermOptions(nextOptions)
       const availableValues = new Set(availableTerms.map((item) => String(item.value || '').trim()))
       if (availableTerms.length && !availableValues.has(termName.trim())) {
         setTermName(String(availableTerms[0].value || ''))
@@ -136,7 +149,7 @@ export default function ApSyncPage() {
   }
 
   const refreshActiveRuns = async () => {
-    const jobs = await Promise.all(BRANCHES.map(async (branch) => {
+    const jobs = await Promise.all(availableBranches.map(async (branch) => {
       const runs = await getAcademicApSyncJobs(headers, { termName, branch: branch.value, status: 'active', limit: 5 })
       return runs.map((run) => ({ branch: branch.value, run }))
     }))
@@ -261,7 +274,7 @@ export default function ApSyncPage() {
     <OperationsKpiStrip items={[
       { label: 'Học kỳ', value: termName || 'Chưa chọn', hint: 'Phạm vi đồng bộ hiện tại' },
       { label: 'Cơ sở khả dụng', value: totalCampuses, hint: 'Lấy từ danh mục cơ sở Dash CMS', tone: totalCampuses ? 'success' : 'warning' },
-      { label: 'Môn được đồng bộ', value: totalSelectedSubjects, hint: `CMS ${optionsByBranch.poly.cms_subject_count + optionsByBranch.ptcd.cms_subject_count} · Udemy ${optionsByBranch.poly.udemy_subject_count + optionsByBranch.ptcd.udemy_subject_count}`, tone: totalSelectedSubjects ? 'success' : 'warning' },
+      { label: 'Môn được đồng bộ', value: totalSelectedSubjects, hint: `CMS ${totalCmsSubjects} · Udemy ${totalUdemySubjects}`, tone: totalSelectedSubjects ? 'success' : 'warning' },
       { label: 'Tác vụ đang chạy', value: activeRuns.length, hint: activeRuns.length ? 'Đang xử lý' : 'Sẵn sàng chạy', tone: activeRuns.length ? 'info' : 'neutral' },
       { label: 'Kết quả gần nhất', value: lastResults.length, hint: dryRun ? 'Chế độ kiểm tra kế hoạch' : 'Chế độ ghi dữ liệu' },
     ]} />
@@ -270,19 +283,19 @@ export default function ApSyncPage() {
       <WorkspaceSection title="Kế hoạch đồng bộ" description="Chọn học kỳ và kiểm tra phạm vi trước khi đồng bộ." className="ap-sync-plan">
         <div className="settings-form-grid">
           <label>Học kỳ<select className="input" value={termName} onChange={(event) => setTermName(event.target.value)} disabled={!termOptions.length}>{termOptions.length ? termOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>) : <option value="">Chưa có học kỳ</option>}</select></label>
-          <label>Hệ khi chạy riêng<select className="input" value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value as BranchCode)}>{BRANCHES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          <label>Hệ khi chạy riêng<select className="input" value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value as BranchCode)}>{availableBranches.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         </div>
         <label className="check-row"><input type="checkbox" checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} /> Chỉ kiểm tra kế hoạch, chưa ghi dữ liệu</label>
         <div className="ap-sync-summary">
-          <div><span>Poly</span><b>{optionsByBranch.poly.campuses?.length || 0}</b><small>cơ sở khả dụng</small></div>
-          <div><span>PTCĐ</span><b>{optionsByBranch.ptcd.campuses?.length || 0}</b><small>cơ sở khả dụng</small></div>
+          {academicBranches.includes('poly') && <div><span>Poly</span><b>{optionsByBranch.poly.campuses?.length || 0}</b><small>cơ sở khả dụng</small></div>}
+          {academicBranches.includes('ptcd') && <div><span>PTCĐ</span><b>{optionsByBranch.ptcd.campuses?.length || 0}</b><small>cơ sở khả dụng</small></div>}
           <div><span>Phạm vi riêng</span><b>{BRANCHES.find((item) => item.value === selectedBranch)?.label}</b><small>{currentBranchOptions.campuses?.length || 0} cơ sở</small></div>
           <div><span>Môn đã chọn</span><b>{currentBranchOptions.selected_subject_count || 0}</b><small>CMS {currentBranchOptions.cms_subject_count || 0} · Udemy {currentBranchOptions.udemy_subject_count || 0}</small></div>
         </div>
         {!totalCampuses ? <ContentNotice tone="warning">Chưa có cơ sở đang bật. Vào trang Cơ sở để thêm thủ công trước khi đồng bộ.</ContentNotice> : null}
         {termName.trim() && totalSelectedSubjects === 0 ? <ContentNotice tone="warning">Học kỳ này chưa có môn nào được chọn CMS/Udemy. Vào Quản lý môn học để chọn nền tảng; Các môn chưa chọn nền tảng được bỏ qua.</ContentNotice> : null}
         {canManageAcademicOps ? <div className="ap-sync-actions">
-          <button className="btn" type="button" disabled={running || loadingOptions || Boolean(activeRuns.length) || totalCampuses === 0 || totalSelectedSubjects === 0 || !termName.trim()} onClick={() => requestRunForBranches(['poly', 'ptcd'])}>{dryRun ? 'Kiểm tra toàn bộ' : 'Đồng bộ toàn bộ'}</button>
+          <button className="btn" type="button" disabled={running || loadingOptions || Boolean(activeRuns.length) || totalCampuses === 0 || totalSelectedSubjects === 0 || !termName.trim()} onClick={() => requestRunForBranches(availableBranches.map((item) => item.value))}>{dryRun ? 'Kiểm tra toàn bộ phạm vi' : 'Đồng bộ toàn bộ phạm vi'}</button>
           <button className="btn secondary" type="button" disabled={running || loadingOptions || Boolean(activeRuns.length) || !currentBranchOptions.campuses.length || !currentBranchOptions.selected_subject_count || !termName.trim()} onClick={() => requestRunForBranches([selectedBranch])}>{dryRun ? `Kiểm tra hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}` : `Đồng bộ hệ ${BRANCHES.find((item) => item.value === selectedBranch)?.label}`}</button>
         </div> : <ContentNotice tone="warning">Bạn không có quyền chạy đồng bộ AP.</ContentNotice>}
       </WorkspaceSection>

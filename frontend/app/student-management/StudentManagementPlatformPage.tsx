@@ -151,7 +151,7 @@ function buildSubjectClassesHref(
 function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlatform }) {
   const isCms = platform === "cms";
   const platformLabel = isCms ? "CMS" : "Udemy";
-  const { authHeaders, can } = useAppContext();
+  const { authHeaders, can, academicBranches } = useAppContext();
   const { confirmAction } = useFeedback();
   const headers = useMemo(() => authHeaders(), [authHeaders]);
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders]);
@@ -161,6 +161,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   const { state, update, scopeReady } = useAcademicTableState({ branch: "poly", status: "all", pageSize: 50 });
   const { termId, branch, campus, q: search, status: learningStatus, page, pageSize, density } = state;
   const debouncedSearch = useDebouncedValue(search, 350);
+  const branchAllowed = academicBranches.includes(branch as 'poly' | 'ptcd');
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<AcademicSubjectManagementSummary>(
     EMPTY_SUBJECT_SUMMARY,
@@ -176,7 +177,12 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   const canImportUdemy = !isCms && can('manage_settings');
 
   useEffect(() => {
-    if (!scopeReady) {
+    if (!scopeReady || branchAllowed || !academicBranches.length) return;
+    update({ branch: academicBranches[0], campus: "", termId: "" });
+  }, [academicBranches, branchAllowed, scopeReady, update]);
+
+  useEffect(() => {
+    if (!scopeReady || !branchAllowed) {
       setTerms([]);
       return;
     }
@@ -199,7 +205,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   }, [headers, scopeReady, branch, termId]);
 
   useEffect(() => {
-    if (!scopeReady) {
+    if (!scopeReady || !branchAllowed) {
       setCampuses([]);
       return;
     }
@@ -217,7 +223,7 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
   }, [headers, scopeReady, branch, campus]);
 
   const loadSubjects = async (cancelledRef?: { cancelled: boolean }) => {
-    if (!scopeReady) {
+    if (!scopeReady || !branchAllowed) {
       setLoading(false);
       return;
     }
@@ -472,8 +478,8 @@ function StudentManagementSubjectsContent({ platform }: { platform: TrainingPlat
                 update({ branch: event.target.value, campus: "" });
               }}
             >
-              <option value="poly">Poly</option>
-              <option value="ptcd">PTCĐ</option>
+              {academicBranches.includes('poly') && <option value="poly">Poly</option>}
+              {academicBranches.includes('ptcd') && <option value="ptcd">PTCĐ</option>}
             </select>
           </label>
           <label>
