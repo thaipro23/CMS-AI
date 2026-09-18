@@ -2593,7 +2593,23 @@ def list_subjects(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
-    return AcademicService(db).list_subjects(term_id=term_id, block_id=block_id, search=search, branch=branch)
+    rbac = BusinessRBACService(db)
+    allowed_branches = rbac.accessible_branch_codes(user)
+    if branch or term_id:
+        _enforce_academic_branch_scope(
+            db,
+            user,
+            branch=branch,
+            term_id=term_id,
+            action='xem danh mục môn',
+        )
+    rows = AcademicService(db).list_subjects(term_id=term_id, block_id=block_id, search=search, branch=branch)
+    if allowed_branches is None:
+        return rows
+    return [
+        row for row in rows
+        if str(getattr(row, 'branch', '') or '').strip().lower() in allowed_branches
+    ]
 
 
 @router.get('/teacher/classes', response_model=AcademicClassListOut)
@@ -3789,6 +3805,7 @@ def upsert_academic_campus(
     branch = (payload.branch or 'poly').strip().lower()
     if not code:
         raise HTTPException(status_code=400, detail='Thiếu mã cơ sở AP')
+    _enforce_academic_branch_scope(db, user, branch=branch, require_filter=True, action='lưu cơ sở')
     campus = db.query(AcademicCampus).filter(AcademicCampus.campus_code == code, AcademicCampus.branch == branch).first()
     if not campus:
         campus = AcademicCampus(campus_code=code, branch=branch, created_at=func.now(), updated_at=func.now())
@@ -3822,8 +3839,10 @@ def update_academic_campus(
         raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
     old_code = str(campus.campus_code or '')
     old_branch = str(campus.branch or '')
+    _enforce_academic_branch_scope(db, user, branch=old_branch, require_filter=True, action='sửa cơ sở')
     code = (payload.campus_code if payload.campus_code is not None else campus.campus_code or '').strip().lower()
     branch = (payload.branch if payload.branch is not None else campus.branch or 'poly').strip().lower()
+    _enforce_academic_branch_scope(db, user, branch=branch, require_filter=True, action='chuyển cơ sở sang hệ khác')
     if not code:
         raise HTTPException(status_code=422, detail='Thiếu mã cơ sở AP')
     conflict = db.query(AcademicCampus).filter(
@@ -3929,6 +3948,7 @@ def delete_academic_campus(
     campus = db.query(AcademicCampus).filter(AcademicCampus.id == campus_id).first()
     if not campus:
         raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
+    _enforce_academic_branch_scope(db, user, branch=campus.branch, require_filter=True, action='xóa cơ sở')
     campus.active = False
     meta = dict(campus.metadata_json or {})
     meta.update({'deleted_from_ui': True})
@@ -3948,7 +3968,29 @@ def get_ap_sync_options(
     user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    return AcademicAPSyncWorkflowService(db).get_sync_options(term_name=term_name or None, branch=branch, campus=campus, include_subjects=include_subjects)
+    rbac = BusinessRBACService(db)
+    rbac.ensure_requested_branch_filter_allowed(
+        user,
+        branch,
+        require_filter_when_scoped=True,
+        action='xem tùy chọn đồng bộ AP',
+    )
+    result = AcademicAPSyncWorkflowService(db).get_sync_options(
+        term_name=term_name or None,
+        branch=branch,
+        campus=campus,
+        include_subjects=include_subjects,
+    )
+    allowed_branches = rbac.accessible_branch_codes(user)
+    if allowed_branches is not None:
+        result = {
+            **result,
+            'branches': [
+                item for item in (result.get('branches') or [])
+                if str(item.get('value') or '').strip().lower() in allowed_branches
+            ],
+        }
+    return result
 
 
 @router.post('/sync/from-json', response_model=AcademicImportResultOut)
@@ -3958,6 +4000,13 @@ def sync_from_json(
     db: Session = Depends(get_db),
 ):
     _require_academic_catalog_admin(user, db)
+    _enforce_academic_branch_scope(
+        db,
+        user,
+        branch=payload.branch,
+        require_filter=True,
+        action='import dữ liệu AP từ JSON',
+    )
     return AcademicAPSyncWorkflowService(db).sync_from_json(payload, user=user)
 
 
@@ -3969,6 +4018,13 @@ def enqueue_sync_from_ap_job(
     user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
+    _enforce_academic_branch_scope(
+        db,
+        user,
+        branch=payload.branch,
+        require_filter=True,
+        action='tạo job đồng bộ AP',
+    )
     return AcademicAPSyncWorkflowService(db).enqueue_sync_from_ap_job(payload, user=user)
 
 
@@ -3982,7 +4038,22 @@ def list_ap_sync_jobs(
     user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    return AcademicAPSyncWorkflowService(db).list_sync_jobs(term_name=term_name, branch=branch, status_filter=status_filter, limit=limit)
+    rbac = BusinessRBACService(db)
+    if branch:
+        rbac.ensure_requested_branch_filter_allowed(
+            user,
+            branch,
+            require_filter_when_scoped=True,
+            action='xem job đồng bộ AP',
+        )
+    allowed_branches = rbac.accessible_branch_codes(user)
+    return AcademicAPSyncWorkflowService(db).list_sync_jobs(
+        term_name=term_name,
+        branch=branch,
+        status_filter=status_filter,
+        limit=limit,
+        allowed_branches=allowed_branches,
+    )
 
 
 
@@ -3992,7 +4063,15 @@ def get_ap_sync_job(
     user: UserContext = Depends(_require_academic_catalog_admin),
     db: Session = Depends(get_db),
 ):
-    return AcademicAPSyncWorkflowService(db).get_sync_job(run_id)
+    run = AcademicAPSyncWorkflowService(db).get_sync_job(run_id)
+    _enforce_academic_branch_scope(
+        db,
+        user,
+        branch=run.branch,
+        require_filter=True,
+        action='xem job đồng bộ AP',
+    )
+    return run
 
 
 
@@ -4003,4 +4082,11 @@ def sync_from_ap(
     db: Session = Depends(get_db),
 ):
     _require_academic_catalog_admin(user, db)
+    _enforce_academic_branch_scope(
+        db,
+        user,
+        branch=payload.branch,
+        require_filter=True,
+        action='đồng bộ AP',
+    )
     return AcademicAPSyncWorkflowService(db).sync_from_ap(payload, user=user)
