@@ -99,7 +99,7 @@ function defaultBlocks(): BlockForm[] { return [{ block_code: 'Block 1', block_n
 function emptyForm(branch: Branch = 'poly'): TermForm { return { term_code: 'Summer 2026', term_name: 'Summer 2026', branch, active: true, blocks: defaultBlocks() } }
 
 export default function SemestersPage() {
-  const { authHeaders, can } = useAppContext()
+  const { authHeaders, can, academicBranches } = useAppContext()
   const headers = useMemo(() => authHeaders(), [authHeaders])
   const jsonHeaders = useMemo(() => authHeaders(true), [authHeaders])
   const [items, setItems] = useState<TermRow[]>([])
@@ -110,6 +110,11 @@ export default function SemestersPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<TermForm>(emptyForm())
   const [deleteTarget, setDeleteTarget] = useState<TermRow | null>(null)
+
+  useEffect(() => {
+    if (!academicBranches.length || academicBranches.includes(form.branch)) return
+    setForm((value) => ({ ...value, branch: academicBranches[0] }))
+  }, [academicBranches, form.branch])
 
   const load = async (clearMessage = true) => {
     setLoading(true); if (clearMessage) setMessage(null)
@@ -124,7 +129,7 @@ export default function SemestersPage() {
   }
   useEffect(() => { load() }, [headers])
 
-  const openCreate = () => { setMessage(null); setForm(emptyForm()); setModalOpen(true) }
+  const openCreate = () => { setMessage(null); setForm(emptyForm(academicBranches[0] || 'poly')); setModalOpen(true) }
   const openEdit = async (item: TermRow) => {
     setSaving(true); setMessage(null)
     try {
@@ -204,7 +209,7 @@ export default function SemestersPage() {
     >
       <InlineNotice notice={message} />
       <div className="academic-modal-form">
-        <label>Hệ<select className="input" value={form.branch} onChange={(event) => setForm((value) => ({ ...value, branch: event.target.value as Branch }))}><option value="poly">Poly</option><option value="ptcd">PTCĐ</option></select></label>
+        <label>Hệ<select className="input" value={form.branch} onChange={(event) => setForm((value) => ({ ...value, branch: event.target.value as Branch }))}>{academicBranches.includes('poly') && <option value="poly">Poly</option>}{academicBranches.includes('ptcd') && <option value="ptcd">PTCĐ</option>}</select></label>
         <label>Mã học kỳ<input className="input" value={form.term_code} onChange={(event) => setForm((value) => ({ ...value, term_code: event.target.value, term_name: value.term_name || event.target.value }))} placeholder="Summer 2026" /></label>
         <label>Tên học kỳ<input className="input" value={form.term_name} onChange={(event) => setForm((value) => ({ ...value, term_name: event.target.value }))} placeholder="Summer 2026" /></label>
         <label>Trạng thái<select className="input" value={form.active ? 'true' : 'false'} onChange={(event) => setForm((value) => ({ ...value, active: event.target.value === 'true' }))}><option value="true">Đang dùng</option><option value="false">Đã xóa</option></select></label>
