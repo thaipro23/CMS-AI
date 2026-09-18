@@ -971,6 +971,7 @@ class AcademicClassSyncJobOut(BaseModel):
     job_type: str
     status: str
     class_id: str
+    parent_job_id: str | None = None
     requested_by: str | None = None
     force: bool = False
     limit: int = 500

@@ -661,11 +661,12 @@ export async function getQuestionStats(
 }
 
 export async function getJobs(
-  courseId: string,
+  courseId: string | null | undefined,
   headers: HeadersInit,
 ): Promise<Job[]> {
+  const suffix = courseId?.trim() ? `?course_id=${encodeURIComponent(courseId.trim())}` : "";
   return parseResponse(
-    await apiFetch(`${API}/jobs?course_id=${encodeURIComponent(courseId)}`, {
+    await apiFetch(`${API}/jobs${suffix}`, {
       headers,
     }),
   );

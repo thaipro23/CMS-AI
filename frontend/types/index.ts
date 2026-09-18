@@ -186,6 +186,16 @@ export type Job = {
   openai_response_ids?: string | null
   model_parse_error?: string | null
   error_message?: string | null
+  created_at?: string | null
+  batch_summary?: {
+    total?: number
+    queued?: number
+    running?: number
+    completed?: number
+    partial?: number
+    failed?: number
+    tail?: number
+  } | null
 }
 
 
@@ -2701,6 +2711,7 @@ export type AcademicClassSyncJob = {
   job_type: 'cms_sync_check' | 'cms_enrollment_sync' | 'learning_sync' | string
   status: 'queued' | 'running' | 'completed' | 'failed' | string
   class_id: string
+  parent_job_id?: string | null
   requested_by?: string | null
   force?: boolean
   limit?: number
