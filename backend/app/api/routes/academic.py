@@ -1384,6 +1384,7 @@ def get_term_with_blocks(
     term = db.query(AcademicTerm).filter(AcademicTerm.id == term_id).first()
     if not term:
         raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ')
+    _enforce_academic_branch_scope(db, user, term_id=term.id, require_filter=True, action='xem học kỳ')
     blocks = service.list_blocks(term_id=term_id, active=active_blocks)
     data = AcademicTermOut.model_validate(term).model_dump()
     data['blocks'] = [AcademicBlockOut.model_validate(item).model_dump() for item in blocks]
@@ -1397,6 +1398,23 @@ def save_academic_term(
     db: Session = Depends(get_db),
 ):
     _require_academic_catalog_admin(user, db)
+    if payload.id:
+        existing_term = db.query(AcademicTerm).filter(AcademicTerm.id == payload.id).first()
+        if existing_term:
+            _enforce_academic_branch_scope(
+                db,
+                user,
+                term_id=existing_term.id,
+                require_filter=True,
+                action='sửa học kỳ',
+            )
+    _enforce_academic_branch_scope(
+        db,
+        user,
+        branch=payload.branch,
+        require_filter=True,
+        action='lưu học kỳ',
+    )
     term = AcademicService(db).save_term_with_blocks(payload.model_dump())
     blocks = AcademicService(db).list_blocks(term_id=term.id, active=None)
     log_audit(db, action='academic.term.upsert', status='success', message='Lưu học kỳ/block thành công', user=user, target_type='academic_term', target_id=term.id, metadata={'term_code': term.term_code, 'branch': term.branch, 'block_count': len(blocks)})
@@ -1416,6 +1434,7 @@ def delete_academic_term(
     term = db.query(AcademicTerm).filter(AcademicTerm.id == term_id).first()
     if not term:
         raise HTTPException(status_code=404, detail='Không tìm thấy học kỳ')
+    _enforce_academic_branch_scope(db, user, term_id=term.id, require_filter=True, action='xóa học kỳ')
     term.active = False
     meta = dict(term.metadata_json or {})
     meta.update({'deleted_from_ui': True})
