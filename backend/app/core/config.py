@@ -203,7 +203,7 @@ class Settings(BaseSettings):
     openedx_connector_enrollment_remove_endpoint: str = '/api/ai-connector/v1/course-enrollment/remove'
     openedx_connector_default_enrollment_mode: str = 'audit'
     openedx_connector_client_id: str = 'ai-server'
-    openedx_connector_timeout_seconds: int = 30
+    openedx_connector_timeout_seconds: int = 60
     openedx_connector_max_batch_size: int = 100
 
     # Backward-compatible aliases for old env files. Do not use these for new
@@ -346,8 +346,8 @@ class Settings(BaseSettings):
     # Keep ordinary reads short while giving these writes a separate budget.
     # Course-tree reads are also used to reconcile a failed Quiz create. A
     # 30-second timeout left stale local locks when Studio was merely slow.
-    openedx_request_timeout_seconds: int = 180
-    openedx_write_timeout_seconds: int = 180
+    openedx_request_timeout_seconds: int = 60
+    openedx_write_timeout_seconds: int = 60
     # Bounded retry is used only for idempotent connector operations.
     openedx_retry_max_attempts: int = 4
     openedx_retry_base_seconds: float = 2.0
