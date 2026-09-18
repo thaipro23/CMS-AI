@@ -30,4 +30,5 @@ def test_class_analytics_sends_and_returns_read_consistency(read_consistency):
     )
 
     assert captured['body']['read_consistency'] == read_consistency
+    assert captured['timeout'] == 50
     assert result['read_consistency'] == read_consistency
