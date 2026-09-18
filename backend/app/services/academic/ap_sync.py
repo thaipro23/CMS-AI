@@ -331,12 +331,25 @@ class AcademicAPSyncWorkflowService:
         )
         return {'ok': True, 'message': 'Đã đưa job đồng bộ AP vào hàng đợi. Trạng thái sẽ tự cập nhật.', 'sync_run': run, 'counters': AcademicSyncCounters()}
 
-    def list_sync_jobs(self, *, term_name: str = '', branch: str = '', status_filter: str = 'active', limit: int = 10) -> list[AcademicSyncRun]:
+    def list_sync_jobs(
+        self,
+        *,
+        term_name: str = '',
+        branch: str = '',
+        status_filter: str = 'active',
+        limit: int = 10,
+        allowed_branches: set[str] | None = None,
+    ) -> list[AcademicSyncRun]:
         query = self.db.query(AcademicSyncRun).filter(AcademicSyncRun.source == 'ap')
         if term_name.strip():
             query = query.filter(AcademicSyncRun.term_name == term_name.strip())
         if branch.strip():
             query = query.filter(AcademicSyncRun.branch == branch.strip().lower())
+        elif allowed_branches is not None:
+            clean_allowed = {str(item).strip().lower() for item in allowed_branches if str(item).strip()}
+            if not clean_allowed:
+                return []
+            query = query.filter(func.lower(AcademicSyncRun.branch).in_(sorted(clean_allowed)))
         if status_filter == 'active':
             query = query.filter(AcademicSyncRun.status.in_(['queued', 'running']))
         elif status_filter and status_filter != 'all':
