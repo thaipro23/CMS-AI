@@ -34,6 +34,7 @@ spec:
             - secretRef: {name: ai-server-env}
             - secretRef: {name: ai-server-minio}
           env:
+            - {name: OPENEDX_CONNECTOR_INTERNAL_BASE_URL, value: "http://lms:8000"}
             - {name: LOCAL_STORAGE_PATH, value: /app/.runtime}
             - {name: HOME, value: /tmp}
           resources:
