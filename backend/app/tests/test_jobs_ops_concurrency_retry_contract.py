@@ -91,3 +91,12 @@ def test_k8s_runtime_bypasses_public_haproxy_for_connector_calls():
         assert 'OPENEDX_CONNECTOR_INTERNAL_BASE_URL' in source
         assert 'http://lms:8000' in source
 
+def test_legacy_queued_audit_events_render_as_success():
+    audit = (ROOT / 'backend/app/api/routes/audit.py').read_text(encoding='utf-8')
+
+    assert "_LEGACY_EVENT_SUCCESS_ACTIONS" in audit
+    assert "'academic.progress_email.enqueue'" in audit
+    assert "'academic.class_sync.async.retry'" in audit
+    assert 'def _effective_status' in audit
+    assert "_csv_cell(_effective_status(row))" in audit
+
