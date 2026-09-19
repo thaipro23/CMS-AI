@@ -197,7 +197,7 @@ services:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
       HOME: /tmp
     restart: unless-stopped
-    command: 'celery -A app.worker_entry.celery_app worker --loglevel=INFO --queues=interactive,sync
+    command: 'celery -A app.worker.celery_app worker --loglevel=INFO --queues=interactive,sync
       --concurrency=${CELERY_CONCURRENCY:-2} --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25} --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
       --hostname=worker@%h
@@ -219,7 +219,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A app.worker_entry.celery_app inspect ping -d worker@$$(hostname) 
+      - celery -A app.worker.celery_app inspect ping -d worker@$$(hostname) 
         --timeout=8 | grep -q pong
       interval: 30s
       timeout: 10s
@@ -257,7 +257,7 @@ services:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
       HOME: /tmp
     restart: unless-stopped
-    command: 'celery -A app.worker_entry.celery_app worker --loglevel=INFO --queues=generation,exports
+    command: 'celery -A app.worker.celery_app worker --loglevel=INFO --queues=generation,exports
       --concurrency=${CELERY_HEAVY_CONCURRENCY:-1} --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25} --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
       --hostname=worker-heavy@%h
@@ -279,7 +279,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A app.worker_entry.celery_app inspect ping -d 
+      - celery -A app.worker.celery_app inspect ping -d 
         worker-heavy@$$(hostname) --timeout=8 | grep -q pong
       interval: 30s
       timeout: 10s
@@ -317,7 +317,7 @@ services:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
       HOME: /tmp
     restart: unless-stopped
-    command: 'celery -A app.worker_entry.celery_app worker --loglevel=INFO --queues=analytics
+    command: 'celery -A app.worker.celery_app worker --loglevel=INFO --queues=analytics
       --concurrency=${CELERY_ANALYTICS_CONCURRENCY:-1} --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25} --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
       --hostname=worker-analytics@%h
@@ -340,7 +340,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A app.worker_entry.celery_app inspect ping -d 
+      - celery -A app.worker.celery_app inspect ping -d 
         worker-analytics@$$(hostname) --timeout=8 | grep -q pong
       interval: 30s
       timeout: 10s
@@ -371,7 +371,7 @@ services:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
       HOME: /tmp
     restart: unless-stopped
-    command: celery -A app.worker_entry.celery_app beat --loglevel=INFO 
+    command: celery -A app.worker.celery_app beat --loglevel=INFO 
       --pidfile=/tmp/celerybeat.pid --schedule=/app/.runtime/celerybeat-schedule
     depends_on:
       backend:
