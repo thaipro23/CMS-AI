@@ -3866,3 +3866,54 @@ def analytics_class_recalculate_task(job_id: str):
         raise
     finally:
         db.close()
+
+
+
+def _register_production_academic_runtime_tasks() -> None:
+    """Load production academic coordinators on the canonical Celery app.
+
+    Keep `app.worker.celery_app` as the single runtime entrypoint for Docker,
+    Kubernetes and Jenkins. Runtime modules replace the legacy public task names
+    only after all legacy handlers above have been declared, which avoids import
+    cycles and keeps existing API enqueue contracts stable.
+    """
+    from app.services.academic.daily_teacher_report_runtime import (
+        register_daily_teacher_report_tasks,
+    )
+    from app.services.academic.student_management_runtime import (
+        register_student_management_runtime_tasks,
+    )
+
+    register_daily_teacher_report_tasks(celery_app)
+    register_student_management_runtime_tasks(celery_app)
+
+    routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})
+    routes.update({
+        'academic_sync_all_student_scores_task': {'queue': 'sync'},
+        'academic_daily_score_report_parent_task': {'queue': 'sync'},
+        'academic_teacher_report_watchdog_task': {'queue': 'sync'},
+        'academic_teacher_report_job_task': {'queue': 'exports'},
+    })
+    celery_app.conf.task_routes = routes
+
+    beat_schedule = dict(getattr(celery_app.conf, 'beat_schedule', {}) or {})
+    beat_schedule['academic-score-sync-all-students'] = {
+        'task': 'academic_sync_all_student_scores_task',
+        'schedule': crontab(hour=5, minute=0),
+    }
+    beat_schedule['academic-teacher-report-watchdog'] = {
+        'task': 'academic_teacher_report_watchdog_task',
+        'schedule': 60.0,
+    }
+    celery_app.conf.beat_schedule = beat_schedule
+
+    annotations = dict(getattr(celery_app.conf, 'task_annotations', {}) or {})
+    annotations.update({
+        'academic_sync_all_student_scores_task': {'soft_time_limit': 540, 'time_limit': 600},
+        'academic_daily_score_report_parent_task': {'soft_time_limit': 540, 'time_limit': 600},
+        'academic_teacher_report_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55},
+    })
+    celery_app.conf.task_annotations = annotations
+
+
+_register_production_academic_runtime_tasks()
