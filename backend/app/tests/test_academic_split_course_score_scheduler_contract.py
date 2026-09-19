@@ -33,7 +33,7 @@ def test_learning_refresh_is_a_separate_backend_route_and_learning_only_worker()
 
 
 def test_03_scheduler_runs_ap_then_course_map_without_learning_sync_and_keeps_05_score_job():
-    entry = _read('backend/app/worker_entry.py')
+    entry = _read('backend/app/worker.py')
     runtime = _read('backend/app/services/academic/student_management_runtime.py')
 
     assert 'register_student_management_runtime_tasks(celery_app)' in entry
