@@ -120,3 +120,9 @@ def test_auto_map_worker_allows_explicit_empty_scope_but_rejects_missing_snapsho
     assert 'if not scope_snapshot_present:' in worker_source
     assert "if not approved_class_ids:\n                raise PermissionError" not in worker_source
 
+def test_auto_map_retry_treats_explicit_empty_scope_as_valid_snapshot():
+    source = inspect.getsource(academic_routes.retry_academic_bulk_operation_job)
+
+    assert "scope_snapshot_present = 'approved_class_ids' in request_json" in source
+    assert 'if not scope_snapshot_present:' in source
+
