@@ -196,6 +196,10 @@ class Settings(BaseSettings):
     # existing openedx_connector_plugin on the LMS Django host. The older
     # OPENEDX_STUDENT_INSIGHT_* names remain as deployment aliases only.
     openedx_connector_base_url: str | None = None
+    # Optional Kubernetes service-to-service route for the LMS connector. When
+    # set, requests bypass public Cloudflare/HAProxy while preserving the public
+    # Host header derived from OPENEDX_CONNECTOR_BASE_URL.
+    openedx_connector_internal_base_url: str | None = None
     openedx_connector_users_resolve_endpoint: str = '/api/ai-connector/v1/users/resolve'
     openedx_connector_course_search_endpoint: str = '/api/ai-connector/v1/courses/search'
     openedx_connector_class_analytics_endpoint: str = '/api/ai-connector/v1/class-analytics'
@@ -582,6 +586,11 @@ def validate_security_settings() -> None:
         parsed_internal = urlsplit(internal_cms)
         if parsed_internal.scheme not in {'http', 'https'} or not parsed_internal.hostname:
             errors.append('OPENEDX_CMS_INTERNAL_BASE_URL must be an absolute http(s) URL when configured')
+    internal_connector = str(settings.openedx_connector_internal_base_url or '').strip()
+    if internal_connector:
+        parsed_connector = urlsplit(internal_connector)
+        if parsed_connector.scheme not in {'http', 'https'} or not parsed_connector.hostname:
+            errors.append('OPENEDX_CONNECTOR_INTERNAL_BASE_URL must be an absolute http(s) URL when configured')
     cms_host_header = str(settings.openedx_cms_host_header or '').strip()
     if cms_host_header and ('://' in cms_host_header or '/' in cms_host_header or any(ch.isspace() for ch in cms_host_header)):
         errors.append('OPENEDX_CMS_HOST_HEADER must contain only a host name, not a URL/path')
