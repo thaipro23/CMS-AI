@@ -4,6 +4,17 @@ function isDateOnlyISO(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value.trim())
 }
 
+function parseServerDateTime(value: string | number | Date) {
+  if (typeof value !== 'string') return new Date(value)
+  const raw = value.trim()
+  // SQLAlchemy DateTime columns in this project are persisted with
+  // datetime.utcnow(), so API isoformat() values are UTC even when they do not
+  // carry a trailing Z/offset. Browsers otherwise interpret them as local time
+  // and display scheduled jobs seven hours early in Vietnam.
+  const naiveIsoUtc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(raw)
+  return new Date(naiveIsoUtc ? `${raw}Z` : raw)
+}
+
 function parseISODateOnly(value: string) {
   const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (!match) return null
@@ -83,7 +94,7 @@ export function formatVNDateTime(value?: string | number | Date | null): string 
   try {
     const raw = typeof value === 'string' ? value.trim() : value
     if (typeof raw === 'string' && isDateOnlyISO(raw)) return normalizeVNDateInput(raw)
-    return new Date(raw).toLocaleString('vi-VN', {
+    return parseServerDateTime(raw).toLocaleString('vi-VN', {
       timeZone: VIETNAM_TIME_ZONE,
       hour12: false,
       year: 'numeric',
@@ -112,7 +123,7 @@ export function formatVNTimeDate(value?: string | number | Date | null): string 
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-    }).formatToParts(new Date(raw))
+    }).formatToParts(parseServerDateTime(raw))
     const get = (type: string) => parts.find((part) => part.type === type)?.value || ''
     return `${get('hour')}:${get('minute')}:${get('second')} ${get('day')}/${get('month')}/${get('year')}`
   } catch {
@@ -130,7 +141,7 @@ export function formatVNDate(value?: string | number | Date | null): string {
       const isoDate = parseISODateOnly(raw)
       if (isoDate) return `${String(isoDate.dd).padStart(2, '0')}/${String(isoDate.mm).padStart(2, '0')}/${isoDate.yyyy}`
     }
-    return new Date(raw).toLocaleDateString('vi-VN', { timeZone: VIETNAM_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric' })
+    return parseServerDateTime(raw).toLocaleDateString('vi-VN', { timeZone: VIETNAM_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric' })
   } catch {
     return String(value || '—')
   }
