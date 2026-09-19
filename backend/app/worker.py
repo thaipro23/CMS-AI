@@ -3866,3 +3866,14 @@ def analytics_class_recalculate_task(job_id: str):
         raise
     finally:
         db.close()
+
+
+# Register production runtime task replacements and scheduler extensions on the
+# canonical Celery app itself. Keeping registration here preserves the historic
+# `app.worker.celery_app` entrypoint used by Jenkins/Kubernetes while still
+# loading the 03:00 AP -> auto-map and 05:00 report pipelines.
+from app.services.academic.daily_teacher_report_runtime import register_daily_teacher_report_tasks
+from app.services.academic.student_management_runtime import register_student_management_runtime_tasks
+
+register_daily_teacher_report_tasks(celery_app)
+register_student_management_runtime_tasks(celery_app)

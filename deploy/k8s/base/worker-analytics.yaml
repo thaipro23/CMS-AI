@@ -24,7 +24,7 @@ spec:
           command: ["sh", "-c"]
           args:
             - >-
-              exec celery -A app.worker_entry.celery_app worker
+              exec celery -A app.worker.celery_app worker
               --loglevel=INFO --queues=analytics --concurrency=${CELERY_ANALYTICS_CONCURRENCY:-1}
               --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
               --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}

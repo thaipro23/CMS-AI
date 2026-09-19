@@ -8,23 +8,25 @@ def text(path: str) -> str:
     return target.read_text(encoding='utf-8') if target.exists() else ''
 
 
-def test_daily_teacher_report_worker_entry_replaces_legacy_tasks_and_runs_at_0500_vn():
-    source = text('backend/app/worker_entry.py')
-    assert "Asia/Ho_Chi_Minh" in source
-    assert "crontab(hour=5, minute=0)" in source
-    assert "academic_sync_all_student_scores_task" in source
-    assert "academic_teacher_report_job_task" in source
-    assert "academic-teacher-report-watchdog" in source
+def test_canonical_worker_registers_daily_tasks_and_runs_at_0500_vn():
+    worker = text('backend/app/worker.py')
+    runtime = text('backend/app/services/academic/daily_teacher_report_runtime.py')
+    assert "Asia/Ho_Chi_Minh" in worker
+    assert "crontab(hour=5, minute=0)" in worker
+    assert "academic_sync_all_student_scores_task" in worker
+    assert "academic_teacher_report_job_task" in worker
+    assert "register_daily_teacher_report_tasks(celery_app)" in worker
+    assert "academic_teacher_report_watchdog_task" in runtime
 
 
-def test_compose_celery_runtime_loads_daily_report_registration_entrypoint():
+def test_compose_celery_runtime_keeps_canonical_worker_entrypoint():
     for path in ('docker-compose.yml', 'docker-compose.prod.yml'):
         source = text(path)
-        assert 'app.worker_entry.celery_app' in source
-        assert 'app.worker.celery_app' not in source
+        assert 'app.worker.celery_app' in source
+        assert 'app.worker_entry.celery_app' not in source
 
 
-def test_k8s_celery_runtime_loads_scheduler_registration_entrypoint():
+def test_k8s_celery_runtime_keeps_canonical_worker_entrypoint():
     for path in (
         'deploy/k8s/base/worker.yaml',
         'deploy/k8s/base/worker-heavy.yaml',
@@ -32,8 +34,8 @@ def test_k8s_celery_runtime_loads_scheduler_registration_entrypoint():
         'deploy/k8s/base/beat.yaml',
     ):
         source = text(path)
-        assert 'app.worker_entry.celery_app' in source
-        assert 'app.worker.celery_app' not in source
+        assert 'app.worker.celery_app' in source
+        assert 'app.worker_entry.celery_app' not in source
 
 
 def test_management_report_pipeline_never_refreshes_cms_and_teacher_class_export_keeps_live_refresh():
