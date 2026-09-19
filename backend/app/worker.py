@@ -1692,7 +1692,7 @@ def academic_class_sync_task(self, job_id: str):
                     log_audit(
                         db,
                         action='academic.class_sync.async.retry',
-                        status='queued',
+                        status='success',
                         error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
                         message=job.progress_label,
                         user=None,
@@ -2808,14 +2808,15 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 source='celery_academic_bulk_operation_job',
                 job_id=job.id,
             )
+            scope_snapshot_present = 'approved_class_ids' in request_json
             approved_class_ids = {
                 str(item)
                 for item in (request_json.get('approved_class_ids') or [])
                 if str(item)
             }
-            if not approved_class_ids:
+            if not scope_snapshot_present:
                 raise PermissionError(
-                    'Job Auto map tất cả không có phạm vi lớp đã được duyệt; '
+                    'Job Auto map tất cả thiếu snapshot phạm vi lớp đã được duyệt; '
                     'dừng để tránh mở rộng quyền.'
                 )
             approved_subject_ids = [
