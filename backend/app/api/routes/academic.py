@@ -744,7 +744,7 @@ def _enqueue_progress_email_job(
     log_audit(
         db,
         action='academic.progress_email.enqueue',
-        status='queued',
+        status='success',
         message=f'Đã xếp hàng gửi nhắc tiến độ cho {len(selected_ids)} sinh viên.',
         user=user,
         target_type='academic_bulk_operation_job',
@@ -2932,14 +2932,17 @@ def retry_academic_bulk_operation_job(
         raise HTTPException(status_code=422, detail='Loại tác vụ hàng loạt này chưa hỗ trợ chạy lại an toàn.')
 
     request_json = dict(job.request_json or {}) if isinstance(job.request_json, dict) else {}
+    scope_snapshot_present = 'approved_class_ids' in request_json
     approved_class_ids = [
         str(value) for value in (request_json.get('approved_class_ids') or []) if str(value).strip()
     ]
-    if not approved_class_ids:
+    if not scope_snapshot_present:
         # Jobs created before scope snapshots were introduced fail at 5% in the
         # worker and would otherwise repeat the same failure on every retry.
         # Rebuild the snapshot through the current caller's RBAC decision and
         # the original filters; never trust or broaden the legacy job payload.
+        # An explicitly empty approved_class_ids list is a valid no-op scope and
+        # must be allowed to retry to completion.
         try:
             approved_preview = AcademicService(db).auto_map_subject_courses_for_filter(
                 user,

@@ -31,3 +31,19 @@ def test_class_analytics_sends_and_returns_read_consistency(read_consistency):
 
     assert captured['body']['read_consistency'] == read_consistency
     assert result['read_consistency'] == read_consistency
+
+def test_connector_prefers_internal_service_and_preserves_public_host(monkeypatch):
+    from app.services.openedx_student_insight import settings as connector_settings
+
+    monkeypatch.setattr(connector_settings, 'openedx_connector_base_url', 'https://cms.fpl.edu.vn')
+    monkeypatch.setattr(connector_settings, 'openedx_connector_internal_base_url', 'http://lms:8000')
+    monkeypatch.setattr(connector_settings, 'openedx_connector_hmac_secret', 'x' * 64)
+
+    client = OpenEdXConnectorClient()
+
+    assert client.public_base_url == 'https://cms.fpl.edu.vn'
+    assert client.base_url == 'http://lms:8000'
+    assert client.connector_host_header == 'cms.fpl.edu.vn'
+    headers = client._headers('POST', '/api/ai-connector/v1/class-analytics', b'{}')
+    assert headers['Host'] == 'cms.fpl.edu.vn'
+

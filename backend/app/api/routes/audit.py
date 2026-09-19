@@ -3,7 +3,7 @@ import io
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.db.session import get_db
@@ -13,6 +13,18 @@ from app.models.question_bank import BankOperationJob, CourseQuizInstance, EdxCo
 from app.services.business_rbac import BusinessRBACService
 
 router = APIRouter()
+
+_LEGACY_EVENT_SUCCESS_ACTIONS = {
+    'academic.progress_email.enqueue',
+    'academic.class_sync.async.retry',
+}
+
+
+def _effective_status(row: AuditLog) -> str:
+    """Normalize legacy event rows that recorded queue state instead of event outcome."""
+    if row.status == 'queued' and row.action in _LEGACY_EVENT_SUCCESS_ACTIONS:
+        return 'success'
+    return row.status
 
 
 def _actor_identity(user: UserContext) -> set[str]:
@@ -98,7 +110,7 @@ def _serialize(row: AuditLog):
         'action': row.action,
         'target_type': row.target_type,
         'target_id': row.target_id,
-        'status': row.status,
+        'status': _effective_status(row),
         'error_type': row.error_type,
         'message': row.message,
         'metadata': row.metadata_json or {},
@@ -110,7 +122,16 @@ def _apply_audit_filters(query, *, course_id: str | None, status: str | None, er
     if course_id:
         query = query.filter(AuditLog.course_id == course_id)
     if status and status != 'all':
-        query = query.filter(AuditLog.status == status)
+        if status == 'success':
+            query = query.filter(or_(
+                AuditLog.status == 'success',
+                and_(
+                    AuditLog.status == 'queued',
+                    AuditLog.action.in_(sorted(_LEGACY_EVENT_SUCCESS_ACTIONS)),
+                ),
+            ))
+        else:
+            query = query.filter(AuditLog.status == status)
     if error_type and error_type != 'all':
         query = query.filter(AuditLog.error_type == error_type)
     if actor_id:
@@ -220,7 +241,7 @@ def export_audit_logs_csv(
     for row in rows:
         writer.writerow([
             _csv_cell(row.created_at.isoformat() if row.created_at else ''), _csv_cell(row.actor_id), _csv_cell(row.actor_role),
-            _csv_cell(row.action), _csv_cell(row.status), _csv_cell(row.error_type), _csv_cell(row.target_type), _csv_cell(row.target_id), _csv_cell(row.message),
+            _csv_cell(row.action), _csv_cell(_effective_status(row)), _csv_cell(row.error_type), _csv_cell(row.target_type), _csv_cell(row.target_id), _csv_cell(row.message),
         ])
     payload = buffer.getvalue().encode('utf-8')
     return StreamingResponse(

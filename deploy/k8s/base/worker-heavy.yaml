@@ -24,7 +24,7 @@ spec:
           command: ["sh", "-c"]
           args:
             - >-
-              exec celery -A app.worker.celery_app worker
+              exec celery -A app.worker_entry.celery_app worker
               --loglevel=INFO --queues=generation,exports --concurrency=${CELERY_HEAVY_CONCURRENCY:-1}
               --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
               --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}
@@ -34,6 +34,7 @@ spec:
             - secretRef: {name: ai-server-env}
             - secretRef: {name: ai-server-minio}
           env:
+            - {name: OPENEDX_CONNECTOR_INTERNAL_BASE_URL, value: "http://lms:8000"}
             - {name: LOCAL_STORAGE_PATH, value: /app/.runtime}
             - {name: HOME, value: /tmp}
           resources:
