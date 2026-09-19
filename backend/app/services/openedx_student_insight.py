@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
@@ -60,13 +60,22 @@ class OpenEdXConnectorClient:
     """
 
     def __init__(self) -> None:
-        base = (
+        public_base = (
             getattr(settings, 'openedx_connector_base_url', None)
             or settings.openedx_student_insight_base_url
             or settings.openedx_lms_base_url
             or ''
         ).rstrip('/')
-        self.base_url = base
+        internal_base = str(
+            getattr(settings, 'openedx_connector_internal_base_url', None) or ''
+        ).strip().rstrip('/')
+        self.public_base_url = public_base
+        self.base_url = internal_base or public_base
+        self.connector_host_header = None
+        if internal_base and public_base:
+            public_parts = urlsplit(public_base)
+            if public_parts.hostname:
+                self.connector_host_header = public_parts.netloc
         self.users_resolve_endpoint = _path(
             getattr(settings, 'openedx_connector_users_resolve_endpoint', None),
             '/api/ai-connector/v1/users/resolve',
@@ -169,6 +178,11 @@ class OpenEdXConnectorClient:
             'X-AI-Client': self.client_id,
             'X-AI-Connector-Timestamp': timestamp,
         }
+        if self.connector_host_header:
+            # Direct Kubernetes Service traffic still needs the public LMS Host
+            # so Django ALLOWED_HOSTS/site configuration sees the canonical host
+            # instead of the internal Service DNS name.
+            headers['Host'] = self.connector_host_header
         if use_nonce:
             nonce = str(uuid.uuid4())
             # v25.9.16.5.8 adds nonce to the connector canonical string. The Open edX
