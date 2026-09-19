@@ -26,7 +26,7 @@ spec:
           command: ["celery"]
           args:
             - -A
-            - app.worker_entry.celery_app
+            - app.worker.celery_app
             - beat
             - --loglevel=INFO
             - --pidfile=/tmp/celerybeat.pid
