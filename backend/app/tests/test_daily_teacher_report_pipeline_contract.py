@@ -9,12 +9,14 @@ def text(path: str) -> str:
 
 
 def test_canonical_worker_registers_daily_tasks_and_runs_at_0500_vn():
-    source = text('backend/app/worker.py')
-    assert "Asia/Ho_Chi_Minh" in source
-    assert "crontab(hour=5, minute=0)" in source
-    assert "academic_sync_all_student_scores_task" in source
-    assert "academic_teacher_report_job_task" in source
-    assert "academic-teacher-report-watchdog" in source
+    worker = text('backend/app/worker.py')
+    runtime = text('backend/app/services/academic/daily_teacher_report_runtime.py')
+    assert "Asia/Ho_Chi_Minh" in worker
+    assert "crontab(hour=5, minute=0)" in worker
+    assert "academic_sync_all_student_scores_task" in worker
+    assert "academic_teacher_report_job_task" in worker
+    assert "register_daily_teacher_report_tasks(celery_app)" in worker
+    assert "academic_teacher_report_watchdog_task" in runtime
 
 
 def test_compose_celery_runtime_keeps_canonical_worker_entrypoint():
