@@ -64,3 +64,19 @@ def test_jobs_console_shows_generation_and_groups_bulk_children():
     assert "courseId: string | null | undefined" in api
     assert "parent_job_id?: string | null" in types
     assert "parent_job_id: str | None = None" in schemas
+
+def test_audit_events_do_not_stay_in_queued_state_after_enqueue_or_retry():
+    worker = WORKER.read_text(encoding='utf-8')
+    academic = ACADEMIC.read_text(encoding='utf-8')
+    jobs = JOBS_PAGE.read_text(encoding='utf-8')
+
+    retry_block = worker.split("action='academic.class_sync.async.retry'", 1)[1].split("raise self.retry", 1)[0]
+    assert "status='success'" in retry_block
+    assert "status='queued'" not in retry_block
+
+    email_block = academic.split("action='academic.progress_email.enqueue'", 1)[1].split("return job", 1)[0]
+    assert "status='success'" in email_block
+    assert "status='queued'" not in email_block
+
+    assert "academic.class_sync.async.retry" not in jobs or "Chờ tự chạy lại" in jobs
+
