@@ -744,7 +744,7 @@ def _enqueue_progress_email_job(
     log_audit(
         db,
         action='academic.progress_email.enqueue',
-        status='queued',
+        status='success',
         message=f'Đã xếp hàng gửi nhắc tiến độ cho {len(selected_ids)} sinh viên.',
         user=user,
         target_type='academic_bulk_operation_job',
