@@ -24,6 +24,18 @@ def test_compose_celery_runtime_loads_daily_report_registration_entrypoint():
         assert 'app.worker.celery_app' not in source
 
 
+def test_k8s_celery_runtime_loads_scheduler_registration_entrypoint():
+    for path in (
+        'deploy/k8s/base/worker.yaml',
+        'deploy/k8s/base/worker-heavy.yaml',
+        'deploy/k8s/base/worker-analytics.yaml',
+        'deploy/k8s/base/beat.yaml',
+    ):
+        source = text(path)
+        assert 'app.worker_entry.celery_app' in source
+        assert 'app.worker.celery_app' not in source
+
+
 def test_management_report_pipeline_never_refreshes_cms_and_teacher_class_export_keeps_live_refresh():
     source = text('backend/app/services/academic/daily_teacher_report_runtime.py')
     assert "scheduled_export_excel" in source
