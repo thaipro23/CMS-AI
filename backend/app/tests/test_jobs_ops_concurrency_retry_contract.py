@@ -80,3 +80,14 @@ def test_audit_events_do_not_stay_in_queued_state_after_enqueue_or_retry():
 
     assert "academic.class_sync.async.retry" not in jobs or "Chờ tự chạy lại" in jobs
 
+def test_k8s_runtime_bypasses_public_haproxy_for_connector_calls():
+    for relative in (
+        'deploy/k8s/base/backend.yaml',
+        'deploy/k8s/base/worker.yaml',
+        'deploy/k8s/base/worker-heavy.yaml',
+        'deploy/k8s/base/worker-analytics.yaml',
+    ):
+        source = (ROOT / relative).read_text(encoding='utf-8')
+        assert 'OPENEDX_CONNECTOR_INTERNAL_BASE_URL' in source
+        assert 'http://lms:8000' in source
+
