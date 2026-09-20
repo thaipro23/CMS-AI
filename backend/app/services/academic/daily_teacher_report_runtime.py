@@ -1203,3 +1203,24 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
             return reconcile_teacher_report_watchdog(db)
         finally:
             db.close()
+
+    routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})
+    routes.update({
+        'academic_daily_score_report_parent_task': {'queue': 'sync'},
+        'academic_teacher_report_watchdog_task': {'queue': 'sync'},
+    })
+    celery_app.conf.task_routes = routes
+
+    annotations = dict(getattr(celery_app.conf, 'task_annotations', {}) or {})
+    annotations.update({
+        'academic_daily_score_report_parent_task': {'soft_time_limit': 120, 'time_limit': 180},
+        'academic_teacher_report_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55},
+    })
+    celery_app.conf.task_annotations = annotations
+
+    beat_schedule = dict(getattr(celery_app.conf, 'beat_schedule', {}) or {})
+    beat_schedule['academic-teacher-report-watchdog'] = {
+        'task': 'academic_teacher_report_watchdog_task',
+        'schedule': 300,
+    }
+    celery_app.conf.beat_schedule = beat_schedule
