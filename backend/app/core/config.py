@@ -391,7 +391,7 @@ class Settings(BaseSettings):
     academic_teacher_report_sync_export_max_teachers: int = 20
     academic_teacher_report_sync_export_max_students: int = 1000
     academic_teacher_report_file_retention_hours: int = 48
-    academic_bulk_sync_dispatch_window: int = 10
+    academic_bulk_sync_dispatch_window: int = 4
     academic_bulk_sync_continue_delay_seconds: int = 10
     # Per-class CMS sync retries only transient connector/network failures.
     # Three retries means one initial attempt plus up to three automatic retries.
