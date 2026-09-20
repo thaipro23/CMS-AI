@@ -46,3 +46,14 @@ def test_03_scheduler_runs_ap_then_course_map_without_learning_sync_and_keeps_05
     # Existing score/Excel freshness pipeline stays at 05:00 Vietnam time.
     assert "'academic-score-sync-all-students'" in worker
     assert 'crontab(hour=5, minute=0)' in worker
+
+
+def test_academic_batch_window_is_four_in_config_and_k8s_worker():
+    config = _read('backend/app/core/config.py')
+    worker_manifest = _read('deploy/k8s/base/worker.yaml')
+    env_example = _read('.env.production.example')
+
+    assert 'academic_bulk_sync_dispatch_window: int = 4' in config
+    assert 'value: "4"' in worker_manifest
+    assert '--concurrency=${CELERY_CONCURRENCY:-4}' in worker_manifest
+    assert 'ACADEMIC_BULK_SYNC_DISPATCH_WINDOW=4' in env_example
