@@ -86,6 +86,11 @@ def test_daily_parent_waits_for_terminal_children_before_scheduled_exports():
     assert "if not plan.finished" in parent
     assert "_create_scheduled_export_job" in parent
     assert parent.index("if not plan.finished") < parent.index("_create_scheduled_export_job")
+    assert "'phase': 'campus_reporting'" in parent
+    assert "'phase': 'ho_reporting'" in parent
+    assert "source_campus_report_job_ids" in parent
+    assert "aggregate_after_campus_reports" in parent
+    assert parent.index("for campus in campuses:") < parent.index("campus=None,")
 
 
 def test_cms_teacher_management_keeps_operations_visible_and_has_one_excel_flow():
