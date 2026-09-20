@@ -685,10 +685,9 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                 if str(value or '').strip()
             }) if target_class_ids else []
 
-            report_job_ids: list[str] = []
+            campus_report_job_ids: list[str] = []
             skipped_scopes: list[dict[str, Any]] = []
-            scopes: list[str | None] = [None, *campuses]
-            for campus in scopes:
+            for campus in campuses:
                 scope_ids = _scope_class_ids(
                     db,
                     term_id=str(parent.term_id),
@@ -698,7 +697,7 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                 failed_in_scope = sorted(scope_ids.intersection(failed_class_ids))
                 if failed_in_scope:
                     skipped_scopes.append({
-                        'scope': campus or 'HO',
+                        'scope': campus,
                         'failed_class_count': len(failed_in_scope),
                         'failed_class_ids': failed_in_scope[:50],
                         'reason': 'score_sync_failed',
@@ -711,51 +710,143 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                     campus=campus,
                     source_synced_at=source_synced_at,
                 )
-                report_job_ids.append(str(export_job.id))
+                campus_report_job_ids.append(str(export_job.id))
 
             state = dict(parent.result_json or {})
             state.update({
-                'phase': 'reporting',
+                'phase': 'campus_reporting',
                 'source_synced_at': vn_iso(source_synced_at),
-                'report_job_ids': report_job_ids,
+                'campus_report_job_ids': campus_report_job_ids,
+                'report_job_ids': list(campus_report_job_ids),
                 'skipped_report_scopes': skipped_scopes,
             })
             parent.result_json = json_safe_value(state)
             touch_job_runtime(
                 parent,
                 current=70,
-                label=f'Đã cập nhật điểm; đang tạo {len(report_job_ids)} file HO/cơ sở',
-                phase='reporting',
+                label=f'Đã cập nhật điểm; đang tạo {len(campus_report_job_ids)} file báo cáo cơ sở',
+                phase='campus_reporting',
                 force_progress_changed=True,
             )
             db.add(parent)
             db.commit()
             _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync', countdown=30)
-            return {'ok': True, 'status': 'reporting', 'report_job_ids': report_job_ids, 'skipped_scopes': skipped_scopes}
+            return {
+                'ok': True,
+                'status': 'campus_reporting',
+                'campus_report_job_ids': campus_report_job_ids,
+                'skipped_scopes': skipped_scopes,
+            }
+
+        if phase == 'campus_reporting':
+            campus_report_job_ids = [
+                str(item) for item in (state.get('campus_report_job_ids') or []) if str(item)
+            ]
+            campus_reports = (
+                db.query(AcademicTeacherReportJob)
+                .filter(AcademicTeacherReportJob.id.in_(campus_report_job_ids))
+                .all()
+                if campus_report_job_ids else []
+            )
+            completed_campus_reports = [item for item in campus_reports if item.status == 'completed']
+            failed_campus_reports = [item for item in campus_reports if item.status == 'failed']
+            terminal_count = len(completed_campus_reports) + len(failed_campus_reports)
+            if terminal_count < len(campus_report_job_ids):
+                progress = min(88, 70 + int((terminal_count / max(1, len(campus_report_job_ids))) * 18))
+                touch_job_runtime(
+                    parent,
+                    current=progress,
+                    label=f'Đang tạo Excel cơ sở: {terminal_count}/{len(campus_report_job_ids)} hoàn tất',
+                    phase='campus_reporting',
+                    force_progress_changed=terminal_count != int(state.get('campus_report_terminal_count') or 0),
+                )
+                state['campus_report_terminal_count'] = terminal_count
+                parent.result_json = json_safe_value(state)
+                db.add(parent)
+                db.commit()
+                _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync', countdown=30)
+                return {'ok': True, 'status': 'campus_reporting', 'campus_report_terminal_count': terminal_count}
+
+            skipped_scopes = list(state.get('skipped_report_scopes') or [])
+            if failed_campus_reports or skipped_scopes:
+                state.update({
+                    'phase': 'finished',
+                    'report_completed_count': len(completed_campus_reports),
+                    'report_failed_count': len(failed_campus_reports),
+                    'artifact_job_ids': [str(item.id) for item in completed_campus_reports],
+                    'finished_at': vn_iso(now),
+                })
+                parent.result_json = json_safe_value(state)
+                parent.status = 'failed'
+                parent.finished_at = now
+                parent.error_message = (
+                    'Không tạo báo cáo HO vì còn cơ sở lỗi cập nhật điểm hoặc lỗi tạo Excel.'
+                )
+                touch_job_runtime(
+                    parent,
+                    current=100,
+                    label='Dừng trước báo cáo HO vì còn cơ sở thất bại',
+                    phase='finished',
+                    force_progress_changed=True,
+                )
+                db.add(parent)
+                db.commit()
+                return json_safe_value({'ok': False, **state})
+
+            source_synced_at = _parse_runtime_time(state.get('source_synced_at')) or now
+            ho_job = _create_scheduled_export_job(
+                db,
+                celery_app,
+                parent=parent,
+                campus=None,
+                source_synced_at=source_synced_at,
+            )
+            ho_request = dict(ho_job.request_json or {})
+            ho_request['source_campus_report_job_ids'] = [
+                str(item.id) for item in completed_campus_reports
+            ]
+            ho_request['aggregate_after_campus_reports'] = True
+            ho_job.request_json = json_safe_value(ho_request)
+            db.add(ho_job)
+            state.update({
+                'phase': 'ho_reporting',
+                'ho_report_job_id': str(ho_job.id),
+                'report_job_ids': [
+                    *[str(item.id) for item in completed_campus_reports],
+                    str(ho_job.id),
+                ],
+            })
+            parent.result_json = json_safe_value(state)
+            touch_job_runtime(
+                parent,
+                current=90,
+                label='Excel các cơ sở đã xong; đang tổng hợp báo cáo HO',
+                phase='ho_reporting',
+                force_progress_changed=True,
+            )
+            db.add(parent)
+            db.commit()
+            _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync', countdown=30)
+            return {'ok': True, 'status': 'ho_reporting', 'ho_report_job_id': str(ho_job.id)}
+
+        ho_report_job_id = str(state.get('ho_report_job_id') or '')
+        ho_report = db.get(AcademicTeacherReportJob, ho_report_job_id) if ho_report_job_id else None
+        if ho_report and ho_report.status in {'queued', 'running'}:
+            touch_job_runtime(
+                parent,
+                current=95,
+                label='Đang tổng hợp báo cáo HO sau các báo cáo cơ sở',
+                phase='ho_reporting',
+            )
+            db.add(parent)
+            db.commit()
+            _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync', countdown=30)
+            return {'ok': True, 'status': 'ho_reporting'}
 
         report_job_ids = [str(item) for item in (state.get('report_job_ids') or []) if str(item)]
         reports = db.query(AcademicTeacherReportJob).filter(AcademicTeacherReportJob.id.in_(report_job_ids)).all() if report_job_ids else []
         completed_reports = [item for item in reports if item.status == 'completed']
         failed_reports = [item for item in reports if item.status == 'failed']
-        terminal_count = len(completed_reports) + len(failed_reports)
-        if terminal_count < len(report_job_ids):
-            progress = min(95, 70 + int((terminal_count / max(1, len(report_job_ids))) * 25))
-            touch_job_runtime(
-                parent,
-                current=progress,
-                label=f'Đang tạo file báo cáo: {terminal_count}/{len(report_job_ids)} hoàn tất',
-                phase='reporting',
-                force_progress_changed=terminal_count != int(state.get('report_terminal_count') or 0),
-            )
-            state = dict(parent.result_json or {})
-            state['report_terminal_count'] = terminal_count
-            parent.result_json = json_safe_value(state)
-            db.add(parent)
-            db.commit()
-            _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync', countdown=30)
-            return {'ok': True, 'status': 'reporting', 'report_terminal_count': terminal_count}
-
-        state = dict(parent.result_json or {})
         state.update({
             'phase': 'finished',
             'report_completed_count': len(completed_reports),
@@ -764,16 +855,16 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
             'finished_at': vn_iso(now),
         })
         parent.result_json = json_safe_value(state)
-        parent.status = 'completed' if completed_reports or not report_job_ids else 'failed'
+        parent.status = 'completed' if ho_report and ho_report.status == 'completed' and not failed_reports else 'failed'
         parent.finished_at = now
-        parent.error_message = None if parent.status == 'completed' else 'Không tạo được file báo cáo tự động nào.'
+        parent.error_message = None if parent.status == 'completed' else 'Không tạo được báo cáo HO sau báo cáo cơ sở.'
         touch_job_runtime(
             parent,
             current=100,
             label=(
-                f'Hoàn tất 05:00 +07 · {len(completed_reports)} file mới'
+                f'Hoàn tất 05:00 +07 · {len(completed_reports)} file cơ sở/HO'
                 if parent.status == 'completed'
-                else 'Đợt 05:00 thất bại khi tạo báo cáo'
+                else 'Đợt 05:00 thất bại khi tổng hợp báo cáo HO'
             ),
             phase='finished',
             force_progress_changed=True,
