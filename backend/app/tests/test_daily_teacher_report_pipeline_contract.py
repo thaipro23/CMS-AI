@@ -112,3 +112,25 @@ def test_cms_teacher_management_keeps_operations_visible_and_has_one_excel_flow(
     assert 'refreshLatestAcademicScores' in management
     assert "import { API, apiFetch }" in academic_bulk
     assert 'await apiFetch(' in academic_bulk
+
+
+def test_ho_aggregation_metadata_is_persisted_before_export_enqueue():
+    source = text('backend/app/services/academic/daily_teacher_report_runtime.py')
+    creator = source.split('def _create_scheduled_export_job(', 1)[1].split('def run_daily_score_report_parent(', 1)[0]
+    parent = source.split('def run_daily_score_report_parent(', 1)[1].split('def _job_request(', 1)[0]
+    assert 'request_overrides' in creator
+    assert 'request.update(json_safe_value(request_overrides))' in creator
+    assert creator.index('request.update(json_safe_value(request_overrides))') < creator.index("_enqueue_task(celery_app, 'academic_teacher_report_job_task'")
+    assert "'aggregate_after_campus_reports': True" in parent
+    assert "'source_campus_report_job_ids': [" in parent
+
+
+def test_report_watchdog_is_actually_scheduled_and_routed():
+    source = text('backend/app/services/academic/daily_teacher_report_runtime.py')
+    register = source.split('def register_daily_teacher_report_tasks(', 1)[1]
+    assert "'academic-teacher-report-watchdog'" in register
+    assert "'task': 'academic_teacher_report_watchdog_task'" in register
+    assert "'schedule': 300" in register
+    assert "'academic_teacher_report_watchdog_task': {'queue': 'sync'}" in register
+    assert "'academic_daily_score_report_parent_task': {'queue': 'sync'}" in register
+    assert "'academic_teacher_report_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55}" in register
