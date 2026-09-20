@@ -564,6 +564,7 @@ def _create_scheduled_export_job(
     parent: AcademicBulkOperationJob,
     campus: str | None,
     source_synced_at: datetime,
+    request_overrides: dict[str, Any] | None = None,
 ) -> AcademicTeacherReportJob:
     request = {
         'term_id': str(parent.term_id),
@@ -587,6 +588,8 @@ def _create_scheduled_export_job(
         },
         'scope_enforced_by_backend': True,
     }
+    if request_overrides:
+        request.update(json_safe_value(request_overrides))
     job = AcademicTeacherReportJob(
         job_type=SCHEDULED_EXPORT_JOB_TYPE,
         status='queued',
@@ -794,20 +797,22 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                 return json_safe_value({'ok': False, **state})
 
             source_synced_at = _parse_runtime_time(state.get('source_synced_at')) or now
+            # Persist the HO aggregation contract before publishing the task.
+            # _create_scheduled_export_job() enqueues immediately, so mutating
+            # request_json afterwards races a fast exports worker.
             ho_job = _create_scheduled_export_job(
                 db,
                 celery_app,
                 parent=parent,
                 campus=None,
                 source_synced_at=source_synced_at,
+                request_overrides={
+                    'source_campus_report_job_ids': [
+                        str(item.id) for item in completed_campus_reports
+                    ],
+                    'aggregate_after_campus_reports': True,
+                },
             )
-            ho_request = dict(ho_job.request_json or {})
-            ho_request['source_campus_report_job_ids'] = [
-                str(item.id) for item in completed_campus_reports
-            ]
-            ho_request['aggregate_after_campus_reports'] = True
-            ho_job.request_json = json_safe_value(ho_request)
-            db.add(ho_job)
             state.update({
                 'phase': 'ho_reporting',
                 'ho_report_job_id': str(ho_job.id),
