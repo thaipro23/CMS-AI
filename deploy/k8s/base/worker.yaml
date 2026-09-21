@@ -25,7 +25,7 @@ spec:
           args:
             - >-
               exec celery -A app.worker.celery_app worker
-              --loglevel=INFO --queues=interactive,sync --concurrency=${CELERY_CONCURRENCY:-4}
+              --loglevel=INFO --queues=interactive,sync-fast --concurrency=${CELERY_CONCURRENCY:-4}
               --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
               --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25}
               --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
@@ -35,7 +35,7 @@ spec:
                 name: ai-server-env
           env:
             # Explicit values override any stale values inherited from ai-server-env.
-            # Keep the shared interactive/sync worker bounded so overnight academic batches cannot exhaust the 2Gi pod.
+            # Fast lane: user-triggered/single tasks keep dedicated worker slots and never consume the bulk queue.
             - name: CELERY_CONCURRENCY
               value: "4"
             - name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW
