@@ -52,6 +52,12 @@ spec:
             # Service directly so connector traffic does not depend on HAProxy.
             - name: OPENEDX_CONNECTOR_INTERNAL_BASE_URL
               value: http://lms:8000
+            - name: OPENEDX_CONNECTOR_READ_RETRY_MAX_ATTEMPTS
+              value: "2"
+            - name: OPENEDX_CONNECTOR_READ_RETRY_BASE_SECONDS
+              value: "0.5"
+            - name: OPENEDX_CONNECTOR_READ_RETRY_MAX_SECONDS
+              value: "1.0"
             - name: LOCAL_STORAGE_PATH
               value: /app/.runtime
             - name: HOME
