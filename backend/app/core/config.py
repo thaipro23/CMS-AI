@@ -208,6 +208,11 @@ class Settings(BaseSettings):
     openedx_connector_default_enrollment_mode: str = 'audit'
     openedx_connector_client_id: str = 'ai-server'
     openedx_connector_timeout_seconds: int = 60
+    # Read-only class analytics may retry transient LMS/service failures. Keep
+    # attempts low because one analytics request can be relatively expensive.
+    openedx_connector_read_retry_max_attempts: int = 2
+    openedx_connector_read_retry_base_seconds: float = 0.5
+    openedx_connector_read_retry_max_seconds: float = 1.0
     openedx_connector_max_batch_size: int = 100
 
     # Backward-compatible aliases for old env files. Do not use these for new
