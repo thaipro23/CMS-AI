@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import time as time_module
 import uuid
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
@@ -232,7 +233,16 @@ class OpenEdXConnectorClient:
             )
         response.raise_for_status()
 
-    def _post_json(self, *, path: str, body: dict[str, Any], operation: str, timeout: int | None = None, legacy_fallback: bool = True) -> Any:
+    def _post_json(
+        self,
+        *,
+        path: str,
+        body: dict[str, Any],
+        operation: str,
+        timeout: int | None = None,
+        legacy_fallback: bool = True,
+        retry_transient_read: bool = False,
+    ) -> Any:
         if not self.configured():
             raise RuntimeError('Chưa cấu hình OPENEDX_CONNECTOR_BASE_URL/OPENEDX_CONNECTOR_HMAC_SECRET để gọi Open edX Connector')
         primary = _path(path, path)
@@ -242,20 +252,84 @@ class OpenEdXConnectorClient:
             candidates.append(legacy)
         raw = json.dumps(body, ensure_ascii=False, separators=(',', ':'), default=_json_default).encode('utf-8')
         last_404: httpx.Response | None = None
+
+        # Only explicitly read-only connector operations may retry POST requests.
+        # Enrollment/user-creation endpoints keep one-shot semantics so a proxy
+        # failure can never replay a mutation accidentally.
+        max_attempts = 1
+        retry_base_seconds = 0.0
+        retry_max_seconds = 0.0
+        if retry_transient_read:
+            max_attempts = max(
+                1,
+                int(getattr(settings, 'openedx_connector_read_retry_max_attempts', 3) or 3),
+            )
+            retry_base_seconds = max(
+                0.0,
+                float(getattr(settings, 'openedx_connector_read_retry_base_seconds', 0.5) or 0.0),
+            )
+            retry_max_seconds = max(
+                retry_base_seconds,
+                float(getattr(settings, 'openedx_connector_read_retry_max_seconds', 2.0) or 0.0),
+            )
+
+        transient_statuses = {502, 503, 504}
+
         for candidate_path in candidates:
             url = urljoin(self.base_url + '/', candidate_path.lstrip('/'))
-            headers = self._headers('POST', candidate_path, raw, use_nonce=True)
-            with httpx.Client(timeout=timeout or self.timeout_seconds) as client:
-                response = client.post(url, content=raw, headers=headers)
-                # Rolling-upgrade fallback: older connector plugins validate the
-                # four-part connector HMAC canonical string and do not know the
-                # X-AI-Connector-Nonce extension yet. Retry once without nonce if
-                # the nonce-signed request is rejected.
-                if response.status_code == 403:
-                    legacy_headers = self._headers('POST', candidate_path, raw, use_nonce=False)
-                    legacy_response = client.post(url, content=raw, headers=legacy_headers)
-                    if legacy_response.status_code < 400 or legacy_response.status_code == 404:
-                        response = legacy_response
+            response: httpx.Response | None = None
+            last_transport_error: httpx.TransportError | None = None
+
+            for attempt in range(1, max_attempts + 1):
+                # Generate a new nonce/signature for every retry. Reusing a nonce
+                # can be rejected as replay if the previous request reached LMS
+                # but the proxy/service failed before returning the response.
+                headers = self._headers('POST', candidate_path, raw, use_nonce=True)
+                try:
+                    with httpx.Client(timeout=timeout or self.timeout_seconds) as client:
+                        response = client.post(url, content=raw, headers=headers)
+                        # Rolling-upgrade fallback: older connector plugins validate
+                        # the four-part HMAC canonical string and do not know nonce.
+                        if response.status_code == 403:
+                            legacy_headers = self._headers('POST', candidate_path, raw, use_nonce=False)
+                            legacy_response = client.post(url, content=raw, headers=legacy_headers)
+                            if legacy_response.status_code < 400 or legacy_response.status_code == 404:
+                                response = legacy_response
+                    last_transport_error = None
+                except httpx.TransportError as exc:
+                    if not retry_transient_read or attempt >= max_attempts:
+                        raise
+                    last_transport_error = exc
+                    response = None
+
+                should_retry_status = (
+                    retry_transient_read
+                    and response is not None
+                    and response.status_code in transient_statuses
+                    and attempt < max_attempts
+                )
+                should_retry_transport = (
+                    retry_transient_read
+                    and last_transport_error is not None
+                    and attempt < max_attempts
+                )
+                if should_retry_status or should_retry_transport:
+                    delay = min(
+                        retry_max_seconds,
+                        retry_base_seconds * (2 ** (attempt - 1)),
+                    )
+                    if delay > 0:
+                        time_module.sleep(delay)
+                    continue
+                break
+
+            if response is None:
+                # The final transport error is raised in the except branch above;
+                # this guard exists only for defensive type narrowing.
+                if last_transport_error is not None:
+                    raise last_transport_error
+                raise RuntimeError(f'Open edX Connector không trả về response khi {operation}')
+
             if response.status_code == 404 and candidate_path != candidates[-1]:
                 last_404 = response
                 continue
@@ -460,6 +534,7 @@ class OpenEdXConnectorClient:
             body=body,
             operation='lấy tiến độ/điểm CMS',
             timeout=max(self.timeout_seconds, 60),
+            retry_transient_read=True,
         )
         if isinstance(data, dict):
             rows = data.get('results') or data.get('items') or data.get('students') or []
