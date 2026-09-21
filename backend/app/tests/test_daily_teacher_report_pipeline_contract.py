@@ -29,6 +29,7 @@ def test_compose_celery_runtime_keeps_canonical_worker_entrypoint():
 def test_k8s_celery_runtime_keeps_canonical_worker_entrypoint():
     for path in (
         'deploy/k8s/base/worker.yaml',
+        'deploy/k8s/base/worker-bulk.yaml',
         'deploy/k8s/base/worker-heavy.yaml',
         'deploy/k8s/base/worker-analytics.yaml',
         'deploy/k8s/base/beat.yaml',
@@ -131,6 +132,6 @@ def test_report_watchdog_is_actually_scheduled_and_routed():
     assert "'academic-teacher-report-watchdog'" in register
     assert "'task': 'academic_teacher_report_watchdog_task'" in register
     assert "'schedule': 300" in register
-    assert "'academic_teacher_report_watchdog_task': {'queue': 'sync'}" in register
-    assert "'academic_daily_score_report_parent_task': {'queue': 'sync'}" in register
+    assert "'academic_teacher_report_watchdog_task': {'queue': 'sync-fast'}" in register
+    assert "'academic_daily_score_report_parent_task': {'queue': 'sync-bulk'}" in register
     assert "'academic_teacher_report_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55}" in register
