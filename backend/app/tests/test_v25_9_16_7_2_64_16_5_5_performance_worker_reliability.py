@@ -35,7 +35,10 @@ def test_celery_routes_and_reliability_settings_are_active():
     assert "'generate_questions_task': {'queue': 'generation'}" in source
     assert "'academic_teacher_report_job_task': {'queue': 'exports'}" in source
     assert "'analytics_ingest_task': {'queue': 'analytics'}" in source
-    assert "'academic_ap_sync_task': {'queue': 'sync'}" in source
+    assert "'bank_release_publish_task': {'queue': 'sync-fast'}" in source
+    assert "'academic_class_sync_task': {'queue': 'sync-fast'}" in source
+    assert "'academic_ap_sync_task': {'queue': 'sync-bulk'}" in source
+    assert "'academic_sync_all_student_scores_task': {'queue': 'sync-bulk'}" in source
     assert "'visibility_timeout': int(settings.celery_broker_visibility_timeout_seconds)" in source
     env = (ROOT / '.env.production.example').read_text(encoding='utf-8')
     assert 'CELERY_TASK_ACKS_LATE=true' in env
@@ -46,7 +49,9 @@ def test_compose_splits_heavy_and_analytics_workers():
     source = (ROOT / 'docker-compose.prod.yml').read_text(encoding='utf-8')
     assert 'worker-heavy:' in source
     assert 'worker-analytics:' in source
-    assert '--queues=interactive,sync' in source
+    assert '--queues=interactive,sync-fast' in source
+    assert 'worker-bulk:' in source
+    assert '--queues=sync-bulk,sync' in source
     assert '--queues=generation,exports' in source
     assert '--queues=analytics' in source
     assert '--prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}' in source
