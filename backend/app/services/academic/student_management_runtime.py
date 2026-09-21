@@ -237,7 +237,7 @@ def _dispatch_latest_score_window(celery_app, db, parent: AcademicBulkOperationJ
         db.refresh(child)
         child_ids_by_class[class_id] = str(child.id)
         try:
-            celery_app.send_task(CLASS_SYNC_TASK, args=[child.id], queue='sync')
+            celery_app.send_task(CLASS_SYNC_TASK, args=[child.id], queue='sync-bulk')
             queued += 1
         except Exception as exc:
             child.status = 'failed'
@@ -332,7 +332,7 @@ def _enqueue_latest_score_children(celery_app, parent: AcademicBulkOperationJob)
             celery_app.send_task(
                 LATEST_SCORE_WATCHDOG_TASK,
                 args=[parent.id],
-                queue='sync',
+                queue='sync-bulk',
                 countdown=10,
             )
         return parent.result_json or state
@@ -354,7 +354,7 @@ def _watch_latest_score_children(celery_app, parent_job_id: str) -> dict[str, An
             celery_app.send_task(
                 LATEST_SCORE_WATCHDOG_TASK,
                 args=[parent.id],
-                queue='sync',
+                queue='sync-bulk',
                 countdown=15,
             )
         return parent.result_json or state
@@ -414,7 +414,7 @@ def _start_ap_03_schedule(celery_app) -> dict[str, Any]:
                 celery_app.send_task(
                     AP_03_FOLLOWUP_TASK,
                     args=[str(run.id)],
-                    queue='sync',
+                    queue='sync-bulk',
                     countdown=30,
                 )
             except HTTPException as exc:
@@ -482,7 +482,7 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             celery_app.send_task(
                 AP_03_FOLLOWUP_TASK,
                 args=[run_id],
-                queue='sync',
+                queue='sync-bulk',
                 countdown=60,
             )
             return {'ok': True, 'waiting': True, 'status': run.status, 'check': checks}
@@ -609,7 +609,7 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
         db.refresh(job)
 
         try:
-            celery_app.send_task(AUTO_MAP_TASK, args=[job.id], queue='sync')
+            celery_app.send_task(AUTO_MAP_TASK, args=[job.id], queue='sync-bulk')
         except Exception as exc:
             job.status = 'failed'
             job.progress_label = 'Không đưa được auto-map 03:00 vào hàng đợi'
@@ -669,10 +669,10 @@ def register_student_management_runtime_tasks(celery_app) -> None:
 
     routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})
     routes.update({
-        LATEST_SCORE_TASK: {'queue': 'sync'},
-        LATEST_SCORE_WATCHDOG_TASK: {'queue': 'sync'},
-        AP_03_TASK: {'queue': 'sync'},
-        AP_03_FOLLOWUP_TASK: {'queue': 'sync'},
+        LATEST_SCORE_TASK: {'queue': 'sync-bulk'},
+        LATEST_SCORE_WATCHDOG_TASK: {'queue': 'sync-bulk'},
+        AP_03_TASK: {'queue': 'sync-bulk'},
+        AP_03_FOLLOWUP_TASK: {'queue': 'sync-bulk'},
     })
     celery_app.conf.task_routes = routes
 
