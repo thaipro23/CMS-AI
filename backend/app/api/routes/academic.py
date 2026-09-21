@@ -606,7 +606,7 @@ def _enqueue_class_sync_job(
     db.refresh(job)
     from app.worker import academic_class_sync_task
     try:
-        metadata = enqueue_job_task(academic_class_sync_task, job.id, queue='sync')
+        metadata = enqueue_job_task(academic_class_sync_task, job.id, queue='sync-fast')
     except Exception as exc:
         mark_enqueue_failed(job, exc)
         db.add(job)
@@ -2821,7 +2821,7 @@ def auto_map_all_subject_courses_and_enqueue_sync_jobs(
         metadata = enqueue_job_task(
             academic_subject_auto_map_all_sync_task,
             job.id,
-            queue='sync',
+            queue='sync-bulk',
         )
     except Exception as exc:
         mark_enqueue_failed(job, exc)
@@ -3038,7 +3038,7 @@ def retry_academic_bulk_operation_job(
         metadata = enqueue_job_task(
             academic_subject_auto_map_all_sync_task,
             job.id,
-            queue='sync',
+            queue='sync-bulk',
             attempt=retry_count + 1,
         )
     except Exception as exc:
