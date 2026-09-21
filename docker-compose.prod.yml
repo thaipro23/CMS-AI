@@ -279,7 +279,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A app.worker.celery_app inspect ping -d worker-bulk@$(hostname) 
+      - celery -A app.worker.celery_app inspect ping -d worker-bulk@$$(hostname) 
         --timeout=8 | grep -q pong
       interval: 30s
       timeout: 10s
