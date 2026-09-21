@@ -37,3 +37,17 @@ def test_mapping_confidence_and_stale_state_follow_rollnumber_contract():
     assert "status_value in {'missing', 'missing_student_code', 'manual_required'}" in service
     assert 'canonical_lookup = normalize_username(canonical_username)' in identity
     assert "openedx_username or self._student_cms_username(student) or None" in identity
+
+
+def test_openedx_user_mapping_write_is_atomic_on_postgres():
+    service = read('backend/app/services/academic_service.py')
+    block = service.split('def _upsert_mapping', 1)[1].split('def _scope_filter_course_mapping', 1)[0]
+    assert 'from sqlalchemy.dialects.postgresql import insert as pg_insert' in service
+    assert "bind.dialect.name == 'postgresql'" in block
+    assert 'pg_insert(OpenEdXUserMapping.__table__).values(**insert_values)' in block
+    assert '.on_conflict_do_update(' in block
+    assert 'index_elements=[OpenEdXUserMapping.__table__.c.student_id]' in block
+    assert '.returning(OpenEdXUserMapping.__table__.c.id)' in block
+    assert 'populate_existing=True' in block
+    assert "'created_at': now" in block
+    assert "'created_at': stmt.excluded.created_at" not in block
