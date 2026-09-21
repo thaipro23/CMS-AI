@@ -63,7 +63,7 @@ services:
       - postgres
     volumes:
       - ./backend:/app
-    command: celery -A app.worker.celery_app worker --loglevel=INFO
+    command: celery -A app.worker.celery_app worker --loglevel=INFO --queues=interactive,sync-fast,sync-bulk,sync,generation,exports,analytics
 
   frontend:
     build: ./frontend
