@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, func, or_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.rbac import UserContext
@@ -3256,37 +3257,101 @@ class AcademicService:
         return self._training_teacher_report_workflow().training_teacher_report(user, term_id=term_id, branch=branch, campus=campus, search=search, learning_status=learning_status, learning_platform=learning_platform, teacher_id=teacher_id, class_id=class_id, page=page, page_size=page_size, include_all=include_all, include_classes=include_classes, include_students=include_students, use_cache=use_cache)
 
     def _upsert_mapping(self, student: AcademicStudent, result: dict[str, Any] | None, *, source: str = 'plugin') -> OpenEdXUserMapping:
+        """Persist one AP -> Open edX identity mapping without class-sync races.
+
+        Multiple class-sync workers can legitimately resolve the same student at
+        the same time because one learner may belong to more than one AP class.
+        PostgreSQL therefore uses one atomic INSERT .. ON CONFLICT(student_id)
+        DO UPDATE instead of the historical SELECT-then-INSERT sequence.
+        """
         now = datetime.utcnow()
         result = result or {}
         status_value, method_value, confidence, note = _derive_mapping_status(result)
+
+        active_was_resolved = False
+        active_value: bool | None = None
+        if 'is_active' in result:
+            active_was_resolved = True
+            active_value = _boolish(result.get('is_active'))
+        elif 'openedx_is_active' in result:
+            active_was_resolved = True
+            active_value = _boolish(result.get('openedx_is_active'))
+        elif status_value in {'missing', 'missing_student_code', 'manual_required'}:
+            active_was_resolved = True
+            active_value = None
+
+        values: dict[str, Any] = {
+            'student_id': student.id,
+            'ap_username': normalize_username(student.username),
+            'ap_student_code': student.student_code,
+            'ap_email': student.email,
+            'openedx_user_id': str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or None,
+            'openedx_username': str(result.get('openedx_username') or result.get('username') or '').strip() or None,
+            'openedx_email': str(result.get('openedx_email') or result.get('email') or '').strip() or None,
+            'match_status': status_value,
+            'match_method': method_value,
+            'confidence': confidence,
+            'note': note[:4000],
+            'raw_json': {'source': source, 'payload': _safe_mapping_raw(result)},
+            'last_resolved_at': now,
+            'updated_at': now,
+        }
+
+        # Production runs PostgreSQL. Keep the unique(student_id) contract and
+        # let PostgreSQL serialize concurrent writers atomically. This prevents
+        # psycopg UniqueViolation from rolling back an otherwise-valid class batch.
+        bind = self.db.get_bind()
+        if bind is not None and bind.dialect.name == 'postgresql':
+            insert_values = {
+                **values,
+                'created_at': now,
+                # A brand-new row has no prior active state to preserve.
+                'openedx_is_active': active_value if active_was_resolved else None,
+            }
+            stmt = pg_insert(OpenEdXUserMapping.__table__).values(**insert_values)
+            update_values: dict[str, Any] = {
+                'ap_username': stmt.excluded.ap_username,
+                'ap_student_code': stmt.excluded.ap_student_code,
+                'ap_email': stmt.excluded.ap_email,
+                'openedx_user_id': stmt.excluded.openedx_user_id,
+                'openedx_username': stmt.excluded.openedx_username,
+                'openedx_email': stmt.excluded.openedx_email,
+                'match_status': stmt.excluded.match_status,
+                'match_method': stmt.excluded.match_method,
+                'confidence': stmt.excluded.confidence,
+                'note': stmt.excluded.note,
+                'raw_json': stmt.excluded.raw_json,
+                'last_resolved_at': stmt.excluded.last_resolved_at,
+                'updated_at': stmt.excluded.updated_at,
+            }
+            # Preserve the previous active flag when the connector omitted it,
+            # matching the behavior of the old ORM update path.
+            if active_was_resolved:
+                update_values['openedx_is_active'] = stmt.excluded.openedx_is_active
+
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[OpenEdXUserMapping.__table__.c.student_id],
+                set_=update_values,
+            ).returning(OpenEdXUserMapping.__table__.c.id)
+            mapping_id = self.db.execute(stmt).scalar_one()
+            mapping = self.db.get(OpenEdXUserMapping, mapping_id, populate_existing=True)
+            if mapping is None:
+                raise RuntimeError(f'Không đọc lại được Open edX user mapping sau UPSERT: {student.id}')
+            return mapping
+
+        # Portable fallback for local/unit-test databases that do not implement
+        # PostgreSQL's ON CONFLICT dialect API.
         mapping = self.db.query(OpenEdXUserMapping).filter(OpenEdXUserMapping.student_id == student.id).first()
         if not mapping:
             mapping = OpenEdXUserMapping(
                 student_id=student.id,
-                ap_username=normalize_username(student.username),
-                ap_student_code=student.student_code,
-                ap_email=student.email,
                 created_at=now,
             )
-        mapping.ap_username = normalize_username(student.username)
-        mapping.ap_student_code = student.student_code
-        mapping.ap_email = student.email
-        mapping.openedx_user_id = str(result.get('openedx_user_id') or result.get('user_id') or '').strip() or None
-        mapping.openedx_username = str(result.get('openedx_username') or result.get('username') or '').strip() or None
-        mapping.openedx_email = str(result.get('openedx_email') or result.get('email') or '').strip() or None
-        if 'is_active' in result:
-            mapping.openedx_is_active = _boolish(result.get('is_active'))
-        elif 'openedx_is_active' in result:
-            mapping.openedx_is_active = _boolish(result.get('openedx_is_active'))
-        elif status_value in {'missing', 'missing_student_code', 'manual_required'}:
-            mapping.openedx_is_active = None
-        mapping.match_status = status_value
-        mapping.match_method = method_value
-        mapping.confidence = confidence
-        mapping.note = note[:4000]
-        mapping.raw_json = {'source': source, 'payload': _safe_mapping_raw(result)}
-        mapping.last_resolved_at = now
-        mapping.updated_at = now
+        for field, value in values.items():
+            if field != 'student_id':
+                setattr(mapping, field, value)
+        if active_was_resolved:
+            mapping.openedx_is_active = active_value
         self.db.add(mapping)
         return mapping
 
