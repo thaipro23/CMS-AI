@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import time as time_module
 import uuid
 from datetime import date, datetime, time, timezone
@@ -18,6 +19,8 @@ from app.core.privacy import mask_email
 
 CONNECTOR_PREFIX = '/api/ai-connector/v1'
 LEGACY_STUDENT_INSIGHT_PREFIX = '/api/ai-student-insight/v1'
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_username(value: Any) -> str:
@@ -262,7 +265,7 @@ class OpenEdXConnectorClient:
         if retry_transient_read:
             max_attempts = max(
                 1,
-                int(getattr(settings, 'openedx_connector_read_retry_max_attempts', 3) or 3),
+                int(getattr(settings, 'openedx_connector_read_retry_max_attempts', 2) or 2),
             )
             retry_base_seconds = max(
                 0.0,
@@ -270,7 +273,7 @@ class OpenEdXConnectorClient:
             )
             retry_max_seconds = max(
                 retry_base_seconds,
-                float(getattr(settings, 'openedx_connector_read_retry_max_seconds', 2.0) or 0.0),
+                float(getattr(settings, 'openedx_connector_read_retry_max_seconds', 1.0) or 0.0),
             )
 
         transient_statuses = {502, 503, 504}
@@ -317,6 +320,20 @@ class OpenEdXConnectorClient:
                     delay = min(
                         retry_max_seconds,
                         retry_base_seconds * (2 ** (attempt - 1)),
+                    )
+                    retry_reason = (
+                        f'HTTP {response.status_code}'
+                        if should_retry_status and response is not None
+                        else type(last_transport_error).__name__
+                    )
+                    logger.warning(
+                        'Open edX connector read retry operation=%s route=%s attempt=%s/%s reason=%s delay=%.2fs',
+                        operation,
+                        self.base_url,
+                        attempt,
+                        max_attempts,
+                        retry_reason,
+                        delay,
                     )
                     if delay > 0:
                         time_module.sleep(delay)
