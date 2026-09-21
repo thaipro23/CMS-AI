@@ -197,7 +197,7 @@ services:
       LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
       HOME: /tmp
     restart: unless-stopped
-    command: 'celery -A app.worker.celery_app worker --loglevel=INFO --queues=interactive,sync
+    command: 'celery -A app.worker.celery_app worker --loglevel=INFO --queues=interactive,sync-fast
       --concurrency=${CELERY_CONCURRENCY:-2} --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25} --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
       --hostname=worker@%h
@@ -220,6 +220,66 @@ services:
       test:
       - CMD-SHELL
       - celery -A app.worker.celery_app inspect ping -d worker@$$(hostname) 
+        --timeout=8 | grep -q pong
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks:
+    - ai_internal
+    - openedx_shared
+    extra_hosts:
+    - cms-test.poly.edu.vn:host-gateway
+    - scms-test.poly.edu.vn:host-gateway
+    - app.cms-test.poly.edu.vn:host-gateway
+    - ai.cms-test.poly.edu.vn:host-gateway
+    - api-ai.cms-test.poly.edu.vn:host-gateway
+    - meilisearch.cms-test.poly.edu.vn:host-gateway
+    user: 10001:10001
+    read_only: true
+    init: true
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=512m
+    mem_limit: 2g
+    cpus: '2.0'
+    stop_grace_period: 45s
+    image: 
+      ${BACKEND_IMAGE:-ai-server-backend:${APP_VERSION:-25.9.16.7.2.64.16.5.7.2.18}}
+  worker-bulk:
+    container_name: ai-worker-bulk
+    env_file: .env.production
+    environment:
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/.runtime}
+      HOME: /tmp
+    restart: unless-stopped
+    command: 'celery -A app.worker.celery_app worker --loglevel=INFO --queues=sync-bulk,sync
+      --concurrency=${CELERY_BULK_CONCURRENCY:-2} --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-25} --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB:-600000}
+      --hostname=worker-bulk@%h
+
+      '
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      runtime-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+    - runtime_data:/app/.runtime
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - celery -A app.worker.celery_app inspect ping -d worker-bulk@$(hostname) 
         --timeout=8 | grep -q pong
       interval: 30s
       timeout: 10s
