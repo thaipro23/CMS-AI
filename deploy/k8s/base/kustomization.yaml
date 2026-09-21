@@ -5,6 +5,7 @@ resources:
   - runtime-pvc.yaml
   - backend.yaml
   - worker.yaml
+  - worker-bulk.yaml
   - worker-heavy.yaml
   - worker-analytics.yaml
   - beat.yaml
