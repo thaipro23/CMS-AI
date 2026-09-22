@@ -1526,21 +1526,30 @@ def academic_class_sync_task(self, job_id: str):
     from fastapi import HTTPException
     from app.models.academic import AcademicClassSyncJob
     from app.services.academic_service import AcademicService
+    from app.services.academic.job_claim import claim_class_sync_job
     from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
     from app.services.audit_log import AuditErrorType, log_audit
 
     db = SessionLocal()
     try:
-        job = db.get(AcademicClassSyncJob, job_id)
-        if not job:
-            return {'ok': False, 'error': 'job_not_found'}
-        if job.status not in {'queued', 'running'}:
-            return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
+        job = claim_class_sync_job(db, job_id)
+        if job is None:
+            current = db.get(AcademicClassSyncJob, job_id)
+            if current is None:
+                return {'ok': False, 'error': 'job_not_found'}
+            if current.status in {'queued', 'running'}:
+                return {
+                    'ok': True,
+                    'skipped': True,
+                    'reason': 'not_queued',
+                    'status': current.status,
+                }
+            return current.result_json or {
+                'ok': current.status == 'completed',
+                'status': current.status,
+            }
 
         now = datetime.utcnow()
-        job.status = 'running'
-        job.started_at = job.started_at or now
-        job.updated_at = now
         job.progress_current = max(job.progress_current or 0, 10)
         labels = {
             'cms_sync_check': 'Đang kiểm tra CMS',
