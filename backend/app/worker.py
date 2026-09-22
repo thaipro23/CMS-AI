@@ -25,6 +25,13 @@ from app.algorithms.node_coverage import create_batches
 from app.services.generation_cache import GenerationCacheService, build_generation_cache_key, build_prompt_cache_key, sha256_text
 from app.services.token_calibration import OutputTokenCalibrationService
 from app.services.audit_log import AuditErrorType, log_audit
+from app.services.academic.job_identity import (
+    CLASS_SYNC_POLICY_VERSION,
+    ClassSyncJobBlocked,
+    choose_active_class_sync_job,
+    class_sync_contract,
+    class_sync_idempotency_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2309,7 +2316,20 @@ def _enqueue_academic_class_sync_child_job(
 
     _advisory_xact_lock_for_key(db, f'academic-class-sync:{class_id}')
 
-    idempotency_key = f'bulk:{parent_job_id}:{job_type}:{class_id}' if parent_job_id else None
+    clean_limit = max(1, min(500, int(limit or 500)))
+    request_contract = class_sync_contract(
+        class_id=class_id,
+        job_type=job_type,
+        force=bool(force),
+        limit=clean_limit,
+        mode=mode,
+        auto_map_course=auto_map_course,
+        sync_learning=sync_learning,
+        parent_job_id=parent_job_id,
+        origin='scheduled',
+        policy_version=CLASS_SYNC_POLICY_VERSION,
+    )
+    idempotency_key = class_sync_idempotency_key(**request_contract)
     if idempotency_key:
         existing = db.query(AcademicClassSyncJob).filter(
             AcademicClassSyncJob.idempotency_key == idempotency_key,
@@ -2317,19 +2337,24 @@ def _enqueue_academic_class_sync_child_job(
         if existing:
             return existing, True
 
-    existing = (
+    active_jobs = (
         db.query(AcademicClassSyncJob)
         .filter(
             AcademicClassSyncJob.class_id == class_id,
             AcademicClassSyncJob.status.in_(['queued', 'running']),
         )
         .order_by(AcademicClassSyncJob.created_at.desc())
-        .first()
+        .all()
     )
-    if existing:
-        return existing, True
+    decision = choose_active_class_sync_job(
+        active_jobs,
+        requested_key=idempotency_key,
+    )
+    if decision.blocker is not None:
+        raise ClassSyncJobBlocked(decision.blocker)
+    if decision.reusable is not None:
+        return decision.reusable, True
 
-    clean_limit = max(1, min(500, int(limit or 500)))
     job = AcademicClassSyncJob(
         job_type=job_type,
         status='queued',
@@ -2355,6 +2380,9 @@ def _enqueue_academic_class_sync_child_job(
             'sync_learning': sync_learning,
             'parent_job_type': parent_job_type,
             'parent_job_id': parent_job_id,
+            'request_key': idempotency_key,
+            'request_contract': request_contract,
+            'policy_version': CLASS_SYNC_POLICY_VERSION,
             'requester_context': requester_context or {},
             'approved_class_id': class_id,
         }),
@@ -2517,29 +2545,27 @@ def academic_learning_refresh_filter_task(job_id: str):
         blocked_now = 0
 
         for class_id in plan.dispatch_class_ids:
-            child, reused = _enqueue_academic_class_sync_child_job(
-                db,
-                requested_by=job.requested_by,
-                class_id=class_id,
-                force=bool(request_json.get('force', True)),
-                limit=int(request_json.get('limit') or 500),
-                mode=request_json.get('mode'),
-                auto_map_course=False,
-                sync_learning=True,
-                requester_context=(
-                    request_json.get('requester_context')
-                    if isinstance(request_json.get('requester_context'), dict)
-                    else {}
-                ),
-                parent_job_id=job.id,
-                job_type='learning_sync',
-                parent_job_type='learning_refresh_filter',
-                progress_label='Đang chờ cập nhật điểm theo bộ lọc',
-            )
-            # A different active class mutation may be safely reused as a lock,
-            # but it does not count as score refresh completion. Try again on the
-            # next coordinator pass after that conflicting job finishes.
-            if str(child.job_type) != 'learning_sync':
+            try:
+                child, reused = _enqueue_academic_class_sync_child_job(
+                    db,
+                    requested_by=job.requested_by,
+                    class_id=class_id,
+                    force=bool(request_json.get('force', True)),
+                    limit=int(request_json.get('limit') or 500),
+                    mode=request_json.get('mode'),
+                    auto_map_course=False,
+                    sync_learning=True,
+                    requester_context=(
+                        request_json.get('requester_context')
+                        if isinstance(request_json.get('requester_context'), dict)
+                        else {}
+                    ),
+                    parent_job_id=job.id,
+                    job_type='learning_sync',
+                    parent_job_type='learning_refresh_filter',
+                    progress_label='Đang chờ cập nhật điểm theo bộ lọc',
+                )
+            except ClassSyncJobBlocked:
                 blocked_now += 1
                 continue
             child_ids_by_class[class_id] = child.id
@@ -2933,6 +2959,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         jobs_queued = int(state.get('jobs_queued') or 0)
         jobs_reused = int(state.get('jobs_reused') or 0)
         jobs_skipped = int(state.get('jobs_skipped') or 0)
+        blocked_now = 0
         dispatch_error = None
 
         for class_id in plan.dispatch_class_ids:
@@ -2962,6 +2989,9 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                     jobs_reused += 1
                 else:
                     jobs_queued += 1
+            except ClassSyncJobBlocked:
+                blocked_now += 1
+                continue
             except Exception as exc:
                 jobs_skipped += 1
                 dispatch_error = str(exc)[:1000]
@@ -2986,6 +3016,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             'class_active_count': plan.active_count,
             'class_completed_count': plan.completed_count,
             'class_failed_count': plan.failed_count,
+            'blocked_last_pass': blocked_now,
             'retry_child_job_ids': sorted(retry_child_ids),
         })
         if dispatch_error:

@@ -117,6 +117,12 @@ from app.services.academic.udemy_progress import UdemyProgressService
 from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
 from app.services.academic.assignment_external import AcademicAssignmentExternalWorkflowService
 from app.services.academic.progress_email import AcademicProgressEmailService
+from app.services.academic.job_identity import (
+    CLASS_SYNC_POLICY_VERSION,
+    choose_active_class_sync_job,
+    class_sync_contract,
+    class_sync_idempotency_key,
+)
 from app.services.audit_log import AuditErrorType, log_audit
 from app.services.business_rbac import BusinessRBACService
 from app.core.json_safe import json_safe_value
@@ -544,36 +550,49 @@ def _enqueue_class_sync_job(
         raise HTTPException(status_code=404, detail='Không tìm thấy lớp')
     AcademicSubjectDeliveryService(db).assert_cms_workflow_allowed_for_class(class_id, job_type=job_type)
     clean_limit = max(1, min(500, int(limit or 500)))
-    request_key_payload = {
-        'class_id': class_id,
-        'job_type': job_type,
-        'force': bool(force),
-        'limit': clean_limit,
-        'mode': mode,
-        'auto_map_course': auto_map_course,
-        'sync_learning': sync_learning,
-        'requested_by': user.user_id,
-    }
-    request_key = hashlib.sha256(
-        json.dumps(request_key_payload, sort_keys=True, ensure_ascii=True).encode('utf-8')
-    ).hexdigest()
+    request_contract = class_sync_contract(
+        class_id=class_id,
+        job_type=job_type,
+        force=bool(force),
+        limit=clean_limit,
+        mode=mode,
+        auto_map_course=auto_map_course,
+        sync_learning=sync_learning,
+        parent_job_id=None,
+        origin='manual',
+        policy_version=CLASS_SYNC_POLICY_VERSION,
+    )
+    request_key = class_sync_idempotency_key(**request_contract)
 
     _advisory_xact_lock_for_key(db, f'academic-class-sync:{class_id}')
 
     # Class sync jobs mutate the same CMS/Open edX and snapshot rows. Returning
     # the existing active job makes the operation idempotent across refresh/F5
     # and prevents users from accidentally enqueueing duplicate jobs.
-    existing_job = (
+    active_jobs = (
         db.query(AcademicClassSyncJob)
         .filter(
             AcademicClassSyncJob.class_id == class_id,
             AcademicClassSyncJob.status.in_(['queued', 'running']),
         )
         .order_by(AcademicClassSyncJob.created_at.desc())
-        .first()
+        .all()
     )
-    if existing_job:
-        return existing_job
+    decision = choose_active_class_sync_job(
+        active_jobs,
+        requested_key=request_key,
+    )
+    if decision.blocker is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'CLASS_SYNC_ACTIVE_CONFLICT',
+                'message': 'Lớp đang có một tác vụ đồng bộ khác. Hãy chờ tác vụ đó hoàn tất.',
+                'blocking_job_id': str(decision.blocker.id),
+            },
+        )
+    if decision.reusable is not None:
+        return decision.reusable
 
     job = AcademicClassSyncJob(
         job_type=job_type,
@@ -598,6 +617,8 @@ def _enqueue_class_sync_job(
             'approved_branch': str(class_row.branch or '').strip().lower() or None,
             'scope_enforced_by_backend': True,
             'request_key': request_key,
+            'request_contract': request_contract,
+            'policy_version': CLASS_SYNC_POLICY_VERSION,
         }),
         result_json={},
     )
