@@ -631,6 +631,12 @@ class AcademicBulkOperationJob(Base):
     term_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_terms.id'), nullable=True, index=True)
     branch: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     campus: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     progress_current: Mapped[int] = mapped_column(Integer, default=0)
     progress_total: Mapped[int] = mapped_column(Integer, default=100)
@@ -647,6 +653,60 @@ class AcademicBulkOperationJob(Base):
         Index('ix_academic_bulk_operation_scope_status', 'job_type', 'term_id', 'branch', 'campus', 'status'),
         Index('ix_academic_bulk_operation_actor_created', 'requested_by', 'created_at'),
         Index('ix_academic_bulk_operation_type_created', 'job_type', 'created_at'),
+    )
+
+
+class AcademicTeacherReportSnapshot(Base):
+    """Immutable run-specific report payload metadata.
+
+    Payload bytes live in object storage. This row stores only the durable
+    identity, checksum, counts, and provenance needed to reproduce artifacts.
+    """
+
+    __tablename__ = 'academic_teacher_report_snapshots'
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    parent_job_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey('academic_bulk_operation_jobs.id'),
+        index=True,
+    )
+    term_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey('academic_terms.id'),
+        index=True,
+    )
+    branch: Mapped[str] = mapped_column(String(64), index=True)
+    scope_type: Mapped[str] = mapped_column(String(32), index=True)
+    campus: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    policy_version: Mapped[str] = mapped_column(String(128))
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    counts_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    __table_args__ = (
+        Index(
+            'uq_academic_teacher_report_snapshot_parent_scope_campus',
+            'parent_job_id',
+            'scope_type',
+            text("COALESCE(campus, '')"),
+            unique=True,
+        ),
+        Index(
+            'ix_academic_teacher_report_snapshot_scope',
+            'term_id',
+            'branch',
+            'scope_type',
+            'campus',
+        ),
     )
 
 

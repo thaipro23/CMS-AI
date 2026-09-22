@@ -25,7 +25,7 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0065_academic_job_batch_recovery'
+_EXPECTED_ALEMBIC_REVISION = '0066_academic_pipeline_hardening'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {
