@@ -32,6 +32,11 @@ from app.services.academic.job_identity import (
     class_sync_contract,
     class_sync_idempotency_key,
 )
+from app.services.academic.job_outcome import (
+    ClassSyncOutcomeError,
+    automatic_retry_allowed,
+    evaluate_class_sync_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1645,7 +1650,14 @@ def academic_class_sync_task(self, job_id: str):
         else:
             raise ValueError(f'Unsupported academic class sync job_type: {job.job_type}')
 
-        safe_result = json_safe_value(result)
+        evaluation = evaluate_class_sync_result(job.job_type, result)
+        safe_result = json_safe_value({
+            **(result if isinstance(result, dict) else {'raw_result': result}),
+            'outcome_counts': evaluation.counts,
+            'failure_details': evaluation.failures,
+        })
+        if not evaluation.ok:
+            raise ClassSyncOutcomeError(safe_result, evaluation)
         job.status = 'completed'
         job.progress_current = 100
         job.progress_total = 100
@@ -1677,7 +1689,12 @@ def academic_class_sync_task(self, job_id: str):
         if job:
             retries_done = int(getattr(self.request, 'retries', 0) or 0)
             max_retries = max(0, int(settings.academic_class_sync_retry_max_attempts))
-            if _is_transient_worker_error(exc) and retries_done < max_retries:
+            transient_failure = _is_transient_worker_error(exc)
+            retry_allowed = automatic_retry_allowed(
+                job.job_type,
+                transient=transient_failure,
+            )
+            if retry_allowed and retries_done < max_retries:
                 retry_number = retries_done + 1
                 delay_seconds = _class_sync_retry_delay_seconds(retry_number)
                 previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
@@ -1731,13 +1748,48 @@ def academic_class_sync_task(self, job_id: str):
             job.progress_total = 100
             job.progress_label = 'Đồng bộ thất bại'
             job.error_message = str(exc)[:4000] or 'Không thể hoàn tất đồng bộ lớp.'
-            previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+            previous = (
+                dict(exc.result)
+                if isinstance(exc, ClassSyncOutcomeError)
+                else (
+                    dict(job.result_json or {})
+                    if isinstance(job.result_json, dict)
+                    else {}
+                )
+            )
+            reconcile_required = bool(transient_failure and not retry_allowed)
+            failure_code = (
+                'CLASS_SYNC_RECONCILE_REQUIRED'
+                if reconcile_required
+                else (
+                    'CLASS_SYNC_INCOMPLETE'
+                    if isinstance(exc, ClassSyncOutcomeError)
+                    else previous.get('code') or 'CLASS_SYNC_FAILED'
+                )
+            )
             job.result_json = json_safe_value({
                 **previous,
                 'ok': False,
-                'code': previous.get('code') or 'CLASS_SYNC_FAILED',
+                'code': failure_code,
                 'message': job.error_message,
-                'retry_exhausted': bool(_is_transient_worker_error(exc) and max_retries > 0),
+                'reconcile_required': reconcile_required,
+                'automatic_retry_allowed': retry_allowed,
+                'failure_class': (
+                    'transient_after_mutation'
+                    if reconcile_required
+                    else (
+                        'read_only_retry_exhausted'
+                        if transient_failure and retry_allowed
+                        else 'business_incomplete'
+                        if isinstance(exc, ClassSyncOutcomeError)
+                        else 'non_transient'
+                    )
+                ),
+                'retry_exhausted': bool(
+                    transient_failure
+                    and retry_allowed
+                    and max_retries > 0
+                ),
             })
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
