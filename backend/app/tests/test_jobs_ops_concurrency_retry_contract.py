@@ -10,16 +10,21 @@ JOBS_PAGE = ROOT / 'frontend/app/jobs/page.tsx'
 API = ROOT / 'frontend/lib/api.ts'
 TYPES = ROOT / 'frontend/types/index.ts'
 WORKER_DEPLOY = ROOT / 'deploy/k8s/base/worker.yaml'
+WORKER_BULK_DEPLOY = ROOT / 'deploy/k8s/base/worker-bulk.yaml'
 
 
-def test_single_large_sync_worker_runs_ten_slots():
+def test_fast_and_bulk_workers_keep_separate_bounded_slots():
     deploy = WORKER_DEPLOY.read_text(encoding='utf-8')
+    bulk_deploy = WORKER_BULK_DEPLOY.read_text(encoding='utf-8')
     assert 'replicas: 1' in deploy
-    assert '--concurrency=${CELERY_CONCURRENCY:-10}' in deploy
+    assert '--queues=interactive,sync-fast' in deploy
+    assert '--concurrency=${CELERY_CONCURRENCY:-4}' in deploy
     assert '- name: CELERY_CONCURRENCY' in deploy
-    assert 'value: "10"' in deploy
+    assert 'value: "4"' in deploy
     assert '- name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW' in deploy
     assert '--prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}' in deploy
+    assert '--queues=sync-bulk,sync' in bulk_deploy
+    assert '--concurrency=${CELERY_BULK_CONCURRENCY:-2}' in bulk_deploy
 
 
 def test_class_sync_has_bounded_transient_retry():
@@ -41,7 +46,7 @@ def test_learning_refresh_filter_has_real_worker_coordinator():
     worker = WORKER.read_text(encoding='utf-8')
     academic = ACADEMIC.read_text(encoding='utf-8')
     assert "job_type='learning_refresh_filter'" in route
-    assert "'academic_learning_refresh_filter_task': {'queue': 'sync'}" in worker
+    assert "'academic_learning_refresh_filter_task': {'queue': 'sync-bulk'}" in worker
     assert "@celery_app.task(name='academic_learning_refresh_filter_task')" in worker
     assert "job_type='learning_sync'" in worker
     assert "window = max(1, min(10, int(settings.academic_bulk_sync_dispatch_window)))" in worker
@@ -99,4 +104,3 @@ def test_legacy_queued_audit_events_render_as_success():
     assert "'academic.class_sync.async.retry'" in audit
     assert 'def _effective_status' in audit
     assert "_csv_cell(_effective_status(row))" in audit
-

@@ -134,7 +134,7 @@ def test_failed_bulk_retry_keeps_scope_and_marks_failed_children_for_batched_ret
         assert job.result_json['phase'] == 'dispatching'
         assert job.result_json['retry_child_job_ids'] == ['child-1']
         assert job.result_json['retry_count'] == 1
-        assert calls == [{'job_id': 'bulk-1', 'queue': 'sync', 'attempt': 2}]
+        assert calls == [{'job_id': 'bulk-1', 'queue': 'sync-bulk', 'attempt': 2}]
     engine.dispose()
 
 
@@ -203,5 +203,5 @@ def test_failed_legacy_bulk_retry_rebuilds_missing_approved_class_scope(monkeypa
             'max_classes': 3000,
             'dry_run': True,
         }]
-        assert calls == [{'job_id': 'bulk-legacy', 'queue': 'sync', 'attempt': 2}]
+        assert calls == [{'job_id': 'bulk-legacy', 'queue': 'sync-bulk', 'attempt': 2}]
     engine.dispose()

@@ -2508,7 +2508,7 @@ def _enqueue_academic_class_sync_child_job(
         raise
     db.refresh(job)
     try:
-        metadata = enqueue_job_task(academic_class_sync_task, job.id, queue='sync')
+        metadata = enqueue_job_task(academic_class_sync_task, job.id, queue='sync-bulk')
     except Exception as exc:
         mark_enqueue_failed(job, exc)
         db.add(job)
@@ -2548,7 +2548,7 @@ def _restart_academic_class_sync_child_job(db, job):
         metadata = enqueue_job_task(
             academic_class_sync_task,
             job.id,
-            queue='sync',
+            queue='sync-bulk',
             attempt=retry_count + 1,
         )
     except Exception as exc:
@@ -2801,7 +2801,7 @@ def academic_learning_refresh_filter_task(job_id: str):
         metadata = enqueue_job_task(
             academic_learning_refresh_filter_task,
             job.id,
-            queue='sync',
+            queue='sync-bulk',
             attempt=continuation + 1,
             countdown_seconds=int(settings.academic_bulk_sync_continue_delay_seconds),
         )
@@ -3319,7 +3319,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         metadata = enqueue_job_task(
             academic_subject_auto_map_all_sync_task,
             job.id,
-            queue='sync',
+            queue='sync-bulk',
             attempt=state['continuation_attempt'] + 1,
             countdown_seconds=int(settings.academic_bulk_sync_continue_delay_seconds),
         )

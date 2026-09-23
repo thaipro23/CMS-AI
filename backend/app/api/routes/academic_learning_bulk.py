@@ -162,7 +162,7 @@ def enqueue_latest_learning_refresh(
             celery_app.send_task(
                 'academic_learning_refresh_filter_task',
                 args=[job.id],
-                queue='sync',
+                queue='sync-bulk',
             )
         except Exception as exc:
             job.status = 'failed'
