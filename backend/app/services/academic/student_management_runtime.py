@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from celery.schedules import crontab
 from fastapi import HTTPException
@@ -28,6 +29,13 @@ from app.services.academic.job_runtime import (
     class_sync_queued_timeout_seconds,
     reconcile_stale_rows,
 )
+from app.services.academic.scheduled_parent import (
+    ContinuationPublishError,
+    confirm_parent_continuation,
+    create_or_load_scheduled_parent,
+    publish_parent_continuation,
+    scheduled_parent_key,
+)
 from app.services.academic_service import AcademicService
 
 
@@ -39,12 +47,44 @@ LATEST_SCORE_TASK = 'academic_learning_refresh_filter_task'
 LATEST_SCORE_WATCHDOG_TASK = 'academic_learning_refresh_filter_watchdog_task'
 AP_03_TASK = 'academic_ap_03_schedule_task'
 AP_03_FOLLOWUP_TASK = 'academic_ap_03_followup_task'
+AP_03_PARENT_JOB_TYPE = 'ap_daily_pipeline'
 AUTO_MAP_TASK = 'academic_subject_auto_map_all_sync_task'
 CLASS_SYNC_TASK = 'academic_class_sync_task'
 
 
 def _now() -> datetime:
     return datetime.utcnow()
+
+
+def _ap_parent_publisher(celery_app):
+    def publish(*, task_name: str, args: list[Any], queue: str, countdown: int):
+        return celery_app.send_task(
+            task_name,
+            args=args,
+            queue=queue,
+            countdown=countdown,
+        )
+
+    return publish
+
+
+def _publish_ap_followup(
+    celery_app,
+    db,
+    parent: AcademicBulkOperationJob,
+    run_id: str,
+    *,
+    countdown: int,
+) -> str:
+    return publish_parent_continuation(
+        db,
+        parent,
+        publisher=_ap_parent_publisher(celery_app),
+        task_name=AP_03_FOLLOWUP_TASK,
+        args=[str(run_id)],
+        queue='sync-bulk',
+        countdown=countdown,
+    )
 
 
 def _scheduler_user() -> UserContext:
@@ -362,7 +402,15 @@ def _watch_latest_score_children(celery_app, parent_job_id: str) -> dict[str, An
         db.close()
 
 
-def _mark_ap_03_run(db, run: AcademicSyncRun, *, term_id: str, branch: str, campuses: list[str]) -> None:
+def _mark_ap_03_run(
+    db,
+    run: AcademicSyncRun,
+    *,
+    term_id: str,
+    branch: str,
+    campuses: list[str],
+    parent_job_id: str,
+) -> None:
     data = dict(run.counters_json or {}) if isinstance(run.counters_json, dict) else {}
     marker = dict(data.get('scheduled_03_auto_map') or {})
     marker.update({
@@ -373,6 +421,7 @@ def _mark_ap_03_run(db, run: AcademicSyncRun, *, term_id: str, branch: str, camp
         'schedule_time': '03:00',
         'timezone': 'Asia/Ho_Chi_Minh',
         'queued_at': marker.get('queued_at') or _now().isoformat(),
+        'scheduled_parent_job_id': parent_job_id,
     })
     data['scheduled_03_auto_map'] = marker
     run.counters_json = json_safe_value(data)
@@ -383,16 +432,71 @@ def _mark_ap_03_run(db, run: AcademicSyncRun, *, term_id: str, branch: str, camp
 def _start_ap_03_schedule(celery_app) -> dict[str, Any]:
     db = SessionLocal()
     queued_runs: list[str] = []
+    created_parent_ids: list[str] = []
+    reused_parent_ids: list[str] = []
     skipped: list[dict[str, Any]] = []
+    publish_errors: list[ContinuationPublishError] = []
     try:
         user = _scheduler_user()
         terms = _active_configured_terms(db)
+        run_date_vn = datetime.now(ZoneInfo('Asia/Ho_Chi_Minh')).date().isoformat()
         for term in terms:
             branch = str(term.branch or 'poly').strip().lower() or 'poly'
             campuses = _campus_codes_for_term(db, term, branch)
             if not campuses:
                 skipped.append({'term_id': term.id, 'branch': branch, 'reason': 'no_campus_scope'})
                 continue
+            parent_key = scheduled_parent_key(
+                'ap-daily',
+                run_date_vn=run_date_vn,
+                term_id=str(term.id),
+                branch=branch,
+            )
+            parent, created = create_or_load_scheduled_parent(
+                db,
+                idempotency_key=parent_key,
+                values={
+                    'job_type': AP_03_PARENT_JOB_TYPE,
+                    'status': 'running',
+                    'term_id': str(term.id),
+                    'branch': branch,
+                    'campus': None,
+                    'requested_by': SCHEDULER_ACTOR,
+                    'progress_current': 1,
+                    'progress_total': 100,
+                    'progress_label': '03:00 +07 · đang chờ đồng bộ AP',
+                    'request_json': json_safe_value({
+                        'scheduled': True,
+                        'schedule_time': '03:00',
+                        'timezone': 'Asia/Ho_Chi_Minh',
+                        'run_date_vn': run_date_vn,
+                        'term_id': str(term.id),
+                        'branch': branch,
+                        'campuses': campuses,
+                    }),
+                    'result_json': {
+                        'phase': 'ap_sync_pending',
+                        'run_date_vn': run_date_vn,
+                    },
+                    'started_at': _now(),
+                    'updated_at': _now(),
+                },
+            )
+            if not created:
+                reused_parent_ids.append(str(parent.id))
+                state = parent.result_json if isinstance(parent.result_json, dict) else {}
+                prior_run_id = str(state.get('source_ap_sync_run_id') or '')
+                if parent.status in {'queued', 'running'} and prior_run_id:
+                    _publish_ap_followup(
+                        celery_app,
+                        db,
+                        parent,
+                        prior_run_id,
+                        countdown=5,
+                    )
+                    queued_runs.append(prior_run_id)
+                continue
+            created_parent_ids.append(str(parent.id))
             try:
                 payload = AcademicAPSyncIn(
                     term_name=term.term_name,
@@ -407,38 +511,96 @@ def _start_ap_03_schedule(celery_app) -> dict[str, Any]:
                 response = AcademicAPSyncWorkflowService(db).enqueue_sync_from_ap_job(payload, user=user)
                 run = response.get('sync_run')
                 if not run:
+                    parent.status = 'failed'
+                    parent.error_message = 'AP scheduler did not return a sync run.'
+                    parent.finished_at = _now()
+                    parent.updated_at = parent.finished_at
+                    db.add(parent)
+                    db.commit()
                     skipped.append({'term_id': term.id, 'branch': branch, 'reason': 'missing_sync_run'})
                     continue
-                _mark_ap_03_run(db, run, term_id=str(term.id), branch=branch, campuses=campuses)
+                _mark_ap_03_run(
+                    db,
+                    run,
+                    term_id=str(term.id),
+                    branch=branch,
+                    campuses=campuses,
+                    parent_job_id=str(parent.id),
+                )
                 queued_runs.append(str(run.id))
-                celery_app.send_task(
-                    AP_03_FOLLOWUP_TASK,
-                    args=[str(run.id)],
-                    queue='sync-bulk',
+                parent.result_json = json_safe_value({
+                    **(parent.result_json or {}),
+                    'phase': 'waiting_ap_sync',
+                    'source_ap_sync_run_id': str(run.id),
+                })
+                parent.progress_current = 5
+                parent.progress_label = '03:00 +07 · đang chờ AP hoàn tất'
+                parent.updated_at = _now()
+                db.add(parent)
+                db.commit()
+                _publish_ap_followup(
+                    celery_app,
+                    db,
+                    parent,
+                    str(run.id),
                     countdown=30,
                 )
             except HTTPException as exc:
                 db.rollback()
+                parent = db.get(AcademicBulkOperationJob, parent.id)
+                if parent:
+                    parent.status = 'failed'
+                    parent.error_message = str(exc.detail)[:4000]
+                    parent.finished_at = _now()
+                    parent.updated_at = parent.finished_at
+                    db.add(parent)
+                    db.commit()
                 skipped.append({
                     'term_id': term.id,
                     'branch': branch,
                     'reason': f'http_{exc.status_code}',
                     'detail': str(exc.detail)[:500],
                 })
+            except ContinuationPublishError as exc:
+                db.rollback()
+                logger.exception(
+                    '03:00 AP scheduler could not publish follow-up for term %s/%s',
+                    term.id,
+                    branch,
+                )
+                publish_errors.append(exc)
+                skipped.append({
+                    'term_id': term.id,
+                    'branch': branch,
+                    'reason': 'continuation_dispatch_pending',
+                })
             except Exception as exc:
                 db.rollback()
+                parent = db.get(AcademicBulkOperationJob, parent.id)
+                if parent:
+                    parent.status = 'failed'
+                    parent.error_message = str(exc)[:4000]
+                    parent.finished_at = _now()
+                    parent.updated_at = parent.finished_at
+                    db.add(parent)
+                    db.commit()
                 logger.exception('03:00 AP scheduler could not enqueue term %s/%s', term.id, branch)
                 skipped.append({
                     'term_id': term.id,
                     'branch': branch,
                     'reason': exc.__class__.__name__,
                 })
+        if publish_errors:
+            raise publish_errors[0]
         return json_safe_value({
             'ok': True,
             'scheduled': True,
             'schedule': '03:00',
             'timezone': 'Asia/Ho_Chi_Minh',
+            'run_date_vn': run_date_vn,
             'term_total': len(terms),
+            'created_parent_ids': created_parent_ids,
+            'reused_parent_ids': reused_parent_ids,
             'queued_run_ids': queued_runs,
             'queued': len(queued_runs),
             'skipped': skipped,
@@ -457,6 +619,14 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
         marker = dict(data.get('scheduled_03_auto_map') or {})
         if not marker.get('enabled'):
             return {'ok': True, 'skipped': True, 'reason': 'not_03_scheduler_run'}
+        parent_job_id = str(marker.get('scheduled_parent_job_id') or '')
+        parent = (
+            db.get(AcademicBulkOperationJob, parent_job_id)
+            if parent_job_id
+            else None
+        )
+        if parent and parent.status in {'queued', 'running'}:
+            confirm_parent_continuation(db, parent, now=_now())
         if marker.get('auto_map_job_id'):
             return {
                 'ok': True,
@@ -477,14 +647,37 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
                 data['scheduled_03_auto_map'] = marker
                 run.counters_json = json_safe_value(data)
                 db.add(run)
+                if parent:
+                    parent.status = 'failed'
+                    parent.error_message = '03:00 AP sync follow-up timed out.'
+                    parent.finished_at = _now()
+                    parent.updated_at = parent.finished_at
+                    db.add(parent)
                 db.commit()
                 return {'ok': False, 'error': 'timeout_waiting_for_ap'}
-            celery_app.send_task(
-                AP_03_FOLLOWUP_TASK,
-                args=[run_id],
-                queue='sync-bulk',
-                countdown=60,
-            )
+            if parent:
+                parent.result_json = json_safe_value({
+                    **(parent.result_json or {}),
+                    'phase': 'waiting_ap_sync',
+                    'source_ap_sync_run_id': str(run.id),
+                    'followup_checks': checks,
+                })
+                db.add(parent)
+                db.commit()
+                _publish_ap_followup(
+                    celery_app,
+                    db,
+                    parent,
+                    str(run.id),
+                    countdown=60,
+                )
+            else:
+                celery_app.send_task(
+                    AP_03_FOLLOWUP_TASK,
+                    args=[run_id],
+                    queue='sync-bulk',
+                    countdown=60,
+                )
             return {'ok': True, 'waiting': True, 'status': run.status, 'check': checks}
 
         if run.status != 'completed':
@@ -494,6 +687,12 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             data['scheduled_03_auto_map'] = marker
             run.counters_json = json_safe_value(data)
             db.add(run)
+            if parent:
+                parent.status = 'failed'
+                parent.error_message = f'AP sync ended with status {run.status}.'
+                parent.finished_at = _now()
+                parent.updated_at = parent.finished_at
+                db.add(parent)
             db.commit()
             return {'ok': False, 'error': 'ap_sync_failed', 'status': run.status}
 
@@ -603,6 +802,7 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             progress_label='03:00 AP đã xong · đang chờ tự động ghép Course CMS',
             request_json=request_json,
             result_json={},
+            idempotency_key=f'ap-auto-map:{parent_job_id or run.id}',
         )
         db.add(job)
         db.commit()
@@ -627,6 +827,16 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
         data['scheduled_03_auto_map'] = marker
         run.counters_json = json_safe_value(data)
         db.add(run)
+        if parent:
+            parent.result_json = json_safe_value({
+                **(parent.result_json or {}),
+                'phase': 'auto_map_queued',
+                'auto_map_job_id': str(job.id),
+            })
+            parent.progress_current = 20
+            parent.progress_label = '03:00 AP đã xong · đã xếp hàng auto-map'
+            parent.updated_at = _now()
+            db.add(parent)
         db.commit()
         return {
             'ok': True,

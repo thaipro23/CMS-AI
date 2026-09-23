@@ -21,6 +21,14 @@ from app.models.academic import (
 )
 from app.services.academic.batch_coordinator import plan_batch_dispatch
 from app.services.academic.job_runtime import class_sync_queued_timeout_seconds, reconcile_stale_rows
+from app.services.academic.scheduled_parent import (
+    ContinuationPublishError,
+    confirm_parent_continuation,
+    create_or_load_scheduled_parent,
+    publish_parent_continuation,
+    recover_due_parent_continuations,
+    scheduled_parent_key,
+)
 from app.services.academic_service import AcademicService
 from app.services.object_storage import get_object_storage
 
@@ -294,6 +302,50 @@ def _enqueue_task(celery_app, name: str, args: list[Any], *, queue: str, countdo
     return str(getattr(result, 'id', '') or '')
 
 
+def _continuation_publisher(celery_app):
+    def publish(*, task_name: str, args: list[Any], queue: str, countdown: int):
+        return celery_app.send_task(
+            task_name,
+            args=args,
+            queue=queue,
+            countdown=countdown,
+        )
+
+    return publish
+
+
+def _publish_daily_parent_continuation(
+    celery_app,
+    db,
+    parent: AcademicBulkOperationJob,
+    *,
+    countdown: int,
+) -> str:
+    return publish_parent_continuation(
+        db,
+        parent,
+        publisher=_continuation_publisher(celery_app),
+        task_name='academic_daily_score_report_parent_task',
+        args=[str(parent.id)],
+        queue='sync-bulk',
+        countdown=countdown,
+    )
+
+
+def recover_daily_score_report_continuations(celery_app) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        return recover_due_parent_continuations(
+            db,
+            publisher=_continuation_publisher(celery_app),
+            job_types={DAILY_PARENT_JOB_TYPE, 'ap_daily_pipeline'},
+            max_attempts=5,
+            max_runtime_seconds=6 * 60 * 60,
+        )
+    finally:
+        db.close()
+
+
 def _daily_score_children(db, parent: AcademicBulkOperationJob, state: dict[str, Any]) -> list[AcademicClassSyncJob]:
     tracked_ids = {
         str(value)
@@ -439,14 +491,35 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
         terms = db.query(AcademicTerm).filter(AcademicTerm.active.is_(True)).order_by(AcademicTerm.start_date.desc().nullslast()).all()
         for term in terms:
             branch = str(term.branch or 'poly').strip().lower() or 'poly'
-            existing = _daily_run_for_date(db, term_id=str(term.id), branch=branch, run_date=run_date_vn)
+            parent_key = scheduled_parent_key(
+                'score-report-daily',
+                run_date_vn=run_date_vn,
+                term_id=str(term.id),
+                branch=branch,
+            )
+            existing = db.query(AcademicBulkOperationJob).filter(
+                AcademicBulkOperationJob.idempotency_key == parent_key,
+            ).one_or_none()
+            if existing is None:
+                existing = _daily_run_for_date(
+                    db,
+                    term_id=str(term.id),
+                    branch=branch,
+                    run_date=run_date_vn,
+                )
+                if existing is not None and not existing.idempotency_key:
+                    existing.idempotency_key = parent_key
+                    db.add(existing)
+                    db.commit()
             if existing:
                 reused_parent_ids.append(str(existing.id))
                 if existing.status in {'queued', 'running'}:
-                    try:
-                        _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [existing.id], queue='sync-bulk', countdown=5)
-                    except Exception:
-                        pass
+                    _publish_daily_parent_continuation(
+                        celery_app,
+                        db,
+                        existing,
+                        countdown=5,
+                    )
                 continue
 
             classes = db.query(AcademicClass).filter(
@@ -457,32 +530,43 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
             if not classes:
                 continue
 
-            parent = AcademicBulkOperationJob(
-                job_type=DAILY_PARENT_JOB_TYPE,
-                status='running',
-                term_id=str(term.id),
-                branch=branch,
-                campus=None,
-                requested_by=SCHEDULER_ACTOR,
-                progress_current=1,
-                progress_total=100,
-                progress_label='05:00 +07 · đang xếp hàng cập nhật điểm CMS',
-                request_json=json_safe_value({
-                    'scheduled': True,
-                    'schedule_time': '05:00',
-                    'schedule_timezone': 'Asia/Ho_Chi_Minh',
-                    'run_date_vn': run_date_vn,
+            parent, created = create_or_load_scheduled_parent(
+                db,
+                idempotency_key=parent_key,
+                values={
+                    'job_type': DAILY_PARENT_JOB_TYPE,
+                    'status': 'running',
                     'term_id': str(term.id),
                     'branch': branch,
-                }),
-                result_json={},
-                started_at=now,
-                updated_at=now,
+                    'campus': None,
+                    'requested_by': SCHEDULER_ACTOR,
+                    'progress_current': 1,
+                    'progress_total': 100,
+                    'progress_label': '05:00 +07 · đang xếp hàng cập nhật điểm CMS',
+                    'request_json': json_safe_value({
+                        'scheduled': True,
+                        'schedule_time': '05:00',
+                        'schedule_timezone': 'Asia/Ho_Chi_Minh',
+                        'run_date_vn': run_date_vn,
+                        'term_id': str(term.id),
+                        'branch': branch,
+                    }),
+                    'result_json': {},
+                    'started_at': now,
+                    'updated_at': now,
+                },
             )
+            if not created:
+                reused_parent_ids.append(str(parent.id))
+                if parent.status in {'queued', 'running'}:
+                    _publish_daily_parent_continuation(
+                        celery_app,
+                        db,
+                        parent,
+                        countdown=5,
+                    )
+                continue
             touch_job_runtime(parent, current=1, label=parent.progress_label, phase='dispatching', now=now, force_progress_changed=True)
-            db.add(parent)
-            db.commit()
-            db.refresh(parent)
 
             class_ids = [str(cls.id) for cls in classes]
             requester_context = {
@@ -531,7 +615,12 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
             )
             db.add(parent)
             db.commit()
-            _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync-bulk', countdown=15)
+            _publish_daily_parent_continuation(
+                celery_app,
+                db,
+                parent,
+                countdown=15,
+            )
             created_parent_ids.append(str(parent.id))
 
         return {
@@ -640,6 +729,7 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
         now = utc_now_naive()
         parent.status = 'running'
         parent.started_at = parent.started_at or now
+        confirm_parent_continuation(db, parent, now=now)
         state = dict(parent.result_json or {})
         phase = str(state.get('phase') or 'waiting_children')
 
@@ -672,7 +762,12 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                 )
                 db.add(parent)
                 db.commit()
-                _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync-bulk', countdown=30)
+                _publish_daily_parent_continuation(
+                    celery_app,
+                    db,
+                    parent,
+                    countdown=30,
+                )
                 return {'ok': True, 'status': 'running', 'terminal_count': terminal_count, 'target_count': target_count}
 
             source_synced_at = max(
@@ -733,7 +828,12 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
             )
             db.add(parent)
             db.commit()
-            _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync-bulk', countdown=30)
+            _publish_daily_parent_continuation(
+                celery_app,
+                db,
+                parent,
+                countdown=30,
+            )
             return {
                 'ok': True,
                 'status': 'campus_reporting',
@@ -767,7 +867,12 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                 parent.result_json = json_safe_value(state)
                 db.add(parent)
                 db.commit()
-                _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync-bulk', countdown=30)
+                _publish_daily_parent_continuation(
+                    celery_app,
+                    db,
+                    parent,
+                    countdown=30,
+                )
                 return {'ok': True, 'status': 'campus_reporting', 'campus_report_terminal_count': terminal_count}
 
             skipped_scopes = list(state.get('skipped_report_scopes') or [])
@@ -831,7 +936,12 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
             )
             db.add(parent)
             db.commit()
-            _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync-bulk', countdown=30)
+            _publish_daily_parent_continuation(
+                celery_app,
+                db,
+                parent,
+                countdown=30,
+            )
             return {'ok': True, 'status': 'ho_reporting', 'ho_report_job_id': str(ho_job.id)}
 
         ho_report_job_id = str(state.get('ho_report_job_id') or '')
@@ -845,7 +955,12 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
             )
             db.add(parent)
             db.commit()
-            _enqueue_task(celery_app, 'academic_daily_score_report_parent_task', [parent.id], queue='sync-bulk', countdown=30)
+            _publish_daily_parent_continuation(
+                celery_app,
+                db,
+                parent,
+                countdown=30,
+            )
             return {'ok': True, 'status': 'ho_reporting'}
 
         report_job_ids = [str(item) for item in (state.get('report_job_ids') or []) if str(item)]
@@ -877,6 +992,21 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
         db.add(parent)
         db.commit()
         return json_safe_value({'ok': parent.status == 'completed', **state})
+    except ContinuationPublishError as exc:
+        db.rollback()
+        parent = db.get(AcademicBulkOperationJob, parent_job_id)
+        return {
+            'ok': False,
+            'status': 'dispatch_pending',
+            'parent_job_id': str(parent_job_id),
+            'error': str(exc.original)[:500],
+            'error_class': exc.original.__class__.__name__,
+            'continuation': (
+                (parent.result_json or {}).get('continuation')
+                if parent and isinstance(parent.result_json, dict)
+                else {}
+            ),
+        }
     except Exception as exc:
         db.rollback()
         parent = db.get(AcademicBulkOperationJob, parent_job_id)
@@ -1204,10 +1334,15 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
         finally:
             db.close()
 
+    @celery_app.task(name='academic_scheduled_parent_recovery_task')
+    def _scheduled_parent_recovery_task():
+        return recover_daily_score_report_continuations(celery_app)
+
     routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})
     routes.update({
         'academic_daily_score_report_parent_task': {'queue': 'sync-bulk'},
         'academic_teacher_report_watchdog_task': {'queue': 'sync-fast'},
+        'academic_scheduled_parent_recovery_task': {'queue': 'sync-bulk'},
     })
     celery_app.conf.task_routes = routes
 
@@ -1215,6 +1350,7 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
     annotations.update({
         'academic_daily_score_report_parent_task': {'soft_time_limit': 120, 'time_limit': 180},
         'academic_teacher_report_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55},
+        'academic_scheduled_parent_recovery_task': {'soft_time_limit': 45, 'time_limit': 55},
     })
     celery_app.conf.task_annotations = annotations
 
@@ -1222,5 +1358,9 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
     beat_schedule['academic-teacher-report-watchdog'] = {
         'task': 'academic_teacher_report_watchdog_task',
         'schedule': 300,
+    }
+    beat_schedule['academic-scheduled-parent-recovery'] = {
+        'task': 'academic_scheduled_parent_recovery_task',
+        'schedule': 60,
     }
     celery_app.conf.beat_schedule = beat_schedule
