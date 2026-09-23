@@ -24,8 +24,8 @@ def _child(class_id: str, status: str):
     return SimpleNamespace(class_id=class_id, status=status)
 
 
-def test_empty_batch_dispatches_only_the_ten_slot_window():
-    assert settings.academic_bulk_sync_dispatch_window == 10
+def test_empty_batch_dispatches_only_the_four_slot_window():
+    assert settings.academic_bulk_sync_dispatch_window == 4
 
     plan = plan_batch_dispatch(
         [f'class-{index}' for index in range(1, 16)],
@@ -33,8 +33,8 @@ def test_empty_batch_dispatches_only_the_ten_slot_window():
         window=settings.academic_bulk_sync_dispatch_window,
     )
 
-    assert plan.dispatch_class_ids == [f'class-{index}' for index in range(1, 11)]
-    assert plan.window == 10
+    assert plan.dispatch_class_ids == [f'class-{index}' for index in range(1, 5)]
+    assert plan.window == 4
     assert plan.active_count == 0
     assert plan.finished is False
 

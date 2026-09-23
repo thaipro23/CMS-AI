@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
@@ -21,6 +22,12 @@ from app.models.academic import (
 )
 from app.services.academic.batch_coordinator import plan_batch_dispatch
 from app.services.academic.job_runtime import class_sync_queued_timeout_seconds, reconcile_stale_rows
+from app.services.academic.job_identity import (
+    CLASS_SYNC_POLICY_VERSION,
+    choose_active_class_sync_job,
+    class_sync_contract,
+    class_sync_idempotency_key,
+)
 from app.services.academic.scheduled_parent import (
     ContinuationPublishError,
     confirm_parent_continuation,
@@ -28,6 +35,10 @@ from app.services.academic.scheduled_parent import (
     publish_parent_continuation,
     recover_due_parent_continuations,
     scheduled_parent_key,
+)
+from app.services.academic.scheduled_scope import (
+    ScheduledScopeError,
+    freeze_scheduled_scope,
 )
 from app.services.academic_service import AcademicService
 from app.services.object_storage import get_object_storage
@@ -398,15 +409,40 @@ def _dispatch_daily_score_window(celery_app, db, parent: AcademicBulkOperationJo
     enqueue_failed = int(state.get('enqueue_failed_count') or 0)
     queued_count = int(state.get('queued_count') or 0)
     reused_count = int(state.get('reused_count') or 0)
+    blocked_class_ids = {
+        str(value)
+        for value in (state.get('blocked_class_ids') or [])
+        if str(value or '').strip()
+    }
 
     for class_id in plan.dispatch_class_ids:
-        active = db.query(AcademicClassSyncJob).filter(
+        request_contract = class_sync_contract(
+            class_id=class_id,
+            job_type='learning_sync',
+            force=True,
+            limit=max_students,
+            mode=None,
+            auto_map_course=False,
+            sync_learning=True,
+            parent_job_id=str(parent.id),
+            origin='scheduled',
+            policy_version=CLASS_SYNC_POLICY_VERSION,
+        )
+        request_key = class_sync_idempotency_key(**request_contract)
+        active_jobs = db.query(AcademicClassSyncJob).filter(
             AcademicClassSyncJob.class_id == class_id,
-            AcademicClassSyncJob.job_type == 'learning_sync',
             AcademicClassSyncJob.status.in_(['queued', 'running']),
-        ).order_by(AcademicClassSyncJob.created_at.desc()).first()
-        if active:
-            child_ids_by_class[class_id] = str(active.id)
+        ).order_by(AcademicClassSyncJob.created_at.desc()).all()
+        decision = choose_active_class_sync_job(
+            active_jobs,
+            requested_key=request_key,
+        )
+        if decision.blocker is not None:
+            blocked_class_ids.add(class_id)
+            continue
+        if decision.reusable is not None:
+            child_ids_by_class[class_id] = str(decision.reusable.id)
+            blocked_class_ids.discard(class_id)
             reused_count += 1
             continue
         child = AcademicClassSyncJob(
@@ -414,6 +450,7 @@ def _dispatch_daily_score_window(celery_app, db, parent: AcademicBulkOperationJo
             status='queued',
             class_id=class_id,
             parent_job_id=str(parent.id),
+            idempotency_key=request_key,
             requested_by=SCHEDULER_ACTOR,
             force=True,
             limit=max_students,
@@ -427,15 +464,33 @@ def _dispatch_daily_score_window(celery_app, db, parent: AcademicBulkOperationJo
                 'schedule_timezone': 'Asia/Ho_Chi_Minh',
                 'schedule_time': '05:00',
                 'daily_parent_job_id': str(parent.id),
+                'scheduled_parent_job_id': str(parent.id),
                 'requester_context': requester_context,
                 'approved_class_id': class_id,
+                'scheduled_scope_hash': request.get('scope_hash'),
+                'request_key': request_key,
+                'request_contract': request_contract,
+                'policy_version': CLASS_SYNC_POLICY_VERSION,
             }),
             result_json={},
         )
         db.add(child)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            child = db.query(AcademicClassSyncJob).filter(
+                AcademicClassSyncJob.idempotency_key == request_key,
+            ).one_or_none()
+            if child is None:
+                raise
+            child_ids_by_class[class_id] = str(child.id)
+            blocked_class_ids.discard(class_id)
+            reused_count += 1
+            continue
         db.refresh(child)
         child_ids_by_class[class_id] = str(child.id)
+        blocked_class_ids.discard(class_id)
         try:
             celery_task_id = _enqueue_task(celery_app, 'academic_class_sync_task', [child.id], queue='sync-bulk')
             child.result_json = json_safe_value({
@@ -463,6 +518,8 @@ def _dispatch_daily_score_window(celery_app, db, parent: AcademicBulkOperationJo
         'enqueue_failed_count': enqueue_failed,
         'queued_count': queued_count,
         'reused_count': reused_count,
+        'blocked_class_ids': sorted(blocked_class_ids),
+        'blocked_class_count': len(blocked_class_ids),
         'dispatch_window': int(settings.academic_bulk_sync_dispatch_window),
     })
     children = _daily_score_children(db, parent, state)
@@ -527,32 +584,140 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
                 AcademicClass.term_id == str(term.id),
                 func.lower(func.coalesce(AcademicClass.branch, branch)) == branch,
             ).order_by(AcademicClass.id.asc()).all()
-            if not classes:
+
+            max_students = max(
+                1000,
+                min(
+                    int(
+                        getattr(
+                            settings,
+                            'academic_class_sync_max_students',
+                            5000,
+                        )
+                        or 5000
+                    ),
+                    20000,
+                ),
+            )
+            class_to_campus = {
+                str(cls.id): str(cls.campus or '').strip().lower() or None
+                for cls in classes
+            }
+            try:
+                frozen_scope = freeze_scheduled_scope(
+                    term_id=str(term.id),
+                    branch=branch,
+                    run_date_vn=run_date_vn,
+                    class_to_campus=class_to_campus,
+                    requested_maximum={'students_per_class': max_students},
+                )
+            except ScheduledScopeError as exc:
+                parent, created = create_or_load_scheduled_parent(
+                    db,
+                    idempotency_key=parent_key,
+                    values={
+                        'job_type': DAILY_PARENT_JOB_TYPE,
+                        'status': 'failed',
+                        'term_id': str(term.id),
+                        'branch': branch,
+                        'campus': None,
+                        'requested_by': SCHEDULER_ACTOR,
+                        'progress_current': 100,
+                        'progress_total': 100,
+                        'progress_label': '05:00 +07 · phạm vi lớp không hợp lệ',
+                        'request_json': json_safe_value({
+                            'scheduled': True,
+                            'schedule_time': '05:00',
+                            'schedule_timezone': 'Asia/Ho_Chi_Minh',
+                            'run_date_vn': run_date_vn,
+                            'term_id': str(term.id),
+                            'branch': branch,
+                            'requested_maximum': {
+                                'students_per_class': max_students,
+                            },
+                        }),
+                        'result_json': {
+                            'ok': False,
+                            'code': exc.code,
+                            'message': str(exc),
+                        },
+                        'error_message': str(exc),
+                        'started_at': now,
+                        'finished_at': now,
+                        'updated_at': now,
+                    },
+                )
+                (created_parent_ids if created else reused_parent_ids).append(
+                    str(parent.id)
+                )
                 continue
+
+            class_ids = list(frozen_scope['class_ids'])
+            requester_context = {
+                'user_id': SCHEDULER_ACTOR,
+                'username': SCHEDULER_ACTOR,
+                'role': 'admin',
+                'permissions': [],
+                'authenticated_admin_claims': {'ai_system_admin': True},
+            }
+            initial_request = json_safe_value({
+                'scheduled': True,
+                'schedule_time': '05:00',
+                'schedule_timezone': 'Asia/Ho_Chi_Minh',
+                'run_date_vn': run_date_vn,
+                'term_id': str(term.id),
+                'branch': branch,
+                'approved_class_ids': class_ids,
+                'class_to_campus': frozen_scope['class_to_campus'],
+                'campuses': frozen_scope['campuses'],
+                'scope_hash': frozen_scope['scope_hash'],
+                'frozen_scope': frozen_scope,
+                'requester_context': requester_context,
+                'limit': max_students,
+            })
+            initial_result = json_safe_value({
+                'phase': 'waiting_children' if class_ids else 'completed',
+                'daily_score_report_pipeline': True,
+                'run_date_vn': run_date_vn,
+                'frozen_scope': frozen_scope,
+                'target_class_ids': class_ids,
+                'target_class_count': len(class_ids),
+                'terminal_count': 0,
+                'enqueue_failed_count': 0,
+                'report_job_ids': [],
+                'skipped_report_scopes': [],
+                **(
+                    {}
+                    if class_ids
+                    else {
+                        'ok': True,
+                        'code': 'scope_empty',
+                        'reason': 'no_active_classes',
+                    }
+                ),
+            })
 
             parent, created = create_or_load_scheduled_parent(
                 db,
                 idempotency_key=parent_key,
                 values={
                     'job_type': DAILY_PARENT_JOB_TYPE,
-                    'status': 'running',
+                    'status': 'running' if class_ids else 'completed',
                     'term_id': str(term.id),
                     'branch': branch,
                     'campus': None,
                     'requested_by': SCHEDULER_ACTOR,
-                    'progress_current': 1,
+                    'progress_current': 1 if class_ids else 100,
                     'progress_total': 100,
-                    'progress_label': '05:00 +07 · đang xếp hàng cập nhật điểm CMS',
-                    'request_json': json_safe_value({
-                        'scheduled': True,
-                        'schedule_time': '05:00',
-                        'schedule_timezone': 'Asia/Ho_Chi_Minh',
-                        'run_date_vn': run_date_vn,
-                        'term_id': str(term.id),
-                        'branch': branch,
-                    }),
-                    'result_json': {},
+                    'progress_label': (
+                        '05:00 +07 · đang xếp hàng cập nhật điểm CMS'
+                        if class_ids
+                        else '05:00 +07 · không có lớp trong phạm vi'
+                    ),
+                    'request_json': initial_request,
+                    'result_json': initial_result,
                     'started_at': now,
+                    'finished_at': None if class_ids else now,
                     'updated_at': now,
                 },
             )
@@ -566,36 +731,11 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
                         countdown=5,
                     )
                 continue
+            if not class_ids:
+                created_parent_ids.append(str(parent.id))
+                continue
             touch_job_runtime(parent, current=1, label=parent.progress_label, phase='dispatching', now=now, force_progress_changed=True)
-
-            class_ids = [str(cls.id) for cls in classes]
-            requester_context = {
-                'user_id': SCHEDULER_ACTOR,
-                'username': SCHEDULER_ACTOR,
-                'role': 'admin',
-                'permissions': [],
-                'authenticated_admin_claims': {'ai_system_admin': True},
-            }
-            max_students = max(1000, min(int(getattr(settings, 'academic_class_sync_max_students', 5000) or 5000), 20000))
-            parent = db.get(AcademicBulkOperationJob, parent.id)
-            parent.request_json = json_safe_value({
-                **(parent.request_json or {}),
-                'approved_class_ids': class_ids,
-                'requester_context': requester_context,
-                'limit': max_students,
-            })
             parent_result = dict(parent.result_json or {})
-            parent_result.update({
-                'phase': 'waiting_children',
-                'daily_score_report_pipeline': True,
-                'run_date_vn': run_date_vn,
-                'target_class_ids': class_ids,
-                'target_class_count': len(class_ids),
-                'terminal_count': 0,
-                'enqueue_failed_count': 0,
-                'report_job_ids': [],
-                'skipped_report_scopes': [],
-            })
             children, plan = _dispatch_daily_score_window(
                 celery_app,
                 db,
@@ -633,18 +773,6 @@ def start_daily_score_report_pipeline(celery_app) -> dict[str, Any]:
         }
     finally:
         db.close()
-
-
-def _scope_class_ids(db, *, term_id: str, branch: str, campus: str | None) -> set[str]:
-    query = db.query(AcademicClass.id).filter(
-        AcademicClass.active.is_(True),
-        AcademicClass.term_id == term_id,
-        func.lower(func.coalesce(AcademicClass.branch, branch)) == branch,
-    )
-    if campus:
-        query = query.filter(func.lower(func.coalesce(AcademicClass.campus, '')) == campus.lower())
-    return {str(row[0]) for row in query.all()}
-
 
 def _create_scheduled_export_job(
     db,
@@ -729,7 +857,12 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
         now = utc_now_naive()
         parent.status = 'running'
         parent.started_at = parent.started_at or now
-        confirm_parent_continuation(db, parent, now=now)
+        confirm_parent_continuation(
+            db,
+            parent,
+            now=now,
+            expected_task_name='academic_daily_score_report_parent_task',
+        )
         state = dict(parent.result_json or {})
         phase = str(state.get('phase') or 'waiting_children')
 
@@ -770,28 +903,67 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                 )
                 return {'ok': True, 'status': 'running', 'terminal_count': terminal_count, 'target_count': target_count}
 
+            if failed or int(state.get('enqueue_failed_count') or 0):
+                failed_ids = sorted({str(item.class_id) for item in failed})
+                state.update({
+                    'ok': False,
+                    'phase': 'failed',
+                    'code': 'mandatory_score_sync_failed',
+                    'failed_class_ids': failed_ids,
+                    'failed_class_count': len(failed_ids),
+                    'report_job_ids': [],
+                })
+                parent.status = 'failed'
+                parent.error_message = (
+                    f'05:00 score sync failed for {len(failed_ids)} '
+                    'mandatory classes; reports were not generated.'
+                )
+                parent.result_json = json_safe_value(state)
+                parent.progress_current = 100
+                parent.progress_total = 100
+                parent.progress_label = '05:00 +07 · cập nhật điểm thất bại'
+                parent.finished_at = now
+                parent.updated_at = now
+                db.add(parent)
+                db.commit()
+                return {
+                    'ok': False,
+                    'status': 'failed',
+                    'code': 'mandatory_score_sync_failed',
+                    'failed_class_ids': failed_ids,
+                }
+
             source_synced_at = max(
                 [item.finished_at for item in children if item.finished_at] or [now]
             )
             target_class_ids = {str(item) for item in (state.get('target_class_ids') or []) if str(item)}
             failed_class_ids = {str(item.class_id) for item in failed}
-            campuses = sorted({
-                str(value or '').strip().lower()
-                for (value,) in db.query(AcademicClass.campus).filter(
-                    AcademicClass.id.in_(target_class_ids),
-                ).all()
-                if str(value or '').strip()
-            }) if target_class_ids else []
+            frozen_scope = (
+                state.get('frozen_scope')
+                if isinstance(state.get('frozen_scope'), dict)
+                else {}
+            )
+            class_to_campus = {
+                str(class_id): str(campus)
+                for class_id, campus in (
+                    frozen_scope.get('class_to_campus') or {}
+                ).items()
+                if str(class_id) in target_class_ids
+            }
+            campuses = [
+                str(campus)
+                for campus in (frozen_scope.get('campuses') or [])
+                if str(campus)
+            ]
 
             campus_report_job_ids: list[str] = []
             skipped_scopes: list[dict[str, Any]] = []
             for campus in campuses:
-                scope_ids = _scope_class_ids(
-                    db,
-                    term_id=str(parent.term_id),
-                    branch=str(parent.branch or 'poly'),
-                    campus=campus,
-                )
+                scope_ids = {
+                    class_id
+                    for class_id, frozen_campus in class_to_campus.items()
+                    if frozen_campus == campus
+                }
                 failed_in_scope = sorted(scope_ids.intersection(failed_class_ids))
                 if failed_in_scope:
                     skipped_scopes.append({

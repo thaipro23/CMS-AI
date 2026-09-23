@@ -183,7 +183,8 @@ def confirm_parent_continuation(
     parent: AcademicBulkOperationJob,
     *,
     now: datetime | None = None,
-) -> None:
+    expected_task_name: str | None = None,
+) -> bool:
     current_time = now or datetime.utcnow()
     state = dict(parent.result_json or {})
     continuation = (
@@ -191,6 +192,12 @@ def confirm_parent_continuation(
         if isinstance(state.get('continuation'), dict)
         else {}
     )
+    if (
+        expected_task_name is not None
+        and str(continuation.get('task_name') or '')
+        != str(expected_task_name)
+    ):
+        return False
     continuation.update({
         'status': 'confirmed',
         'confirmed_at': current_time.isoformat(),
@@ -202,6 +209,7 @@ def confirm_parent_continuation(
     parent.updated_at = current_time
     db.add(parent)
     db.commit()
+    return True
 
 
 def _parse_time(value: Any) -> datetime | None:

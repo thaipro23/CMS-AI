@@ -51,7 +51,7 @@ def _parent(class_count: int = 15) -> AcademicBulkOperationJob:
     )
 
 
-def test_latest_score_initial_dispatch_enqueues_only_ten_classes(monkeypatch):
+def test_latest_score_initial_dispatch_enqueues_only_four_classes(monkeypatch):
     engine = _engine()
     factory = sessionmaker(bind=engine)
     monkeypatch.setattr(runtime, 'SessionLocal', factory)
@@ -66,10 +66,10 @@ def test_latest_score_initial_dispatch_enqueues_only_ten_classes(monkeypatch):
     result = runtime._enqueue_latest_score_children(celery, parent)
 
     class_calls = [call for call in celery.calls if call['name'] == runtime.CLASS_SYNC_TASK]
-    assert len(class_calls) == 10
+    assert len(class_calls) == 4
     assert result['class_total'] == 15
-    assert result['queued'] == 10
-    assert len(result['child_job_ids']) == 10
+    assert result['queued'] == 4
+    assert len(result['child_job_ids']) == 4
     assert celery.calls[-1]['name'] == runtime.LATEST_SCORE_WATCHDOG_TASK
     engine.dispose()
 
@@ -103,13 +103,13 @@ def test_latest_score_watchdog_releases_completed_slots_for_next_classes(monkeyp
     after = len([call for call in celery.calls if call['name'] == runtime.CLASS_SYNC_TASK])
 
     assert after - before == 3
-    assert len(result['child_job_ids']) == 13
-    assert result['active'] == 10
+    assert len(result['child_job_ids']) == 7
+    assert result['active'] == 4
     assert result['completed'] == 3
     engine.dispose()
 
 
-def test_daily_0500_scheduler_also_dispatches_only_the_ten_class_window(monkeypatch):
+def test_daily_0500_scheduler_also_dispatches_only_the_four_class_window(monkeypatch):
     engine = create_engine(
         'sqlite+pysqlite:///:memory:',
         connect_args={'check_same_thread': False},
@@ -143,12 +143,12 @@ def test_daily_0500_scheduler_also_dispatches_only_the_ten_class_window(monkeypa
     result = daily_runtime.start_daily_score_report_pipeline(celery)
 
     class_calls = [call for call in celery.calls if call['name'] == 'academic_class_sync_task']
-    assert len(class_calls) == 10
+    assert len(class_calls) == 4
     with Session(engine) as db:
         parent = db.get(AcademicBulkOperationJob, result['created_parent_ids'][0])
         assert parent.result_json['target_class_count'] == 15
-        assert len(parent.result_json['child_job_ids']) == 10
-        assert parent.result_json['dispatch_window'] == 10
+        assert len(parent.result_json['child_job_ids']) == 4
+        assert parent.result_json['dispatch_window'] == 4
         first_children = (
             db.query(AcademicClassSyncJob)
             .filter(AcademicClassSyncJob.parent_job_id == parent.id)
@@ -168,4 +168,69 @@ def test_daily_0500_scheduler_also_dispatches_only_the_ten_class_window(monkeypa
     assert len(class_calls) - before == 3
     assert progress['status'] == 'running'
     assert progress['terminal_count'] == 3
+    engine.dispose()
+
+
+def test_daily_0500_does_not_generate_reports_after_any_score_failure(monkeypatch):
+    engine = create_engine(
+        'sqlite+pysqlite:///:memory:',
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool,
+    )
+    for model in (AcademicTerm, AcademicClass, AcademicBulkOperationJob, AcademicClassSyncJob):
+        model.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(daily_runtime, 'SessionLocal', factory)
+    with Session(engine) as db:
+        term = AcademicTerm(
+            id='term-fa26',
+            term_code='FA26',
+            term_name='Fall 2026',
+            branch='poly',
+            active=True,
+        )
+        db.add(term)
+        db.add_all([
+            AcademicClass(
+                id=f'class-{index}',
+                term_id=term.id,
+                subject_id='subject-1',
+                class_code=f'SOA102.{index:02d}',
+                class_name=f'SOA102.{index:02d}',
+                campus='hn' if index == 1 else 'hcm',
+                branch='poly',
+                active=True,
+            )
+            for index in (1, 2)
+        ])
+        db.commit()
+
+    celery = _Celery()
+    started = daily_runtime.start_daily_score_report_pipeline(celery)
+    parent_id = started['created_parent_ids'][0]
+    with Session(engine) as db:
+        children = (
+            db.query(AcademicClassSyncJob)
+            .filter(AcademicClassSyncJob.parent_job_id == parent_id)
+            .order_by(AcademicClassSyncJob.class_id.asc())
+            .all()
+        )
+        children[0].status = 'completed'
+        children[0].finished_at = daily_runtime.utc_now_naive()
+        children[1].status = 'failed'
+        children[1].finished_at = daily_runtime.utc_now_naive()
+        db.commit()
+
+    result = daily_runtime.run_daily_score_report_parent(celery, parent_id)
+
+    assert result['ok'] is False
+    assert result['code'] == 'mandatory_score_sync_failed'
+    assert not any(
+        call['name'] == 'academic_teacher_report_job_task'
+        for call in celery.calls
+    )
+    with Session(engine) as db:
+        parent = db.get(AcademicBulkOperationJob, parent_id)
+        assert parent.status == 'failed'
+        assert parent.result_json['report_job_ids'] == []
     engine.dispose()

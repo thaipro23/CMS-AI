@@ -2340,6 +2340,7 @@ class AcademicService:
 
         page = 1
         subjects: list[dict[str, Any]] = []
+        subject_scope_truncated = False
         while True:
             batch = self.list_teacher_subjects(
                 user,
@@ -2356,6 +2357,7 @@ class AcademicService:
                 break
             page += 1
             if page > 50:
+                subject_scope_truncated = True
                 break
 
         visible_subject_ids = [str(item.get('id') or '') for item in subjects if str(item.get('id') or '')]
@@ -2485,6 +2487,12 @@ class AcademicService:
             'class_total': class_total,
             'class_ids': class_ids,
             'capped': capped,
+            'scope_truncated': bool(subject_scope_truncated or capped),
+            'scope_truncated_reason': (
+                'subject_page_safety_cap'
+                if subject_scope_truncated
+                else ('class_safety_cap' if capped else None)
+            ),
             'subject_results': subject_results,
             'subject_ids': eligible_subject_ids,
             'visible_subject_ids': visible_subject_ids,

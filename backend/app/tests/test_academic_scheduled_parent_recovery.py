@@ -202,6 +202,18 @@ def test_duplicate_0500_scheduler_delivery_creates_one_parent(monkeypatch):
         model.__table__.create(engine)
     factory = sessionmaker(bind=engine)
     monkeypatch.setattr(daily_teacher_report_runtime, 'SessionLocal', factory)
+    created_values = []
+    original_create = daily_teacher_report_runtime.create_or_load_scheduled_parent
+
+    def capture_initial_parent(db, **kwargs):
+        created_values.append(kwargs['values'])
+        return original_create(db, **kwargs)
+
+    monkeypatch.setattr(
+        daily_teacher_report_runtime,
+        'create_or_load_scheduled_parent',
+        capture_initial_parent,
+    )
     with factory() as db:
         db.add(AcademicTerm(
             id='term-1',
@@ -237,6 +249,10 @@ def test_duplicate_0500_scheduler_delivery_creates_one_parent(monkeypatch):
     assert first['created_parent_ids']
     assert second['created_parent_ids'] == []
     assert second['reused_parent_ids'] == first['created_parent_ids']
+    first_commit = created_values[0]
+    assert first_commit['request_json']['approved_class_ids'] == ['class-1']
+    assert first_commit['result_json']['phase'] == 'waiting_children'
+    assert first_commit['result_json']['target_class_ids'] == ['class-1']
     with factory() as db:
         parents = db.query(AcademicBulkOperationJob).filter(
             AcademicBulkOperationJob.job_type
@@ -244,6 +260,138 @@ def test_duplicate_0500_scheduler_delivery_creates_one_parent(monkeypatch):
         ).all()
         assert len(parents) == 1
         assert parents[0].idempotency_key.startswith('score-report-daily:')
+        frozen_scope = parents[0].request_json['frozen_scope']
+        assert frozen_scope['class_ids'] == ['class-1']
+        assert frozen_scope['class_to_campus'] == {'class-1': 'hn'}
+        assert frozen_scope['campuses'] == ['hn']
+        assert parents[0].result_json['frozen_scope'] == frozen_scope
+        children = db.query(AcademicClassSyncJob).all()
+        assert len(children) == 1
+        assert children[0].parent_job_id == parents[0].id
+        assert children[0].idempotency_key.startswith('class-sync:v2:')
+        assert (
+            children[0].request_json['scheduled_scope_hash']
+            == frozen_scope['scope_hash']
+        )
+    engine.dispose()
+
+
+def test_0500_foreign_active_class_job_is_a_blocker_not_a_child(monkeypatch):
+    engine = create_engine(
+        'sqlite+pysqlite:///:memory:',
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool,
+    )
+    for model in (
+        AcademicTerm,
+        AcademicClass,
+        AcademicBulkOperationJob,
+        AcademicClassSyncJob,
+    ):
+        model.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(daily_teacher_report_runtime, 'SessionLocal', factory)
+    with factory() as db:
+        db.add(AcademicTerm(
+            id='term-1',
+            term_code='FA26',
+            term_name='Fall 2026',
+            branch='poly',
+            active=True,
+        ))
+        db.add(AcademicClass(
+            id='class-1',
+            term_id='term-1',
+            subject_id='subject-1',
+            class_code='SOA102.01',
+            class_name='SOA102.01',
+            campus='hn',
+            branch='poly',
+            active=True,
+        ))
+        db.add(AcademicClassSyncJob(
+            id='manual-job-1',
+            job_type='learning_sync',
+            status='queued',
+            class_id='class-1',
+            parent_job_id=None,
+            idempotency_key='class-sync:v2:manual-contract',
+            requested_by='admin-1',
+            request_json={'origin': 'manual'},
+            result_json={},
+        ))
+        db.commit()
+
+    class Celery:
+        def send_task(self, name, args=None, **options):
+            return SimpleNamespace(id='task-1')
+
+    result = daily_teacher_report_runtime.start_daily_score_report_pipeline(
+        Celery(),
+    )
+
+    assert len(result['created_parent_ids']) == 1
+    with factory() as db:
+        parent = db.get(
+            AcademicBulkOperationJob,
+            result['created_parent_ids'][0],
+        )
+        assert parent.result_json['blocked_class_ids'] == ['class-1']
+        jobs = db.query(AcademicClassSyncJob).all()
+        assert [job.id for job in jobs] == ['manual-job-1']
+        assert jobs[0].parent_job_id is None
+    engine.dispose()
+
+
+def test_0500_empty_scope_is_recorded_without_continuation(monkeypatch):
+    engine = create_engine(
+        'sqlite+pysqlite:///:memory:',
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool,
+    )
+    for model in (
+        AcademicTerm,
+        AcademicClass,
+        AcademicBulkOperationJob,
+        AcademicClassSyncJob,
+    ):
+        model.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(daily_teacher_report_runtime, 'SessionLocal', factory)
+    with factory() as db:
+        db.add(AcademicTerm(
+            id='term-empty',
+            term_code='FA26',
+            term_name='Fall 2026',
+            branch='poly',
+            active=True,
+        ))
+        db.commit()
+
+    class Celery:
+        def __init__(self):
+            self.calls = []
+
+        def send_task(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return SimpleNamespace(id='unexpected')
+
+    celery = Celery()
+    result = daily_teacher_report_runtime.start_daily_score_report_pipeline(
+        celery,
+    )
+
+    assert len(result['created_parent_ids']) == 1
+    assert celery.calls == []
+    with factory() as db:
+        parent = db.get(
+            AcademicBulkOperationJob,
+            result['created_parent_ids'][0],
+        )
+        assert parent.status == 'completed'
+        assert parent.result_json['code'] == 'scope_empty'
+        assert parent.result_json['reason'] == 'no_active_classes'
+        assert parent.result_json['target_class_ids'] == []
     engine.dispose()
 
 
@@ -315,3 +463,74 @@ def test_0300_scheduler_does_not_swallow_continuation_publish_error(monkeypatch)
         student_management_runtime._start_ap_03_schedule(SimpleNamespace())
 
     assert raised.value.original is original
+
+
+def test_0300_auto_map_publish_failure_leaves_parent_recoverable():
+    engine = _engine()
+    with Session(engine) as db:
+        parent, _ = create_or_load_scheduled_parent(
+            db,
+            idempotency_key='ap-daily:2026-09-23:term-1:poly',
+            values={
+                **_values(),
+                'job_type': 'ap_daily_pipeline',
+                'status': 'running',
+                'result_json': {'phase': 'auto_map_queued'},
+            },
+        )
+
+        class FailingCelery:
+            def send_task(self, *args, **kwargs):
+                raise ConnectionError('broker unavailable')
+
+        with pytest.raises(ContinuationPublishError):
+            student_management_runtime._publish_auto_map_job(
+                FailingCelery(),
+                db,
+                parent,
+                'auto-map-1',
+            )
+
+        db.expire_all()
+        persisted = db.get(AcademicBulkOperationJob, parent.id)
+        continuation = persisted.result_json['continuation']
+        assert continuation['status'] == 'dispatch_pending'
+        assert continuation['task_name'] == student_management_runtime.AUTO_MAP_TASK
+        assert continuation['args'] == ['auto-map-1']
+        assert continuation['last_error_class'] == 'ConnectionError'
+        assert persisted.status == 'running'
+
+        assert confirm_parent_continuation(
+            db,
+            persisted,
+            expected_task_name=student_management_runtime.AP_03_FOLLOWUP_TASK,
+        ) is False
+        db.refresh(persisted)
+        assert persisted.result_json['continuation']['status'] == 'dispatch_pending'
+
+        state = dict(persisted.result_json)
+        continuation = dict(state['continuation'])
+        continuation['due_at'] = (datetime.utcnow() - timedelta(seconds=1)).isoformat()
+        state['continuation'] = continuation
+        persisted.result_json = state
+        db.add(persisted)
+        db.commit()
+        published = []
+        recovered = recover_due_parent_continuations(
+            db,
+            publisher=lambda **kwargs: published.append(kwargs) or 'auto-task-2',
+            job_types={'ap_daily_pipeline'},
+            now=datetime.utcnow(),
+        )
+        assert recovered['republished'] == 1
+        assert published[0]['task_name'] == student_management_runtime.AUTO_MAP_TASK
+
+        db.refresh(persisted)
+        assert confirm_parent_continuation(
+            db,
+            persisted,
+            expected_task_name=student_management_runtime.AUTO_MAP_TASK,
+        ) is True
+        db.refresh(persisted)
+        assert persisted.result_json['continuation']['status'] == 'confirmed'
+    engine.dispose()

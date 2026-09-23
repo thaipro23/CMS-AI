@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from celery.schedules import crontab
 from fastapi import HTTPException
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
@@ -35,6 +36,12 @@ from app.services.academic.scheduled_parent import (
     create_or_load_scheduled_parent,
     publish_parent_continuation,
     scheduled_parent_key,
+)
+from app.services.academic.scheduled_scope import (
+    ScheduledScopeError,
+    freeze_scheduled_scope,
+    scheduled_auto_map_contract,
+    scheduled_auto_map_key,
 )
 from app.services.academic_service import AcademicService
 
@@ -84,6 +91,23 @@ def _publish_ap_followup(
         args=[str(run_id)],
         queue='sync-bulk',
         countdown=countdown,
+    )
+
+
+def _publish_auto_map_job(
+    celery_app,
+    db,
+    parent: AcademicBulkOperationJob,
+    auto_map_job_id: str,
+) -> str:
+    return publish_parent_continuation(
+        db,
+        parent,
+        publisher=_ap_parent_publisher(celery_app),
+        task_name=AUTO_MAP_TASK,
+        args=[str(auto_map_job_id)],
+        queue='sync-bulk',
+        countdown=0,
     )
 
 
@@ -429,6 +453,123 @@ def _mark_ap_03_run(
     db.commit()
 
 
+def _load_or_freeze_ap_scope(
+    db,
+    *,
+    parent: AcademicBulkOperationJob,
+    term: AcademicTerm,
+    branch: str,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    """Discover the 03:00 class scope once, then replay only the snapshot."""
+    parent_request = (
+        parent.request_json if isinstance(parent.request_json, dict) else {}
+    )
+    frozen_scope = (
+        parent_request.get('frozen_scope')
+        if isinstance(parent_request.get('frozen_scope'), dict)
+        else None
+    )
+    if frozen_scope is not None:
+        approved_class_ids = [
+            str(value)
+            for value in (frozen_scope.get('class_ids') or [])
+            if str(value)
+        ]
+        approved_subject_ids = [
+            str(value)
+            for value in (parent_request.get('approved_subject_ids') or [])
+            if str(value)
+        ]
+        if not approved_class_ids:
+            raise ScheduledScopeError(
+                'scope_empty',
+                '03:00 mapping discovery returned no mandatory classes.',
+            )
+        if not approved_subject_ids:
+            raise ScheduledScopeError(
+                'scope_missing_subjects',
+                '03:00 frozen class scope has no subject identities.',
+            )
+        return frozen_scope, approved_class_ids, approved_subject_ids
+
+    preview = AcademicService(db).auto_map_subject_courses_for_filter(
+        _scheduler_user(),
+        term_id=str(term.id),
+        branch=branch,
+        campus=None,
+        search=None,
+        learning_status=None,
+        max_classes=5000,
+        dry_run=True,
+    )
+    if preview.get('scope_truncated'):
+        reason = str(
+            preview.get('scope_truncated_reason') or 'scope_safety_cap'
+        )
+        raise ScheduledScopeError(
+            'scope_truncated',
+            f'03:00 scope discovery was truncated: {reason}.',
+        )
+
+    approved_class_ids = list(dict.fromkeys(
+        str(item).strip()
+        for item in (preview.get('class_ids') or [])
+        if str(item or '').strip()
+    ))
+    if not approved_class_ids:
+        raise ScheduledScopeError(
+            'scope_empty',
+            '03:00 mapping discovery returned no mandatory classes.',
+        )
+    class_rows = (
+        db.query(AcademicClass)
+        .filter(AcademicClass.id.in_(approved_class_ids))
+        .all()
+    )
+    class_to_campus = {
+        str(item.id): str(item.campus or '').strip().lower() or None
+        for item in class_rows
+    }
+    missing_class_ids = sorted(set(approved_class_ids) - set(class_to_campus))
+    if missing_class_ids:
+        class_to_campus[missing_class_ids[0]] = None
+    approved_subject_ids = sorted({
+        str(item.subject_id)
+        for item in class_rows
+        if str(item.subject_id or '').strip()
+    })
+    if not approved_subject_ids:
+        raise ScheduledScopeError(
+            'scope_missing_subjects',
+            '03:00 discovered class scope has no subject identities.',
+        )
+    frozen_scope = freeze_scheduled_scope(
+        term_id=str(term.id),
+        branch=branch,
+        run_date_vn=str(parent_request.get('run_date_vn') or ''),
+        class_to_campus=class_to_campus,
+        requested_maximum={'classes': 5000},
+    )
+    parent.request_json = json_safe_value({
+        **parent_request,
+        'approved_class_ids': frozen_scope['class_ids'],
+        'approved_subject_ids': approved_subject_ids,
+        'class_to_campus': frozen_scope['class_to_campus'],
+        'campuses': frozen_scope['campuses'],
+        'scope_hash': frozen_scope['scope_hash'],
+        'frozen_scope': frozen_scope,
+    })
+    parent.result_json = json_safe_value({
+        **(parent.result_json or {}),
+        'phase': 'scope_frozen',
+        'frozen_scope': frozen_scope,
+    })
+    parent.updated_at = _now()
+    db.add(parent)
+    db.commit()
+    return frozen_scope, list(frozen_scope['class_ids']), approved_subject_ids
+
+
 def _start_ap_03_schedule(celery_app) -> dict[str, Any]:
     db = SessionLocal()
     queued_runs: list[str] = []
@@ -442,16 +583,53 @@ def _start_ap_03_schedule(celery_app) -> dict[str, Any]:
         run_date_vn = datetime.now(ZoneInfo('Asia/Ho_Chi_Minh')).date().isoformat()
         for term in terms:
             branch = str(term.branch or 'poly').strip().lower() or 'poly'
-            campuses = _campus_codes_for_term(db, term, branch)
-            if not campuses:
-                skipped.append({'term_id': term.id, 'branch': branch, 'reason': 'no_campus_scope'})
-                continue
             parent_key = scheduled_parent_key(
                 'ap-daily',
                 run_date_vn=run_date_vn,
                 term_id=str(term.id),
                 branch=branch,
             )
+            campuses = _campus_codes_for_term(db, term, branch)
+            if not campuses:
+                parent, created = create_or_load_scheduled_parent(
+                    db,
+                    idempotency_key=parent_key,
+                    values={
+                        'job_type': AP_03_PARENT_JOB_TYPE,
+                        'status': 'failed',
+                        'term_id': str(term.id),
+                        'branch': branch,
+                        'campus': None,
+                        'requested_by': SCHEDULER_ACTOR,
+                        'progress_current': 100,
+                        'progress_total': 100,
+                        'progress_label': '03:00 +07 · không có cơ sở trong phạm vi',
+                        'request_json': json_safe_value({
+                            'scheduled': True,
+                            'schedule_time': '03:00',
+                            'timezone': 'Asia/Ho_Chi_Minh',
+                            'run_date_vn': run_date_vn,
+                            'term_id': str(term.id),
+                            'branch': branch,
+                            'campuses': [],
+                        }),
+                        'result_json': {
+                            'ok': False,
+                            'phase': 'failed',
+                            'code': 'scope_empty',
+                            'reason': 'no_campus_scope',
+                        },
+                        'error_message': '03:00 has no campus scope.',
+                        'started_at': _now(),
+                        'finished_at': _now(),
+                        'updated_at': _now(),
+                    },
+                )
+                (created_parent_ids if created else reused_parent_ids).append(
+                    str(parent.id)
+                )
+                skipped.append({'term_id': term.id, 'branch': branch, 'reason': 'no_campus_scope'})
+                continue
             parent, created = create_or_load_scheduled_parent(
                 db,
                 idempotency_key=parent_key,
@@ -625,14 +803,64 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             if parent_job_id
             else None
         )
-        if parent and parent.status in {'queued', 'running'}:
-            confirm_parent_continuation(db, parent, now=_now())
-        if marker.get('auto_map_job_id'):
+        if parent is None:
+            marker['followup_status'] = 'scheduled_parent_missing'
+            marker['finished_at'] = _now().isoformat()
+            data['scheduled_03_auto_map'] = marker
+            run.counters_json = json_safe_value(data)
+            db.add(run)
+            db.commit()
+            return {'ok': False, 'error': 'scheduled_parent_missing'}
+        if parent.status not in {'queued', 'running'}:
             return {
-                'ok': True,
-                'reused': True,
-                'auto_map_job_id': marker.get('auto_map_job_id'),
+                'ok': parent.status == 'completed',
+                'status': parent.status,
+                'parent_job_id': str(parent.id),
             }
+        confirm_parent_continuation(
+            db,
+            parent,
+            now=_now(),
+            expected_task_name=AP_03_FOLLOWUP_TASK,
+        )
+        if marker.get('auto_map_job_id'):
+            marked_job = db.get(
+                AcademicBulkOperationJob,
+                str(marker.get('auto_map_job_id')),
+            )
+            if marked_job is None:
+                marker.pop('auto_map_job_id', None)
+                marker['followup_status'] = 'auto_map_job_missing'
+                data['scheduled_03_auto_map'] = marker
+                run.counters_json = json_safe_value(data)
+                db.add(run)
+                db.commit()
+            else:
+                if marked_job.status in {'completed', 'failed'}:
+                    parent.status = marked_job.status
+                    parent.progress_current = 100
+                    parent.progress_total = 100
+                    parent.progress_label = (
+                        '03:00 +07 · hoàn tất AP, auto-map và đồng bộ CMS'
+                        if marked_job.status == 'completed'
+                        else '03:00 +07 · pipeline AP/CMS thất bại'
+                    )
+                    parent.error_message = marked_job.error_message
+                    parent.finished_at = marked_job.finished_at or _now()
+                    parent.updated_at = _now()
+                    parent.result_json = json_safe_value({
+                        **(parent.result_json or {}),
+                        'phase': marked_job.status,
+                        'auto_map_job_id': str(marked_job.id),
+                    })
+                    db.add(parent)
+                    db.commit()
+                return {
+                    'ok': marked_job.status != 'failed',
+                    'reused': True,
+                    'auto_map_job_id': marker.get('auto_map_job_id'),
+                    'status': marked_job.status,
+                }
 
         if run.status in {'queued', 'running'}:
             checks = int(marker.get('followup_checks') or 0) + 1
@@ -717,56 +945,176 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             db.commit()
             return {'ok': False, 'error': 'term_not_found'}
 
-        existing_candidates = (
+        parent = (
+            db.query(AcademicBulkOperationJob)
+            .filter(AcademicBulkOperationJob.id == parent.id)
+            .with_for_update()
+            .one()
+        )
+        try:
+            (
+                frozen_scope,
+                approved_class_ids,
+                approved_subject_ids,
+            ) = _load_or_freeze_ap_scope(
+                db,
+                parent=parent,
+                term=term,
+                branch=branch,
+            )
+        except ScheduledScopeError as exc:
+            marker.update({
+                'followup_status': exc.code,
+                'finished_at': _now().isoformat(),
+            })
+            data['scheduled_03_auto_map'] = marker
+            run.counters_json = json_safe_value(data)
+            db.add(run)
+            parent.status = 'failed'
+            parent.error_message = str(exc)
+            parent.result_json = json_safe_value({
+                **(parent.result_json or {}),
+                'phase': 'failed',
+                'code': exc.code,
+            })
+            parent.finished_at = _now()
+            parent.updated_at = parent.finished_at
+            db.add(parent)
+            db.commit()
+            return {'ok': False, 'error': exc.code, 'message': str(exc)}
+        parent_request = (
+            parent.request_json if isinstance(parent.request_json, dict) else {}
+        )
+
+        auto_map_contract = scheduled_auto_map_contract(
+            scheduled_parent_job_id=parent_job_id,
+            ap_sync_run_id=str(run.id),
+            frozen_scope=frozen_scope,
+        )
+        auto_map_key = scheduled_auto_map_key(auto_map_contract)
+        exact_existing = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.idempotency_key == auto_map_key,
+        ).one_or_none()
+        if exact_existing is not None:
+            marker['auto_map_job_id'] = exact_existing.id
+            marker['followup_status'] = 'auto_map_reused'
+            data['scheduled_03_auto_map'] = marker
+            run.counters_json = json_safe_value(data)
+            db.add(run)
+            parent.request_json = json_safe_value({
+                **parent_request,
+                'approved_class_ids': frozen_scope['class_ids'],
+                'class_to_campus': frozen_scope['class_to_campus'],
+                'campuses': frozen_scope['campuses'],
+                'scope_hash': frozen_scope['scope_hash'],
+                'frozen_scope': frozen_scope,
+            })
+            parent.result_json = json_safe_value({
+                **(parent.result_json or {}),
+                'phase': (
+                    'completed'
+                    if exact_existing.status == 'completed'
+                    else (
+                        'failed'
+                        if exact_existing.status == 'failed'
+                        else 'auto_map_queued'
+                    )
+                ),
+                'auto_map_job_id': str(exact_existing.id),
+                'frozen_scope': frozen_scope,
+            })
+            if exact_existing.status in {'completed', 'failed'}:
+                parent.status = exact_existing.status
+                parent.progress_current = 100
+                parent.finished_at = exact_existing.finished_at or _now()
+                parent.updated_at = _now()
+                parent.error_message = exact_existing.error_message
+            db.add(parent)
+            db.commit()
+            return {
+                'ok': exact_existing.status != 'failed',
+                'reused': True,
+                'auto_map_job_id': exact_existing.id,
+                'status': exact_existing.status,
+            }
+
+        active_candidates = (
             db.query(AcademicBulkOperationJob)
             .filter(
-                AcademicBulkOperationJob.job_type == 'subject_auto_map_all_sync',
+                AcademicBulkOperationJob.job_type
+                == 'subject_auto_map_all_sync',
                 AcademicBulkOperationJob.term_id == term.id,
                 AcademicBulkOperationJob.branch == branch,
-                AcademicBulkOperationJob.campus.is_(None),
                 AcademicBulkOperationJob.status.in_(['queued', 'running']),
             )
             .order_by(AcademicBulkOperationJob.created_at.desc())
-            .limit(20)
             .all()
         )
-        for existing in existing_candidates:
-            request = existing.request_json if isinstance(existing.request_json, dict) else {}
-            if request.get('sync_learning') is False:
-                marker['auto_map_job_id'] = existing.id
-                marker['followup_status'] = 'auto_map_reused'
-                data['scheduled_03_auto_map'] = marker
-                run.counters_json = json_safe_value(data)
-                db.add(run)
-                db.commit()
-                return {'ok': True, 'reused': True, 'auto_map_job_id': existing.id}
-
-        user = _scheduler_user()
-        service = AcademicService(db)
-        preview = service.auto_map_subject_courses_for_filter(
-            user,
-            term_id=str(term.id),
-            branch=branch,
-            campus=None,
-            search=None,
-            learning_status=None,
-            max_classes=5000,
-            dry_run=True,
+        foreign_active = next(
+            (
+                candidate
+                for candidate in active_candidates
+                if candidate.idempotency_key != auto_map_key
+            ),
+            None,
         )
-        approved_class_ids = [str(item) for item in (preview.get('class_ids') or []) if str(item or '').strip()]
-        approved_subject_ids = [str(item) for item in (preview.get('subject_ids') or []) if str(item or '').strip()]
-        campus_codes = sorted({
-            str(item).strip().lower()
-            for (item,) in (
-                db.query(AcademicClass.campus)
-                .filter(AcademicClass.id.in_(approved_class_ids), AcademicClass.campus.isnot(None))
-                .distinct()
-                .all()
-                if approved_class_ids
-                else []
-            )
-            if str(item or '').strip()
-        })
+        if foreign_active is not None:
+            blocked_checks = int(marker.get('foreign_block_checks') or 0) + 1
+            marker.update({
+                'followup_status': 'blocked_by_foreign_job',
+                'foreign_block_checks': blocked_checks,
+                'blocking_job_id': str(foreign_active.id),
+                'last_checked_at': _now().isoformat(),
+            })
+            data['scheduled_03_auto_map'] = marker
+            run.counters_json = json_safe_value(data)
+            db.add(run)
+            if blocked_checks >= 120:
+                if parent:
+                    parent.status = 'failed'
+                    parent.error_message = (
+                        '03:00 auto-map remained blocked by a foreign active job.'
+                    )
+                    parent.finished_at = _now()
+                    parent.updated_at = parent.finished_at
+                    db.add(parent)
+                db.commit()
+                return {
+                    'ok': False,
+                    'error': 'foreign_job_block_timeout',
+                    'blocking_job_id': str(foreign_active.id),
+                }
+            if parent:
+                parent.result_json = json_safe_value({
+                    **(parent.result_json or {}),
+                    'phase': 'auto_map_blocked',
+                    'blocking_job_id': str(foreign_active.id),
+                    'frozen_scope': frozen_scope,
+                })
+                parent.request_json = json_safe_value({
+                    **parent_request,
+                    'scope_hash': frozen_scope['scope_hash'],
+                    'frozen_scope': frozen_scope,
+                })
+                db.add(parent)
+                db.commit()
+                _publish_ap_followup(
+                    celery_app,
+                    db,
+                    parent,
+                    str(run.id),
+                    countdown=60,
+                )
+            else:
+                db.commit()
+            return {
+                'ok': True,
+                'waiting': True,
+                'reason': 'blocked_by_foreign_job',
+                'blocking_job_id': str(foreign_active.id),
+            }
+
+        campus_codes = list(frozen_scope['campuses'])
         request_json = json_safe_value({
             'term_id': str(term.id),
             'branch': branch,
@@ -782,6 +1130,11 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             'approved_class_total': len(approved_class_ids),
             'approved_subject_ids': approved_subject_ids,
             'approved_campus_codes_from_preview': campus_codes,
+            'scheduled_parent_job_id': parent_job_id,
+            'scheduled_scope_hash': frozen_scope['scope_hash'],
+            'scheduled_scope_contract': auto_map_contract,
+            'frozen_scope': frozen_scope,
+            'policy_version': frozen_scope['policy_version'],
             'requester_context': _scheduler_requester_context(),
             'scope_enforced_by_backend': True,
             'scheduled': True,
@@ -802,23 +1155,25 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
             progress_label='03:00 AP đã xong · đang chờ tự động ghép Course CMS',
             request_json=request_json,
             result_json={},
-            idempotency_key=f'ap-auto-map:{parent_job_id or run.id}',
+            idempotency_key=auto_map_key,
         )
         db.add(job)
-        db.commit()
-        db.refresh(job)
-
         try:
-            celery_app.send_task(AUTO_MAP_TASK, args=[job.id], queue='sync-bulk')
-        except Exception as exc:
-            job.status = 'failed'
-            job.progress_label = 'Không đưa được auto-map 03:00 vào hàng đợi'
-            job.error_message = str(exc)[:4000]
-            job.finished_at = _now()
-            job.updated_at = _now()
-            db.add(job)
-            db.commit()
-            raise
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            job = db.query(AcademicBulkOperationJob).filter(
+                AcademicBulkOperationJob.idempotency_key == auto_map_key,
+            ).one_or_none()
+            if job is None:
+                raise
+            return {
+                'ok': job.status != 'failed',
+                'reused': True,
+                'auto_map_job_id': job.id,
+                'status': job.status,
+            }
+        db.refresh(job)
 
         marker['auto_map_job_id'] = job.id
         marker['followup_status'] = 'auto_map_queued'
@@ -828,16 +1183,30 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
         run.counters_json = json_safe_value(data)
         db.add(run)
         if parent:
+            parent.request_json = json_safe_value({
+                **parent_request,
+                'approved_class_ids': frozen_scope['class_ids'],
+                'class_to_campus': frozen_scope['class_to_campus'],
+                'campuses': frozen_scope['campuses'],
+                'scope_hash': frozen_scope['scope_hash'],
+                'frozen_scope': frozen_scope,
+            })
             parent.result_json = json_safe_value({
                 **(parent.result_json or {}),
                 'phase': 'auto_map_queued',
                 'auto_map_job_id': str(job.id),
+                'frozen_scope': frozen_scope,
             })
             parent.progress_current = 20
             parent.progress_label = '03:00 AP đã xong · đã xếp hàng auto-map'
             parent.updated_at = _now()
             db.add(parent)
-        db.commit()
+        _publish_auto_map_job(
+            celery_app,
+            db,
+            parent,
+            str(job.id),
+        )
         return {
             'ok': True,
             'auto_map_job_id': job.id,

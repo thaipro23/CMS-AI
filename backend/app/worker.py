@@ -1529,7 +1529,7 @@ def _should_log_academic_class_sync_success(request_json: dict | None) -> bool:
 def academic_class_sync_task(self, job_id: str):
     """Run class-level CMS/Open edX sync outside request/response."""
     from fastapi import HTTPException
-    from app.models.academic import AcademicClassSyncJob
+    from app.models.academic import AcademicBulkOperationJob, AcademicClassSyncJob
     from app.services.academic_service import AcademicService
     from app.services.academic.job_claim import claim_class_sync_job
     from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
@@ -1569,6 +1569,42 @@ def academic_class_sync_task(self, job_id: str):
         approved_class_id = str(request_json.get('approved_class_id') or '')
         if approved_class_id and approved_class_id != str(job.class_id):
             raise PermissionError('Job đồng bộ lớp vượt ngoài phạm vi đã được duyệt khi enqueue.')
+        scheduled_parent_job_id = str(
+            request_json.get('scheduled_parent_job_id') or ''
+        ).strip()
+        if scheduled_parent_job_id or request_json.get('scheduled_scope_hash'):
+            if not scheduled_parent_job_id:
+                raise PermissionError(
+                    'Scheduled class job is missing its parent identity.'
+                )
+            scheduled_parent = db.get(
+                AcademicBulkOperationJob,
+                scheduled_parent_job_id,
+            )
+            parent_request = (
+                scheduled_parent.request_json
+                if scheduled_parent
+                and isinstance(scheduled_parent.request_json, dict)
+                else {}
+            )
+            frozen_scope = (
+                parent_request.get('frozen_scope')
+                if isinstance(parent_request.get('frozen_scope'), dict)
+                else {}
+            )
+            if (
+                scheduled_parent is None
+                or str(request_json.get('scheduled_scope_hash') or '')
+                != str(frozen_scope.get('scope_hash') or '')
+                or str(job.class_id)
+                not in {
+                    str(value)
+                    for value in (frozen_scope.get('class_ids') or [])
+                }
+            ):
+                raise PermissionError(
+                    'Scheduled class job does not match its frozen parent scope.'
+                )
 
         worker_user = _worker_user_from_request_json(
             request_json,
@@ -2365,6 +2401,7 @@ def _enqueue_academic_class_sync_child_job(
     job_type: str = 'full_cms_sync',
     parent_job_type: str = 'subject_auto_map_all_sync',
     progress_label: str | None = None,
+    scheduled_contract: dict | None = None,
 ):
     """Create/reuse one durable per-class sync child from a parent bulk job."""
     from app.models.academic import AcademicClassSyncJob
@@ -2444,6 +2481,14 @@ def _enqueue_academic_class_sync_child_job(
             'request_key': idempotency_key,
             'request_contract': request_contract,
             'policy_version': CLASS_SYNC_POLICY_VERSION,
+            'scheduled_contract': scheduled_contract or None,
+            'scheduled': bool(scheduled_contract),
+            'scheduled_parent_job_id': (
+                (scheduled_contract or {}).get('scheduled_parent_job_id')
+            ),
+            'scheduled_scope_hash': (
+                (scheduled_contract or {}).get('scope_hash')
+            ),
             'requester_context': requester_context or {},
             'approved_class_id': class_id,
         }),
@@ -2518,9 +2563,59 @@ def _restart_academic_class_sync_child_job(db, job):
     return job
 
 
+def _finish_scheduled_auto_map_parent(
+    db,
+    *,
+    auto_map_job,
+    request_json: dict,
+    state: dict,
+    ok: bool,
+    message: str,
+) -> None:
+    """Finish the 03:00 parent with the exact scheduled auto-map outcome."""
+    from app.models.academic import AcademicBulkOperationJob
+
+    parent_id = str(request_json.get('scheduled_parent_job_id') or '').strip()
+    if not parent_id:
+        return
+    parent = db.get(AcademicBulkOperationJob, parent_id)
+    if parent is None or parent.status not in {'queued', 'running'}:
+        return
+    now = datetime.utcnow()
+    parent.status = 'completed' if ok else 'failed'
+    parent.progress_current = 100
+    parent.progress_total = 100
+    parent.progress_label = (
+        '03:00 +07 · hoàn tất AP, auto-map và đồng bộ CMS'
+        if ok
+        else '03:00 +07 · pipeline AP/CMS thất bại'
+    )
+    parent.result_json = json_safe_value({
+        **(parent.result_json or {}),
+        'phase': 'completed' if ok else 'failed',
+        'auto_map_job_id': str(auto_map_job.id),
+        'scheduled_scope_hash': request_json.get('scheduled_scope_hash'),
+        'auto_map_outcome': {
+            'ok': ok,
+            'class_target_count': int(state.get('class_target_count') or 0),
+            'class_completed_count': int(
+                state.get('class_completed_count') or 0
+            ),
+            'class_failed_count': int(state.get('class_failed_count') or 0),
+            'subject_failed': int(state.get('subject_failed') or 0),
+            'jobs_skipped': int(state.get('jobs_skipped') or 0),
+        },
+        'message': message,
+    })
+    parent.error_message = None if ok else message[:4000]
+    parent.finished_at = now
+    parent.updated_at = now
+    db.add(parent)
+
+
 @celery_app.task(name='academic_learning_refresh_filter_task')
 def academic_learning_refresh_filter_task(job_id: str):
-    """Fan out score refresh children with a bounded 10-class execution window."""
+    """Fan out score refresh children with the configured bounded window."""
     from app.models.academic import AcademicBulkOperationJob, AcademicClassSyncJob
     from app.services.academic.batch_coordinator import plan_batch_dispatch
     from app.services.academic.job_runtime import (
@@ -2861,6 +2956,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         persist_enqueue_metadata,
         reconcile_stale_rows,
     )
+    from app.services.academic.scheduled_parent import confirm_parent_continuation
     from app.services.academic_service import AcademicService
     from app.services.audit_log import AuditErrorType, log_audit
 
@@ -2874,6 +2970,53 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
 
         request_json = job.request_json if isinstance(job.request_json, dict) else {}
         state = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+        scheduled_contract = (
+            request_json.get('scheduled_scope_contract')
+            if isinstance(request_json.get('scheduled_scope_contract'), dict)
+            else None
+        )
+        frozen_scope = (
+            request_json.get('frozen_scope')
+            if isinstance(request_json.get('frozen_scope'), dict)
+            else None
+        )
+        if request_json.get('scheduled'):
+            if scheduled_contract is None or frozen_scope is None:
+                raise PermissionError(
+                    'Scheduled auto-map job is missing its frozen parent contract.'
+                )
+            if (
+                str(scheduled_contract.get('scope_hash') or '')
+                != str(frozen_scope.get('scope_hash') or '')
+            ):
+                raise PermissionError(
+                    'Scheduled auto-map scope hash does not match its parent contract.'
+                )
+            scheduled_parent = db.get(
+                AcademicBulkOperationJob,
+                str(request_json.get('scheduled_parent_job_id') or ''),
+            )
+            scheduled_parent_request = (
+                scheduled_parent.request_json
+                if scheduled_parent
+                and isinstance(scheduled_parent.request_json, dict)
+                else {}
+            )
+            if (
+                scheduled_parent is None
+                or str(scheduled_parent_request.get('scope_hash') or '')
+                != str(frozen_scope.get('scope_hash') or '')
+            ):
+                raise PermissionError(
+                    'Scheduled auto-map job does not match its durable parent.'
+                )
+            if scheduled_parent.status in {'queued', 'running'}:
+                confirm_parent_continuation(
+                    db,
+                    scheduled_parent,
+                    now=datetime.utcnow(),
+                    expected_task_name='academic_subject_auto_map_all_sync_task',
+                )
         now = datetime.utcnow()
         job.status = 'running'
         job.started_at = job.started_at or now
@@ -2901,6 +3044,14 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 for item in (request_json.get('approved_class_ids') or [])
                 if str(item)
             }
+            if request_json.get('scheduled') and approved_class_ids != {
+                str(item)
+                for item in (frozen_scope.get('class_ids') or [])
+                if str(item)
+            }:
+                raise PermissionError(
+                    'Scheduled auto-map class scope does not match its parent contract.'
+                )
             if not scope_snapshot_present:
                 raise PermissionError(
                     'Job Auto map tất cả thiếu snapshot phạm vi lớp đã được duyệt; '
@@ -2927,6 +3078,10 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 approved_class_ids=sorted(approved_class_ids),
             )
             raw_class_ids = [str(item) for item in (prepared.get('class_ids') or [])]
+            if request_json.get('scheduled') and set(raw_class_ids) != approved_class_ids:
+                raise PermissionError(
+                    'Scheduled auto-map prepared scope no longer matches its frozen parent scope.'
+                )
             class_ids = list(dict.fromkeys(
                 item for item in raw_class_ids if item in approved_class_ids
             ))
@@ -3043,6 +3198,14 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                         else {}
                     ),
                     parent_job_id=job.id,
+                    scheduled_contract=(
+                        request_json.get('scheduled_scope_contract')
+                        if isinstance(
+                            request_json.get('scheduled_scope_contract'),
+                            dict,
+                        )
+                        else None
+                    ),
                 )
                 child_ids_by_class[class_id] = child_job.id
                 tracked_ids.add(child_job.id)
@@ -3084,9 +3247,14 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             state['last_dispatch_error'] = dispatch_error
 
         if batch_finished:
-            all_failed = plan.target_count > 0 and plan.failed_count == plan.target_count
             subject_mapped = int(state.get('subject_mapped') or 0)
             subject_already_mapped = int(state.get('subject_already_mapped') or 0)
+            mandatory_failed = bool(
+                plan.failed_count
+                or int(state.get('subject_failed') or 0)
+                or jobs_skipped
+                or int(state.get('scope_blocked_class_count') or 0)
+            )
             message = (
                 f'Đã auto map {subject_mapped} môn mới; '
                 f'{subject_already_mapped} môn đã map sẵn; '
@@ -3098,22 +3266,34 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 message += f"; {state.get('subject_failed')} môn chưa map được"
             state['message'] = message
             state['finished_at'] = datetime.utcnow().isoformat()
-            job.status = 'failed' if all_failed else 'completed'
+            job.status = 'failed' if mandatory_failed else 'completed'
             job.progress_current = 100
             job.progress_total = 100
             job.progress_label = message[:255]
             job.result_json = json_safe_value(state)
-            job.error_message = message[:4000] if all_failed else None
+            job.error_message = message[:4000] if mandatory_failed else None
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
             db.add(job)
+            _finish_scheduled_auto_map_parent(
+                db,
+                auto_map_job=job,
+                request_json=request_json,
+                state=state,
+                ok=not mandatory_failed,
+                message=message,
+            )
             db.commit()
             try:
                 log_audit(
                     db,
                     action='academic.subject_course_mapping.auto_all_sync_job.finish',
-                    status='failed' if all_failed else 'success',
-                    error_type=AuditErrorType.EXTERNAL_SERVICE if all_failed else None,
+                    status='failed' if mandatory_failed else 'success',
+                    error_type=(
+                        AuditErrorType.EXTERNAL_SERVICE
+                        if mandatory_failed
+                        else None
+                    ),
                     message=message,
                     user=None,
                     target_type='academic_bulk_operation_job',
@@ -3122,7 +3302,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 )
             except Exception:
                 pass
-            return json_safe_value({'ok': not all_failed, **state})
+            return json_safe_value({'ok': not mandatory_failed, **state})
 
         state['continuation_attempt'] = int(state.get('continuation_attempt') or 0) + 1
         job.progress_current = progress
@@ -3170,6 +3350,18 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
             db.add(job)
+            _finish_scheduled_auto_map_parent(
+                db,
+                auto_map_job=job,
+                request_json=(
+                    job.request_json
+                    if isinstance(job.request_json, dict)
+                    else {}
+                ),
+                state=previous,
+                ok=False,
+                message=job.error_message,
+            )
             db.commit()
             try:
                 log_audit(db, action='academic.subject_course_mapping.auto_all_sync_job.failed', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_bulk_operation_job', target_id=job_id, metadata=json_safe_value({'request_json': job.request_json}))
