@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
@@ -18,6 +21,7 @@ from app.models.academic import (
     AcademicClass,
     AcademicClassSyncJob,
     AcademicTeacherReportJob,
+    AcademicTeacherReportSnapshot,
     AcademicTerm,
 )
 from app.services.academic.batch_coordinator import plan_batch_dispatch
@@ -40,6 +44,12 @@ from app.services.academic.scheduled_scope import (
     ScheduledScopeError,
     freeze_scheduled_scope,
 )
+from app.services.academic.report_snapshot import (
+    ReportSnapshotError,
+    create_campus_snapshot,
+    create_ho_snapshot,
+    load_snapshot_envelope,
+)
 from app.services.academic_service import AcademicService
 from app.services.object_storage import get_object_storage
 
@@ -53,6 +63,9 @@ MANAGEMENT_REPORT_PREBUILT_ONLY = 'MANAGEMENT_REPORT_PREBUILT_ONLY'
 WORKER_HEARTBEAT_LOST = 'WORKER_HEARTBEAT_LOST'
 JOB_PROGRESS_STALLED = 'JOB_PROGRESS_STALLED'
 JOB_RUNTIME_EXCEEDED = 'JOB_RUNTIME_EXCEEDED'
+
+_SNAPSHOT_PARENT_LOCKS_GUARD = threading.Lock()
+_SNAPSHOT_PARENT_LOCKS: dict[str, list[Any]] = {}
 
 
 def utc_now_naive() -> datetime:
@@ -807,6 +820,28 @@ def _create_scheduled_export_job(
     }
     if request_overrides:
         request.update(json_safe_value(request_overrides))
+    snapshot_id = str(request.get('report_snapshot_id') or '').strip()
+    if snapshot_id:
+        bind = db.get_bind()
+        if bind.dialect.name == 'postgresql':
+            db.execute(
+                text('SELECT pg_advisory_xact_lock(hashtext(:snapshot_id))'),
+                {'snapshot_id': snapshot_id},
+            )
+        candidates = db.query(AcademicTeacherReportJob).filter(
+            AcademicTeacherReportJob.job_type == SCHEDULED_EXPORT_JOB_TYPE,
+            AcademicTeacherReportJob.term_id == str(parent.term_id),
+            AcademicTeacherReportJob.branch == str(parent.branch or 'poly'),
+            AcademicTeacherReportJob.campus == campus,
+            AcademicTeacherReportJob.requested_by == SCHEDULER_ACTOR,
+        ).order_by(AcademicTeacherReportJob.created_at.desc()).all()
+        for candidate in candidates:
+            candidate_request = candidate.request_json if isinstance(candidate.request_json, dict) else {}
+            if (
+                str(candidate_request.get('report_snapshot_id') or '') == snapshot_id
+                and str(candidate_request.get('source_sync_parent_id') or '') == str(parent.id)
+            ):
+                return _publish_scheduled_export_job(db, celery_app, candidate)
     job = AcademicTeacherReportJob(
         job_type=SCHEDULED_EXPORT_JOB_TYPE,
         status='queued',
@@ -818,14 +853,54 @@ def _create_scheduled_export_job(
         progress_total=100,
         progress_label='Đang chờ tạo file báo cáo tự động',
         request_json=json_safe_value(request),
-        result_json={},
+        result_json=json_safe_value({
+            'dispatch': {
+                'state': 'pending',
+                'task_name': 'academic_teacher_report_job_task',
+                'queue': 'exports',
+                'attempt_count': 0,
+                'created_at': vn_iso(),
+            },
+        }),
     )
     db.add(job)
     db.commit()
     db.refresh(job)
+    return _publish_scheduled_export_job(db, celery_app, job)
+
+
+def _publish_scheduled_export_job(db, celery_app, job: AcademicTeacherReportJob) -> AcademicTeacherReportJob:
+    if job.status != 'queued':
+        return job
+    payload = dict(job.result_json or {})
+    dispatch = dict(payload.get('dispatch') or {})
+    if dispatch.get('state') == 'confirmed' and dispatch.get('celery_task_id'):
+        return job
+
+    dispatch.update({
+        'state': 'pending',
+        'task_name': 'academic_teacher_report_job_task',
+        'queue': 'exports',
+        'attempt_count': int(dispatch.get('attempt_count') or 0) + 1,
+        'last_attempt_at': vn_iso(),
+    })
+    payload['dispatch'] = dispatch
+    job.result_json = json_safe_value(payload)
+    job.updated_at = utc_now_naive()
+    db.add(job)
+    db.commit()
     try:
         task_id = _enqueue_task(celery_app, 'academic_teacher_report_job_task', [job.id], queue='exports')
-        job.result_json = json_safe_value({'enqueue': {'celery_task_id': task_id, 'enqueued_at': vn_iso()}})
+        payload = dict(job.result_json or {})
+        dispatch = dict(payload.get('dispatch') or {})
+        dispatch.update({
+            'state': 'confirmed',
+            'celery_task_id': task_id,
+            'confirmed_at': vn_iso(),
+        })
+        payload['dispatch'] = dispatch
+        payload['enqueue'] = {'celery_task_id': task_id, 'enqueued_at': dispatch['confirmed_at']}
+        job.result_json = json_safe_value(payload)
         job.updated_at = utc_now_naive()
         db.add(job)
         db.commit()
@@ -836,11 +911,295 @@ def _create_scheduled_export_job(
             message='Không đưa được tác vụ tạo báo cáo tự động vào hàng đợi exports.',
         )
         payload = dict(job.result_json or {})
+        dispatch = dict(payload.get('dispatch') or {})
+        dispatch.update({
+            'state': 'failed',
+            'error_type': exc.__class__.__name__,
+            'failed_at': vn_iso(),
+        })
+        payload['dispatch'] = dispatch
         payload['enqueue_error_type'] = exc.__class__.__name__
         job.result_json = json_safe_value(payload)
         db.add(job)
         db.commit()
     return job
+
+
+@contextmanager
+def _snapshot_parent_process_lock(parent_id: str):
+    """Serialize duplicate deliveries in one worker process.
+
+    PostgreSQL advisory locking below extends the same boundary across worker
+    processes and pods. This local lock also gives SQLite/dev the same contract.
+    """
+    key = str(parent_id)
+    with _SNAPSHOT_PARENT_LOCKS_GUARD:
+        entry = _SNAPSHOT_PARENT_LOCKS.get(key)
+        if entry is None:
+            entry = [threading.Lock(), 0]
+            _SNAPSHOT_PARENT_LOCKS[key] = entry
+        entry[1] += 1
+        lock = entry[0]
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _SNAPSHOT_PARENT_LOCKS_GUARD:
+            entry[1] -= 1
+            if entry[1] == 0:
+                _SNAPSHOT_PARENT_LOCKS.pop(key, None)
+
+
+def _open_consistent_snapshot_session(parent_id: str) -> tuple[Session, Any | None]:
+    bootstrap = SessionLocal()
+    bind = bootstrap.get_bind()
+    if bind.dialect.name != 'postgresql':
+        return bootstrap, None
+    bootstrap.close()
+
+    connection = bind.connect()
+    try:
+        # Session-level lock is acquired before the REPEATABLE READ snapshot.
+        # A transaction-level lock would take its snapshot before waiting and
+        # could therefore miss rows committed by the winning coordinator.
+        connection.execute(
+            text('SELECT pg_advisory_lock(hashtextextended(:parent_id, 0))'),
+            {'parent_id': str(parent_id)},
+        )
+        connection.commit()
+        connection = connection.execution_options(isolation_level='REPEATABLE READ')
+        return Session(bind=connection, autoflush=False, autocommit=False), connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def _close_consistent_snapshot_session(
+    snapshot_db: Session,
+    advisory_connection,
+    *,
+    parent_id: str,
+) -> None:
+    if advisory_connection is None:
+        snapshot_db.close()
+        return
+    try:
+        snapshot_db.close()
+    finally:
+        try:
+            advisory_connection.execute(
+                text('SELECT pg_advisory_unlock(hashtextextended(:parent_id, 0))'),
+                {'parent_id': str(parent_id)},
+            )
+            advisory_connection.commit()
+        except Exception:
+            advisory_connection.invalidate()
+            raise
+        finally:
+            advisory_connection.close()
+
+
+def _build_campus_report_snapshots(
+    parent: AcademicBulkOperationJob,
+    *,
+    state: dict[str, Any],
+    source_synced_at: datetime,
+) -> dict[str, str]:
+    """Build every campus payload inside one database snapshot transaction."""
+    with _snapshot_parent_process_lock(str(parent.id)):
+        return _build_campus_report_snapshots_locked(
+            parent,
+            state=state,
+            source_synced_at=source_synced_at,
+        )
+
+
+def _build_campus_report_snapshots_locked(
+    parent: AcademicBulkOperationJob,
+    *,
+    state: dict[str, Any],
+    source_synced_at: datetime,
+) -> dict[str, str]:
+    frozen_scope = state.get('frozen_scope') if isinstance(state.get('frozen_scope'), dict) else {}
+    campuses = [str(item).strip().lower() for item in (frozen_scope.get('campuses') or []) if str(item).strip()]
+    class_to_campus = {
+        str(class_id): str(campus).strip().lower()
+        for class_id, campus in (frozen_scope.get('class_to_campus') or {}).items()
+        if str(class_id).strip() and str(campus).strip()
+    }
+    child_ids_by_class = {
+        str(class_id): str(child_id)
+        for class_id, child_id in (state.get('child_job_ids_by_class') or {}).items()
+        if str(class_id).strip() and str(child_id).strip()
+    }
+    if not campuses:
+        raise ReportSnapshotError('Frozen parent scope has no campuses to snapshot.')
+
+    snapshot_db, advisory_connection = _open_consistent_snapshot_session(str(parent.id))
+    try:
+        storage = get_object_storage()
+        run_date_vn = str(frozen_scope.get('run_date_vn') or '').strip()
+        if not run_date_vn:
+            raise ReportSnapshotError('Frozen parent scope is missing run_date_vn.')
+        existing_rows = snapshot_db.query(AcademicTeacherReportSnapshot).filter(
+            AcademicTeacherReportSnapshot.parent_job_id == str(parent.id),
+            AcademicTeacherReportSnapshot.scope_type == 'campus',
+        ).all()
+        if existing_rows:
+            existing_by_campus = {str(row.campus or '').strip().lower(): row for row in existing_rows}
+            if set(existing_by_campus) != set(campuses) or len(existing_rows) != len(campuses):
+                raise ReportSnapshotError('Existing campus snapshot set does not match frozen parent scope.')
+            for campus, row in existing_by_campus.items():
+                class_ids = sorted(
+                    class_id
+                    for class_id, scope_campus in class_to_campus.items()
+                    if scope_campus == campus
+                )
+                source_child_ids = [child_ids_by_class[class_id] for class_id in class_ids if class_id in child_ids_by_class]
+                if len(source_child_ids) != len(class_ids) or len(set(source_child_ids)) != len(class_ids):
+                    raise ReportSnapshotError(
+                        f'Campus {campus} snapshot source child set does not match frozen class scope.'
+                    )
+                envelope = load_snapshot_envelope(
+                    snapshot_db,
+                    storage=storage,
+                    snapshot_id=str(row.id),
+                    expected_parent_id=str(parent.id),
+                    expected_term_id=str(parent.term_id),
+                    expected_branch=str(parent.branch or 'poly'),
+                    expected_campus=campus,
+                )
+                if str(envelope.get('scope_hash') or '') != str(frozen_scope.get('scope_hash') or ''):
+                    raise ReportSnapshotError(f'Campus {campus} snapshot scope_hash mismatch.')
+                if envelope.get('source_class_ids') != class_ids:
+                    raise ReportSnapshotError(f'Campus {campus} snapshot class scope mismatch.')
+                if envelope.get('source_child_ids') != sorted(source_child_ids):
+                    raise ReportSnapshotError(f'Campus {campus} snapshot child provenance mismatch.')
+                if not str(envelope.get('term_label') or '').strip():
+                    raise ReportSnapshotError(f'Campus {campus} snapshot term_label is missing.')
+                if str(envelope.get('run_date_vn') or '') != run_date_vn:
+                    raise ReportSnapshotError(f'Campus {campus} snapshot run_date_vn mismatch.')
+            return {campus: str(row.id) for campus, row in existing_by_campus.items()}
+
+        term = snapshot_db.get(AcademicTerm, str(parent.term_id))
+        term_label = str(
+            getattr(term, 'term_code', None)
+            or getattr(term, 'term_name', None)
+            or parent.term_id
+        )
+        service = AcademicService(snapshot_db)
+        user = _scheduler_user()
+        rows: dict[str, AcademicTeacherReportSnapshot] = {}
+        for campus in campuses:
+            class_ids = sorted(
+                class_id
+                for class_id, scope_campus in class_to_campus.items()
+                if scope_campus == campus
+            )
+            source_child_ids = [child_ids_by_class[class_id] for class_id in class_ids if class_id in child_ids_by_class]
+            if len(source_child_ids) != len(class_ids) or len(set(source_child_ids)) != len(class_ids):
+                raise ReportSnapshotError(
+                    f'Campus {campus} snapshot source child set does not match frozen class scope.'
+                )
+            report = service.training_teacher_report(
+                user,
+                term_id=str(parent.term_id),
+                branch=str(parent.branch or 'poly'),
+                campus=campus,
+                learning_platform='cms',
+                page=1,
+                page_size=200,
+                include_all=True,
+                include_students=True,
+                use_cache=False,
+                student_row_limit=None,
+                allowed_class_ids=set(class_ids),
+            )
+            rows[campus] = create_campus_snapshot(
+                snapshot_db,
+                storage=storage,
+                parent_id=str(parent.id),
+                term_id=str(parent.term_id),
+                branch=str(parent.branch or 'poly'),
+                campus=campus,
+                scope_hash=str(frozen_scope.get('scope_hash') or ''),
+                source_child_ids=source_child_ids,
+                source_synced_at=source_synced_at,
+                report=report,
+                source_class_ids=class_ids,
+                term_label=term_label,
+                run_date_vn=run_date_vn,
+            )
+        snapshot_ids = {campus: str(row.id) for campus, row in rows.items()}
+        snapshot_db.commit()
+        return snapshot_ids
+    except Exception:
+        snapshot_db.rollback()
+        raise
+    finally:
+        _close_consistent_snapshot_session(
+            snapshot_db,
+            advisory_connection,
+            parent_id=str(parent.id),
+        )
+
+
+def _build_ho_report_snapshot(
+    parent: AcademicBulkOperationJob,
+    *,
+    state: dict[str, Any],
+    campus_snapshot_ids: dict[str, str],
+    source_synced_at: datetime,
+) -> str:
+    with _snapshot_parent_process_lock(str(parent.id)):
+        return _build_ho_report_snapshot_locked(
+            parent,
+            state=state,
+            campus_snapshot_ids=campus_snapshot_ids,
+            source_synced_at=source_synced_at,
+        )
+
+
+def _build_ho_report_snapshot_locked(
+    parent: AcademicBulkOperationJob,
+    *,
+    state: dict[str, Any],
+    campus_snapshot_ids: dict[str, str],
+    source_synced_at: datetime,
+) -> str:
+    frozen_scope = state.get('frozen_scope') if isinstance(state.get('frozen_scope'), dict) else {}
+    campuses = [str(item).strip().lower() for item in (frozen_scope.get('campuses') or []) if str(item).strip()]
+    if set(campus_snapshot_ids) != set(campuses):
+        raise ReportSnapshotError('Campus snapshot set does not match frozen parent scope before HO aggregation.')
+    snapshot_db, advisory_connection = _open_consistent_snapshot_session(str(parent.id))
+    try:
+        rows = snapshot_db.query(AcademicTeacherReportSnapshot).filter(
+            AcademicTeacherReportSnapshot.id.in_(list(campus_snapshot_ids.values())),
+        ).all()
+        ho_row = create_ho_snapshot(
+            snapshot_db,
+            storage=get_object_storage(),
+            parent_id=str(parent.id),
+            term_id=str(parent.term_id),
+            branch=str(parent.branch or 'poly'),
+            scope_hash=str(frozen_scope.get('scope_hash') or ''),
+            expected_campuses=campuses,
+            campus_snapshots=rows,
+            source_synced_at=source_synced_at,
+        )
+        ho_snapshot_id = str(ho_row.id)
+        snapshot_db.commit()
+        return ho_snapshot_id
+    except Exception:
+        snapshot_db.rollback()
+        raise
+    finally:
+        _close_consistent_snapshot_session(
+            snapshot_db,
+            advisory_connection,
+            parent_id=str(parent.id),
+        )
 
 
 def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, Any]:
@@ -866,7 +1225,7 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
         state = dict(parent.result_json or {})
         phase = str(state.get('phase') or 'waiting_children')
 
-        if phase in {'dispatching', 'waiting_children'}:
+        if phase in {'dispatching', 'waiting_children', 'building_campus_snapshots'}:
             children, plan = _dispatch_daily_score_window(celery_app, db, parent, state)
             completed = [item for item in children if item.status == 'completed']
             failed = [item for item in children if item.status == 'failed']
@@ -956,6 +1315,32 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                 if str(campus)
             ]
 
+            state.update({
+                'phase': 'building_campus_snapshots',
+                'source_synced_at': vn_iso(source_synced_at),
+            })
+            parent.result_json = json_safe_value(state)
+            touch_job_runtime(
+                parent,
+                current=66,
+                label=f'Đang chốt snapshot bất biến cho {len(campuses)} cơ sở',
+                phase='building_campus_snapshots',
+                force_progress_changed=True,
+            )
+            db.add(parent)
+            db.commit()
+            campus_snapshot_ids = _build_campus_report_snapshots(
+                parent,
+                state=state,
+                source_synced_at=source_synced_at,
+            )
+            ho_snapshot_id = _build_ho_report_snapshot(
+                parent,
+                state=state,
+                campus_snapshot_ids=campus_snapshot_ids,
+                source_synced_at=source_synced_at,
+            )
+
             campus_report_job_ids: list[str] = []
             skipped_scopes: list[dict[str, Any]] = []
             for campus in campuses:
@@ -979,6 +1364,10 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                     parent=parent,
                     campus=campus,
                     source_synced_at=source_synced_at,
+                    request_overrides={
+                        'report_snapshot_id': campus_snapshot_ids[campus],
+                        'report_snapshot_scope_hash': str(frozen_scope.get('scope_hash') or ''),
+                    },
                 )
                 campus_report_job_ids.append(str(export_job.id))
 
@@ -986,6 +1375,8 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
             state.update({
                 'phase': 'campus_reporting',
                 'source_synced_at': vn_iso(source_synced_at),
+                'campus_snapshot_ids_by_campus': campus_snapshot_ids,
+                'ho_snapshot_id': ho_snapshot_id,
                 'campus_report_job_ids': campus_report_job_ids,
                 'report_job_ids': list(campus_report_job_ids),
                 'skipped_report_scopes': skipped_scopes,
@@ -1087,6 +1478,15 @@ def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, A
                     'source_campus_report_job_ids': [
                         str(item.id) for item in completed_campus_reports
                     ],
+                    'source_campus_snapshot_ids': sorted(
+                        str(item)
+                        for item in (state.get('campus_snapshot_ids_by_campus') or {}).values()
+                        if str(item)
+                    ),
+                    'report_snapshot_id': str(state.get('ho_snapshot_id') or ''),
+                    'report_snapshot_scope_hash': str(
+                        ((state.get('frozen_scope') or {}).get('scope_hash') or '')
+                    ),
                     'aggregate_after_campus_reports': True,
                 },
             )
@@ -1202,6 +1602,34 @@ def _job_request(job: AcademicTeacherReportJob) -> dict[str, Any]:
     return job.request_json if isinstance(job.request_json, dict) else {}
 
 
+def _scheduled_snapshot_report(
+    db,
+    job: AcademicTeacherReportJob,
+    *,
+    storage=None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    request = _job_request(job)
+    snapshot_id = str(request.get('report_snapshot_id') or '').strip()
+    if not snapshot_id:
+        raise ReportSnapshotError('Scheduled report is missing immutable report_snapshot_id.')
+    term_id = str(job.term_id or request.get('term_id') or '')
+    branch = str(job.branch or request.get('branch') or 'poly').strip().lower() or 'poly'
+    campus = str(job.campus or request.get('campus') or '').strip().lower() or None
+    envelope = load_snapshot_envelope(
+        db,
+        storage=storage or get_object_storage(),
+        snapshot_id=snapshot_id,
+        expected_parent_id=str(request.get('source_sync_parent_id') or ''),
+        expected_term_id=term_id,
+        expected_branch=branch,
+        expected_campus=campus,
+    )
+    report = envelope.get('report')
+    if not isinstance(report, dict):
+        raise ReportSnapshotError('Immutable report snapshot has no report payload.')
+    return report, envelope
+
+
 def _write_teacher_report_file(
     db,
     job: AcademicTeacherReportJob,
@@ -1260,24 +1688,24 @@ def _write_teacher_report_file(
             max_snapshot_age_seconds=0,
         )
 
+    snapshot_envelope: dict[str, Any] | None = None
+    snapshot_report: dict[str, Any] | None = None
     # Management scope reaches this point only for the scheduled 05:00 artifact.
-    # It reads PostgreSQL snapshots/cache only and NEVER calls CMS/Open edX.
+    # The immutable run snapshot is the artifact source of truth; mutable UI
+    # caches and current academic rows are deliberately outside this path.
     if scheduled and management_scope:
         touch_job_runtime(
             job,
             current=25,
-            label='Đang tính cache báo cáo từ dữ liệu 05:00 đã đồng bộ',
-            phase='building_cache',
+            label='Đang đọc snapshot báo cáo bất biến của đợt 05:00',
+            phase='loading_snapshot',
             force_progress_changed=True,
         )
         db.add(job)
         db.commit()
-        service.rebuild_training_teacher_report_cache(
-            user,
-            term_id=term_id,
-            branch=branch,
-            campus=campus,
-            source_sync_run_id=str(request.get('source_sync_parent_id') or '') or None,
+        snapshot_report, snapshot_envelope = _scheduled_snapshot_report(
+            db,
+            job,
         )
 
     touch_job_runtime(
@@ -1290,29 +1718,37 @@ def _write_teacher_report_file(
     db.add(job)
     db.commit()
 
-    report = service.training_teacher_report(
-        user,
-        term_id=term_id,
-        branch=branch,
-        campus=campus,
-        search=request.get('search'),
-        learning_status=request.get('learning_status'),
-        learning_platform=learning_platform,
-        teacher_id=teacher_id,
-        class_id=class_id,
-        page=1,
-        page_size=200,
-        include_all=True,
-        include_students=True,
-        use_cache=False,
-    )
+    report = snapshot_report if snapshot_report is not None else service.training_teacher_report(
+            user,
+            term_id=term_id,
+            branch=branch,
+            campus=campus,
+            search=request.get('search'),
+            learning_status=request.get('learning_status'),
+            learning_platform=learning_platform,
+            teacher_id=teacher_id,
+            class_id=class_id,
+            page=1,
+            page_size=200,
+            include_all=True,
+            include_students=True,
+            use_cache=False,
+        )
+    report = dict(report)
     report['learning_refresh'] = json_safe_value(refresh_result) if refresh_result else None
 
-    term = db.get(AcademicTerm, term_id) if term_id else None
-    term_code = str(getattr(term, 'term_code', None) or getattr(term, 'term_name', None) or term_id or 'term')
+    if scheduled:
+        term_code = str((snapshot_envelope or {}).get('term_label') or term_id or 'term')
+        run_date_vn = str((snapshot_envelope or {}).get('run_date_vn') or '')
+        if not run_date_vn:
+            raise ReportSnapshotError('Immutable report snapshot is missing run_date_vn.')
+        local_date = run_date_vn.replace('-', '')
+    else:
+        term = db.get(AcademicTerm, term_id) if term_id else None
+        term_code = str(getattr(term, 'term_code', None) or getattr(term, 'term_name', None) or term_id or 'term')
+        local_date = _aware_utc(utc_now_naive()).astimezone(VN_TZ).strftime('%Y%m%d')
     safe_term = ''.join(char if char.isalnum() or char in {'-', '_'} else '-' for char in term_code)
     safe_branch = ''.join(char if char.isalnum() or char in {'-', '_'} else '-' for char in branch)
-    local_date = _aware_utc(utc_now_naive()).astimezone(VN_TZ).strftime('%Y%m%d')
     if scheduled:
         scope_label = (campus or 'HO').upper()
         safe_scope = ''.join(char if char.isalnum() or char in {'-', '_'} else '-' for char in scope_label)
@@ -1365,6 +1801,15 @@ def _write_teacher_report_file(
         'learning_refresh': refresh_result,
         'generated_at': generated_at,
         'source_synced_at': source_synced_at,
+        'report_snapshot_id': request.get('report_snapshot_id') if scheduled else None,
+        'report_snapshot_sha256': (
+            db.get(AcademicTeacherReportSnapshot, str(request.get('report_snapshot_id'))).sha256
+            if scheduled and request.get('report_snapshot_id')
+            else None
+        ),
+        'report_snapshot_schema_version': (
+            snapshot_envelope.get('schema_version') if snapshot_envelope else None
+        ),
         'timezone': 'Asia/Ho_Chi_Minh',
     }
 
@@ -1377,7 +1822,9 @@ def run_teacher_report_job(job_id: str) -> dict[str, Any]:
         ).with_for_update().one_or_none()
         if not job:
             return {'ok': False, 'error': 'job_not_found'}
-        if job.status not in {'queued', 'running'}:
+        if job.status == 'running':
+            return {'ok': True, 'status': 'running', 'duplicate_delivery': True}
+        if job.status != 'queued':
             return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
 
         request = _job_request(job)

@@ -1160,6 +1160,8 @@ class AcademicTeacherReportWorkflowService:
         include_students: bool = False,
         include_classes: bool = False,
         use_cache: bool = True,
+        student_row_limit: int | None = 20000,
+        allowed_class_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
         decision = self.access_decision(user)
@@ -1285,6 +1287,14 @@ class AcademicTeacherReportWorkflowService:
             query = query.filter(AcademicTeacher.id == str(teacher_id).strip())
         if class_id and str(class_id).strip():
             query = query.filter(AcademicClass.id == str(class_id).strip())
+        if allowed_class_ids is not None:
+            normalized_allowed_class_ids = {
+                str(item).strip() for item in allowed_class_ids if str(item).strip()
+            }
+            if not normalized_allowed_class_ids:
+                query = query.filter(AcademicClass.id.is_(None))
+            else:
+                query = query.filter(AcademicClass.id.in_(normalized_allowed_class_ids))
         if search and search.strip():
             like = f"%{search.strip()}%"
             query = query.filter(or_(
@@ -1859,6 +1869,7 @@ class AcademicTeacherReportWorkflowService:
                         'block_name': context.get('block_name'),
                         'subject_code': context.get('subject_code'),
                         'subject_name': context.get('subject_name'),
+                        'student_id': student.id,
                         'student_code': student.student_code,
                         'student_username': student.username,
                         'student_name': student.full_name,
@@ -1891,9 +1902,9 @@ class AcademicTeacherReportWorkflowService:
                         'deadline_next_quiz_from_date': deadline_status.get('next_quiz_from_date'),
                         'deadline_next_quiz_due_date': deadline_status.get('next_quiz_due_date'),
                     })
-                    if len(watch_rows) >= 20000:
+                    if student_row_limit is not None and len(watch_rows) >= max(1, int(student_row_limit)):
                         break
-                if len(watch_rows) >= 20000:
+                if student_row_limit is not None and len(watch_rows) >= max(1, int(student_row_limit)):
                     break
             result['student_watch_rows'] = watch_rows
         return result
