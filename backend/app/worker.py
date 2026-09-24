@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Any
 from celery import Celery
@@ -86,6 +86,7 @@ celery_app.conf.update(
         'academic_subject_catalog_refresh_task': {'queue': 'sync-bulk'},
         'academic_teacher_report_job_task': {'queue': 'exports'},
         'academic_progress_email_task': {'queue': 'exports'},
+        'academic_progress_email_watchdog_task': {'queue': 'exports'},
         'academic_udemy_progress_import_task': {'queue': 'exports'},
         'academic_udemy_progress_export_task': {'queue': 'exports'},
         'academic_udemy_artifact_cleanup_task': {'queue': 'exports'},
@@ -111,6 +112,7 @@ celery_app.conf.update(
         # Mail Send owns delivery retries. Keep Celery redelivery disabled on the
         # task itself so a worker loss cannot create a duplicate bulk session.
         'academic_progress_email_task': {'soft_time_limit': 840, 'time_limit': 900},
+        'academic_progress_email_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55},
         'academic_udemy_progress_import_task': {'soft_time_limit': 1800, 'time_limit': 2100},
         'academic_udemy_progress_export_task': {'soft_time_limit': 1800, 'time_limit': 2100},
         'academic_udemy_artifact_cleanup_task': {'soft_time_limit': 300, 'time_limit': 600},
@@ -132,6 +134,10 @@ if getattr(settings, 'analytics_ingest_scheduler_enabled', False):
 _beat_schedule['academic-score-sync-all-students'] = {
     'task': 'academic_sync_all_student_scores_task',
     'schedule': crontab(hour=5, minute=0),
+}
+_beat_schedule['academic-progress-email-watchdog'] = {
+    'task': 'academic_progress_email_watchdog_task',
+    'schedule': 60.0,
 }
 celery_app.conf.beat_schedule = _beat_schedule
 
@@ -1962,14 +1968,75 @@ def academic_sync_all_student_scores_task():
         db.close()
 
 
+@celery_app.task(name='academic_progress_email_watchdog_task')
+def academic_progress_email_watchdog_task():
+    """Re-enqueue interrupted provider reconciliation without creating a new intent."""
+    from app.models.academic import AcademicBulkOperationJob
+
+    db = SessionLocal()
+    requeued = 0
+    try:
+        # This lease is longer than one full provider poll. A live task keeps
+        # updated_at fresh while polling; only an interrupted task is reclaimed.
+        lease_seconds = max(
+            120,
+            int(settings.mailsend_poll_timeout_seconds)
+            + int(settings.mailsend_request_timeout_seconds)
+            + 60,
+        )
+        cutoff = datetime.utcnow() - timedelta(seconds=lease_seconds)
+        jobs = (
+            db.query(AcademicBulkOperationJob)
+            .filter(
+                AcademicBulkOperationJob.job_type == 'progress_reminder_email',
+                AcademicBulkOperationJob.status.in_(['queued', 'running']),
+                AcademicBulkOperationJob.updated_at < cutoff,
+            )
+            .order_by(AcademicBulkOperationJob.updated_at.asc())
+            .limit(100)
+            .all()
+        )
+        for job in jobs:
+            result = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+            deliveries = [item for item in (result.get('mail_send_deliveries') or []) if isinstance(item, dict)]
+            states = {str(item.get('provider_state') or '').lower() for item in deliveries}
+            if deliveries and states and states.issubset({'terminal'}):
+                continue
+            attempt = int(result.get('reconciliation_attempt') or 0) + 1
+            result.update({
+                'reconciliation_attempt': attempt,
+                'reconciliation_enqueued_at': datetime.utcnow().isoformat(),
+            })
+            job.status = 'queued'
+            job.progress_label = 'Đang hòa giải trạng thái Mail Send'
+            job.result_json = json_safe_value(result)
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            academic_progress_email_task.apply_async(
+                args=[job.id],
+                queue='exports',
+                task_id=f'academic-progress-email-reconcile:{job.id}:{attempt}',
+            )
+            requeued += 1
+        return {'ok': True, 'requeued': requeued}
+    finally:
+        db.close()
+
+
 @celery_app.task(name='academic_progress_email_task', acks_late=False)
 def academic_progress_email_task(job_id: str):
     """Refresh CMS progress, personalize each reminder locally, then track Mail Send."""
-    from app.models.academic import AcademicBulkOperationJob, AcademicClassStudent
+    from app.models.academic import AcademicBulkOperationJob, AcademicClassStudent, AcademicStudent
     from app.services.academic.progress_email import (
         AcademicProgressEmailService,
         plain_text_mail_template,
         render_recipient_body_text,
+    )
+    from app.services.academic.progress_email_delivery import (
+        build_delivery_intent,
+        delivery_reconciliation_action,
+        recipient_matches_intent,
     )
     from app.services.academic_service import AcademicService
     from app.services.audit_log import AuditErrorType, log_audit
@@ -2107,15 +2174,56 @@ def academic_progress_email_task(job_id: str):
             db.commit()
             existing_result = dict(job.result_json or {})
 
-        resolved = progress_service.resolve_selected_after_refresh(
-            worker_user,
-            class_id,
-            selected_student_ids=selected_ids,
-            minimum_synced_at=refresh_started,
-        )
-        recipients = list(resolved.pop('recipients'))
-        delivery_summary = json_safe_value(resolved)
-        if not recipients:
+        current_job = db.get(AcademicBulkOperationJob, job_id)
+        current_result = dict(current_job.result_json or {}) if isinstance(current_job.result_json, dict) else {}
+        raw_states = current_result.get('mail_send_deliveries')
+        delivery_states: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_states, list):
+            for item in raw_states:
+                if not isinstance(item, dict):
+                    continue
+                student_id = str(item.get('student_id') or '').strip()
+                if student_id:
+                    delivery_states[student_id] = dict(item)
+
+        if delivery_states:
+            # Once intent rows exist, the selected set is immutable. Reload raw
+            # addresses only from the protected student table and require their
+            # HMAC fingerprints to match before any idempotent create/replay.
+            students = {
+                str(item.id): item
+                for item in db.query(AcademicStudent).filter(
+                    AcademicStudent.id.in_(list(delivery_states)),
+                ).all()
+            }
+            recipients = []
+            for student_id in delivery_states:
+                student = students.get(student_id)
+                recipients.append({
+                    'student_id': student_id,
+                    'student_code': student.student_code if student else None,
+                    'full_name': student.full_name if student else None,
+                    'private_email': str(student.email or '').strip().lower() if student else '',
+                })
+            summary_keys = {
+                'selected_count', 'eligible_after_refresh_count', 'deliverable_count',
+                'caught_up_or_no_longer_late_count', 'missing_email_count',
+                'inactive_student_count', 'duplicate_email_count', 'stale_after_refresh_count',
+            }
+            delivery_summary = json_safe_value({
+                key: current_result.get(key) for key in summary_keys if key in current_result
+            })
+        else:
+            resolved = progress_service.resolve_selected_after_refresh(
+                worker_user,
+                class_id,
+                selected_student_ids=selected_ids,
+                minimum_synced_at=refresh_started,
+            )
+            recipients = list(resolved.pop('recipients'))
+            delivery_summary = json_safe_value(resolved)
+
+        if not recipients and not delivery_states:
             result = json_safe_value({
                 'ok': True,
                 **delivery_summary,
@@ -2157,18 +2265,6 @@ def academic_progress_email_task(job_id: str):
                 logger.exception('Could not write no-recipient progress email audit for job %s', job_id)
             return result
 
-        current_job = db.get(AcademicBulkOperationJob, job_id)
-        current_result = dict(current_job.result_json or {}) if isinstance(current_job.result_json, dict) else {}
-        raw_states = current_result.get('mail_send_deliveries')
-        delivery_states: dict[str, dict[str, Any]] = {}
-        if isinstance(raw_states, list):
-            for item in raw_states:
-                if not isinstance(item, dict):
-                    continue
-                student_id = str(item.get('student_id') or '').strip()
-                if student_id:
-                    delivery_states[student_id] = dict(item)
-
         client = MailSendProxyClient()
         processed = 0
         total = len(recipients)
@@ -2199,20 +2295,61 @@ def academic_progress_email_task(job_id: str):
             db.add(current)
             db.commit()
 
+        if not delivery_states:
+            for recipient in recipients:
+                state = build_delivery_intent(job_id=job_id, recipient=recipient)
+                state.update({'provider_state': 'intent_created'})
+                delivery_states[str(recipient['student_id'])] = state
+            # Freeze the complete bounded recipient set before the first
+            # provider request. No raw address is written to job JSON.
+            persist_states(label=f'Đã lưu ý định gửi cho {len(recipients)} sinh viên')
+        else:
+            # Rolling-deployment compatibility for rows created by the previous
+            # implementation. A known session is safe to poll; a completed row
+            # is terminal. Unknown legacy failures are never blindly resent.
+            for recipient in recipients:
+                student_id = str(recipient.get('student_id') or '').strip()
+                state = delivery_states[student_id]
+                if state.get('provider_state'):
+                    continue
+                if str(state.get('session_id') or '').strip():
+                    state['provider_state'] = 'provider_created'
+                elif str(state.get('status') or '').upper() == 'COMPLETED':
+                    state['provider_state'] = 'terminal'
+                else:
+                    state.update({
+                        'provider_state': 'terminal',
+                        'status': 'LEGACY_STATE_UNSAFE_TO_RETRY',
+                        'error_code': 'MAILSEND_LEGACY_STATE_UNKNOWN',
+                    })
+            persist_states(label='Đang tiếp tục trạng thái Mail Send đã lưu')
+
         for recipient in recipients:
             student_id = str(recipient.get('student_id') or '').strip()
             recipient_email = str(recipient.get('private_email') or '').strip().lower()
-            state = delivery_states.get(student_id, {'student_id': student_id})
-            delivery_states[student_id] = state
+            state = delivery_states[student_id]
+            action = delivery_reconciliation_action(state)
 
-            if str(state.get('status') or '').upper() == 'COMPLETED':
-                sent_count += int(state.get('sent_count') or 1)
-                failed_count += int(state.get('failed_count') or 0)
+            if action == 'done':
+                if str(state.get('status') or '').upper() == 'COMPLETED':
+                    sent_count += int(state.get('sent_count') or 1)
+                    failed_count += int(state.get('failed_count') or 0)
+                else:
+                    failed_count += max(1, int(state.get('failed_count') or 0))
                 processed += 1
                 continue
 
-            session_id = str(state.get('session_id') or '').strip()
-            if not session_id:
+            if action == 'create_idempotently':
+                if not recipient_matches_intent(state, recipient_email):
+                    state.update({
+                        'provider_state': 'terminal',
+                        'status': 'RECIPIENT_CHANGED',
+                        'error_code': 'MAILSEND_FROZEN_RECIPIENT_MISMATCH',
+                    })
+                    failed_count += 1
+                    processed += 1
+                    persist_states(label=f'Đã xử lý {processed}/{total} sinh viên')
+                    continue
                 try:
                     personalized_text = render_recipient_body_text(
                         body_text,
@@ -2221,6 +2358,7 @@ def academic_progress_email_task(job_id: str):
                     )
                 except ValueError as exc:
                     state.update({
+                        'provider_state': 'terminal',
                         'status': 'PERSONALIZATION_MISSING',
                         'error_code': str(exc),
                     })
@@ -2235,9 +2373,22 @@ def academic_progress_email_task(job_id: str):
                         subject=subject,
                         body_template=plain_text_mail_template(personalized_text),
                         emails=[recipient_email],
+                        idempotency_key=state['idempotency_key'],
                     )
                 except MailSendProxyError as exc:
+                    if exc.code in {'MAILSEND_TIMEOUT', 'MAILSEND_UNAVAILABLE'}:
+                        state.update({
+                            'provider_state': 'provider_unknown',
+                            'status': 'PROVIDER_UNKNOWN',
+                            'error_code': exc.code,
+                        })
+                        persist_states(
+                            label='Đang chờ hòa giải xác nhận từ Mail Send',
+                            status='RECONCILIATION_PENDING',
+                        )
+                        return db.get(AcademicBulkOperationJob, job_id).result_json
                     state.update({
+                        'provider_state': 'terminal',
                         'status': 'CREATE_FAILED',
                         'error_code': exc.code,
                     })
@@ -2248,17 +2399,27 @@ def academic_progress_email_task(job_id: str):
 
                 session_id = str(created['session_id'])
                 state.update({
+                    'provider_state': 'provider_created',
                     'session_id': session_id,
                     'status': str(created.get('status') or 'QUEUED').upper(),
+                    'provider_created_at': datetime.utcnow().isoformat(),
                 })
-                # Persist the session before polling so retry/resume never creates
-                # a duplicate email for this student.
+                # Persist provider metadata immediately after the remote call.
+                # If the worker died just before this commit, replay uses the
+                # exact same provider-facing idempotency key.
                 persist_states(label=f'Mail Send đã nhận {processed + 1}/{total} session')
 
+            session_id = str(state.get('session_id') or '').strip()
+
             try:
-                terminal = client.wait_for_terminal(session_id)
+                def heartbeat(provider_status: dict[str, Any]) -> None:
+                    state['status'] = str(provider_status.get('status') or 'QUEUED').upper()
+                    persist_states(label=f'Đang theo dõi Mail Send {processed + 1}/{total}')
+
+                terminal = client.wait_for_terminal(session_id, on_status=heartbeat)
                 terminal_status = str(terminal.get('status') or '').upper()
                 state.update({
+                    'provider_state': 'terminal',
                     'status': terminal_status or 'UNKNOWN',
                     'sent_count': int(terminal.get('sent_count') or 0),
                     'failed_count': int(terminal.get('failed_count') or 0),
@@ -2270,10 +2431,15 @@ def academic_progress_email_task(job_id: str):
                     failed_count += max(1, int(terminal.get('failed_count') or 0))
             except MailSendProxyError as exc:
                 state.update({
-                    'status': 'POLL_FAILED',
+                    'provider_state': 'provider_created',
+                    'status': 'PROVIDER_CREATED',
                     'error_code': exc.code,
                 })
-                failed_count += 1
+                persist_states(
+                    label='Đang chờ hòa giải session Mail Send',
+                    status='RECONCILIATION_PENDING',
+                )
+                return db.get(AcademicBulkOperationJob, job_id).result_json
 
             processed += 1
             persist_states(label=f'Đã xử lý {processed}/{total} sinh viên')
@@ -2348,6 +2514,36 @@ def academic_progress_email_task(job_id: str):
             logger.exception('academic_progress_email_task failed for job %s', job_id)
         if job:
             previous = dict(job.result_json or {}) if isinstance(job.result_json, dict) else {}
+            durable_deliveries = [
+                item for item in (previous.get('mail_send_deliveries') or [])
+                if isinstance(item, dict)
+            ]
+            nonterminal_provider_intent = any(
+                str(item.get('provider_state') or '').lower()
+                in {'intent_created', 'provider_unknown', 'provider_created'}
+                for item in durable_deliveries
+            )
+            if nonterminal_provider_intent:
+                # The durable intent predates all provider I/O. Preserve it for
+                # watchdog reconciliation even when an unexpected DB/runtime
+                # error occurs after provider acceptance; never convert this
+                # ambiguity into a terminal failure that an operator may resend.
+                previous.update({
+                    'ok': False,
+                    'code': 'MAILSEND_RECONCILIATION_REQUIRED',
+                    'last_reconciliation_error_code': error_code,
+                    'mail_send_status': 'RECONCILIATION_PENDING',
+                    'mail_send_confirmed': False,
+                })
+                job.status = 'running'
+                job.progress_label = 'Đang chờ hòa giải trạng thái Mail Send'
+                job.error_message = None
+                job.result_json = json_safe_value(previous)
+                job.finished_at = None
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+                return job.result_json
             job.status = 'failed'
             job.progress_total = 100
             job.progress_label = 'Gửi nhắc tiến độ thất bại'

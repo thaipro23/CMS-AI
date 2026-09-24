@@ -91,13 +91,17 @@ class MailSendProxyClient:
     def configured(self) -> bool:
         return bool(settings.mailsend_enabled and self.base_url and self.api_key)
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, *, idempotency_key: str | None = None) -> dict[str, str]:
         if not self.api_key:
             raise MailSendProxyError(
                 'MAILSEND_NOT_CONFIGURED',
                 'AI Server chưa được cấu hình Mail Send ProxyKey.',
             )
-        return {'X-API-Key': self.api_key, 'Accept': 'application/json'}
+        headers = {'X-API-Key': self.api_key, 'Accept': 'application/json'}
+        clean_key = str(idempotency_key or '').strip()
+        if clean_key:
+            headers['Idempotency-Key'] = clean_key
+        return headers
 
     def _url(self, path: str) -> str:
         clean_path = path if path.startswith('/') else f'/{path}'
@@ -126,6 +130,7 @@ class MailSendProxyClient:
         subject: str,
         body_template: str,
         emails: list[str],
+        idempotency_key: str,
     ) -> dict[str, Any]:
         unique_emails = list(dict.fromkeys(str(item or '').strip().lower() for item in emails if str(item or '').strip()))
         if not unique_emails:
@@ -134,6 +139,12 @@ class MailSendProxyClient:
             raise MailSendProxyError(
                 'MAILSEND_RECIPIENT_LIMIT',
                 f'Mỗi session Mail Send chỉ nhận tối đa {self.max_recipients} người.',
+            )
+        clean_idempotency_key = str(idempotency_key or '').strip()
+        if not clean_idempotency_key or len(clean_idempotency_key) > 255:
+            raise MailSendProxyError(
+                'MAILSEND_IDEMPOTENCY_KEY_INVALID',
+                'Thiếu khóa chống gửi trùng hợp lệ cho Mail Send.',
             )
 
         request_payload = {
@@ -159,10 +170,10 @@ class MailSendProxyClient:
         response = self._request(
             'POST',
             self._url(self.create_path),
-            headers=self._headers(),
+            headers=self._headers(idempotency_key=clean_idempotency_key),
             files=multipart_parts,
         )
-        if response.status_code != 202:
+        if response.status_code not in {200, 201, 202}:
             raise MailSendProxyError(
                 'MAILSEND_CREATE_REJECTED',
                 f'Mail Send từ chối tạo session (HTTP {response.status_code}).',

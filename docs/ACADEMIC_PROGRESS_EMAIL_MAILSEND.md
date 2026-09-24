@@ -10,8 +10,10 @@ AI Server **không kết nối SMTP trực tiếp** và giảng viên không c�
 2. Giao diện chỉ hiển thị email đã che và mặc định chọn người đang trễ Quiz, chưa đạt 100%.
 3. Khi xác nhận gửi, job cập nhật tiến độ CMS của cả lớp một lần nữa.
 4. Sinh viên vừa bắt kịp, thiếu email, inactive, trùng email hoặc chưa có dữ liệu CMS mới sẽ tự bị loại.
-5. Worker tạo Mail Send session và lưu `sessionId` ngay, sau đó theo dõi đến trạng thái cuối.
+5. Worker lưu trước một intent chống gửi trùng cho từng người nhận, rồi tạo Mail Send session với cùng header `Idempotency-Key` và lưu `sessionId` ngay khi provider trả về.
 6. Chỉ khi Mail Send trả `COMPLETED`, AI Server mới hiển thị hoàn tất và số lượng đã gửi/lỗi.
+
+Nếu worker mất kết nối sau khi Mail Send đã nhận yêu cầu nhưng trước khi AI Server kịp lưu `sessionId`, watchdog sẽ gửi lại đúng intent với cùng `Idempotency-Key`. Mail Send phải trả lại session đã có thay vì tạo lần gửi mới. Các trạng thái hòa giải được lưu bền vững là `intent_created`, `provider_unknown`, `provider_created` và `terminal`.
 
 Deadline Quiz trong luồng này chỉ là **mốc nhắc tiến độ**, không phải kết luận cấm thi. Việc xét điều kiện thi vẫn theo ngày học cuối chính thức.
 
@@ -19,6 +21,7 @@ Deadline Quiz trong luồng này chỉ là **mốc nhắc tiến độ**, không
 
 - Tạo session: `POST https://mailsend.poly.edu.vn/api/proxy/bulk-sessions/with-files`
 - Xác thực: header `X-API-Key: <ProxyKey>`
+- Chống gửi trùng: header `Idempotency-Key: <stable-key>`; cùng khóa phải trả lại cùng session và có thể trả HTTP `200`, `201` hoặc `202`
 - Nội dung: `multipart/form-data`
 - Form field bắt buộc: `payload`
 - `payload` là JSON `CreateProxyBulkSessionRequestDto`, tối thiểu gồm `subject`, `bodyTemplate` và một nguồn người nhận như `sourceTo.inlineEmails`
@@ -46,7 +49,7 @@ Ví dụ phần `payload` mà AI Server gửi:
 }
 ```
 
-Template mặc định dùng các placeholder mà AI Server xử lý trước khi gửi cho từng sinh viên. AI Server không ghi `ProxyKey` hoặc địa chỉ email thật vào audit/job result.
+Template mặc định dùng các placeholder mà AI Server xử lý trước khi gửi cho từng sinh viên. Danh sách người nhận được đóng băng bằng mã sinh viên và HMAC của địa chỉ; nếu địa chỉ thay đổi trước khi hòa giải, AI Server dừng intent đó thay vì gửi sang địa chỉ mới. AI Server không ghi `ProxyKey` hoặc địa chỉ email thật vào audit/job result.
 
 ## Biến môi trường
 
