@@ -236,7 +236,14 @@ class AcademicAPSyncWorkflowService:
         lock_key = int.from_bytes(digest[:8], byteorder='big', signed=True)
         self.db.execute(text('SELECT pg_advisory_xact_lock(:lock_key)'), {'lock_key': lock_key})
 
-    def enqueue_sync_from_ap_job(self, payload: AcademicAPSyncIn, *, user: UserContext) -> dict[str, Any]:
+    def enqueue_sync_from_ap_job(
+        self,
+        payload: AcademicAPSyncIn,
+        *,
+        user: UserContext,
+        idempotency_key: str | None = None,
+        run_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         request_json = json_safe_value(self._normalized_ap_request(payload))
         branch = str(request_json['branch'])
         term_name = str(request_json['term_name'])
@@ -249,6 +256,20 @@ class AcademicAPSyncWorkflowService:
         request_fingerprint = self._ap_request_fingerprint(request_json)
         scope = str(request_json['sync_scope'])
         self._acquire_enqueue_scope_lock(term_name=term_name, branch=branch)
+        normalized_idempotency_key = str(idempotency_key or '').strip() or None
+        if normalized_idempotency_key:
+            exact = (
+                self.db.query(AcademicSyncRun)
+                .filter(AcademicSyncRun.idempotency_key == normalized_idempotency_key)
+                .first()
+            )
+            if exact is not None:
+                return {
+                    'ok': True,
+                    'message': 'Job đồng bộ AP của lần chạy này đã tồn tại. Hệ thống tiếp tục theo dõi job hiện tại.',
+                    'sync_run': exact,
+                    'counters': AcademicSyncCounters(),
+                }
         active = (
             self.db.query(AcademicSyncRun)
             .filter(
@@ -299,8 +320,10 @@ class AcademicAPSyncWorkflowService:
                 'request': request_json,
                 'request_fingerprint': request_fingerprint,
                 'subject_selection': selection,
+                'daily_pipeline': json_safe_value(run_metadata or {}),
                 'progress': {'current': 0, 'total': max(1, len(effective_codes)), 'label': f'Đã chọn {len(effective_codes)} môn CMS/Udemy để đồng bộ AP', 'updated_at': None},
             },
+            idempotency_key=normalized_idempotency_key,
         )
         try:
             from app.worker import academic_ap_sync_task

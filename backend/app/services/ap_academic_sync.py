@@ -512,10 +512,11 @@ class AcademicImportService:
         # and still refreshes immediately when AP returns a different signature.
         self._term_block_payload_cache: dict[str, tuple[AcademicTerm, dict[str, AcademicBlock], list[AcademicBlock]]] = {}
 
-    def create_run(self, *, source: str, mode: str, requested_by: str | None = None, term_name: str | None = None, campus: str | None = None, branch: str | None = None, status: str = 'running', counters_json: dict[str, Any] | None = None) -> AcademicSyncRun:
+    def create_run(self, *, source: str, mode: str, requested_by: str | None = None, term_name: str | None = None, campus: str | None = None, branch: str | None = None, status: str = 'running', counters_json: dict[str, Any] | None = None, idempotency_key: str | None = None) -> AcademicSyncRun:
         now = _now()
         run = AcademicSyncRun(
             id=str(uuid.uuid4()),
+            idempotency_key=idempotency_key,
             source=source,
             mode=mode,
             status=status or 'running',

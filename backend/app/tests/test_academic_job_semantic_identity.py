@@ -32,6 +32,8 @@ def _key(**overrides):
         'parent_job_id': None,
         'origin': 'MANUAL',
         'policy_version': CLASS_SYNC_POLICY_VERSION,
+        'attempt_no': 0,
+        'logical_target_key': None,
     }
     values.update(overrides)
     return class_sync_idempotency_key(**values)
@@ -58,6 +60,8 @@ def test_contract_is_canonical_and_key_is_stable():
         parent_job_id=' ',
         origin='MANUAL',
         policy_version=CLASS_SYNC_POLICY_VERSION,
+        attempt_no=0,
+        logical_target_key=None,
     )
 
     assert contract == {
@@ -71,6 +75,8 @@ def test_contract_is_canonical_and_key_is_stable():
         'parent_job_id': None,
         'origin': 'manual',
         'policy_version': CLASS_SYNC_POLICY_VERSION,
+        'attempt_no': 0,
+        'logical_target_key': None,
     }
     assert _key() == _key()
     assert _key().startswith('class-sync:v2:')
@@ -89,9 +95,33 @@ def test_every_operation_field_participates_in_semantic_identity():
         {'parent_job_id': 'parent-01', 'origin': 'scheduled'},
         {'origin': 'scheduled'},
         {'policy_version': 'class-sync/v3'},
+        {'attempt_no': 1},
+        {'logical_target_key': 'score:poly:term-1:class-01'},
     )
 
     assert all(_key(**variant) != base for variant in variants)
+
+
+def test_class_attempt_changes_job_key_but_preserves_logical_target():
+    base = dict(
+        class_id='class-1',
+        job_type='learning_sync',
+        force=True,
+        limit=5000,
+        mode=None,
+        auto_map_course=False,
+        sync_learning=True,
+        parent_job_id='scope-1',
+        origin='scheduled',
+        logical_target_key='score:poly:term-1:class-1',
+    )
+
+    first = class_sync_idempotency_key(**base, attempt_no=0)
+    retry = class_sync_idempotency_key(**base, attempt_no=1)
+
+    assert first != retry
+    assert first.startswith('class-sync:v2:')
+    assert retry.startswith('class-sync:v2:')
 
 
 def test_exact_active_fingerprint_is_reused_only_without_a_blocker():

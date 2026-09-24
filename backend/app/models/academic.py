@@ -626,6 +626,7 @@ class AcademicBulkOperationJob(Base):
     __tablename__ = 'academic_bulk_operation_jobs'
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    parent_job_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     job_type: Mapped[str] = mapped_column(String(80), index=True)  # subject_auto_map_all_sync
     status: Mapped[str] = mapped_column(String(50), default='queued', index=True)  # queued | running | completed | failed
     term_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_terms.id'), nullable=True, index=True)
@@ -756,6 +757,13 @@ class AcademicTeacherReportJob(Base):
     __tablename__ = 'academic_teacher_report_jobs'
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    parent_job_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     job_type: Mapped[str] = mapped_column(String(80), index=True)  # rebuild_cache | export_excel
     status: Mapped[str] = mapped_column(String(50), default='queued', index=True)
     term_id: Mapped[str | None] = mapped_column(String, ForeignKey('academic_terms.id'), nullable=True, index=True)
@@ -785,6 +793,12 @@ class AcademicSyncRun(Base):
     __tablename__ = 'academic_sync_runs'
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     source: Mapped[str] = mapped_column(String(50), default='ap', index=True)
     mode: Mapped[str] = mapped_column(String(50), default='manual', index=True)
     status: Mapped[str] = mapped_column(String(50), default='running', index=True)

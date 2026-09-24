@@ -27,6 +27,8 @@ def class_sync_contract(
     parent_job_id: str | None,
     origin: str,
     policy_version: str = CLASS_SYNC_POLICY_VERSION,
+    attempt_no: int = 0,
+    logical_target_key: str | None = None,
 ) -> dict[str, Any]:
     """Return the canonical business contract for one class-sync intent."""
     return {
@@ -42,6 +44,8 @@ def class_sync_contract(
         'parent_job_id': _optional_text(parent_job_id),
         'origin': str(origin or '').strip().lower(),
         'policy_version': str(policy_version or '').strip(),
+        'attempt_no': max(0, int(attempt_no)),
+        'logical_target_key': _optional_text(logical_target_key),
     }
 
 
