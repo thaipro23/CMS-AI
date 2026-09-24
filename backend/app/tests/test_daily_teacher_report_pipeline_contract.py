@@ -8,14 +8,17 @@ def text(path: str) -> str:
     return target.read_text(encoding='utf-8') if target.exists() else ''
 
 
-def test_canonical_worker_registers_daily_tasks_and_runs_at_0500_vn():
+def test_canonical_worker_registers_one_daily_pipeline_at_0100_vn():
     worker = text('backend/app/worker.py')
     runtime = text('backend/app/services/academic/daily_teacher_report_runtime.py')
+    daily = text('backend/app/services/academic/daily_academic_pipeline.py')
     assert "Asia/Ho_Chi_Minh" in worker
-    assert "crontab(hour=5, minute=0)" in worker
+    assert "crontab(hour=5, minute=0)" not in worker
+    assert "crontab(hour=1, minute=0)" in daily
     assert "academic_sync_all_student_scores_task" in worker
     assert "academic_teacher_report_job_task" in worker
     assert "register_daily_teacher_report_tasks(celery_app)" in worker
+    assert "register_daily_academic_pipeline_tasks(celery_app)" in worker
     assert "academic_teacher_report_watchdog_task" in runtime
 
 

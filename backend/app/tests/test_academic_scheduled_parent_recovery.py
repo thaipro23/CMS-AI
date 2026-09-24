@@ -14,6 +14,7 @@ from app.models.academic import (
 )
 from app.services.academic import daily_teacher_report_runtime
 from app.services.academic import student_management_runtime
+from app.services.academic.daily_academic_pipeline import DAILY_ROOT_JOB_TYPE
 from app.services.academic.scheduled_parent import (
     ContinuationPublishError,
     confirm_parent_continuation,
@@ -185,6 +186,33 @@ def test_worker_confirmation_prevents_recovery_of_accepted_continuation():
         assert parent.result_json['continuation']['status'] == 'confirmed'
         assert parent.result_json['continuation']['confirmed_at'] == '2026-09-22T05:00:30'
     engine.dispose()
+
+
+def test_recovery_scanner_allows_unified_root_to_run_for_24_hours(monkeypatch):
+    calls = []
+
+    class FakeDB:
+        def close(self):
+            return None
+
+    def fake_recover(db, **kwargs):
+        calls.append(kwargs)
+        return {"scanned": 0, "republished": 0, "failed": 0, "errors": []}
+
+    monkeypatch.setattr(daily_teacher_report_runtime, "SessionLocal", FakeDB)
+    monkeypatch.setattr(
+        daily_teacher_report_runtime,
+        "recover_due_parent_continuations",
+        fake_recover,
+    )
+
+    result = daily_teacher_report_runtime.recover_daily_score_report_continuations(
+        SimpleNamespace(),
+    )
+
+    root_call = next(call for call in calls if call["job_types"] == {DAILY_ROOT_JOB_TYPE})
+    assert root_call["max_runtime_seconds"] == 24 * 60 * 60
+    assert result == {"scanned": 0, "republished": 0, "failed": 0, "errors": []}
 
 
 def test_duplicate_0500_scheduler_delivery_creates_one_parent(monkeypatch):

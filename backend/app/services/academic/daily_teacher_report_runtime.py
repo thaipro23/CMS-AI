@@ -44,6 +44,7 @@ from app.services.academic.scheduled_scope import (
     ScheduledScopeError,
     freeze_scheduled_scope,
 )
+from app.services.academic.daily_academic_pipeline import DAILY_ROOT_JOB_TYPE
 from app.services.academic.report_snapshot import (
     ReportSnapshotError,
     create_campus_snapshot,
@@ -359,13 +360,26 @@ def _publish_daily_parent_continuation(
 def recover_daily_score_report_continuations(celery_app) -> dict[str, Any]:
     db = SessionLocal()
     try:
-        return recover_due_parent_continuations(
+        legacy = recover_due_parent_continuations(
             db,
             publisher=_continuation_publisher(celery_app),
             job_types={DAILY_PARENT_JOB_TYPE, 'ap_daily_pipeline'},
             max_attempts=5,
             max_runtime_seconds=6 * 60 * 60,
         )
+        daily_root = recover_due_parent_continuations(
+            db,
+            publisher=_continuation_publisher(celery_app),
+            job_types={DAILY_ROOT_JOB_TYPE},
+            max_attempts=5,
+            max_runtime_seconds=24 * 60 * 60,
+        )
+        return {
+            'scanned': int(legacy['scanned']) + int(daily_root['scanned']),
+            'republished': int(legacy['republished']) + int(daily_root['republished']),
+            'failed': int(legacy['failed']) + int(daily_root['failed']),
+            'errors': [*legacy['errors'], *daily_root['errors']],
+        }
     finally:
         db.close()
 

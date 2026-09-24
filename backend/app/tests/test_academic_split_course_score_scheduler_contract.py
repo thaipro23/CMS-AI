@@ -32,20 +32,22 @@ def test_learning_refresh_is_a_separate_backend_route_and_learning_only_worker()
     assert "auto_map_course" not in route
 
 
-def test_03_scheduler_runs_ap_then_course_map_without_learning_sync_and_keeps_05_score_job():
+def test_one_0100_scheduler_replaces_legacy_ap_and_score_publishers():
     worker = _read('backend/app/worker.py')
     runtime = _read('backend/app/services/academic/student_management_runtime.py')
+    daily = _read('backend/app/services/academic/daily_academic_pipeline.py')
 
     assert 'register_student_management_runtime_tasks(celery_app)' in worker
     assert 'register_daily_teacher_report_tasks(celery_app)' in worker
-    assert "crontab(hour=3, minute=0)" in runtime
+    assert 'register_daily_academic_pipeline_tasks(celery_app)' in worker
+    assert "crontab(hour=3, minute=0)" not in runtime
     assert "academic_ap_03_schedule_task" in runtime
     assert "academic_ap_03_followup_task" in runtime
     assert "'sync_learning': False" in runtime
-
-    # Existing score/Excel freshness pipeline stays at 05:00 Vietnam time.
-    assert "'academic-score-sync-all-students'" in worker
-    assert 'crontab(hour=5, minute=0)' in worker
+    assert "'academic-score-sync-all-students'" not in worker
+    assert 'crontab(hour=5, minute=0)' not in worker
+    assert "crontab(hour=1, minute=0)" in daily
+    assert "'academic-daily-pipeline-01-vn'" in daily
 
 
 def test_academic_batch_window_is_four_in_config_and_k8s_worker():

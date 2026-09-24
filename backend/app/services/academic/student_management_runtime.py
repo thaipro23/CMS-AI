@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from celery.schedules import crontab
 from fastapi import HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
@@ -1263,10 +1262,3 @@ def register_student_management_runtime_tasks(celery_app) -> None:
         AP_03_FOLLOWUP_TASK: {'soft_time_limit': 120, 'time_limit': 180},
     })
     celery_app.conf.task_annotations = annotations
-
-    beat_schedule = dict(getattr(celery_app.conf, 'beat_schedule', {}) or {})
-    beat_schedule['academic-ap-sync-and-auto-map-03-vn'] = {
-        'task': AP_03_TASK,
-        'schedule': crontab(hour=3, minute=0),
-    }
-    celery_app.conf.beat_schedule = beat_schedule

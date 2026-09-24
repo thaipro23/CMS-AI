@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Any
 from celery import Celery
-from celery.schedules import crontab
 from sqlalchemy import or_, text
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from app.core.config import settings
@@ -56,8 +55,8 @@ celery_app.conf.update(
     result_serializer='json',
     accept_content=['json'],
     # Celery beat wall-clock schedules are operator-facing.  Keep interval
-    # tasks equivalent while making the daily score refresh unambiguously
-    # 05:00 Asia/Ho_Chi_Minh instead of relying on a UTC conversion.
+    # tasks equivalent while making the daily academic pipeline unambiguously
+    # use Asia/Ho_Chi_Minh wall-clock time instead of a UTC conversion.
     timezone='Asia/Ho_Chi_Minh',
     enable_utc=True,
     task_track_started=True,
@@ -131,10 +130,6 @@ if getattr(settings, 'analytics_ingest_scheduler_enabled', False):
         'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
         'args': (None, None),
     }
-_beat_schedule['academic-score-sync-all-students'] = {
-    'task': 'academic_sync_all_student_scores_task',
-    'schedule': crontab(hour=5, minute=0),
-}
 _beat_schedule['academic-progress-email-watchdog'] = {
     'task': 'academic_progress_email_watchdog_task',
     'schedule': 60.0,
@@ -4351,9 +4346,11 @@ def analytics_class_recalculate_task(job_id: str):
 # Register production runtime task replacements and scheduler extensions on the
 # canonical Celery app itself. Keeping registration here preserves the historic
 # `app.worker.celery_app` entrypoint used by Jenkins/Kubernetes while still
-# loading the 03:00 AP -> auto-map and 05:00 report pipelines.
+# loading the unified 01:00 academic pipeline and compatibility task handlers.
+from app.services.academic.daily_academic_pipeline import register_daily_academic_pipeline_tasks
 from app.services.academic.daily_teacher_report_runtime import register_daily_teacher_report_tasks
 from app.services.academic.student_management_runtime import register_student_management_runtime_tasks
 
 register_daily_teacher_report_tasks(celery_app)
 register_student_management_runtime_tasks(celery_app)
+register_daily_academic_pipeline_tasks(celery_app)
