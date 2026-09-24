@@ -7,7 +7,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from celery.schedules import crontab
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.json_safe import json_safe_value
@@ -17,6 +18,7 @@ from app.models.academic import (
     AcademicBulkOperationJob,
     AcademicCampus,
     AcademicClass,
+    AcademicClassSyncJob,
     AcademicSyncRun,
     AcademicTerm,
 )
@@ -27,6 +29,13 @@ from app.services.academic.daily_pipeline_state import (
     MAX_STAGE_RETRY_ROUNDS,
     plan_stage_barrier,
     select_global_dispatch_targets,
+)
+from app.services.academic.job_identity import (
+    CLASS_SYNC_POLICY_VERSION,
+    ClassSyncJobBlocked,
+    choose_active_class_sync_job,
+    class_sync_contract,
+    class_sync_idempotency_key,
 )
 from app.services.academic.scheduled_parent import (
     confirm_parent_continuation,
@@ -460,6 +469,111 @@ def ensure_mapping_attempt(
     return job
 
 
+def _lock_class_attempt(db: Session, class_id: str) -> None:
+    bind = db.get_bind()
+    if bind and bind.dialect.name == 'postgresql':
+        db.execute(
+            text('SELECT pg_advisory_xact_lock(hashtext(:key))'),
+            {'key': f'academic-daily-class:{class_id}'},
+        )
+
+
+def ensure_class_attempt_job(
+    db: Session,
+    *,
+    scope_parent: AcademicBulkOperationJob,
+    class_id: str,
+    stage: str,
+    round_no: int,
+    request: dict[str, Any],
+) -> AcademicClassSyncJob:
+    if stage not in {'account_enrollment', 'score_update'}:
+        raise ValueError(f'Unsupported daily class stage: {stage}')
+    _lock_class_attempt(db, class_id)
+    job_type = 'full_cms_sync' if stage == 'account_enrollment' else 'learning_sync'
+    logical_target_key = str(request.get('logical_target_key') or '').strip()
+    contract = class_sync_contract(
+        class_id=class_id,
+        job_type=job_type,
+        force=bool(request.get('force', False)),
+        limit=int(request.get('limit') or 5000),
+        mode=request.get('mode'),
+        auto_map_course=request.get('auto_map_course'),
+        sync_learning=request.get('sync_learning'),
+        parent_job_id=str(scope_parent.id),
+        origin='scheduled',
+        policy_version=CLASS_SYNC_POLICY_VERSION,
+        attempt_no=round_no,
+        logical_target_key=logical_target_key,
+    )
+    idempotency_key = class_sync_idempotency_key(**contract)
+    existing = db.query(AcademicClassSyncJob).filter(
+        AcademicClassSyncJob.idempotency_key == idempotency_key,
+    ).one_or_none()
+    if existing is not None:
+        return existing
+
+    active_jobs = (
+        db.query(AcademicClassSyncJob)
+        .filter(
+            AcademicClassSyncJob.class_id == str(class_id),
+            AcademicClassSyncJob.status.in_(['queued', 'running']),
+        )
+        .order_by(AcademicClassSyncJob.created_at.desc())
+        .all()
+    )
+    decision = choose_active_class_sync_job(
+        active_jobs,
+        requested_key=idempotency_key,
+    )
+    if decision.blocker is not None:
+        raise ClassSyncJobBlocked(decision.blocker)
+    if decision.reusable is not None:
+        return decision.reusable
+
+    job = AcademicClassSyncJob(
+        job_type=job_type,
+        status='queued',
+        class_id=str(class_id),
+        parent_job_id=str(scope_parent.id),
+        idempotency_key=idempotency_key,
+        requested_by=DAILY_SCHEDULER_ACTOR,
+        force=bool(request.get('force', False)),
+        limit=max(1, int(request.get('limit') or 5000)),
+        mode=request.get('mode'),
+        progress_current=0,
+        progress_total=100,
+        progress_label=(
+            '01:00 +07 · chờ tạo tài khoản và ghi danh'
+            if stage == 'account_enrollment'
+            else '01:00 +07 · chờ cập nhật điểm'
+        ),
+        request_json=json_safe_value({
+            **request,
+            'request_key': idempotency_key,
+            'request_contract': contract,
+            'policy_version': CLASS_SYNC_POLICY_VERSION,
+            'parent_job_id': str(scope_parent.id),
+            'parent_job_type': scope_parent.job_type,
+            'approved_class_id': str(class_id),
+        }),
+        result_json={},
+    )
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(AcademicClassSyncJob).filter(
+            AcademicClassSyncJob.idempotency_key == idempotency_key,
+        ).one_or_none()
+        if existing is None:
+            raise
+        return existing
+    db.refresh(job)
+    return job
+
+
 def _stage_attempts(
     state: dict[str, Any],
     stage: str,
@@ -572,6 +686,237 @@ def _dispatch_mapping_job(celery_app, db: Session, job: AcademicBulkOperationJob
     job.updated_at = datetime.utcnow()
     db.add(job)
     db.commit()
+
+
+def _round_robin_class_targets(scopes: list[dict[str, Any]]) -> list[str]:
+    ordered_rows = [
+        [str(value) for value in scope.get('class_ids') or []]
+        for scope in sorted(
+            scopes,
+            key=lambda item: (str(item.get('branch')), str(item.get('term_id'))),
+        )
+    ]
+    return [
+        class_id
+        for index in range(max((len(row) for row in ordered_rows), default=0))
+        for row in ordered_rows
+        for class_id in row[index:index + 1]
+    ]
+
+
+def _class_scope_index(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    scopes = [
+        dict(value)
+        for value in dict(state.get('frozen_scopes_after_ap') or {}).values()
+        if isinstance(value, dict)
+    ]
+    return {
+        str(class_id): scope
+        for scope in scopes
+        for class_id in scope.get('class_ids') or []
+    }
+
+
+def _dispatch_class_job(celery_app, db: Session, job: AcademicClassSyncJob) -> None:
+    result = dict(job.result_json or {})
+    enqueue = result.get('enqueue') if isinstance(result.get('enqueue'), dict) else {}
+    if job.status != 'queued' or enqueue.get('celery_task_id'):
+        return
+    try:
+        async_result = celery_app.send_task(
+            'academic_class_sync_task',
+            args=[str(job.id)],
+            queue='sync-bulk',
+        )
+        result['enqueue'] = {
+            'task_name': 'academic_class_sync_task',
+            'celery_task_id': str(getattr(async_result, 'id', '') or ''),
+            'enqueued_at': datetime.utcnow().isoformat(),
+        }
+    except Exception as exc:
+        job.status = 'failed'
+        job.error_message = str(exc)[:4000]
+        job.finished_at = datetime.utcnow()
+        result['enqueue_error'] = str(exc)[:2000]
+    job.result_json = json_safe_value(result)
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+
+
+def _class_attempt_request(
+    root: AcademicBulkOperationJob,
+    scope_parent: AcademicBulkOperationJob,
+    scope: dict[str, Any],
+    class_id: str,
+    *,
+    stage: str,
+    round_no: int,
+) -> dict[str, Any]:
+    root_request = root.request_json if isinstance(root.request_json, dict) else {}
+    run_date = str(root_request.get('run_date_vn') or '')
+    logical_target_key = f'{stage}:{scope["scope_key"]}:{class_id}'
+    return {
+        'scheduled': True,
+        'stage_managed_retries': True,
+        'daily_root_job_id': str(root.id),
+        'scheduled_parent_job_id': str(scope_parent.id),
+        'scheduled_scope_hash': str(scope['scope_hash']),
+        'logical_target_key': logical_target_key,
+        'mutation_intent_key': (
+            f'academic-daily:v2:{run_date}:{stage}:{scope["scope_key"]}:{class_id}'
+        ),
+        'attempt_no': max(0, int(round_no)),
+        'auto_map_course': False,
+        'sync_learning': stage == 'score_update',
+        'force': False,
+        'limit': 5000,
+        'mode': None,
+        'requester_context': _scheduler_requester_context(),
+    }
+
+
+def _run_class_stage(
+    celery_app,
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    *,
+    stage: str,
+) -> dict[str, object]:
+    class_scopes = _class_scope_index(state)
+    round_no = max(0, int(state.get('stage_round') or 0))
+    targets = [str(value) for value in state.get('stage_target_keys') or []]
+    attempts = _stage_attempts(state, stage, round_no)
+    jobs = {
+        target: db.get(AcademicClassSyncJob, job_id)
+        for target, job_id in attempts.items()
+    }
+    statuses = {
+        target: str(job.status or '').lower()
+        for target, job in jobs.items()
+        if job is not None
+    }
+    active_count = sum(status in ACTIVE for status in statuses.values())
+    for class_id in select_global_dispatch_targets(
+        targets,
+        statuses,
+        active_count=active_count,
+    ):
+        scope = class_scopes[class_id]
+        parents = ensure_scope_parents(db, root, [scope])
+        group = 'provision' if stage == 'account_enrollment' else 'score-report'
+        scope_parent = parents[f'{scope["scope_key"]}:{group}']
+        parent_request = dict(scope_parent.request_json or {})
+        parent_request.update({
+            'scope_hash': scope['scope_hash'],
+            'frozen_scope': scope,
+            'scope': scope,
+        })
+        scope_parent.request_json = json_safe_value(parent_request)
+        db.add(scope_parent)
+        db.commit()
+        try:
+            job = ensure_class_attempt_job(
+                db,
+                scope_parent=scope_parent,
+                class_id=class_id,
+                stage=stage,
+                round_no=round_no,
+                request=_class_attempt_request(
+                    root,
+                    scope_parent,
+                    scope,
+                    class_id,
+                    stage=stage,
+                    round_no=round_no,
+                ),
+            )
+        except ClassSyncJobBlocked:
+            continue
+        attempts[class_id] = str(job.id)
+        statuses[class_id] = str(job.status or '').lower()
+        _dispatch_class_job(celery_app, db, job)
+    _set_stage_attempts(state, stage, round_no, attempts)
+    state['stage_attempt_ids'] = dict(attempts)
+    _save_root_state(db, root, state)
+
+    decision = plan_stage_barrier(
+        targets,
+        statuses,
+        current_round=round_no,
+    )
+    if not decision.ready:
+        _publish_root_continuation(celery_app, db, root)
+        return {
+            'ok': True,
+            'status': 'waiting_stage',
+            'phase': stage,
+            'root_job_id': str(root.id),
+        }
+    if decision.exhausted:
+        state.setdefault('artifacts', {})
+        state['report_job_count'] = 0
+        return _fail_exhausted_stage(
+            db,
+            root,
+            state,
+            stage=stage,
+            failed_target_keys=decision.retry_target_keys,
+            attempt_ids=attempts,
+        )
+    if decision.retry_target_keys:
+        retry_round = int(decision.next_round or round_no + 1)
+        state['stage_round'] = retry_round
+        state['stage_target_keys'] = list(decision.retry_target_keys)
+        _set_stage_attempts(state, stage, retry_round, {})
+        state['stage_attempt_ids'] = {}
+        _save_root_state(db, root, state)
+        return _run_class_stage(
+            celery_app,
+            db,
+            root,
+            state,
+            stage=stage,
+        )
+
+    scopes = [
+        dict(value)
+        for value in dict(state.get('frozen_scopes_after_ap') or {}).values()
+        if isinstance(value, dict)
+    ]
+    all_class_ids = _round_robin_class_targets(scopes)
+    if stage == 'account_enrollment':
+        state.update({
+            'phase': 'score_update',
+            'stage_round': 0,
+            'stage_target_keys': all_class_ids,
+        })
+        _save_root_state(db, root, state)
+        return _run_class_stage(
+            celery_app,
+            db,
+            root,
+            state,
+            stage='score_update',
+        )
+
+    state.update({
+        'phase': 'campus_reports',
+        'stage_round': 0,
+        'stage_target_keys': [
+            f'{scope["scope_key"]}:{campus}'
+            for scope in scopes
+            for campus in scope.get('campuses') or []
+        ],
+    })
+    _save_root_state(db, root, state)
+    return {
+        'ok': True,
+        'status': 'stage_complete',
+        'phase': 'campus_reports',
+        'root_job_id': str(root.id),
+    }
 
 
 def _run_ap_stage(
@@ -757,11 +1102,7 @@ def _run_mapping_stage(
     state.update({
         'phase': 'account_enrollment',
         'stage_round': 0,
-        'stage_target_keys': [
-            class_id
-            for scope in scopes.values()
-            for class_id in scope.get('class_ids') or []
-        ],
+        'stage_target_keys': _round_robin_class_targets(list(scopes.values())),
     })
     _save_root_state(db, root, state)
     return {
@@ -953,6 +1294,22 @@ def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, objec
             return _run_ap_stage(celery_app, db, root, state)
         if phase == 'course_mapping':
             return _run_mapping_stage(celery_app, db, root, state)
+        if phase == 'account_enrollment':
+            return _run_class_stage(
+                celery_app,
+                db,
+                root,
+                state,
+                stage='account_enrollment',
+            )
+        if phase == 'score_update':
+            return _run_class_stage(
+                celery_app,
+                db,
+                root,
+                state,
+                stage='score_update',
+            )
         return {
             'ok': True,
             'status': 'ready',

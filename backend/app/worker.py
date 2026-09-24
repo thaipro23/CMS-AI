@@ -1673,6 +1673,15 @@ def academic_class_sync_task(self, job_id: str):
             action = 'academic.learning_sync.class.async'
             label = 'Hoàn tất cập nhật điểm'
         elif job.job_type == 'full_cms_sync':
+            provisioning_gap = None
+            if (
+                bool(request_json.get('stage_managed_retries'))
+                and int(request_json.get('attempt_no') or 0) > 0
+            ):
+                provisioning_gap = (
+                    service._academic_sync_enrollment_workflow()
+                    .class_provisioning_gap(job.class_id)
+                )
             result = service.sync_class_full_cms_flow(
                 worker_user,
                 job.class_id,
@@ -1682,6 +1691,11 @@ def academic_class_sync_task(self, job_id: str):
                 auto_map_course=bool(request_json.get('auto_map_course', True)),
                 sync_learning=bool(request_json.get('sync_learning', True)),
             )
+            if provisioning_gap is not None and isinstance(result, dict):
+                result = {
+                    **result,
+                    'provisioning_reconciliation': provisioning_gap,
+                }
             action = 'academic.full_cms_sync.class.async'
             label = 'Hoàn tất đồng bộ CMS'
         else:
@@ -1727,9 +1741,18 @@ def academic_class_sync_task(self, job_id: str):
             retries_done = int(getattr(self.request, 'retries', 0) or 0)
             max_retries = max(0, int(settings.academic_class_sync_retry_max_attempts))
             transient_failure = _is_transient_worker_error(exc)
-            retry_allowed = automatic_retry_allowed(
-                job.job_type,
-                transient=transient_failure,
+            request_json = (
+                job.request_json
+                if isinstance(job.request_json, dict)
+                else {}
+            )
+            stage_managed = bool(request_json.get('stage_managed_retries'))
+            retry_allowed = (
+                not stage_managed
+                and automatic_retry_allowed(
+                    job.job_type,
+                    transient=transient_failure,
+                )
             )
             if retry_allowed and retries_done < max_retries:
                 retry_number = retries_done + 1
@@ -1794,7 +1817,11 @@ def academic_class_sync_task(self, job_id: str):
                     else {}
                 )
             )
-            reconcile_required = bool(transient_failure and not retry_allowed)
+            reconcile_required = bool(
+                transient_failure
+                and not retry_allowed
+                and job.job_type != 'learning_sync'
+            )
             failure_code = (
                 'CLASS_SYNC_RECONCILE_REQUIRED'
                 if reconcile_required
@@ -1817,6 +1844,8 @@ def academic_class_sync_task(self, job_id: str):
                     else (
                         'read_only_retry_exhausted'
                         if transient_failure and retry_allowed
+                        else 'stage_managed_retry'
+                        if transient_failure and stage_managed
                         else 'business_incomplete'
                         if isinstance(exc, ClassSyncOutcomeError)
                         else 'non_transient'

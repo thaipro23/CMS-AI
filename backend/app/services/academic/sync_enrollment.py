@@ -130,6 +130,83 @@ def _student_cms_email(self, student: AcademicStudent) -> str | None:
         username = self._student_cms_username(student)
         return f'{username}@fpt.edu.vn' if username else None
 
+
+def class_provisioning_gap(self, class_id: str) -> dict[str, object]:
+        """Reconcile the current account/enrollment state before a retry.
+
+        This is read-only. The subsequent ``full_cms_sync(force=False)`` uses
+        the same persisted mappings and snapshots to submit only missing effects.
+        """
+        cls = self.db.get(AcademicClass, class_id)
+        if cls is None:
+            return {
+                'class_id': str(class_id),
+                'class_found': False,
+                'openedx_course_id': None,
+                'reconciled_student_ids': [],
+                'missing_account_student_ids': [],
+                'missing_enrollment_student_ids': [],
+            }
+        mapping = self.effective_course_mapping_for_class(cls)
+        course_id = str(getattr(mapping, 'openedx_course_id', '') or '').strip() or None
+        rows = (
+            self.db.query(AcademicStudent, OpenEdXUserMapping)
+            .join(
+                AcademicClassStudent,
+                AcademicClassStudent.student_id == AcademicStudent.id,
+            )
+            .outerjoin(
+                OpenEdXUserMapping,
+                OpenEdXUserMapping.student_id == AcademicStudent.id,
+            )
+            .filter(AcademicClassStudent.class_id == str(class_id))
+            .order_by(AcademicStudent.id.asc())
+            .all()
+        )
+        snapshots: dict[str, AcademicStudentLearningSnapshot] = {}
+        if course_id:
+            snapshots = {
+                str(snapshot.student_id): snapshot
+                for snapshot in self.db.query(AcademicStudentLearningSnapshot).filter(
+                    AcademicStudentLearningSnapshot.class_id == str(class_id),
+                    AcademicStudentLearningSnapshot.openedx_course_id == course_id,
+                ).all()
+            }
+        reconciled: list[str] = []
+        missing_accounts: list[str] = []
+        missing_enrollments: list[str] = []
+        for student, user_mapping in rows:
+            student_id = str(student.id)
+            reconciled.append(student_id)
+            roll_number = normalize_username(student.student_code or '')
+            mapped_username = normalize_username(
+                getattr(user_mapping, 'openedx_username', '') or '',
+            )
+            account_ready = bool(
+                user_mapping is not None
+                and user_mapping.match_status == 'matched'
+                and user_mapping.openedx_is_active is not False
+                and roll_number
+                and mapped_username == roll_number
+            )
+            if not account_ready:
+                missing_accounts.append(student_id)
+                missing_enrollments.append(student_id)
+                continue
+            snapshot = snapshots.get(student_id)
+            if snapshot is None or snapshot.enrollment_status != 'enrolled':
+                missing_enrollments.append(student_id)
+        return {
+            'class_id': str(class_id),
+            'class_found': True,
+            'openedx_course_id': course_id,
+            'reconciled_student_ids': reconciled,
+            'missing_account_student_ids': missing_accounts,
+            'missing_enrollment_student_ids': missing_enrollments,
+            'account_ready_count': len(reconciled) - len(missing_accounts),
+            'enrollment_ready_count': len(reconciled) - len(missing_enrollments),
+        }
+
 def _assert_live_course_for_mutation(self, course_id: str) -> dict[str, Any]:
         live = OpenEdXConnectorClient().verify_course_exists(course_id)
         if not live.get('available'):
@@ -943,8 +1020,20 @@ def sync_class_full_cms_flow(
         limit = self._normalize_class_sync_limit(max(int(limit or 0), roster_size or 1))
         counts: dict[str, int] = {'roster_total': roster_size}
 
-        mapping_result = self._try_auto_map_course_for_class(user, cls) if auto_map_course else {'ok': False, 'status': 'mapping_required', 'openedx_course_id': None, 'mapping': None, 'message': 'Auto-map Course CMS bị tắt cho lần chạy này.'}
+        mapping_result = self._try_auto_map_course_for_class(user, cls) if auto_map_course else None
         mapping = self.effective_course_mapping_for_class(cls)
+        if mapping_result is None:
+            mapping_result = {
+                'ok': mapping is not None and bool(mapping.openedx_course_id),
+                'status': 'already_mapped' if mapping and mapping.openedx_course_id else 'mapping_required',
+                'openedx_course_id': mapping.openedx_course_id if mapping else None,
+                'mapping': self._course_mapping_item(mapping) if mapping else None,
+                'message': (
+                    'Course CMS đã được map ở giai đoạn trước.'
+                    if mapping and mapping.openedx_course_id
+                    else 'Auto-map Course CMS bị tắt và lớp chưa có mapping.'
+                ),
+            }
         course_id = mapping.openedx_course_id if mapping else None
         if not course_id:
             return {
@@ -1023,6 +1112,7 @@ AcademicSyncEnrollmentWorkflowService._normalize_class_sync_limit = _normalize_c
 AcademicSyncEnrollmentWorkflowService._student_rollnumber = _student_rollnumber
 AcademicSyncEnrollmentWorkflowService._student_cms_username = _student_cms_username
 AcademicSyncEnrollmentWorkflowService._student_cms_email = _student_cms_email
+AcademicSyncEnrollmentWorkflowService.class_provisioning_gap = class_provisioning_gap
 AcademicSyncEnrollmentWorkflowService._student_cms_payload = _student_cms_payload
 AcademicSyncEnrollmentWorkflowService._assert_live_course_for_mutation = _assert_live_course_for_mutation
 AcademicSyncEnrollmentWorkflowService._upsert_teacher_cms_metadata = _upsert_teacher_cms_metadata

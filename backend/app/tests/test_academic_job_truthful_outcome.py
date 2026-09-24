@@ -175,3 +175,41 @@ def test_mutation_timeout_requires_reconciliation_and_is_not_retried(monkeypatch
         assert job.result_json['failure_class'] == 'transient_after_mutation'
         assert job.finished_at is not None
     engine.dispose()
+
+
+def test_stage_managed_learning_failure_is_terminal_without_celery_retry(monkeypatch):
+    engine, factory = _factory_with_job('learning_sync')
+    with factory() as db:
+        job = db.get(AcademicClassSyncJob, 'job-learning_sync')
+        job.request_json = {
+            **job.request_json,
+            'stage_managed_retries': True,
+            'attempt_no': 0,
+            'logical_target_key': 'score_update:poly:term-1:class-1',
+        }
+        db.add(job)
+        db.commit()
+    _allow_worker_scope(monkeypatch, factory)
+    monkeypatch.setattr(
+        AcademicService,
+        'sync_class_learning_insight',
+        lambda self, user, class_id, **kwargs: (_ for _ in ()).throw(
+            TimeoutError('temporary score timeout')
+        ),
+    )
+    retry_calls = []
+    monkeypatch.setattr(
+        worker.academic_class_sync_task,
+        'retry',
+        lambda **kwargs: retry_calls.append(kwargs),
+    )
+
+    with pytest.raises(TimeoutError, match='temporary score timeout'):
+        worker.academic_class_sync_task.run('job-learning_sync')
+
+    with factory() as db:
+        job = db.get(AcademicClassSyncJob, 'job-learning_sync')
+        assert job.status == 'failed'
+        assert job.result_json['automatic_retry_allowed'] is False
+        assert retry_calls == []
+    engine.dispose()
