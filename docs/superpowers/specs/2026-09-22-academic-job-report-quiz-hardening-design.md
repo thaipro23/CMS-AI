@@ -2,14 +2,14 @@
 
 ## 1. Goal
 
-Make the Dash CMS production workflows truthful and replay-safe: a completed job must mean the requested business operation completed for its entire frozen scope, duplicate Celery deliveries must not repeat mutations, the 03:00 and 05:00 pipelines must recover after broker/worker interruption, HO must be the union of every campus report in the scheduled run, and Quiz planning must find every feasible exact allocation instead of depending on greedy ordering.
+Make the Dash CMS production workflows truthful and replay-safe: a completed job must mean the requested business operation completed for its entire frozen scope, duplicate Celery deliveries must not repeat mutations, the unified 01:00 Asia/Ho_Chi_Minh pipeline must recover after broker/worker interruption, each branch-specific HO workbook must be the union of every campus report in that branch's scheduled run, and Quiz planning must find every feasible exact allocation instead of depending on greedy ordering.
 
 ## 2. Scope and delivery stages
 
 The implementation is split into four independently testable stages:
 
 1. Core class-sync job safety and semantic idempotency.
-2. Durable 03:00/05:00 scheduling and immutable report snapshots.
+2. Durable unified 01:00 scheduling and branch-isolated immutable report snapshots.
 3. Progress-email reconciliation and scheduled queue cleanup.
 4. Exact Quiz allocation and normalization edge cases.
 
@@ -20,7 +20,9 @@ Each stage must leave the application runnable and must include behavior tests t
 ### 3.1 Campus and HO
 
 - A campus report contains exactly one campus code from the scheduled parent's frozen campus set.
-- **HO is not a campus. HO means the consolidated report for all campuses in the same scheduled parent, term, and branch.**
+- **HO is not a campus. HO means the consolidated report for all campuses in the same scheduled parent, term, and branch.** Poly and PTCD therefore produce separate `HO-Poly` and `HO-PTCD` artifacts.
+- Every campus and HO row must match the scheduled branch. An explicit opposite-branch class or teacher is a hard validation failure, not a row to include or silently discard.
+- A legacy teacher with a null branch inherits the class branch for validation. A teacher with an explicit branch must equal the class branch and scheduled branch.
 - The HO artifact must be produced only after every required campus artifact is complete.
 - The HO artifact must be derived from the exact immutable campus snapshots belonging to that parent. It must not query the current academic tables again.
 - For additive measures, the HO totals must equal the sum of campus totals from the same parent. For distinct measures such as unique students or teachers, HO must de-duplicate stable entity identifiers across campus snapshots rather than summing already-aggregated distinct counts.
@@ -90,15 +92,16 @@ They also return bounded failure details. A scheduled `full_cms_sync` succeeds o
 
 ## 5. Durable scheduler design
 
-### 5.1 Database changes
+### 5.1 Database changes and root identity
 
 Add migration `0066_academic_pipeline_hardening` after `0065_academic_job_batch_recovery`.
 
-It adds a nullable, unique, indexed `idempotency_key` to `academic_bulk_operation_jobs`. Existing rows remain valid. Scheduled parent keys use stable values:
+It adds a nullable, unique, indexed `idempotency_key` to `academic_bulk_operation_jobs`. Existing rows remain valid. The single 01:00 run owns one durable root and stable branch/term scopes:
 
 ```text
-03:00: ap-daily:{run_date_vn}:{term_id}:{branch}
-05:00: score-report-daily:{run_date_vn}:{term_id}:{branch}
+root: academic-daily:v2:{run_date_vn}
+provision scope: academic-daily:v2:{run_date_vn}:{term_id}:{branch}:provision
+score/report scope: academic-daily:v2:{run_date_vn}:{term_id}:{branch}:score-report
 ```
 
 Class-sync children continue using the existing unique `academic_class_sync_jobs.idempotency_key`, with keys containing parent ID, class ID, job type, and policy version.
@@ -113,25 +116,30 @@ Every state transition is committed before task publication. Failure to publish 
 
 Publish exceptions are recorded; they are never swallowed. Coordinator retries use bounded attempts, exponential backoff, a per-target dispatch-attempt counter, and a maximum parent runtime. Persistent failure becomes terminal.
 
-### 5.4 03:00 pipeline
+### 5.4 Unified 01:00 pipeline
 
-The frozen sequence remains:
+Celery Beat publishes exactly one root continuation at 01:00 Asia/Ho_Chi_Minh. The old 03:00 AP and 05:00 score/report publishers are disabled. The durable sequence is:
 
 ```text
-AP sync
-→ wait for AP terminal success
-→ scheduled auto-map for the exact AP run/scope
-→ full_cms_sync children
-→ course mapping
-→ Open edX account resolution/creation
-→ student and teacher enrollment
+AP sync for Poly and PTCD
+→ wait for both branches' AP scopes to succeed
+→ map missing subjects to CMS courses
+→ create/resolve missing student Open edX accounts
+→ enroll students who are not yet enrolled
+→ update scores
+→ wait for both branches' score scopes to succeed
+→ export every campus workbook
+→ wait for every campus artifact in each branch
+→ build HO-Poly and HO-PTCD from their own campus snapshots
 ```
+
+AP work for Poly and PTCD may run concurrently. Mutation, score, and report dispatch share one global concurrency budget of four jobs across both branches; separate branch coordinators must not each acquire a four-job window. Scope ordering is deterministic by branch and term so recovery resumes the same work without exceeding the global cap.
 
 The auto-map idempotency contract contains the AP sync run ID, term, branch, run date, and scope hash. A manual auto-map job never satisfies the scheduled continuation. Class discovery is paginated until exhaustion. A configured hard safety cap produces an explicit `scope_truncated` failure instead of silently completing.
 
-### 5.5 05:00 pipeline
+### 5.5 Cross-branch barrier and frozen score/report scope
 
-The parent freezes, before dispatch:
+Before score dispatch, each branch/term scope freezes:
 
 - exact class IDs;
 - class-to-campus mapping;
@@ -140,18 +148,20 @@ The parent freezes, before dispatch:
 - requested maximum student scope;
 - run date and policy version.
 
-Each `learning_sync` child belongs to that parent. A manual job is a blocker only. Report generation starts only after every frozen child is terminal and all are successful.
+Each `learning_sync` child belongs to its scheduled scope. A manual job is a blocker only. Campus report generation starts only after every frozen score child for both Poly and PTCD is terminal and successful. A missing active branch, truncated scope, or mandatory failure is fail-closed: the root records the failed stage, branch, scope, and child IDs; it publishes no new campus or HO artifact. Previously successful artifacts remain downloadable and are not presented as results of the failed run.
 
 ## 6. Immutable campus and HO report design
 
 ### 6.1 Snapshot creation
 
-After all 05:00 score children succeed, one snapshot-building operation reads the required PostgreSQL data under one consistent database snapshot. It builds run-specific report payloads for:
+After all score children for both branches succeed, snapshot-building reads the required PostgreSQL data under a consistent database snapshot. It builds run-specific report payloads for:
 
 - each campus in the frozen parent scope;
-- one HO payload covering all frozen campuses.
+- one branch-specific HO payload covering all frozen campuses for that branch.
 
 Snapshot payloads include stable teacher, class, and student identifiers so HO can de-duplicate cross-campus entities correctly. They also include parent ID, term, branch, campus scope, source child IDs, source timestamps, row counts, and checksums.
+
+Snapshot creation validates `class.branch` and the effective teacher branch (`teacher.branch` when set, otherwise `class.branch`) against the scheduled branch. This validation is symmetric: Poly snapshots reject PTCD data and PTCD snapshots reject Poly data. Campus ownership must also belong to the scheduled branch. Any mismatch fails the snapshot and blocks publication.
 
 Run-specific snapshots are stored separately from the mutable UI cache. The existing live cache may still be refreshed for page performance, but scheduled artifacts never depend on that mutable cache.
 
@@ -163,6 +173,7 @@ Campus export jobs read only their matching immutable snapshot. The HO export jo
 - every snapshot checksum is present;
 - no campus appears twice;
 - term, branch, parent, and policy version match;
+- every class, effective teacher branch, and campus source matches the artifact branch;
 - additive and distinct aggregation invariants hold.
 
 Only then is the HO workbook written. `source_campus_report_job_ids` remains provenance metadata but is no longer the source of truth by itself.
@@ -225,7 +236,9 @@ Tests must exercise runtime behavior, not search source text.
 - A delivery for a running job exits without mutation.
 - Same semantic request reuses a job; different semantics returns a blocker conflict.
 - A scheduled child never adopts a manual or foreign-parent job.
-- Duplicate Beat delivery produces one parent per run date/term/branch.
+- Duplicate Beat delivery produces one root per Vietnam run date and one stable branch/term scope per stage.
+- The unified dispatcher never has more than four active mutation, score, or report jobs across Poly and PTCD combined.
+- The legacy 03:00 and 05:00 schedules do not publish new pipeline roots.
 
 ### 11.2 Truthful terminal state
 
@@ -238,6 +251,10 @@ Tests must exercise runtime behavior, not search source text.
 
 - Campus A contains only A; campus B contains only B.
 - HO contains A and B and no campus outside the frozen set.
+- `HO-Poly` rejects every PTCD class, teacher, and campus row; `HO-PTCD` rejects every Poly class, teacher, and campus row.
+- Campus workbooks enforce the same two-way branch isolation as HO.
+- An explicit teacher branch that differs from its class branch fails snapshot creation; a null legacy teacher branch inherits the class branch.
+- No campus or HO report is published when either branch has an incomplete mandatory score scope.
 - HO additive totals equal campus additive totals.
 - A teacher/student present in multiple campuses is counted once in HO distinct totals.
 - Changing live academic rows after snapshot creation does not change campus or HO artifacts.
@@ -261,8 +278,9 @@ Tests must exercise runtime behavior, not search source text.
 1. Apply migration `0066` before deploying workers that write bulk idempotency keys.
 2. Deploy backend/worker/beat code from the same image version.
 3. Keep the legacy `sync` consumer only during the drain window.
-4. Verify worker queue bindings and parent recovery scanner before enabling the daily schedules.
-5. Run one controlled 03:00-equivalent scope and one 05:00-equivalent scope before full production scheduling.
+4. Verify worker queue bindings, the global four-job lease/window, and the parent recovery scanner before enabling the daily schedule.
+5. Disable the old 03:00 and 05:00 Beat entries, enable the single 01:00 Asia/Ho_Chi_Minh entry, and verify only one root is created per Vietnam run date.
+6. Run one controlled end-to-end 01:00-equivalent execution containing both Poly and PTCD before full production scheduling; verify branch-specific campus and HO artifacts.
 
 Rollback may return application code to the prior version because the new bulk idempotency column is nullable and additive. Immutable report snapshots and reconciliation metadata remain harmless to the old application. The downgrade migration must not be run while new-version jobs are active.
 
@@ -271,4 +289,4 @@ Rollback may return application code to the prior version because the new bulk i
 - Redesigning the frontend job dashboard.
 - Changing Open edX connector APIs unrelated to idempotency/reconciliation.
 - Replacing Celery or Redis.
-- Altering academic scoring policy or Excel presentation beyond the corrected campus/HO data source.
+- Altering academic scoring policy or Excel presentation beyond the corrected campus/HO data source and branch isolation.
