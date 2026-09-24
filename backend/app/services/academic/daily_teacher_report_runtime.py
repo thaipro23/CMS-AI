@@ -48,6 +48,7 @@ from app.services.academic.scheduled_scope import (
 from app.services.academic.daily_academic_pipeline import (
     DAILY_ROOT_JOB_TYPE,
     DAILY_SNAPSHOT_TASK,
+    recover_daily_academic_pipeline,
 )
 from app.services.academic.report_snapshot import (
     ReportSnapshotError,
@@ -371,13 +372,7 @@ def recover_daily_score_report_continuations(celery_app) -> dict[str, Any]:
             max_attempts=5,
             max_runtime_seconds=6 * 60 * 60,
         )
-        daily_root = recover_due_parent_continuations(
-            db,
-            publisher=_continuation_publisher(celery_app),
-            job_types={DAILY_ROOT_JOB_TYPE},
-            max_attempts=5,
-            max_runtime_seconds=24 * 60 * 60,
-        )
+        daily_root = recover_daily_academic_pipeline(celery_app)
         return {
             'scanned': int(legacy['scanned']) + int(daily_root['scanned']),
             'republished': int(legacy['republished']) + int(daily_root['republished']),

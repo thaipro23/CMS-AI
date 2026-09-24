@@ -14,7 +14,6 @@ from app.models.academic import (
 )
 from app.services.academic import daily_teacher_report_runtime
 from app.services.academic import student_management_runtime
-from app.services.academic.daily_academic_pipeline import DAILY_ROOT_JOB_TYPE
 from app.services.academic.scheduled_parent import (
     ContinuationPublishError,
     confirm_parent_continuation,
@@ -190,6 +189,7 @@ def test_worker_confirmation_prevents_recovery_of_accepted_continuation():
 
 def test_recovery_scanner_allows_unified_root_to_run_for_24_hours(monkeypatch):
     calls = []
+    daily_calls = []
 
     class FakeDB:
         def close(self):
@@ -199,19 +199,27 @@ def test_recovery_scanner_allows_unified_root_to_run_for_24_hours(monkeypatch):
         calls.append(kwargs)
         return {"scanned": 0, "republished": 0, "failed": 0, "errors": []}
 
+    def fake_daily_recover(celery_app):
+        daily_calls.append(celery_app)
+        return {"scanned": 0, "republished": 0, "failed": 0, "errors": []}
+
     monkeypatch.setattr(daily_teacher_report_runtime, "SessionLocal", FakeDB)
     monkeypatch.setattr(
         daily_teacher_report_runtime,
         "recover_due_parent_continuations",
         fake_recover,
     )
-
-    result = daily_teacher_report_runtime.recover_daily_score_report_continuations(
-        SimpleNamespace(),
+    monkeypatch.setattr(
+        daily_teacher_report_runtime,
+        "recover_daily_academic_pipeline",
+        fake_daily_recover,
     )
 
-    root_call = next(call for call in calls if call["job_types"] == {DAILY_ROOT_JOB_TYPE})
-    assert root_call["max_runtime_seconds"] == 24 * 60 * 60
+    celery = SimpleNamespace()
+    result = daily_teacher_report_runtime.recover_daily_score_report_continuations(celery)
+
+    assert len(calls) == 1
+    assert daily_calls == [celery]
     assert result == {"scanned": 0, "republished": 0, "failed": 0, "errors": []}
 
 

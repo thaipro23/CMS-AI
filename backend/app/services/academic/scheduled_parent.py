@@ -229,6 +229,7 @@ def recover_due_parent_continuations(
     now: datetime | None = None,
     max_attempts: int = 5,
     max_runtime_seconds: int = 6 * 60 * 60,
+    runtime_failure_code: str = 'scheduled_pipeline_runtime_exceeded',
     limit: int = 100,
 ) -> dict[str, Any]:
     current_time = now or datetime.utcnow()
@@ -270,16 +271,19 @@ def recover_due_parent_continuations(
         continuation = dict(state.get('continuation') or {})
         created_at = _parse_time(parent.created_at)
         attempts = int(continuation.get('attempt_count') or 0)
-        if (
-            attempts >= max(1, int(max_attempts))
-            or (
-                created_at is not None
-                and (current_time - created_at).total_seconds()
-                > max(1, int(max_runtime_seconds))
-            )
-        ):
+        runtime_exceeded = (
+            created_at is not None
+            and (current_time - created_at).total_seconds()
+            > max(1, int(max_runtime_seconds))
+        )
+        attempts_exhausted = attempts >= max(1, int(max_attempts))
+        if attempts_exhausted or runtime_exceeded:
             parent.status = 'failed'
-            parent.error_message = 'Scheduled continuation recovery limit exceeded.'
+            parent.error_message = (
+                'Scheduled pipeline runtime exceeded.'
+                if runtime_exceeded
+                else 'Scheduled continuation recovery limit exceeded.'
+            )
             parent.finished_at = current_time
             continuation.update({
                 'status': 'failed',
@@ -287,6 +291,18 @@ def recover_due_parent_continuations(
                 'last_error': parent.error_message,
             })
             state['continuation'] = continuation
+            state['code'] = (
+                str(runtime_failure_code)
+                if runtime_exceeded
+                else 'continuation_recovery_exhausted'
+            )
+            target_keys = [
+                str(value)
+                for value in state.get('stage_target_keys') or []
+                if str(value)
+            ]
+            if target_keys:
+                state.setdefault('failed_target_key', target_keys[0])
             parent.result_json = json_safe_value(state)
             parent.updated_at = current_time
             db.add(parent)

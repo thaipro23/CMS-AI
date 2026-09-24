@@ -58,12 +58,17 @@ class RBACIdentityLoginSyncContractTests(unittest.TestCase):
         self.assertIn('last_login_at', page)
         self.assertIn('Đăng nhập lần cuối', page)
 
-    def test_score_sync_schedule_is_0500_vietnam_and_fanout_is_registered(self):
-        worker = (BACKEND / 'app/worker.py').read_text(encoding='utf-8')
-        self.assertIn("timezone='Asia/Ho_Chi_Minh'", worker)
-        self.assertIn("'academic-score-sync-all-students'", worker)
-        self.assertIn("crontab(hour=5, minute=0)", worker)
-        self.assertIn("academic_sync_all_student_scores_task", worker)
+    def test_score_sync_is_owned_by_the_unified_0100_vietnam_pipeline(self):
+        from app.worker import celery_app
+
+        schedule = celery_app.conf.beat_schedule
+        entry = schedule['academic-daily-pipeline-01-vn']
+
+        self.assertEqual(celery_app.conf.timezone, 'Asia/Ho_Chi_Minh')
+        self.assertEqual(entry['task'], 'academic_daily_pipeline_start_task')
+        self.assertEqual(entry['schedule'].hour, {1})
+        self.assertEqual(entry['schedule'].minute, {0})
+        self.assertNotIn('academic-score-sync-all-students', schedule)
 
 
 if __name__ == '__main__':

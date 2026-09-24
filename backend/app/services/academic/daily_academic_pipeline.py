@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -42,6 +44,7 @@ from app.services.academic.scheduled_parent import (
     confirm_parent_continuation,
     create_or_load_scheduled_parent,
     publish_parent_continuation,
+    recover_due_parent_continuations,
 )
 
 
@@ -55,11 +58,35 @@ DAILY_STATE_VERSION = 'academic-daily-state.v2'
 DAILY_SCHEDULER_ACTOR = 'academic-daily-scheduler'
 REQUIRED_BRANCHES = ('poly', 'ptcd')
 
+_DAILY_ROOT_LOCKS_GUARD = threading.Lock()
+_DAILY_ROOT_LOCKS: dict[str, list[Any]] = {}
+
 
 class DailyScopeError(ValueError):
     def __init__(self, code: str, message: str):
         self.code = code
         super().__init__(message)
+
+
+@contextmanager
+def _daily_root_process_lock(root_id: str):
+    key = str(root_id)
+    with _DAILY_ROOT_LOCKS_GUARD:
+        entry = _DAILY_ROOT_LOCKS.get(key)
+        if entry is None:
+            entry = [threading.Lock(), 0]
+            _DAILY_ROOT_LOCKS[key] = entry
+        entry[1] += 1
+        lock = entry[0]
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _DAILY_ROOT_LOCKS_GUARD:
+            entry[1] -= 1
+            if entry[1] == 0:
+                _DAILY_ROOT_LOCKS.pop(key, None)
 
 
 def _canonical_hash(payload: dict[str, Any]) -> str:
@@ -252,6 +279,70 @@ def _continuation_publisher(celery_app):
         )
 
     return publish
+
+
+def recover_daily_academic_pipeline(
+    celery_app,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Republish persisted root continuation intent without planning retries."""
+    current_time = now or datetime.utcnow()
+    db = SessionLocal()
+    try:
+        roots = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.job_type == DAILY_ROOT_JOB_TYPE,
+            AcademicBulkOperationJob.status.in_(['queued', 'running']),
+        ).all()
+        for root in roots:
+            state = dict(root.result_json or {})
+            continuation = (
+                dict(state.get('continuation') or {})
+                if isinstance(state.get('continuation'), dict)
+                else {}
+            )
+            status = str(continuation.get('status') or '')
+            if status == 'confirmed':
+                continue
+            if status not in {'dispatch_pending', 'dispatched'}:
+                continuation = {
+                    'status': 'dispatch_pending',
+                    'attempt_count': 0,
+                    'due_at': current_time.isoformat(),
+                    'task_name': DAILY_ROOT_TASK,
+                    'args': [str(root.id)],
+                    'queue': 'sync-bulk',
+                    'countdown': 15,
+                    'intent_created_at': current_time.isoformat(),
+                }
+                state['continuation'] = continuation
+                root.result_json = json_safe_value(state)
+                root.updated_at = current_time
+                db.add(root)
+            elif not continuation.get('due_at'):
+                continuation['due_at'] = current_time.isoformat()
+                state['continuation'] = continuation
+                root.result_json = json_safe_value(state)
+                root.updated_at = current_time
+                db.add(root)
+        db.commit()
+        result = recover_due_parent_continuations(
+            db,
+            publisher=_continuation_publisher(celery_app),
+            job_types={DAILY_ROOT_JOB_TYPE},
+            now=current_time,
+            max_attempts=5,
+            max_runtime_seconds=24 * 60 * 60,
+            runtime_failure_code='pipeline_runtime_exceeded',
+        )
+        return {
+            'scanned': int(result.get('scanned') or 0),
+            'republished': int(result.get('republished') or 0),
+            'failed': int(result.get('failed') or 0),
+            'errors': list(result.get('errors') or []),
+        }
+    finally:
+        db.close()
 
 
 def _scheduler_user() -> UserContext:
@@ -1765,10 +1856,12 @@ def start_daily_academic_pipeline(
         db.close()
 
 
-def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, object]:
+def _run_daily_academic_pipeline_locked(celery_app, root_job_id: str) -> dict[str, object]:
     db = SessionLocal()
     try:
-        root = db.get(AcademicBulkOperationJob, str(root_job_id))
+        root = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.id == str(root_job_id),
+        ).with_for_update().one_or_none()
         if root is None or root.job_type != DAILY_ROOT_JOB_TYPE:
             return {'ok': False, 'code': 'root_job_not_found'}
         confirm_parent_continuation(
@@ -1847,6 +1940,11 @@ def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, objec
         }
     finally:
         db.close()
+
+
+def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, object]:
+    with _daily_root_process_lock(str(root_job_id)):
+        return _run_daily_academic_pipeline_locked(celery_app, root_job_id)
 
 
 def register_daily_academic_pipeline_tasks(celery_app) -> None:

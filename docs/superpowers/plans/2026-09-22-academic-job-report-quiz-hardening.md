@@ -8,6 +8,29 @@
 
 **Delivery rule:** Write a behavior test that fails for the intended reason, implement the smallest coherent change, run focused tests, then run the relevant regression set. Persist completed milestones as fast-forward commits on `feat/import-quiz-cms-old-su26`.
 
+## Implementation status (updated 2026-09-24)
+
+| Task | Status | Commit / authority |
+| --- | --- | --- |
+| 1 | Completed | `3ab6fd4` |
+| 2 | Completed | `4a4dfb1` |
+| 3 | Completed | `c44ad91` |
+| 4 | Completed | `48afc4d` |
+| 5 | Completed | `dada610` |
+| 6 | Completed; pipeline orchestration superseded | `de349d7`; superseded by the approved v2 plan below |
+| 7 | Completed; pipeline orchestration superseded | `60c80d2`; superseded by the approved v2 plan below |
+| 8 | Completed; pipeline orchestration superseded | `60c80d2`; superseded by the approved v2 plan below |
+| 9 | Completed | `9d63fbd` |
+| 10 | Completed | `fc9cf68` |
+| 11 | Pending | Acceptance criteria below remain authoritative |
+| 12 | Pending | Acceptance criteria below remain authoritative |
+| 13 | Pending final release after Tasks 11–12 | Acceptance criteria below remain authoritative |
+
+The active authority for the unified 01:00 AP → mapping → provisioning → score → campus → HO workflow is
+[`2026-09-24-unified-academic-daily-pipeline.md`](2026-09-24-unified-academic-daily-pipeline.md).
+That approved v2 plan replaces the scheduling/orchestration portions of Tasks 6–8 without removing their
+data-integrity requirements. Exact Quiz allocation Tasks 11–12 are intentionally still pending.
+
 ## Task 1: Semantic class-sync identity and conflict behavior
 
 - Add `backend/app/services/academic/job_identity.py`.
