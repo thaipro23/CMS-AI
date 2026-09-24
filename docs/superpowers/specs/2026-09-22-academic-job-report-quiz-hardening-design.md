@@ -75,7 +75,7 @@ If no row is returned, the task exits without executing business logic. A duplic
 
 ### 4.3 Retry policy
 
-- Read-only `learning_sync` may use bounded automatic retry for classified transient errors.
+- Manual read-only `learning_sync` may use bounded automatic retry for classified transient errors. Scheduled daily children report their first business failure to the stage coordinator; their business retries occur only at the end-of-stage barrier so all targets follow the same three-round policy.
 - Account creation, enrollment, course mapping, and `full_cms_sync` are mutation workflows. After an ambiguous timeout they move to failed/reconcile-required metadata and are not blindly replayed.
 - Reconciliation first reads remote Open edX state, calculates missing effects, and submits only missing mutations with the same idempotency intent.
 - Retry counters, last failure class, and reconciliation outcome are stored in `result_json` for operator diagnosis.
@@ -116,6 +116,8 @@ Every state transition is committed before task publication. Failure to publish 
 
 Publish exceptions are recorded; they are never swallowed. Coordinator retries use bounded attempts, exponential backoff, a per-target dispatch-attempt counter, and a maximum parent runtime. Persistent failure becomes terminal.
 
+Application-stage retries are separate from Celery delivery retries. A stage always lets every job in its current attempt reach a terminal state before it schedules failed logical targets again. This prevents one early failure from consuming all retry capacity while the rest of the stage is still running.
+
 ### 5.4 Unified 01:00 pipeline
 
 Celery Beat publishes exactly one root continuation at 01:00 Asia/Ho_Chi_Minh. The old 03:00 AP and 05:00 score/report publishers are disabled. The durable sequence is:
@@ -148,13 +150,32 @@ Before score dispatch, each branch/term scope freezes:
 - requested maximum student scope;
 - run date and policy version.
 
-Each `learning_sync` child belongs to its scheduled scope. A manual job is a blocker only. Campus report generation starts only after every frozen score child for both Poly and PTCD is terminal and successful. A missing active branch, truncated scope, or mandatory failure is fail-closed: the root records the failed stage, branch, scope, and child IDs; it publishes no new campus or HO artifact. Previously successful artifacts remain downloadable and are not presented as results of the failed run.
+Each `learning_sync` child belongs to its scheduled scope. A manual job is a blocker only. Campus report generation starts only after every frozen score child for both Poly and PTCD is terminal and successful. After the stage retry budget is exhausted, a missing active branch, truncated scope, or mandatory failure is fail-closed: the root records the failed stage, branch, scope, and child IDs; it publishes no new campus or HO artifact. Previously successful artifacts remain downloadable and are not presented as results of the failed run.
+
+### 5.6 End-of-stage retry barrier
+
+The root treats the daily flow as six ordered stages:
+
+1. AP synchronization for Poly and PTCD;
+2. missing subject-to-course mapping;
+3. missing student account creation and enrollment;
+4. score update;
+5. campus snapshot and workbook export;
+6. branch-specific HO aggregation and workbook export.
+
+For each stage, attempt zero runs every frozen logical target once. After all jobs in that attempt are terminal, the coordinator freezes the failed target set and runs only those targets again. It performs at most three retry rounds (`1`, `2`, and `3`), so one logical target can execute at most four times including its initial attempt. Each retry round must finish before the next round is created. Successful targets are never repeated.
+
+The four-job global concurrency limit applies to initial work and every retry round across Poly and PTCD combined. The parent durably records the stage, retry round, frozen failed target IDs, child attempt IDs, failure classifications, and next continuation before publishing retry jobs. Recovery loads this state and resumes the same round instead of consuming another retry.
+
+Read-only and deterministic export targets may be re-executed directly. Before retrying a mutation target, the coordinator reconciles the current database and Open edX state using the original mutation intent key, then submits only missing effects. An ambiguous timeout is never treated as proof that the remote mutation failed. Every retry attempt has a unique job identity for audit, while all attempts share the same logical target and external idempotency intent.
+
+A stage advances only when all frozen targets have succeeded. If any target is still failed after retry round three, the root becomes terminal `failed`, records the exhausted targets and their last errors, and does not dispatch the next stage. A validation or scope-integrity failure may be reconsidered in each end-of-stage retry round, but it never bypasses validation and never becomes successful merely because the retry budget is exhausted.
 
 ## 6. Immutable campus and HO report design
 
 ### 6.1 Snapshot creation
 
-After all score children for both branches succeed, snapshot-building reads the required PostgreSQL data under a consistent database snapshot. It builds run-specific report payloads for:
+After all score children for both branches succeed, including their end-of-stage retry rounds, snapshot-building reads the required PostgreSQL data under a consistent database snapshot. It builds run-specific report payloads for:
 
 - each campus in the frozen parent scope;
 - one branch-specific HO payload covering all frozen campuses for that branch.
@@ -239,6 +260,9 @@ Tests must exercise runtime behavior, not search source text.
 - Duplicate Beat delivery produces one root per Vietnam run date and one stable branch/term scope per stage.
 - The unified dispatcher never has more than four active mutation, score, or report jobs across Poly and PTCD combined.
 - The legacy 03:00 and 05:00 schedules do not publish new pipeline roots.
+- A failed target is retried only after every job in the current stage attempt is terminal.
+- Each retry round contains only the still-failed logical targets, never successful targets, and the global active-job count remains at most four.
+- Duplicate continuation delivery resumes the persisted retry round without creating a fourth retry or duplicate mutation intent.
 
 ### 11.2 Truthful terminal state
 
@@ -246,6 +270,9 @@ Tests must exercise runtime behavior, not search source text.
 - Mapping discovery failure with zero children produces failure, not completion.
 - A missing learning result does not refresh unrelated snapshot timestamps.
 - A persistent dispatch error terminates after the configured bound.
+- A target that succeeds in retry round one allows the stage to advance after all other targets succeed.
+- A target still failing after retry rounds one, two, and three fails the root and prevents the next stage from dispatching.
+- An ambiguous mutation timeout is reconciled before retry and only the missing remote effect is submitted.
 
 ### 11.3 Reports
 
@@ -278,7 +305,7 @@ Tests must exercise runtime behavior, not search source text.
 1. Apply migration `0066` before deploying workers that write bulk idempotency keys.
 2. Deploy backend/worker/beat code from the same image version.
 3. Keep the legacy `sync` consumer only during the drain window.
-4. Verify worker queue bindings, the global four-job lease/window, and the parent recovery scanner before enabling the daily schedule.
+4. Verify worker queue bindings, the global four-job lease/window, persisted retry-round recovery, and the parent recovery scanner before enabling the daily schedule.
 5. Disable the old 03:00 and 05:00 Beat entries, enable the single 01:00 Asia/Ho_Chi_Minh entry, and verify only one root is created per Vietnam run date.
 6. Run one controlled end-to-end 01:00-equivalent execution containing both Poly and PTCD before full production scheduling; verify branch-specific campus and HO artifacts.
 
