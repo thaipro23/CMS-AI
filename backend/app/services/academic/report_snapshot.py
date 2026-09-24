@@ -5,8 +5,10 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import func
+
 from app.core.json_safe import json_safe_value
-from app.models.academic import AcademicTeacherReportSnapshot
+from app.models.academic import AcademicCampus, AcademicTeacherReportSnapshot
 
 
 REPORT_SNAPSHOT_SCHEMA_VERSION = 'teacher-report-snapshot.v1'
@@ -36,12 +38,57 @@ def _canonical_bytes(payload: dict[str, Any]) -> bytes:
     ).encode('utf-8')
 
 
-def validate_campus_report(report: dict[str, Any], *, campus: str) -> dict[str, int]:
+def validate_report_branch(report: dict[str, Any], *, branch: str) -> dict[str, int]:
+    expected_branch = _normalized(branch)
+    if not expected_branch:
+        raise ReportSnapshotError('Report branch scope is invalid.')
+    if not isinstance(report, dict):
+        raise ReportSnapshotError('Report branch payload must be an object.')
+
+    teacher_ids: set[str] = set()
+    class_ids: set[str] = set()
+    for teacher in report.get('items') or []:
+        teacher = teacher or {}
+        teacher_id = str(teacher.get('teacher_id') or '').strip()
+        if not teacher_id:
+            raise ReportSnapshotError('Report branch row is missing stable teacher_id.')
+        teacher_ids.add(teacher_id)
+        class_branches: set[str] = set()
+        for class_item in teacher.get('classes') or []:
+            class_item = class_item or {}
+            class_id = str(class_item.get('class_id') or '').strip()
+            if not class_id:
+                raise ReportSnapshotError('Report branch row is missing stable class_id.')
+            class_branch = _normalized(class_item.get('branch'))
+            if class_branch != expected_branch:
+                raise ReportSnapshotError('Report class branch is outside its scheduled branch scope.')
+            class_branches.add(class_branch)
+            class_ids.add(class_id)
+        if len(class_branches) > 1:
+            raise ReportSnapshotError('Report teacher classes span multiple branches.')
+        teacher_branch = _normalized(teacher.get('branch'))
+        effective_teacher_branch = teacher_branch or next(iter(class_branches), '')
+        if effective_teacher_branch != expected_branch:
+            raise ReportSnapshotError('Report teacher branch is outside its scheduled branch scope.')
+
+    return {
+        'teacher_count': len(teacher_ids),
+        'class_count': len(class_ids),
+    }
+
+
+def validate_campus_report(
+    report: dict[str, Any],
+    *,
+    campus: str,
+    branch: str,
+) -> dict[str, int]:
     expected_campus = _normalized(campus)
     if not expected_campus or expected_campus == 'ho':
         raise ReportSnapshotError('Campus snapshot scope is invalid.')
     if not isinstance(report, dict):
         raise ReportSnapshotError('Campus snapshot report must be an object.')
+    branch_counts = validate_report_branch(report, branch=branch)
 
     teacher_ids: set[str] = set()
     class_ids: set[str] = set()
@@ -75,8 +122,8 @@ def validate_campus_report(report: dict[str, Any], *, campus: str) -> dict[str, 
 
     summary = report.get('summary') if isinstance(report.get('summary'), dict) else {}
     return {
-        'teacher_count': len(teacher_ids),
-        'class_count': len(class_ids),
+        'teacher_count': branch_counts['teacher_count'],
+        'class_count': branch_counts['class_count'],
         'student_count': len(student_ids) or int(summary.get('student_count') or 0),
     }
 
@@ -99,7 +146,11 @@ def create_campus_snapshot(
 ) -> AcademicTeacherReportSnapshot:
     normalized_branch = _normalized(branch) or 'poly'
     normalized_campus = _normalized(campus)
-    counts = validate_campus_report(report, campus=normalized_campus)
+    counts = validate_campus_report(
+        report,
+        campus=normalized_campus,
+        branch=normalized_branch,
+    )
     child_ids = sorted({str(item).strip() for item in source_child_ids if str(item).strip()})
     if not child_ids:
         raise ReportSnapshotError('Campus snapshot source_child_ids is empty.')
@@ -365,6 +416,16 @@ def create_ho_snapshot(
 ) -> AcademicTeacherReportSnapshot:
     normalized_branch = _normalized(branch) or 'poly'
     campuses = sorted({_normalized(item) for item in expected_campuses if _normalized(item)})
+    owned_campuses = {
+        _normalized(row.campus_code)
+        for row in db.query(AcademicCampus).filter(
+            AcademicCampus.active.is_(True),
+            func.lower(AcademicCampus.branch) == normalized_branch,
+            func.lower(AcademicCampus.campus_code).in_(campuses),
+        ).all()
+    }
+    if owned_campuses != set(campuses):
+        raise ReportSnapshotError('HO source campus ownership does not match the requested branch.')
     row_campuses = [_normalized(row.campus) for row in campus_snapshots]
     if len(row_campuses) != len(set(row_campuses)):
         raise ReportSnapshotError('HO source contains a duplicate campus snapshot.')
@@ -393,6 +454,7 @@ def create_ho_snapshot(
         envelopes.append(envelope)
 
     report = _aggregate_campus_reports([envelope['report'] for envelope in envelopes])
+    validate_report_branch(report, branch=normalized_branch)
     term_labels = {str(envelope.get('term_label') or '') for envelope in envelopes}
     run_dates = {str(envelope.get('run_date_vn') or '') for envelope in envelopes}
     if len(term_labels) != 1 or not next(iter(term_labels), ''):
@@ -526,5 +588,9 @@ def load_snapshot_envelope(
         if (_normalized(envelope.get(field)) or None) != (_normalized(expected_value) or None):
             raise ReportSnapshotError(f'Immutable report snapshot payload {field} mismatch.')
     if row.scope_type == 'campus':
-        validate_campus_report(envelope.get('report') or {}, campus=str(row.campus))
+        validate_campus_report(
+            envelope.get('report') or {},
+            campus=str(row.campus),
+            branch=str(row.branch),
+        )
     return envelope

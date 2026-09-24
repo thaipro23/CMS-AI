@@ -32,6 +32,10 @@ from app.services.training_policy_service import TrainingPolicyService
 from app.services.academic.udemy_progress import UdemyProgressService
 
 
+class TeacherReportBranchScopeError(RuntimeError):
+    pass
+
+
 class AcademicTeacherReportWorkflowService:
     """Teacher management report/cache workflow split out of AcademicService.
 
@@ -1162,6 +1166,7 @@ class AcademicTeacherReportWorkflowService:
         use_cache: bool = True,
         student_row_limit: int | None = 20000,
         allowed_class_ids: set[str] | None = None,
+        enforce_branch_integrity: bool = False,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
         decision = self.access_decision(user)
@@ -1203,6 +1208,80 @@ class AcademicTeacherReportWorkflowService:
                 'total_pages': 0,
                 'has_next': False,
             }
+        normalized_branch = str(branch or '').strip().lower()
+        normalized_allowed_class_ids = {
+            str(item).strip()
+            for item in (allowed_class_ids or set())
+            if str(item).strip()
+        }
+        if enforce_branch_integrity:
+            if not normalized_branch:
+                raise TeacherReportBranchScopeError(
+                    'Scheduled teacher report branch scope is missing.'
+                )
+            class_scope = self.db.query(
+                AcademicClass.id,
+                AcademicClass.branch,
+            ).filter(
+                AcademicClass.term_id == str(term_id),
+                AcademicClass.active.is_(True),
+            )
+            if normalized_allowed_class_ids:
+                class_scope = class_scope.filter(
+                    AcademicClass.id.in_(normalized_allowed_class_ids)
+                )
+            if campus:
+                class_scope = class_scope.filter(
+                    func.lower(AcademicClass.campus) == str(campus).strip().lower()
+                )
+            invalid_classes = [
+                (str(class_id), str(class_branch or ''))
+                for class_id, class_branch in class_scope.filter(or_(
+                    AcademicClass.branch.is_(None),
+                    func.trim(AcademicClass.branch) == '',
+                    func.lower(AcademicClass.branch) != normalized_branch,
+                )).limit(20).all()
+            ]
+            if invalid_classes:
+                raise TeacherReportBranchScopeError(
+                    f'Scheduled report class branch contamination: {invalid_classes}'
+                )
+
+            teacher_scope = self.db.query(
+                AcademicTeacher.id,
+                AcademicClass.id,
+                AcademicTeacher.branch,
+            ).join(
+                AcademicTeacherAssignment,
+                AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
+            ).join(
+                AcademicClass,
+                AcademicClass.id == AcademicTeacherAssignment.class_id,
+            ).filter(
+                AcademicTeacher.active.is_(True),
+                AcademicClass.active.is_(True),
+                AcademicClass.term_id == str(term_id),
+                func.lower(AcademicClass.branch) == normalized_branch,
+                AcademicTeacher.branch.isnot(None),
+                func.trim(AcademicTeacher.branch) != '',
+                func.lower(AcademicTeacher.branch) != normalized_branch,
+            )
+            if campus:
+                teacher_scope = teacher_scope.filter(
+                    func.lower(AcademicClass.campus) == str(campus).strip().lower()
+                )
+            if normalized_allowed_class_ids:
+                teacher_scope = teacher_scope.filter(
+                    AcademicClass.id.in_(normalized_allowed_class_ids)
+                )
+            invalid_teachers = [
+                (str(teacher_id), str(class_id), str(teacher_branch))
+                for teacher_id, class_id, teacher_branch in teacher_scope.limit(20).all()
+            ]
+            if invalid_teachers:
+                raise TeacherReportBranchScopeError(
+                    f'Scheduled report teacher branch contamination: {invalid_teachers}'
+                )
         if use_cache and term_id and not class_id and not include_all and not include_students:
             cached_report = self._training_teacher_report_from_cache(
                 term_id=term_id,
@@ -1288,9 +1367,6 @@ class AcademicTeacherReportWorkflowService:
         if class_id and str(class_id).strip():
             query = query.filter(AcademicClass.id == str(class_id).strip())
         if allowed_class_ids is not None:
-            normalized_allowed_class_ids = {
-                str(item).strip() for item in allowed_class_ids if str(item).strip()
-            }
             if not normalized_allowed_class_ids:
                 query = query.filter(AcademicClass.id.is_(None))
             else:

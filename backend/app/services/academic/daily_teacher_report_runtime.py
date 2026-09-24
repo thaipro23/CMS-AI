@@ -18,6 +18,7 @@ from app.core.rbac import UserContext
 from app.db.session import SessionLocal
 from app.models.academic import (
     AcademicBulkOperationJob,
+    AcademicCampus,
     AcademicClass,
     AcademicClassSyncJob,
     AcademicTeacherReportJob,
@@ -1056,6 +1057,19 @@ def _build_campus_report_snapshots_locked(
         run_date_vn = str(frozen_scope.get('run_date_vn') or '').strip()
         if not run_date_vn:
             raise ReportSnapshotError('Frozen parent scope is missing run_date_vn.')
+        normalized_branch = str(parent.branch or 'poly').strip().lower()
+        owned_campuses = {
+            str(row.campus_code or '').strip().lower()
+            for row in snapshot_db.query(AcademicCampus).filter(
+                AcademicCampus.active.is_(True),
+                func.lower(AcademicCampus.branch) == normalized_branch,
+                func.lower(AcademicCampus.campus_code).in_(campuses),
+            ).all()
+        }
+        if owned_campuses != set(campuses):
+            raise ReportSnapshotError(
+                'Frozen campus scope is not owned by the scheduled branch.'
+            )
         existing_rows = snapshot_db.query(AcademicTeacherReportSnapshot).filter(
             AcademicTeacherReportSnapshot.parent_job_id == str(parent.id),
             AcademicTeacherReportSnapshot.scope_type == 'campus',
@@ -1129,6 +1143,7 @@ def _build_campus_report_snapshots_locked(
                 use_cache=False,
                 student_row_limit=None,
                 allowed_class_ids=set(class_ids),
+                enforce_branch_integrity=True,
             )
             rows[campus] = create_campus_snapshot(
                 snapshot_db,

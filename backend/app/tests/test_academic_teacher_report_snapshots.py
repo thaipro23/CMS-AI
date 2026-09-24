@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.academic import (
     AcademicBulkOperationJob,
+    AcademicCampus,
     AcademicTeacherReportJob,
     AcademicTeacherReportSnapshot,
     AcademicTerm,
@@ -40,6 +41,7 @@ class MemoryStorage:
 
 def _engine():
     engine = create_engine('sqlite+pysqlite:///:memory:')
+    AcademicCampus.__table__.create(engine)
     AcademicTerm.__table__.create(engine)
     AcademicBulkOperationJob.__table__.create(engine)
     AcademicTeacherReportSnapshot.__table__.create(engine)
@@ -47,16 +49,18 @@ def _engine():
     return engine
 
 
-def _report(campus: str = 'hcm') -> dict:
+def _report(campus: str = 'hcm', branch: str = 'poly') -> dict:
     return {
         'items': [{
             'teacher_id': 'teacher-1',
             'teacher_name': 'Teacher One',
             'campus': campus,
+            'branch': branch,
             'classes': [{
                 'class_id': 'class-1',
                 'class_code': 'WEB101',
                 'campus': campus,
+                'branch': branch,
             }],
         }],
         'student_watch_rows': [{
@@ -70,6 +74,16 @@ def _report(campus: str = 'hcm') -> dict:
 
 
 def _seed(db: Session):
+    db.add_all([
+        AcademicCampus(
+            id='campus-hcm-poly', campus_code='hcm', campus_name='HCM',
+            branch='poly', active=True,
+        ),
+        AcademicCampus(
+            id='campus-hn-poly', campus_code='hn', campus_name='HN',
+            branch='poly', active=True,
+        ),
+    ])
     db.add(AcademicTerm(
         id='term-1',
         term_code='FA26',
@@ -275,6 +289,7 @@ def test_all_campus_payloads_are_built_by_one_consistent_session(monkeypatch):
         def training_teacher_report(self, _user, **kwargs):
             sessions_seen.add(id(self.db))
             assert kwargs['student_row_limit'] is None
+            assert kwargs['enforce_branch_integrity'] is True
             campus = kwargs['campus']
             assert kwargs['allowed_class_ids'] == {f'class-{campus}'}
             report = _report(campus)
@@ -462,6 +477,42 @@ def test_ho_snapshot_rejects_missing_duplicate_or_scope_mismatched_campus_snapsh
     engine.dispose()
 
 
+def test_ho_snapshot_rejects_campus_owned_by_other_branch():
+    engine = _engine()
+    storage = MemoryStorage()
+    with Session(engine) as db:
+        _seed(db)
+        hcm = create_campus_snapshot(
+            db,
+            storage=storage,
+            parent_id='parent-1',
+            term_id='term-1',
+            branch='poly',
+            campus='hcm',
+            scope_hash='scope-sha',
+            source_child_ids=['child-1'],
+            source_synced_at=datetime(2026, 9, 23, 5, 5),
+            report=_report('hcm'),
+        )
+        campus = db.get(AcademicCampus, 'campus-hcm-poly')
+        campus.branch = 'ptcd'
+        db.flush()
+
+        with pytest.raises(ReportSnapshotError, match='campus ownership'):
+            create_ho_snapshot(
+                db,
+                storage=storage,
+                parent_id='parent-1',
+                term_id='term-1',
+                branch='poly',
+                scope_hash='scope-sha',
+                expected_campuses=['hcm'],
+                campus_snapshots=[hcm],
+                source_synced_at=datetime(2026, 9, 23, 5, 5),
+            )
+    engine.dispose()
+
+
 def test_scheduled_export_job_is_reused_by_immutable_snapshot_identity():
     from app.services.academic import daily_teacher_report_runtime as runtime
 
@@ -506,6 +557,7 @@ def test_duplicate_parent_delivery_serializes_snapshot_construction(monkeypatch,
         f"sqlite+pysqlite:///{tmp_path / 'snapshot-race.sqlite'}",
         connect_args={'check_same_thread': False, 'timeout': 10},
     )
+    AcademicCampus.__table__.create(engine)
     AcademicTerm.__table__.create(engine)
     AcademicBulkOperationJob.__table__.create(engine)
     AcademicTeacherReportSnapshot.__table__.create(engine)
