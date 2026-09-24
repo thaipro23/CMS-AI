@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the independent 03:00 and 05:00 academic schedules with one durable 01:00 Vietnam-time pipeline that processes Poly and PTCD through AP sync, mapping, provisioning, score refresh, campus exports, and branch-specific HO exports with a global four-job limit and three end-of-stage retries.
+**Goal:** Replace the independent 03:00 and 05:00 academic schedules with one durable 01:00 Vietnam-time pipeline that processes Poly and PTCD through AP sync, mapping, provisioning, score refresh, canonical assessment projection, campus exports, and branch-specific HO exports with a global four-job limit and three end-of-stage retries.
 
-**Architecture:** One `AcademicBulkOperationJob` is the root for each Vietnam run date. A new coordinator freezes every `(branch, term_id)` scope, owns all dispatch decisions, persists attempt state before publishing Celery work, and advances only after the cross-branch stage barrier succeeds. Existing AP, class-sync, snapshot, and Excel workers remain execution adapters; pure state-planning code decides global capacity and retry transitions.
+**Architecture:** One `AcademicBulkOperationJob` is the root for each Vietnam run date. A new coordinator freezes every `(branch, term_id)` scope, owns all dispatch decisions, persists attempt state before publishing Celery work, and advances only after the cross-branch stage barrier succeeds. Existing AP, class-sync, snapshot, and Excel workers remain execution adapters; pure state-planning code decides global capacity and retry transitions, while one shared assessment selector prevents structural Open edX nodes from becoming UI or workbook columns.
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy, Alembic, Celery/Redis, PostgreSQL, pytest, OpenPyXL, existing Open edX Connector client.
 
@@ -25,13 +25,14 @@
 - Scheduled/bulk work and continuations use `sync-bulk`; workbook workers use `exports`.
 - Every database state transition is committed before Celery publication, and duplicate continuation delivery must not create another attempt.
 - Existing manual AP, class sync, score refresh, and report APIs retain their current task names and behavior.
+- Raw Open edX learning snapshots remain intact, but student lists, teacher summaries, and Excel exports expose only canonical numbered Quiz columns plus at most one Final test column; structural `Demo`/`Phần` nodes are excluded.
 
 ## Review Focus
 
 - A worker dies after an attempt row commits but before Celery confirmation: recovery must republish the same attempt without incrementing its retry round.
 - One mandatory branch has no active term or campus: the root must fail before AP dispatch and must not silently run only the other branch.
 - A PTCD class is assigned to an explicit Poly teacher, or the inverse: campus snapshot creation must fail; a null teacher branch must inherit the class branch.
-- A manual class job is active for a scheduled target: it is a blocker, never adopted as the scheduled child, and does not permit the global active count to exceed four.
+- A mixed Open edX payload contains valid quizzes plus repeated `Demo`/`Phần` rows under different usage keys: only canonical Quiz/Final-test columns reach the UI and workbooks, while raw snapshot evidence remains intact.
 - A campus export succeeds while another exhausts retry round three: the successful campus is not repeated, HO is not created, and the previous successful daily artifacts remain untouched.
 
 ---
@@ -606,7 +607,142 @@ git add backend/app/services/academic/daily_academic_pipeline.py backend/app/wor
 git commit -m "feat(academic): coordinate provision and score retries globally"
 ```
 
-### Task 6: Symmetric Poly/PTCD report isolation
+### Task 6: Remove structural Open edX nodes from assessment columns
+
+**Files:**
+- Create: `backend/app/services/academic/assessment_components.py`
+- Modify: `backend/app/services/academic_service.py`
+- Create: `backend/app/tests/test_academic_assessment_component_contract.py`
+- Create: `frontend/lib/academicAssessments.ts`
+- Modify: `frontend/types/index.ts`
+- Modify: `frontend/app/student-management/classes/[classId]/page.tsx`
+- Modify: `frontend/app/teacher-management/TeacherManagementPlatformPage.tsx`
+- Create: `e2e/tests/student-grade-column-hygiene.spec.ts`
+
+**Interfaces:**
+- Produces: `canonical_assessment_identity(item: Mapping[str, Any]) -> str | None`.
+- Produces: `canonical_assessment_components(items: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]`.
+- Produces: frontend `CanonicalAssessmentColumn` and `canonicalAssessmentColumns(scores: AcademicLearningComponentScore[]) -> CanonicalAssessmentColumn[]` using the same quiz/final identity contract.
+- Changes: raw `AcademicStudentLearningSnapshot.raw_json` stays unchanged; only API/report presentation payloads are filtered.
+- Consumes: explicit positive `quiz_number`, human-facing `Quiz N`/`Learning Check N`/`LC N`, or explicit/normalized `Final test` identity. Storage-key digits alone never create a quiz.
+
+- [ ] **Step 1: Write failing backend behavior tests for the reported junk columns**
+
+```python
+from app.services.academic.assessment_components import canonical_assessment_components
+
+
+def test_structural_demo_and_part_rows_never_become_assessment_columns():
+    rows = [
+        {'key': 'quiz-real', 'name': 'Quiz 1', 'quiz_number': 1, 'percent': 80},
+        {'key': 'demo-a', 'name': 'Demo', 'category': 'subsection', 'percent': 100},
+        {'key': 'demo-b', 'name': 'Demo', 'category': 'subsection', 'percent': 90},
+        {'key': 'demo-lesson-1', 'name': 'Demo bài 1', 'percent': 100},
+        {'key': 'part-1-a', 'name': 'Phần 1', 'percent': 100},
+        {'key': 'part-1-b', 'name': 'Phần 1', 'percent': 80},
+        {'key': 'final-a', 'name': 'Final test', 'assessment_type': 'final_test', 'percent': 70},
+    ]
+    result = canonical_assessment_components(rows)
+    assert [(row['key'], row['name']) for row in result] == [
+        ('quiz:1', 'Quiz 1'),
+        ('final_test', 'Final test'),
+    ]
+
+
+def test_quiz_duplicates_collapse_by_number_and_prefer_real_score():
+    rows = [
+        {'key': 'outline-q2', 'name': 'Quiz 2', 'quiz_number': 2, 'planned': True, 'percent': None},
+        {'key': 'grade-q2', 'name': 'Learning Check 2', 'quiz_number': 2, 'planned': False, 'percent': 95},
+    ]
+    result = canonical_assessment_components(rows)
+    assert len(result) == 1
+    assert result[0]['key'] == 'quiz:2'
+    assert result[0]['name'] == 'Quiz 2'
+    assert result[0]['percent'] == 95
+    assert result[0]['planned'] is False
+
+
+def test_storage_key_number_does_not_create_phantom_quiz():
+    rows = [{'key': 'block@quiz-14-random', 'name': 'Demo', 'category': 'problem', 'percent': 100}]
+    assert canonical_assessment_components(rows) == []
+```
+
+- [ ] **Step 2: Prove the current parser reproduces the defect**
+
+Run: `cd backend && ../.venv/bin/python -m pytest app/tests/test_academic_assessment_component_contract.py -q`
+
+Expected: FAIL because no canonical assessment boundary exists and usage-key-distinct `Demo`/`Phần 1` rows survive into summaries.
+
+- [ ] **Step 3: Implement one canonical backend selector without mutating raw snapshots**
+
+Use human-facing fields only when inferring identity:
+
+```python
+QUIZ_LABEL = re.compile(r'\b(?:quiz|learning\s*check|lc)\s*#?\s*(\d{1,3})\b', re.I)
+
+
+def canonical_assessment_identity(item: Mapping[str, Any]) -> str | None:
+    explicit = _positive_int(item.get('quiz_number'))
+    labels = ' '.join(str(item.get(key) or '') for key in ('name', 'label', 'display_name', 'title'))
+    match = QUIZ_LABEL.search(labels)
+    number = explicit or (_positive_int(match.group(1)) if match else None)
+    if number:
+        return f'quiz:{number}'
+    assessment_type = str(item.get('assessment_type') or '').strip().lower()
+    normalized_label = _normalize_label(labels)
+    if assessment_type == 'final_test' or normalized_label == 'final test':
+        return 'final_test'
+    return None
+```
+
+`canonical_assessment_components` groups by that identity, canonicalizes names to `Quiz N` or `Final test`, prefers non-planned rows with actual `percent`/`earned`, merges dates from the remaining duplicate, and sorts numbered quizzes before Final test. It never infers quiz order from generic list position or digits in `key`/`usage_key`.
+
+- [ ] **Step 4: Apply the selector at every presentation boundary**
+
+Keep `_component_scores_from_snapshot()` unchanged for policy evaluation and diagnostics. Apply the selector:
+
+```python
+raw_components = self._enrich_component_scores_for_class(
+    self._component_scores_from_snapshot(learning), cls, quiz_schedule_by_number,
+)
+display_components = canonical_assessment_components(raw_components)
+```
+
+Return `display_components` as `learning_component_scores`. In `_component_summary_from_snapshots`, canonicalize each learner's normalized rows before bucketing, then run the existing deadline enrichment once on the aggregated result so class summaries, teacher summaries, campus workbooks, and HO inputs use `quiz:{number}`/`final_test` keys without adding per-learner schedule queries. Do not rewrite `snapshot.raw_json`, total grade, progress, or the component list passed to `TrainingPolicyService.evaluate_student`.
+
+Preserve `assessment_type` from connector rows in `_normalize_component_score_item`, and add `assessment_type?: string | null` to `AcademicLearningComponentScore`; this makes explicit Final-test identity survive the backend/frontend boundary instead of relying only on its display label.
+
+- [ ] **Step 5: Add a frontend fail-safe and browser regression**
+
+Move column identity/building to `frontend/lib/academicAssessments.ts`. `canonicalAssessmentColumns` must reject any score without a canonical quiz/final identity, even if an old cache or mixed-version backend returns it. Use it in the student list and teacher management table.
+
+The Playwright fixture returns `Quiz 1`, two `Demo` keys, sixteen `Phần 1` keys, and one `Final test` in `component_summaries`. Assert:
+
+```typescript
+await expect(page.getByRole('columnheader', { name: 'Quiz 1', exact: true })).toHaveCount(1)
+await expect(page.getByRole('columnheader', { name: 'Final test', exact: true })).toHaveCount(1)
+await expect(page.getByRole('columnheader', { name: /^Demo/ })).toHaveCount(0)
+await expect(page.getByRole('columnheader', { name: /^Phần [1-4]$/ })).toHaveCount(0)
+```
+
+- [ ] **Step 6: Run assessment and UI regressions**
+
+Run: `cd backend && ../.venv/bin/python -m pytest app/tests/test_academic_assessment_component_contract.py app/tests/test_training_policy_service.py app/tests/test_teacher_management_all_cms_regression.py -q`
+
+Run: `cd frontend && npm run typecheck`
+
+Run: `cd e2e && npx playwright test tests/student-grade-column-hygiene.spec.ts --reporter=line`
+
+Expected: PASS; the reported payload yields only `Quiz 1` and `Final test`, while scoring-policy tests remain unchanged.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/services/academic/assessment_components.py backend/app/services/academic_service.py backend/app/tests/test_academic_assessment_component_contract.py frontend/lib/academicAssessments.ts frontend/types/index.ts 'frontend/app/student-management/classes/[classId]/page.tsx' frontend/app/teacher-management/TeacherManagementPlatformPage.tsx e2e/tests/student-grade-column-hygiene.spec.ts
+git commit -m "fix(academic): remove structural nodes from grade columns"
+```
+
+### Task 7: Symmetric Poly/PTCD report isolation
 
 **Files:**
 - Modify: `backend/app/services/academic/teacher_report.py`
@@ -692,7 +828,7 @@ git add backend/app/services/academic/teacher_report.py backend/app/services/aca
 git commit -m "fix(academic): isolate Poly and PTCD report snapshots"
 ```
 
-### Task 7: Campus and HO report stages with retry barriers
+### Task 8: Campus and HO report stages with retry barriers
 
 **Files:**
 - Modify: `backend/app/services/academic/daily_academic_pipeline.py`
@@ -787,7 +923,7 @@ git add backend/app/services/academic/daily_academic_pipeline.py backend/app/ser
 git commit -m "feat(academic): retry campus and HO report stages"
 ```
 
-### Task 8: Recovery, full verification, and release handoff
+### Task 9: Recovery, full verification, and release handoff
 
 **Files:**
 - Modify: `backend/app/services/academic/daily_academic_pipeline.py`
@@ -844,6 +980,7 @@ cd backend
   app/tests/test_academic_daily_pipeline_schedule.py \
   app/tests/test_academic_daily_pipeline_ap_mapping.py \
   app/tests/test_academic_daily_pipeline_provision_score.py \
+  app/tests/test_academic_assessment_component_contract.py \
   app/tests/test_academic_teacher_report_branch_isolation.py \
   app/tests/test_academic_daily_pipeline_reports.py \
   app/tests/test_academic_daily_pipeline_recovery.py \
@@ -852,6 +989,12 @@ cd backend
 ```
 
 Expected: all selected tests PASS with zero failures.
+
+Run: `cd frontend && npm run typecheck`
+
+Run: `cd e2e && npx playwright test tests/student-grade-column-hygiene.spec.ts --reporter=line`
+
+Expected: frontend typecheck and the assessment-column browser regression PASS.
 
 - [ ] **Step 6: Run migrations, compilation, and backend regressions**
 
@@ -888,7 +1031,7 @@ Expected: `daily_pipeline_schedule_ok`.
 
 - [ ] **Step 8: Review the complete diff against the spec**
 
-Verify all six stage names, both mandatory branches, maximum four active jobs, three retry rounds, branch-isolated campus/HO validation, and fail-closed transitions are covered by behavior tests. Confirm `AI-Server.zip` remains untracked and unchanged.
+Verify all six stage names, both mandatory branches, maximum four active jobs, three retry rounds, canonical Quiz/Final-test projection, branch-isolated campus/HO validation, and fail-closed transitions are covered by behavior tests. Confirm `AI-Server.zip` remains untracked and unchanged.
 
 - [ ] **Step 9: Commit the recovery and plan-status changes**
 

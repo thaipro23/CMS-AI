@@ -2,7 +2,7 @@
 
 ## 1. Goal
 
-Make the Dash CMS production workflows truthful and replay-safe: a completed job must mean the requested business operation completed for its entire frozen scope, duplicate Celery deliveries must not repeat mutations, the unified 01:00 Asia/Ho_Chi_Minh pipeline must recover after broker/worker interruption, each branch-specific HO workbook must be the union of every campus report in that branch's scheduled run, and Quiz planning must find every feasible exact allocation instead of depending on greedy ordering.
+Make the Dash CMS production workflows truthful and replay-safe: a completed job must mean the requested business operation completed for its entire frozen scope, duplicate Celery deliveries must not repeat mutations, the unified 01:00 Asia/Ho_Chi_Minh pipeline must recover after broker/worker interruption, score snapshots must expose only canonical assessment columns instead of course-outline noise, each branch-specific HO workbook must be the union of every campus report in that branch's scheduled run, and Quiz planning must find every feasible exact allocation instead of depending on greedy ordering.
 
 ## 2. Scope and delivery stages
 
@@ -171,6 +171,21 @@ Read-only and deterministic export targets may be re-executed directly. Before r
 
 A stage advances only when all frozen targets have succeeded. If any target is still failed after retry round three, the root becomes terminal `failed`, records the exhausted targets and their last errors, and does not dispatch the next stage. A validation or scope-integrity failure may be reconsidered in each end-of-stage retry round, but it never bypasses validation and never becomes successful merely because the retry budget is exhausted.
 
+### 5.7 Canonical assessment-component boundary
+
+Open edX may return both actual assessment grades and structural course nodes through duplicated containers such as `component_scores`, `grade.components`, `items`, or `subsections`. The raw connector response remains unchanged in the learning snapshot for diagnostics, but student-list, teacher-report, and Excel payloads pass through one canonical assessment selector before exposing dynamic columns.
+
+The canonical display contract is:
+
+- a numbered quiz is identified by an explicit positive `quiz_number` or a human-facing label such as `Quiz 7`, `Learning Check 7`, or `LC 7`;
+- all rows for the same quiz number collapse to one `quiz:{number}` column, preferring a real scored row over a planned course-outline shell;
+- a Final test is represented by at most one `final_test` column when the row has explicit `assessment_type=final_test` or a normalized human-facing `Final test` label;
+- structural or demonstration rows such as `Demo`, `Demo 1`, `Demo bài 1`, and repeated `Phần 1` through `Phần 4` are not assessment columns, even when their usage keys differ or Open edX stores incidental problem scores beneath them;
+- Assignment remains represented by the existing Assignment/defense contract and is not duplicated as a dynamic grade column;
+- an empty canonical assessment set is valid and produces no dynamic assessment columns rather than guessing from storage keys or generic list position.
+
+This filtering does not alter the stored total grade, progress, raw snapshot, or exam-eligibility rules. The same canonical identity and preference rules must be used by class student responses, class/teacher component summaries, and workbook column discovery so the UI and exports cannot disagree.
+
 ## 6. Immutable campus and HO report design
 
 ### 6.1 Snapshot creation
@@ -286,6 +301,9 @@ Tests must exercise runtime behavior, not search source text.
 - A teacher/student present in multiple campuses is counted once in HO distinct totals.
 - Changing live academic rows after snapshot creation does not change campus or HO artifacts.
 - A missing/failed campus snapshot prevents HO generation.
+- Student lists, teacher reports, and Excel exports expose the same canonical assessment columns.
+- A payload containing `Quiz 1`, repeated `Demo`, repeated `Phần 1`, and one `Final test` produces exactly `Quiz 1` and `Final test` dynamic columns.
+- Duplicate quiz rows with different usage keys collapse by quiz number and prefer real scores over planned shells; raw snapshot JSON remains intact for diagnosis.
 
 ### 11.4 Quiz
 
@@ -316,4 +334,4 @@ Rollback may return application code to the prior version because the new bulk i
 - Redesigning the frontend job dashboard.
 - Changing Open edX connector APIs unrelated to idempotency/reconciliation.
 - Replacing Celery or Redis.
-- Altering academic scoring policy or Excel presentation beyond the corrected campus/HO data source and branch isolation.
+- Altering academic scoring policy or Excel presentation beyond the corrected campus/HO data source, branch isolation, and removal of non-assessment dynamic grade columns.
