@@ -177,7 +177,8 @@ Open edX may return both actual assessment grades and structural course nodes th
 
 The canonical display contract is:
 
-- a numbered quiz is identified by an explicit positive `quiz_number` or a human-facing label such as `Quiz 7`, `Learning Check 7`, or `LC 7`;
+- a numbered quiz is identified by a human-facing label such as `Quiz 7`, `Learning Check 7`, or `LC 7`; alternatively it may use a positive `quiz_number` only when the connector also supplies explicit `assessment_type=quiz`;
+- `quiz_number` by itself is untrusted because the connector's course-outline fallback may assign sequential positions to any graded subsection; a row named `Demo` or `Phần 1` remains excluded even when it carries a positive `quiz_number` or `category=quiz`;
 - all rows for the same quiz number collapse to one `quiz:{number}` column, preferring a real scored row over a planned course-outline shell;
 - a Final test is represented by at most one `final_test` column when the row has explicit `assessment_type=final_test` or a normalized human-facing `Final test` label;
 - structural or demonstration rows such as `Demo`, `Demo 1`, `Demo bài 1`, and repeated `Phần 1` through `Phần 4` are not assessment columns, even when their usage keys differ or Open edX stores incidental problem scores beneath them;
@@ -303,7 +304,7 @@ Tests must exercise runtime behavior, not search source text.
 - A missing/failed campus snapshot prevents HO generation.
 - Student lists, teacher reports, and Excel exports expose the same canonical assessment columns.
 - A payload containing `Quiz 1`, repeated `Demo`, repeated `Phần 1`, and one `Final test` produces exactly `Quiz 1` and `Final test` dynamic columns.
-- Duplicate quiz rows with different usage keys collapse by quiz number and prefer real scores over planned shells; raw snapshot JSON remains intact for diagnosis.
+- Duplicate quiz rows with different usage keys collapse by quiz number and prefer real scores over planned shells; a structural row with a position-derived `quiz_number` stays excluded, and raw snapshot JSON remains intact for diagnosis.
 
 ### 11.4 Quiz
 

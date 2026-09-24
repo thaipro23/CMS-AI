@@ -624,7 +624,7 @@ git commit -m "feat(academic): coordinate provision and score retries globally"
 - Produces: `canonical_assessment_components(items: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]`.
 - Produces: frontend `CanonicalAssessmentColumn` and `canonicalAssessmentColumns(scores: AcademicLearningComponentScore[]) -> CanonicalAssessmentColumn[]` using the same quiz/final identity contract.
 - Changes: raw `AcademicStudentLearningSnapshot.raw_json` stays unchanged; only API/report presentation payloads are filtered.
-- Consumes: explicit positive `quiz_number`, human-facing `Quiz N`/`Learning Check N`/`LC N`, or explicit/normalized `Final test` identity. Storage-key digits alone never create a quiz.
+- Consumes: human-facing `Quiz N`/`Learning Check N`/`LC N`, explicit `assessment_type=quiz` paired with a positive `quiz_number`, or explicit/normalized `Final test` identity. A position-derived `quiz_number`, `category=quiz`, or storage-key digit alone never creates a quiz.
 
 - [ ] **Step 1: Write failing backend behavior tests for the reported junk columns**
 
@@ -635,7 +635,7 @@ from app.services.academic.assessment_components import canonical_assessment_com
 def test_structural_demo_and_part_rows_never_become_assessment_columns():
     rows = [
         {'key': 'quiz-real', 'name': 'Quiz 1', 'quiz_number': 1, 'percent': 80},
-        {'key': 'demo-a', 'name': 'Demo', 'category': 'subsection', 'percent': 100},
+        {'key': 'demo-a', 'name': 'Demo', 'category': 'quiz', 'quiz_number': 2, 'planned': True, 'percent': None},
         {'key': 'demo-b', 'name': 'Demo', 'category': 'subsection', 'percent': 90},
         {'key': 'demo-lesson-1', 'name': 'Demo bài 1', 'percent': 100},
         {'key': 'part-1-a', 'name': 'Phần 1', 'percent': 100},
@@ -665,6 +665,11 @@ def test_quiz_duplicates_collapse_by_number_and_prefer_real_score():
 def test_storage_key_number_does_not_create_phantom_quiz():
     rows = [{'key': 'block@quiz-14-random', 'name': 'Demo', 'category': 'problem', 'percent': 100}]
     assert canonical_assessment_components(rows) == []
+
+
+def test_position_derived_quiz_number_on_demo_is_not_trusted():
+    rows = [{'key': 'demo-outline', 'name': 'Demo', 'category': 'quiz', 'quiz_number': 7, 'planned': True}]
+    assert canonical_assessment_components(rows) == []
 ```
 
 - [ ] **Step 2: Prove the current parser reproduces the defect**
@@ -685,17 +690,17 @@ def canonical_assessment_identity(item: Mapping[str, Any]) -> str | None:
     explicit = _positive_int(item.get('quiz_number'))
     labels = ' '.join(str(item.get(key) or '') for key in ('name', 'label', 'display_name', 'title'))
     match = QUIZ_LABEL.search(labels)
-    number = explicit or (_positive_int(match.group(1)) if match else None)
+    assessment_type = str(item.get('assessment_type') or '').strip().lower()
+    number = (_positive_int(match.group(1)) if match else None) or (explicit if assessment_type == 'quiz' else None)
     if number:
         return f'quiz:{number}'
-    assessment_type = str(item.get('assessment_type') or '').strip().lower()
     normalized_label = _normalize_label(labels)
     if assessment_type == 'final_test' or normalized_label == 'final test':
         return 'final_test'
     return None
 ```
 
-`canonical_assessment_components` groups by that identity, canonicalizes names to `Quiz N` or `Final test`, prefers non-planned rows with actual `percent`/`earned`, merges dates from the remaining duplicate, and sorts numbered quizzes before Final test. It never infers quiz order from generic list position or digits in `key`/`usage_key`.
+`canonical_assessment_components` groups by that identity, canonicalizes names to `Quiz N` or `Final test`, prefers non-planned rows with actual `percent`/`earned`, merges dates from the remaining duplicate, and sorts numbered quizzes before Final test. It never infers quiz order from generic list position, `category=quiz`, a bare `quiz_number`, or digits in `key`/`usage_key`. This explicitly guards the CMS connector fallback that assigns `quiz_number=position` to graded course-outline candidates.
 
 - [ ] **Step 4: Apply the selector at every presentation boundary**
 
