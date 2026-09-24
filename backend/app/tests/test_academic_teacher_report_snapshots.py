@@ -550,6 +550,70 @@ def test_scheduled_export_job_is_reused_by_immutable_snapshot_identity():
     engine.dispose()
 
 
+def test_daily_snapshot_attempt_persists_campus_snapshot_result(monkeypatch):
+    from app.services.academic import daily_teacher_report_runtime as runtime
+
+    engine = _engine()
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    captured: dict[str, object] = {}
+    with Session(engine) as db:
+        _seed(db)
+        db.add(AcademicBulkOperationJob(
+            id='daily-root-1',
+            job_type='academic_daily_pipeline_v2',
+            status='running',
+            request_json={'run_date_vn': '2026-09-24'},
+            result_json={},
+        ))
+        db.add(AcademicBulkOperationJob(
+            id='snapshot-attempt-1',
+            parent_job_id='daily-root-1',
+            job_type='daily_report_snapshot_attempt',
+            status='queued',
+            term_id='term-1',
+            branch='poly',
+            request_json={
+                'daily_root_job_id': 'daily-root-1',
+                'scope_parent_id': 'parent-1',
+                'snapshot_type': 'campus_set',
+                'source_synced_at': '2026-09-24T01:45:00+07:00',
+                'scope': {
+                    'scope_key': 'poly:term-1',
+                    'term_id': 'term-1',
+                    'branch': 'poly',
+                    'campuses': ['hcm'],
+                    'class_ids': ['class-1'],
+                    'class_to_campus': {'class-1': 'hcm'},
+                    'scope_hash': 'scope-sha',
+                },
+                'score_job_ids_by_class': {'class-1': 'score-class-1'},
+            },
+            result_json={},
+        ))
+        db.commit()
+
+    def fake_build(scope_parent, state, source_synced_at):
+        captured['scope_parent_id'] = scope_parent.id
+        captured['state'] = state
+        captured['source_synced_at'] = source_synced_at
+        return {'hcm': 'snapshot-hcm'}
+
+    monkeypatch.setattr(runtime, 'SessionLocal', factory)
+    monkeypatch.setattr(runtime, 'build_scope_campus_snapshots', fake_build)
+
+    result = runtime.run_daily_snapshot_attempt('snapshot-attempt-1')
+
+    assert result['snapshot_ids_by_campus'] == {'hcm': 'snapshot-hcm'}
+    assert captured['scope_parent_id'] == 'parent-1'
+    assert captured['state']['frozen_scope']['run_date_vn'] == '2026-09-24'
+    assert captured['state']['child_job_ids_by_class'] == {'class-1': 'score-class-1'}
+    with Session(engine) as db:
+        job = db.get(AcademicBulkOperationJob, 'snapshot-attempt-1')
+        assert job.status == 'completed'
+        assert job.result_json['snapshot_type'] == 'campus_set'
+    engine.dispose()
+
+
 def test_duplicate_parent_delivery_serializes_snapshot_construction(monkeypatch, tmp_path):
     from app.services.academic import daily_teacher_report_runtime as runtime
 

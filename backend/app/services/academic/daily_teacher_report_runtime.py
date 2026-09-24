@@ -45,7 +45,10 @@ from app.services.academic.scheduled_scope import (
     ScheduledScopeError,
     freeze_scheduled_scope,
 )
-from app.services.academic.daily_academic_pipeline import DAILY_ROOT_JOB_TYPE
+from app.services.academic.daily_academic_pipeline import (
+    DAILY_ROOT_JOB_TYPE,
+    DAILY_SNAPSHOT_TASK,
+)
 from app.services.academic.report_snapshot import (
     ReportSnapshotError,
     create_campus_snapshot,
@@ -1231,6 +1234,151 @@ def _build_ho_report_snapshot_locked(
         )
 
 
+def build_scope_campus_snapshots(
+    scope_parent: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    source_synced_at: datetime,
+) -> dict[str, str]:
+    """Build only immutable campus inputs for one branch/term scope."""
+    return _build_campus_report_snapshots(
+        scope_parent,
+        state=state,
+        source_synced_at=source_synced_at,
+    )
+
+
+def build_scope_ho_snapshot(
+    scope_parent: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    campus_snapshot_ids: dict[str, str],
+    source_synced_at: datetime,
+) -> str:
+    """Build one HO input only after every campus workbook has succeeded."""
+    return _build_ho_report_snapshot(
+        scope_parent,
+        state=state,
+        campus_snapshot_ids=campus_snapshot_ids,
+        source_synced_at=source_synced_at,
+    )
+
+
+def run_daily_snapshot_attempt(job_id: str) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        job = db.get(AcademicBulkOperationJob, str(job_id))
+        if job is None or job.job_type != 'daily_report_snapshot_attempt':
+            return {'ok': False, 'code': 'snapshot_attempt_not_found'}
+        if job.status == 'completed':
+            return dict(job.result_json or {})
+        if job.status not in {'queued', 'running'}:
+            return {'ok': False, 'status': str(job.status)}
+        request = job.request_json if isinstance(job.request_json, dict) else {}
+        scope = request.get('scope') if isinstance(request.get('scope'), dict) else {}
+        scope_parent = db.get(
+            AcademicBulkOperationJob,
+            str(request.get('scope_parent_id') or ''),
+        )
+        if scope_parent is None:
+            raise ReportSnapshotError('Daily snapshot scope parent was not found.')
+        source_synced_at = _parse_runtime_time(request.get('source_synced_at'))
+        if source_synced_at is None:
+            raise ReportSnapshotError('Daily snapshot source_synced_at is missing.')
+        root = db.get(
+            AcademicBulkOperationJob,
+            str(request.get('daily_root_job_id') or ''),
+        )
+        root_request = root.request_json if root and isinstance(root.request_json, dict) else {}
+        frozen_scope = {
+            **dict(scope),
+            'run_date_vn': str(root_request.get('run_date_vn') or ''),
+        }
+        builder_state = {
+            'frozen_scope': frozen_scope,
+            'child_job_ids_by_class': dict(request.get('score_job_ids_by_class') or {}),
+        }
+        now = utc_now_naive()
+        job.status = 'running'
+        job.started_at = job.started_at or now
+        job.progress_current = 10
+        job.progress_label = 'Đang chốt snapshot bất biến'
+        db.add(job)
+        db.commit()
+
+        snapshot_type = str(request.get('snapshot_type') or '')
+        if snapshot_type == 'campus_set':
+            snapshot_ids = build_scope_campus_snapshots(
+                scope_parent,
+                builder_state,
+                source_synced_at,
+            )
+            rows = db.query(AcademicTeacherReportSnapshot).filter(
+                AcademicTeacherReportSnapshot.id.in_(list(snapshot_ids.values())),
+            ).all()
+            result = {
+                'ok': True,
+                'snapshot_type': 'campus_set',
+                'snapshot_ids_by_campus': snapshot_ids,
+                'snapshot_checksums': {
+                    str(row.id): str(row.sha256) for row in rows
+                },
+            }
+        elif snapshot_type == 'ho':
+            campus_snapshot_ids = {
+                str(campus): str(snapshot_id)
+                for campus, snapshot_id in dict(
+                    request.get('campus_snapshot_ids_by_campus') or {}
+                ).items()
+                if str(campus) and str(snapshot_id)
+            }
+            ho_snapshot_id = build_scope_ho_snapshot(
+                scope_parent,
+                builder_state,
+                campus_snapshot_ids,
+                source_synced_at,
+            )
+            result = {
+                'ok': True,
+                'snapshot_type': 'ho',
+                'ho_snapshot_id': str(ho_snapshot_id),
+            }
+        else:
+            raise ReportSnapshotError('Unsupported daily snapshot type.')
+
+        job = db.get(AcademicBulkOperationJob, str(job_id))
+        job.status = 'completed'
+        job.progress_current = 100
+        job.progress_total = 100
+        job.progress_label = 'Đã chốt snapshot bất biến'
+        job.result_json = json_safe_value(result)
+        job.error_message = None
+        job.finished_at = utc_now_naive()
+        job.updated_at = job.finished_at
+        db.add(job)
+        db.commit()
+        return result
+    except Exception as exc:
+        db.rollback()
+        job = db.get(AcademicBulkOperationJob, str(job_id))
+        if job and job.status in {'queued', 'running'}:
+            job.status = 'failed'
+            job.error_message = str(exc)[:4000]
+            job.progress_label = 'Không chốt được snapshot báo cáo'
+            job.finished_at = utc_now_naive()
+            job.updated_at = job.finished_at
+            payload = dict(job.result_json or {})
+            payload.update({
+                'ok': False,
+                'code': 'daily_snapshot_attempt_failed',
+                'exception_class': exc.__class__.__name__,
+            })
+            job.result_json = json_safe_value(payload)
+            db.add(job)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
 def run_daily_score_report_parent(celery_app, parent_job_id: str) -> dict[str, Any]:
     db = SessionLocal()
     try:
@@ -1974,6 +2122,10 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
     def _teacher_report_task(job_id: str):
         return run_teacher_report_job(job_id)
 
+    @celery_app.task(name=DAILY_SNAPSHOT_TASK)
+    def _daily_snapshot_attempt_task(job_id: str):
+        return run_daily_snapshot_attempt(job_id)
+
     @celery_app.task(name='academic_teacher_report_watchdog_task')
     def _teacher_report_watchdog_task():
         db = SessionLocal()
@@ -1989,6 +2141,7 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
     routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})
     routes.update({
         'academic_daily_score_report_parent_task': {'queue': 'sync-bulk'},
+        DAILY_SNAPSHOT_TASK: {'queue': 'exports'},
         'academic_teacher_report_watchdog_task': {'queue': 'sync-fast'},
         'academic_scheduled_parent_recovery_task': {'queue': 'sync-bulk'},
     })
@@ -1997,6 +2150,7 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
     annotations = dict(getattr(celery_app.conf, 'task_annotations', {}) or {})
     annotations.update({
         'academic_daily_score_report_parent_task': {'soft_time_limit': 120, 'time_limit': 180},
+        DAILY_SNAPSHOT_TASK: {'soft_time_limit': 30 * 60, 'time_limit': 35 * 60},
         'academic_teacher_report_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55},
         'academic_scheduled_parent_recovery_task': {'soft_time_limit': 45, 'time_limit': 55},
     })

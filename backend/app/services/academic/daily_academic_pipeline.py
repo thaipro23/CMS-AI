@@ -20,6 +20,7 @@ from app.models.academic import (
     AcademicClass,
     AcademicClassSyncJob,
     AcademicSyncRun,
+    AcademicTeacherReportJob,
     AcademicTerm,
 )
 from app.schemas.academic import AcademicAPSyncIn
@@ -48,6 +49,7 @@ VN_TZ = ZoneInfo('Asia/Ho_Chi_Minh')
 DAILY_ROOT_JOB_TYPE = 'academic_daily_pipeline_v2'
 DAILY_START_TASK = 'academic_daily_pipeline_start_task'
 DAILY_ROOT_TASK = 'academic_daily_pipeline_task'
+DAILY_SNAPSHOT_TASK = 'academic_daily_snapshot_attempt_task'
 DAILY_POLICY_VERSION = 'academic-daily/v2'
 DAILY_STATE_VERSION = 'academic-daily-state.v2'
 DAILY_SCHEDULER_ACTOR = 'academic-daily-scheduler'
@@ -601,6 +603,217 @@ def _set_stage_attempts(
     state['attempts_by_stage'] = attempts_by_stage
 
 
+def _run_date(root: AcademicBulkOperationJob) -> str:
+    request = root.request_json if isinstance(root.request_json, dict) else {}
+    return str(request.get('run_date_vn') or '').strip()
+
+
+def _scope_parent(
+    db: Session,
+    root: AcademicBulkOperationJob,
+    scope: dict[str, Any],
+) -> AcademicBulkOperationJob:
+    parents = ensure_scope_parents(db, root, [scope])
+    return parents[f'{scope["scope_key"]}:score-report']
+
+
+def ensure_snapshot_attempt(
+    db: Session,
+    *,
+    root: AcademicBulkOperationJob,
+    scope: dict[str, Any],
+    snapshot_type: str,
+    round_no: int,
+) -> AcademicBulkOperationJob:
+    if snapshot_type not in {'campus_set', 'ho'}:
+        raise ValueError(f'Unsupported snapshot type: {snapshot_type}')
+    stage = 'campus_snapshots' if snapshot_type == 'campus_set' else 'ho_snapshots'
+    snapshot_key = 'campus-snapshot' if snapshot_type == 'campus_set' else 'ho-snapshot'
+    key = (
+        f'academic-daily:v2:{_run_date(root)}:{scope["term_id"]}:'
+        f'{scope["branch"]}:{snapshot_key}:attempt:{max(0, int(round_no))}'
+    )
+    existing = db.query(AcademicBulkOperationJob).filter(
+        AcademicBulkOperationJob.idempotency_key == key,
+    ).one_or_none()
+    if existing is not None:
+        return existing
+    scope_parent = _scope_parent(db, root, scope)
+    job = AcademicBulkOperationJob(
+        parent_job_id=str(root.id),
+        idempotency_key=key,
+        job_type='daily_report_snapshot_attempt',
+        status='queued',
+        term_id=str(scope['term_id']),
+        branch=str(scope['branch']),
+        campus=None,
+        requested_by=DAILY_SCHEDULER_ACTOR,
+        progress_current=0,
+        progress_total=100,
+        progress_label='01:00 +07 · chờ chốt snapshot báo cáo',
+        request_json=json_safe_value({
+            'scheduled': True,
+            'daily_root_job_id': str(root.id),
+            'scope_parent_id': str(scope_parent.id),
+            'daily_stage': stage,
+            'logical_target_key': str(scope['scope_key']),
+            'attempt_no': max(0, int(round_no)),
+            'snapshot_type': snapshot_type,
+            'scope': scope,
+        }),
+        result_json=json_safe_value({'dispatch': {'state': 'pending'}}),
+    )
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.idempotency_key == key,
+        ).one_or_none()
+        if existing is None:
+            raise
+        return existing
+    db.refresh(job)
+    return job
+
+
+def ensure_report_attempt(
+    db: Session,
+    *,
+    root: AcademicBulkOperationJob,
+    scope: dict[str, Any],
+    campus: str | None,
+    stage: str,
+    round_no: int,
+    snapshot_id: str,
+) -> AcademicTeacherReportJob:
+    if stage not in {'campus_reports', 'ho_reports'}:
+        raise ValueError(f'Unsupported report stage: {stage}')
+    target_name = f'campus:{campus}' if campus else 'ho'
+    key = (
+        f'academic-daily:v2:{_run_date(root)}:{scope["term_id"]}:'
+        f'{scope["branch"]}:{target_name}:attempt:{max(0, int(round_no))}'
+    )
+    existing = db.query(AcademicTeacherReportJob).filter(
+        AcademicTeacherReportJob.idempotency_key == key,
+    ).one_or_none()
+    if existing is not None:
+        return existing
+    scope_parent = _scope_parent(db, root, scope)
+    logical_target_key = (
+        f'{scope["scope_key"]}:{campus}' if campus else str(scope['scope_key'])
+    )
+    job = AcademicTeacherReportJob(
+        parent_job_id=str(root.id),
+        idempotency_key=key,
+        job_type='scheduled_export_excel',
+        status='queued',
+        term_id=str(scope['term_id']),
+        branch=str(scope['branch']),
+        campus=campus,
+        requested_by=DAILY_SCHEDULER_ACTOR,
+        progress_current=0,
+        progress_total=100,
+        progress_label='01:00 +07 · chờ tạo file báo cáo',
+        request_json=json_safe_value({
+            'scheduled': True,
+            'management_scope': True,
+            'learning_platform': 'cms',
+            'daily_root_job_id': str(root.id),
+            'source_sync_parent_id': str(scope_parent.id),
+            'source_synced_at': str((root.result_json or {}).get('source_synced_at') or ''),
+            'daily_stage': stage,
+            'logical_target_key': logical_target_key,
+            'attempt_no': max(0, int(round_no)),
+            'report_snapshot_id': str(snapshot_id),
+            'report_snapshot_scope_hash': str(scope.get('scope_hash') or ''),
+            'scope': 'campus' if campus else 'ho',
+            'requester_context': _scheduler_requester_context(),
+            'scope_enforced_by_backend': True,
+        }),
+        result_json=json_safe_value({'dispatch': {'state': 'pending'}}),
+    )
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(AcademicTeacherReportJob).filter(
+            AcademicTeacherReportJob.idempotency_key == key,
+        ).one_or_none()
+        if existing is None:
+            raise
+        return existing
+    db.refresh(job)
+    return job
+
+
+def _dispatch_snapshot_job(celery_app, db: Session, job: AcademicBulkOperationJob) -> None:
+    payload = dict(job.result_json or {})
+    dispatch = dict(payload.get('dispatch') or {})
+    if job.status != 'queued' or dispatch.get('celery_task_id'):
+        return
+    try:
+        result = celery_app.send_task(
+            DAILY_SNAPSHOT_TASK,
+            args=[str(job.id)],
+            queue='exports',
+        )
+        dispatch.update({
+            'state': 'confirmed',
+            'celery_task_id': str(getattr(result, 'id', '') or ''),
+            'confirmed_at': datetime.utcnow().isoformat(),
+        })
+    except Exception as exc:
+        job.status = 'failed'
+        job.error_message = str(exc)[:4000]
+        job.finished_at = datetime.utcnow()
+        dispatch.update({'state': 'failed', 'error_type': exc.__class__.__name__})
+    payload['dispatch'] = dispatch
+    job.result_json = json_safe_value(payload)
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+
+
+def _all_stage_jobs(
+    db: Session,
+    state: dict[str, Any],
+    stage: str,
+    model,
+) -> dict[str, Any]:
+    selected: dict[str, Any] = {}
+    stage_rounds = dict((state.get('attempts_by_stage') or {}).get(stage) or {})
+    for round_key in sorted(stage_rounds, key=lambda value: int(value)):
+        for target, job_id in dict(stage_rounds[round_key] or {}).items():
+            job = db.get(model, str(job_id))
+            if job is not None and str(job.status or '').lower() == 'completed':
+                selected[str(target)] = job
+    return selected
+
+
+def _campus_targets(scopes: list[dict[str, Any]]) -> list[str]:
+    rows = [
+        [f'{scope["scope_key"]}:{campus}' for campus in scope.get('campuses') or []]
+        for scope in sorted(scopes, key=lambda item: (str(item.get('branch')), str(item.get('term_id'))))
+    ]
+    return [
+        target
+        for index in range(max((len(row) for row in rows), default=0))
+        for row in rows
+        for target in row[index:index + 1]
+    ]
+
+
+def _frozen_scopes(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(value)
+        for value in dict(state.get('frozen_scopes_after_ap') or {}).values()
+        if isinstance(value, dict)
+    ]
+
+
 def _save_root_state(
     db: Session,
     root: AcademicBulkOperationJob,
@@ -901,21 +1114,305 @@ def _run_class_stage(
             stage='score_update',
         )
 
+    score_jobs = _all_stage_jobs(
+        db,
+        state,
+        'score_update',
+        AcademicClassSyncJob,
+    )
+    score_finished = [job.finished_at for job in score_jobs.values() if job.finished_at]
+    source_synced_at = max(score_finished or [datetime.utcnow()]).isoformat()
     state.update({
-        'phase': 'campus_reports',
+        'phase': 'campus_snapshots',
         'stage_round': 0,
-        'stage_target_keys': [
-            f'{scope["scope_key"]}:{campus}'
-            for scope in scopes
-            for campus in scope.get('campuses') or []
-        ],
+        'stage_target_keys': [str(scope['scope_key']) for scope in scopes],
+        'source_synced_at': source_synced_at,
+        'score_job_ids_by_class': {
+            class_id: str(job.id)
+            for class_id, job in score_jobs.items()
+        },
     })
     _save_root_state(db, root, state)
     return {
         'ok': True,
         'status': 'stage_complete',
-        'phase': 'campus_reports',
+        'phase': 'campus_snapshots',
         'root_job_id': str(root.id),
+    }
+
+
+def _run_snapshot_stage(
+    celery_app,
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    *,
+    snapshot_type: str,
+) -> dict[str, object]:
+    stage = 'campus_snapshots' if snapshot_type == 'campus_set' else 'ho_snapshots'
+    scopes = _frozen_scopes(state)
+    scope_index = {str(scope['scope_key']): scope for scope in scopes}
+    round_no = max(0, int(state.get('stage_round') or 0))
+    targets = [str(value) for value in state.get('stage_target_keys') or []]
+    attempts = _stage_attempts(state, stage, round_no)
+    jobs = {
+        target: db.get(AcademicBulkOperationJob, job_id)
+        for target, job_id in attempts.items()
+    }
+    statuses = {
+        target: str(job.status or '').lower()
+        for target, job in jobs.items()
+        if job is not None
+    }
+    active_count = db.query(AcademicBulkOperationJob).filter(
+        AcademicBulkOperationJob.parent_job_id == str(root.id),
+        AcademicBulkOperationJob.job_type == 'daily_report_snapshot_attempt',
+        AcademicBulkOperationJob.status.in_(list(ACTIVE)),
+    ).count()
+    for target in select_global_dispatch_targets(
+        targets,
+        statuses,
+        active_count=active_count,
+    ):
+        scope = scope_index[target]
+        job = ensure_snapshot_attempt(
+            db,
+            root=root,
+            scope=scope,
+            snapshot_type=snapshot_type,
+            round_no=round_no,
+        )
+        request = dict(job.request_json or {})
+        request['source_synced_at'] = str(state.get('source_synced_at') or '')
+        request['score_job_ids_by_class'] = {
+            class_id: job_id
+            for class_id, job_id in dict(state.get('score_job_ids_by_class') or {}).items()
+            if class_id in set(scope.get('class_ids') or [])
+        }
+        if snapshot_type == 'ho':
+            request['campus_snapshot_ids_by_campus'] = {
+                campus: state.get('campus_snapshot_ids_by_target', {}).get(
+                    f'{scope["scope_key"]}:{campus}'
+                )
+                for campus in scope.get('campuses') or []
+            }
+        job.request_json = json_safe_value(request)
+        db.add(job)
+        db.commit()
+        attempts[target] = str(job.id)
+        statuses[target] = str(job.status or '').lower()
+        _dispatch_snapshot_job(celery_app, db, job)
+    _set_stage_attempts(state, stage, round_no, attempts)
+    state['stage_attempt_ids'] = dict(attempts)
+    _save_root_state(db, root, state)
+
+    decision = plan_stage_barrier(targets, statuses, current_round=round_no)
+    if not decision.ready:
+        _publish_root_continuation(celery_app, db, root)
+        return {'ok': True, 'status': 'waiting_stage', 'phase': stage, 'root_job_id': str(root.id)}
+    if decision.exhausted:
+        completed = _all_stage_jobs(db, state, stage, AcademicBulkOperationJob)
+        artifacts = state.setdefault('artifacts', {})
+        artifacts[stage] = {target: str(job.id) for target, job in completed.items()}
+        return _fail_exhausted_stage(
+            db,
+            root,
+            state,
+            stage=stage,
+            failed_target_keys=decision.retry_target_keys,
+            attempt_ids=attempts,
+        )
+    if decision.retry_target_keys:
+        retry_round = int(decision.next_round or round_no + 1)
+        state['stage_round'] = retry_round
+        state['stage_target_keys'] = list(decision.retry_target_keys)
+        _set_stage_attempts(state, stage, retry_round, {})
+        state['stage_attempt_ids'] = {}
+        _save_root_state(db, root, state)
+        return _run_snapshot_stage(
+            celery_app,
+            db,
+            root,
+            state,
+            snapshot_type=snapshot_type,
+        )
+
+    completed = _all_stage_jobs(db, state, stage, AcademicBulkOperationJob)
+    if snapshot_type == 'campus_set':
+        snapshot_ids_by_target: dict[str, str] = {}
+        snapshot_checksums: dict[str, str] = {}
+        for scope_key, job in completed.items():
+            result = dict(job.result_json or {})
+            for campus, snapshot_id in dict(result.get('snapshot_ids_by_campus') or {}).items():
+                target = f'{scope_key}:{campus}'
+                snapshot_ids_by_target[target] = str(snapshot_id)
+            snapshot_checksums.update({
+                str(key): str(value)
+                for key, value in dict(result.get('snapshot_checksums') or {}).items()
+            })
+        state.update({
+            'phase': 'campus_reports',
+            'stage_round': 0,
+            'stage_target_keys': _campus_targets(scopes),
+            'campus_snapshot_ids_by_target': snapshot_ids_by_target,
+            'campus_snapshot_checksums': snapshot_checksums,
+        })
+        _save_root_state(db, root, state)
+        return _run_report_stage(celery_app, db, root, state, stage='campus_reports')
+
+    ho_snapshot_ids = {
+        scope_key: str((job.result_json or {}).get('ho_snapshot_id') or '')
+        for scope_key, job in completed.items()
+    }
+    state.update({
+        'phase': 'ho_reports',
+        'stage_round': 0,
+        'stage_target_keys': [str(scope['scope_key']) for scope in scopes],
+        'ho_snapshot_ids_by_scope': ho_snapshot_ids,
+    })
+    _save_root_state(db, root, state)
+    return _run_report_stage(celery_app, db, root, state, stage='ho_reports')
+
+
+def _run_report_stage(
+    celery_app,
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    *,
+    stage: str,
+) -> dict[str, object]:
+    from app.services.academic.daily_teacher_report_runtime import (
+        _publish_scheduled_export_job,
+    )
+
+    scopes = _frozen_scopes(state)
+    scope_index = {str(scope['scope_key']): scope for scope in scopes}
+    round_no = max(0, int(state.get('stage_round') or 0))
+    targets = [str(value) for value in state.get('stage_target_keys') or []]
+    attempts = _stage_attempts(state, stage, round_no)
+    jobs = {
+        target: db.get(AcademicTeacherReportJob, job_id)
+        for target, job_id in attempts.items()
+    }
+    statuses = {
+        target: str(job.status or '').lower()
+        for target, job in jobs.items()
+        if job is not None
+    }
+    active_count = db.query(AcademicTeacherReportJob).filter(
+        AcademicTeacherReportJob.parent_job_id == str(root.id),
+        AcademicTeacherReportJob.status.in_(list(ACTIVE)),
+    ).count()
+    for target in select_global_dispatch_targets(
+        targets,
+        statuses,
+        active_count=active_count,
+    ):
+        if stage == 'campus_reports':
+            scope_key, campus = target.rsplit(':', 1)
+            scope = scope_index[scope_key]
+            snapshot_id = str(
+                (state.get('campus_snapshot_ids_by_target') or {}).get(target) or ''
+            )
+        else:
+            scope_key, campus = target, None
+            scope = scope_index[scope_key]
+            snapshot_id = str(
+                (state.get('ho_snapshot_ids_by_scope') or {}).get(scope_key) or ''
+            )
+        if not snapshot_id:
+            raise RuntimeError(f'Missing immutable snapshot for report target {target}.')
+        job = ensure_report_attempt(
+            db,
+            root=root,
+            scope=scope,
+            campus=campus,
+            stage=stage,
+            round_no=round_no,
+            snapshot_id=snapshot_id,
+        )
+        if stage == 'ho_reports':
+            request = dict(job.request_json or {})
+            campus_targets = [
+                f'{scope_key}:{value}' for value in scope.get('campuses') or []
+            ]
+            campus_jobs = _all_stage_jobs(
+                db, state, 'campus_reports', AcademicTeacherReportJob,
+            )
+            request.update({
+                'aggregate_after_campus_reports': True,
+                'source_campus_report_job_ids': [
+                    str(campus_jobs[key].id) for key in campus_targets
+                ],
+                'source_campus_snapshot_ids': [
+                    str((state.get('campus_snapshot_ids_by_target') or {}).get(key) or '')
+                    for key in campus_targets
+                ],
+                'source_campus_checksums': dict(state.get('campus_snapshot_checksums') or {}),
+            })
+            job.request_json = json_safe_value(request)
+            db.add(job)
+            db.commit()
+        attempts[target] = str(job.id)
+        statuses[target] = str(job.status or '').lower()
+        _publish_scheduled_export_job(db, celery_app, job)
+    _set_stage_attempts(state, stage, round_no, attempts)
+    state['stage_attempt_ids'] = dict(attempts)
+    _save_root_state(db, root, state)
+
+    decision = plan_stage_barrier(targets, statuses, current_round=round_no)
+    if not decision.ready:
+        _publish_root_continuation(celery_app, db, root)
+        return {'ok': True, 'status': 'waiting_stage', 'phase': stage, 'root_job_id': str(root.id)}
+    completed = _all_stage_jobs(db, state, stage, AcademicTeacherReportJob)
+    if decision.exhausted:
+        artifacts = state.setdefault('artifacts', {})
+        artifacts[stage] = {target: str(job.id) for target, job in completed.items()}
+        return _fail_exhausted_stage(
+            db,
+            root,
+            state,
+            stage=stage,
+            failed_target_keys=decision.retry_target_keys,
+            attempt_ids=attempts,
+        )
+    if decision.retry_target_keys:
+        retry_round = int(decision.next_round or round_no + 1)
+        state['stage_round'] = retry_round
+        state['stage_target_keys'] = list(decision.retry_target_keys)
+        _set_stage_attempts(state, stage, retry_round, {})
+        state['stage_attempt_ids'] = {}
+        _save_root_state(db, root, state)
+        return _run_report_stage(celery_app, db, root, state, stage=stage)
+
+    artifacts = state.setdefault('artifacts', {})
+    artifacts[stage] = {target: str(job.id) for target, job in completed.items()}
+    if stage == 'campus_reports':
+        state.update({
+            'phase': 'ho_snapshots',
+            'stage_round': 0,
+            'stage_target_keys': [str(scope['scope_key']) for scope in scopes],
+        })
+        _save_root_state(db, root, state)
+        return _run_snapshot_stage(
+            celery_app, db, root, state, snapshot_type='ho',
+        )
+
+    now = datetime.utcnow()
+    state.update({'phase': 'completed', 'finished_at': now.isoformat(), 'ok': True})
+    root.status = 'completed'
+    root.progress_current = 100
+    root.progress_total = 100
+    root.progress_label = '01:00 +07 · hoàn tất đồng bộ và báo cáo'
+    root.error_message = None
+    root.finished_at = now
+    _save_root_state(db, root, state)
+    return {
+        'ok': True,
+        'status': 'completed',
+        'root_job_id': str(root.id),
+        'artifacts': artifacts,
     }
 
 
@@ -1309,6 +1806,38 @@ def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, objec
                 root,
                 state,
                 stage='score_update',
+            )
+        if phase == 'campus_snapshots':
+            return _run_snapshot_stage(
+                celery_app,
+                db,
+                root,
+                state,
+                snapshot_type='campus_set',
+            )
+        if phase == 'campus_reports':
+            return _run_report_stage(
+                celery_app,
+                db,
+                root,
+                state,
+                stage='campus_reports',
+            )
+        if phase == 'ho_snapshots':
+            return _run_snapshot_stage(
+                celery_app,
+                db,
+                root,
+                state,
+                snapshot_type='ho',
+            )
+        if phase == 'ho_reports':
+            return _run_report_stage(
+                celery_app,
+                db,
+                root,
+                state,
+                stage='ho_reports',
             )
         return {
             'ok': True,

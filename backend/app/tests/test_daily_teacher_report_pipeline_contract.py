@@ -138,3 +138,15 @@ def test_report_watchdog_is_actually_scheduled_and_routed():
     assert "'academic_teacher_report_watchdog_task': {'queue': 'sync-fast'}" in register
     assert "'academic_daily_score_report_parent_task': {'queue': 'sync-bulk'}" in register
     assert "'academic_teacher_report_watchdog_task': {'soft_time_limit': 45, 'time_limit': 55}" in register
+
+
+def test_daily_snapshot_attempt_is_an_exports_task_and_ho_builder_is_separate():
+    source = text('backend/app/services/academic/daily_teacher_report_runtime.py')
+    register = source.split('def register_daily_teacher_report_tasks(', 1)[1]
+    assert 'def build_scope_campus_snapshots(' in source
+    assert 'def build_scope_ho_snapshot(' in source
+    campus_builder = source.split('def build_scope_campus_snapshots(', 1)[1].split('def build_scope_ho_snapshot(', 1)[0]
+    assert '_build_campus_report_snapshots(' in campus_builder
+    assert '_build_ho_report_snapshot(' not in campus_builder
+    assert "@celery_app.task(name=DAILY_SNAPSHOT_TASK)" in register
+    assert "DAILY_SNAPSHOT_TASK: {'queue': 'exports'}" in register
