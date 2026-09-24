@@ -2362,6 +2362,7 @@ export type AcademicLearningComponentScore = {
   weight?: number | null
   source?: string | null
   planned?: boolean | null
+  assessment_type?: 'quiz' | 'final_test' | string | null
   order?: number | null
   quiz_number?: number | null
   submitted_at?: string | null

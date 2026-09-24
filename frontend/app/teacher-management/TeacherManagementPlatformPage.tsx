@@ -37,6 +37,11 @@ import { TrainingKpiStrip } from '../../components/training/TrainingWorkspace'
 import { EnterpriseDataTable, EnterpriseTableColumn } from "../../components/table/EnterpriseDataTable";
 import { useAcademicTableState } from "../../hooks/useAcademicTableState";
 import {
+  canonicalAssessmentColumns,
+  canonicalAssessmentIdentity,
+  type CanonicalAssessmentColumn,
+} from "../../lib/academicAssessments";
+import {
   InlineNotice,
   InlineNoticeData,
   noticeError,
@@ -169,24 +174,6 @@ function score10Label(value?: number | null) {
   if (score > 10) score /= 10;
   score = Math.max(0, Math.min(10, score));
   return `${Math.round(score * 10) / 10}/10`;
-}
-
-function componentKey(score: AcademicLearningComponentScore) {
-  return String(score.key || score.name || "").trim();
-}
-
-function componentDisplayName(score: AcademicLearningComponentScore) {
-  return String(score.name || score.key || "Đầu điểm").trim();
-}
-
-function gradeColumnCompare(
-  left: { key: string; name: string },
-  right: { key: string; name: string },
-) {
-  return left.name.localeCompare(right.name, "vi", {
-    numeric: true,
-    sensitivity: "base",
-  });
 }
 
 function componentScoreText(score?: AcademicLearningComponentScore | null) {
@@ -491,29 +478,23 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   }, [page, totalPages, update]);
 
   const classComponentColumns = (item: AcademicTrainingTeacherReport) => {
-    const columns: Array<{ key: string; name: string }> = [];
-    const seen = new Set<string>();
+    const scores: AcademicLearningComponentScore[] = [];
     (item.classes || []).forEach((cls) => {
       (cls.learning_component_summaries || []).forEach((score) => {
-        const key = componentKey(score);
-        const name = componentDisplayName(score);
-        const dedupeKey = (key || name).toLowerCase();
-        if (!dedupeKey || seen.has(dedupeKey)) return;
-        seen.add(dedupeKey);
-        columns.push({ key: key || name, name });
+        scores.push(score);
       });
     });
-    return columns.sort(gradeColumnCompare);
+    return canonicalAssessmentColumns(scores);
   };
 
   const classComponentScore = (
     cls: any,
-    column: { key: string; name: string },
+    column: CanonicalAssessmentColumn,
   ) => {
     return (
       cls.learning_component_summaries?.find(
         (score: AcademicLearningComponentScore) =>
-          componentKey(score) === column.key || score.name === column.name,
+          canonicalAssessmentIdentity(score) === column.key,
       ) || null
     );
   };

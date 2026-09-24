@@ -52,6 +52,7 @@ from app.services.academic.helpers import (
     _term_run_candidates,
     _validation_result,
 )
+from app.services.academic.assessment_components import canonical_assessment_components
 from app.services.academic.platform import cms_delivery_predicate
 
 from app.services.academic.access import AcademicAccessWorkflowService
@@ -1060,8 +1061,18 @@ class AcademicService:
         submitted_at = item.get('submitted_at') or item.get('submittedAt') or item.get('last_submitted_at') or item.get('lastSubmittedAt') or item.get('attempted_at') or item.get('attemptedAt') or item.get('modified') or item.get('updated_at') or item.get('updatedAt')
         available_from = item.get('available_from') or item.get('availableFrom') or item.get('start_date') or item.get('startDate') or item.get('open_date') or item.get('openDate')
         deadline_date = item.get('deadline_date') or item.get('deadlineDate') or item.get('deadline') or item.get('due_date') or item.get('dueDate') or item.get('due')
+        assessment_type = str(
+            item.get('assessment_type') or item.get('assessmentType') or ''
+        ).strip().lower() or None
+        explicit_quiz_number = self._number_or_none(
+            item.get('quiz_number', item.get('quizNumber'))
+        )
         quiz_numbers = self._quiz_numbers_from_text(' '.join([str(name or ''), str(key or ''), str(item.get('category') or '')]))
-        quiz_number = quiz_numbers[0] if quiz_numbers else None
+        quiz_number = (
+            int(explicit_quiz_number)
+            if assessment_type == 'quiz' and explicit_quiz_number and explicit_quiz_number > 0
+            else quiz_numbers[0] if quiz_numbers else None
+        )
         return {
             'key': key or name,
             'name': name[:255],
@@ -1072,6 +1083,7 @@ class AcademicService:
             'weight': self._number_or_none(item.get('weight')),
             'source': str(item.get('source') or item.get('model') or '').strip() or None,
             'planned': planned,
+            'assessment_type': assessment_type,
             'order': int(self._number_or_none(item.get('order') or item.get('index') or item.get('position') or item.get('quiz_index') or item.get('quizIndex')) or 0) or None,
             'quiz_number': quiz_number,
             'submitted_at': submitted_at,
@@ -1679,7 +1691,9 @@ class AcademicService:
     def _component_summary_from_snapshots(self, snapshots: list[AcademicStudentLearningSnapshot], cls: AcademicClass | None = None) -> list[dict[str, Any]]:
         buckets: dict[str, dict[str, Any]] = {}
         for snapshot in snapshots:
-            for item in self._component_scores_from_snapshot(snapshot):
+            for item in canonical_assessment_components(
+                self._component_scores_from_snapshot(snapshot)
+            ):
                 identity = self._component_identity_key(item)
                 if not identity:
                     continue
@@ -1693,6 +1707,7 @@ class AcademicService:
                     'student_count': 0,
                     'source': item.get('source'),
                     'planned': bool(item.get('planned')),
+                    'assessment_type': item.get('assessment_type'),
                     'quiz_number': item.get('quiz_number'),
                     'deadline_date': item.get('deadline_date'),
                     'available_from': item.get('available_from'),
@@ -1740,6 +1755,7 @@ class AcademicService:
                 'weight': None,
                 'source': bucket.get('source') or f"{bucket.get('student_count', 0)} SV",
                 'planned': bool(bucket.get('planned')),
+                'assessment_type': bucket.get('assessment_type'),
                 'quiz_number': bucket.get('quiz_number'),
                 'deadline_date': bucket.get('deadline_date'),
                 'available_from': bucket.get('available_from'),
@@ -3046,7 +3062,12 @@ class AcademicService:
     ) -> dict[str, Any]:
         cls = cls or self.db.get(AcademicClass, class_id)
         block = block if block is not None else (self._block_for_class(cls) if cls else None)
-        components = self._enrich_component_scores_for_class(self._component_scores_from_snapshot(learning), cls, quiz_schedule_by_number)
+        raw_components = self._enrich_component_scores_for_class(
+            self._component_scores_from_snapshot(learning),
+            cls,
+            quiz_schedule_by_number,
+        )
+        display_components = canonical_assessment_components(raw_components)
         course_id = course_id or (learning.openedx_course_id if learning else None)
         policy_service = policy_service or TrainingPolicyService(self.db)
         if assignment_scores is None:
@@ -3056,7 +3077,7 @@ class AcademicService:
         training_policy = policy_service.evaluate_student(
             cls=cls,
             student_id=student.id,
-            components=components,
+            components=raw_components,
             block=block,
             course_id=course_id,
             assignment_score=assignment_scores.get(student.id),
@@ -3103,7 +3124,7 @@ class AcademicService:
             # measurable JSON/CPU overhead on large classes.
             'learning_diagnostics': None,
             'learning_sync_note': None,
-            'learning_component_scores': components,
+            'learning_component_scores': display_components,
             'training_policy': training_policy,
             'exam_eligible': training_policy.get('exam_eligible'),
             'exam_status': training_policy.get('exam_status'),

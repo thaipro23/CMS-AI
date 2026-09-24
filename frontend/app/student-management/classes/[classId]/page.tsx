@@ -43,9 +43,14 @@ import { VisualIcon } from '../../../../components/ui/VisualIcon'
 import { AppIcon } from '../../../../components/icons/AppIcon'
 import { UdemyClassProgressPanel } from '../../../../components/student-management/UdemyClassProgressPanel'
 import { ContentNotice } from '../../../../components/ui/ContentNotice'
+import {
+  canonicalAssessmentColumns,
+  canonicalAssessmentIdentity,
+  type CanonicalAssessmentColumn,
+} from '../../../../lib/academicAssessments'
 
 
-type GradeColumn = { key: string; name: string; quizNumber?: number | null; deadlineDate?: string | null; availableFrom?: string | null; deadlineMode?: string | null; scheduleWarning?: string | null }
+type GradeColumn = CanonicalAssessmentColumn
 
 function cmsSyncLabel(status?: string | null) {
   const value = (status || 'not_checked').toLowerCase()
@@ -127,12 +132,6 @@ function componentScoreText(score?: AcademicLearningComponentScore | null) {
     return `${Math.round(value * 10) / 10}/10`
   }
   return 'N/A'
-}
-function componentKey(score: AcademicLearningComponentScore) {
-  return String(score.key || score.name || '').trim()
-}
-function componentDisplayName(score: AcademicLearningComponentScore) {
-  return String(score.name || score.key || 'Đầu điểm').trim()
 }
 function enrollmentLabel(value?: string | null) {
   const status = (value || 'unknown').toLowerCase()
@@ -221,40 +220,6 @@ function formatDateOnly(value?: string | null) {
   if (!value) return 'N/A'
   const formatted = formatVNDate(value)
   return formatted === '—' ? 'N/A' : formatted
-}
-function quizNumbersFromText(value?: string | null) {
-  const text = String(value || '').toLowerCase()
-  const numbers: number[] = []
-  const patterns = [/quiz\s*#?\s*(\d{1,3})/gi, /learning\s*check\s*#?\s*(\d{1,3})/gi, /\blc\s*#?\s*(\d{1,3})/gi]
-  patterns.forEach((pattern) => {
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(text)) !== null) {
-      const number = Number(match[1])
-      if (number > 0 && number <= 200 && !numbers.includes(number)) numbers.push(number)
-    }
-  })
-  return numbers.sort((a, b) => a - b)
-}
-function quizNumber(score?: AcademicLearningComponentScore | null) {
-  if (!score) return null
-  if (typeof score.quiz_number === 'number' && score.quiz_number > 0) return score.quiz_number
-  // Only parse human-facing labels. Do not parse storage keys like
-  // `block@quiz-14-...`, otherwise a random usage key can create a phantom `Quiz 14` column.
-  const fromText = quizNumbersFromText(`${score.name || ''} ${(score as any).label || ''} ${(score as any).display_name || ''} ${(score as any).title || ''}`)
-  return fromText[0] || null
-}
-function gradeColumnIdentity(score: AcademicLearningComponentScore) {
-  const number = quizNumber(score)
-  if (number) return `quiz:${number}`
-  return String(score.key || score.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/gi, '')
-}
-function gradeColumnCompare(left: { key: string; name: string; quizNumber?: number | null }, right: { key: string; name: string; quizNumber?: number | null }) {
-  const leftQuiz = left.quizNumber || quizNumbersFromText(left.name)[0] || null
-  const rightQuiz = right.quizNumber || quizNumbersFromText(right.name)[0] || null
-  if (leftQuiz && rightQuiz) return leftQuiz - rightQuiz
-  if (leftQuiz) return -1
-  if (rightQuiz) return 1
-  return left.name.localeCompare(right.name, 'vi', { numeric: true, sensitivity: 'base' })
 }
 function quizStatusLabel(score?: AcademicLearningComponentScore | null) {
   const status = String(score?.quiz_status || '').toLowerCase()
@@ -908,24 +873,7 @@ function ClassDetailContent() {
     } else {
       students.forEach((student) => student.learning_component_scores?.forEach((score) => sourceScores.push(score)))
     }
-    const byIdentity = new Map<string, GradeColumn>()
-    sourceScores.forEach((score) => {
-      const identity = gradeColumnIdentity(score)
-      if (!identity) return
-      const number = quizNumber(score)
-      const existing = byIdentity.get(identity)
-      const next: GradeColumn = {
-        key: identity,
-        name: number ? `Quiz ${number}` : componentDisplayName(score),
-        quizNumber: number,
-        deadlineDate: score.deadline_date || existing?.deadlineDate || null,
-        availableFrom: score.available_from || existing?.availableFrom || null,
-        deadlineMode: score.deadline_mode || existing?.deadlineMode || null,
-        scheduleWarning: score.schedule_warning || existing?.scheduleWarning || null,
-      }
-      byIdentity.set(identity, existing ? { ...existing, ...next, deadlineDate: next.deadlineDate || existing.deadlineDate, availableFrom: next.availableFrom || existing.availableFrom } : next)
-    })
-    return Array.from(byIdentity.values()).sort(gradeColumnCompare)
+    return canonicalAssessmentColumns(sourceScores)
   }, [learningSummary, students])
 
 
@@ -948,7 +896,7 @@ function ClassDetailContent() {
   }
 
   const studentComponentScore = (student: AcademicStudent, column: GradeColumn) => {
-    return student.learning_component_scores?.find((score) => gradeColumnIdentity(score) === column.key || componentKey(score) === column.key || score.name === column.name) || null
+    return student.learning_component_scores?.find((score) => canonicalAssessmentIdentity(score) === column.key) || null
   }
 
   const navigationPlatform = searchParams.get('platform') === 'udemy' || isUdemyClass ? 'udemy' : 'cms'
