@@ -11,12 +11,22 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.json_safe import json_safe_value
+from app.core.rbac import UserContext
 from app.db.session import SessionLocal
 from app.models.academic import (
     AcademicBulkOperationJob,
     AcademicCampus,
     AcademicClass,
+    AcademicSyncRun,
     AcademicTerm,
+)
+from app.schemas.academic import AcademicAPSyncIn
+from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
+from app.services.academic.daily_pipeline_state import (
+    ACTIVE,
+    MAX_STAGE_RETRY_ROUNDS,
+    plan_stage_barrier,
+    select_global_dispatch_targets,
 )
 from app.services.academic.scheduled_parent import (
     confirm_parent_continuation,
@@ -159,6 +169,8 @@ def _scope_parent_values(
             'scheduled': True,
             'daily_root_job_id': str(root.id),
             'stage_group': stage_group,
+            'scope_hash': scope.get('scope_hash'),
+            'frozen_scope': scope,
             'scope': scope,
         }),
         'result_json': {},
@@ -229,6 +241,535 @@ def _continuation_publisher(celery_app):
         )
 
     return publish
+
+
+def _scheduler_user() -> UserContext:
+    return UserContext(
+        user_id=DAILY_SCHEDULER_ACTOR,
+        username=DAILY_SCHEDULER_ACTOR,
+        email=None,
+        role='admin',
+        permissions=set(),
+        course_ids=None,
+        raw_claims={
+            'ai_system_admin': True,
+            'source': DAILY_POLICY_VERSION,
+        },
+    )
+
+
+def _scheduler_requester_context() -> dict[str, Any]:
+    return {
+        'user_id': DAILY_SCHEDULER_ACTOR,
+        'username': DAILY_SCHEDULER_ACTOR,
+        'email': None,
+        'role': 'admin',
+        'permissions': [],
+        'course_ids': None,
+        'authenticated_admin_claims': {'ai_system_admin': True},
+    }
+
+
+def _scope_by_key(root: AcademicBulkOperationJob) -> dict[str, dict[str, Any]]:
+    request = root.request_json if isinstance(root.request_json, dict) else {}
+    return {
+        str(scope.get('scope_key')): dict(scope)
+        for scope in (request.get('scopes') or [])
+        if isinstance(scope, dict) and scope.get('scope_key')
+    }
+
+
+def _attempt_key(
+    root: AcademicBulkOperationJob,
+    scope: dict[str, Any],
+    *,
+    stage: str,
+    round_no: int,
+) -> str:
+    request = root.request_json if isinstance(root.request_json, dict) else {}
+    return ':'.join((
+        daily_root_key(str(request.get('run_date_vn') or '')),
+        str(scope['term_id']),
+        str(scope['branch']),
+        stage,
+        'attempt',
+        str(max(0, int(round_no))),
+    ))
+
+
+def enqueue_ap_stage_attempt(
+    db: Session,
+    root: AcademicBulkOperationJob,
+    scope: dict[str, object],
+    round_no: int,
+) -> AcademicSyncRun:
+    scope_data = dict(scope)
+    metadata = {
+        'root_job_id': str(root.id),
+        'scope_key': str(scope_data['scope_key']),
+        'logical_target_key': f'ap_sync:{scope_data["scope_key"]}',
+        'stage': 'ap_sync',
+        'round': max(0, int(round_no)),
+    }
+    result = AcademicAPSyncWorkflowService(db).enqueue_sync_from_ap_job(
+        AcademicAPSyncIn(
+            term_name=str(scope_data['term_name']),
+            sync_scope='all',
+            campuses=[str(value) for value in scope_data.get('campuses') or []],
+            branch=str(scope_data['branch']),
+            subject_codes=[],
+            max_subjects=0,
+            dry_run=False,
+        ),
+        user=_scheduler_user(),
+        idempotency_key=_attempt_key(
+            root,
+            scope_data,
+            stage='ap',
+            round_no=round_no,
+        ),
+        run_metadata=metadata,
+    )
+    run = result['sync_run']
+    counters = dict(run.counters_json or {})
+    counters['daily_pipeline'] = {
+        **metadata,
+        'source_run_id': str(run.id),
+    }
+    run.counters_json = json_safe_value(counters)
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def _refresh_scope_after_ap(
+    db: Session,
+    scope: dict[str, Any],
+) -> dict[str, Any]:
+    branch = str(scope['branch'])
+    campus_codes = sorted({
+        str(value).strip().lower()
+        for value in scope.get('campuses') or []
+        if str(value).strip()
+    })
+    classes = (
+        db.query(AcademicClass)
+        .filter(
+            AcademicClass.active.is_(True),
+            AcademicClass.term_id == str(scope['term_id']),
+            func.lower(func.coalesce(AcademicClass.branch, branch)) == branch,
+        )
+        .order_by(AcademicClass.id.asc())
+        .all()
+    )
+    class_to_campus: dict[str, str] = {}
+    for item in classes:
+        campus = str(item.campus or '').strip().lower()
+        if not campus or campus not in campus_codes:
+            raise DailyScopeError(
+                'class_campus_outside_scope',
+                f'Active class {item.id} has no frozen campus in branch {branch}.',
+            )
+        class_to_campus[str(item.id)] = campus
+    refreshed = {
+        key: value
+        for key, value in scope.items()
+        if key not in {'scope_hash', 'class_ids', 'class_to_campus'}
+    }
+    refreshed.update({
+        'class_ids': sorted(class_to_campus),
+        'class_to_campus': {
+            key: class_to_campus[key]
+            for key in sorted(class_to_campus)
+        },
+    })
+    return {**refreshed, 'scope_hash': _canonical_hash(refreshed)}
+
+
+def ensure_mapping_attempt(
+    db: Session,
+    root: AcademicBulkOperationJob,
+    scope: dict[str, object],
+    round_no: int,
+) -> AcademicBulkOperationJob:
+    scope_data = dict(scope)
+    parents = ensure_scope_parents(db, root, [scope_data])
+    scope_parent = parents[f'{scope_data["scope_key"]}:provision']
+    parent_request = dict(scope_parent.request_json or {})
+    parent_request.update({
+        'scope_hash': scope_data['scope_hash'],
+        'frozen_scope': scope_data,
+        'scope': scope_data,
+    })
+    scope_parent.request_json = json_safe_value(parent_request)
+    db.add(scope_parent)
+    db.commit()
+
+    class_ids = [str(value) for value in scope_data.get('class_ids') or []]
+    subject_ids = [
+        str(value)
+        for (value,) in db.query(AcademicClass.subject_id).filter(
+            AcademicClass.id.in_(class_ids),
+        ).distinct().all()
+        if value
+    ] if class_ids else []
+    key = _attempt_key(
+        root,
+        scope_data,
+        stage='mapping',
+        round_no=round_no,
+    )
+    job, _created = create_or_load_scheduled_parent(
+        db,
+        idempotency_key=key,
+        values={
+            'parent_job_id': str(scope_parent.id),
+            'job_type': 'subject_auto_map_all_sync',
+            'status': 'queued',
+            'term_id': str(scope_data['term_id']),
+            'branch': str(scope_data['branch']),
+            'campus': None,
+            'requested_by': DAILY_SCHEDULER_ACTOR,
+            'progress_current': 0,
+            'progress_total': 100,
+            'progress_label': '01:00 +07 · chờ ghép Course CMS còn thiếu',
+            'request_json': json_safe_value({
+                'operation': 'map_only',
+                'scheduled': True,
+                'daily_root_job_id': str(root.id),
+                'scheduled_parent_job_id': str(scope_parent.id),
+                'scheduled_scope_hash': scope_data['scope_hash'],
+                'scheduled_scope_contract': {
+                    'scope_hash': scope_data['scope_hash'],
+                    'scope_key': scope_data['scope_key'],
+                    'round': max(0, int(round_no)),
+                },
+                'frozen_scope': scope_data,
+                'approved_class_ids': class_ids,
+                'approved_subject_ids': subject_ids,
+                'term_id': str(scope_data['term_id']),
+                'branch': str(scope_data['branch']),
+                'requester_context': _scheduler_requester_context(),
+                'logical_target_key': f'course_mapping:{scope_data["scope_key"]}',
+                'attempt_no': max(0, int(round_no)),
+            }),
+            'result_json': {},
+        },
+    )
+    return job
+
+
+def _stage_attempts(
+    state: dict[str, Any],
+    stage: str,
+    round_no: int,
+) -> dict[str, str]:
+    attempts_by_stage = dict(state.get('attempts_by_stage') or {})
+    stage_attempts = dict(attempts_by_stage.get(stage) or {})
+    return {
+        str(key): str(value)
+        for key, value in dict(stage_attempts.get(str(round_no)) or {}).items()
+        if key and value
+    }
+
+
+def _set_stage_attempts(
+    state: dict[str, Any],
+    stage: str,
+    round_no: int,
+    attempts: dict[str, str],
+) -> None:
+    attempts_by_stage = dict(state.get('attempts_by_stage') or {})
+    stage_attempts = dict(attempts_by_stage.get(stage) or {})
+    stage_attempts[str(round_no)] = dict(attempts)
+    attempts_by_stage[stage] = stage_attempts
+    state['attempts_by_stage'] = attempts_by_stage
+
+
+def _save_root_state(
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+) -> None:
+    root.result_json = json_safe_value(state)
+    root.updated_at = datetime.utcnow()
+    db.add(root)
+    db.commit()
+
+
+def _publish_root_continuation(celery_app, db: Session, root: AcademicBulkOperationJob) -> None:
+    publish_parent_continuation(
+        db,
+        root,
+        publisher=_continuation_publisher(celery_app),
+        task_name=DAILY_ROOT_TASK,
+        args=[str(root.id)],
+        queue='sync-bulk',
+        countdown=15,
+    )
+
+
+def _fail_exhausted_stage(
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    *,
+    stage: str,
+    failed_target_keys: tuple[str, ...],
+    attempt_ids: dict[str, str],
+) -> dict[str, object]:
+    now = datetime.utcnow()
+    state.update({
+        'phase': 'failed',
+        'failed_stage': stage,
+        'failed_scope_keys': list(failed_target_keys),
+        'failed_target_keys': list(failed_target_keys),
+        'final_attempt_ids': {
+            key: attempt_ids.get(key)
+            for key in failed_target_keys
+        },
+        'code': 'stage_retry_exhausted',
+    })
+    root.status = 'failed'
+    root.progress_current = 100
+    root.progress_label = f'01:00 +07 · {stage} thất bại sau retry'
+    root.error_message = f'{stage} exhausted: {", ".join(failed_target_keys)}'
+    root.finished_at = now
+    _save_root_state(db, root, state)
+    return {
+        'ok': False,
+        'status': 'failed',
+        'code': 'stage_retry_exhausted',
+        'failed_stage': stage,
+        'failed_target_keys': list(failed_target_keys),
+        'root_job_id': str(root.id),
+    }
+
+
+def _dispatch_mapping_job(celery_app, db: Session, job: AcademicBulkOperationJob) -> None:
+    result = dict(job.result_json or {})
+    enqueue = result.get('enqueue') if isinstance(result.get('enqueue'), dict) else {}
+    if job.status != 'queued' or enqueue.get('celery_task_id'):
+        return
+    try:
+        async_result = celery_app.send_task(
+            'academic_subject_auto_map_all_sync_task',
+            args=[str(job.id)],
+            queue='sync-bulk',
+        )
+        result['enqueue'] = {
+            'task_name': 'academic_subject_auto_map_all_sync_task',
+            'celery_task_id': str(getattr(async_result, 'id', '') or ''),
+            'enqueued_at': datetime.utcnow().isoformat(),
+        }
+    except Exception as exc:
+        job.status = 'failed'
+        job.error_message = str(exc)[:4000]
+        job.finished_at = datetime.utcnow()
+        result['enqueue_error'] = str(exc)[:2000]
+    job.result_json = json_safe_value(result)
+    job.updated_at = datetime.utcnow()
+    db.add(job)
+    db.commit()
+
+
+def _run_ap_stage(
+    celery_app,
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+) -> dict[str, object]:
+    scopes = _scope_by_key(root)
+    round_no = max(0, int(state.get('stage_round') or 0))
+    targets = [str(value) for value in state.get('stage_target_keys') or []]
+    attempts = _stage_attempts(state, 'ap_sync', round_no)
+    runs = {
+        target: db.get(AcademicSyncRun, run_id)
+        for target, run_id in attempts.items()
+    }
+    statuses = {
+        target: str(run.status or '').lower()
+        for target, run in runs.items()
+        if run is not None
+    }
+    active_count = sum(status in ACTIVE for status in statuses.values())
+    for target in select_global_dispatch_targets(
+        targets,
+        statuses,
+        active_count=active_count,
+    ):
+        run = enqueue_ap_stage_attempt(db, root, scopes[target], round_no)
+        attempts[target] = str(run.id)
+        statuses[target] = str(run.status or '').lower()
+    _set_stage_attempts(state, 'ap_sync', round_no, attempts)
+    state['stage_attempt_ids'] = dict(attempts)
+    _save_root_state(db, root, state)
+
+    decision = plan_stage_barrier(
+        targets,
+        statuses,
+        current_round=round_no,
+    )
+    if not decision.ready:
+        _publish_root_continuation(celery_app, db, root)
+        return {
+            'ok': True,
+            'status': 'waiting_stage',
+            'phase': 'ap_sync',
+            'root_job_id': str(root.id),
+        }
+    if decision.exhausted:
+        return _fail_exhausted_stage(
+            db,
+            root,
+            state,
+            stage='ap_sync',
+            failed_target_keys=decision.retry_target_keys,
+            attempt_ids=attempts,
+        )
+    if decision.retry_target_keys:
+        state['stage_round'] = int(decision.next_round or round_no + 1)
+        state['stage_target_keys'] = list(decision.retry_target_keys)
+        retry_round = int(state['stage_round'])
+        retry_attempts: dict[str, str] = {}
+        for target in select_global_dispatch_targets(
+            decision.retry_target_keys,
+            {},
+            active_count=0,
+        ):
+            run = enqueue_ap_stage_attempt(db, root, scopes[target], retry_round)
+            retry_attempts[target] = str(run.id)
+        _set_stage_attempts(state, 'ap_sync', retry_round, retry_attempts)
+        state['stage_attempt_ids'] = dict(retry_attempts)
+        _save_root_state(db, root, state)
+        _publish_root_continuation(celery_app, db, root)
+        return {
+            'ok': True,
+            'status': 'retrying_stage',
+            'phase': 'ap_sync',
+            'stage_round': retry_round,
+            'retry_target_keys': list(decision.retry_target_keys),
+            'root_job_id': str(root.id),
+        }
+
+    refreshed_scopes = {
+        key: _refresh_scope_after_ap(db, scope)
+        for key, scope in scopes.items()
+    }
+    state.update({
+        'phase': 'course_mapping',
+        'stage_round': 0,
+        'stage_target_keys': list(scopes),
+        'frozen_scopes_after_ap': refreshed_scopes,
+    })
+    _save_root_state(db, root, state)
+    return _run_mapping_stage(celery_app, db, root, state)
+
+
+def _run_mapping_stage(
+    celery_app,
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+) -> dict[str, object]:
+    root_scopes = _scope_by_key(root)
+    frozen = {
+        str(key): dict(value)
+        for key, value in dict(state.get('frozen_scopes_after_ap') or {}).items()
+        if isinstance(value, dict)
+    }
+    scopes = {key: frozen.get(key, value) for key, value in root_scopes.items()}
+    round_no = max(0, int(state.get('stage_round') or 0))
+    targets = [str(value) for value in state.get('stage_target_keys') or []]
+    attempts = _stage_attempts(state, 'course_mapping', round_no)
+    jobs = {
+        target: db.get(AcademicBulkOperationJob, job_id)
+        for target, job_id in attempts.items()
+    }
+    statuses = {
+        target: str(job.status or '').lower()
+        for target, job in jobs.items()
+        if job is not None
+    }
+    active_count = sum(status in ACTIVE for status in statuses.values())
+    for target in select_global_dispatch_targets(
+        targets,
+        statuses,
+        active_count=active_count,
+    ):
+        job = ensure_mapping_attempt(db, root, scopes[target], round_no)
+        attempts[target] = str(job.id)
+        statuses[target] = str(job.status or '').lower()
+        _dispatch_mapping_job(celery_app, db, job)
+    _set_stage_attempts(state, 'course_mapping', round_no, attempts)
+    state['stage_attempt_ids'] = dict(attempts)
+    _save_root_state(db, root, state)
+
+    decision = plan_stage_barrier(
+        targets,
+        statuses,
+        current_round=round_no,
+    )
+    if not decision.ready:
+        _publish_root_continuation(celery_app, db, root)
+        return {
+            'ok': True,
+            'status': 'waiting_stage',
+            'phase': 'course_mapping',
+            'root_job_id': str(root.id),
+        }
+    if decision.exhausted:
+        return _fail_exhausted_stage(
+            db,
+            root,
+            state,
+            stage='course_mapping',
+            failed_target_keys=decision.retry_target_keys,
+            attempt_ids=attempts,
+        )
+    if decision.retry_target_keys:
+        retry_round = int(decision.next_round or round_no + 1)
+        state['stage_round'] = retry_round
+        state['stage_target_keys'] = list(decision.retry_target_keys)
+        retry_attempts: dict[str, str] = {}
+        for target in select_global_dispatch_targets(
+            decision.retry_target_keys,
+            {},
+            active_count=0,
+        ):
+            job = ensure_mapping_attempt(db, root, scopes[target], retry_round)
+            retry_attempts[target] = str(job.id)
+            _dispatch_mapping_job(celery_app, db, job)
+        _set_stage_attempts(state, 'course_mapping', retry_round, retry_attempts)
+        state['stage_attempt_ids'] = dict(retry_attempts)
+        _save_root_state(db, root, state)
+        _publish_root_continuation(celery_app, db, root)
+        return {
+            'ok': True,
+            'status': 'retrying_stage',
+            'phase': 'course_mapping',
+            'stage_round': retry_round,
+            'retry_target_keys': list(decision.retry_target_keys),
+            'root_job_id': str(root.id),
+        }
+
+    state.update({
+        'phase': 'account_enrollment',
+        'stage_round': 0,
+        'stage_target_keys': [
+            class_id
+            for scope in scopes.values()
+            for class_id in scope.get('class_ids') or []
+        ],
+    })
+    _save_root_state(db, root, state)
+    return {
+        'ok': True,
+        'status': 'stage_complete',
+        'phase': 'account_enrollment',
+        'root_job_id': str(root.id),
+    }
 
 
 def start_daily_academic_pipeline(
@@ -406,11 +947,16 @@ def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, objec
         request = root.request_json if isinstance(root.request_json, dict) else {}
         scopes = list(request.get('scopes') or [])
         ensure_scope_parents(db, root, scopes)
-        state = root.result_json if isinstance(root.result_json, dict) else {}
+        state = dict(root.result_json or {}) if isinstance(root.result_json, dict) else {}
+        phase = str(state.get('phase') or 'ap_sync')
+        if phase == 'ap_sync':
+            return _run_ap_stage(celery_app, db, root, state)
+        if phase == 'course_mapping':
+            return _run_mapping_stage(celery_app, db, root, state)
         return {
             'ok': True,
             'status': 'ready',
-            'phase': str(state.get('phase') or 'ap_sync'),
+            'phase': phase,
             'root_job_id': str(root.id),
         }
     finally:

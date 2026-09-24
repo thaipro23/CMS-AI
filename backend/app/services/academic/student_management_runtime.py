@@ -1218,7 +1218,7 @@ def _create_scheduled_auto_map_after_ap(celery_app, run_id: str) -> dict[str, An
 
 
 def register_student_management_runtime_tasks(celery_app) -> None:
-    """Register split score-refresh tasks and the 03:00 AP -> auto-map pipeline."""
+    """Register manual/compatibility handlers used by the unified pipeline."""
 
     @celery_app.task(name=LATEST_SCORE_TASK)
     def _latest_score_task(job_id: str):

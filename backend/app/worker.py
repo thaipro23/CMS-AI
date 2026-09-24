@@ -3302,6 +3302,32 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             db.add(job)
             db.commit()
 
+        if request_json.get('operation') == 'map_only':
+            mandatory_failed = bool(
+                int(state.get('subject_failed') or 0)
+                or int(state.get('scope_blocked_class_count') or 0)
+            )
+            state['phase'] = 'finished'
+            state['frozen_class_ids'] = [
+                str(item) for item in (state.get('target_class_ids') or [])
+            ]
+            state['finished_at'] = datetime.utcnow().isoformat()
+            job.status = 'failed' if mandatory_failed else 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = (
+                'Ghép Course CMS còn thiếu thất bại'
+                if mandatory_failed
+                else 'Đã ghép Course CMS còn thiếu'
+            )
+            job.result_json = json_safe_value(state)
+            job.error_message = job.progress_label if mandatory_failed else None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = job.finished_at
+            db.add(job)
+            db.commit()
+            return json_safe_value({'ok': not mandatory_failed, **state})
+
         target_class_ids = [str(item) for item in (state.get('target_class_ids') or [])]
         tracked_ids = {
             str(value)
@@ -3541,18 +3567,19 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
             db.add(job)
-            _finish_scheduled_auto_map_parent(
-                db,
-                auto_map_job=job,
-                request_json=(
-                    job.request_json
-                    if isinstance(job.request_json, dict)
-                    else {}
-                ),
-                state=previous,
-                ok=False,
-                message=job.error_message,
-            )
+            if (job.request_json or {}).get('operation') != 'map_only':
+                _finish_scheduled_auto_map_parent(
+                    db,
+                    auto_map_job=job,
+                    request_json=(
+                        job.request_json
+                        if isinstance(job.request_json, dict)
+                        else {}
+                    ),
+                    state=previous,
+                    ok=False,
+                    message=job.error_message,
+                )
             db.commit()
             try:
                 log_audit(db, action='academic.subject_course_mapping.auto_all_sync_job.failed', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_bulk_operation_job', target_id=job_id, metadata=json_safe_value({'request_json': job.request_json}))

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api.routes.academic import reconcile_bulk_operation_jobs
 from app.core.config import settings
@@ -15,6 +17,7 @@ from app.models.academic import (
     AcademicTerm,
 )
 from app.services.academic.batch_coordinator import plan_batch_dispatch
+from app.services.academic_service import AcademicService
 
 
 NOW = datetime(2026, 9, 12, 12, 0, 0)
@@ -159,4 +162,106 @@ def test_bulk_reconciliation_does_not_expire_unrelated_long_running_job_types():
         assert reconcile_bulk_operation_jobs(db, now=NOW) == 0
         db.refresh(export_job)
         assert export_job.status == 'running'
+    engine.dispose()
+
+
+def test_map_only_job_finishes_without_provisioning_children_or_legacy_parent_finish(
+    monkeypatch,
+):
+    from app import worker
+
+    engine = create_engine(
+        'sqlite+pysqlite:///:memory:',
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool,
+    )
+    for model in (
+        AcademicTerm,
+        AcademicClass,
+        AcademicBulkOperationJob,
+        AcademicClassSyncJob,
+    ):
+        model.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    frozen_scope = {
+        'policy_version': 'academic-daily/v2',
+        'scope_key': 'poly:term-1',
+        'scope_hash': 'scope-hash-1',
+        'term_id': 'term-1',
+        'branch': 'poly',
+        'campuses': ['hn'],
+        'class_ids': [],
+        'class_to_campus': {},
+    }
+    with factory() as db:
+        db.add(AcademicTerm(
+            id='term-1',
+            term_code='FA26',
+            term_name='Fall 2026',
+            branch='poly',
+            active=True,
+        ))
+        db.add(AcademicBulkOperationJob(
+            id='scope-parent-1',
+            job_type='academic_daily_provision_scope',
+            status='queued',
+            request_json={
+                'scope_hash': frozen_scope['scope_hash'],
+                'frozen_scope': frozen_scope,
+            },
+            result_json={},
+        ))
+        db.add(AcademicBulkOperationJob(
+            id='map-job-1',
+            parent_job_id='scope-parent-1',
+            job_type='subject_auto_map_all_sync',
+            status='queued',
+            term_id='term-1',
+            branch='poly',
+            request_json={
+                'operation': 'map_only',
+                'scheduled': True,
+                'scheduled_parent_job_id': 'scope-parent-1',
+                'scheduled_scope_contract': {
+                    'scope_hash': frozen_scope['scope_hash'],
+                },
+                'frozen_scope': frozen_scope,
+                'approved_class_ids': [],
+                'approved_subject_ids': [],
+                'term_id': 'term-1',
+                'branch': 'poly',
+                'requester_context': {
+                    'user_id': 'academic-daily-scheduler',
+                    'username': 'academic-daily-scheduler',
+                    'role': 'admin',
+                    'permissions': [],
+                    'authenticated_admin_claims': {'ai_system_admin': True},
+                },
+            },
+            result_json={},
+        ))
+        db.commit()
+
+    monkeypatch.setattr(worker, 'SessionLocal', factory)
+    monkeypatch.setattr(
+        AcademicService,
+        'auto_map_subject_courses_for_snapshot',
+        lambda self, *args, **kwargs: {
+            'class_ids': [],
+            'subject_mapped': 1,
+            'subject_already_mapped': 0,
+            'subject_failed': 0,
+        },
+    )
+
+    result = worker.academic_subject_auto_map_all_sync_task.run('map-job-1')
+
+    assert result['ok'] is True
+    assert result['phase'] == 'finished'
+    with factory() as db:
+        job = db.get(AcademicBulkOperationJob, 'map-job-1')
+        parent = db.get(AcademicBulkOperationJob, 'scope-parent-1')
+        assert job.status == 'completed'
+        assert parent.status == 'queued'
+        assert db.query(AcademicClassSyncJob).count() == 0
     engine.dispose()
