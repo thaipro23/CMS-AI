@@ -4390,6 +4390,21 @@ def analytics_class_recalculate_task(job_id: str):
         db.commit()
         behavior_result = service.recalculate_learning_behavior(class_id=job.class_id, course_id=course_id, username=username)
 
+        quiz_result = session_result.get('quiz') if isinstance(session_result, dict) and isinstance(session_result.get('quiz'), dict) else {}
+        warnings: list[str] = []
+        if int(video_result.get('source_event_count') or 0) > 0 and int(video_result.get('matched_event_count') or 0) <= 0:
+            warnings.append('NO_VIDEO_EVENT_IDENTITY_OVERLAP')
+        if int(quiz_result.get('source_event_count') or 0) > 0 and int(quiz_result.get('normalized_event_count') or 0) <= 0:
+            warnings.append('NO_QUIZ_EVENT_IDENTITY_OVERLAP')
+        if int(session_result.get('sessions') or 0) <= 0:
+            warnings.append('SESSION_STRUCTURE_MISSING')
+        if isinstance(behavior_result, dict):
+            behavior_counts = behavior_result.get('counts') if isinstance(behavior_result.get('counts'), dict) else {}
+            processed_behavior = int(behavior_result.get('processed') or 0)
+            insufficient = int(behavior_counts.get('INSUFFICIENT_DATA') or 0)
+            if processed_behavior > 0 and insufficient >= processed_behavior:
+                warnings.append('BEHAVIOR_ALL_INSUFFICIENT_DATA')
+
         result = json_safe_value({
             'ok': True,
             'class_id': job.class_id,
@@ -4398,12 +4413,14 @@ def analytics_class_recalculate_task(job_id: str):
             'video': video_result,
             'session': session_result,
             'behavior': behavior_result,
+            'warnings': list(dict.fromkeys(warnings)),
+            'data_ready': not warnings,
             'signals_only_not_violation': True,
         })
         job.status = 'completed'
         job.progress_current = 100
         job.progress_total = 100
-        job.progress_label = 'Hoàn tất học online'
+        job.progress_label = 'Hoàn tất học online' if not warnings else 'Hoàn tất nhưng dữ liệu học online chưa đầy đủ'
         job.result_json = result
         job.error_message = None
         job.finished_at = datetime.utcnow()
