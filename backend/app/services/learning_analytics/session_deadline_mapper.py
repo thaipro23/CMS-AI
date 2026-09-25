@@ -227,12 +227,23 @@ def build_session_mappings_from_blocks(
     clean_blocks = [block for block in blocks if isinstance(block, dict)]
     by_id, children_by_parent = _build_block_index(clean_blocks)
 
-    sessions: list[dict[str, Any]] = []
+    typed_sessions: list[dict[str, Any]] = []
+    fallback_sessions: list[dict[str, Any]] = []
+    leaf_types = {'video', 'problem', 'quiz', 'sequential_quiz', 'library_content', 'html'}
+
     for idx, block in enumerate(clean_blocks):
         block_type = _block_type(block)
         title = _block_title(block)
-        if block_type in {'sequential', 'session'} or re.search(r'(?:bài|bai|session|lesson)\s*\d+', title.lower()):
-            sessions.append({'idx': idx, 'block': block})
+        if block_type in {'sequential', 'session'}:
+            typed_sessions.append({'idx': idx, 'block': block})
+        elif block_type not in leaf_types and re.search(r'(?:bài|bai|session|lesson)\s*\d+', title.lower()):
+            fallback_sessions.append({'idx': idx, 'block': block})
+
+    # Open edX canonical courses expose sequential blocks. Prefer them and only
+    # use title-based discovery for legacy/custom courses with no sequential
+    # containers, otherwise a nested Unit named "Bài 1..." could duplicate a
+    # real session.
+    sessions = typed_sessions or fallback_sessions
 
     sessions.sort(
         key=lambda item: _natural_session_sort_key(
