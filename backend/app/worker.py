@@ -4392,9 +4392,9 @@ def analytics_class_recalculate_task(job_id: str):
 
         quiz_result = session_result.get('quiz') if isinstance(session_result, dict) and isinstance(session_result.get('quiz'), dict) else {}
         warnings: list[str] = []
-        if int(video_result.get('source_event_count') or 0) > 0 and int(video_result.get('matched_event_count') or 0) <= 0:
+        if bool(video_result.get('source_event_exists')) and int(video_result.get('matched_event_count') or 0) <= 0:
             warnings.append('NO_VIDEO_EVENT_IDENTITY_OVERLAP')
-        if int(quiz_result.get('source_event_count') or 0) > 0 and int(quiz_result.get('normalized_event_count') or 0) <= 0:
+        if bool(quiz_result.get('source_event_exists')) and int(quiz_result.get('normalized_event_count') or 0) <= 0:
             warnings.append('NO_QUIZ_EVENT_IDENTITY_OVERLAP')
         if int(session_result.get('sessions') or 0) <= 0:
             warnings.append('SESSION_STRUCTURE_MISSING')
