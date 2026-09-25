@@ -272,6 +272,22 @@ class Settings(BaseSettings):
     # scans the full log from request handlers and every result is a soft signal,
     # not a disciplinary conclusion.
     openedx_tracking_log_path: str = '/openedx-data/lms/logs/tracking.log'
+    # Production reads Open edX tracking events from Loki because analytics
+    # workers do not share the LMS container filesystem. Set to "file" only
+    # for local/legacy deployments that explicitly mount tracking.log.
+    analytics_ingest_source: str = 'loki'  # loki | file
+    analytics_loki_base_url: str = 'http://loki.logging.svc.cluster.local:3100'
+    analytics_loki_query: str = '{namespace="openedx", app=~"lms|lms-worker"} |= "event_type"'
+    analytics_loki_tenant_id: str = ''
+    analytics_loki_backfill_start: str = ''
+    analytics_loki_default_backfill_hours: int = 24
+    analytics_loki_window_seconds: int = 600
+    analytics_loki_lag_seconds: int = 120
+    analytics_loki_limit: int = 1000
+    analytics_loki_request_timeout_seconds: int = 60
+    analytics_loki_page_sleep_seconds: float = 0.3
+    analytics_loki_max_pages_per_run: int = 100
+    analytics_ingest_store_all_event_types: bool = True
     analytics_ingest_enabled: bool = True
     analytics_ingest_scheduler_enabled: bool = True
     analytics_ingest_interval_seconds: int = 60
