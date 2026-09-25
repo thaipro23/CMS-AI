@@ -35,6 +35,8 @@ class QuizAttemptFeature:
     fishing_pattern: bool = False
     repeat_rate: float | None = None
     median_time_per_question_seconds: float | None = None
+    score_earned: float | None = None
+    score_possible: float | None = None
     low_confidence_reason: str | None = None
     evidence: dict[str, Any] = field(default_factory=dict)
 
@@ -68,6 +70,38 @@ def _safe_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _first_scalar(value: Any) -> Any:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if item is not None and str(item).strip():
+                return item
+        return None
+    return value
+
+
+def _payload_param(payload: dict[str, Any], key: str) -> Any:
+    value = _first_scalar(payload.get(key))
+    if value is not None and str(value).strip():
+        return value
+    for bucket_name in ('GET', 'POST'):
+        bucket = payload.get(bucket_name)
+        if isinstance(bucket, dict):
+            value = _first_scalar(bucket.get(key))
+            if value is not None and str(value).strip():
+                return value
+    return None
+
+
+def _vertical_usage_key(text: str | None) -> str | None:
+    if not text:
+        return None
+    for match in re.finditer(r'block-v1:[^\s"\']+', text):
+        candidate = match.group(0).rstrip('?/&,')
+        if '+type@vertical+block@' in candidate:
+            return candidate
+    return None
 
 
 def _safe_float(value: Any) -> float | None:
@@ -105,27 +139,38 @@ def _walk_values(obj: Any) -> list[str]:
 def extract_usage_key(event: EventLike, *, prefer_problem: bool = False) -> str | None:
     payload = event.raw_event or {}
     context = event.raw_context or {}
-    keys = (
-        ('problem_id', 'problem_usage_key', 'usage_key', 'item_usage_key', 'module_id', 'block_id')
-        if prefer_problem else
-        ('unit_usage_key', 'unit_key', 'usage_key', 'module_id', 'block_id', 'problem_id', 'problem_usage_key')
-    )
-    for key in keys:
-        value = _safe_str(payload.get(key)) or _safe_str(context.get(key))
-        if value:
-            return value
+    if prefer_problem:
+        keys = ('problem_id', 'problem_usage_key', 'usage_key', 'item_usage_key', 'module_id', 'block_id')
+        for key in keys:
+            value = _safe_str(_payload_param(payload, key)) or _safe_str(context.get(key))
+            if value:
+                return value
+    else:
+        # Production quiz-session/status puts unit_usage_key in event.GET.
+        for key in ('unit_usage_key', 'unit_key'):
+            value = _safe_str(_payload_param(payload, key)) or _safe_str(context.get(key))
+            if value:
+                return value
+        # Grade events expose problem_id, but their page/referer identifies the
+        # vertical quiz unit. Group by that vertical rather than by each problem.
+        vertical = _vertical_usage_key(event.page_url)
+        if vertical:
+            return vertical
+        for key in ('usage_key', 'module_id', 'block_id', 'problem_id', 'problem_usage_key'):
+            value = _safe_str(_payload_param(payload, key)) or _safe_str(context.get(key))
+            if value:
+                return value
     for text in [event.page_url or ''] + _walk_values(payload):
         match = re.search(r'block-v1:[^\s"\']+', text)
         if match:
             return match.group(0).rstrip('?/&,')
     return event.page_url or 'UNKNOWN_QUIZ_UNIT'
 
-
 def extract_sequence_key(event: EventLike) -> str | None:
     payload = event.raw_event or {}
     context = event.raw_context or {}
     for key in ('sequence_usage_key', 'sequence_key', 'section_key'):
-        value = _safe_str(payload.get(key)) or _safe_str(context.get(key))
+        value = _safe_str(_payload_param(payload, key)) or _safe_str(context.get(key))
         if value:
             return value
     return None
@@ -134,7 +179,7 @@ def extract_sequence_key(event: EventLike) -> str | None:
 def extract_unit_reset_nonce(event: EventLike) -> str | None:
     payload = event.raw_event or {}
     for key in ('unit_reset_nonce', 'nonce', 'reset_nonce'):
-        value = _safe_str(payload.get(key))
+        value = _safe_str(_payload_param(payload, key))
         if value:
             return value
     if event.page_url:
@@ -202,6 +247,8 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
         'showanswer_count': feature.showanswer_count,
         'repeat_rate': feature.repeat_rate,
         'median_time_per_question_seconds': feature.median_time_per_question_seconds,
+        'score_earned': feature.score_earned,
+        'score_possible': feature.score_possible,
         'server_canonical_submission': True,
         'showanswer_policy': 'neutral_unless_same_item_repeated_in_same_attempt',
         'reset_times': [d.isoformat() for d in reset_times[:20]],
@@ -261,7 +308,12 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
                 )
                 continue
             if et == QUIZ_SESSION_STATUS:
-                # Status refreshes an open attempt only. It never creates one by itself.
+                # Production /start events have no course/unit payload. /status is
+                # the first course-bound marker and carries course/sequence/unit in
+                # event.GET, so use it to open the attempt when necessary.
+                feat = ensure_attempt(ev)
+                if feat.sequence_usage_key is None:
+                    feat.sequence_usage_key = extract_sequence_key(ev)
                 continue
             if et == QUIZ_SESSION_RESET:
                 if ev.event_time:
