@@ -1314,9 +1314,9 @@ class LearningAnalyticsCoreService:
     def _class_matches_rollout(self, cls: AcademicClass | None, course_id: str | None = None) -> tuple[bool, list[str]]:
         """Check env-only rollout scope; does not require new tables."""
         reasons: list[str] = []
-        mode = str(getattr(settings, 'analytics_rollout_mode', 'pilot') or 'pilot').strip().lower()
-        if mode == 'off':
-            return False, ['ROLLOUT_MODE_OFF']
+        mode = str(getattr(settings, 'analytics_rollout_mode', 'production') or 'production').strip().lower()
+        if mode not in {'pilot', 'production'}:
+            mode = 'production'
         campuses = self._csv_setting_set(getattr(settings, 'analytics_rollout_campuses', ''))
         branches = self._csv_setting_set(getattr(settings, 'analytics_rollout_branches', ''))
         class_ids = self._csv_setting_set(getattr(settings, 'analytics_rollout_class_ids', ''))
@@ -1352,8 +1352,10 @@ class LearningAnalyticsCoreService:
         is created: production can start with env allowlists and later promote to
         full scope by changing ANALYTICS_ROLLOUT_MODE/SCOPES.
         """
-        mode = str(getattr(settings, 'analytics_rollout_mode', 'pilot') or 'pilot').strip().lower()
-        enabled = mode != 'off'
+        mode = str(getattr(settings, 'analytics_rollout_mode', 'production') or 'production').strip().lower()
+        if mode not in {'pilot', 'production'}:
+            mode = 'production'
+        enabled = True
         q = self.db.query(AcademicClass).filter(AcademicClass.active.is_(True))
         if class_id:
             q = q.filter(AcademicClass.id == class_id)
@@ -1401,8 +1403,6 @@ class LearningAnalyticsCoreService:
             })
         blockers: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
-        if not enabled:
-            blockers.append({'code': 'ROLLOUT_DISABLED', 'message': 'Học online analytics đang tắt rollout.', 'action': 'Đặt ANALYTICS_ROLLOUT_MODE=pilot hoặc production.'})
         if enabled and not any(item.get('in_rollout') for item in items):
             warnings.append({'code': 'NO_CLASS_IN_ROLLOUT_SCOPE', 'message': 'Không có lớp nào trong phạm vi rollout hiện tại.', 'action': 'Kiểm tra allowlist campus/class/course hoặc bộ lọc.'})
         if mode == 'production' and (counters.get('missing_course_mapping') or counters.get('missing_session_structure')):
