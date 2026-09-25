@@ -1110,6 +1110,7 @@ class LearningAnalyticsCoreService:
             AnalyticsTrackingEvent.course_id == course_id,
             AnalyticsTrackingEvent.event_type.in_(list(VIDEO_EVENT_TYPES)),
         )
+        source_event_count = int(query.count() or 0)
         identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
         if username:
@@ -1311,6 +1312,11 @@ class LearningAnalyticsCoreService:
             'username': username,
             'video_progress_rows': saved,
             'skipped_no_new_events': skipped_no_new_events,
+            'source_event_count': source_event_count,
+            'matched_event_count': len(events),
+            'identity_student_count': len(target_usernames or []),
+            'identity_ambiguous_username_count': len((identity or {}).get('ambiguous_usernames') or []),
+            'identity_ambiguous_user_id_count': len((identity or {}).get('ambiguous_user_ids') or []),
             'materialization_mode': 'incremental_cumulative_v1',
         }
 
@@ -1326,6 +1332,7 @@ class LearningAnalyticsCoreService:
             AnalyticsTrackingEvent.course_id == course_id,
             AnalyticsTrackingEvent.event_type.in_(list(QUIZ_ANALYTICS_EVENT_TYPES)),
         )
+        source_event_count = int(query.count() or 0)
         identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
         if username:
@@ -1473,6 +1480,12 @@ class LearningAnalyticsCoreService:
             'quiz_attempt_rows': saved,
             'created': created,
             'updated': updated,
+            'source_event_count': source_event_count,
+            'matched_event_count': len(rows),
+            'normalized_event_count': len(normalized_events),
+            'identity_student_count': len(target_usernames or []),
+            'identity_ambiguous_username_count': len((identity or {}).get('ambiguous_usernames') or []),
+            'identity_ambiguous_user_id_count': len((identity or {}).get('ambiguous_user_ids') or []),
             'materialization_mode': 'retention_safe_upsert_v1',
         }
 
