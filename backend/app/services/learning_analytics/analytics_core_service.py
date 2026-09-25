@@ -201,31 +201,67 @@ class LearningAnalyticsCoreService:
             'stats': cp.stats_json if cp else {},
         }
 
-    def _class_scope_filter(self, q: Any, column: Any, value: Any) -> Any:
-        """Apply an optional AcademicCourseMapping scope to AcademicClass.
+    @staticmethod
+    def _mapping_scope_value_matches(mapping_value: Any, class_value: Any) -> bool:
+        """Return whether one optional subject-mapping scope matches a class.
 
-        NULL/blank block, campus, or branch on a subject-level course mapping
-        means the mapping is broad for that dimension. Do not require the
-        AcademicClass field itself to be blank; doing so makes valid broad
-        mappings resolve to zero production classes. A non-blank mapping scope
-        remains an exact match.
+        A blank mapping scope is a wildcard. A non-blank mapping scope must
+        match the class exactly (case-insensitive for string values).
         """
+        left = str(mapping_value or '').strip().lower()
+        if not left:
+            return True
+        return left == str(class_value or '').strip().lower()
+
+    @classmethod
+    def _subject_mapping_matches_class(cls, mapping: AcademicCourseMapping, klass: AcademicClass) -> bool:
+        return (
+            str(mapping.term_id or '') == str(klass.term_id or '')
+            and str(mapping.subject_id or '') == str(klass.subject_id or '')
+            and cls._mapping_scope_value_matches(mapping.block_id, klass.block_id)
+            and cls._mapping_scope_value_matches(mapping.campus, klass.campus)
+            and cls._mapping_scope_value_matches(mapping.branch, klass.branch)
+        )
+
+    @classmethod
+    def _subject_mapping_score_for_class(cls, mapping: AcademicCourseMapping, klass: AcademicClass) -> int | None:
+        """Score only mappings that are actually eligible for the class.
+
+        Exact block/campus/branch scopes outrank wildcards. A mismatched
+        non-blank scope is not a lower-confidence candidate; it is ineligible.
+        """
+        if not cls._subject_mapping_matches_class(mapping, klass):
+            return None
+        score = 30
+        score += 20 if str(mapping.block_id or '') == str(klass.block_id or '') and mapping.block_id else 5
+        score += 15 if str(mapping.campus or '').strip().lower() == str(klass.campus or '').strip().lower() and mapping.campus else 3
+        score += 15 if str(mapping.branch or '').strip().lower() == str(klass.branch or '').strip().lower() and mapping.branch else 3
+        return score
+
+    def _class_scope_filter(self, q: Any, column: Any, value: Any) -> Any:
+        """Apply an optional AcademicCourseMapping scope to AcademicClass."""
         if value is None or str(value).strip() == '':
             return q
         return q.filter(column == value)
 
     def _resolve_recalculate_class_ids_for_courses(self, *, course_ids: set[str]) -> dict[str, set[str]]:
-        """Resolve Open edX course IDs to AP class IDs using existing mappings.
+        """Resolve only the effective Open edX course for each active AP class.
 
-        Direct class mappings win. Subject/term course mappings are used as a
-        fallback so post-ingest orchestration can still enqueue class jobs even
-        when the course is mapped at the subject scope rather than the class
-        override scope.
+        Resolution precedence matches the diagnostics/UI contract:
+        class override > most-specific eligible subject/term mapping > wildcard.
+        Ambiguous equal-score mappings are deliberately not auto-selected.
         """
-        clean_course_ids = {str(course_id or '').strip() for course_id in course_ids if str(course_id or '').strip()}
+        clean_course_ids = {
+            str(course_id or '').strip()
+            for course_id in course_ids
+            if str(course_id or '').strip()
+        }
         if not clean_course_ids:
             return {}
+
         resolved: dict[str, set[str]] = defaultdict(set)
+
+        # Class overrides are authoritative and win over inherited mappings.
         direct_rows = (
             self.db.query(AcademicClassCourseMapping.openedx_course_id, AcademicClassCourseMapping.class_id)
             .join(AcademicClass, AcademicClass.id == AcademicClassCourseMapping.class_id)
@@ -236,18 +272,11 @@ class LearningAnalyticsCoreService:
             )
             .all()
         )
-        direct_override_class_ids = {
-            str(class_id)
-            for (class_id,) in self.db.query(AcademicClassCourseMapping.class_id).filter(
-                AcademicClassCourseMapping.active.is_(True),
-            ).all()
-            if class_id
-        }
         for course_id, class_id in direct_rows:
             if course_id and class_id:
                 resolved[str(course_id)].add(str(class_id))
 
-        subject_mappings = (
+        relevant_mappings = (
             self.db.query(AcademicCourseMapping)
             .filter(
                 AcademicCourseMapping.active.is_(True),
@@ -255,18 +284,104 @@ class LearningAnalyticsCoreService:
             )
             .all()
         )
-        for mapping in subject_mappings:
-            q = self.db.query(AcademicClass.id).filter(
+        if not relevant_mappings:
+            return resolved
+
+        relevant_pairs = {
+            (str(mapping.term_id or ''), str(mapping.subject_id or ''))
+            for mapping in relevant_mappings
+            if mapping.term_id and mapping.subject_id
+        }
+        term_ids = {pair[0] for pair in relevant_pairs}
+        subject_ids = {pair[1] for pair in relevant_pairs}
+
+        classes = (
+            self.db.query(AcademicClass)
+            .filter(
                 AcademicClass.active.is_(True),
-                AcademicClass.term_id == mapping.term_id,
-                AcademicClass.subject_id == mapping.subject_id,
+                AcademicClass.term_id.in_(list(term_ids)),
+                AcademicClass.subject_id.in_(list(subject_ids)),
             )
-            q = self._class_scope_filter(q, AcademicClass.block_id, mapping.block_id)
-            q = self._class_scope_filter(q, AcademicClass.campus, mapping.campus)
-            q = self._class_scope_filter(q, AcademicClass.branch, mapping.branch)
-            for (class_id,) in q.all():
-                if class_id and str(class_id) not in direct_override_class_ids:
-                    resolved[str(mapping.openedx_course_id)].add(str(class_id))
+            .all()
+        )
+        classes = [
+            klass for klass in classes
+            if (str(klass.term_id or ''), str(klass.subject_id or '')) in relevant_pairs
+        ]
+        if not classes:
+            return resolved
+
+        class_ids = [str(klass.id) for klass in classes if klass.id]
+        direct_overrides = (
+            self.db.query(AcademicClassCourseMapping)
+            .filter(
+                AcademicClassCourseMapping.active.is_(True),
+                AcademicClassCourseMapping.class_id.in_(class_ids),
+            )
+            .all()
+        )
+        override_by_class = {
+            str(row.class_id): str(row.openedx_course_id or '').strip()
+            for row in direct_overrides
+            if row.class_id and str(row.openedx_course_id or '').strip()
+        }
+
+        # Load every inherited mapping for the involved term/subject pairs so a
+        # broad mapping cannot incorrectly beat a more specific mapping that
+        # points to a different course.
+        all_pair_mappings = (
+            self.db.query(AcademicCourseMapping)
+            .filter(
+                AcademicCourseMapping.active.is_(True),
+                AcademicCourseMapping.term_id.in_(list(term_ids)),
+                AcademicCourseMapping.subject_id.in_(list(subject_ids)),
+            )
+            .all()
+        )
+        mappings_by_pair: dict[tuple[str, str], list[AcademicCourseMapping]] = defaultdict(list)
+        for mapping in all_pair_mappings:
+            pair = (str(mapping.term_id or ''), str(mapping.subject_id or ''))
+            if pair in relevant_pairs:
+                mappings_by_pair[pair].append(mapping)
+
+        for klass in classes:
+            class_id = str(klass.id or '')
+            if not class_id:
+                continue
+
+            override_course_id = override_by_class.get(class_id)
+            if override_course_id:
+                if override_course_id in clean_course_ids:
+                    resolved[override_course_id].add(class_id)
+                continue
+
+            pair = (str(klass.term_id or ''), str(klass.subject_id or ''))
+            scored: list[tuple[int, str]] = []
+            for mapping in mappings_by_pair.get(pair, []):
+                course_id = str(mapping.openedx_course_id or '').strip()
+                if not course_id:
+                    continue
+                score = self._subject_mapping_score_for_class(mapping, klass)
+                if score is not None:
+                    scored.append((score, course_id))
+
+            if not scored:
+                continue
+
+            top_score = max(score for score, _course_id in scored)
+            top_courses = {
+                course_id for score, course_id in scored
+                if score == top_score
+            }
+            if len(top_courses) != 1:
+                # Equal-confidence mappings are ambiguous. Leave the class out
+                # of automatic recalculation rather than choosing arbitrarily.
+                continue
+
+            effective_course_id = next(iter(top_courses))
+            if effective_course_id in clean_course_ids:
+                resolved[effective_course_id].add(class_id)
+
         return resolved
 
     def enqueue_post_ingest_recalculate_jobs(
@@ -2426,20 +2541,16 @@ class LearningAnalyticsCoreService:
             AcademicCourseMapping.active.is_(True),
         ).all()
         for row in mappings:
-            score = 30
-            if (row.block_id or None) == (cls.block_id or None):
-                score += 20
-            elif row.block_id is None:
-                score += 5
-            if (row.campus or '').strip().lower() == (cls.campus or '').strip().lower():
-                score += 15
-            elif not row.campus:
-                score += 3
-            if (row.branch or '').strip().lower() == (cls.branch or '').strip().lower():
-                score += 15
-            elif not row.branch:
-                score += 3
-            add_candidate(row.openedx_course_id, 'subject_term_mapping', score, row, 'Mapping kế thừa theo môn/kỳ/cơ sở/hệ.')
+            score = self._subject_mapping_score_for_class(row, cls)
+            if score is None:
+                continue
+            add_candidate(
+                row.openedx_course_id,
+                'subject_term_mapping',
+                score,
+                row,
+                'Mapping kế thừa theo môn/kỳ/cơ sở/hệ.',
+            )
 
         candidates.sort(key=lambda item: (int(item.get('score') or 0), str(item.get('updated_at') or '')), reverse=True)
         course_ids = []
