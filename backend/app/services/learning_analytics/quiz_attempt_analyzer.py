@@ -207,6 +207,21 @@ def _submission_score(event: EventLike) -> tuple[float | None, float | None]:
 
 
 def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) -> None:
+    # Open edX can emit browser problem_check, problem_graded and the canonical
+    # edx.grades.problem.submitted for the same action. Prefer the canonical
+    # server grade events when present; keep legacy/browser rows only as fallback.
+    all_submissions = list(feature.submissions)
+    canonical_submissions = [
+        item for item in all_submissions
+        if item.get('event_type') == 'edx.grades.problem.submitted'
+    ]
+    fallback_submission_count = sum(
+        1 for item in all_submissions
+        if item.get('event_type') != 'edx.grades.problem.submitted'
+    )
+    if canonical_submissions:
+        feature.submissions = canonical_submissions
+
     submitted_times = [s['submitted_at'] for s in feature.submissions if s.get('submitted_at')]
     if submitted_times:
         feature.ended_at = max(submitted_times)
@@ -249,7 +264,8 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
         'median_time_per_question_seconds': feature.median_time_per_question_seconds,
         'score_earned': feature.score_earned,
         'score_possible': feature.score_possible,
-        'server_canonical_submission': True,
+        'server_canonical_submission': bool(canonical_submissions),
+        'fallback_submission_count': fallback_submission_count,
         'showanswer_policy': 'neutral_unless_same_item_repeated_in_same_attempt',
         'reset_times': [d.isoformat() for d in reset_times[:20]],
     }
