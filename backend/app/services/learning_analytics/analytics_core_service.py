@@ -786,6 +786,168 @@ class LearningAnalyticsCoreService:
         finally:
             self._release_ingest_lock()
 
+    def cleanup_tracking_events(self) -> dict[str, Any]:
+        """Delete only retention-safe raw video/quiz events in bounded batches.
+
+        Loki remains the raw source of truth. PostgreSQL keeps a short staging
+        window while durable video/quiz materializations retain historical
+        analytics. Cleanup is intentionally conservative:
+        - PostgreSQL only;
+        - never while analytics recalculate jobs are queued/running;
+        - never before at least one video/quiz materialization exists;
+        - delete an event only when a matching durable materialized row exists;
+        - keep non-video/non-quiz event families untouched.
+        """
+        if not self._is_postgres():
+            return {
+                'status': 'skipped_non_postgres',
+                'deleted': 0,
+            }
+
+        active_jobs = (
+            self.db.query(AcademicClassSyncJob.id)
+            .filter(
+                AcademicClassSyncJob.job_type == 'learning_analytics_recalculate',
+                AcademicClassSyncJob.status.in_(['queued', 'running']),
+            )
+            .count()
+        )
+        if active_jobs:
+            return {
+                'status': 'skipped_active_recalculate_jobs',
+                'active_jobs': int(active_jobs),
+                'deleted': 0,
+            }
+
+        video_rows = int(self.db.query(AnalyticsStudentVideoProgress.id).count() or 0)
+        quiz_rows = int(self.db.query(AnalyticsQuizAttempt.id).count() or 0)
+        if video_rows + quiz_rows <= 0:
+            return {
+                'status': 'skipped_not_materialized',
+                'video_rows': video_rows,
+                'quiz_rows': quiz_rows,
+                'deleted': 0,
+                'message': 'Chưa có video/quiz materialized; giữ nguyên raw events để có thể tính lại.',
+            }
+
+        retention_days = max(1, int(getattr(settings, 'analytics_raw_event_retention_days', 7) or 7))
+        batch_size = min(
+            50000,
+            max(100, int(getattr(settings, 'analytics_raw_event_cleanup_batch_size', 20000) or 20000)),
+        )
+        max_batches = min(
+            100,
+            max(1, int(getattr(settings, 'analytics_raw_event_cleanup_max_batches_per_run', 10) or 10)),
+        )
+        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+
+        def sql_list(values: set[str]) -> str:
+            return ','.join("'" + str(value).replace("'", "''") + "'" for value in sorted(values))
+
+        video_types_sql = sql_list(set(VIDEO_EVENT_TYPES))
+        quiz_types_sql = sql_list(set(QUIZ_ANALYTICS_EVENT_TYPES))
+        deleted = 0
+        batches = 0
+
+        # Match raw Open edX identities to the AP username stored in durable
+        # materializations. Direct username equality remains as a safe fallback
+        # for installations where AP/Open edX usernames are identical.
+        delete_sql = text(f"""
+            WITH doomed AS (
+                SELECT e.id
+                FROM analytics_tracking_events e
+                WHERE e.created_at < :cutoff
+                  AND (
+                    (
+                      e.event_type IN ({video_types_sql})
+                      AND EXISTS (
+                        SELECT 1
+                        FROM analytics_student_video_progress v
+                        LEFT JOIN openedx_user_mappings m
+                          ON (
+                            (e.username IS NOT NULL AND m.openedx_username = e.username)
+                            OR
+                            (e.user_id IS NOT NULL AND m.openedx_user_id = e.user_id)
+                          )
+                        LEFT JOIN academic_students s
+                          ON s.id = m.student_id
+                        WHERE v.course_id = e.course_id
+                          AND v.video_id = e.video_id
+                          AND (
+                            v.username = e.username
+                            OR v.username = s.username
+                          )
+                      )
+                    )
+                    OR
+                    (
+                      e.event_type IN ({quiz_types_sql})
+                      AND EXISTS (
+                        SELECT 1
+                        FROM analytics_quiz_attempts q
+                        LEFT JOIN openedx_user_mappings m
+                          ON (
+                            (e.username IS NOT NULL AND m.openedx_username = e.username)
+                            OR
+                            (e.user_id IS NOT NULL AND m.openedx_user_id = e.user_id)
+                          )
+                        LEFT JOIN academic_students s
+                          ON s.id = m.student_id
+                        WHERE q.course_id = e.course_id
+                          AND (
+                            q.username = e.username
+                            OR q.username = s.username
+                          )
+                      )
+                    )
+                  )
+                ORDER BY e.created_at ASC
+                LIMIT :batch_size
+                FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM analytics_tracking_events e
+            USING doomed d
+            WHERE e.id = d.id
+            RETURNING e.id
+        """)
+
+        for _ in range(max_batches):
+            removed = self.db.execute(
+                delete_sql,
+                {
+                    'cutoff': cutoff,
+                    'batch_size': batch_size,
+                },
+            ).scalars().all()
+            removed_count = len(removed)
+            self.db.commit()
+            if removed_count <= 0:
+                break
+            deleted += removed_count
+            batches += 1
+            if removed_count < batch_size:
+                break
+
+        remaining_old = int(
+            self.db.query(AnalyticsTrackingEvent.id)
+            .filter(AnalyticsTrackingEvent.created_at < cutoff)
+            .count()
+            or 0
+        )
+        return {
+            'status': 'completed',
+            'retention_days': retention_days,
+            'cutoff': cutoff.isoformat(),
+            'batch_size': batch_size,
+            'max_batches': max_batches,
+            'batches': batches,
+            'deleted': deleted,
+            'remaining_old_rows_all_types': remaining_old,
+            'video_rows': video_rows,
+            'quiz_rows': quiz_rows,
+            'policy': 'delete_only_materialized_video_quiz_raw_events',
+        }
+
     def rebuild_session_structure_from_blocks(
         self,
         *,
