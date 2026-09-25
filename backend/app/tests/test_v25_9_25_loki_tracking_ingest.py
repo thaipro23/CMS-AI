@@ -192,3 +192,38 @@ def test_quiz_status_and_submitted_problem_correlate_to_one_vertical_attempt():
     assert feature.score_possible == 1.0
     assert len(feature.submissions) == 1
     assert feature.submissions[0]['problem_usage_key'].endswith('type@problem+block@p1')
+
+
+def test_canonical_grade_event_suppresses_browser_submission_duplicate():
+    course = 'course-v1:FPS+COM1091+FA26'
+    unit = 'block-v1:FPS+COM1091+FA26+type@vertical+block@quiz-964a50b2'
+    browser = EventLike(
+        event_type='problem_check',
+        event_source='browser',
+        event_time=datetime(2026, 9, 25, 6, 55, 34),
+        user_id='13668', username='TH09593', course_id=course,
+        page_url='https://cms.fpl.edu.vn/xblock/' + unit + '?format=Quiz',
+        raw_event={'value': 'input_problem=choice_1'},
+        raw_context={}, raw_json={},
+    )
+    canonical = EventLike(
+        event_type='edx.grades.problem.submitted',
+        event_source='server',
+        event_time=datetime(2026, 9, 25, 6, 55, 35),
+        user_id='13668', username='TH09593', course_id=course,
+        page_url='https://cms.fpl.edu.vn/xblock/' + unit + '?format=Quiz',
+        raw_event={
+            'problem_id': 'block-v1:FPS+COM1091+FA26+type@problem+block@p1',
+            'weighted_earned': 1,
+            'weighted_possible': 1,
+        },
+        raw_context={}, raw_json={},
+    )
+
+    features = build_quiz_attempt_features([browser, canonical])
+
+    assert len(features) == 1
+    assert len(features[0].submissions) == 1
+    assert features[0].submissions[0]['event_type'] == 'edx.grades.problem.submitted'
+    assert features[0].evidence['server_canonical_submission'] is True
+    assert features[0].evidence['fallback_submission_count'] == 1
