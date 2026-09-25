@@ -96,6 +96,120 @@ def _natural_session_sort_key(title: str, index: int) -> tuple[int, int, str]:
     return (int(m.group(1)) if m else 10_000 + index, index, title or '')
 
 
+def _block_id(block: dict[str, Any]) -> str:
+    return str(
+        block.get('usage_key')
+        or block.get('block_id')
+        or block.get('id')
+        or ''
+    ).strip()
+
+
+def _block_type(block: dict[str, Any]) -> str:
+    return str(block.get('block_type') or block.get('type') or '').strip().lower()
+
+
+def _block_title(block: dict[str, Any]) -> str:
+    return str(block.get('display_name') or block.get('title') or block.get('name') or '').strip()
+
+
+def _build_block_index(blocks: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    children_by_parent: dict[str, list[str]] = {}
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        bid = _block_id(block)
+        if bid:
+            by_id[bid] = block
+        parent = str(block.get('parent_block_id') or block.get('parent') or '').strip()
+        if parent and bid:
+            children_by_parent.setdefault(parent, []).append(bid)
+    return by_id, children_by_parent
+
+
+def _child_blocks(
+    block: dict[str, Any],
+    *,
+    by_id: dict[str, dict[str, Any]],
+    children_by_parent: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    explicit = block.get('children') if isinstance(block.get('children'), list) else []
+    for child in explicit:
+        item: dict[str, Any] | None = None
+        if isinstance(child, dict):
+            item = child
+        else:
+            item = by_id.get(str(child or '').strip())
+        if not item:
+            continue
+        cid = _block_id(item)
+        key = cid or f'inline:{id(item)}'
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+
+    parent_id = _block_id(block)
+    for cid in children_by_parent.get(parent_id, []):
+        if cid in seen:
+            continue
+        item = by_id.get(cid)
+        if not item:
+            continue
+        seen.add(cid)
+        result.append(item)
+    return result
+
+
+def _descendant_components(
+    session_block: dict[str, Any],
+    *,
+    by_id: dict[str, dict[str, Any]],
+    children_by_parent: dict[str, list[str]],
+) -> list[SessionComponent]:
+    components: list[SessionComponent] = []
+    visited: set[str] = set()
+    part_index = 0
+
+    def walk(block: dict[str, Any]) -> None:
+        nonlocal part_index
+        bid = _block_id(block)
+        key = bid or f'inline:{id(block)}'
+        if key in visited:
+            return
+        visited.add(key)
+
+        btype = _block_type(block)
+        if btype in {'video', 'problem', 'quiz', 'sequential_quiz', 'library_content'}:
+            if btype == 'video':
+                part_index += 1
+            components.append(SessionComponent(
+                usage_key=bid,
+                block_type=btype,
+                title=_block_title(block),
+                part_index=part_index if btype == 'video' else None,
+                metadata=block,
+            ))
+        for child in _child_blocks(
+            block,
+            by_id=by_id,
+            children_by_parent=children_by_parent,
+        ):
+            walk(child)
+
+    for child in _child_blocks(
+        session_block,
+        by_id=by_id,
+        children_by_parent=children_by_parent,
+    ):
+        walk(child)
+    return components
+
+
 def build_session_mappings_from_blocks(
     course_id: str,
     blocks: list[dict[str, Any]],
@@ -103,44 +217,62 @@ def build_session_mappings_from_blocks(
     course_start_at: datetime | None = None,
     manual_deadlines: dict[int, datetime] | None = None,
 ) -> list[CourseSessionMapping]:
-    """Map course blocks to Bài/Session -> video/quiz components.
+    """Map normalized Open edX blocks to Bài/Session -> video/quiz components.
 
-    The adapter accepts already-synced block dictionaries. It does not call Open
-    edX directly, so it is safe for tests and production API paths.
+    RealOpenEdXConnector returns a flat block list where children commonly
+    contains usage-key strings. Resolve the tree recursively so sequential ->
+    vertical -> video/problem/library_content descendants are preserved.
     """
     manual_deadlines = manual_deadlines or {}
+    clean_blocks = [block for block in blocks if isinstance(block, dict)]
+    by_id, children_by_parent = _build_block_index(clean_blocks)
+
     sessions: list[dict[str, Any]] = []
-    for idx, block in enumerate(blocks):
-        block_type = str(block.get('block_type') or block.get('type') or '').lower()
-        title = str(block.get('display_name') or block.get('title') or '')
+    for idx, block in enumerate(clean_blocks):
+        block_type = _block_type(block)
+        title = _block_title(block)
         if block_type in {'sequential', 'session'} or re.search(r'(?:bài|bai|session|lesson)\s*\d+', title.lower()):
             sessions.append({'idx': idx, 'block': block})
-    sessions.sort(key=lambda item: _natural_session_sort_key(str(item['block'].get('display_name') or item['block'].get('title') or ''), int(item['idx'])))
+
+    sessions.sort(
+        key=lambda item: _natural_session_sort_key(
+            _block_title(item['block']),
+            int(item['idx']),
+        )
+    )
     session_count = len(sessions)
     quality = 'GOOD' if session_count in {11, 12} else ('PARTIAL' if session_count > 0 else 'LOW')
     mappings: list[CourseSessionMapping] = []
+
     for one_based, item in enumerate(sessions, start=1):
         block = item['block']
-        title = str(block.get('display_name') or block.get('title') or f'Bài {one_based}')
-        usage_key = str(block.get('usage_key') or block.get('id') or f'{course_id}:session:{one_based}')
+        title = _block_title(block) or f'Bài {one_based}'
+        usage_key = _block_id(block) or f'{course_id}:session:{one_based}'
         week = week_for_session(one_based, session_count or 1)
         deadline = manual_deadlines.get(one_based) or infer_deadline(course_start_at, week)
-        source = 'MANUAL' if one_based in manual_deadlines else 'INFERRED'
-        children = block.get('children') if isinstance(block.get('children'), list) else []
-        components: list[SessionComponent] = []
-        for child_idx, child in enumerate(children, start=1):
-            if not isinstance(child, dict):
-                continue
-            btype = str(child.get('block_type') or child.get('type') or '').lower()
-            if btype not in {'video', 'problem', 'quiz', 'sequential_quiz'}:
-                continue
-            components.append(SessionComponent(
-                usage_key=str(child.get('usage_key') or child.get('id') or ''),
-                block_type=btype,
-                title=str(child.get('display_name') or child.get('title') or ''),
-                part_index=child_idx if btype == 'video' else None,
-                metadata=child,
-            ))
-        session_type = classify_session_type(title, str(block.get('block_type') or block.get('type') or ''), components)
-        mappings.append(CourseSessionMapping(one_based, session_type, usage_key, title, week, deadline, source, quality, components))
+        source = 'MANUAL' if one_based in manual_deadlines else ('INFERRED' if deadline else 'MISSING')
+
+        components = _descendant_components(
+            block,
+            by_id=by_id,
+            children_by_parent=children_by_parent,
+        )
+        session_type = classify_session_type(
+            title,
+            _block_type(block),
+            components,
+        )
+        mappings.append(
+            CourseSessionMapping(
+                one_based,
+                session_type,
+                usage_key,
+                title,
+                week,
+                deadline,
+                source,
+                quality,
+                components,
+            )
+        )
     return mappings
