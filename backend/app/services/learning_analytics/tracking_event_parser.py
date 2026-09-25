@@ -97,6 +97,29 @@ def _safe_str(value: Any) -> str | None:
     return text or None
 
 
+def _first_scalar(value: Any) -> Any:
+    """Unwrap query-string style values such as {'GET': {'course_id': ['...']}}."""
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if item is not None and str(item).strip():
+                return item
+        return None
+    return value
+
+
+def _event_param(event: dict[str, Any], key: str) -> Any:
+    direct = _first_scalar(event.get(key))
+    if direct is not None and str(direct).strip():
+        return direct
+    for bucket_name in ('GET', 'POST'):
+        bucket = event.get(bucket_name)
+        if isinstance(bucket, dict):
+            value = _first_scalar(bucket.get(key))
+            if value is not None and str(value).strip():
+                return value
+    return None
+
+
 def _parse_time(value: Any) -> datetime | None:
     if not value:
         return None
@@ -185,9 +208,16 @@ def parse_tracking_log_line(line: str, *, include_caption_events: bool = True, r
 
     context = data.get('context') if isinstance(data.get('context'), dict) else {}
     event = parse_nested_event(data.get('event'))
-    page = _safe_str(data.get('page')) or _safe_str(event.get('page'))
-    referer = _safe_str(data.get('referer')) or _safe_str(data.get('agent'))
-    course_id = _safe_str(context.get('course_id')) or _safe_str(data.get('course_id')) or _safe_str(event.get('course_id'))
+    referer = _safe_str(data.get('referer'))
+    # Server-side grade/completion events commonly have page=null while referer
+    # still points at the vertical unit. Keeping that as page_url lets the quiz
+    # analyzer correlate problem submissions back to one quiz unit.
+    page = _safe_str(data.get('page')) or _safe_str(event.get('page')) or referer
+    course_id = (
+        _safe_str(context.get('course_id'))
+        or _safe_str(data.get('course_id'))
+        or _safe_str(_event_param(event, 'course_id'))
+    )
     org_id = _safe_str(context.get('org_id')) or (course_id.split('+', 1)[0].replace('course-v1:', '') if course_id and '+' in course_id else None)
     current_time = _safe_float(event.get('currentTime'))
     if current_time is None:
@@ -199,7 +229,11 @@ def parse_tracking_log_line(line: str, *, include_caption_events: bool = True, r
         event_time=_parse_time(data.get('time')),
         event_type=event_type,
         event_source=_safe_str(data.get('event_source')) or _safe_str(data.get('source')) or 'openedx_tracking_log',
-        user_id=_safe_str((context or {}).get('user_id')) or _safe_str(data.get('user_id')),
+        user_id=(
+            _safe_str((context or {}).get('user_id'))
+            or _safe_str(data.get('user_id'))
+            or _safe_str(_event_param(event, 'user_id'))
+        ),
         username=_safe_str(data.get('username')) or _safe_str((context or {}).get('username')),
         course_id=course_id,
         org_id=org_id,
