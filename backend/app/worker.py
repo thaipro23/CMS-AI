@@ -4378,20 +4378,59 @@ def analytics_class_recalculate_task(job_id: str):
             return result
 
         service = LearningAnalyticsCoreService(db)
-        video_result = service.recalculate_course_video_progress(course_id=course_id, username=username, class_id=job.class_id)
-        job.progress_current = 45
+
+        job.progress_current = 20
+        job.progress_label = 'Đang chuẩn hóa cấu trúc Bài/Session'
+        db.add(job)
+        db.commit()
+        session_structure_result = asyncio.run(
+            service.ensure_session_structure_from_openedx(
+                course_id=course_id,
+                class_id=job.class_id,
+            )
+        )
+
+        job.progress_current = 35
+        job.progress_label = 'Đang tính tín hiệu xem video'
+        db.add(job)
+        db.commit()
+        video_result = service.recalculate_course_video_progress(
+            course_id=course_id,
+            username=username,
+            class_id=job.class_id,
+        )
+
+        job.progress_current = 55
         job.progress_label = 'Đang tổng hợp theo Bài/Deadline'
         db.add(job)
         db.commit()
-        session_result = service.recalculate_student_session_progress(class_id=job.class_id, course_id=course_id, username=username)
-        job.progress_current = 75
+        session_result = service.recalculate_student_session_progress(
+            class_id=job.class_id,
+            course_id=course_id,
+            username=username,
+        )
+
+        job.progress_current = 80
         job.progress_label = 'Đang phân loại tín hiệu học online'
         db.add(job)
         db.commit()
-        behavior_result = service.recalculate_learning_behavior(class_id=job.class_id, course_id=course_id, username=username)
+        behavior_result = service.recalculate_learning_behavior(
+            class_id=job.class_id,
+            course_id=course_id,
+            username=username,
+        )
 
         quiz_result = session_result.get('quiz') if isinstance(session_result, dict) and isinstance(session_result.get('quiz'), dict) else {}
         warnings: list[str] = []
+        structure_status = str((session_structure_result or {}).get('status') or '')
+        if structure_status == 'fetch_failed':
+            warnings.append('SESSION_STRUCTURE_FETCH_FAILED')
+        elif structure_status == 'no_blocks':
+            warnings.append('SESSION_STRUCTURE_NO_BLOCKS')
+        elif structure_status == 'no_sessions':
+            warnings.append('SESSION_STRUCTURE_NO_SESSIONS')
+        if int((session_structure_result or {}).get('session_count') or 0) > 0 and int((session_structure_result or {}).get('video_count') or 0) <= 0:
+            warnings.append('SESSION_STRUCTURE_NO_VIDEO_COMPONENTS')
         if bool(video_result.get('source_event_exists')) and int(video_result.get('matched_event_count') or 0) <= 0:
             warnings.append('NO_VIDEO_EVENT_IDENTITY_OVERLAP')
         if bool(quiz_result.get('source_event_exists')) and int(quiz_result.get('normalized_event_count') or 0) <= 0:
@@ -4410,6 +4449,7 @@ def analytics_class_recalculate_task(job_id: str):
             'class_id': job.class_id,
             'course_id': course_id,
             'username': username,
+            'session_structure': session_structure_result,
             'video': video_result,
             'session': session_result,
             'behavior': behavior_result,
