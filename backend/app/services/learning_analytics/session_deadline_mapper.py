@@ -227,23 +227,28 @@ def build_session_mappings_from_blocks(
     clean_blocks = [block for block in blocks if isinstance(block, dict)]
     by_id, children_by_parent = _build_block_index(clean_blocks)
 
-    typed_sessions: list[dict[str, Any]] = []
+    chapter_sessions: list[dict[str, Any]] = []
+    sequential_sessions: list[dict[str, Any]] = []
     fallback_sessions: list[dict[str, Any]] = []
     leaf_types = {'video', 'problem', 'quiz', 'sequential_quiz', 'library_content', 'html'}
 
     for idx, block in enumerate(clean_blocks):
         block_type = _block_type(block)
         title = _block_title(block)
-        if block_type in {'sequential', 'session'}:
-            typed_sessions.append({'idx': idx, 'block': block})
+        if block_type == 'chapter':
+            chapter_sessions.append({'idx': idx, 'block': block})
+        elif block_type in {'sequential', 'session'}:
+            sequential_sessions.append({'idx': idx, 'block': block})
         elif block_type not in leaf_types and re.search(r'(?:bài|bai|session|lesson)\s*\d+', title.lower()):
             fallback_sessions.append({'idx': idx, 'block': block})
 
-    # Open edX canonical courses expose sequential blocks. Prefer them and only
-    # use title-based discovery for legacy/custom courses with no sequential
-    # containers, otherwise a nested Unit named "Bài 1..." could duplicate a
-    # real session.
-    sessions = typed_sessions or fallback_sessions
+    # Production FPT course structure is typically:
+    # chapter (Bài N) -> sequential (Phần 1 / Phần 2 / Quiz) -> vertical
+    # -> video/problem. The analytics "Bài/Session" is therefore the chapter,
+    # not every sequential. Prefer chapter containers whenever present so a
+    # course with 11 Bài and 33 sequentials produces 11 sessions, not 44.
+    # Sequential remains a safe fallback for courses without chapters.
+    sessions = chapter_sessions or sequential_sessions or fallback_sessions
 
     sessions.sort(
         key=lambda item: _natural_session_sort_key(
