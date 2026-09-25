@@ -573,8 +573,6 @@ class LearningAnalyticsCoreService:
             self._release_ingest_lock()
 
     def _run_file_ingest(self, *, file_path: str | None = None, max_lines: int | None = None) -> dict[str, Any]:
-        if not True:
-            return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_INGEST_ENABLED=false'}
         if not self._try_acquire_ingest_lock():
             return {
                 'enabled': True,
@@ -1545,12 +1543,10 @@ class LearningAnalyticsCoreService:
                 'safe_policy': 'signals_only_not_violation',
             }
 
-        if not ingest.get('enabled'):
-            issues.append({'severity': 'error', 'code': 'INGEST_DISABLED', 'message': 'Analytics ingest đang tắt.', 'action': 'Bật ANALYTICS_INGEST_ENABLED=true rồi chạy ingest.'})
         if not ingest.get('file_exists'):
             issues.append({'severity': 'error', 'code': 'TRACKING_LOG_NOT_MOUNTED', 'message': 'Chưa thấy tracking.log trong container AI Server.', 'action': 'Mount thư mục Tutor LMS logs dạng read-only vào /openedx-data/lms/logs.'})
         if int(ingest.get('total_events_inserted') or 0) <= 0:
-            issues.append({'severity': 'warning', 'code': 'NO_TRACKING_EVENTS_INGESTED', 'message': 'Chưa có event tracking nào được ingest.', 'action': 'Chạy ingest thủ công hoặc bật scheduler ingest.'})
+            issues.append({'severity': 'warning', 'code': 'NO_TRACKING_EVENTS_INGESTED', 'message': 'Chưa có event tracking nào được ingest.', 'action': 'Kiểm tra beat/worker hoặc chạy ingest thủ công.'})
         if int(ingest.get('total_parse_errors') or 0) > max(50, int(ingest.get('total_events_inserted') or 0) * 0.1):
             issues.append({'severity': 'warning', 'code': 'HIGH_PARSE_ERROR_COUNT', 'message': 'Số dòng tracking log parse lỗi đang cao.', 'action': 'Kiểm tra format log/prefix logger.py và event JSON string.'})
 
