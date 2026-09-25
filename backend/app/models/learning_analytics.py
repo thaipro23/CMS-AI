@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Any
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -28,7 +28,7 @@ class AnalyticsIngestCheckpoint(Base):
     file_path: Mapped[str] = mapped_column(String(1024), default='')
     file_inode: Mapped[str | None] = mapped_column(String(128), nullable=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
-    last_offset: Mapped[int] = mapped_column(Integer, default=0)
+    last_offset: Mapped[int] = mapped_column(BigInteger, default=0)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     last_status: Mapped[str] = mapped_column(String(50), default='never_run', index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -51,6 +51,9 @@ class AnalyticsTrackingEvent(Base):
     event_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(120), index=True)
     event_source: Mapped[str] = mapped_column(String(80), default='openedx_tracking_log', index=True)
+    loki_ts_ns: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    source_pod: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    source_app: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     course_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
