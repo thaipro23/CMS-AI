@@ -148,8 +148,6 @@ class LearningAnalyticsOperationsWorkflowService:
         issues: list[dict[str, Any]] = []
         if not ingest.get('file_exists'):
             issues.append({'severity': 'BLOCKER', 'code': 'TRACKING_LOG_NOT_MOUNTED', 'category': 'Ingest', 'message': 'AI Server chưa thấy nguồn tracking Open edX (Loki/file).', 'action': 'Kiểm tra ANALYTICS_INGEST_SOURCE và kết nối Loki hoặc mount tracking.log.'})
-        if not ingest.get('enabled'):
-            issues.append({'severity': 'BLOCKER', 'code': 'INGEST_DISABLED', 'category': 'Ingest', 'message': 'Analytics ingest đang tắt.', 'action': 'Bật ANALYTICS_INGEST_ENABLED=true.'})
         if seconds_since_ingest is None:
             issues.append({'severity': 'WARNING', 'code': 'INGEST_NEVER_RAN', 'category': 'Ingest', 'message': 'Chưa có lượt ingest nào chạy.', 'action': 'Chờ beat hoặc enqueue ingest job thủ công.'})
         elif seconds_since_ingest > ingest_target_seconds:
@@ -184,9 +182,9 @@ class LearningAnalyticsOperationsWorkflowService:
             {
                 'key': 'orchestrator',
                 'title': 'Post-ingest orchestrator',
-                'status': 'OK' if bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)) else 'WARNING',
+                'status': 'OK' if True else 'WARNING',
                 'metrics': {
-                    'enabled': bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)),
+                    'enabled': True,
                     'cooldown_seconds': int(getattr(settings, 'analytics_post_ingest_recalculate_cooldown_seconds', 900) or 900),
                     'max_jobs_per_run': int(getattr(settings, 'analytics_post_ingest_recalculate_max_jobs_per_run', 10) or 10),
                     'last_post_ingest': post_ingest,
