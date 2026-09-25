@@ -233,9 +233,9 @@ class LearningAnalyticsCoreService:
         if not cls._subject_mapping_matches_class(mapping, klass):
             return None
         score = 30
-        score += 20 if str(mapping.block_id or '') == str(klass.block_id or '') and mapping.block_id else 5
-        score += 15 if str(mapping.campus or '').strip().lower() == str(klass.campus or '').strip().lower() and mapping.campus else 3
-        score += 15 if str(mapping.branch or '').strip().lower() == str(klass.branch or '').strip().lower() and mapping.branch else 3
+        score += 20 if str(mapping.block_id or '').strip() else 5
+        score += 15 if str(mapping.campus or '').strip() else 3
+        score += 15 if str(mapping.branch or '').strip() else 3
         return score
 
     def _class_scope_filter(self, q: Any, column: Any, value: Any) -> Any:
