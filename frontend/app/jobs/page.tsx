@@ -12,6 +12,7 @@ import {
   getCourseQuizInstances,
   getJobs,
   getRecentAcademicClassSyncJobs,
+  getUserIdentityLabels,
   retryAcademicBulkOperationJob,
   retryAcademicTrainingTeacherReportJob,
   retryBankOperationJob,
@@ -83,6 +84,31 @@ function academicJobError(error: string | null | undefined, resultValue: unknown
   return error || null
 }
 
+function requesterContextUsername(value: unknown): string {
+  const context = jsonObject(jsonObject(value).requester_context)
+  return jsonText(context.username).trim()
+}
+
+function isSystemActor(value?: string | null): boolean {
+  const actor = String(value || '').trim().toLowerCase()
+  if (!actor) return true
+  if (['system', 'scheduler', 'worker', 'unknown'].includes(actor)) return true
+  return /(^|[-_.])(system|scheduler|worker)([-_.]|$)/.test(actor)
+}
+
+function requestedByLabel(
+  requestedBy: string | null | undefined,
+  requestValue: unknown,
+  labels: Record<string, string>,
+): string {
+  const actor = String(requestedBy || '').trim()
+  if (isSystemActor(actor)) return 'Hệ thống'
+  if (labels[actor]) return labels[actor]
+  const snapshotUsername = requesterContextUsername(requestValue)
+  if (snapshotUsername) return snapshotUsername
+  return /^\d+$/.test(actor) ? `Người dùng #${actor}` : actor
+}
+
 function operationStatusLabel(job: OperationRow) {
   if (job.status === 'queued' && /tự chạy lại/i.test(job.message || '')) return 'Chờ tự chạy lại'
   if (job.status === 'queued') return 'Chờ worker'
@@ -109,6 +135,7 @@ function JobsContent() {
   const [quizInstances, setQuizInstances] = useState<CourseQuizInstance[]>([])
   const [academicRuns, setAcademicRuns] = useState<AcademicSyncRun[]>([])
   const [analyticsOps, setAnalyticsOps] = useState<AnalyticsOpsStatus | null>(null)
+  const [creatorLabels, setCreatorLabels] = useState<Record<string, string>>({})
   const { state, update } = useOpsTableState({ pageSize: 20 })
   const { status, group: operationGroup, q, page, pageSize, density } = state
   const [loading, setLoading] = useState(false)
@@ -155,6 +182,23 @@ function JobsContent() {
       setBulkOperationJobs(nextBulkOperationJobs || [])
       if (primaryFailure) setMessage(toUserError(primaryFailure.reason))
       setLoading(false)
+
+      const creatorIds = Array.from(new Set([
+        ...(opJobs.items || []).map((job) => job.requested_by),
+        ...(nextGenerationJobs || []).map((job) => job.requested_by),
+        ...(nextAcademicRuns || []).map((job) => job.requested_by),
+        ...(nextClassSyncJobs || []).map((job) => job.requested_by),
+        ...(nextTeacherReportJobs || []).map((job) => job.requested_by),
+        ...(nextBulkOperationJobs || []).map((job) => job.requested_by),
+      ].map((value) => String(value || '').trim()).filter((value) => value && !isSystemActor(value))))
+      getUserIdentityLabels(headers, creatorIds).then((labels) => {
+        if (generation !== loadGeneration.current) return
+        setCreatorLabels(Object.fromEntries(
+          Object.entries(labels).map(([userId, item]) => [userId, item.username]),
+        ))
+      }).catch(() => {
+        if (generation === loadGeneration.current) setCreatorLabels({})
+      })
 
       // Supplemental data is allowed to arrive independently after the first
       // table render. A refresh started later owns the state and stale results
@@ -213,7 +257,7 @@ function JobsContent() {
       progressPercent: progressPercent(job.progress_current, job.progress_total, job.progress_percent),
       scope: job.target_type || 'Bank',
       scopeDetail: job.target_id || job.bank_version_id || job.release_id || null,
-      requestedBy: job.requested_by || 'Hệ thống',
+      requestedBy: requestedByLabel(job.requested_by, job.request, creatorLabels),
       createdAt: job.created_at,
       message: job.progress_label,
       error: job.error_message,
@@ -230,7 +274,7 @@ function JobsContent() {
       progressPercent: progressPercent(job.progress_current, job.progress_total),
       scope: 'Lớp',
       scopeDetail: job.class_id,
-      requestedBy: job.requested_by || 'Hệ thống',
+      requestedBy: requestedByLabel(job.requested_by, job.request_json, creatorLabels),
       createdAt: job.created_at,
       message: job.progress_label,
       error: academicJobError(job.error_message, job.result_json),
@@ -265,7 +309,7 @@ function JobsContent() {
         progressPercent: progressPercent(job.progress_current, job.progress_total),
         scope: job.term_id || 'Tự động ghép Course CMS',
         scopeDetail: scopeText,
-        requestedBy: job.requested_by || 'Hệ thống',
+        requestedBy: requestedByLabel(job.requested_by, job.request_json, creatorLabels),
         createdAt: job.created_at,
         message: childSummary || job.progress_label || `Map ${mapped}+${already} môn · queue ${queued} lớp · reuse ${reused} · bỏ qua ${skipped}`,
         error: academicJobError(job.error_message, job.result_json),
@@ -286,7 +330,7 @@ function JobsContent() {
         progressPercent: progressPercent(safeNumber(progress.current), safeNumber(progress.total)),
         scope: run.term_name || 'AP',
         scopeDetail: [run.branch || null, run.campus || null].filter(Boolean).join(' · ') || null,
-        requestedBy: run.requested_by || 'Hệ thống',
+        requestedBy: requestedByLabel(run.requested_by, run.counters_json, creatorLabels),
         createdAt: run.created_at || run.started_at,
         message: jsonText(progress.label),
         error: run.error_message,
@@ -304,7 +348,7 @@ function JobsContent() {
       progressPercent: progressPercent(job.progress_current, job.progress_total),
       scope: job.term_id || 'Báo cáo giáo viên',
       scopeDetail: [job.branch || null, job.campus || null].filter(Boolean).join(' · ') || null,
-      requestedBy: job.requested_by || 'Hệ thống',
+      requestedBy: requestedByLabel(job.requested_by, job.request_json, creatorLabels),
       createdAt: job.created_at,
       message: job.progress_label || job.file_name || null,
       error: academicJobError(job.error_message, job.result_json),
@@ -330,7 +374,7 @@ function JobsContent() {
         progressPercent: progressPercent(completed, total),
         scope: job.course_id || 'Ngân hàng câu hỏi',
         scopeDetail: total ? `${total} câu yêu cầu` : null,
-        requestedBy: 'Hệ thống',
+        requestedBy: requestedByLabel(job.requested_by, null, creatorLabels),
         createdAt: job.created_at,
         message: batchText || (total ? `Đã tạo ${completed}/${total} câu` : 'Đang chuẩn bị kế hoạch sinh câu hỏi'),
         error: job.error_message || job.model_parse_error || null,
@@ -364,7 +408,7 @@ function JobsContent() {
     const topLevelClassRows = classRows.filter((row) => !row.parentJobId || !loadedParentIds.has(row.parentJobId))
     return [...analyticsRows, ...bulkRows, ...topLevelClassRows, ...apRows, ...reportRows, ...generationRows, ...bankRows]
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-  }, [operationJobs, generationJobs, classSyncJobs, academicRuns, teacherReportJobs, bulkOperationJobs, analyticsOps])
+  }, [operationJobs, generationJobs, classSyncJobs, academicRuns, teacherReportJobs, bulkOperationJobs, analyticsOps, creatorLabels])
 
   const filteredRows = useMemo(() => {
     const needle = q.trim().toLowerCase()

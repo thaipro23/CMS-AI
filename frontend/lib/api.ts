@@ -2,6 +2,7 @@ import { userFacingError, userFacingValidation } from './userFacingError';
 import {
   CourseChunk,
   Job,
+  UserIdentityLabel,
   Question,
   QuestionFilters,
   QuestionStats,
@@ -1259,6 +1260,23 @@ export async function getUserAnalytics(
       headers,
     }),
   );
+}
+
+export async function getUserIdentityLabels(
+  headers: HeadersInit,
+  userIds: string[],
+): Promise<Record<string, UserIdentityLabel>> {
+  const keys = Array.from(new Set(userIds.map((value) => value.trim()).filter(Boolean))).slice(0, 200);
+  if (!keys.length) return {};
+  const params = new URLSearchParams();
+  keys.forEach((userId) => params.append("user_ids", userId));
+  const response = await parseResponse<{ items: UserIdentityLabel[] }>(
+    await apiFetch(`${API}/users/labels?${params.toString()}`, {
+      credentials: "include",
+      headers,
+    }),
+  );
+  return Object.fromEntries((response.items || []).map((item) => [item.user_id, item]));
 }
 
 export async function getRuntimeSettings(

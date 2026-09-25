@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.db.session import get_db
@@ -9,8 +9,32 @@ from app.models.job import GenerationJob
 from app.models.question import Question, QuestionReviewLog
 from app.models.audit import AuditLog
 from app.services.cost_control import USD_TO_VND
+from app.services.identity import login_by_user_ids
 
 router = APIRouter()
+
+
+@router.get('/labels')
+def user_identity_labels(
+    user_ids: list[str] = Query(...),
+    db: Session = Depends(get_db),
+    user: UserContext = Depends(require_permission('view_jobs')),
+):
+    keys = sorted({str(value or '').strip() for value in user_ids if str(value or '').strip()})
+    if len(keys) > 200:
+        raise HTTPException(status_code=422, detail='Chỉ tra cứu tối đa 200 người tạo mỗi lần.')
+    profiles = login_by_user_ids(db, keys)
+    return {
+        'items': [
+            {
+                'user_id': key,
+                'username': str(profiles[key].username or '').strip(),
+                'display_name': str(profiles[key].display_name or '').strip() or None,
+            }
+            for key in keys
+            if key in profiles and str(profiles[key].username or '').strip()
+        ],
+    }
 
 
 def _empty_user(user_id: str):

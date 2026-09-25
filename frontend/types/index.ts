@@ -159,6 +159,7 @@ export type Job = {
   course_id: string
   question_count: number
   status: string
+  requested_by?: string | null
   estimated_input_tokens: number
   estimated_cached_input_tokens: number
   estimated_uncached_input_tokens: number
@@ -196,6 +197,12 @@ export type Job = {
     failed?: number
     tail?: number
   } | null
+}
+
+export type UserIdentityLabel = {
+  user_id: string
+  username: string
+  display_name?: string | null
 }
 
 
