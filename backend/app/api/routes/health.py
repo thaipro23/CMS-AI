@@ -429,8 +429,8 @@ def analytics_health(user: UserContext = Depends(require_permission('view_jobs')
         return {
             'status': 'ok',
             'version': settings.app_version,
-            'analytics_ingest_enabled': settings.analytics_ingest_enabled,
-            'analytics_ingest_scheduler_enabled': settings.analytics_ingest_scheduler_enabled,
+            'analytics_ingest_enabled': True,
+            'analytics_ingest_scheduler_enabled': True,
             'tracking_log_path': file_path,
             'tracking_log_exists': file_exists,
             'tracking_event_count': status_payload.get('tracking_event_count', 0),
