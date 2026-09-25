@@ -79,6 +79,14 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _first_float(*values: Any) -> float | None:
+    for value in values:
+        parsed = _safe_float(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _walk_values(obj: Any) -> list[str]:
     out: list[str] = []
     if isinstance(obj, dict):
@@ -138,17 +146,17 @@ def extract_unit_reset_nonce(event: EventLike) -> str | None:
 
 def _submission_score(event: EventLike) -> tuple[float | None, float | None]:
     payload = event.raw_event or {}
-    earned = (
-        _safe_float(payload.get('weighted_earned'))
-        or _safe_float(payload.get('grade'))
-        or _safe_float(payload.get('score'))
-        or _safe_float(payload.get('earned'))
+    earned = _first_float(
+        payload.get('weighted_earned'),
+        payload.get('grade'),
+        payload.get('score'),
+        payload.get('earned'),
     )
-    possible = (
-        _safe_float(payload.get('weighted_possible'))
-        or _safe_float(payload.get('max_grade'))
-        or _safe_float(payload.get('max_score'))
-        or _safe_float(payload.get('possible'))
+    possible = _first_float(
+        payload.get('weighted_possible'),
+        payload.get('max_grade'),
+        payload.get('max_score'),
+        payload.get('possible'),
     )
     return earned, possible
 
