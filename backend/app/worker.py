@@ -124,12 +124,11 @@ _beat_schedule['udemy-artifact-cleanup'] = {
     'task': 'academic_udemy_artifact_cleanup_task',
     'schedule': max(3600, int(settings.academic_udemy_cleanup_interval_seconds)),
 }
-if getattr(settings, 'analytics_ingest_scheduler_enabled', False):
-    _beat_schedule['analytics-ingest-openedx-tracking-log'] = {
-        'task': 'analytics_ingest_task',
-        'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
-        'args': (None, None),
-    }
+_beat_schedule['analytics-ingest-openedx-tracking-log'] = {
+    'task': 'analytics_ingest_task',
+    'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
+    'args': (None, None),
+}
 _beat_schedule['academic-progress-email-watchdog'] = {
     'task': 'academic_progress_email_watchdog_task',
     'schedule': 60.0,
