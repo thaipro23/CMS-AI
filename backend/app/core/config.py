@@ -315,7 +315,7 @@ class Settings(BaseSettings):
     analytics_pilot_sample_limit: int = 5
     # v25.9.16.7.2.4 rollout/monitoring scope. Analytics is always enabled;
     # mode/allowlists only control which classes are visible during rollout.
-    analytics_rollout_mode: str = 'production'  # off | pilot | production
+    analytics_rollout_mode: str = 'production'  # pilot | production
     analytics_rollout_campuses: str = ''
     analytics_rollout_branches: str = ''
     analytics_rollout_class_ids: str = ''
