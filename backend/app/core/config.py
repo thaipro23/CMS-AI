@@ -289,8 +289,6 @@ class Settings(BaseSettings):
     analytics_loki_page_sleep_seconds: float = 0.3
     analytics_loki_max_pages_per_run: int = 100
     analytics_ingest_store_all_event_types: bool = True
-    analytics_ingest_enabled: bool = True
-    analytics_ingest_scheduler_enabled: bool = True
     analytics_ingest_interval_seconds: int = 60
     analytics_max_lines_per_run: int = 50000
     analytics_recalculate_max_students_per_job: int = 500
@@ -308,7 +306,6 @@ class Settings(BaseSettings):
     # minute, but recalculation must stay debounced and class-scoped so a
     # production term with thousands of enrollments does not rebuild all
     # analytics snapshots on every scheduler tick.
-    analytics_post_ingest_recalculate_enabled: bool = True
     analytics_post_ingest_recalculate_cooldown_seconds: int = 900
     analytics_post_ingest_recalculate_max_jobs_per_run: int = 10
     analytics_ingest_enqueue_cooldown_seconds: int = 120
@@ -316,9 +313,8 @@ class Settings(BaseSettings):
     analytics_production_min_events: int = 1
     analytics_production_min_snapshots: int = 1
     analytics_pilot_sample_limit: int = 5
-    # v25.9.16.7.2.4 rollout/monitoring controls. These are env-only guards
-    # to avoid creating rollout tables while still allowing safe production rollout.
-    analytics_rollout_enabled: bool = True
+    # v25.9.16.7.2.4 rollout/monitoring scope. Analytics is always enabled;
+    # mode/allowlists only control which classes are visible during rollout.
     analytics_rollout_mode: str = 'production'  # off | pilot | production
     analytics_rollout_campuses: str = ''
     analytics_rollout_branches: str = ''
