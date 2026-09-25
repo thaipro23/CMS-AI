@@ -1126,7 +1126,7 @@ class LearningAnalyticsCoreService:
             AnalyticsTrackingEvent.course_id == course_id,
             AnalyticsTrackingEvent.event_type.in_(list(VIDEO_EVENT_TYPES)),
         )
-        source_event_count = int(query.count() or 0)
+        source_query = query
         identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
         if class_id:
@@ -1330,7 +1330,7 @@ class LearningAnalyticsCoreService:
             'username': username,
             'video_progress_rows': saved,
             'skipped_no_new_events': skipped_no_new_events,
-            'source_event_count': source_event_count,
+            'source_event_exists': bool(source_query.with_entities(AnalyticsTrackingEvent.id).first()),
             'matched_event_count': len(events),
             'identity_student_count': len(target_usernames or []),
             'identity_ambiguous_username_count': len((identity or {}).get('ambiguous_usernames') or []),
@@ -1350,7 +1350,7 @@ class LearningAnalyticsCoreService:
             AnalyticsTrackingEvent.course_id == course_id,
             AnalyticsTrackingEvent.event_type.in_(list(QUIZ_ANALYTICS_EVENT_TYPES)),
         )
-        source_event_count = int(query.count() or 0)
+        source_query = query
         identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
         if class_id:
@@ -1500,7 +1500,7 @@ class LearningAnalyticsCoreService:
             'quiz_attempt_rows': saved,
             'created': created,
             'updated': updated,
-            'source_event_count': source_event_count,
+            'source_event_exists': bool(source_query.with_entities(AnalyticsTrackingEvent.id).first()),
             'matched_event_count': len(rows),
             'normalized_event_count': len(normalized_events),
             'identity_student_count': len(target_usernames or []),
