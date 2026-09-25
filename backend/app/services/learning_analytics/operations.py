@@ -147,7 +147,7 @@ class LearningAnalyticsOperationsWorkflowService:
 
         issues: list[dict[str, Any]] = []
         if not ingest.get('file_exists'):
-            issues.append({'severity': 'BLOCKER', 'code': 'TRACKING_LOG_NOT_MOUNTED', 'category': 'Ingest', 'message': 'AI Server chưa thấy tracking.log Open edX.', 'action': 'Kiểm tra mount log trong backend/worker/beat.'})
+            issues.append({'severity': 'BLOCKER', 'code': 'TRACKING_LOG_NOT_MOUNTED', 'category': 'Ingest', 'message': 'AI Server chưa thấy nguồn tracking Open edX (Loki/file).', 'action': 'Kiểm tra ANALYTICS_INGEST_SOURCE và kết nối Loki hoặc mount tracking.log.'})
         if not ingest.get('enabled'):
             issues.append({'severity': 'BLOCKER', 'code': 'INGEST_DISABLED', 'category': 'Ingest', 'message': 'Analytics ingest đang tắt.', 'action': 'Bật ANALYTICS_INGEST_ENABLED=true.'})
         if seconds_since_ingest is None:
@@ -168,7 +168,7 @@ class LearningAnalyticsOperationsWorkflowService:
         sections = [
             {
                 'key': 'ingest',
-                'title': 'Ingest tracking.log',
+                'title': 'Ingest tracking Open edX',
                 'status': 'OK' if ingest.get('file_exists') and ingest.get('enabled') and (seconds_since_ingest is not None and seconds_since_ingest <= ingest_target_seconds) else ('BLOCKED' if not ingest.get('file_exists') or not ingest.get('enabled') else 'WARNING'),
                 'target_seconds': ingest_target_seconds,
                 'actual_seconds': seconds_since_ingest,
