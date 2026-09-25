@@ -1041,14 +1041,20 @@ class LearningAnalyticsCoreService:
                 for row in existing
             )
             video_count = sum(int(row.total_videos or 0) for row in existing)
-            return {
-                'status': 'existing',
-                'course_id': course_id,
-                'session_count': len(existing),
-                'component_count': component_count,
-                'video_count': video_count,
-                'source': 'analytics_course_sessions',
-            }
+            quiz_count = len([row for row in existing if row.quiz_usage_key])
+            # Reuse only a structure that actually contains learning components.
+            # Older/broken mapper versions could persist Bài rows with zero
+            # components; those must be rebuilt from the live Open edX tree.
+            if component_count > 0 and (video_count > 0 or quiz_count > 0):
+                return {
+                    'status': 'existing',
+                    'course_id': course_id,
+                    'session_count': len(existing),
+                    'component_count': component_count,
+                    'video_count': video_count,
+                    'quiz_component_count': quiz_count,
+                    'source': 'analytics_course_sessions',
+                }
 
         live_error: str | None = None
         clean_blocks: list[dict[str, Any]] = []
