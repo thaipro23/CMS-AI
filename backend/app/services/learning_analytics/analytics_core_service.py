@@ -30,6 +30,7 @@ from app.services.academic.subject_delivery import AcademicSubjectDeliveryServic
 from app.services.learning_analytics.tracking_event_parser import TrackingParseError, parse_tracking_log_line
 from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
+from app.services.learning_analytics.loki_tracking_reader import LokiTrackingLogReader
 from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress
 from app.services.learning_analytics.presentation import (
     class_behavior_focus_count as _presentation_class_behavior_focus_count,
@@ -154,11 +155,39 @@ class LearningAnalyticsCoreService:
         return cp
 
     def ingest_status(self) -> dict[str, Any]:
+        source = str(getattr(settings, 'analytics_ingest_source', 'loki') or 'loki').strip().lower()
+        if source == 'loki':
+            base_url = str(getattr(settings, 'analytics_loki_base_url', '') or '').strip().rstrip('/')
+            cp = self.db.query(AnalyticsIngestCheckpoint).filter(
+                AnalyticsIngestCheckpoint.checkpoint_key == 'openedx_tracking_loki'
+            ).first()
+            return {
+                'enabled': bool(getattr(settings, 'analytics_ingest_enabled', True)),
+                'source': 'loki',
+                'source_url': base_url,
+                # Compatibility for existing SLA/UI code that historically
+                # interpreted file_exists as "ingest source is available".
+                'file_path': None,
+                'file_exists': True,
+                'checkpoint_key': 'openedx_tracking_loki',
+                'last_offset': int(cp.last_offset or 0) if cp else 0,
+                'cursor_ns': str(int(cp.last_offset or 0)) if cp else '0',
+                'last_run_at': cp.last_run_at.isoformat() if cp and cp.last_run_at else None,
+                'last_status': cp.last_status if cp else 'never_run',
+                'last_error': cp.last_error if cp else None,
+                'total_lines_read': int(cp.total_lines_read or 0) if cp else 0,
+                'total_events_inserted': int(cp.total_events_inserted or 0) if cp else 0,
+                'total_duplicate_events': int(cp.total_duplicate_events or 0) if cp else 0,
+                'total_parse_errors': int(cp.total_parse_errors or 0) if cp else 0,
+                'stats': cp.stats_json if cp else {},
+            }
+
         file_path = getattr(settings, 'openedx_tracking_log_path', '/openedx-data/lms/logs/tracking.log')
         cp = self.db.query(AnalyticsIngestCheckpoint).filter(AnalyticsIngestCheckpoint.checkpoint_key == 'openedx_tracking_log').first()
         exists = Path(file_path).exists()
         return {
             'enabled': bool(getattr(settings, 'analytics_ingest_enabled', True)),
+            'source': 'file',
             'file_path': file_path,
             'file_exists': exists,
             'last_offset': int(cp.last_offset or 0) if cp else 0,
@@ -369,6 +398,184 @@ class LearningAnalyticsCoreService:
         }
 
     def run_ingest(self, *, file_path: str | None = None, max_lines: int | None = None) -> dict[str, Any]:
+        """Ingest Open edX tracking events from the configured production source."""
+        source = str(getattr(settings, 'analytics_ingest_source', 'loki') or 'loki').strip().lower()
+        # Explicit file_path keeps the manual/debug compatibility path intact.
+        if file_path or source == 'file':
+            return self._run_file_ingest(file_path=file_path, max_lines=max_lines)
+        if source != 'loki':
+            raise ValueError(f'Unsupported ANALYTICS_INGEST_SOURCE: {source}')
+        return self._run_loki_ingest(max_lines=max_lines)
+
+    def _run_loki_ingest(self, *, max_lines: int | None = None) -> dict[str, Any]:
+        if not bool(getattr(settings, 'analytics_ingest_enabled', True)):
+            return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_INGEST_ENABLED=false'}
+        if not self._try_acquire_ingest_lock():
+            return {
+                'enabled': True,
+                'source': 'loki',
+                'status': 'skipped_locked',
+                'message': 'Một lượt ingest tracking log khác đang chạy.',
+                'safe_policy': 'signals_only_not_violation',
+            }
+
+        base_url = str(getattr(settings, 'analytics_loki_base_url', '') or '').strip().rstrip('/')
+        query = str(getattr(settings, 'analytics_loki_query', '') or '').strip()
+        checkpoint_key = 'openedx_tracking_loki'
+        cp: AnalyticsIngestCheckpoint | None = None
+        try:
+            cp = self._get_checkpoint(checkpoint_key, base_url)
+            reader = LokiTrackingLogReader(
+                base_url=base_url,
+                query=query,
+                window_seconds=int(getattr(settings, 'analytics_loki_window_seconds', 600) or 600),
+                lag_seconds=int(getattr(settings, 'analytics_loki_lag_seconds', 120) or 120),
+                limit=int(getattr(settings, 'analytics_loki_limit', 1000) or 1000),
+                timeout_seconds=float(getattr(settings, 'analytics_loki_request_timeout_seconds', 60) or 60),
+                page_sleep_seconds=float(getattr(settings, 'analytics_loki_page_sleep_seconds', 0.3) or 0.0),
+                max_pages=int(getattr(settings, 'analytics_loki_max_pages_per_run', 100) or 100),
+                max_lines=max_lines or int(getattr(settings, 'analytics_max_lines_per_run', 50000) or 50000),
+                tenant_id=str(getattr(settings, 'analytics_loki_tenant_id', '') or '').strip() or None,
+            )
+            cursor_ns = int(cp.last_offset or 0)
+            if cursor_ns <= 0:
+                cursor_ns = reader.initial_cursor_ns(
+                    backfill_start=str(getattr(settings, 'analytics_loki_backfill_start', '') or '').strip() or None,
+                    default_backfill_hours=int(getattr(settings, 'analytics_loki_default_backfill_hours', 24) or 24),
+                )
+
+            result = reader.read_from(cursor_ns=cursor_ns)
+            stats = Counter()
+            stats['lines_read'] = len(result.entries)
+            event_type_counts: Counter[str] = Counter()
+            impacted_course_usernames: dict[str, set[str]] = defaultdict(set)
+            parsed_rows: list[tuple[Any, Any]] = []
+            store_all = bool(getattr(settings, 'analytics_ingest_store_all_event_types', True))
+
+            for entry in result.entries:
+                try:
+                    parsed = parse_tracking_log_line(entry.line, relevant_only=not store_all)
+                except TrackingParseError:
+                    stats['parse_errors'] += 1
+                    continue
+                if parsed is None:
+                    stats['ignored_events'] += 1
+                    continue
+                parsed_rows.append((entry, parsed))
+                event_type_counts[parsed.event_type] += 1
+
+            existing_hashes: set[str] = set()
+            hashes = list(dict.fromkeys(parsed.raw_line_hash for _entry, parsed in parsed_rows))
+            for offset in range(0, len(hashes), 1000):
+                batch = hashes[offset:offset + 1000]
+                existing_hashes.update(
+                    str(raw_hash)
+                    for (raw_hash,) in self.db.query(AnalyticsTrackingEvent.raw_line_hash)
+                    .filter(AnalyticsTrackingEvent.raw_line_hash.in_(batch))
+                    .all()
+                    if raw_hash
+                )
+
+            seen_hashes = set(existing_hashes)
+            for entry, parsed in parsed_rows:
+                if parsed.raw_line_hash in seen_hashes:
+                    stats['duplicate_events'] += 1
+                    continue
+                seen_hashes.add(parsed.raw_line_hash)
+                values = parsed.as_model_kwargs()
+                values.update({
+                    'event_source': 'openedx_tracking_loki',
+                    'loki_ts_ns': int(entry.timestamp_ns),
+                    'source_pod': entry.pod,
+                    'source_app': entry.app,
+                })
+                self.db.add(AnalyticsTrackingEvent(**values))
+                stats['events_inserted'] += 1
+                if parsed.course_id:
+                    impacted_course_usernames[str(parsed.course_id or '').strip()].add(str(parsed.username or '').strip())
+                if parsed.event_type in VIDEO_EVENT_TYPES:
+                    stats['video_events'] += 1
+                if parsed.event_type in PROBLEM_EVENT_TYPES:
+                    stats['problem_events'] += 1
+                if (stats['events_inserted'] % 500) == 0:
+                    self.db.flush()
+
+            cp.file_inode = None
+            cp.file_size = 0
+            cp.last_offset = int(result.end_cursor_ns)
+            cp.last_run_at = datetime.utcnow()
+            cp.last_status = 'completed'
+            cp.last_error = None
+            cp.total_lines_read = int(cp.total_lines_read or 0) + int(stats['lines_read'])
+            cp.total_events_inserted = int(cp.total_events_inserted or 0) + int(stats['events_inserted'])
+            cp.total_duplicate_events = int(cp.total_duplicate_events or 0) + int(stats['duplicate_events'])
+            cp.total_parse_errors = int(cp.total_parse_errors or 0) + int(stats['parse_errors'])
+            impacted_course_usernames = {
+                course_id: {username for username in usernames if username}
+                for course_id, usernames in impacted_course_usernames.items()
+                if course_id
+            }
+            cp.stats_json = {
+                **dict(stats),
+                'source': 'loki',
+                'event_type_counts': dict(event_type_counts),
+                'start_cursor_ns': str(result.start_cursor_ns),
+                'end_cursor_ns': str(result.end_cursor_ns),
+                'safe_end_ns': str(result.safe_end_ns),
+                'pages': result.pages,
+                'windows': result.windows,
+                'caught_up': result.caught_up,
+                'query': result.query,
+                'impacted_course_count': len(impacted_course_usernames),
+                'impacted_user_count': sum(len(users) for users in impacted_course_usernames.values()),
+            }
+            self.db.add(cp)
+            self.db.commit()
+
+            post_ingest_recalculate = {
+                'enabled': bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)),
+                'status': 'not_run',
+            }
+            if int(stats['events_inserted'] or 0) > 0:
+                try:
+                    post_ingest_recalculate = self.enqueue_post_ingest_recalculate_jobs(
+                        course_usernames=impacted_course_usernames,
+                        source='analytics_loki_ingest_task',
+                    )
+                except Exception as exc:
+                    post_ingest_recalculate = {'enabled': True, 'status': 'failed', 'message': str(exc)[:1000]}
+
+            cp.stats_json = {**(cp.stats_json or {}), 'post_ingest_recalculate': post_ingest_recalculate}
+            self.db.add(cp)
+            self.db.commit()
+            return {
+                'enabled': True,
+                'source': 'loki',
+                'status': 'completed',
+                'cursor_ns': str(result.end_cursor_ns),
+                **cp.stats_json,
+            }
+        except Exception as exc:
+            self.db.rollback()
+            try:
+                cp = self._get_checkpoint(checkpoint_key, base_url)
+                cp.last_run_at = datetime.utcnow()
+                cp.last_status = 'failed'
+                cp.last_error = str(exc)[:4000]
+                cp.stats_json = {
+                    **(cp.stats_json or {}),
+                    'source': 'loki',
+                    'last_failure': str(exc)[:1000],
+                }
+                self.db.add(cp)
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+            raise
+        finally:
+            self._release_ingest_lock()
+
+    def _run_file_ingest(self, *, file_path: str | None = None, max_lines: int | None = None) -> dict[str, Any]:
         if not bool(getattr(settings, 'analytics_ingest_enabled', True)):
             return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_INGEST_ENABLED=false'}
         if not self._try_acquire_ingest_lock():
@@ -396,7 +603,10 @@ class LearningAnalyticsCoreService:
             impacted_course_usernames: dict[str, set[str]] = defaultdict(set)
             for line in result.lines:
                 try:
-                    parsed = parse_tracking_log_line(line)
+                    parsed = parse_tracking_log_line(
+                        line,
+                        relevant_only=not bool(getattr(settings, 'analytics_ingest_store_all_event_types', True)),
+                    )
                 except TrackingParseError:
                     stats['parse_errors'] += 1
                     continue
