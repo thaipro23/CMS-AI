@@ -1223,7 +1223,10 @@ class LearningAnalyticsCoreService:
             row.total_parts = len(video_components)
             row.total_videos = len(video_components)
             row.quiz_usage_key = mapping.quiz.usage_key if mapping.quiz else None
-            row.components_json = {'components': [asdict(item) for item in mapping.components]}
+            row.components_json = {
+                'components': [asdict(item) for item in mapping.components],
+                'match_keys': list(dict.fromkeys(mapping.match_keys or [])),
+            }
             row.session_type = mapping.session_type
             row.source = 'openedx_blocks_auto'
             row.active = True
@@ -1283,7 +1286,9 @@ class LearningAnalyticsCoreService:
             deadline_at = override.deadline_date if override and override.deadline_date else r.deadline_at
             source = 'QUIZ_DEADLINE' if override and override.deadline_date else r.deadline_source
             quality = 'GOOD' if override and override.deadline_date else r.deadline_mapping_quality
-            components = (r.components_json or {}).get('components', [])
+            components_payload = r.components_json or {}
+            components = components_payload.get('components', [])
+            match_keys = components_payload.get('match_keys', [])
             if override:
                 components = [dict(item) for item in components]
                 for item in components:
@@ -1303,6 +1308,7 @@ class LearningAnalyticsCoreService:
                 'total_parts': r.total_parts,
                 'total_videos': r.total_videos,
                 'quiz_usage_key': r.quiz_usage_key,
+                'match_keys': list(match_keys or []),
                 'quiz_deadline_configured': bool(override and override.deadline_date),
                 'quiz_deadline_label': override.component_label if override else None,
                 'components': components,
@@ -1814,19 +1820,135 @@ class LearningAnalyticsCoreService:
             AnalyticsQuizAttempt.username == username,
         ).order_by(AnalyticsQuizAttempt.started_at.asc().nullslast(), AnalyticsQuizAttempt.attempt_no.asc()).all()
 
-    def _quiz_attempt_for_session(self, *, attempts: list[AnalyticsQuizAttempt], session: dict[str, Any]) -> AnalyticsQuizAttempt | None:
-        quiz_key = session.get('quiz_usage_key')
-        session_key = session.get('session_key')
+    def _quiz_attempt_match_score(
+        self,
+        *,
+        attempt: AnalyticsQuizAttempt,
+        session: dict[str, Any],
+    ) -> tuple[int, str | None]:
+        """Return deterministic session match score for one quiz attempt.
+
+        Production tracking can carry a stale sequence key while the unit key
+        already points at the next/previous Bài. Prefer the most specific
+        evidence observed in production:
+        assigned problem > unit/vertical > sequence.
+        """
+        match_keys = [
+            str(value)
+            for value in (session.get('match_keys') or [])
+            if value
+        ]
+        quiz_key = str(session.get('quiz_usage_key') or '')
+        session_key = str(session.get('session_key') or '')
         components = session.get('components') if isinstance(session.get('components'), list) else []
-        candidate_keys = [str(quiz_key or ''), str(session_key or '')]
-        candidate_keys.extend(str(item.get('usage_key') or item.get('id') or '') for item in components if isinstance(item, dict))
-        for attempt in reversed(attempts):
-            if any(self._key_match(attempt.unit_usage_key, key) or self._key_match(attempt.sequence_usage_key, key) for key in candidate_keys if key):
-                return attempt
-            assigned = attempt.assigned_problem_usage_keys_json or []
-            if any(any(self._key_match(value, key) for key in candidate_keys if key) for value in assigned):
-                return attempt
-        return None
+
+        if quiz_key:
+            match_keys.append(quiz_key)
+        if session_key:
+            match_keys.append(session_key)
+        match_keys.extend(
+            str(item.get('usage_key') or item.get('id') or '')
+            for item in components
+            if isinstance(item, dict)
+        )
+        match_keys = list(dict.fromkeys(key for key in match_keys if key))
+
+        assigned = [
+            str(value)
+            for value in (attempt.assigned_problem_usage_keys_json or [])
+            if value
+        ]
+        if any(
+            self._key_match(value, key)
+            for value in assigned
+            for key in match_keys
+        ):
+            return 300, 'assigned_problem'
+
+        if attempt.unit_usage_key and any(
+            self._key_match(attempt.unit_usage_key, key)
+            for key in match_keys
+        ):
+            return 200, 'unit'
+
+        if attempt.sequence_usage_key and any(
+            self._key_match(attempt.sequence_usage_key, key)
+            for key in match_keys
+        ):
+            return 100, 'sequence'
+
+        return 0, None
+
+    @staticmethod
+    def _quiz_attempt_representative_rank(attempt: AnalyticsQuizAttempt) -> tuple[int, int, datetime]:
+        """Prefer submitted/scored evidence, then the latest attempt."""
+        submitted = int(attempt.submission_count or 0)
+        scored = 1 if attempt.score_earned is not None or attempt.score_possible is not None else 0
+        when = (
+            attempt.last_submission_at
+            or attempt.first_submission_at
+            or attempt.ended_at
+            or attempt.started_at
+            or datetime.min
+        )
+        return (1 if submitted > 0 else 0, scored, when)
+
+    def _resolve_quiz_attempts_by_session(
+        self,
+        *,
+        attempts: list[AnalyticsQuizAttempt],
+        sessions: list[dict[str, Any]],
+    ) -> tuple[dict[int, AnalyticsQuizAttempt], dict[str, Any]]:
+        """Resolve every attempt to at most one Bài/Session.
+
+        This prevents the same stale sequence/unit pair from being counted in
+        two adjacent Bài. Equal top scores across multiple sessions remain
+        unresolved rather than being guessed.
+        """
+        resolved: dict[int, AnalyticsQuizAttempt] = {}
+        method_counts: Counter[str] = Counter()
+        ambiguous = 0
+        unmatched = 0
+
+        for attempt in attempts:
+            scored_sessions: list[tuple[int, int, str]] = []
+            for session in sessions:
+                session_index = int(session.get('session_index') or 0)
+                if session_index <= 0:
+                    continue
+                score, method = self._quiz_attempt_match_score(
+                    attempt=attempt,
+                    session=session,
+                )
+                if score > 0 and method:
+                    scored_sessions.append((score, session_index, method))
+
+            if not scored_sessions:
+                unmatched += 1
+                continue
+
+            max_score = max(item[0] for item in scored_sessions)
+            winners = [item for item in scored_sessions if item[0] == max_score]
+            winner_sessions = {item[1] for item in winners}
+            if len(winner_sessions) != 1:
+                ambiguous += 1
+                continue
+
+            _, session_index, method = winners[0]
+            method_counts[method] += 1
+
+            current = resolved.get(session_index)
+            if current is None or self._quiz_attempt_representative_rank(attempt) > self._quiz_attempt_representative_rank(current):
+                resolved[session_index] = attempt
+
+        return resolved, {
+            'attempt_count': len(attempts),
+            'resolved_session_count': len(resolved),
+            'match_method_counts': dict(method_counts),
+            'ambiguous_attempt_count': ambiguous,
+            'unmatched_attempt_count': unmatched,
+        }
+
 
     def _class_tracking_identity_maps(self, *, class_id: str, course_id: str) -> dict[str, Any]:
         """Resolve AP roster identities to Open edX tracking identities.
@@ -2091,8 +2213,17 @@ class LearningAnalyticsCoreService:
         academic_service = AcademicService(self.db)
         now = datetime.utcnow()
         saved = 0
+        quiz_resolution_totals: Counter[str] = Counter()
         for user in users:
             quiz_attempts = self._quiz_attempts_for_user(course_id=course_id, username=user)
+            quiz_attempt_by_session, quiz_resolution = self._resolve_quiz_attempts_by_session(
+                attempts=quiz_attempts,
+                sessions=sessions,
+            )
+            quiz_resolution_totals['attempt_count'] += int(quiz_resolution.get('attempt_count') or 0)
+            quiz_resolution_totals['resolved_session_count'] += int(quiz_resolution.get('resolved_session_count') or 0)
+            quiz_resolution_totals['ambiguous_attempt_count'] += int(quiz_resolution.get('ambiguous_attempt_count') or 0)
+            quiz_resolution_totals['unmatched_attempt_count'] += int(quiz_resolution.get('unmatched_attempt_count') or 0)
             video_rows = self.db.query(AnalyticsStudentVideoProgress).filter(AnalyticsStudentVideoProgress.course_id == course_id, AnalyticsStudentVideoProgress.username == user).all()
             videos_by_session: dict[int, list[AnalyticsStudentVideoProgress]] = defaultdict(list)
             for row in video_rows:
@@ -2112,7 +2243,7 @@ class LearningAnalyticsCoreService:
                 rows = videos_by_session.get(session_index, [])
                 session_type = str(session.get('session_type') or 'LEARNING_SESSION')
                 quiz_item = self._quiz_item_for_session(components=components, session_index=session_index, academic_service=academic_service)
-                raw_attempt = self._quiz_attempt_for_session(attempts=quiz_attempts, session=session)
+                raw_attempt = quiz_attempt_by_session.get(session_index)
                 quiz_score = None
                 quiz_attempted = False
                 quiz_completed = False
@@ -2232,7 +2363,15 @@ class LearningAnalyticsCoreService:
                 row.calculated_at = now
                 saved += 1
         self.db.commit()
-        return {'class_id': class_id, 'course_id': course_id, 'processed': len(users), 'sessions': len(sessions), 'session_progress_rows': saved}
+        return {
+            'class_id': class_id,
+            'course_id': course_id,
+            'processed': len(users),
+            'sessions': len(sessions),
+            'session_progress_rows': saved,
+            'quiz': quiz_result,
+            'quiz_resolution': dict(quiz_resolution_totals),
+        }
 
     def recalculate_learning_behavior(self, *, class_id: str | None, course_id: str, username: str | None = None) -> dict[str, Any]:
         self.recalculate_student_session_progress(class_id=class_id, course_id=course_id, username=username)
