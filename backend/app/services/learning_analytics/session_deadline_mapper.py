@@ -34,7 +34,7 @@ class CourseSessionMapping:
 
     @property
     def quiz(self) -> SessionComponent | None:
-        quizzes = [c for c in self.components if c.block_type in {'problem', 'quiz', 'sequential_quiz'}]
+        quizzes = [c for c in self.components if c.block_type in {'problem', 'quiz', 'sequential_quiz', 'library_content'}]
         return quizzes[-1] if quizzes else None
 
 
@@ -83,7 +83,7 @@ def classify_session_type(title: str | None, block_type: str | None = None, comp
         return 'ASSIGNMENT'
     comps = components or []
     has_video = any(c.block_type == 'video' for c in comps)
-    has_quiz = any(c.block_type in {'problem', 'quiz', 'sequential_quiz'} for c in comps)
+    has_quiz = any(c.block_type in {'problem', 'quiz', 'sequential_quiz', 'library_content'} for c in comps)
     if has_video or has_quiz or re.search(r'(?:bài|bai|session|lesson)\s*\d+', text, re.I):
         return 'LEARNING_SESSION'
     if comps:
