@@ -289,6 +289,13 @@ class Settings(BaseSettings):
     analytics_loki_page_sleep_seconds: float = 0.3
     analytics_loki_max_pages_per_run: int = 100
     analytics_ingest_interval_seconds: int = 60
+    # Raw Open edX events are a short-lived PostgreSQL staging buffer. Loki
+    # remains the authoritative raw source; durable video/quiz snapshots carry
+    # historical analytics after retention cleanup.
+    analytics_raw_event_retention_days: int = 7
+    analytics_raw_event_cleanup_batch_size: int = 20000
+    analytics_raw_event_cleanup_max_batches_per_run: int = 10
+    analytics_raw_event_cleanup_interval_seconds: int = 86400
     analytics_max_lines_per_run: int = 50000
     analytics_recalculate_max_students_per_job: int = 500
     analytics_dashboard_max_page_size: int = 200
