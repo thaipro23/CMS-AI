@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
 from app.core.privacy import mask_email
-from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot
+from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot, OpenEdXUserMapping
 from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
@@ -912,22 +912,28 @@ class LearningAnalyticsCoreService:
 
     def recalculate_course_video_progress(self, *, course_id: str, username: str | None = None, class_id: str | None = None) -> dict[str, Any]:
         video_session_lookup = self._video_session_lookup(course_id=course_id)
-        query = self.db.query(AnalyticsTrackingEvent).filter(AnalyticsTrackingEvent.course_id == course_id, AnalyticsTrackingEvent.event_type.in_(list(VIDEO_EVENT_TYPES)))
+        query = self.db.query(AnalyticsTrackingEvent).filter(
+            AnalyticsTrackingEvent.course_id == course_id,
+            AnalyticsTrackingEvent.event_type.in_(list(VIDEO_EVENT_TYPES)),
+        )
+        identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
         if username:
             target_usernames = [username]
+            query = query.filter(AnalyticsTrackingEvent.username == username)
         elif class_id:
-            target_usernames = self._student_usernames_for_class(class_id=class_id, course_id=course_id)
-        if target_usernames is not None:
+            identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
+            target_usernames = list(identity.get('ap_usernames') or [])
             if not target_usernames:
                 return {'course_id': course_id, 'class_id': class_id, 'username': username, 'video_progress_rows': 0, 'message': 'Lớp chưa có username hợp lệ để tính video.'}
-            query = query.filter(AnalyticsTrackingEvent.username.in_(target_usernames))
-        events = query.order_by(AnalyticsTrackingEvent.username.asc(), AnalyticsTrackingEvent.video_id.asc(), AnalyticsTrackingEvent.event_time.asc()).all()
+            query = self._apply_tracking_identity_filter(query, identity)
+        events = query.order_by(AnalyticsTrackingEvent.event_time.asc(), AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast()).all()
         grouped: dict[tuple[str, str], list[AnalyticsTrackingEvent]] = defaultdict(list)
         for ev in events:
-            if not ev.username or not ev.video_id:
+            canonical = self._canonical_event_username(ev, identity)
+            if not canonical or not ev.video_id:
                 continue
-            grouped[(ev.username, ev.video_id)].append(ev)
+            grouped[(canonical, ev.video_id)].append(ev)
         now = datetime.utcnow()
         saved = 0
         for (user, video_id), group in grouped.items():
@@ -977,31 +983,36 @@ class LearningAnalyticsCoreService:
             AnalyticsTrackingEvent.course_id == course_id,
             AnalyticsTrackingEvent.event_type.in_(list(QUIZ_ANALYTICS_EVENT_TYPES)),
         )
+        identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
         if username:
             target_usernames = [username]
+            query = query.filter(AnalyticsTrackingEvent.username == username)
         elif class_id:
-            target_usernames = self._student_usernames_for_class(class_id=class_id, course_id=course_id)
-        if target_usernames is not None:
+            identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
+            target_usernames = list(identity.get('ap_usernames') or [])
             if not target_usernames:
                 return {'course_id': course_id, 'class_id': class_id, 'username': username, 'quiz_attempt_rows': 0, 'message': 'Lớp chưa có username hợp lệ để tính quiz.'}
-            query = query.filter(AnalyticsTrackingEvent.username.in_(target_usernames))
-        rows = query.order_by(AnalyticsTrackingEvent.username.asc(), AnalyticsTrackingEvent.event_time.asc()).all()
-        features = build_quiz_attempt_features([
-            EventLike(
+            query = self._apply_tracking_identity_filter(query, identity)
+        rows = query.order_by(AnalyticsTrackingEvent.event_time.asc(), AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast()).all()
+        normalized_events: list[EventLike] = []
+        for r in rows:
+            canonical = self._canonical_event_username(r, identity)
+            if not canonical:
+                continue
+            normalized_events.append(EventLike(
                 event_type=r.event_type,
                 event_source=r.event_source,
                 event_time=r.event_time,
                 user_id=r.user_id,
-                username=r.username,
+                username=canonical,
                 course_id=r.course_id,
                 page_url=r.page_url,
                 raw_event=r.raw_event or {},
                 raw_context=r.raw_context or {},
                 raw_json=r.raw_json or {},
-            )
-            for r in rows
-        ])
+            ))
+        features = build_quiz_attempt_features(normalized_events)
         now = datetime.utcnow()
         saved = 0
         for feat in features:
@@ -1067,18 +1078,125 @@ class LearningAnalyticsCoreService:
                 return attempt
         return None
 
+    def _class_tracking_identity_maps(self, *, class_id: str, course_id: str) -> dict[str, Any]:
+        """Resolve AP roster identities to Open edX tracking identities.
+
+        Derived analytics keeps AcademicStudent.username as the stable dashboard
+        key, while raw tracking events are matched using OpenEdXUserMapping and
+        AcademicStudentLearningSnapshot openedx_username/openedx_user_id.
+        Ambiguous Open edX identities are deliberately excluded.
+        """
+        rows = (
+            self.db.query(
+                AcademicStudent.id,
+                AcademicStudent.username,
+                OpenEdXUserMapping.openedx_username,
+                OpenEdXUserMapping.openedx_user_id,
+                AcademicStudentLearningSnapshot.openedx_username,
+                AcademicStudentLearningSnapshot.openedx_user_id,
+            )
+            .join(AcademicClassStudent, AcademicClassStudent.student_id == AcademicStudent.id)
+            .outerjoin(OpenEdXUserMapping, OpenEdXUserMapping.student_id == AcademicStudent.id)
+            .outerjoin(
+                AcademicStudentLearningSnapshot,
+                (AcademicStudentLearningSnapshot.student_id == AcademicStudent.id)
+                & (AcademicStudentLearningSnapshot.class_id == class_id)
+                & (AcademicStudentLearningSnapshot.openedx_course_id == course_id),
+            )
+            .filter(AcademicClassStudent.class_id == class_id)
+            .all()
+        )
+
+        username_candidates: dict[str, set[str]] = defaultdict(set)
+        user_id_candidates: dict[str, set[str]] = defaultdict(set)
+        raw_usernames: set[str] = set()
+        raw_user_ids: set[str] = set()
+        ap_usernames: set[str] = set()
+
+        for (
+            _student_id,
+            ap_username,
+            mapped_username,
+            mapped_user_id,
+            snapshot_username,
+            snapshot_user_id,
+        ) in rows:
+            ap = str(ap_username or '').strip()
+            if not ap:
+                continue
+            ap_usernames.add(ap)
+
+            for candidate in (snapshot_username, mapped_username, ap):
+                raw = str(candidate or '').strip()
+                if not raw:
+                    continue
+                raw_usernames.add(raw)
+                username_candidates[raw.lower()].add(ap)
+
+            for candidate in (snapshot_user_id, mapped_user_id):
+                raw = str(candidate or '').strip()
+                if not raw:
+                    continue
+                raw_user_ids.add(raw)
+                user_id_candidates[raw].add(ap)
+
+        username_to_ap = {
+            key: next(iter(values))
+            for key, values in username_candidates.items()
+            if len(values) == 1
+        }
+        user_id_to_ap = {
+            key: next(iter(values))
+            for key, values in user_id_candidates.items()
+            if len(values) == 1
+        }
+
+        return {
+            'ap_usernames': sorted(ap_usernames),
+            'raw_usernames': raw_usernames,
+            'raw_user_ids': raw_user_ids,
+            'username_to_ap': username_to_ap,
+            'user_id_to_ap': user_id_to_ap,
+            'ambiguous_usernames': sorted(key for key, values in username_candidates.items() if len(values) > 1),
+            'ambiguous_user_ids': sorted(key for key, values in user_id_candidates.items() if len(values) > 1),
+        }
+
+    @staticmethod
+    def _canonical_event_username(event: AnalyticsTrackingEvent, identity: dict[str, Any] | None) -> str | None:
+        if identity is None:
+            return str(event.username or '').strip() or None
+        user_id = str(event.user_id or '').strip()
+        if user_id:
+            mapped = (identity.get('user_id_to_ap') or {}).get(user_id)
+            if mapped:
+                return str(mapped)
+        username = str(event.username or '').strip()
+        if username:
+            mapped = (identity.get('username_to_ap') or {}).get(username.lower())
+            if mapped:
+                return str(mapped)
+        return None
+
+    @staticmethod
+    def _apply_tracking_identity_filter(query: Any, identity: dict[str, Any]) -> Any:
+        filters: list[Any] = []
+        raw_usernames = sorted(identity.get('raw_usernames') or [])
+        raw_user_ids = sorted(identity.get('raw_user_ids') or [])
+        if raw_usernames:
+            filters.append(AnalyticsTrackingEvent.username.in_(raw_usernames))
+        if raw_user_ids:
+            filters.append(AnalyticsTrackingEvent.user_id.in_(raw_user_ids))
+        if not filters:
+            return query.filter(False)
+        return query.filter(or_(*filters))
+
     def _student_usernames_for_class(self, *, class_id: str | None, course_id: str, username: str | None = None) -> list[str]:
         if username:
             return [username]
         users: set[str] = set()
         if class_id:
-            rows = (
-                self.db.query(AcademicStudent.username)
-                .join(AcademicClassStudent, AcademicClassStudent.student_id == AcademicStudent.id)
-                .filter(AcademicClassStudent.class_id == class_id)
-                .all()
-            )
-            return sorted({str(row[0]) for row in rows if row and row[0]})
+            identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
+            return list(identity.get('ap_usernames') or [])
         video_users = self.db.query(AnalyticsStudentVideoProgress.username).filter(AnalyticsStudentVideoProgress.course_id == course_id).distinct().all()
         users.update(str(item[0]) for item in video_users if item and item[0])
         event_users = self.db.query(AnalyticsTrackingEvent.username).filter(AnalyticsTrackingEvent.course_id == course_id).distinct().all()
@@ -1100,9 +1218,22 @@ class LearningAnalyticsCoreService:
         return {str(username): snapshot for username, snapshot in rows if username and snapshot}
 
 
-    def _events_count_by_username(self, *, course_id: str, usernames: list[str]) -> dict[str, int]:
+    def _events_count_by_username(self, *, course_id: str, usernames: list[str], class_id: str | None = None) -> dict[str, int]:
         if not usernames:
             return {}
+        if class_id:
+            identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
+            query = self.db.query(AnalyticsTrackingEvent).filter(
+                AnalyticsTrackingEvent.course_id == course_id,
+            )
+            query = self._apply_tracking_identity_filter(query, identity)
+            counts: Counter[str] = Counter()
+            allowed = set(usernames)
+            for event in query.all():
+                canonical = self._canonical_event_username(event, identity)
+                if canonical and canonical in allowed:
+                    counts[canonical] += 1
+            return dict(counts)
         rows = (
             self.db.query(AnalyticsTrackingEvent.username, func.count(AnalyticsTrackingEvent.id))
             .filter(
@@ -1342,7 +1473,7 @@ class LearningAnalyticsCoreService:
         if not users and username:
             users = [username]
 
-        events_by_user = self._events_count_by_username(course_id=course_id, usernames=users)
+        events_by_user = self._events_count_by_username(course_id=course_id, usernames=users, class_id=class_id)
         videos_by_user = self._video_progress_by_username(course_id=course_id, usernames=users)
         sessions_by_user = self._session_progress_by_username(course_id=course_id, usernames=users)
 
