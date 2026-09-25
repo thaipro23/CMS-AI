@@ -169,14 +169,14 @@ def _derive_video_id(event: dict[str, Any], page: str | None) -> str | None:
     return None
 
 
-def parse_tracking_log_line(line: str, *, include_caption_events: bool = True) -> ParsedTrackingEvent | None:
+def parse_tracking_log_line(line: str, *, include_caption_events: bool = True, relevant_only: bool = True) -> ParsedTrackingEvent | None:
     raw_hash = hashlib.sha256((line or '').encode('utf-8', errors='ignore')).hexdigest()
     data = extract_tracking_json(line)
     event_type = _safe_str(data.get('event_type')) or _safe_str(data.get('name')) or ''
     if not event_type:
         raise TrackingParseError('event_type_missing')
     page_for_noise = _safe_str(data.get('page')) or ''
-    if event_type not in _RELEVANT_EVENTS:
+    if relevant_only and event_type not in _RELEVANT_EVENTS:
         if any(pattern in page_for_noise for pattern in _NOISE_PATTERNS):
             return None
         return None
