@@ -447,11 +447,11 @@ class LearningAnalyticsCoreService:
             event_type_counts: Counter[str] = Counter()
             impacted_course_usernames: dict[str, set[str]] = defaultdict(set)
             parsed_rows: list[tuple[Any, Any]] = []
-            store_all = bool(getattr(settings, 'analytics_ingest_store_all_event_types', True))
-
             for entry in result.entries:
                 try:
-                    parsed = parse_tracking_log_line(entry.line, relevant_only=not store_all)
+                    # Loki remains the complete raw source of truth. PostgreSQL
+                    # stores only events required by learning analytics.
+                    parsed = parse_tracking_log_line(entry.line, relevant_only=True)
                 except TrackingParseError:
                     stats['parse_errors'] += 1
                     continue
@@ -598,10 +598,7 @@ class LearningAnalyticsCoreService:
             impacted_course_usernames: dict[str, set[str]] = defaultdict(set)
             for line in result.lines:
                 try:
-                    parsed = parse_tracking_log_line(
-                        line,
-                        relevant_only=not bool(getattr(settings, 'analytics_ingest_store_all_event_types', True)),
-                    )
+                    parsed = parse_tracking_log_line(line, relevant_only=True)
                 except TrackingParseError:
                     stats['parse_errors'] += 1
                     continue
