@@ -288,7 +288,6 @@ class Settings(BaseSettings):
     analytics_loki_request_timeout_seconds: int = 60
     analytics_loki_page_sleep_seconds: float = 0.3
     analytics_loki_max_pages_per_run: int = 100
-    analytics_ingest_store_all_event_types: bool = True
     analytics_ingest_interval_seconds: int = 60
     analytics_max_lines_per_run: int = 50000
     analytics_recalculate_max_students_per_job: int = 500
