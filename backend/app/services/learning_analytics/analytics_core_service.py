@@ -910,7 +910,39 @@ class LearningAnalyticsCoreService:
                 best = (score, value)
         return best[1] if best[0] > 0 else None
 
+    @staticmethod
+    def _video_quality_from_totals(
+        completion_percent: float | None,
+        watch_percent: float | None,
+    ) -> tuple[float | None, float | None]:
+        if completion_percent is None or watch_percent is None:
+            return None, None
+        completion = max(0.0, min(1.0, float(completion_percent) / 100.0))
+        watch = max(0.0, min(1.0, float(watch_percent) / 100.0))
+        consistency = max(0.0, 1.0 - abs(completion - watch))
+        quality = min(completion, watch) * consistency
+        return round(consistency * 100.0, 2), round(quality * 100.0, 2)
+
+    @staticmethod
+    def _video_event_is_new(
+        event: AnalyticsTrackingEvent,
+        *,
+        last_loki_ts_ns: int,
+        last_event_at: datetime | None,
+    ) -> bool:
+        if event.loki_ts_ns is not None and last_loki_ts_ns > 0:
+            return int(event.loki_ts_ns) > last_loki_ts_ns
+        if last_event_at is not None and event.event_time is not None:
+            return event.event_time > last_event_at
+        return last_loki_ts_ns <= 0 and last_event_at is None
+
     def recalculate_course_video_progress(self, *, course_id: str, username: str | None = None, class_id: str | None = None) -> dict[str, Any]:
+        """Incrementally materialize video analytics.
+
+        AnalyticsStudentVideoProgress is the durable cumulative state. Loki raw
+        events are only the incremental input and may later be removed by the
+        retention task without making historical progress decrease.
+        """
         video_session_lookup = self._video_session_lookup(course_id=course_id)
         query = self.db.query(AnalyticsTrackingEvent).filter(
             AnalyticsTrackingEvent.course_id == course_id,
@@ -925,60 +957,209 @@ class LearningAnalyticsCoreService:
             identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
             target_usernames = list(identity.get('ap_usernames') or [])
             if not target_usernames:
-                return {'course_id': course_id, 'class_id': class_id, 'username': username, 'video_progress_rows': 0, 'message': 'Lớp chưa có username hợp lệ để tính video.'}
+                return {
+                    'course_id': course_id,
+                    'class_id': class_id,
+                    'username': username,
+                    'video_progress_rows': 0,
+                    'message': 'Lớp chưa có identity hợp lệ để tính video.',
+                }
             query = self._apply_tracking_identity_filter(query, identity)
-        events = query.order_by(AnalyticsTrackingEvent.event_time.asc(), AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast()).all()
+
+        events = query.order_by(
+            AnalyticsTrackingEvent.event_time.asc(),
+            AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
+        ).all()
         grouped: dict[tuple[str, str], list[AnalyticsTrackingEvent]] = defaultdict(list)
         for ev in events:
             canonical = self._canonical_event_username(ev, identity)
             if not canonical or not ev.video_id:
                 continue
             grouped[(canonical, ev.video_id)].append(ev)
+
         now = datetime.utcnow()
         saved = 0
+        skipped_no_new_events = 0
         for (user, video_id), group in grouped.items():
-            result = calculate_video_progress([
-                VideoEventInput(e.event_type, e.event_time, e.current_time_seconds, e.video_duration_seconds, e.raw_event or {}) for e in group
-            ], complete_threshold=getattr(settings, 'analytics_video_complete_threshold', 0.9), suspicious_watch_ratio=getattr(settings, 'analytics_suspicious_watch_ratio', 0.25), max_passive_segment_seconds=getattr(settings, 'analytics_max_passive_segment_seconds', 600))
-            row = self.db.query(AnalyticsStudentVideoProgress).filter(AnalyticsStudentVideoProgress.course_id == course_id, AnalyticsStudentVideoProgress.username == user, AnalyticsStudentVideoProgress.video_id == video_id).first()
+            row = self.db.query(AnalyticsStudentVideoProgress).filter(
+                AnalyticsStudentVideoProgress.course_id == course_id,
+                AnalyticsStudentVideoProgress.username == user,
+                AnalyticsStudentVideoProgress.video_id == video_id,
+            ).first()
+            evidence = dict(row.evidence_json or {}) if row else {}
+            last_loki_ts_ns = int(evidence.get('last_loki_ts_ns') or 0)
+            last_event_at = row.last_event_at if row else None
+            new_group = [
+                event
+                for event in group
+                if self._video_event_is_new(
+                    event,
+                    last_loki_ts_ns=last_loki_ts_ns,
+                    last_event_at=last_event_at,
+                )
+            ]
+            if row and not new_group:
+                skipped_no_new_events += 1
+                continue
+
+            calculator_events: list[VideoEventInput] = []
+            previous_state = evidence.get('last_event_state') if isinstance(evidence.get('last_event_state'), dict) else {}
+            if row and previous_state and str(previous_state.get('event_type') or '') in {'play_video', 'edx.video.played'}:
+                previous_time = self._as_datetime(previous_state.get('event_time'))
+                if previous_time is not None:
+                    calculator_events.append(VideoEventInput(
+                        str(previous_state.get('event_type')),
+                        previous_time,
+                        previous_state.get('current_time_seconds'),
+                        previous_state.get('duration_seconds'),
+                        {},
+                    ))
+            calculator_events.extend(
+                VideoEventInput(
+                    e.event_type,
+                    e.event_time,
+                    e.current_time_seconds,
+                    e.video_duration_seconds,
+                    e.raw_event or {},
+                )
+                for e in new_group
+            )
+            result = calculate_video_progress(
+                calculator_events,
+                complete_threshold=getattr(settings, 'analytics_video_complete_threshold', 0.9),
+                suspicious_watch_ratio=getattr(settings, 'analytics_suspicious_watch_ratio', 0.25),
+                max_passive_segment_seconds=getattr(settings, 'analytics_max_passive_segment_seconds', 600),
+            )
+
             if not row:
-                row = AnalyticsStudentVideoProgress(course_id=course_id, username=user, video_id=video_id)
+                row = AnalyticsStudentVideoProgress(
+                    course_id=course_id,
+                    username=user,
+                    video_id=video_id,
+                )
                 self.db.add(row)
-            matched_session = self._match_video_session(video_id=video_id, video_code=group[-1].video_code, lookup=video_session_lookup)
-            row.user_id = group[-1].user_id
-            row.video_code = group[-1].video_code
+
+            latest = new_group[-1]
+            matched_session = self._match_video_session(
+                video_id=video_id,
+                video_code=latest.video_code,
+                lookup=video_session_lookup,
+            )
+            row.user_id = latest.user_id or row.user_id
+            row.video_code = latest.video_code or row.video_code
             if matched_session:
                 session = matched_session.get('session') or {}
                 component = matched_session.get('component') or {}
                 row.session_key = session.get('session_key')
                 row.session_index = session.get('session_index')
                 row.component_title = component.get('title') or component.get('display_name') or row.component_title or ''
-            row.duration_seconds = result.duration_seconds
-            row.max_position_seconds = result.max_position_seconds
-            row.completion_percent = result.completion_percent
-            row.estimated_watch_seconds = result.estimated_watch_seconds
-            row.estimated_watch_percent = result.estimated_watch_percent
-            row.consistency_percent = result.consistency_percent
-            row.video_quality_percent = result.video_quality_percent
-            row.long_passive_segment_count = result.long_passive_segment_count
-            row.long_passive_seconds = result.long_passive_seconds
-            row.passive_watch_seconds = result.passive_watch_seconds
-            row.play_count = result.play_count
-            row.pause_count = result.pause_count
-            row.stop_count = result.stop_count
-            row.seek_count = result.seek_count
-            row.is_completed = result.is_completed
-            row.is_suspicious = result.is_suspicious
-            row.suspicious_reason = ','.join(result.reason_codes)
-            row.evidence_json = result.evidence
-            row.first_played_at = min([e.event_time for e in group if e.event_time] or [None])
-            row.last_event_at = max([e.event_time for e in group if e.event_time] or [None])
+
+            old_duration = float(row.duration_seconds or 0)
+            new_duration = float(result.duration_seconds or 0)
+            duration = max(old_duration, new_duration) or None
+            old_position = float(row.max_position_seconds or 0)
+            new_position = float(result.max_position_seconds or 0)
+            max_position = max(old_position, new_position) if (old_position or new_position) else None
+            completion = (
+                round(max(0.0, min(100.0, (float(max_position) / float(duration)) * 100.0)), 2)
+                if duration and max_position is not None
+                else (row.completion_percent if row.completion_percent is not None else result.completion_percent)
+            )
+
+            cumulative_watch = round(float(row.estimated_watch_seconds or 0) + float(result.estimated_watch_seconds or 0), 2)
+            watch_percent = (
+                round(max(0.0, min(100.0, cumulative_watch / float(duration) * 100.0)), 2)
+                if duration else None
+            )
+            consistency, quality = self._video_quality_from_totals(completion, watch_percent)
+
+            actual_play_count = sum(1 for e in new_group if e.event_type in {'play_video', 'edx.video.played'})
+            actual_pause_count = sum(1 for e in new_group if e.event_type in {'pause_video', 'edx.video.paused'})
+            actual_stop_count = sum(1 for e in new_group if e.event_type in {'stop_video', 'edx.video.stopped'})
+            actual_seek_count = sum(1 for e in new_group if e.event_type in {'seek_video', 'edx.video.position.changed'})
+
+            row.duration_seconds = duration
+            row.max_position_seconds = max_position
+            row.completion_percent = completion
+            row.estimated_watch_seconds = cumulative_watch
+            row.estimated_watch_percent = watch_percent
+            row.consistency_percent = consistency
+            row.video_quality_percent = quality
+            row.long_passive_segment_count = int(row.long_passive_segment_count or 0) + int(result.long_passive_segment_count or 0)
+            row.long_passive_seconds = round(float(row.long_passive_seconds or 0) + float(result.long_passive_seconds or 0), 2)
+            row.passive_watch_seconds = round(float(row.passive_watch_seconds or 0) + float(result.passive_watch_seconds or 0), 2)
+            row.play_count = int(row.play_count or 0) + actual_play_count
+            row.pause_count = int(row.pause_count or 0) + actual_pause_count
+            row.stop_count = int(row.stop_count or 0) + actual_stop_count
+            row.seek_count = int(row.seek_count or 0) + actual_seek_count
+
+            cumulative_large_seek_count = int(evidence.get('large_seek_count') or 0) + int((result.evidence or {}).get('large_seek_count') or 0)
+            reasons: list[str] = []
+            if cumulative_large_seek_count:
+                reasons.append('LARGE_SEEK_JUMP')
+            if int(row.long_passive_segment_count or 0):
+                reasons.append('LONG_PASSIVE_PLAYBACK')
+            suspicious_watch_ratio = float(getattr(settings, 'analytics_suspicious_watch_ratio', 0.25) or 0.25)
+            complete_threshold = float(getattr(settings, 'analytics_video_complete_threshold', 0.9) or 0.9)
+            if duration and completion is not None and completion >= complete_threshold * 100.0 and cumulative_watch < float(duration) * suspicious_watch_ratio:
+                reasons.append('HIGH_COMPLETION_LOW_WATCH_TIME')
+            if int(row.play_count or 0) >= 3 and duration and cumulative_watch < min(30.0, float(duration) * 0.1):
+                reasons.append('MANY_VIDEOS_COMPLETED_TOO_FAST')
+            row.is_completed = bool(completion is not None and completion >= complete_threshold * 100.0)
+            row.is_suspicious = bool([reason for reason in reasons if reason != 'LONG_PASSIVE_PLAYBACK'])
+            row.suspicious_reason = ','.join(reasons)
+
+            all_times = [e.event_time for e in new_group if e.event_time]
+            if all_times:
+                first_new = min(all_times)
+                last_new = max(all_times)
+                row.first_played_at = min([d for d in (row.first_played_at, first_new) if d])
+                row.last_event_at = max([d for d in (row.last_event_at, last_new) if d])
+
+            max_loki_ts_ns = max(
+                [int(e.loki_ts_ns) for e in new_group if e.loki_ts_ns is not None]
+                or [last_loki_ts_ns]
+            )
+            row.evidence_json = {
+                **evidence,
+                'segments': (result.evidence or {}).get('segments', []),
+                'event_count': int(evidence.get('event_count') or 0) + len(new_group),
+                'large_seek_count': cumulative_large_seek_count,
+                'long_passive_segment_count': int(row.long_passive_segment_count or 0),
+                'long_passive_seconds': row.long_passive_seconds,
+                'passive_watch_seconds': row.passive_watch_seconds,
+                'consistency_percent': row.consistency_percent,
+                'video_quality_percent': row.video_quality_percent,
+                'last_loki_ts_ns': max_loki_ts_ns,
+                'last_event_state': {
+                    'event_type': latest.event_type,
+                    'event_time': latest.event_time.isoformat() if latest.event_time else None,
+                    'current_time_seconds': latest.current_time_seconds,
+                    'duration_seconds': latest.video_duration_seconds,
+                },
+                'materialization_mode': 'incremental_cumulative_v1',
+            }
             row.calculated_at = now
             saved += 1
+
         self.db.commit()
-        return {'course_id': course_id, 'class_id': class_id, 'username': username, 'video_progress_rows': saved}
+        return {
+            'course_id': course_id,
+            'class_id': class_id,
+            'username': username,
+            'video_progress_rows': saved,
+            'skipped_no_new_events': skipped_no_new_events,
+            'materialization_mode': 'incremental_cumulative_v1',
+        }
 
     def recalculate_course_quiz_attempts(self, *, course_id: str, username: str | None = None, class_id: str | None = None) -> dict[str, Any]:
+        """Materialize quiz attempts without overwriting retained history.
+
+        Raw retention can remove old tracking rows. Existing attempts are matched
+        by reset nonce or start timestamp; unmatched retained-window features are
+        appended after the current max attempt number instead of reusing attempt
+        number 1 and corrupting historical rows.
+        """
         query = self.db.query(AnalyticsTrackingEvent).filter(
             AnalyticsTrackingEvent.course_id == course_id,
             AnalyticsTrackingEvent.event_type.in_(list(QUIZ_ANALYTICS_EVENT_TYPES)),
@@ -992,63 +1173,146 @@ class LearningAnalyticsCoreService:
             identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
             target_usernames = list(identity.get('ap_usernames') or [])
             if not target_usernames:
-                return {'course_id': course_id, 'class_id': class_id, 'username': username, 'quiz_attempt_rows': 0, 'message': 'Lớp chưa có username hợp lệ để tính quiz.'}
+                return {
+                    'course_id': course_id,
+                    'class_id': class_id,
+                    'username': username,
+                    'quiz_attempt_rows': 0,
+                    'message': 'Lớp chưa có identity hợp lệ để tính quiz.',
+                }
             query = self._apply_tracking_identity_filter(query, identity)
-        rows = query.order_by(AnalyticsTrackingEvent.event_time.asc(), AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast()).all()
+
+        rows = query.order_by(
+            AnalyticsTrackingEvent.event_time.asc(),
+            AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
+        ).all()
         normalized_events: list[EventLike] = []
-        for r in rows:
-            canonical = self._canonical_event_username(r, identity)
+        for raw in rows:
+            canonical = self._canonical_event_username(raw, identity)
             if not canonical:
                 continue
             normalized_events.append(EventLike(
-                event_type=r.event_type,
-                event_source=r.event_source,
-                event_time=r.event_time,
-                user_id=r.user_id,
+                event_type=raw.event_type,
+                event_source=raw.event_source,
+                event_time=raw.event_time,
+                user_id=raw.user_id,
                 username=canonical,
-                course_id=r.course_id,
-                page_url=r.page_url,
-                raw_event=r.raw_event or {},
-                raw_context=r.raw_context or {},
-                raw_json=r.raw_json or {},
+                course_id=raw.course_id,
+                page_url=raw.page_url,
+                raw_event=raw.raw_event or {},
+                raw_context=raw.raw_context or {},
+                raw_json=raw.raw_json or {},
             ))
+
         features = build_quiz_attempt_features(normalized_events)
         now = datetime.utcnow()
         saved = 0
+        created = 0
+        updated = 0
+
+        existing_by_key: dict[tuple[str, str], list[AnalyticsQuizAttempt]] = defaultdict(list)
+        existing_query = self.db.query(AnalyticsQuizAttempt).filter(AnalyticsQuizAttempt.course_id == course_id)
+        if target_usernames is not None:
+            existing_query = existing_query.filter(AnalyticsQuizAttempt.username.in_(target_usernames))
+        for existing in existing_query.order_by(
+            AnalyticsQuizAttempt.username.asc(),
+            AnalyticsQuizAttempt.unit_usage_key.asc(),
+            AnalyticsQuizAttempt.attempt_no.asc(),
+        ).all():
+            existing_by_key[(str(existing.username), str(existing.unit_usage_key))].append(existing)
+
         for feat in features:
-            row = self.db.query(AnalyticsQuizAttempt).filter(
-                AnalyticsQuizAttempt.course_id == feat.course_id,
-                AnalyticsQuizAttempt.username == feat.username,
-                AnalyticsQuizAttempt.unit_usage_key == feat.unit_usage_key,
-                AnalyticsQuizAttempt.attempt_no == feat.attempt_no,
-            ).first()
-            if not row:
-                row = AnalyticsQuizAttempt(course_id=feat.course_id, username=feat.username, unit_usage_key=feat.unit_usage_key, attempt_no=feat.attempt_no)
+            key = (str(feat.username), str(feat.unit_usage_key))
+            candidates = existing_by_key.get(key, [])
+            row: AnalyticsQuizAttempt | None = None
+
+            if feat.unit_reset_nonce:
+                row = next(
+                    (
+                        item for item in candidates
+                        if str(item.unit_reset_nonce or '') == str(feat.unit_reset_nonce)
+                    ),
+                    None,
+                )
+            if row is None and feat.started_at is not None:
+                row = next(
+                    (
+                        item for item in candidates
+                        if item.started_at is not None and item.started_at == feat.started_at
+                    ),
+                    None,
+                )
+
+            if row is None:
+                next_attempt_no = max([int(item.attempt_no or 0) for item in candidates] or [0]) + 1
+                row = AnalyticsQuizAttempt(
+                    course_id=feat.course_id,
+                    username=feat.username,
+                    unit_usage_key=feat.unit_usage_key,
+                    attempt_no=next_attempt_no,
+                )
                 self.db.add(row)
-            row.user_id = feat.user_id
-            row.sequence_usage_key = feat.sequence_usage_key
-            row.unit_reset_nonce = feat.unit_reset_nonce
-            row.started_at = feat.started_at
-            row.ended_at = feat.ended_at
-            row.reset_count = int(feat.reset_count or 0)
-            row.submission_count = len(feat.submissions)
-            row.assigned_problem_usage_keys_json = feat.assigned_problem_usage_keys
-            row.itembank_locations_json = feat.itembank_locations
-            row.score_earned = feat.score_earned
-            row.score_possible = feat.score_possible
-            row.median_time_per_question_seconds = feat.median_time_per_question_seconds
-            row.repeat_rate = feat.repeat_rate
-            row.suspicious_quiz_speed = bool(feat.suspicious_quiz_speed)
-            row.fishing_pattern = bool(feat.fishing_pattern)
-            row.showanswer_count = int(feat.showanswer_count or 0)
-            row.first_submission_at = feat.first_submission_at
-            row.last_submission_at = feat.last_submission_at
-            row.low_confidence_reason = feat.low_confidence_reason
-            row.evidence_json = feat.evidence
+                existing_by_key[key].append(row)
+                created += 1
+            else:
+                updated += 1
+
+            row.user_id = feat.user_id or row.user_id
+            row.sequence_usage_key = feat.sequence_usage_key or row.sequence_usage_key
+            row.unit_reset_nonce = feat.unit_reset_nonce or row.unit_reset_nonce
+            if feat.started_at is not None:
+                row.started_at = min([d for d in (row.started_at, feat.started_at) if d])
+            if feat.ended_at is not None:
+                row.ended_at = max([d for d in (row.ended_at, feat.ended_at) if d])
+            row.reset_count = max(int(row.reset_count or 0), int(feat.reset_count or 0))
+            row.submission_count = max(int(row.submission_count or 0), len(feat.submissions))
+
+            assigned = list(dict.fromkeys([
+                *(row.assigned_problem_usage_keys_json or []),
+                *(feat.assigned_problem_usage_keys or []),
+            ]))
+            locations = list(dict.fromkeys([
+                *(row.itembank_locations_json or []),
+                *(feat.itembank_locations or []),
+            ]))
+            row.assigned_problem_usage_keys_json = assigned
+            row.itembank_locations_json = locations
+
+            if feat.score_earned is not None:
+                row.score_earned = max(float(row.score_earned or 0), float(feat.score_earned))
+            if feat.score_possible is not None:
+                row.score_possible = max(float(row.score_possible or 0), float(feat.score_possible))
+            if feat.median_time_per_question_seconds is not None:
+                if row.median_time_per_question_seconds is None or len(feat.submissions) >= int(row.submission_count or 0):
+                    row.median_time_per_question_seconds = feat.median_time_per_question_seconds
+            if feat.repeat_rate is not None:
+                row.repeat_rate = max(float(row.repeat_rate or 0), float(feat.repeat_rate))
+            row.suspicious_quiz_speed = bool(row.suspicious_quiz_speed or feat.suspicious_quiz_speed)
+            row.fishing_pattern = bool(row.fishing_pattern or feat.fishing_pattern)
+            row.showanswer_count = max(int(row.showanswer_count or 0), int(feat.showanswer_count or 0))
+            if feat.first_submission_at is not None:
+                row.first_submission_at = min([d for d in (row.first_submission_at, feat.first_submission_at) if d])
+            if feat.last_submission_at is not None:
+                row.last_submission_at = max([d for d in (row.last_submission_at, feat.last_submission_at) if d])
+            row.low_confidence_reason = feat.low_confidence_reason or row.low_confidence_reason
+            row.evidence_json = {
+                **(row.evidence_json or {}),
+                **(feat.evidence or {}),
+                'materialization_mode': 'retention_safe_upsert_v1',
+            }
             row.calculated_at = now
             saved += 1
+
         self.db.commit()
-        return {'course_id': course_id, 'class_id': class_id, 'username': username, 'quiz_attempt_rows': saved}
+        return {
+            'course_id': course_id,
+            'class_id': class_id,
+            'username': username,
+            'quiz_attempt_rows': saved,
+            'created': created,
+            'updated': updated,
+            'materialization_mode': 'retention_safe_upsert_v1',
+        }
 
     @staticmethod
     def _key_match(left: str | None, right: str | None) -> bool:
