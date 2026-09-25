@@ -202,14 +202,16 @@ class LearningAnalyticsCoreService:
         }
 
     def _class_scope_filter(self, q: Any, column: Any, value: Any) -> Any:
-        """Apply AcademicCourseMapping scope fields to AcademicClass safely.
+        """Apply an optional AcademicCourseMapping scope to AcademicClass.
 
-        AP/CMS data can store campus/branch/block as NULL or empty strings for
-        broad mappings. Keep this helper conservative: a scoped mapping must
-        match exactly, while a blank mapping only matches blank class scope.
+        NULL/blank block, campus, or branch on a subject-level course mapping
+        means the mapping is broad for that dimension. Do not require the
+        AcademicClass field itself to be blank; doing so makes valid broad
+        mappings resolve to zero production classes. A non-blank mapping scope
+        remains an exact match.
         """
         if value is None or str(value).strip() == '':
-            return q.filter(or_(column.is_(None), column == ''))
+            return q
         return q.filter(column == value)
 
     def _resolve_recalculate_class_ids_for_courses(self, *, course_ids: set[str]) -> dict[str, set[str]]:
@@ -1053,11 +1055,25 @@ class LearningAnalyticsCoreService:
         return None
 
     def recalculate_student_session_progress(self, *, class_id: str | None, course_id: str, username: str | None = None) -> dict[str, Any]:
+        # Quiz attempts are derived directly from tracking events and must not
+        # depend on session-structure availability. Persist them first so a
+        # course without rebuilt blocks can still expose useful quiz analytics.
+        quiz_result = self.recalculate_course_quiz_attempts(
+            course_id=course_id,
+            username=username,
+            class_id=class_id,
+        )
         sessions = self.get_session_structure(course_id=course_id, class_id=class_id)
         if not sessions:
-            return {'class_id': class_id, 'course_id': course_id, 'processed': 0, 'sessions': 0, 'message': 'Chưa có cấu trúc Bài/Session. Hãy rebuild session structure trước.'}
+            return {
+                'class_id': class_id,
+                'course_id': course_id,
+                'processed': 0,
+                'sessions': 0,
+                'quiz': quiz_result,
+                'message': 'Chưa có cấu trúc Bài/Session. Quiz analytics đã được tính; hãy rebuild session structure để tính tiến độ theo Bài/Deadline.',
+            }
         users = self._student_usernames_for_class(class_id=class_id, course_id=course_id, username=username)
-        self.recalculate_course_quiz_attempts(course_id=course_id, username=username, class_id=class_id)
         snapshots = self._learning_snapshots_by_username(class_id=class_id, course_id=course_id)
         academic_service = AcademicService(self.db)
         now = datetime.utcnow()
