@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.json_safe import json_safe_value
 from app.core.privacy import mask_email
 from app.models.academic import AcademicBlock, AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot, AcademicTerm, OpenEdXUserMapping
+from app.models.course import CourseSyncState
 from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
@@ -983,6 +984,35 @@ class LearningAnalyticsCoreService:
                 return term.start_date
         return None
 
+    def _synced_course_blocks_for_sessions(self, course_id: str) -> list[dict[str, Any]]:
+        rows = (
+            self.db.query(CourseSyncState)
+            .filter(CourseSyncState.course_id == course_id)
+            .order_by(CourseSyncState.created_at.asc(), CourseSyncState.block_id.asc())
+            .all()
+        )
+        return [
+            {
+                'block_id': row.block_id,
+                'type': row.block_type,
+                'block_type': row.block_type,
+                'display_name': row.display_name,
+                'parent_block_id': row.parent_block_id,
+                'children': [],
+            }
+            for row in rows
+            if row.block_id
+        ]
+
+    def _session_build_has_components(self, result: dict[str, Any]) -> bool:
+        return (
+            int(result.get('session_count') or 0) > 0
+            and (
+                int(result.get('video_count') or 0) > 0
+                or int(result.get('quiz_component_count') or 0) > 0
+            )
+        )
+
     async def ensure_session_structure_from_openedx(
         self,
         *,
@@ -992,8 +1022,9 @@ class LearningAnalyticsCoreService:
     ) -> dict[str, Any]:
         """Ensure one reusable course-level Bài/Session structure exists.
 
-        Fetch Open edX blocks only when no active structure exists (or force=True).
-        Fail soft so temporary connector errors never erase video/quiz analytics.
+        Live Open edX blocks are authoritative. If the connector is temporarily
+        unavailable, fall back to CourseSyncState so analytics can still rebuild
+        from the latest course tree already synchronized into Dash CMS.
         """
         existing = (
             self.db.query(AnalyticsCourseSession)
@@ -1019,40 +1050,125 @@ class LearningAnalyticsCoreService:
                 'source': 'analytics_course_sessions',
             }
 
+        live_error: str | None = None
+        clean_blocks: list[dict[str, Any]] = []
         try:
             blocks = await OpenEdxClient().get_course_blocks(course_id)
+            clean_blocks = [item for item in (blocks or []) if isinstance(item, dict)]
         except Exception as exc:
             self.db.rollback()
+            live_error = f'{type(exc).__name__}: {str(exc)[:800]}'
+
+        course_start_at = self._course_start_at_for_class(class_id)
+
+        if clean_blocks:
+            try:
+                live_result = self.rebuild_session_structure_from_blocks(
+                    course_id=course_id,
+                    blocks=clean_blocks,
+                    course_start_at=course_start_at,
+                )
+                if self._session_build_has_components(live_result):
+                    return {
+                        **live_result,
+                        'status': 'rebuilt',
+                        'block_count': len(clean_blocks),
+                        'course_start_at': course_start_at.isoformat() if course_start_at else None,
+                        'source': 'openedx_live',
+                    }
+            except IntegrityError:
+                # Another analytics worker may have created the same unique
+                # course/session rows after our initial existence check.
+                self.db.rollback()
+                raced = (
+                    self.db.query(AnalyticsCourseSession)
+                    .filter(
+                        AnalyticsCourseSession.course_id == course_id,
+                        AnalyticsCourseSession.active.is_(True),
+                    )
+                    .all()
+                )
+                if raced:
+                    return {
+                        'status': 'existing_after_race',
+                        'course_id': course_id,
+                        'session_count': len(raced),
+                        'component_count': sum(
+                            len((row.components_json or {}).get('components') or [])
+                            for row in raced
+                        ),
+                        'video_count': sum(int(row.total_videos or 0) for row in raced),
+                        'source': 'analytics_course_sessions',
+                    }
+                raise
+
+        # Fallback to the latest normalized tree already stored by Course Sync.
+        synced_blocks = self._synced_course_blocks_for_sessions(course_id)
+        if synced_blocks:
+            try:
+                fallback_result = self.rebuild_session_structure_from_blocks(
+                    course_id=course_id,
+                    blocks=synced_blocks,
+                    course_start_at=course_start_at,
+                )
+                if int(fallback_result.get('session_count') or 0) > 0:
+                    return {
+                        **fallback_result,
+                        'status': 'rebuilt_from_sync_state',
+                        'block_count': len(synced_blocks),
+                        'course_start_at': course_start_at.isoformat() if course_start_at else None,
+                        'source': 'ai_course_sync_state',
+                        'live_error': live_error,
+                    }
+            except IntegrityError:
+                self.db.rollback()
+                raced = (
+                    self.db.query(AnalyticsCourseSession)
+                    .filter(
+                        AnalyticsCourseSession.course_id == course_id,
+                        AnalyticsCourseSession.active.is_(True),
+                    )
+                    .all()
+                )
+                if raced:
+                    return {
+                        'status': 'existing_after_race',
+                        'course_id': course_id,
+                        'session_count': len(raced),
+                        'component_count': sum(
+                            len((row.components_json or {}).get('components') or [])
+                            for row in raced
+                        ),
+                        'video_count': sum(int(row.total_videos or 0) for row in raced),
+                        'source': 'analytics_course_sessions',
+                    }
+                raise
+
+        if live_error:
             return {
                 'status': 'fetch_failed',
                 'course_id': course_id,
                 'session_count': 0,
-                'block_count': 0,
-                'error': f'{type(exc).__name__}: {str(exc)[:800]}',
+                'block_count': len(clean_blocks),
+                'fallback_block_count': len(synced_blocks),
+                'error': live_error,
             }
-
-        clean_blocks = [item for item in (blocks or []) if isinstance(item, dict)]
-        if not clean_blocks:
+        if not clean_blocks and not synced_blocks:
             return {
                 'status': 'no_blocks',
                 'course_id': course_id,
                 'session_count': 0,
                 'block_count': 0,
+                'fallback_block_count': 0,
             }
-
-        course_start_at = self._course_start_at_for_class(class_id)
-        result = self.rebuild_session_structure_from_blocks(
-            course_id=course_id,
-            blocks=clean_blocks,
-            course_start_at=course_start_at,
-        )
-        result = {
-            **result,
-            'status': 'rebuilt' if int(result.get('session_count') or 0) > 0 else 'no_sessions',
+        return {
+            'status': 'no_sessions',
+            'course_id': course_id,
+            'session_count': 0,
             'block_count': len(clean_blocks),
-            'course_start_at': course_start_at.isoformat() if course_start_at else None,
+            'fallback_block_count': len(synced_blocks),
+            'source': 'openedx_live_or_sync_state',
         }
-        return result
 
     def rebuild_session_structure_from_blocks(
         self,
