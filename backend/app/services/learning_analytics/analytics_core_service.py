@@ -162,7 +162,7 @@ class LearningAnalyticsCoreService:
                 AnalyticsIngestCheckpoint.checkpoint_key == 'openedx_tracking_loki'
             ).first()
             return {
-                'enabled': bool(getattr(settings, 'analytics_ingest_enabled', True)),
+                'enabled': True,
                 'source': 'loki',
                 'source_url': base_url,
                 # Compatibility for existing SLA/UI code that historically
@@ -186,7 +186,7 @@ class LearningAnalyticsCoreService:
         cp = self.db.query(AnalyticsIngestCheckpoint).filter(AnalyticsIngestCheckpoint.checkpoint_key == 'openedx_tracking_log').first()
         exists = Path(file_path).exists()
         return {
-            'enabled': bool(getattr(settings, 'analytics_ingest_enabled', True)),
+            'enabled': True,
             'source': 'file',
             'file_path': file_path,
             'file_exists': exists,
@@ -281,8 +281,6 @@ class LearningAnalyticsCoreService:
         most a bounded number of class-level jobs. Existing queued/running jobs
         and recent completed jobs debounce noisy tracking.log bursts.
         """
-        if not bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)):
-            return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_POST_INGEST_RECALCULATE_ENABLED=false'}
         course_ids = {str(course_id or '').strip() for course_id in (course_usernames or {}).keys() if str(course_id or '').strip()}
         if not course_ids:
             return {'enabled': True, 'status': 'no_impacted_courses', 'courses': 0, 'queued_jobs': 0}
@@ -408,8 +406,6 @@ class LearningAnalyticsCoreService:
         return self._run_loki_ingest(max_lines=max_lines)
 
     def _run_loki_ingest(self, *, max_lines: int | None = None) -> dict[str, Any]:
-        if not bool(getattr(settings, 'analytics_ingest_enabled', True)):
-            return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_INGEST_ENABLED=false'}
         if not self._try_acquire_ingest_lock():
             return {
                 'enabled': True,
@@ -534,7 +530,7 @@ class LearningAnalyticsCoreService:
             self.db.commit()
 
             post_ingest_recalculate = {
-                'enabled': bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)),
+                'enabled': True,
                 'status': 'not_run',
             }
             if int(stats['events_inserted'] or 0) > 0:
@@ -577,7 +573,7 @@ class LearningAnalyticsCoreService:
             self._release_ingest_lock()
 
     def _run_file_ingest(self, *, file_path: str | None = None, max_lines: int | None = None) -> dict[str, Any]:
-        if not bool(getattr(settings, 'analytics_ingest_enabled', True)):
+        if not True:
             return {'enabled': False, 'status': 'disabled', 'message': 'ANALYTICS_INGEST_ENABLED=false'}
         if not self._try_acquire_ingest_lock():
             return {
@@ -662,7 +658,7 @@ class LearningAnalyticsCoreService:
                 'impacted_user_count': sum(len(users) for users in impacted_course_usernames.values()),
             }
             self.db.commit()
-            post_ingest_recalculate = {'enabled': bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True)), 'status': 'not_run'}
+            post_ingest_recalculate = {'enabled': True, 'status': 'not_run'}
             if int(stats['events_inserted'] or 0) > 0:
                 try:
                     post_ingest_recalculate = self.enqueue_post_ingest_recalculate_jobs(
@@ -1320,8 +1316,6 @@ class LearningAnalyticsCoreService:
     def _class_matches_rollout(self, cls: AcademicClass | None, course_id: str | None = None) -> tuple[bool, list[str]]:
         """Check env-only rollout scope; does not require new tables."""
         reasons: list[str] = []
-        if not bool(getattr(settings, 'analytics_rollout_enabled', True)):
-            return False, ['ROLLOUT_DISABLED']
         mode = str(getattr(settings, 'analytics_rollout_mode', 'pilot') or 'pilot').strip().lower()
         if mode == 'off':
             return False, ['ROLLOUT_MODE_OFF']
@@ -1361,7 +1355,7 @@ class LearningAnalyticsCoreService:
         full scope by changing ANALYTICS_ROLLOUT_MODE/SCOPES.
         """
         mode = str(getattr(settings, 'analytics_rollout_mode', 'pilot') or 'pilot').strip().lower()
-        enabled = bool(getattr(settings, 'analytics_rollout_enabled', True)) and mode != 'off'
+        enabled = mode != 'off'
         q = self.db.query(AcademicClass).filter(AcademicClass.active.is_(True))
         if class_id:
             q = q.filter(AcademicClass.id == class_id)
@@ -1410,7 +1404,7 @@ class LearningAnalyticsCoreService:
         blockers: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
         if not enabled:
-            blockers.append({'code': 'ROLLOUT_DISABLED', 'message': 'Học online analytics đang tắt rollout.', 'action': 'Bật ANALYTICS_ROLLOUT_ENABLED=true và ANALYTICS_ROLLOUT_MODE=production/production.'})
+            blockers.append({'code': 'ROLLOUT_DISABLED', 'message': 'Học online analytics đang tắt rollout.', 'action': 'Đặt ANALYTICS_ROLLOUT_MODE=pilot hoặc production.'})
         if enabled and not any(item.get('in_rollout') for item in items):
             warnings.append({'code': 'NO_CLASS_IN_ROLLOUT_SCOPE', 'message': 'Không có lớp nào trong phạm vi rollout hiện tại.', 'action': 'Kiểm tra allowlist campus/class/course hoặc bộ lọc.'})
         if mode == 'production' and (counters.get('missing_course_mapping') or counters.get('missing_session_structure')):
@@ -1460,8 +1454,6 @@ class LearningAnalyticsCoreService:
         seconds_since_ingest = None
         if last_run_at:
             seconds_since_ingest = max(0, int((now - last_run_at).total_seconds()))
-        if not bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)):
-            issues.append({'severity': 'warning', 'code': 'SCHEDULER_DISABLED', 'message': 'Scheduler ingest học online đang tắt.', 'action': 'Bật ANALYTICS_INGEST_SCHEDULER_ENABLED=true hoặc chạy ingest theo cron ngoài.'})
         if last_run_at and seconds_since_ingest is not None and seconds_since_ingest > stale_ingest_seconds:
             issues.append({'severity': 'warning', 'code': 'INGEST_STALE', 'message': 'Ingest tracking log đã lâu chưa chạy.', 'action': 'Kiểm tra worker/scheduler hoặc chạy ingest thủ công.'})
         if not ingest.get('file_exists'):
@@ -1505,8 +1497,8 @@ class LearningAnalyticsCoreService:
         return {
             'version': '25.9.16.7.2.7',
             'monitoring_status': monitoring_status,
-            'ready_for_rollout': monitoring_status in {'OK', 'WARNING'} and bool(getattr(settings, 'analytics_rollout_enabled', True)),
-            'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
+            'ready_for_rollout': monitoring_status in {'OK', 'WARNING'} and True,
+            'scheduler_enabled': True,
             'seconds_since_last_ingest': seconds_since_ingest,
             'active_analytics_jobs': int(active_jobs or 0),
             'stuck_analytics_job_count': len(stuck_jobs),
@@ -1796,14 +1788,13 @@ class LearningAnalyticsCoreService:
         cp = self.db.query(AnalyticsIngestCheckpoint).filter(AnalyticsIngestCheckpoint.checkpoint_key == 'openedx_tracking_log').first()
         now = datetime.utcnow()
         recent = bool(cp and cp.last_run_at and cp.last_run_at >= now - timedelta(seconds=cooldown_seconds))
-        enabled = bool(getattr(settings, 'analytics_ingest_enabled', True))
         return {
-            'allowed': bool(enabled and not recent),
-            'enabled': enabled,
+            'allowed': not recent,
+            'enabled': True,
             'cooldown_seconds': cooldown_seconds,
             'last_run_at': cp.last_run_at.isoformat() if cp and cp.last_run_at else None,
-            'reasons': ([] if enabled else ['INGEST_DISABLED']) + (['RECENT_INGEST_RUN'] if recent else []),
-            'message': 'Có thể ingest.' if enabled and not recent else 'Ingest đang tắt hoặc vừa chạy gần đây, hãy kiểm tra /jobs hoặc trạng thái ingest.',
+            'reasons': ['RECENT_INGEST_RUN'] if recent else [],
+            'message': 'Có thể ingest.' if not recent else 'Ingest vừa chạy gần đây, hãy kiểm tra /jobs hoặc trạng thái ingest.',
             'safe_policy': 'signals_only_not_violation',
         }
 
@@ -1924,9 +1915,9 @@ class LearningAnalyticsCoreService:
         ).count()
 
         max_active_jobs = int(getattr(settings, 'analytics_backfill_max_active_jobs', 20) or 20)
-        post_ingest_enabled = bool(getattr(settings, 'analytics_post_ingest_recalculate_enabled', True))
-        scheduler_enabled = bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False))
-        ingest_enabled = bool(ingest.get('enabled'))
+        post_ingest_enabled = True
+        scheduler_enabled = True
+        ingest_enabled = True
         file_exists = bool(ingest.get('file_exists'))
         rollout_enabled = bool(rollout.get('enabled'))
         min_events = int(getattr(settings, 'analytics_production_min_events', 1) or 1)
@@ -1946,46 +1937,16 @@ class LearningAnalyticsCoreService:
                 source='ingest',
                 details={'tracking_log_path': ingest.get('file_path') or getattr(settings, 'openedx_tracking_log_path', None)},
             ))
-        if not ingest_enabled:
-            issues.append(self._production_readiness_issue(
-                code='INGEST_DISABLED',
-                severity='BLOCKER',
-                category='Tracking log',
-                message='Analytics ingest đang tắt.',
-                action='Bật ANALYTICS_INGEST_ENABLED=true trong .env.production rồi recreate backend/worker/beat.',
-                command='grep -n "ANALYTICS_INGEST_ENABLED" .env.production',
-                source='ingest',
-            ))
         if not rollout_enabled:
             issues.append(self._production_readiness_issue(
                 code='ANALYTICS_ROLLOUT_DISABLED',
                 severity='BLOCKER',
                 category='Rollout',
                 message='Rollout học online đang tắt.',
-                action='Bật ANALYTICS_ROLLOUT_ENABLED=true hoặc đặt rollout mode pilot/production trước khi công bố.',
+                action='Đặt ANALYTICS_ROLLOUT_MODE=pilot hoặc production trước khi công bố.',
                 command='grep -n "ANALYTICS_ROLLOUT" .env.production',
                 source='rollout',
                 details={'rollout_mode': rollout.get('mode')},
-            ))
-        if not post_ingest_enabled:
-            issues.append(self._production_readiness_issue(
-                code='POST_INGEST_RECALCULATE_DISABLED',
-                severity='WARNING',
-                category='Analytics Orchestrator',
-                message='Post-ingest recalculate orchestrator đang tắt.',
-                action='Bật ANALYTICS_POST_INGEST_RECALCULATE_ENABLED=true để tracking log vào là hệ thống tự tính dần theo lớp.',
-                command='grep -n "ANALYTICS_POST_INGEST_RECALCULATE" .env.production',
-                source='orchestrator',
-            ))
-        if not scheduler_enabled:
-            issues.append(self._production_readiness_issue(
-                code='SCHEDULER_DISABLED',
-                severity='WARNING',
-                category='Scheduler',
-                message='Scheduler ingest tự động đang tắt.',
-                action='Bật ANALYTICS_INGEST_SCHEDULER_ENABLED=true và đảm bảo service beat đang chạy.',
-                command='docker compose -f docker-compose.prod.yml --env-file .env.production ps beat worker',
-                source='scheduler',
             ))
 
         # Data warm-up warnings. These explain why UI has little/no data but do
@@ -2177,7 +2138,7 @@ class LearningAnalyticsCoreService:
         production = self.production_readiness_report()
         return {
             'version': '25.9.16.7.2.7',
-            'scheduler_enabled': bool(getattr(settings, 'analytics_ingest_scheduler_enabled', False)),
+            'scheduler_enabled': True,
             'ingest': ingest,
             'active_recalculate_jobs': int(active_recalc or 0),
             'tracking_event_count': int(event_count or 0),
