@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-EXPECTED_HEAD = '0067_academic_daily_pipeline_v2'
+EXPECTED_HEAD = '0068_analytics_loki_ingest'
 
 
 def _python_constant(relative_path: str, name: str) -> object:
