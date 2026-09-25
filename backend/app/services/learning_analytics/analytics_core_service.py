@@ -1716,6 +1716,23 @@ class LearningAnalyticsCoreService:
             grouped[str(row.username)].append(row)
         return grouped
 
+    def _quiz_attempts_by_username(self, *, course_id: str, usernames: list[str]) -> dict[str, list[AnalyticsQuizAttempt]]:
+        if not usernames:
+            return {}
+        rows = (
+            self.db.query(AnalyticsQuizAttempt)
+            .filter(
+                AnalyticsQuizAttempt.course_id == course_id,
+                AnalyticsQuizAttempt.username.in_(usernames),
+            )
+            .all()
+        )
+        grouped: dict[str, list[AnalyticsQuizAttempt]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row.username)].append(row)
+        return grouped
+
+
     @staticmethod
     def _as_datetime(value: Any) -> datetime | None:
         if isinstance(value, datetime):
@@ -1915,12 +1932,32 @@ class LearningAnalyticsCoreService:
         events_by_user = self._events_count_by_username(course_id=course_id, usernames=users, class_id=class_id)
         videos_by_user = self._video_progress_by_username(course_id=course_id, usernames=users)
         sessions_by_user = self._session_progress_by_username(course_id=course_id, usernames=users)
+        quiz_attempts_by_user = self._quiz_attempts_by_username(course_id=course_id, usernames=users)
 
         now = datetime.utcnow()
         counts = Counter()
         for user in users:
             rows = videos_by_user.get(user, [])
-            events_count = events_by_user.get(user, 0)
+            raw_events_count = int(events_by_user.get(user, 0) or 0)
+            quiz_rows = quiz_attempts_by_user.get(user, [])
+            cumulative_video_events = sum(
+                int((row.evidence_json or {}).get('event_count') or 0)
+                for row in rows
+            )
+            cumulative_quiz_signals = sum(
+                int(row.submission_count or 0)
+                + int(row.showanswer_count or 0)
+                + int(row.reset_count or 0)
+                + (1 if row.started_at else 0)
+                for row in quiz_rows
+            )
+            # Raw retention intentionally removes materialized video/quiz events.
+            # Keep behavior confidence monotonic by using durable aggregates as
+            # the minimum historical signal count.
+            events_count = max(
+                raw_events_count,
+                cumulative_video_events + cumulative_quiz_signals,
+            )
             session_rows = sessions_by_user.get(user, [])
             learning_session_rows = [r for r in session_rows if (getattr(r, 'session_type', 'LEARNING_SESSION') or 'LEARNING_SESSION') == 'LEARNING_SESSION']
             completed = [r for r in rows if r.is_completed]
@@ -1933,8 +1970,8 @@ class LearningAnalyticsCoreService:
             on_time = len([r for r in learning_session_rows if r.completed_before_deadline is True])
             late = len([r for r in learning_session_rows if r.completed_late is True])
             quiz_before = len([r for r in learning_session_rows if 'QUIZ_BEFORE_VIDEO' in (r.reason_codes or [])])
-            suspicious_quiz_speed = len([r for r in learning_session_rows if 'SUSPICIOUS_QUIZ_SPEED' in (r.reason_codes or [])])
-            fishing_pattern = len([r for r in learning_session_rows if 'FISHING_PATTERN' in (r.reason_codes or [])])
+            suspicious_quiz_speed = len([r for r in quiz_rows if r.suspicious_quiz_speed])
+            fishing_pattern = len([r for r in quiz_rows if r.fishing_pattern])
             late_completion_dates = [r.last_activity_at.date() for r in learning_session_rows if r.last_activity_at and r.completed_late]
             crammed = max(Counter(late_completion_dates).values()) if late_completion_dates else 0
             crammed = crammed if crammed >= 3 else 0
@@ -1957,8 +1994,8 @@ class LearningAnalyticsCoreService:
                 crammed_low_watch_session_count=crammed_low_watch,
                 quiz_before_video_count=quiz_before,
                 video_before_quiz_count=len([r for r in learning_session_rows if r.quiz_attempted and 'QUIZ_BEFORE_VIDEO' not in (r.reason_codes or [])]),
-                total_quiz_sessions=len([r for r in learning_session_rows if r.quiz_attempted]),
-                total_quiz_attempts=len([r for r in learning_session_rows if r.quiz_attempted]),
+                total_quiz_sessions=len({str(r.unit_usage_key or '') for r in quiz_rows if r.unit_usage_key}),
+                total_quiz_attempts=len(quiz_rows),
                 suspicious_quiz_speed_count=suspicious_quiz_speed,
                 fishing_pattern_count=fishing_pattern,
                 total_videos_seen=len(rows),
@@ -2000,7 +2037,19 @@ class LearningAnalyticsCoreService:
             snap.human_readable_summary = result.human_readable_summary
             snap.recommended_action = result.recommended_action
             snap.data_quality = result.data_quality
-            snap.evidence_json = {**result.evidence, 'deadline_known_sessions': len(deadline_known), 'on_time_sessions': on_time, 'late_sessions': late, 'quiz_before_video_count': quiz_before, 'learning_session_count': len(learning_session_rows), 'session_types_excluded': len(session_rows) - len(learning_session_rows)}
+            snap.evidence_json = {
+                **result.evidence,
+                'raw_retained_event_count': raw_events_count,
+                'cumulative_video_event_count': cumulative_video_events,
+                'cumulative_quiz_signal_count': cumulative_quiz_signals,
+                'deadline_known_sessions': len(deadline_known),
+                'on_time_sessions': on_time,
+                'late_sessions': late,
+                'quiz_before_video_count': quiz_before,
+                'learning_session_count': len(learning_session_rows),
+                'session_types_excluded': len(session_rows) - len(learning_session_rows),
+                'raw_retention_safe': True,
+            }
             snap.last_activity_at = inp.last_activity_at
             snap.calculated_at = now
             counts[result.classification] += 1
