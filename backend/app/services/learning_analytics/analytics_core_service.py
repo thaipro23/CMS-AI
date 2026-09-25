@@ -1422,6 +1422,7 @@ class LearningAnalyticsCoreService:
         now = datetime.utcnow()
         saved = 0
         skipped_no_new_events = 0
+        session_mapping_backfilled = 0
         for (user, video_id), group in grouped.items():
             row = self.db.query(AnalyticsStudentVideoProgress).filter(
                 AnalyticsStudentVideoProgress.course_id == course_id,
@@ -1441,6 +1442,34 @@ class LearningAnalyticsCoreService:
                 )
             ]
             if row and not new_group:
+                # Session structure may have been created after this cumulative
+                # video row. Backfill session metadata even when there is no new
+                # video event; otherwise old rows remain permanently unmapped.
+                latest_existing = group[-1]
+                matched_existing = self._match_video_session(
+                    video_id=row.video_id,
+                    video_code=row.video_code or latest_existing.video_code,
+                    lookup=video_session_lookup,
+                )
+                if matched_existing:
+                    session = matched_existing.get('session') or {}
+                    component = matched_existing.get('component') or {}
+                    next_session_key = session.get('session_key')
+                    next_session_index = session.get('session_index')
+                    next_title = component.get('title') or component.get('display_name') or row.component_title or ''
+                    changed = (
+                        row.session_key != next_session_key
+                        or row.session_index != next_session_index
+                        or row.component_title != next_title
+                    )
+                    if changed:
+                        row.session_key = next_session_key
+                        row.session_index = next_session_index
+                        row.component_title = next_title
+                        row.calculated_at = now
+                        self.db.add(row)
+                        saved += 1
+                        session_mapping_backfilled += 1
                 skipped_no_new_events += 1
                 continue
 
@@ -1591,6 +1620,7 @@ class LearningAnalyticsCoreService:
             'username': username,
             'video_progress_rows': saved,
             'skipped_no_new_events': skipped_no_new_events,
+            'session_mapping_backfilled': session_mapping_backfilled,
             'source_event_exists': bool(source_query.with_entities(AnalyticsTrackingEvent.id).first()),
             'matched_event_count': len(events),
             'identity_student_count': len(target_usernames or []),
