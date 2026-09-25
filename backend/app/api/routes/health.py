@@ -25,7 +25,7 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0067_academic_daily_pipeline_v2'
+_EXPECTED_ALEMBIC_REVISION = '0068_analytics_loki_ingest'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {
