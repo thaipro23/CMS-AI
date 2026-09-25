@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
 from app.core.privacy import mask_email
-from app.models.academic import AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot, OpenEdXUserMapping
+from app.models.academic import AcademicBlock, AcademicClass, AcademicClassCourseMapping, AcademicClassStudent, AcademicClassSyncJob, AcademicCourseMapping, AcademicQuizDeadlineOverride, AcademicStudent, AcademicStudentLearningSnapshot, AcademicTerm, OpenEdXUserMapping
 from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
@@ -32,6 +32,7 @@ from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, bui
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
 from app.services.learning_analytics.loki_tracking_reader import LokiTrackingLogReader
 from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress
+from app.services.openedx_client import OpenEdxClient
 from app.services.learning_analytics.presentation import (
     class_behavior_focus_count as _presentation_class_behavior_focus_count,
     csv_setting_set as _presentation_csv_setting_set,
@@ -964,6 +965,95 @@ class LearningAnalyticsCoreService:
             'policy': 'delete_only_materialized_video_quiz_raw_events',
         }
 
+    def _course_start_at_for_class(self, class_id: str | None) -> datetime | None:
+        if not class_id:
+            return None
+        klass = self.db.get(AcademicClass, class_id)
+        if not klass:
+            return None
+        if klass.start_date:
+            return klass.start_date
+        if klass.block_id:
+            block = self.db.get(AcademicBlock, klass.block_id)
+            if block and block.start_date:
+                return block.start_date
+        if klass.term_id:
+            term = self.db.get(AcademicTerm, klass.term_id)
+            if term and term.start_date:
+                return term.start_date
+        return None
+
+    async def ensure_session_structure_from_openedx(
+        self,
+        *,
+        course_id: str,
+        class_id: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Ensure one reusable course-level Bài/Session structure exists.
+
+        Fetch Open edX blocks only when no active structure exists (or force=True).
+        Fail soft so temporary connector errors never erase video/quiz analytics.
+        """
+        existing = (
+            self.db.query(AnalyticsCourseSession)
+            .filter(
+                AnalyticsCourseSession.course_id == course_id,
+                AnalyticsCourseSession.active.is_(True),
+            )
+            .order_by(AnalyticsCourseSession.session_index.asc())
+            .all()
+        )
+        if existing and not force:
+            component_count = sum(
+                len((row.components_json or {}).get('components') or [])
+                for row in existing
+            )
+            video_count = sum(int(row.total_videos or 0) for row in existing)
+            return {
+                'status': 'existing',
+                'course_id': course_id,
+                'session_count': len(existing),
+                'component_count': component_count,
+                'video_count': video_count,
+                'source': 'analytics_course_sessions',
+            }
+
+        try:
+            blocks = await OpenEdxClient().get_course_blocks(course_id)
+        except Exception as exc:
+            self.db.rollback()
+            return {
+                'status': 'fetch_failed',
+                'course_id': course_id,
+                'session_count': 0,
+                'block_count': 0,
+                'error': f'{type(exc).__name__}: {str(exc)[:800]}',
+            }
+
+        clean_blocks = [item for item in (blocks or []) if isinstance(item, dict)]
+        if not clean_blocks:
+            return {
+                'status': 'no_blocks',
+                'course_id': course_id,
+                'session_count': 0,
+                'block_count': 0,
+            }
+
+        course_start_at = self._course_start_at_for_class(class_id)
+        result = self.rebuild_session_structure_from_blocks(
+            course_id=course_id,
+            blocks=clean_blocks,
+            course_start_at=course_start_at,
+        )
+        result = {
+            **result,
+            'status': 'rebuilt' if int(result.get('session_count') or 0) > 0 else 'no_sessions',
+            'block_count': len(clean_blocks),
+            'course_start_at': course_start_at.isoformat() if course_start_at else None,
+        }
+        return result
+
     def rebuild_session_structure_from_blocks(
         self,
         *,
@@ -971,35 +1061,90 @@ class LearningAnalyticsCoreService:
         blocks: list[dict[str, Any]],
         course_start_at: datetime | None = None,
     ) -> dict[str, Any]:
-        mappings = build_session_mappings_from_blocks(course_id, blocks, course_start_at=course_start_at)
+        mappings = build_session_mappings_from_blocks(
+            course_id,
+            blocks,
+            course_start_at=course_start_at,
+        )
         now = datetime.utcnow()
         saved = 0
+        component_count = 0
+        video_count = 0
+        quiz_component_count = 0
+        active_indices: set[int] = set()
+
         for mapping in mappings:
+            active_indices.add(int(mapping.session_index))
             row = self.db.query(AnalyticsCourseSession).filter(
                 AnalyticsCourseSession.course_id == course_id,
                 AnalyticsCourseSession.session_index == mapping.session_index,
             ).first()
             if not row:
-                row = AnalyticsCourseSession(course_id=course_id, session_index=mapping.session_index, session_key=mapping.session_key, created_at=now, updated_at=now)
+                row = AnalyticsCourseSession(
+                    course_id=course_id,
+                    session_index=mapping.session_index,
+                    session_key=mapping.session_key,
+                    created_at=now,
+                    updated_at=now,
+                )
                 self.db.add(row)
+
+            video_components = [item for item in mapping.components if item.block_type == 'video']
+            quiz_components = [
+                item for item in mapping.components
+                if item.block_type in {'problem', 'quiz', 'sequential_quiz', 'library_content'}
+            ]
+            component_count += len(mapping.components)
+            video_count += len(video_components)
+            quiz_component_count += len(quiz_components)
+
             row.session_key = mapping.session_key
             row.session_title = mapping.session_title
             row.week_index = mapping.week_index
             row.deadline_at = mapping.deadline_at
             row.deadline_source = mapping.deadline_source
             row.deadline_mapping_quality = mapping.deadline_mapping_quality
-            row.total_parts = len([c for c in mapping.components if c.block_type == 'video'])
-            row.total_videos = len([c for c in mapping.components if c.block_type == 'video'])
+            row.total_parts = len(video_components)
+            row.total_videos = len(video_components)
             row.quiz_usage_key = mapping.quiz.usage_key if mapping.quiz else None
-            row.components_json = {'components': [asdict(c) for c in mapping.components]}
+            row.components_json = {'components': [asdict(item) for item in mapping.components]}
             row.session_type = mapping.session_type
-            row.source = 'blocks_adapter'
+            row.source = 'openedx_blocks_auto'
             row.active = True
             row.rebuilt_at = now
             row.updated_at = now
             saved += 1
+
+        # If a course outline shrinks/changes, never leave removed sessions active.
+        if mappings:
+            stale_rows = (
+                self.db.query(AnalyticsCourseSession)
+                .filter(
+                    AnalyticsCourseSession.course_id == course_id,
+                    AnalyticsCourseSession.active.is_(True),
+                    ~AnalyticsCourseSession.session_index.in_(sorted(active_indices)),
+                )
+                .all()
+            )
+            for row in stale_rows:
+                row.active = False
+                row.updated_at = now
+                self.db.add(row)
+
         self.db.commit()
-        return {'course_id': course_id, 'session_count': len(mappings), 'saved': saved, 'deadline_pattern': [week_for_session(i, len(mappings) or 1) for i in range(1, len(mappings) + 1)]}
+        return {
+            'course_id': course_id,
+            'session_count': len(mappings),
+            'saved': saved,
+            'component_count': component_count,
+            'video_count': video_count,
+            'quiz_component_count': quiz_component_count,
+            'deadline_known_count': len([item for item in mappings if item.deadline_at is not None]),
+            'deadline_pattern': [
+                week_for_session(i, len(mappings) or 1)
+                for i in range(1, len(mappings) + 1)
+            ],
+        }
 
     def _quiz_deadline_overrides_by_session(self, *, class_id: str | None, course_id: str | None) -> dict[int, AcademicQuizDeadlineOverride]:
         if not class_id:
@@ -1026,7 +1171,7 @@ class LearningAnalyticsCoreService:
             if override:
                 components = [dict(item) for item in components]
                 for item in components:
-                    if str(item.get('block_type') or '').lower() in {'problem', 'quiz', 'sequential_quiz'}:
+                    if str(item.get('block_type') or '').lower() in {'problem', 'quiz', 'sequential_quiz', 'library_content'}:
                         item['deadline_at'] = deadline_at.isoformat() if deadline_at else None
                         item['deadline_source'] = source
                         item['component_label'] = override.component_label or item.get('title') or item.get('usage_key')
