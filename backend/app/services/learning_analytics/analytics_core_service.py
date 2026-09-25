@@ -439,7 +439,8 @@ class LearningAnalyticsCoreService:
             )
             cursor_ns = int(cp.last_offset or 0)
             if cursor_ns <= 0:
-                cursor_ns = reader.initial_cursor_ns(
+                configured_start_ns = int(getattr(settings, 'analytics_loki_backfill_start_ns', 0) or 0)
+                cursor_ns = configured_start_ns if configured_start_ns > 0 else reader.initial_cursor_ns(
                     backfill_start=str(getattr(settings, 'analytics_loki_backfill_start', '') or '').strip() or None,
                     default_backfill_hours=int(getattr(settings, 'analytics_loki_default_backfill_hours', 24) or 24),
                 )
