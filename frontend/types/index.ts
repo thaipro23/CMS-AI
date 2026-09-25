@@ -2590,6 +2590,8 @@ export type AcademicStudent = {
   exam_reasons?: string[]
   assignment_defense_status?: string | null
   assignment_score_10?: number | null
+  progress_email_sent_count?: number
+  progress_email_last_sent_at?: string | null
 }
 
 export type AcademicLearningSummary = {
@@ -2793,6 +2795,7 @@ export type AcademicTrainingClassReport = {
   udemy_progress_current_week?: number | null
   udemy_progress_deadline_date?: string | null
   udemy_progress_last_imported_at?: string | null
+  progress_email_sent_count?: number
 }
 
 export type AcademicTrainingTeacherReport = {
@@ -2840,6 +2843,7 @@ export type AcademicTrainingTeacherReport = {
   status_counts: Record<string, number>
   learning_alerts: string[]
   last_synced_at?: string | null
+  progress_email_sent_count?: number
   classes?: AcademicTrainingClassReport[]
 }
 
@@ -2873,6 +2877,7 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
     exam_insufficient_data_student_count?: number
     quiz_failed_count?: number
     assignment_not_graded_count?: number
+    progress_email_sent_count?: number
   }
 }
 
