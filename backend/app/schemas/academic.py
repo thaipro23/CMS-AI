@@ -664,6 +664,8 @@ class AcademicClassStudentOut(AcademicStudentOut):
     exam_reasons: list[str] = Field(default_factory=list)
     assignment_defense_status: str | None = None
     assignment_score_10: float | None = None
+    progress_email_sent_count: int = 0
+    progress_email_last_sent_at: datetime | None = None
 
     @field_serializer('openedx_email')
     def serialize_openedx_email(self, value: str | None) -> str | None:

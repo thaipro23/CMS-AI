@@ -115,6 +115,7 @@ class AcademicRosterWorkflowService:
             )
             for student, class_student, mapping, learning in rows
         ]
+        self._attach_progress_email_stats(class_id, items)
         total_pages = math.ceil(total / page_size) if total else 0
         return {
             'items': items,
@@ -124,6 +125,20 @@ class AcademicRosterWorkflowService:
             'total_pages': total_pages,
             'has_next': page < total_pages,
         }
+
+    def _attach_progress_email_stats(
+        self,
+        class_id: str,
+        items: list[dict[str, Any]],
+    ) -> None:
+        from app.services.academic.progress_email_stats import AcademicProgressEmailStatsService
+
+        stats = AcademicProgressEmailStatsService(self.db).for_classes({class_id})
+        for item in items:
+            student_id = str(item.get('id') or '').strip()
+            key = (str(class_id), student_id)
+            item['progress_email_sent_count'] = stats.student_sent_count.get(key, 0)
+            item['progress_email_last_sent_at'] = stats.student_last_sent_at.get(key)
 
     def _apply_learning_status_filter(self, query: Any, status_filter: str) -> Any:
         if status_filter == 'cms_not_synced':

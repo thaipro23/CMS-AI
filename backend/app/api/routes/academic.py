@@ -472,6 +472,53 @@ def _requester_context_json(user: UserContext) -> dict[str, Any]:
     })
 
 
+def _attach_progress_email_stats_to_teacher_report(
+    db: Session,
+    report: dict[str, Any],
+    *,
+    term_id: str | None,
+    branch: str | None,
+    campus: str | None,
+    learning_platform: str | None,
+) -> dict[str, Any]:
+    """Attach live Mail Send totals after cached/lite/full report rendering."""
+    if str(learning_platform or 'cms').strip().lower() != 'cms':
+        return report
+    from app.services.academic.progress_email_stats import AcademicProgressEmailStatsService
+
+    items = report.get('items') if isinstance(report, dict) else None
+    if not isinstance(items, list):
+        return report
+    teacher_ids = {
+        str(item.get('teacher_id') or '').strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get('teacher_id') or '').strip()
+    }
+    stats = AcademicProgressEmailStatsService(db).for_teachers(
+        teacher_ids,
+        term_id=term_id,
+        branch=branch,
+        campus=campus,
+    )
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        teacher_id = str(item.get('teacher_id') or '').strip()
+        item['progress_email_sent_count'] = stats.teacher_sent_count.get(teacher_id, 0)
+        classes = item.get('classes')
+        if not isinstance(classes, list):
+            continue
+        for class_item in classes:
+            if not isinstance(class_item, dict):
+                continue
+            class_id = str(class_item.get('class_id') or '').strip()
+            class_item['progress_email_sent_count'] = stats.class_sent_count.get(class_id, 0)
+    summary = report.get('summary')
+    if isinstance(summary, dict):
+        summary['progress_email_sent_count'] = sum(stats.class_sent_count.values())
+    return report
+
+
 def _advisory_xact_lock_for_key(db: Session, key: str) -> None:
     """Best-effort PostgreSQL transaction lock; no-op on SQLite tests."""
     try:
@@ -1296,7 +1343,7 @@ def list_training_teacher_report(
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
-    return AcademicService(db).training_teacher_report(
+    report = AcademicService(db).training_teacher_report(
         user,
         term_id=term_id,
         branch=branch,
@@ -1309,6 +1356,14 @@ def list_training_teacher_report(
         page_size=page_size,
         include_classes=include_classes or bool(teacher_id),
         use_cache=not fresh,
+    )
+    return _attach_progress_email_stats_to_teacher_report(
+        db,
+        report,
+        term_id=term_id,
+        branch=branch,
+        campus=campus,
+        learning_platform=learning_platform,
     )
 
 
