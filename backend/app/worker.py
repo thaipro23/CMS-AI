@@ -90,6 +90,7 @@ celery_app.conf.update(
         'academic_udemy_progress_export_task': {'queue': 'exports'},
         'academic_udemy_artifact_cleanup_task': {'queue': 'exports'},
         'analytics_ingest_task': {'queue': 'analytics'},
+        'analytics_tracking_cleanup_task': {'queue': 'analytics'},
         'analytics_class_recalculate_task': {'queue': 'analytics'},
     },
     task_annotations={
@@ -116,6 +117,7 @@ celery_app.conf.update(
         'academic_udemy_progress_export_task': {'soft_time_limit': 1800, 'time_limit': 2100},
         'academic_udemy_artifact_cleanup_task': {'soft_time_limit': 300, 'time_limit': 600},
         'analytics_ingest_task': {'soft_time_limit': 540, 'time_limit': 600},
+        'analytics_tracking_cleanup_task': {'soft_time_limit': 540, 'time_limit': 600},
         'analytics_class_recalculate_task': {'soft_time_limit': 1500, 'time_limit': 1800},
     },
 )
@@ -128,6 +130,10 @@ _beat_schedule['analytics-ingest-openedx-tracking-log'] = {
     'task': 'analytics_ingest_task',
     'schedule': max(60, int(getattr(settings, 'analytics_ingest_interval_seconds', 60) or 60)),
     'args': (None, None),
+}
+_beat_schedule['analytics-tracking-retention-cleanup'] = {
+    'task': 'analytics_tracking_cleanup_task',
+    'schedule': max(3600, int(getattr(settings, 'analytics_raw_event_cleanup_interval_seconds', 86400) or 86400)),
 }
 _beat_schedule['academic-progress-email-watchdog'] = {
     'task': 'academic_progress_email_watchdog_task',
@@ -4246,6 +4252,48 @@ def analytics_ingest_task(file_path: str | None = None, max_lines: int | None = 
                 user=None,
                 target_type='learning_analytics',
                 metadata=json_safe_value({'file_path': file_path}),
+            )
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name='analytics_tracking_cleanup_task')
+def analytics_tracking_cleanup_task():
+    """Bounded retention cleanup for materialized Open edX analytics raw events."""
+    from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
+    from app.services.audit_log import AuditErrorType, log_audit
+
+    db = SessionLocal()
+    try:
+        result = LearningAnalyticsCoreService(db).cleanup_tracking_events()
+        try:
+            log_audit(
+                db,
+                action='analytics.tracking.cleanup',
+                status='success',
+                message='Dọn raw tracking event analytics theo retention',
+                user=None,
+                target_type='learning_analytics',
+                metadata=json_safe_value(result),
+            )
+        except Exception:
+            pass
+        return json_safe_value(result)
+    except Exception as exc:
+        db.rollback()
+        try:
+            log_audit(
+                db,
+                action='analytics.tracking.cleanup',
+                status='failed',
+                error_type=AuditErrorType.SYSTEM_ERROR,
+                message=str(exc),
+                user=None,
+                target_type='learning_analytics',
+                metadata={'retention_days': int(getattr(settings, 'analytics_raw_event_retention_days', 7) or 7)},
             )
         except Exception:
             pass
