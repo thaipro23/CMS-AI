@@ -912,6 +912,21 @@ class LearningAnalyticsCoreService:
         """)
 
         for _ in range(max_batches):
+            lock_acquired = bool(
+                self.db.execute(
+                    text('SELECT pg_try_advisory_xact_lock(:lock_id)'),
+                    {'lock_id': ANALYTICS_INGEST_LOCK_ID},
+                ).scalar()
+            )
+            if not lock_acquired:
+                self.db.rollback()
+                return {
+                    'status': 'skipped_ingest_locked',
+                    'retention_days': retention_days,
+                    'cutoff': cutoff.isoformat(),
+                    'deleted': deleted,
+                    'batches': batches,
+                }
             removed = self.db.execute(
                 delete_sql,
                 {
@@ -920,6 +935,7 @@ class LearningAnalyticsCoreService:
                 },
             ).scalars().all()
             removed_count = len(removed)
+            # Transaction-scoped advisory lock is released by this commit.
             self.db.commit()
             if removed_count <= 0:
                 break
