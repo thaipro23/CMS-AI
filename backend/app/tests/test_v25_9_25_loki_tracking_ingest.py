@@ -4,6 +4,7 @@ import json
 
 from app.services.learning_analytics.loki_tracking_reader import LokiTrackingLogReader
 from app.services.learning_analytics.tracking_event_parser import parse_tracking_log_line
+from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, _submission_score
 
 
 def _line(event_type: str = 'custom_learning_event') -> str:
@@ -76,3 +77,23 @@ def test_loki_reader_accepts_documented_production_query_shape():
     assert reader.window_ns == 600 * 1_000_000_000
     assert reader.lag_ns == 120 * 1_000_000_000
     assert reader.limit == 1000
+
+
+def test_weighted_problem_score_keeps_zero_earned_value():
+    event = EventLike(
+        event_type='edx.grades.problem.submitted',
+        event_source='openedx_tracking_loki',
+        event_time=None,
+        user_id='101',
+        username='sv001',
+        course_id='course-v1:FPT+COM1071+FA26',
+        page_url=None,
+        raw_event={'weighted_earned': 0, 'weighted_possible': 1},
+        raw_context={},
+        raw_json={},
+    )
+
+    earned, possible = _submission_score(event)
+
+    assert earned == 0.0
+    assert possible == 1.0
