@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
@@ -35,6 +36,58 @@ def test_non_blank_course_mapping_scope_remains_exact_match():
 
     assert result is filtered
     query.filter.assert_called_once_with(predicate)
+
+
+def test_specific_scope_outranks_wildcard_scope():
+    service = _service_without_db()
+    klass = SimpleNamespace(
+        term_id="term-fa26",
+        subject_id="subject-com109",
+        block_id="block-1",
+        campus="HN",
+        branch="poly",
+    )
+    broad = SimpleNamespace(
+        term_id="term-fa26",
+        subject_id="subject-com109",
+        block_id=None,
+        campus=None,
+        branch=None,
+    )
+    specific = SimpleNamespace(
+        term_id="term-fa26",
+        subject_id="subject-com109",
+        block_id="block-1",
+        campus="HN",
+        branch="poly",
+    )
+
+    broad_score = service._subject_mapping_score_for_class(broad, klass)
+    specific_score = service._subject_mapping_score_for_class(specific, klass)
+
+    assert broad_score == 41
+    assert specific_score == 80
+    assert specific_score > broad_score
+
+
+def test_mismatched_non_blank_scope_is_ineligible():
+    service = _service_without_db()
+    klass = SimpleNamespace(
+        term_id="term-fa26",
+        subject_id="subject-com109",
+        block_id="block-1",
+        campus="HN",
+        branch="poly",
+    )
+    wrong_campus = SimpleNamespace(
+        term_id="term-fa26",
+        subject_id="subject-com109",
+        block_id=None,
+        campus="HCM",
+        branch=None,
+    )
+
+    assert service._subject_mapping_score_for_class(wrong_campus, klass) is None
 
 
 def test_quiz_recalculation_does_not_depend_on_session_structure():
