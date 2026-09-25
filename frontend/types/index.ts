@@ -2884,7 +2884,6 @@ export type AcademicTrainingTeacherReportResponse = PaginatedResponse<AcademicTr
     exam_insufficient_data_student_count?: number
     quiz_failed_count?: number
     assignment_not_graded_count?: number
-    progress_email_sent_count?: number
   }
 }
 

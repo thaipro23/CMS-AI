@@ -56,6 +56,7 @@ class AcademicProgressEmailStatsService:
 
         query = self.db.query(AcademicBulkOperationJob).filter(
             AcademicBulkOperationJob.job_type == 'progress_reminder_email',
+            AcademicBulkOperationJob.request_json['class_id'].as_string().in_(requested_class_ids),
         )
         if term_id:
             query = query.filter(AcademicBulkOperationJob.term_id == str(term_id))

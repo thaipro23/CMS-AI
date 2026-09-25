@@ -513,9 +513,6 @@ def _attach_progress_email_stats_to_teacher_report(
                 continue
             class_id = str(class_item.get('class_id') or '').strip()
             class_item['progress_email_sent_count'] = stats.class_sent_count.get(class_id, 0)
-    summary = report.get('summary')
-    if isinstance(summary, dict):
-        summary['progress_email_sent_count'] = sum(stats.class_sent_count.values())
     return report
 
 

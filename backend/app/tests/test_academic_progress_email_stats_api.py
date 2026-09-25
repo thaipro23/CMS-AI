@@ -45,6 +45,19 @@ def _seed_scope(db: Session):
             result_json={'mail_send_confirmed': True, 'sent_count': 9},
             finished_at=sent_at,
         ),
+        AcademicBulkOperationJob(
+            id='mail-contaminated-scope', job_type='progress_reminder_email', status='completed',
+            term_id='term-1', branch='ptcd', campus='hn',
+            request_json={'class_id': 'class-poly'},
+            result_json={
+                'mail_send_confirmed': True,
+                'sent_count': 9,
+                'mail_send_deliveries': [
+                    {'student_id': 'student-1', 'provider_state': 'terminal', 'status': 'COMPLETED', 'sent_count': 9, 'failed_count': 0},
+                ],
+            },
+            finished_at=sent_at,
+        ),
     ])
     db.commit()
     return sent_at
@@ -78,7 +91,7 @@ def test_teacher_report_enrichment_adds_teacher_and_class_totals_with_scope():
     assert enriched['items'][0]['progress_email_sent_count'] == 2
     assert enriched['items'][0]['classes'][0]['progress_email_sent_count'] == 2
     assert enriched['items'][0]['classes'][1]['progress_email_sent_count'] == 0
-    assert enriched['summary']['progress_email_sent_count'] == 2
+    assert 'progress_email_sent_count' not in enriched['summary']
     db.close()
     engine.dispose()
 
@@ -108,7 +121,13 @@ def test_roster_enrichment_adds_confirmed_count_and_latest_time_to_visible_rows(
         {'id': 'student-2', 'full_name': 'Two'},
     ]
 
-    service._attach_progress_email_stats('class-poly', items)
+    service._attach_progress_email_stats(
+        'class-poly',
+        items,
+        term_id='term-1',
+        branch='poly',
+        campus='ph',
+    )
 
     assert items[0]['progress_email_sent_count'] == 1
     assert items[0]['progress_email_last_sent_at'] == sent_at

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import inspect
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -8,6 +9,13 @@ from app.models.academic import (
     AcademicClass,
     AcademicTeacherAssignment,
 )
+
+
+def test_class_filter_is_applied_in_sql_instead_of_scanning_all_mail_jobs():
+    from app.services.academic.progress_email_stats import AcademicProgressEmailStatsService
+
+    source = inspect.getsource(AcademicProgressEmailStatsService.for_classes)
+    assert "request_json['class_id'].as_string().in_(requested_class_ids)" in source
 
 
 def _db():

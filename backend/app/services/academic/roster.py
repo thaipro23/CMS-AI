@@ -115,7 +115,13 @@ class AcademicRosterWorkflowService:
             )
             for student, class_student, mapping, learning in rows
         ]
-        self._attach_progress_email_stats(class_id, items)
+        self._attach_progress_email_stats(
+            class_id,
+            items,
+            term_id=cls.term_id if cls else None,
+            branch=cls.branch if cls else None,
+            campus=cls.campus if cls else None,
+        )
         total_pages = math.ceil(total / page_size) if total else 0
         return {
             'items': items,
@@ -130,10 +136,19 @@ class AcademicRosterWorkflowService:
         self,
         class_id: str,
         items: list[dict[str, Any]],
+        *,
+        term_id: str | None = None,
+        branch: str | None = None,
+        campus: str | None = None,
     ) -> None:
         from app.services.academic.progress_email_stats import AcademicProgressEmailStatsService
 
-        stats = AcademicProgressEmailStatsService(self.db).for_classes({class_id})
+        stats = AcademicProgressEmailStatsService(self.db).for_classes(
+            {class_id},
+            term_id=term_id,
+            branch=branch,
+            campus=campus,
+        )
         for item in items:
             student_id = str(item.get('id') or '').strip()
             key = (str(class_id), student_id)
