@@ -24,16 +24,28 @@ def _line(event_type: str = 'custom_learning_event') -> str:
     return json.dumps(payload)
 
 
-def test_parser_can_retain_all_event_types_for_loki_history():
+def test_parser_rejects_non_analytics_event_types():
     assert parse_tracking_log_line(_line()) is None
 
-    parsed = parse_tracking_log_line(_line(), relevant_only=False)
+
+def test_parser_rejects_long_openedx_route_before_database_insert():
+    long_route = (
+        '/courses/course-v1:FPL+VIE108+FA26/xblock/'
+        'block-v1:FPL+VIE108+FA26+type@openassessment+block@28318ce090074c15af84992946cafb11/'
+        'handler/render_peer_assessment'
+    )
+
+    assert len(long_route) > 120
+    assert parse_tracking_log_line(_line(long_route)) is None
+
+
+def test_parser_keeps_learning_analytics_event():
+    parsed = parse_tracking_log_line(_line('problem_check'))
 
     assert parsed is not None
-    assert parsed.event_type == 'custom_learning_event'
+    assert parsed.event_type == 'problem_check'
     assert parsed.username == 'sv001'
     assert parsed.course_id == 'course-v1:FPT+COM1071+FA26'
-    assert parsed.raw_event == {'value': 'kept-for-future-analysis'}
 
 
 def test_loki_flatten_keeps_stream_metadata_and_sorts_forward():
