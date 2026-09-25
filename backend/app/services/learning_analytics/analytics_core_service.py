@@ -1129,12 +1129,9 @@ class LearningAnalyticsCoreService:
         source_event_count = int(query.count() or 0)
         identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
-        if username:
-            target_usernames = [username]
-            query = query.filter(AnalyticsTrackingEvent.username == username)
-        elif class_id:
+        if class_id:
             identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
-            target_usernames = list(identity.get('ap_usernames') or [])
+            target_usernames = [username] if username else list(identity.get('ap_usernames') or [])
             if not target_usernames:
                 return {
                     'course_id': course_id,
@@ -1144,6 +1141,9 @@ class LearningAnalyticsCoreService:
                     'message': 'Lớp chưa có identity hợp lệ để tính video.',
                 }
             query = self._apply_tracking_identity_filter(query, identity)
+        elif username:
+            target_usernames = [username]
+            query = query.filter(AnalyticsTrackingEvent.username == username)
 
         events = query.order_by(
             AnalyticsTrackingEvent.event_time.asc(),
@@ -1153,6 +1153,8 @@ class LearningAnalyticsCoreService:
         for ev in events:
             canonical = self._canonical_event_username(ev, identity)
             if not canonical or not ev.video_id:
+                continue
+            if target_usernames is not None and canonical not in set(target_usernames):
                 continue
             grouped[(canonical, ev.video_id)].append(ev)
 
@@ -1351,12 +1353,9 @@ class LearningAnalyticsCoreService:
         source_event_count = int(query.count() or 0)
         identity: dict[str, Any] | None = None
         target_usernames: list[str] | None = None
-        if username:
-            target_usernames = [username]
-            query = query.filter(AnalyticsTrackingEvent.username == username)
-        elif class_id:
+        if class_id:
             identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
-            target_usernames = list(identity.get('ap_usernames') or [])
+            target_usernames = [username] if username else list(identity.get('ap_usernames') or [])
             if not target_usernames:
                 return {
                     'course_id': course_id,
@@ -1366,6 +1365,9 @@ class LearningAnalyticsCoreService:
                     'message': 'Lớp chưa có identity hợp lệ để tính quiz.',
                 }
             query = self._apply_tracking_identity_filter(query, identity)
+        elif username:
+            target_usernames = [username]
+            query = query.filter(AnalyticsTrackingEvent.username == username)
 
         rows = query.order_by(
             AnalyticsTrackingEvent.event_time.asc(),
@@ -1375,6 +1377,8 @@ class LearningAnalyticsCoreService:
         for raw in rows:
             canonical = self._canonical_event_username(raw, identity)
             if not canonical:
+                continue
+            if target_usernames is not None and canonical not in set(target_usernames):
                 continue
             normalized_events.append(EventLike(
                 event_type=raw.event_type,
