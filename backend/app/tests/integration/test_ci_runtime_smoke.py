@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 import redis
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 
 pytestmark = pytest.mark.integration
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_postgres_migration_head_and_idempotency_contract() -> None:
+    expected_head = ScriptDirectory(str(BACKEND_ROOT / 'alembic')).get_current_head()
     engine = create_engine(os.environ['DATABASE_URL'], pool_pre_ping=True)
     with engine.begin() as connection:
         version = connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()
-        assert version == '0065_academic_job_batch_recovery'
+        assert version == expected_head
         column_exists = connection.execute(text("""
             SELECT EXISTS (
                 SELECT 1 FROM information_schema.columns
