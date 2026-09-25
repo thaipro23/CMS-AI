@@ -280,6 +280,7 @@ class Settings(BaseSettings):
     analytics_loki_query: str = '{namespace="openedx", app=~"lms|lms-worker"} |= "event_type"'
     analytics_loki_tenant_id: str = ''
     analytics_loki_backfill_start: str = ''
+    analytics_loki_backfill_start_ns: int = 0
     analytics_loki_default_backfill_hours: int = 24
     analytics_loki_window_seconds: int = 600
     analytics_loki_lag_seconds: int = 120
