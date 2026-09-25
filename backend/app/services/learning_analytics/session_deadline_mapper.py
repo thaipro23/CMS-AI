@@ -27,6 +27,10 @@ class CourseSessionMapping:
     deadline_source: str
     deadline_mapping_quality: str
     components: list[SessionComponent] = field(default_factory=list)
+    # All descendant Open edX usage keys under this Bài/chapter, including
+    # sequential and vertical containers. Quiz tracking commonly emits the
+    # unit/sequential key rather than the problem key itself.
+    match_keys: list[str] = field(default_factory=list)
 
     @property
     def videos(self) -> list[SessionComponent]:
@@ -165,6 +169,39 @@ def _child_blocks(
     return result
 
 
+def _descendant_keys(
+    session_block: dict[str, Any],
+    *,
+    by_id: dict[str, dict[str, Any]],
+    children_by_parent: dict[str, list[str]],
+) -> list[str]:
+    keys: list[str] = []
+    visited: set[str] = set()
+
+    def walk(block: dict[str, Any]) -> None:
+        bid = _block_id(block)
+        key = bid or f'inline:{id(block)}'
+        if key in visited:
+            return
+        visited.add(key)
+        if bid:
+            keys.append(bid)
+        for child in _child_blocks(
+            block,
+            by_id=by_id,
+            children_by_parent=children_by_parent,
+        ):
+            walk(child)
+
+    for child in _child_blocks(
+        session_block,
+        by_id=by_id,
+        children_by_parent=children_by_parent,
+    ):
+        walk(child)
+    return keys
+
+
 def _descendant_components(
     session_block: dict[str, Any],
     *,
@@ -273,6 +310,11 @@ def build_session_mappings_from_blocks(
             by_id=by_id,
             children_by_parent=children_by_parent,
         )
+        match_keys = _descendant_keys(
+            block,
+            by_id=by_id,
+            children_by_parent=children_by_parent,
+        )
         session_type = classify_session_type(
             title,
             _block_type(block),
@@ -289,6 +331,7 @@ def build_session_mappings_from_blocks(
                 source,
                 quality,
                 components,
+                match_keys,
             )
         )
     return mappings
