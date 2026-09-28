@@ -342,6 +342,51 @@ def test_question_image_validation_checks_real_bytes_mime_and_svg_rejection() ->
         validate_question_image(b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', declared_content_type='image/svg+xml')
 
 
+def test_openedx_question_media_uses_static_library_asset_paths() -> None:
+    import hashlib
+    from types import SimpleNamespace
+
+    from app.services.question_media import build_openedx_question_assets
+
+    raw = b'legacy-acms-image-bytes'
+    digest = hashlib.sha256(raw).hexdigest()
+    row = SimpleNamespace(
+        id='media-1',
+        storage_reference='question-media/test.png',
+        sha256=digest,
+        mime_type='image/png',
+        sort_order=0,
+        created_at=None,
+    )
+
+    class FakeQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [row]
+
+    class FakeDB:
+        def query(self, *args, **kwargs):
+            return FakeQuery()
+
+    class FakeStorage:
+        def read_bytes(self, reference):
+            assert reference == row.storage_reference
+            return raw
+
+    question = SimpleNamespace(id='question-123')
+    media_rows, assets = build_openedx_question_assets(FakeDB(), question, storage=FakeStorage())
+
+    assert media_rows == [row]
+    assert assets[0]['file_path'] == f'static/acms/{question.id}/{digest[:20]}.png'
+    assert assets[0]['file_path'].startswith('static/acms/')
+    assert not assets[0]['file_path'].startswith('acms/')
+
+
 def test_model_gateway_rejects_wrong_count_and_bad_multi_answer_sets_before_db() -> None:
     gateway = ModelGateway()
     valid = [{
