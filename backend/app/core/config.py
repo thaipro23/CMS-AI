@@ -292,7 +292,7 @@ class Settings(BaseSettings):
     # Raw Open edX events are a short-lived PostgreSQL staging buffer. Loki
     # remains the authoritative raw source; durable video/quiz snapshots carry
     # historical analytics after retention cleanup.
-    analytics_raw_event_retention_days: int = 7
+    analytics_raw_event_retention_days: int = 3
     analytics_raw_event_cleanup_batch_size: int = 20000
     analytics_raw_event_cleanup_max_batches_per_run: int = 10
     analytics_raw_event_cleanup_interval_seconds: int = 86400

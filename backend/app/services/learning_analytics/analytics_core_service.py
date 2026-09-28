@@ -832,7 +832,7 @@ class LearningAnalyticsCoreService:
                 'message': 'Chưa có video/quiz materialized; giữ nguyên raw events để có thể tính lại.',
             }
 
-        retention_days = max(1, int(getattr(settings, 'analytics_raw_event_retention_days', 7) or 7))
+        retention_days = max(1, int(getattr(settings, 'analytics_raw_event_retention_days', 3) or 3))
         batch_size = min(
             50000,
             max(100, int(getattr(settings, 'analytics_raw_event_cleanup_batch_size', 20000) or 20000)),

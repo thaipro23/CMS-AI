@@ -83,7 +83,7 @@ def test_cleanup_never_runs_on_non_postgres():
 
 
 def test_retention_defaults_are_bounded_for_production():
-    assert settings.analytics_raw_event_retention_days == 7
+    assert settings.analytics_raw_event_retention_days == 3
     assert 100 <= settings.analytics_raw_event_cleanup_batch_size <= 50000
     assert settings.analytics_raw_event_cleanup_max_batches_per_run >= 1
     assert settings.analytics_raw_event_cleanup_interval_seconds >= 3600

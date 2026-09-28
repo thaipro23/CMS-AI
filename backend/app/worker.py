@@ -4293,7 +4293,7 @@ def analytics_tracking_cleanup_task():
                 message=str(exc),
                 user=None,
                 target_type='learning_analytics',
-                metadata={'retention_days': int(getattr(settings, 'analytics_raw_event_retention_days', 7) or 7)},
+                metadata={'retention_days': int(getattr(settings, 'analytics_raw_event_retention_days', 3) or 3)},
             )
         except Exception:
             pass
