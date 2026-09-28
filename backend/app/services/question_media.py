@@ -257,7 +257,7 @@ def build_openedx_question_assets(
             raise ValueError(f'MIME ảnh {row.mime_type!r} không được hỗ trợ khi publish.')
         assets.append({
             'placeholder': f'__ACMS_MEDIA_{row.id}__',
-            'file_path': f'acms/{question.id}/{row.sha256[:20]}{extension}',
+            'file_path': f'static/acms/{question.id}/{row.sha256[:20]}{extension}',
             'content_type': row.mime_type,
             'content_b64': base64.b64encode(raw).decode('ascii'),
             'sha256': row.sha256,
