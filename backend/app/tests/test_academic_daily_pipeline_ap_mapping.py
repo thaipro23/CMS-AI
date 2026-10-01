@@ -2,13 +2,16 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.models.academic import (
+    AcademicBlock,
     AcademicBulkOperationJob,
     AcademicCampus,
     AcademicClass,
+    AcademicSubject,
+    AcademicSubjectDelivery,
     AcademicSyncRun,
     AcademicTerm,
 )
@@ -56,6 +59,180 @@ def _scope(branch: str) -> dict[str, object]:
         "class_to_campus": {},
         "scope_hash": f"hash-{branch}",
     }
+
+
+def test_daily_scope_and_post_ap_refresh_include_only_cms_delivery_classes():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    for model in (
+        AcademicTerm,
+        AcademicCampus,
+        AcademicBlock,
+        AcademicSubject,
+        AcademicSubjectDelivery,
+        AcademicClass,
+    ):
+        model.__table__.create(engine)
+
+    with Session(engine) as db:
+        term = AcademicTerm(
+            id="term-fa26",
+            term_code="FA26",
+            term_name="Fall 2026",
+            branch="poly",
+            active=True,
+        )
+        block = AcademicBlock(
+            id="block-1",
+            term_id=term.id,
+            block_code="B1",
+            block_name="Block 1",
+            active=True,
+        )
+        subjects = [
+            AcademicSubject(
+                id=f"subject-{name}",
+                subject_code=f"{name.upper()}101",
+                subject_name=name,
+                branch="poly",
+                active=True,
+            )
+            for name in (
+                "cms",
+                "legacy",
+                "null",
+                "udemy",
+                "inactive-cms",
+                "inactive-udemy",
+            )
+        ]
+        classes = [
+            AcademicClass(
+                id=f"class-{name}",
+                term_id=term.id,
+                block_id=block.id,
+                subject_id=f"subject-{name}",
+                class_code=f"{name.upper()}101.01",
+                class_name=name,
+                campus="hn",
+                branch="poly",
+                active=True,
+            )
+            for name in (
+                "cms",
+                "legacy",
+                "null",
+                "udemy",
+                "inactive-cms",
+                "inactive-udemy",
+            )
+        ]
+        db.add_all([
+            term,
+            AcademicCampus(
+                id="campus-hn",
+                campus_code="hn",
+                campus_name="Ha Noi",
+                branch="poly",
+                active=True,
+            ),
+            block,
+            *subjects,
+            AcademicSubjectDelivery(
+                id="delivery-cms",
+                subject_id="subject-cms",
+                term_id=term.id,
+                block_id=block.id,
+                branch="poly",
+                learning_platform="cms",
+                active=True,
+            ),
+            AcademicSubjectDelivery(
+                id="delivery-udemy",
+                subject_id="subject-udemy",
+                term_id=term.id,
+                block_id=block.id,
+                branch="poly",
+                learning_platform="udemy",
+                active=True,
+            ),
+            AcademicSubjectDelivery(
+                id="delivery-null",
+                subject_id="subject-null",
+                term_id=term.id,
+                block_id=block.id,
+                branch="poly",
+                learning_platform=None,
+                active=True,
+            ),
+            AcademicSubjectDelivery(
+                id="delivery-inactive-cms",
+                subject_id="subject-inactive-cms",
+                term_id=term.id,
+                block_id=block.id,
+                branch="poly",
+                learning_platform="cms",
+                active=False,
+            ),
+            AcademicSubjectDelivery(
+                id="delivery-inactive-udemy",
+                subject_id="subject-inactive-udemy",
+                term_id=term.id,
+                block_id=block.id,
+                branch="poly",
+                learning_platform="udemy",
+                active=False,
+            ),
+            *classes,
+        ])
+        db.commit()
+
+        scope = runtime.discover_daily_scopes(db)[0]
+        refreshed = runtime._refresh_scope_after_ap(db, scope)
+
+    assert scope["class_ids"] == ["class-cms", "class-legacy", "class-null"]
+    assert scope["subject_ids"] == ["subject-cms", "subject-legacy", "subject-null"]
+    assert refreshed["class_ids"] == ["class-cms", "class-legacy", "class-null"]
+    assert refreshed["subject_ids"] == ["subject-cms", "subject-legacy", "subject-null"]
+    assert "class-udemy" not in refreshed["class_to_campus"]
+    assert "class-inactive-cms" not in refreshed["class_to_campus"]
+    assert "class-inactive-udemy" not in refreshed["class_to_campus"]
+    engine.dispose()
+
+
+def test_mapping_exhaustion_keeps_the_actual_subject_failure_message(session_factory):
+    with session_factory() as db:
+        root = AcademicBulkOperationJob(
+            id="root-mapping",
+            job_type=runtime.DAILY_ROOT_JOB_TYPE,
+            status="running",
+            request_json={},
+            result_json={},
+        )
+        attempt = AcademicBulkOperationJob(
+            id="mapping-attempt",
+            parent_job_id=root.id,
+            job_type="subject_auto_map_all_sync",
+            status="failed",
+            error_message="Course mapping failed (1): SOA102: no CMS course candidate",
+            request_json={},
+            result_json={},
+        )
+        db.add_all([root, attempt])
+        db.commit()
+
+        result = runtime._fail_exhausted_stage(
+            db,
+            root,
+            {},
+            stage="course_mapping",
+            failed_target_keys=("poly:term-fa26",),
+            attempt_ids={"poly:term-fa26": attempt.id},
+        )
+        db.refresh(root)
+
+    assert result["code"] == "stage_retry_exhausted"
+    assert "SOA102: no CMS course candidate" in root.error_message
+
 
 
 def _seed_root_with_ap_attempts(session_factory, *, poly: str, ptcd: str, round_no: int):

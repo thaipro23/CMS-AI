@@ -2545,6 +2545,9 @@ class AcademicService:
                 'subject_failed': 0,
                 'class_total': 0,
                 'class_ids': [],
+                'approved_class_ids': [],
+                'mapped_class_ids': [],
+                'failed_class_ids': [],
                 'approved_class_count': 0,
                 'subject_results': [],
                 'subject_ids': subject_ids,
@@ -2582,13 +2585,27 @@ class AcademicService:
             else []
         )
         subject_by_id = {str(item.id): item for item in subjects}
+        class_ids_by_subject: dict[str, list[str]] = {}
+        for item in approved_classes:
+            class_ids_by_subject.setdefault(str(item.subject_id), []).append(str(item.id))
 
         mapped_subject_ids: set[str] = set()
         subject_results: list[dict[str, Any]] = []
         auto_mapped = already_mapped = failed = 0
         for subject_id in subject_ids or sorted(class_subject_ids):
             subject = subject_by_id.get(subject_id)
+            affected_class_ids = class_ids_by_subject.get(subject_id, [])
             if not subject:
+                if affected_class_ids:
+                    failed += 1
+                    subject_results.append({
+                        'subject_id': subject_id,
+                        'subject_code': None,
+                        'class_ids': affected_class_ids,
+                        'status': 'subject_unavailable',
+                        'ok': False,
+                        'message': 'Môn trong phạm vi đã duyệt không còn hoạt động.',
+                    })
                 continue
             try:
                 result = self.auto_map_subject_course(
@@ -2602,6 +2619,7 @@ class AcademicService:
                 subject_results.append({
                     'subject_id': subject_id,
                     'subject_code': subject.subject_code,
+                    'class_ids': affected_class_ids,
                     'status': 'failed',
                     'ok': False,
                     'message': str(exc),
@@ -2621,6 +2639,7 @@ class AcademicService:
             subject_results.append({
                 'subject_id': subject_id,
                 'subject_code': subject.subject_code,
+                'class_ids': affected_class_ids,
                 'status': status_value,
                 'ok': ok,
                 'openedx_course_id': mapping.get('openedx_course_id'),
@@ -2632,8 +2651,13 @@ class AcademicService:
             for item in approved_classes
             if str(item.subject_id) in mapped_subject_ids
         ]
+        failed_class_ids = [
+            class_id
+            for class_id in class_ids
+            if class_id not in set(dispatch_class_ids)
+        ]
         return {
-            'ok': True,
+            'ok': failed <= 0 and not failed_class_ids,
             'term_id': term_id,
             'branch': branch_value,
             'subject_total': len(subjects),
@@ -2642,6 +2666,9 @@ class AcademicService:
             'subject_failed': failed,
             'class_total': len(dispatch_class_ids),
             'class_ids': dispatch_class_ids,
+            'approved_class_ids': class_ids,
+            'mapped_class_ids': dispatch_class_ids,
+            'failed_class_ids': failed_class_ids,
             'approved_class_count': len(class_ids),
             'subject_results': subject_results,
             'subject_ids': subject_ids,

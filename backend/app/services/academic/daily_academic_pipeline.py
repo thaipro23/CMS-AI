@@ -9,7 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from celery.schedules import crontab
-from sqlalchemy import func, text
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,10 +21,12 @@ from app.models.academic import (
     AcademicCampus,
     AcademicClass,
     AcademicClassSyncJob,
+    AcademicSubjectDelivery,
     AcademicSyncRun,
     AcademicTeacherReportJob,
     AcademicTerm,
 )
+from app.services.academic.platform import cms_delivery_predicate
 from app.schemas.academic import AcademicAPSyncIn
 from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
 from app.services.academic.daily_pipeline_state import (
@@ -114,6 +116,35 @@ def daily_root_key(run_date_vn: str) -> str:
     return f'academic-daily:v2:{str(run_date_vn or "").strip()}'
 
 
+def _cms_classes_for_term(db: Session, *, term_id: str, branch: str):
+    normalized_branch = str(branch or '').strip().lower()
+    return (
+        db.query(AcademicClass)
+        .outerjoin(
+            AcademicSubjectDelivery,
+            and_(
+                AcademicSubjectDelivery.subject_id == AcademicClass.subject_id,
+                AcademicSubjectDelivery.term_id == AcademicClass.term_id,
+                AcademicSubjectDelivery.block_id == AcademicClass.block_id,
+                func.lower(AcademicSubjectDelivery.branch) == normalized_branch,
+            ),
+        )
+        .filter(
+            AcademicClass.active.is_(True),
+            AcademicClass.term_id == str(term_id),
+            func.lower(func.coalesce(AcademicClass.branch, normalized_branch))
+            == normalized_branch,
+            or_(
+                AcademicSubjectDelivery.id.is_(None),
+                and_(
+                    AcademicSubjectDelivery.active.is_(True),
+                    cms_delivery_predicate(),
+                ),
+            ),
+        )
+    )
+
+
 def discover_daily_scopes(db: Session) -> list[dict[str, object]]:
     terms = (
         db.query(AcademicTerm)
@@ -150,12 +181,7 @@ def discover_daily_scopes(db: Session) -> list[dict[str, object]]:
             )
 
         classes = (
-            db.query(AcademicClass)
-            .filter(
-                AcademicClass.active.is_(True),
-                AcademicClass.term_id == str(term.id),
-                func.lower(func.coalesce(AcademicClass.branch, branch)) == branch,
-            )
+            _cms_classes_for_term(db, term_id=str(term.id), branch=branch)
             .order_by(AcademicClass.id.asc())
             .all()
         )
@@ -177,6 +203,7 @@ def discover_daily_scopes(db: Session) -> list[dict[str, object]]:
             'branch': branch,
             'campuses': campus_codes,
             'class_ids': sorted(class_to_campus),
+            'subject_ids': sorted({str(item.subject_id) for item in classes}),
             'class_to_campus': {
                 key: class_to_campus[key]
                 for key in sorted(class_to_campus)
@@ -456,11 +483,10 @@ def _refresh_scope_after_ap(
         if str(value).strip()
     })
     classes = (
-        db.query(AcademicClass)
-        .filter(
-            AcademicClass.active.is_(True),
-            AcademicClass.term_id == str(scope['term_id']),
-            func.lower(func.coalesce(AcademicClass.branch, branch)) == branch,
+        _cms_classes_for_term(
+            db,
+            term_id=str(scope['term_id']),
+            branch=branch,
         )
         .order_by(AcademicClass.id.asc())
         .all()
@@ -477,10 +503,11 @@ def _refresh_scope_after_ap(
     refreshed = {
         key: value
         for key, value in scope.items()
-        if key not in {'scope_hash', 'class_ids', 'class_to_campus'}
+        if key not in {'scope_hash', 'class_ids', 'subject_ids', 'class_to_campus'}
     }
     refreshed.update({
         'class_ids': sorted(class_to_campus),
+        'subject_ids': sorted({str(item.subject_id) for item in classes}),
         'class_to_campus': {
             key: class_to_campus[key]
             for key in sorted(class_to_campus)
@@ -511,11 +538,17 @@ def ensure_mapping_attempt(
     class_ids = [str(value) for value in scope_data.get('class_ids') or []]
     subject_ids = [
         str(value)
-        for (value,) in db.query(AcademicClass.subject_id).filter(
-            AcademicClass.id.in_(class_ids),
-        ).distinct().all()
+        for value in scope_data.get('subject_ids') or []
         if value
-    ] if class_ids else []
+    ]
+    if not subject_ids and class_ids:
+        subject_ids = [
+            str(value)
+            for (value,) in db.query(AcademicClass.subject_id).filter(
+                AcademicClass.id.in_(class_ids),
+            ).distinct().all()
+            if value
+        ]
     key = _attempt_key(
         root,
         scope_data,
@@ -938,6 +971,17 @@ def _fail_exhausted_stage(
     attempt_ids: dict[str, str],
 ) -> dict[str, object]:
     now = datetime.utcnow()
+    failure_details: list[dict[str, str]] = []
+    for target_key in failed_target_keys:
+        attempt_id = attempt_ids.get(target_key)
+        attempt = db.get(AcademicBulkOperationJob, str(attempt_id or ''))
+        message = str(getattr(attempt, 'error_message', '') or '').strip()
+        if message:
+            failure_details.append({
+                'target_key': str(target_key),
+                'attempt_id': str(attempt_id or ''),
+                'message': message[:1000],
+            })
     state.update({
         'phase': 'failed',
         'failed_stage': stage,
@@ -948,11 +992,18 @@ def _fail_exhausted_stage(
             for key in failed_target_keys
         },
         'code': 'stage_retry_exhausted',
+        'failure_details': failure_details,
     })
     root.status = 'failed'
     root.progress_current = 100
     root.progress_label = f'01:00 +07 · {stage} thất bại sau retry'
-    root.error_message = f'{stage} exhausted: {", ".join(failed_target_keys)}'
+    root_error = f'{stage} exhausted: {", ".join(failed_target_keys)}'
+    if failure_details:
+        root_error += '; causes: ' + ' | '.join(
+            f'{item["target_key"]}: {item["message"]}'
+            for item in failure_details[:3]
+        )
+    root.error_message = root_error[:4000]
     root.finished_at = now
     _save_root_state(db, root, state)
     return {

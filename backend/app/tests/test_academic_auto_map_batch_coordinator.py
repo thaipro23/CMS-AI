@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
@@ -265,3 +266,206 @@ def test_map_only_job_finishes_without_provisioning_children_or_legacy_parent_fi
         assert parent.status == 'queued'
         assert db.query(AcademicClassSyncJob).count() == 0
     engine.dispose()
+
+
+def test_scheduled_map_only_accepts_mapped_subset_and_persists_real_failure(monkeypatch):
+    from app import worker
+
+    engine = create_engine(
+        'sqlite+pysqlite:///:memory:',
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool,
+    )
+    for model in (
+        AcademicTerm,
+        AcademicClass,
+        AcademicBulkOperationJob,
+        AcademicClassSyncJob,
+    ):
+        model.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    frozen_scope = {
+        'policy_version': 'academic-daily/v2',
+        'scope_key': 'poly:term-1',
+        'scope_hash': 'scope-hash-subset',
+        'term_id': 'term-1',
+        'branch': 'poly',
+        'campuses': ['hn'],
+        'class_ids': ['class-1', 'class-2'],
+        'class_to_campus': {'class-1': 'hn', 'class-2': 'hn'},
+    }
+    with factory() as db:
+        db.add(AcademicTerm(
+            id='term-1', term_code='FA26', term_name='Fall 2026', branch='poly', active=True,
+        ))
+        db.add(AcademicBulkOperationJob(
+            id='scope-parent-subset',
+            job_type='academic_daily_provision_scope',
+            status='queued',
+            request_json={'scope_hash': frozen_scope['scope_hash'], 'frozen_scope': frozen_scope},
+            result_json={},
+        ))
+        db.add(AcademicBulkOperationJob(
+            id='map-job-subset',
+            parent_job_id='scope-parent-subset',
+            job_type='subject_auto_map_all_sync',
+            status='queued',
+            term_id='term-1',
+            branch='poly',
+            request_json={
+                'operation': 'map_only',
+                'scheduled': True,
+                'scheduled_parent_job_id': 'scope-parent-subset',
+                'scheduled_scope_contract': {'scope_hash': frozen_scope['scope_hash']},
+                'frozen_scope': frozen_scope,
+                'approved_class_ids': ['class-1', 'class-2'],
+                'approved_subject_ids': ['subject-1', 'subject-2'],
+                'term_id': 'term-1',
+                'branch': 'poly',
+                'requester_context': {
+                    'user_id': 'academic-daily-scheduler',
+                    'username': 'academic-daily-scheduler',
+                    'role': 'admin',
+                    'permissions': [],
+                    'authenticated_admin_claims': {'ai_system_admin': True},
+                },
+            },
+            result_json={},
+        ))
+        db.commit()
+
+    monkeypatch.setattr(worker, 'SessionLocal', factory)
+    monkeypatch.setattr(
+        AcademicService,
+        'auto_map_subject_courses_for_snapshot',
+        lambda self, *args, **kwargs: {
+            'approved_class_ids': ['class-1', 'class-2'],
+            'mapped_class_ids': ['class-1'],
+            'failed_class_ids': ['class-2'],
+            'class_ids': ['class-1'],
+            'subject_mapped': 1,
+            'subject_already_mapped': 0,
+            'subject_failed': 1,
+            'subject_results': [{
+                'subject_id': 'subject-2',
+                'subject_code': 'SOA102',
+                'class_ids': ['class-2'],
+                'ok': False,
+                'status': 'no_candidate',
+                'message': 'No CMS course candidate',
+            }],
+        },
+    )
+
+    result = worker.academic_subject_auto_map_all_sync_task.run('map-job-subset')
+
+    assert result['ok'] is False
+    assert result['mapped_class_ids'] == ['class-1']
+    assert result['failed_class_ids'] == ['class-2']
+    with factory() as db:
+        job = db.get(AcademicBulkOperationJob, 'map-job-subset')
+        assert job.status == 'failed'
+        assert 'SOA102' in job.error_message
+        assert 'No CMS course candidate' in job.error_message
+    engine.dispose()
+
+
+def test_scheduled_map_only_resumes_prepared_dispatching_state(monkeypatch):
+    from app import worker
+
+    engine = create_engine(
+        'sqlite+pysqlite:///:memory:',
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool,
+    )
+    for model in (
+        AcademicTerm,
+        AcademicClass,
+        AcademicBulkOperationJob,
+        AcademicClassSyncJob,
+    ):
+        model.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    frozen_scope = {
+        'policy_version': 'academic-daily/v2',
+        'scope_key': 'poly:term-1',
+        'scope_hash': 'scope-hash-resume',
+        'term_id': 'term-1',
+        'branch': 'poly',
+        'campuses': ['hn'],
+        'class_ids': ['class-1'],
+        'class_to_campus': {'class-1': 'hn'},
+    }
+    with factory() as db:
+        db.add(AcademicTerm(
+            id='term-1', term_code='FA26', term_name='Fall 2026', branch='poly', active=True,
+        ))
+        db.add(AcademicBulkOperationJob(
+            id='scope-parent-resume',
+            job_type='academic_daily_provision_scope',
+            status='queued',
+            request_json={'scope_hash': frozen_scope['scope_hash'], 'frozen_scope': frozen_scope},
+            result_json={},
+        ))
+        db.add(AcademicBulkOperationJob(
+            id='map-job-resume',
+            parent_job_id='scope-parent-resume',
+            job_type='subject_auto_map_all_sync',
+            status='running',
+            term_id='term-1',
+            branch='poly',
+            request_json={
+                'operation': 'map_only',
+                'scheduled': True,
+                'scheduled_parent_job_id': 'scope-parent-resume',
+                'scheduled_scope_contract': {'scope_hash': frozen_scope['scope_hash']},
+                'frozen_scope': frozen_scope,
+                'approved_class_ids': ['class-1'],
+                'approved_subject_ids': ['subject-1'],
+                'term_id': 'term-1',
+                'branch': 'poly',
+            },
+            result_json={
+                'phase': 'dispatching',
+                'target_class_ids': ['class-1'],
+                'failed_class_ids': [],
+                'failed_class_count': 0,
+                'scope_blocked_class_count': 0,
+                'approved_class_count': 1,
+                'subject_failed': 0,
+            },
+        ))
+        db.commit()
+
+    monkeypatch.setattr(worker, 'SessionLocal', factory)
+    monkeypatch.setattr(
+        AcademicService,
+        'auto_map_subject_courses_for_snapshot',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('prepared state must not remap')
+        ),
+    )
+
+    result = worker.academic_subject_auto_map_all_sync_task.run('map-job-resume')
+
+    assert result['ok'] is True
+    assert result['phase'] == 'finished'
+    assert result['frozen_class_ids'] == ['class-1']
+    with factory() as db:
+        job = db.get(AcademicBulkOperationJob, 'map-job-resume')
+        assert job.status == 'completed'
+
+    engine.dispose()
+
+
+def test_auto_map_scope_validation_rejects_any_class_outside_frozen_scope():
+    from app import worker
+
+    with pytest.raises(PermissionError, match='outside its frozen parent scope'):
+        worker._validated_auto_map_class_sets(
+            {
+                'mapped_class_ids': ['class-1', 'class-outside'],
+                'failed_class_ids': [],
+            },
+            {'class-1', 'class-2'},
+        )

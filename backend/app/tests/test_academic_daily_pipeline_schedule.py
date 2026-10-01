@@ -11,6 +11,7 @@ from app.models.academic import (
     AcademicBulkOperationJob,
     AcademicCampus,
     AcademicClass,
+    AcademicSubjectDelivery,
     AcademicTerm,
 )
 from app.services.academic import daily_academic_pipeline as runtime
@@ -55,6 +56,7 @@ def session_factory():
         AcademicTerm,
         AcademicCampus,
         AcademicClass,
+        AcademicSubjectDelivery,
         AcademicBulkOperationJob,
     ):
         model.__table__.create(engine)

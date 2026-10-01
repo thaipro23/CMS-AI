@@ -159,7 +159,7 @@ def test_class_analytics_recalculate_filters_events_to_class_roster():
     # events by AcademicStudent.username is incorrect in production because AP
     # and Open edX usernames can differ.
     assert 'self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)' in source
-    assert 'self._apply_tracking_identity_filter(query, identity)' in source
+    assert 'self._tracking_events_for_identity(query, identity)' in source
     assert 'self._canonical_event_username' in source
     assert 'class_id=job.class_id' in worker
     assert 'class_id=class_id' in route

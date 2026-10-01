@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, or_, text
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from app.models.learning_analytics import (
     AnalyticsCourseSession,
     AnalyticsIngestCheckpoint,
     AnalyticsLearningBehaviorSnapshot,
+    AnalyticsMaterializedEventReceipt,
     AnalyticsQuizAttempt,
     AnalyticsStudentSessionProgress,
     AnalyticsStudentVideoProgress,
@@ -118,6 +119,47 @@ class LearningAnalyticsCoreService:
     def _is_postgres(self) -> bool:
         bind = self.db.get_bind()
         return bool(bind is not None and getattr(bind.dialect, 'name', '') == 'postgresql')
+
+    def _record_materialized_event_receipts(
+        self,
+        covered_events: list[tuple[AnalyticsTrackingEvent, str]],
+        *,
+        family: str,
+    ) -> int:
+        """Upsert exact raw-event coverage after durable materialization succeeds."""
+        deduplicated = {
+            str(event.id): (event, str(canonical_username))
+            for event, canonical_username in covered_events
+            if event.id and str(canonical_username or '').strip()
+        }
+        if not deduplicated:
+            return 0
+
+        existing: dict[str, AnalyticsMaterializedEventReceipt] = {}
+        event_ids = sorted(deduplicated)
+        for offset in range(0, len(event_ids), 1000):
+            chunk = event_ids[offset:offset + 1000]
+            for receipt in self.db.query(AnalyticsMaterializedEventReceipt).filter(
+                AnalyticsMaterializedEventReceipt.event_id.in_(chunk),
+            ).all():
+                existing[str(receipt.event_id)] = receipt
+
+        now = datetime.utcnow()
+        for event_id, (event, canonical_username) in deduplicated.items():
+            receipt = existing.get(event_id)
+            if receipt is None:
+                receipt = AnalyticsMaterializedEventReceipt(event_id=event_id)
+                self.db.add(receipt)
+            receipt.family = str(family)
+            receipt.course_id = str(event.course_id or '')
+            receipt.canonical_username = canonical_username
+            receipt.raw_username = str(event.username) if event.username is not None else None
+            receipt.raw_user_id = str(event.user_id) if event.user_id is not None else None
+            receipt.event_time = event.event_time
+            receipt.loki_ts_ns = event.loki_ts_ns
+            receipt.materialized_at = receipt.materialized_at or now
+            receipt.updated_at = now
+        return len(deduplicated)
 
     def _try_acquire_ingest_lock(self) -> bool:
         # PostgreSQL session-level advisory lock prevents beat/manual ingest overlap.
@@ -846,71 +888,49 @@ class LearningAnalyticsCoreService:
         def sql_list(values: set[str]) -> str:
             return ','.join("'" + str(value).replace("'", "''") + "'" for value in sorted(values))
 
-        video_types_sql = sql_list(set(VIDEO_EVENT_TYPES))
-        quiz_types_sql = sql_list(set(QUIZ_ANALYTICS_EVENT_TYPES))
+        cleanup_types_sql = sql_list(set(VIDEO_EVENT_TYPES) | set(QUIZ_ANALYTICS_EVENT_TYPES))
+        statement_timeout_ms = min(
+            300000,
+            max(
+                5000,
+                int(
+                    getattr(
+                        settings,
+                        'analytics_raw_event_cleanup_statement_timeout_ms',
+                        60000,
+                    )
+                    or 60000
+                ),
+            ),
+        )
         deleted = 0
         batches = 0
+        candidate_rows_scanned = 0
+        proven_materialized = 0
+        blocked_ids: set[str] = set()
+        status = 'completed'
 
-        # Match raw Open edX identities to the AP username stored in durable
-        # materializations. Direct username equality remains as a safe fallback
-        # for installations where AP/Open edX usernames are identical.
-        delete_sql = text(f"""
-            WITH doomed AS (
-                SELECT e.id
-                FROM analytics_tracking_events e
-                WHERE e.created_at < :cutoff
-                  AND (
-                    (
-                      e.event_type IN ({video_types_sql})
-                      AND EXISTS (
-                        SELECT 1
-                        FROM analytics_student_video_progress v
-                        LEFT JOIN openedx_user_mappings m
-                          ON (
-                            (e.username IS NOT NULL AND m.openedx_username = e.username)
-                            OR
-                            (e.user_id IS NOT NULL AND m.openedx_user_id = e.user_id)
-                          )
-                        LEFT JOIN academic_students s
-                          ON s.id = m.student_id
-                        WHERE v.course_id = e.course_id
-                          AND v.video_id = e.video_id
-                          AND (
-                            v.username = e.username
-                            OR v.username = s.username
-                          )
-                      )
-                    )
-                    OR
-                    (
-                      e.event_type IN ({quiz_types_sql})
-                      AND EXISTS (
-                        SELECT 1
-                        FROM analytics_quiz_attempts q
-                        LEFT JOIN openedx_user_mappings m
-                          ON (
-                            (e.username IS NOT NULL AND m.openedx_username = e.username)
-                            OR
-                            (e.user_id IS NOT NULL AND m.openedx_user_id = e.user_id)
-                          )
-                        LEFT JOIN academic_students s
-                          ON s.id = m.student_id
-                        WHERE q.course_id = e.course_id
-                          AND (
-                            q.username = e.username
-                            OR q.username = s.username
-                          )
-                      )
-                    )
-                  )
-                ORDER BY e.created_at ASC
-                LIMIT :batch_size
-                FOR UPDATE SKIP LOCKED
-            )
-            DELETE FROM analytics_tracking_events e
-            USING doomed d
-            WHERE e.id = d.id
-            RETURNING e.id
+        candidate_sql = text(f"""
+            SELECT e.id
+            FROM analytics_tracking_events e
+            WHERE e.created_at < :cutoff
+              AND e.event_type IN ({cleanup_types_sql})
+            ORDER BY e.created_at ASC, e.id ASC
+            LIMIT :batch_size
+            FOR UPDATE SKIP LOCKED
+        """)
+
+        proof_sql = text("""
+            SELECT e.id
+            FROM analytics_tracking_events e
+            JOIN analytics_materialized_event_receipts r
+              ON r.event_id = e.id
+            WHERE e.id = ANY(CAST(:candidate_ids AS VARCHAR[]))
+        """)
+        delete_sql = text("""
+            DELETE FROM analytics_tracking_events
+            WHERE id = ANY(CAST(:safe_ids AS VARCHAR[]))
+            RETURNING id
         """)
 
         for _ in range(max_batches):
@@ -928,12 +948,47 @@ class LearningAnalyticsCoreService:
                     'cutoff': cutoff.isoformat(),
                     'deleted': deleted,
                     'batches': batches,
+                    'candidate_rows_scanned': candidate_rows_scanned,
+                    'proven_materialized': proven_materialized,
+                    'blocked_unmaterialized': len(blocked_ids),
                 }
+            self.db.execute(
+                text("SELECT set_config('statement_timeout', :statement_timeout, true)"),
+                {'statement_timeout': f'{statement_timeout_ms}ms'},
+            ).scalar()
+            candidate_ids = [
+                str(value)
+                for value in self.db.execute(
+                    candidate_sql,
+                    {'cutoff': cutoff, 'batch_size': batch_size},
+                ).scalars().all()
+                if value
+            ]
+            if not candidate_ids:
+                self.db.commit()
+                break
+
+            candidate_rows_scanned += len(candidate_ids)
+            safe_ids = [
+                str(value)
+                for value in self.db.execute(
+                    proof_sql,
+                    {'candidate_ids': candidate_ids},
+                ).scalars().all()
+                if value
+            ]
+            safe_id_set = set(safe_ids)
+            blocked_ids.update(set(candidate_ids) - safe_id_set)
+            proven_materialized += len(safe_id_set)
+            if not safe_ids:
+                status = 'blocked_unmaterialized'
+                self.db.commit()
+                break
+
             removed = self.db.execute(
                 delete_sql,
                 {
-                    'cutoff': cutoff,
-                    'batch_size': batch_size,
+                    'safe_ids': sorted(safe_id_set),
                 },
             ).scalars().all()
             removed_count = len(removed)
@@ -943,8 +998,6 @@ class LearningAnalyticsCoreService:
                 break
             deleted += removed_count
             batches += 1
-            if removed_count < batch_size:
-                break
 
         remaining_old = int(
             self.db.query(AnalyticsTrackingEvent.id)
@@ -953,13 +1006,17 @@ class LearningAnalyticsCoreService:
             or 0
         )
         return {
-            'status': 'completed',
+            'status': status,
             'retention_days': retention_days,
             'cutoff': cutoff.isoformat(),
             'batch_size': batch_size,
             'max_batches': max_batches,
+            'statement_timeout_ms': statement_timeout_ms,
             'batches': batches,
+            'candidate_rows_scanned': candidate_rows_scanned,
+            'proven_materialized': proven_materialized,
             'deleted': deleted,
+            'blocked_unmaterialized': len(blocked_ids),
             'remaining_old_rows_all_types': remaining_old,
             'video_rows': video_rows,
             'quiz_rows': quiz_rows,
@@ -1413,15 +1470,21 @@ class LearningAnalyticsCoreService:
                     'video_progress_rows': 0,
                     'message': 'Lớp chưa có identity hợp lệ để tính video.',
                 }
-            query = self._apply_tracking_identity_filter(query, identity)
+            events = self._tracking_events_for_identity(query, identity)
         elif username:
             target_usernames = [username]
             query = query.filter(AnalyticsTrackingEvent.username == username)
-
-        events = query.order_by(
-            AnalyticsTrackingEvent.event_time.asc(),
-            AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
-        ).all()
+            events = query.order_by(
+                AnalyticsTrackingEvent.event_time.asc(),
+                AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
+                AnalyticsTrackingEvent.id.asc(),
+            ).all()
+        else:
+            events = query.order_by(
+                AnalyticsTrackingEvent.event_time.asc(),
+                AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
+                AnalyticsTrackingEvent.id.asc(),
+            ).all()
         grouped: dict[tuple[str, str], list[AnalyticsTrackingEvent]] = defaultdict(list)
         for ev in events:
             canonical = self._canonical_event_username(ev, identity)
@@ -1435,6 +1498,7 @@ class LearningAnalyticsCoreService:
         saved = 0
         skipped_no_new_events = 0
         session_mapping_backfilled = 0
+        receipt_events: list[tuple[AnalyticsTrackingEvent, str]] = []
         for (user, video_id), group in grouped.items():
             row = self.db.query(AnalyticsStudentVideoProgress).filter(
                 AnalyticsStudentVideoProgress.course_id == course_id,
@@ -1483,6 +1547,11 @@ class LearningAnalyticsCoreService:
                         saved += 1
                         session_mapping_backfilled += 1
                 skipped_no_new_events += 1
+                receipt_events.extend(
+                    (event, user)
+                    for event in group
+                    if (event.loki_ts_ns is not None or event.event_time is not None)
+                )
                 continue
 
             calculator_events: list[VideoEventInput] = []
@@ -1625,6 +1694,23 @@ class LearningAnalyticsCoreService:
             row.calculated_at = now
             saved += 1
 
+            receipt_events.extend(
+                (event, user)
+                for event in group
+                if (
+                    event in new_group
+                    or (
+                        (event.loki_ts_ns is not None or event.event_time is not None)
+                        and not self._video_event_is_new(
+                            event,
+                            last_loki_ts_ns=max_loki_ts_ns,
+                            last_event_at=row.last_event_at,
+                        )
+                    )
+                )
+            )
+
+        self._record_materialized_event_receipts(receipt_events, family='video')
         self.db.commit()
         return {
             'course_id': course_id,
@@ -1633,7 +1719,11 @@ class LearningAnalyticsCoreService:
             'video_progress_rows': saved,
             'skipped_no_new_events': skipped_no_new_events,
             'session_mapping_backfilled': session_mapping_backfilled,
-            'source_event_exists': bool(source_query.with_entities(AnalyticsTrackingEvent.id).first()),
+            'source_event_exists': (
+                bool(events)
+                if class_id
+                else bool(source_query.with_entities(AnalyticsTrackingEvent.id).first())
+            ),
             'matched_event_count': len(events),
             'identity_student_count': len(target_usernames or []),
             'identity_ambiguous_username_count': len((identity or {}).get('ambiguous_usernames') or []),
@@ -1667,16 +1757,23 @@ class LearningAnalyticsCoreService:
                     'quiz_attempt_rows': 0,
                     'message': 'Lớp chưa có identity hợp lệ để tính quiz.',
                 }
-            query = self._apply_tracking_identity_filter(query, identity)
+            rows = self._tracking_events_for_identity(query, identity)
         elif username:
             target_usernames = [username]
             query = query.filter(AnalyticsTrackingEvent.username == username)
-
-        rows = query.order_by(
-            AnalyticsTrackingEvent.event_time.asc(),
-            AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
-        ).all()
+            rows = query.order_by(
+                AnalyticsTrackingEvent.event_time.asc(),
+                AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
+                AnalyticsTrackingEvent.id.asc(),
+            ).all()
+        else:
+            rows = query.order_by(
+                AnalyticsTrackingEvent.event_time.asc(),
+                AnalyticsTrackingEvent.loki_ts_ns.asc().nullslast(),
+                AnalyticsTrackingEvent.id.asc(),
+            ).all()
         normalized_events: list[EventLike] = []
+        receipt_events: list[tuple[AnalyticsTrackingEvent, str]] = []
         for raw in rows:
             canonical = self._canonical_event_username(raw, identity)
             if not canonical:
@@ -1695,6 +1792,8 @@ class LearningAnalyticsCoreService:
                 raw_context=raw.raw_context or {},
                 raw_json=raw.raw_json or {},
             ))
+            if raw.user_id and raw.event_time and raw.course_id:
+                receipt_events.append((raw, canonical))
 
         features = build_quiz_attempt_features(normalized_events)
         now = datetime.utcnow()
@@ -1795,6 +1894,8 @@ class LearningAnalyticsCoreService:
             row.calculated_at = now
             saved += 1
 
+        if features:
+            self._record_materialized_event_receipts(receipt_events, family='quiz')
         self.db.commit()
         return {
             'course_id': course_id,
@@ -1803,7 +1904,11 @@ class LearningAnalyticsCoreService:
             'quiz_attempt_rows': saved,
             'created': created,
             'updated': updated,
-            'source_event_exists': bool(source_query.with_entities(AnalyticsTrackingEvent.id).first()),
+            'source_event_exists': (
+                bool(rows)
+                if class_id
+                else bool(source_query.with_entities(AnalyticsTrackingEvent.id).first())
+            ),
             'matched_event_count': len(rows),
             'normalized_event_count': len(normalized_events),
             'identity_student_count': len(target_usernames or []),
@@ -2055,18 +2160,43 @@ class LearningAnalyticsCoreService:
                 return str(mapped)
         return None
 
-    @staticmethod
-    def _apply_tracking_identity_filter(query: Any, identity: dict[str, Any]) -> Any:
-        filters: list[Any] = []
+    def _tracking_events_for_identity(
+        self,
+        base_query: Any,
+        identity: dict[str, Any],
+    ) -> list[AnalyticsTrackingEvent]:
+        """Load class events through indexable identity branches.
+
+        A tracking row can carry both username and user_id, so the two branch
+        results are de-duplicated by primary key before deterministic ordering.
+        """
         raw_usernames = sorted(identity.get('raw_usernames') or [])
         raw_user_ids = sorted(identity.get('raw_user_ids') or [])
+        if not raw_usernames and not raw_user_ids:
+            return []
+
+        events_by_id: dict[str, AnalyticsTrackingEvent] = {}
         if raw_usernames:
-            filters.append(AnalyticsTrackingEvent.username.in_(raw_usernames))
+            for event in base_query.filter(
+                AnalyticsTrackingEvent.username.in_(raw_usernames),
+            ).all():
+                events_by_id[str(event.id)] = event
         if raw_user_ids:
-            filters.append(AnalyticsTrackingEvent.user_id.in_(raw_user_ids))
-        if not filters:
-            return query.filter(False)
-        return query.filter(or_(*filters))
+            for event in base_query.filter(
+                AnalyticsTrackingEvent.user_id.in_(raw_user_ids),
+            ).all():
+                events_by_id[str(event.id)] = event
+
+        return sorted(
+            events_by_id.values(),
+            key=lambda event: (
+                event.event_time is None,
+                event.event_time or datetime.max,
+                event.loki_ts_ns is None,
+                int(event.loki_ts_ns or 0),
+                str(event.id),
+            ),
+        )
 
     def _student_usernames_for_class(self, *, class_id: str | None, course_id: str, username: str | None = None) -> list[str]:
         if username:
@@ -2104,10 +2234,9 @@ class LearningAnalyticsCoreService:
             query = self.db.query(AnalyticsTrackingEvent).filter(
                 AnalyticsTrackingEvent.course_id == course_id,
             )
-            query = self._apply_tracking_identity_filter(query, identity)
             counts: Counter[str] = Counter()
             allowed = set(usernames)
-            for event in query.all():
+            for event in self._tracking_events_for_identity(query, identity):
                 canonical = self._canonical_event_username(event, identity)
                 if canonical and canonical in allowed:
                     counts[canonical] += 1

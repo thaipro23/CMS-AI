@@ -3170,6 +3170,60 @@ def academic_subject_catalog_refresh_task(job_id: str):
         db.close()
 
 
+def _validated_auto_map_class_sets(
+    prepared: dict[str, Any],
+    approved_class_ids: set[str],
+) -> tuple[list[str], list[str]]:
+    mapped_values = (
+        prepared.get('mapped_class_ids')
+        if 'mapped_class_ids' in prepared
+        else prepared.get('class_ids')
+    )
+    mapped_class_ids = list(dict.fromkeys(
+        str(value) for value in (mapped_values or []) if str(value or '').strip()
+    ))
+    failed_class_ids = list(dict.fromkeys(
+        str(value)
+        for value in (prepared.get('failed_class_ids') or [])
+        if str(value or '').strip()
+    ))
+    returned_ids = set(mapped_class_ids) | set(failed_class_ids)
+    outside_ids = sorted(returned_ids - approved_class_ids)
+    if outside_ids:
+        raise PermissionError(
+            'Scheduled auto-map returned classes outside its frozen parent scope: '
+            + ', '.join(outside_ids[:10])
+        )
+    overlap = sorted(set(mapped_class_ids) & set(failed_class_ids))
+    if overlap:
+        raise ValueError(
+            'Auto-map result marks classes as both mapped and failed: '
+            + ', '.join(overlap[:10])
+        )
+    return mapped_class_ids, failed_class_ids
+
+
+def _auto_map_failure_message(state: dict[str, Any]) -> str:
+    failed_results = [
+        item
+        for item in (state.get('subject_results') or [])
+        if isinstance(item, dict) and not bool(item.get('ok'))
+    ]
+    failed_count = max(
+        int(state.get('subject_failed') or 0),
+        len(failed_results),
+    )
+    details: list[str] = []
+    for item in failed_results[:5]:
+        subject = str(item.get('subject_code') or item.get('subject_id') or 'unknown')
+        message = str(item.get('message') or item.get('status') or 'mapping failed')
+        details.append(f'{subject}: {message}')
+    summary = f'Course mapping failed ({failed_count})'
+    if details:
+        summary += ': ' + '; '.join(details)
+    return summary[:4000]
+
+
 @celery_app.task(name='academic_subject_auto_map_all_sync_task')
 def academic_subject_auto_map_all_sync_task(job_id: str):
     """Map Course CMS once, then coordinate a bounded window of class sync jobs."""
@@ -3256,6 +3310,26 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         db.add(job)
         db.commit()
 
+        scope_snapshot_present = 'approved_class_ids' in request_json
+        approved_class_ids = {
+            str(item)
+            for item in (request_json.get('approved_class_ids') or [])
+            if str(item)
+        }
+        if request_json.get('scheduled') and approved_class_ids != {
+            str(item)
+            for item in (frozen_scope.get('class_ids') or [])
+            if str(item)
+        }:
+            raise PermissionError(
+                'Scheduled auto-map class scope does not match its parent contract.'
+            )
+        if not scope_snapshot_present:
+            raise PermissionError(
+                'Job Auto map tất cả thiếu snapshot phạm vi lớp đã được duyệt; '
+                'dừng để tránh mở rộng quyền.'
+            )
+
         if state.get('phase') != 'dispatching':
             worker_user = _worker_user_from_request_json(
                 request_json,
@@ -3263,25 +3337,6 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 source='celery_academic_bulk_operation_job',
                 job_id=job.id,
             )
-            scope_snapshot_present = 'approved_class_ids' in request_json
-            approved_class_ids = {
-                str(item)
-                for item in (request_json.get('approved_class_ids') or [])
-                if str(item)
-            }
-            if request_json.get('scheduled') and approved_class_ids != {
-                str(item)
-                for item in (frozen_scope.get('class_ids') or [])
-                if str(item)
-            }:
-                raise PermissionError(
-                    'Scheduled auto-map class scope does not match its parent contract.'
-                )
-            if not scope_snapshot_present:
-                raise PermissionError(
-                    'Job Auto map tất cả thiếu snapshot phạm vi lớp đã được duyệt; '
-                    'dừng để tránh mở rộng quyền.'
-                )
             approved_subject_ids = [
                 str(item)
                 for item in (request_json.get('approved_subject_ids') or [])
@@ -3302,22 +3357,17 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 approved_subject_ids=approved_subject_ids,
                 approved_class_ids=sorted(approved_class_ids),
             )
-            raw_class_ids = [str(item) for item in (prepared.get('class_ids') or [])]
-            if request_json.get('scheduled') and set(raw_class_ids) != approved_class_ids:
-                raise PermissionError(
-                    'Scheduled auto-map prepared scope no longer matches its frozen parent scope.'
-                )
-            class_ids = list(dict.fromkeys(
-                item for item in raw_class_ids if item in approved_class_ids
-            ))
-            blocked_class_ids = [
-                item for item in raw_class_ids if item not in approved_class_ids
-            ]
+            class_ids, failed_class_ids = _validated_auto_map_class_sets(
+                prepared,
+                approved_class_ids,
+            )
             state = {key: value for key, value in prepared.items() if key != 'class_ids'}
             state.update({
                 'phase': 'dispatching',
                 'target_class_ids': class_ids,
-                'scope_blocked_class_count': len(blocked_class_ids),
+                'failed_class_ids': failed_class_ids,
+                'failed_class_count': len(failed_class_ids),
+                'scope_blocked_class_count': 0,
                 'approved_class_count': len(approved_class_ids),
                 'child_job_ids_by_class': {},
                 'jobs_queued': 0,
@@ -3339,12 +3389,11 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
         if request_json.get('operation') == 'map_only':
             mandatory_failed = bool(
                 int(state.get('subject_failed') or 0)
+                or int(state.get('failed_class_count') or 0)
                 or int(state.get('scope_blocked_class_count') or 0)
             )
             state['phase'] = 'finished'
-            state['frozen_class_ids'] = [
-                str(item) for item in (state.get('target_class_ids') or [])
-            ]
+            state['frozen_class_ids'] = sorted(approved_class_ids)
             state['finished_at'] = datetime.utcnow().isoformat()
             job.status = 'failed' if mandatory_failed else 'completed'
             job.progress_current = 100
@@ -3355,7 +3404,11 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
                 else 'Đã ghép Course CMS còn thiếu'
             )
             job.result_json = json_safe_value(state)
-            job.error_message = job.progress_label if mandatory_failed else None
+            job.error_message = (
+                _auto_map_failure_message(state)
+                if mandatory_failed
+                else None
+            )
             job.finished_at = datetime.utcnow()
             job.updated_at = job.finished_at
             db.add(job)
@@ -3503,6 +3556,7 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             mandatory_failed = bool(
                 plan.failed_count
                 or int(state.get('subject_failed') or 0)
+                or int(state.get('failed_class_count') or 0)
                 or jobs_skipped
                 or int(state.get('scope_blocked_class_count') or 0)
             )
@@ -3522,7 +3576,11 @@ def academic_subject_auto_map_all_sync_task(job_id: str):
             job.progress_total = 100
             job.progress_label = message[:255]
             job.result_json = json_safe_value(state)
-            job.error_message = message[:4000] if mandatory_failed else None
+            job.error_message = (
+                _auto_map_failure_message(state)
+                if mandatory_failed and int(state.get('subject_failed') or 0)
+                else (message[:4000] if mandatory_failed else None)
+            )
             job.finished_at = datetime.utcnow()
             job.updated_at = datetime.utcnow()
             db.add(job)

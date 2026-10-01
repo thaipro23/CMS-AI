@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Any
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -75,6 +75,27 @@ class AnalyticsTrackingEvent(Base):
         Index('ix_analytics_events_course_video_time', 'course_id', 'video_id', 'event_time'),
         Index('ix_analytics_events_type_time', 'event_type', 'event_time'),
     )
+
+
+class AnalyticsMaterializedEventReceipt(Base):
+    """Durable proof that one raw event was applied using a canonical identity."""
+
+    __tablename__ = 'analytics_materialized_event_receipts'
+
+    event_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey('analytics_tracking_events.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    family: Mapped[str] = mapped_column(String(32))
+    course_id: Mapped[str] = mapped_column(String(255))
+    canonical_username: Mapped[str] = mapped_column(String(255))
+    raw_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    raw_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    loki_ts_ns: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    materialized_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class AnalyticsCourseSession(Base):

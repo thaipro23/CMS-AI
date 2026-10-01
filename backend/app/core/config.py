@@ -293,9 +293,10 @@ class Settings(BaseSettings):
     # remains the authoritative raw source; durable video/quiz snapshots carry
     # historical analytics after retention cleanup.
     analytics_raw_event_retention_days: int = 3
-    analytics_raw_event_cleanup_batch_size: int = 20000
+    analytics_raw_event_cleanup_batch_size: int = 5000
     analytics_raw_event_cleanup_max_batches_per_run: int = 10
-    analytics_raw_event_cleanup_interval_seconds: int = 86400
+    analytics_raw_event_cleanup_interval_seconds: int = 3600
+    analytics_raw_event_cleanup_statement_timeout_ms: int = 60000
     analytics_max_lines_per_run: int = 50000
     analytics_recalculate_max_students_per_job: int = 500
     analytics_dashboard_max_page_size: int = 200
