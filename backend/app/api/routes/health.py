@@ -25,7 +25,7 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0068_analytics_loki_ingest'
+_EXPECTED_ALEMBIC_REVISION = '0070_analytics_materialized_event_receipts'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {
