@@ -25,7 +25,7 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0070_analytics_materialized_event_receipts'
+_EXPECTED_ALEMBIC_REVISION = '0071_analytics_hotpath_identity_indexes'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {
