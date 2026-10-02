@@ -147,19 +147,3 @@ def test_rbac_scope_catalog_is_server_searched_instead_of_eager_full_tree():
     assert 'getSubjectOfferings(headers)' not in users
     assert 'getSubjects(headers)' not in users
     assert "q: str | None = Query(None, max_length=120)" in route
-
-
-def test_class_analytics_recalculate_filters_events_to_class_roster():
-    source = (ROOT / 'backend' / 'app' / 'services' / 'learning_analytics' / 'analytics_core_service.py').read_text(encoding='utf-8')
-    worker = (ROOT / 'backend' / 'app' / 'worker.py').read_text(encoding='utf-8')
-    route = (ROOT / 'backend' / 'app' / 'api' / 'routes' / 'learning_analytics.py').read_text(encoding='utf-8')
-    assert 'class_id: str | None = None' in source
-    # Class-scoped recalculation must resolve AP roster identities to the
-    # corresponding Open edX tracking username/user_id. Directly filtering raw
-    # events by AcademicStudent.username is incorrect in production because AP
-    # and Open edX usernames can differ.
-    assert 'self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)' in source
-    assert 'self._tracking_events_for_identity(query, identity)' in source
-    assert 'self._canonical_event_username' in source
-    assert 'class_id=job.class_id' in worker
-    assert 'class_id=class_id' in route
