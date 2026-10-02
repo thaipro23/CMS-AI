@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
@@ -479,6 +479,34 @@ class LearningAnalyticsCoreService:
                 except Exception:
                     skipped['PLATFORM_LOOKUP_ERROR'] += 1
                     continue
+
+                # Convert raw ingest identities to canonical AP usernames and
+                # intersect them with this class. A hot course may map to many
+                # classes; only the class that owns an impacted learner gets a
+                # recalculation job.
+                identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
+                class_ap_usernames = set(identity.get('ap_usernames') or [])
+                username_to_ap = identity.get('username_to_ap') or {}
+                user_id_to_ap = identity.get('user_id_to_ap') or {}
+                impacted_ap_users: set[str] = set()
+                for raw_identity in impacted_users:
+                    raw_value = str(raw_identity or '').strip()
+                    if not raw_value:
+                        continue
+                    if raw_value in class_ap_usernames:
+                        impacted_ap_users.add(raw_value)
+                    mapped_username = str(username_to_ap.get(raw_value.lower()) or '').strip()
+                    if mapped_username:
+                        impacted_ap_users.add(mapped_username)
+                    mapped_user_id = str(user_id_to_ap.get(raw_value) or '').strip()
+                    if mapped_user_id:
+                        impacted_ap_users.add(mapped_user_id)
+
+                bounded_impacted_users = sorted(impacted_ap_users)[:safe_limit]
+                if not bounded_impacted_users:
+                    skipped['NO_IMPACTED_STUDENTS_IN_CLASS'] += 1
+                    continue
+
                 considered += 1
                 if len(queued) >= max_jobs_per_run:
                     skipped['RUN_JOB_CAP_REACHED'] += 1
@@ -519,12 +547,13 @@ class LearningAnalyticsCoreService:
                     request_json=json_safe_value({
                         'course_id': course_id,
                         'username': None,
+                        'impacted_usernames': bounded_impacted_users,
                         'force': False,
                         'limit': safe_limit,
                         'source': source,
                         'cooldown_seconds': cooldown_seconds,
-                        'impacted_user_count': len(impacted_users),
-                        'impacted_usernames_sample': impacted_users[:20],
+                        'impacted_user_count': len(bounded_impacted_users),
+                        'impacted_usernames_sample': bounded_impacted_users[:20],
                         'signals_only_not_violation': True,
                     }),
                     result_json={},
@@ -537,7 +566,7 @@ class LearningAnalyticsCoreService:
                 job.request_json = json_safe_value(data)
                 self.db.add(job)
                 self.db.commit()
-                queued.append({'job_id': job.id, 'class_id': class_id, 'course_id': course_id, 'impacted_user_count': len(impacted_users)})
+                queued.append({'job_id': job.id, 'class_id': class_id, 'course_id': course_id, 'impacted_user_count': len(bounded_impacted_users)})
             if len(queued) >= max_jobs_per_run:
                 break
 
@@ -1470,7 +1499,12 @@ class LearningAnalyticsCoreService:
                     'video_progress_rows': 0,
                     'message': 'Lớp chưa có identity hợp lệ để tính video.',
                 }
-            events = self._tracking_events_for_identity(query, identity)
+            events = self._tracking_events_for_identity(
+                query,
+                identity,
+                target_ap_usernames=set(target_usernames),
+                load_raw_payload=False,
+            )
         elif username:
             target_usernames = [username]
             query = query.filter(AnalyticsTrackingEvent.username == username)
@@ -1757,7 +1791,12 @@ class LearningAnalyticsCoreService:
                     'quiz_attempt_rows': 0,
                     'message': 'Lớp chưa có identity hợp lệ để tính quiz.',
                 }
-            rows = self._tracking_events_for_identity(query, identity)
+            rows = self._tracking_events_for_identity(
+                query,
+                identity,
+                target_ap_usernames=set(target_usernames),
+                load_raw_payload=True,
+            )
         elif username:
             target_usernames = [username]
             query = query.filter(AnalyticsTrackingEvent.username == username)
@@ -2164,26 +2203,73 @@ class LearningAnalyticsCoreService:
         self,
         base_query: Any,
         identity: dict[str, Any],
+        *,
+        target_ap_usernames: set[str] | None = None,
+        load_raw_payload: bool = True,
     ) -> list[AnalyticsTrackingEvent]:
-        """Load class events through indexable identity branches.
+        """Load tracking events through indexable username/user-id branches.
 
-        A tracking row can carry both username and user_id, so the two branch
-        results are de-duplicated by primary key before deterministic ordering.
+        target_ap_usernames narrows a class identity map to only students
+        impacted by the current ingest batch. This prevents a one-student
+        recalculation from scanning every learner in the class.
+
+        Video/count paths can disable raw payload loading so large JSON columns
+        are not transferred from PostgreSQL. Quiz analysis keeps raw payloads.
         """
-        raw_usernames = sorted(identity.get('raw_usernames') or [])
-        raw_user_ids = sorted(identity.get('raw_user_ids') or [])
-        if not raw_usernames and not raw_user_ids:
+        raw_usernames = set(identity.get('raw_usernames') or [])
+        raw_user_ids = set(identity.get('raw_user_ids') or [])
+
+        if target_ap_usernames is not None:
+            targets = {str(item or '').strip() for item in target_ap_usernames if str(item or '').strip()}
+            username_to_ap = identity.get('username_to_ap') or {}
+            user_id_to_ap = identity.get('user_id_to_ap') or {}
+            ap_usernames = set(identity.get('ap_usernames') or [])
+
+            raw_usernames = {
+                raw for raw in raw_usernames
+                if (
+                    str((username_to_ap or {}).get(str(raw).lower()) or '').strip() in targets
+                    or (str(raw).strip() in targets and str(raw).strip() in ap_usernames)
+                )
+            }
+            raw_user_ids = {
+                raw for raw in raw_user_ids
+                if str((user_id_to_ap or {}).get(str(raw)) or '').strip() in targets
+            }
+
+        raw_usernames_list = sorted(raw_usernames)
+        raw_user_ids_list = sorted(raw_user_ids)
+        if not raw_usernames_list and not raw_user_ids_list:
             return []
 
+        query = base_query
+        if not load_raw_payload:
+            query = query.options(
+                load_only(
+                    AnalyticsTrackingEvent.id,
+                    AnalyticsTrackingEvent.event_time,
+                    AnalyticsTrackingEvent.event_type,
+                    AnalyticsTrackingEvent.loki_ts_ns,
+                    AnalyticsTrackingEvent.user_id,
+                    AnalyticsTrackingEvent.username,
+                    AnalyticsTrackingEvent.course_id,
+                    AnalyticsTrackingEvent.session_id,
+                    AnalyticsTrackingEvent.video_id,
+                    AnalyticsTrackingEvent.video_code,
+                    AnalyticsTrackingEvent.video_duration_seconds,
+                    AnalyticsTrackingEvent.current_time_seconds,
+                )
+            )
+
         events_by_id: dict[str, AnalyticsTrackingEvent] = {}
-        if raw_usernames:
-            for event in base_query.filter(
-                AnalyticsTrackingEvent.username.in_(raw_usernames),
+        if raw_usernames_list:
+            for event in query.filter(
+                AnalyticsTrackingEvent.username.in_(raw_usernames_list),
             ).all():
                 events_by_id[str(event.id)] = event
-        if raw_user_ids:
-            for event in base_query.filter(
-                AnalyticsTrackingEvent.user_id.in_(raw_user_ids),
+        if raw_user_ids_list:
+            for event in query.filter(
+                AnalyticsTrackingEvent.user_id.in_(raw_user_ids_list),
             ).all():
                 events_by_id[str(event.id)] = event
 
@@ -2236,7 +2322,12 @@ class LearningAnalyticsCoreService:
             )
             counts: Counter[str] = Counter()
             allowed = set(usernames)
-            for event in self._tracking_events_for_identity(query, identity):
+            for event in self._tracking_events_for_identity(
+                query,
+                identity,
+                target_ap_usernames=set(allowed),
+                load_raw_payload=False,
+            ):
                 canonical = self._canonical_event_username(event, identity)
                 if canonical and canonical in allowed:
                     counts[canonical] += 1
@@ -2508,8 +2599,16 @@ class LearningAnalyticsCoreService:
             'quiz_resolution': dict(quiz_resolution_totals),
         }
 
-    def recalculate_learning_behavior(self, *, class_id: str | None, course_id: str, username: str | None = None) -> dict[str, Any]:
-        self.recalculate_student_session_progress(class_id=class_id, course_id=course_id, username=username)
+    def recalculate_learning_behavior(
+        self,
+        *,
+        class_id: str | None,
+        course_id: str,
+        username: str | None = None,
+        refresh_session_progress: bool = True,
+    ) -> dict[str, Any]:
+        if refresh_session_progress:
+            self.recalculate_student_session_progress(class_id=class_id, course_id=course_id, username=username)
         users = self._student_usernames_for_class(class_id=class_id, course_id=course_id, username=username)
         if not users and username:
             users = [username]
