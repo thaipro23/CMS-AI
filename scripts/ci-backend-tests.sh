@@ -9,6 +9,9 @@ pytest -q \
   app/tests/test_daily_teacher_report_pipeline_contract.py \
   app/tests/test_daily_teacher_report_watchdog.py \
   app/tests/test_learning_sync_preserves_confirmed_enrollment.py \
+  app/tests/test_official_course_completion.py \
+  app/tests/test_assignment_ui_suppression.py \
+  app/tests/test_v25_9_16_7_2_64_34_udemy_dashboard_export.py \
   app/tests/test_email_privacy_contract.py \
   app/tests/test_academic_progress_email.py \
   app/tests/test_v25_9_16_7_2_64_16_5_4_production_security_closure.py \

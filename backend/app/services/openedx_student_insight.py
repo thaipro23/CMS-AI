@@ -543,7 +543,11 @@ class OpenEdXConnectorClient:
             # hot path to reduce LMS JSON size and backend parse time.
             'compact': True,
             'include_diagnostics': False,
+            # Rolling-deploy safety: v105 and older see only the legacy skip flag
+            # and keep the fast fallback. v106 understands the explicit direct
+            # official flag and overrides the skip without invoking RequestFactory.
             'skip_course_home_progress': True,
+            'use_official_course_home_progress': True,
             'read_consistency': read_consistency,
         }
         data = self._post_json(

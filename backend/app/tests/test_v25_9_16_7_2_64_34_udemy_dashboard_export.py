@@ -191,6 +191,59 @@ def test_teacher_management_udemy_context_and_export_contract():
     assert wb['UdemyChamTienDo'].max_row == 2
     wb.close()
 
+
+def test_teacher_report_hides_assignment_and_exports_only_quiz_and_final_columns():
+    report = {
+        'items': [{
+            'teacher_name': 'Giảng viên A',
+            'teacher_username': 'teacher.a',
+            'status_counts': {},
+            'classes': [{
+                'class_code': 'BUS1052.01',
+                'learning_platform': 'cms',
+                'status_counts': {},
+                'assignment_not_graded_count': 4,
+                'learning_component_summaries': [
+                    {'key': 'quiz-2', 'name': 'Quiz 2', 'quiz_number': 2, 'assessment_type': 'quiz', 'percent': 80},
+                    {'key': 'learning-check-3', 'name': 'Learning Check 3', 'percent': 75},
+                    {'key': 'assignment', 'name': 'Assignment', 'percent': 90},
+                    {'key': 'final', 'name': 'Final test', 'assessment_type': 'final_test', 'percent': 70},
+                    {'key': 'midterm', 'name': 'Midterm', 'percent': 60},
+                ],
+            }],
+        }],
+        'student_watch_rows': [{
+            'teacher_name': 'Giảng viên A',
+            'class_code': 'BUS1052.01',
+            'student_code': 'PC12804',
+            'assignment_status': 'graded',
+            'assignment_score_10': 9.0,
+        }],
+    }
+
+    wb = _create_training_teacher_report_workbook(report)
+
+    overview_headers = [cell.value for cell in wb['TongQuanGV'][1]]
+    class_headers = [cell.value for cell in wb['ChiTietLop'][1]]
+    student_headers = [cell.value for cell in wb['ChiTietSinhVien'][1]]
+    guide_text = ' '.join(str(cell.value or '') for row in wb['HuongDan'].iter_rows() for cell in row)
+
+    assert 'Assignment chưa chấm' not in overview_headers
+    assert 'Assignment chưa chấm' not in class_headers
+    assert 'Assignment' not in class_headers
+    assert 'Midterm' not in class_headers
+    assert 'Quiz 2' in class_headers
+    assert 'Quiz 3' in class_headers
+    assert 'Final test' in class_headers
+    assert 'Assignment' not in student_headers
+    assert 'Điểm Assignment' not in student_headers
+    assert 'AssignmentBaoVe' not in wb.sheetnames
+    assert 'Assignment' not in guide_text
+    for sheet_name in ('TongQuanGV', 'ChiTietLop', 'ChiTietSinhVien'):
+        sheet = wb[sheet_name]
+        assert len(sheet.column_dimensions) == sheet.max_column
+    wb.close()
+
 def test_batch34_cross_layer_contracts():
     service = (ROOT / 'backend/app/services/academic/udemy_progress.py').read_text(encoding='utf-8')
     routes = (ROOT / 'backend/app/api/routes/academic.py').read_text(encoding='utf-8')

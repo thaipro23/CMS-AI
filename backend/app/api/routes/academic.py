@@ -129,6 +129,7 @@ from app.core.json_safe import json_safe_value
 from app.core.privacy import mask_email
 from app.core.operation_rate_limit import enforce_operation_rate_limit
 from app.core.config import settings
+from app.services.academic.assessment_components import canonical_assessment_identity
 from app.services.academic.job_runtime import (
     class_sync_queued_timeout_seconds,
     enqueue_job_task,
@@ -192,6 +193,17 @@ def _component_score_text(item: dict[str, Any] | None) -> Any:
     return ''
 
 
+def _training_component_column(item: dict[str, Any]) -> dict[str, str] | None:
+    """Expose only the assessment columns approved for teacher Excel reports."""
+    identity = canonical_assessment_identity(item)
+    if identity == 'final_test':
+        return {'key': 'final_test', 'name': 'Final test'}
+    if identity and identity.startswith('quiz:'):
+        quiz_number = int(identity.split(':', 1)[1])
+        return {'key': identity, 'name': f'Quiz {quiz_number}'}
+    return None
+
+
 def _training_component_columns(report: dict[str, Any]) -> list[dict[str, str]]:
     columns: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -200,13 +212,14 @@ def _training_component_columns(report: dict[str, Any]) -> list[dict[str, str]]:
             for score in cls.get('learning_component_summaries') or []:
                 if not isinstance(score, dict):
                     continue
-                key = _component_key(score)
-                name = _component_name(score)
-                dedupe = (key or name).lower()
+                column = _training_component_column(score)
+                if column is None:
+                    continue
+                dedupe = column['key'].lower()
                 if not dedupe or dedupe in seen:
                     continue
                 seen.add(dedupe)
-                columns.append({'key': key or name, 'name': name})
+                columns.append(column)
     columns.sort(key=lambda item: str(item.get('name') or item.get('key') or '').lower())
     return columns
 
@@ -238,7 +251,8 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
         'Course completion TB (%)', 'Điểm tổng TB (hệ 10)', 'SV Udemy đã import',
         'Tiến độ Udemy TB (%)', 'SV Udemy chậm tiến độ', 'Lần import Udemy gần nhất',
         'Lớp CMS chưa map Course', 'SV rủi ro', 'SV chậm mốc tiến độ', 'Lượt Quiz chậm tiến độ',
-        'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm',
+        'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt',
+        # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: 'Assignment chưa chấm',
         'Chưa đồng bộ CMS', 'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp',
         'Lỗi đồng bộ', 'Cập nhật CMS gần nhất', 'Cảnh báo'
     ]
@@ -247,6 +261,9 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
         16, 12, 16, 20, 18, 18, 20, 22, 22, 22, 14, 18, 12, 18, 20, 14, 20,
         20, 14, 12, 14, 12, 14, 22, 52,
     ]
+    # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: remove the width that
+    # belonged to the former "Assignment chưa chấm" column.
+    overview_widths.pop(32)
     _setup_sheet(ws, overview_headers, overview_widths)
     for item in report.get('items') or []:
         statuses = item.get('status_counts') or {}
@@ -258,7 +275,8 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
             item.get('learning_avg_progress_percent'), item.get('learning_avg_grade_10'), item.get('udemy_progress_student_count'),
             item.get('udemy_progress_average_percent'), item.get('udemy_progress_late_count'), item.get('udemy_progress_last_imported_at'),
             item.get('classes_without_course_count'), item.get('risk_student_count'), item.get('deadline_late_student_count'), item.get('deadline_late_quiz_count'),
-            item.get('exam_not_eligible_student_count'), item.get('exam_insufficient_data_student_count'), item.get('quiz_failed_count'), item.get('assignment_not_graded_count'),
+            item.get('exam_not_eligible_student_count'), item.get('exam_insufficient_data_student_count'), item.get('quiz_failed_count'),
+            # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: item.get('assignment_not_graded_count'),
             statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'),
             item.get('last_synced_at'), item.get('learning_alerts'),
         ])
@@ -274,7 +292,8 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
         'Tuần Udemy hiện tại', 'Mốc tiến độ Udemy hiện tại', 'Lần import Udemy gần nhất',
         *[column['name'] for column in component_columns],
         'Số Quiz', 'Quiz đã đến hạn', 'SV chậm mốc tiến độ', 'Lượt Quiz chậm tiến độ', 'SV được thi',
-        'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt', 'Assignment chưa chấm',
+        'SV không được thi', 'SV thiếu dữ liệu xét thi', 'Quiz chưa đạt',
+        # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: 'Assignment chưa chấm',
         'Đợt quiz kế tiếp', 'Ngày làm quiz kế tiếp', 'Mốc tiến độ kế tiếp', 'Chưa đồng bộ CMS',
         'Chưa enroll', 'Chưa học', 'Tiến độ thấp', 'Điểm thấp', 'Lỗi đồng bộ',
         'Cập nhật CMS gần nhất', 'Cảnh báo'
@@ -286,6 +305,9 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
         10, 14, 16, 14, 18, 18, 20, 16, 20, 18, 22, 22, 20, 14, 12, 14, 12,
         14, 22, 52,
     ]
+    # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: the disabled column is
+    # after 29 fixed columns, the dynamic assessment columns, and 8 KPI columns.
+    class_widths.pop(37 + len(component_columns))
     _setup_sheet(class_ws, class_headers, class_widths)
     for item in report.get('items') or []:
         for cls in item.get('classes') or []:
@@ -299,11 +321,12 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
                 cls.get('learning_avg_progress_percent'), cls.get('learning_avg_grade_10'), cls.get('udemy_progress_student_count'), cls.get('udemy_progress_average_percent'),
                 cls.get('udemy_progress_late_count'), cls.get('udemy_progress_required_percent'), cls.get('udemy_progress_current_week'), cls.get('udemy_progress_deadline_date'), cls.get('udemy_progress_last_imported_at'),
                 *[
-                    _component_score_text(next((score for score in (cls.get('learning_component_summaries') or []) if isinstance(score, dict) and (_component_key(score) == column['key'] or _component_name(score) == column['name'])), None))
+                    _component_score_text(next((score for score in (cls.get('learning_component_summaries') or []) if isinstance(score, dict) and _training_component_column(score) == column), None))
                     for column in component_columns
                 ],
                 cls.get('deadline_quiz_count'), cls.get('deadline_due_quiz_count'), cls.get('deadline_late_student_count'), cls.get('deadline_late_quiz_count'),
-                cls.get('exam_eligible_student_count'), cls.get('exam_not_eligible_student_count'), cls.get('exam_insufficient_data_student_count'), cls.get('quiz_failed_count'), cls.get('assignment_not_graded_count'),
+                cls.get('exam_eligible_student_count'), cls.get('exam_not_eligible_student_count'), cls.get('exam_insufficient_data_student_count'), cls.get('quiz_failed_count'),
+                # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: cls.get('assignment_not_graded_count'),
                 cls.get('deadline_next_quiz_label'), cls.get('deadline_next_quiz_from_date'), cls.get('deadline_next_quiz_due_date'),
                 statuses.get('cms_not_synced'), statuses.get('not_enrolled'), statuses.get('no_activity'), statuses.get('low_progress'), statuses.get('low_grade'), statuses.get('sync_error'),
                 cls.get('learning_last_synced_at'), cls.get('learning_alerts'),
@@ -352,15 +375,23 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
     student_headers = [
         'Giảng viên', 'Username GV', 'Học kỳ', 'Block', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên',
         'Course completion (%)', 'Điểm tổng (hệ 10)', 'Quiz đạt', 'Quiz chưa đạt 100%', 'Quiz chưa làm',
-        'Quiz chậm tiến độ', 'Assignment', 'Điểm Assignment', 'Ngày cuối xét cấm thi', 'Điều kiện thi', 'Lý do'
+        'Quiz chậm tiến độ',
+        # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: 'Assignment', 'Điểm Assignment',
+        'Ngày cuối xét cấm thi', 'Điều kiện thi', 'Lý do'
     ]
-    _setup_sheet(student_ws, student_headers, [26, 20, 18, 14, 12, 16, 14, 20, 26, 18, 18, 12, 16, 12, 12, 16, 16, 20, 18, 60])
+    student_widths = [26, 20, 18, 14, 12, 16, 14, 20, 26, 18, 18, 12, 16, 12, 12, 16, 16, 20, 18, 60]
+    # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: remove widths for the
+    # former Assignment status and score columns, keeping later widths aligned.
+    student_widths.pop(16)
+    student_widths.pop(15)
+    _setup_sheet(student_ws, student_headers, student_widths)
     for row in report.get('student_watch_rows') or []:
         _append_row(student_ws, [
             row.get('teacher_name'), row.get('teacher_username'), row.get('term_name'), row.get('block_name'), row.get('subject_code'), row.get('class_code'),
             row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('progress_percent'), row.get('grade_10'),
             row.get('quiz_passed_count'), row.get('quiz_failed_count'), row.get('quiz_not_attempted_count'), row.get('deadline_late_quiz_count'),
-            row.get('assignment_status'), row.get('assignment_score_10'), row.get('exam_cutoff_date'), row.get('exam_status_label') or row.get('exam_status'), row.get('exam_reasons'),
+            # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: row.get('assignment_status'), row.get('assignment_score_10'),
+            row.get('exam_cutoff_date'), row.get('exam_status_label') or row.get('exam_status'), row.get('exam_reasons'),
         ])
 
     late_ws = wb.create_sheet('ChamTienDoQuiz')
@@ -379,13 +410,17 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
             continue
         _append_row(not100_ws, [row.get('teacher_name'), row.get('subject_code'), row.get('class_code'), row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('quiz_failed_count'), row.get('quiz_not_attempted_count'), row.get('exam_reasons')])
 
-    assignment_ws = wb.create_sheet('AssignmentBaoVe')
-    assignment_headers = ['Giảng viên', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên', 'Trạng thái Assignment', 'Điểm Assignment', 'Điều kiện thi', 'Lý do']
-    _setup_sheet(assignment_ws, assignment_headers, [26, 12, 16, 14, 20, 26, 20, 16, 18, 70])
-    for row in report.get('student_watch_rows') or []:
-        if not row.get('assignment_status'):
-            continue
-        _append_row(assignment_ws, [row.get('teacher_name'), row.get('subject_code'), row.get('class_code'), row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('assignment_status'), row.get('assignment_score_10'), row.get('exam_status_label') or row.get('exam_status'), row.get('exam_reasons')])
+    # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02_BEGIN
+    # Keep the previous export block commented for a reversible rollout. Assignment
+    # data and policy remain intact; only teacher-facing display/export is disabled.
+    # assignment_ws = wb.create_sheet('AssignmentBaoVe')
+    # assignment_headers = ['Giảng viên', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên', 'Trạng thái Assignment', 'Điểm Assignment', 'Điều kiện thi', 'Lý do']
+    # _setup_sheet(assignment_ws, assignment_headers, [26, 12, 16, 14, 20, 26, 20, 16, 18, 70])
+    # for row in report.get('student_watch_rows') or []:
+    #     if not row.get('assignment_status'):
+    #         continue
+    #     _append_row(assignment_ws, [row.get('teacher_name'), row.get('subject_code'), row.get('class_code'), row.get('student_code'), row.get('student_username'), row.get('student_name'), row.get('assignment_status'), row.get('assignment_score_10'), row.get('exam_status_label') or row.get('exam_status'), row.get('exam_reasons')])
+    # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02_END
 
     exam_ws = wb.create_sheet('KhongDuocThi')
     exam_headers = ['Giảng viên', 'Môn', 'Lớp', 'Mã SV', 'Username', 'Họ tên', 'Ngày cuối xét cấm thi', 'Điều kiện thi', 'Lý do']
@@ -407,7 +442,8 @@ def _create_training_teacher_report_workbook(report: dict[str, Any]) -> Workbook
         'Deadline từng Quiz là mốc tiến độ để giảng viên theo dõi và thúc sinh viên; trễ các mốc này chỉ tạo cảnh báo, không trực tiếp cấm thi.',
         'Ngày cuối của lớp/block mới là mốc xét cấm thi. Trong suốt ngày cuối sinh viên vẫn được hoàn thành; chỉ sau khi ngày cuối kết thúc mà còn Quiz chưa đạt 100% mới chuyển Không được thi.',
         'Làm sớm hoặc hoàn thành 100% sau một deadline tiến độ nhưng trước/đúng ngày cuối không bị cấm thi. Nếu chỉ đạt 100% sau ngày cuối thì không đủ điều kiện thi.',
-        'Assignment vẫn được theo dõi trong báo cáo nhưng không phải điều kiện cấm thi trong policy hiện tại.',
+        # ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02:
+        # 'Assignment vẫn được theo dõi trong báo cáo nhưng không phải điều kiện cấm thi trong policy hiện tại.',
         'Lớp Udemy không bị tính là thiếu Course CMS, chưa enroll hoặc chưa đồng bộ CMS.',
         'Tiến độ Udemy được tính từ snapshot import mới nhất và đối chiếu lại với mốc kế hoạch đã đến hạn tại thời điểm mở báo cáo.',
         'Sheet UdemyChamTienDo chỉ liệt kê lớp Udemy còn sinh viên chậm theo mốc hiện hành; xem dashboard môn để tải danh sách sinh viên chi tiết.',
