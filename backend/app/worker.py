@@ -4362,7 +4362,12 @@ def analytics_tracking_cleanup_task():
 
 @celery_app.task(name='analytics_class_recalculate_task')
 def analytics_class_recalculate_task(job_id: str):
-    """Recalculate online-learning signals for one class using the existing job table."""
+    """Recalculate online-learning signals for one class with bounded DB work.
+
+    Jobs are serialized per Open edX course with a PostgreSQL advisory lock.
+    Work is executed per learner so the 10-second DB statement timeout protects
+    one bounded query instead of cancelling a whole-class IN (...) scan.
+    """
     from fastapi import HTTPException
     from app.models.academic import AcademicClassSyncJob
     from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
@@ -4370,6 +4375,8 @@ def analytics_class_recalculate_task(job_id: str):
     from app.services.audit_log import AuditErrorType, log_audit
 
     db = SessionLocal()
+    course_lock_key: str | None = None
+    course_lock_acquired = False
     try:
         job = db.get(AcademicClassSyncJob, job_id)
         if not job:
@@ -4378,11 +4385,51 @@ def analytics_class_recalculate_task(job_id: str):
             return job.result_json or {'ok': job.status == 'completed', 'status': job.status}
         if job.job_type != 'learning_analytics_recalculate':
             raise RuntimeError(f'Unsupported analytics job_type: {job.job_type}')
+
         request = job.request_json if isinstance(job.request_json, dict) else {}
         course_id = str(request.get('course_id') or '').strip()
         username = str(request.get('username') or '').strip() or None
+        requested_impacted = [
+            str(item or '').strip()
+            for item in (request.get('impacted_usernames') or [])
+            if str(item or '').strip()
+        ]
         if not course_id:
             raise RuntimeError('Thiếu course_id để tính lại học online')
+
+        # A hot Open edX course can map to many AP classes. Do not let several
+        # class jobs scan/materialize the same course concurrently.
+        if db.bind is not None and db.bind.dialect.name == 'postgresql':
+            course_lock_key = f'learning-analytics:{course_id}'
+            course_lock_acquired = bool(
+                db.execute(
+                    text('SELECT pg_try_advisory_lock(hashtextextended(:lock_key, 0))'),
+                    {'lock_key': course_lock_key},
+                ).scalar()
+            )
+            if not course_lock_acquired:
+                requeues = int(request.get('course_lock_requeues') or 0) + 1
+                if requeues > 40:
+                    raise RuntimeError(f'Không lấy được course analytics lock sau {requeues} lượt: {course_id}')
+                request['course_lock_requeues'] = requeues
+                job.request_json = json_safe_value(request)
+                job.status = 'queued'
+                job.progress_current = max(10, int(job.progress_current or 0))
+                job.progress_total = 100
+                job.progress_label = 'Đang chờ lượt tính theo course'
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+                analytics_class_recalculate_task.apply_async(args=[job_id], countdown=15)
+                return {
+                    'ok': True,
+                    'queued': True,
+                    'reason': 'course_recalculate_locked',
+                    'course_id': course_id,
+                    'retry_in_seconds': 15,
+                    'requeues': requeues,
+                }
+
         now = datetime.utcnow()
         job.status = 'running'
         job.started_at = job.started_at or now
@@ -4448,37 +4495,139 @@ def analytics_class_recalculate_task(job_id: str):
             )
         )
 
-        job.progress_current = 35
-        job.progress_label = 'Đang tính tín hiệu xem video'
-        db.add(job)
-        db.commit()
-        video_result = service.recalculate_course_video_progress(
-            course_id=course_id,
-            username=username,
-            class_id=job.class_id,
+        max_students = max(
+            1,
+            min(
+                int(request.get('limit') or getattr(settings, 'analytics_recalculate_max_students_per_job', 500) or 500),
+                int(getattr(settings, 'analytics_recalculate_max_students_per_job', 500) or 500),
+            ),
         )
+        if username:
+            target_usernames = [username]
+        elif requested_impacted:
+            # Preserve order while removing duplicates from an ingest batch.
+            target_usernames = list(dict.fromkeys(requested_impacted))[:max_students]
+        else:
+            # Manual/backfill compatibility: still process the class, but never
+            # issue one whole-roster tracking query.
+            target_usernames = service._student_usernames_for_class(
+                class_id=job.class_id,
+                course_id=course_id,
+            )[:max_students]
 
-        job.progress_current = 55
-        job.progress_label = 'Đang tổng hợp theo Bài/Deadline'
-        db.add(job)
-        db.commit()
-        session_result = service.recalculate_student_session_progress(
-            class_id=job.class_id,
-            course_id=course_id,
-            username=username,
-        )
+        if not target_usernames:
+            result = json_safe_value({
+                'ok': True,
+                'class_id': job.class_id,
+                'course_id': course_id,
+                'processed_users': 0,
+                'message': 'Không có sinh viên hợp lệ cần tính lại.',
+                'session_structure': session_structure_result,
+                'warnings': ['NO_TARGET_USERS'],
+                'signals_only_not_violation': True,
+            })
+            job.status = 'completed'
+            job.progress_current = 100
+            job.progress_total = 100
+            job.progress_label = 'Không có sinh viên cần tính lại'
+            job.result_json = result
+            job.error_message = None
+            job.finished_at = datetime.utcnow()
+            job.updated_at = datetime.utcnow()
+            db.add(job)
+            db.commit()
+            return result
 
-        job.progress_current = 80
-        job.progress_label = 'Đang phân loại tín hiệu học online'
-        db.add(job)
-        db.commit()
-        behavior_result = service.recalculate_learning_behavior(
-            class_id=job.class_id,
-            course_id=course_id,
-            username=username,
-        )
+        video_rows = 0
+        video_matched_events = 0
+        video_source_event_exists = False
+        session_rows = 0
+        max_sessions = 0
+        quiz_rows = 0
+        quiz_source_event_exists = False
+        quiz_normalized_events = 0
+        behavior_processed = 0
+        behavior_counts: defaultdict[str, int] = defaultdict(int)
+        failed_users: list[dict[str, str]] = []
 
-        quiz_result = session_result.get('quiz') if isinstance(session_result, dict) and isinstance(session_result.get('quiz'), dict) else {}
+        total_targets = len(target_usernames)
+        for idx, target_username in enumerate(target_usernames, start=1):
+            # Progress spans 35..90 and is updated sparsely to avoid turning the
+            # job table itself into a write hotspot.
+            if idx == 1 or idx == total_targets or idx % 10 == 0:
+                job.progress_current = min(90, 35 + int((idx - 1) * 55 / max(1, total_targets)))
+                job.progress_label = f'Đang tính {idx}/{total_targets} sinh viên'
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+
+            try:
+                video_item = service.recalculate_course_video_progress(
+                    course_id=course_id,
+                    username=target_username,
+                    class_id=job.class_id,
+                )
+                session_item = service.recalculate_student_session_progress(
+                    class_id=job.class_id,
+                    course_id=course_id,
+                    username=target_username,
+                )
+                behavior_item = service.recalculate_learning_behavior(
+                    class_id=job.class_id,
+                    course_id=course_id,
+                    username=target_username,
+                    refresh_session_progress=False,
+                )
+
+                video_rows += int(video_item.get('video_progress_rows') or 0)
+                video_matched_events += int(video_item.get('matched_event_count') or 0)
+                video_source_event_exists = video_source_event_exists or bool(video_item.get('source_event_exists'))
+                session_rows += int(session_item.get('session_progress_rows') or 0)
+                max_sessions = max(max_sessions, int(session_item.get('sessions') or 0))
+                quiz_item = session_item.get('quiz') if isinstance(session_item.get('quiz'), dict) else {}
+                quiz_rows += int(quiz_item.get('quiz_attempt_rows') or 0)
+                quiz_normalized_events += int(quiz_item.get('normalized_event_count') or 0)
+                quiz_source_event_exists = quiz_source_event_exists or bool(quiz_item.get('source_event_exists'))
+                behavior_processed += int(behavior_item.get('processed') or 0)
+                for key, value in (behavior_item.get('counts') or {}).items():
+                    behavior_counts[str(key)] += int(value or 0)
+            except Exception as user_exc:
+                # psycopg marks the transaction aborted after statement_timeout.
+                # Roll back only this learner and continue the rest of the class.
+                db.rollback()
+                failed_users.append({
+                    'username': target_username,
+                    'error': str(user_exc)[:1000],
+                })
+
+        if failed_users and len(failed_users) >= total_targets:
+            first_error = failed_users[0].get('error') or 'unknown error'
+            raise RuntimeError(
+                f'Tất cả {total_targets} sinh viên đều tính thất bại; lỗi đầu tiên: {first_error}'
+            )
+
+        video_result = {
+            'video_progress_rows': video_rows,
+            'matched_event_count': video_matched_events,
+            'source_event_exists': video_source_event_exists,
+            'processed_users': total_targets - len(failed_users),
+        }
+        quiz_result = {
+            'quiz_attempt_rows': quiz_rows,
+            'normalized_event_count': quiz_normalized_events,
+            'source_event_exists': quiz_source_event_exists,
+        }
+        session_result = {
+            'processed': total_targets - len(failed_users),
+            'sessions': max_sessions,
+            'session_progress_rows': session_rows,
+            'quiz': quiz_result,
+        }
+        behavior_result = {
+            'processed': behavior_processed,
+            'counts': dict(behavior_counts),
+        }
+
         warnings: list[str] = []
         structure_status = str((session_structure_result or {}).get('status') or '')
         if structure_status == 'fetch_failed':
@@ -4495,24 +4644,34 @@ def analytics_class_recalculate_task(job_id: str):
             warnings.append('NO_QUIZ_EVENT_IDENTITY_OVERLAP')
         if int(session_result.get('sessions') or 0) <= 0:
             warnings.append('SESSION_STRUCTURE_MISSING')
-        if isinstance(behavior_result, dict):
-            behavior_counts = behavior_result.get('counts') if isinstance(behavior_result.get('counts'), dict) else {}
-            processed_behavior = int(behavior_result.get('processed') or 0)
-            insufficient = int(behavior_counts.get('INSUFFICIENT_DATA') or 0)
-            if processed_behavior > 0 and insufficient >= processed_behavior:
-                warnings.append('BEHAVIOR_ALL_INSUFFICIENT_DATA')
+        processed_behavior = int(behavior_result.get('processed') or 0)
+        insufficient = int((behavior_result.get('counts') or {}).get('INSUFFICIENT_DATA') or 0)
+        if processed_behavior > 0 and insufficient >= processed_behavior:
+            warnings.append('BEHAVIOR_ALL_INSUFFICIENT_DATA')
+        if failed_users:
+            warnings.append('PARTIAL_USER_RECALCULATE_FAILURE')
 
         result = json_safe_value({
             'ok': True,
             'class_id': job.class_id,
             'course_id': course_id,
             'username': username,
+            'requested_impacted_user_count': len(requested_impacted),
+            'target_user_count': total_targets,
+            'processed_user_count': total_targets - len(failed_users),
+            'failed_user_count': len(failed_users),
+            'failed_users': failed_users[:20],
             'session_structure': session_structure_result,
             'video': video_result,
             'session': session_result,
             'behavior': behavior_result,
             'warnings': list(dict.fromkeys(warnings)),
             'data_ready': not warnings,
+            'query_policy': {
+                'scope': 'per_user',
+                'db_statement_timeout_ms': int(getattr(settings, 'db_statement_timeout_ms', 10000) or 10000),
+                'course_serialized': bool(course_lock_key),
+            },
             'signals_only_not_violation': True,
         })
         job.status = 'completed'
@@ -4535,7 +4694,14 @@ def analytics_class_recalculate_task(job_id: str):
                 course_id=course_id,
                 target_type='academic_class_sync_job',
                 target_id=job.id,
-                metadata=json_safe_value({'class_id': job.class_id, 'username': username, 'result': behavior_result, 'signals_only_not_violation': True}),
+                metadata=json_safe_value({
+                    'class_id': job.class_id,
+                    'username': username,
+                    'target_user_count': total_targets,
+                    'failed_user_count': len(failed_users),
+                    'result': behavior_result,
+                    'signals_only_not_violation': True,
+                }),
             )
         except Exception:
             pass
@@ -4553,13 +4719,34 @@ def analytics_class_recalculate_task(job_id: str):
             db.add(job)
             db.commit()
             try:
-                log_audit(db, action='analytics.learning_behavior.recalculate.async', status='failed', error_type=AuditErrorType.SYSTEM_ERROR, message=str(exc), user=None, target_type='academic_class_sync_job', target_id=job.id, metadata=json_safe_value({'class_id': job.class_id, 'signals_only_not_violation': True}))
+                log_audit(
+                    db,
+                    action='analytics.learning_behavior.recalculate.async',
+                    status='failed',
+                    error_type=AuditErrorType.SYSTEM_ERROR,
+                    message=str(exc),
+                    user=None,
+                    target_type='academic_class_sync_job',
+                    target_id=job.id,
+                    metadata=json_safe_value({
+                        'class_id': job.class_id,
+                        'signals_only_not_violation': True,
+                    }),
+                )
             except Exception:
                 pass
         raise
     finally:
+        if course_lock_acquired and course_lock_key:
+            try:
+                db.execute(
+                    text('SELECT pg_advisory_unlock(hashtextextended(:lock_key, 0))'),
+                    {'lock_key': course_lock_key},
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
         db.close()
-
 
 # Register production runtime task replacements and scheduler extensions on the
 # canonical Celery app itself. Keeping registration here preserves the historic
