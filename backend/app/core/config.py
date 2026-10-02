@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
-    db_statement_timeout_ms: int = 5000
+    db_statement_timeout_ms: int = 10000
     # v25.9.15.6.34 dashboard summary cache. Dashboard reads ai_bank_chapter_stats
     # and small hierarchy tables only; Redis cache reduces repeated aggregates.
     bank_dashboard_cache_ttl_seconds: int = 45
