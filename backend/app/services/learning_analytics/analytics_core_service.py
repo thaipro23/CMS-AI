@@ -1606,7 +1606,7 @@ class LearningAnalyticsCoreService:
                     e.event_time,
                     e.current_time_seconds,
                     e.video_duration_seconds,
-                    e.raw_event or {},
+                    {},
                 )
                 for e in new_group
             )
