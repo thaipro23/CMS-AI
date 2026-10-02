@@ -40,6 +40,10 @@ def upgrade() -> None:
         # CREATE INDEX CONCURRENTLY cannot run inside Alembic's transaction.
         # Partial predicates keep NULL identities out of the hot-path indexes.
         with op.get_context().autocommit_block():
+            # Runtime queries keep a 10s statement timeout, but building a
+            # concurrent index on a large staging table may legitimately take
+            # longer. Disable the timeout only for this migration connection.
+            op.execute(text("SET statement_timeout = 0"))
             if USERNAME_INDEX not in existing:
                 op.create_index(
                     USERNAME_INDEX,
