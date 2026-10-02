@@ -72,7 +72,7 @@ for f in "${VERSION_TARGETS[@]}"; do
 done
 
 # 3) Confirm the migration graph has one intentional head.
-EXPECTED_ALEMBIC_HEAD='0070_analytics_materialized_event_receipts'
+EXPECTED_ALEMBIC_HEAD='0071_analytics_hotpath_identity_indexes'
 if command -v alembic >/dev/null 2>&1; then
   (cd backend && DATABASE_URL='sqlite+pysqlite:///:memory:' alembic -c alembic.ini heads) > "$OUT_DIR/alembic-heads.txt" 2>&1 || true
   HEAD_COUNT=$(grep -c '(head)' "$OUT_DIR/alembic-heads.txt" 2>/dev/null || true)
