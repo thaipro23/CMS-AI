@@ -13,6 +13,7 @@ from sqlalchemy import and_, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.json_safe import json_safe_value
 from app.core.rbac import UserContext
 from app.db.session import SessionLocal
@@ -35,6 +36,10 @@ from app.services.academic.daily_pipeline_state import (
     plan_stage_barrier,
     select_global_dispatch_targets,
 )
+from app.services.academic.job_runtime import (
+    class_sync_queued_timeout_seconds,
+    reconcile_stale_rows,
+)
 from app.services.academic.job_identity import (
     CLASS_SYNC_POLICY_VERSION,
     ClassSyncJobBlocked,
@@ -43,6 +48,7 @@ from app.services.academic.job_identity import (
     class_sync_idempotency_key,
 )
 from app.services.academic.scheduled_parent import (
+    ContinuationPublishError,
     confirm_parent_continuation,
     create_or_load_scheduled_parent,
     publish_parent_continuation,
@@ -59,6 +65,9 @@ DAILY_POLICY_VERSION = 'academic-daily/v2'
 DAILY_STATE_VERSION = 'academic-daily-state.v2'
 DAILY_SCHEDULER_ACTOR = 'academic-daily-scheduler'
 REQUIRED_BRANCHES = ('poly', 'ptcd')
+DAILY_CONFIRMED_CONTINUATION_STALE_SECONDS = 5 * 60
+DAILY_MAPPING_RUNNING_STALE_SECONDS = 65 * 60
+DAILY_SNAPSHOT_RUNNING_STALE_SECONDS = 40 * 60
 
 _DAILY_ROOT_LOCKS_GUARD = threading.Lock()
 _DAILY_ROOT_LOCKS: dict[str, list[Any]] = {}
@@ -114,6 +123,45 @@ def _utc_naive(value: datetime) -> datetime:
 
 def daily_root_key(run_date_vn: str) -> str:
     return f'academic-daily:v2:{str(run_date_vn or "").strip()}'
+
+
+def _parse_state_time(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _try_daily_root_db_lock(db: Session, root_id: str) -> bool:
+    bind = db.get_bind()
+    if not bind or bind.dialect.name != 'postgresql':
+        return True
+    return bool(
+        db.execute(
+            text('SELECT pg_try_advisory_lock(hashtextextended(:key, 0))'),
+            {'key': f'academic-daily-root:{root_id}'},
+        ).scalar()
+    )
+
+
+def _release_daily_root_db_lock(db: Session, root_id: str) -> None:
+    bind = db.get_bind()
+    if not bind or bind.dialect.name != 'postgresql':
+        return
+    try:
+        db.execute(
+            text('SELECT pg_advisory_unlock(hashtextextended(:key, 0))'),
+            {'key': f'academic-daily-root:{root_id}'},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
 
 
 def _cms_classes_for_term(db: Session, *, term_id: str, branch: str):
@@ -273,6 +321,171 @@ def ensure_scope_parents(
     return parents
 
 
+_ROOT_PHASE_PROGRESS: dict[str, tuple[int, str]] = {
+    'ap_sync': (5, '01:00 +07 · đang đồng bộ AP'),
+    'course_mapping': (15, '01:00 +07 · đang ghép Course CMS'),
+    'account_enrollment': (35, '01:00 +07 · đang tạo tài khoản và ghi danh'),
+    'score_update': (60, '01:00 +07 · đang cập nhật điểm toàn bộ'),
+    'campus_snapshots': (75, '01:00 +07 · đang chốt snapshot từng cơ sở'),
+    'campus_reports': (82, '01:00 +07 · đang tạo Excel từng cơ sở'),
+    'ho_snapshots': (90, '01:00 +07 · đang chốt snapshot HO'),
+    'ho_reports': (95, '01:00 +07 · đang tổng hợp báo cáo HO'),
+    'completed': (100, '01:00 +07 · hoàn tất đồng bộ và báo cáo'),
+}
+
+
+def _sync_scope_parent_states(
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> None:
+    current_time = now or datetime.utcnow()
+    phase = str(state.get('phase') or 'ap_sync')
+    rows = db.query(AcademicBulkOperationJob).filter(
+        AcademicBulkOperationJob.parent_job_id == str(root.id),
+        AcademicBulkOperationJob.job_type.in_([
+            'academic_daily_provision_scope',
+            'academic_daily_score-report_scope',
+        ]),
+    ).all()
+
+    provision_running = {
+        'course_mapping': (15, '01:00 +07 · đang ghép Course CMS'),
+        'account_enrollment': (55, '01:00 +07 · đang tạo tài khoản và ghi danh'),
+    }
+    score_running = {
+        'score_update': (45, '01:00 +07 · đang cập nhật điểm toàn bộ'),
+        'campus_snapshots': (70, '01:00 +07 · đang chốt snapshot cơ sở'),
+        'campus_reports': (82, '01:00 +07 · đang tạo Excel cơ sở'),
+        'ho_snapshots': (90, '01:00 +07 · đang chốt snapshot HO'),
+        'ho_reports': (95, '01:00 +07 · đang tổng hợp Excel HO'),
+    }
+
+    for parent in rows:
+        if parent.status in {'completed', 'failed', 'cancelled', 'canceled'}:
+            continue
+
+        if root.status == 'failed' or phase == 'failed':
+            parent.status = 'failed'
+            parent.progress_current = 100
+            parent.progress_total = 100
+            parent.progress_label = (
+                f'01:00 +07 · dừng theo pipeline ({state.get("failed_stage") or phase})'
+            )[:255]
+            parent.error_message = str(root.error_message or 'Daily pipeline stopped.')[:4000]
+            parent.finished_at = parent.finished_at or current_time
+        elif root.status == 'completed' or phase == 'completed':
+            parent.status = 'completed'
+            parent.progress_current = 100
+            parent.progress_total = 100
+            parent.progress_label = '01:00 +07 · hoàn tất'
+            parent.error_message = None
+            parent.started_at = parent.started_at or root.started_at or current_time
+            parent.finished_at = parent.finished_at or current_time
+        elif parent.job_type == 'academic_daily_provision_scope':
+            if phase in provision_running:
+                progress, label = provision_running[phase]
+                parent.status = 'running'
+                parent.progress_current = progress
+                parent.progress_total = 100
+                parent.progress_label = label
+                parent.error_message = None
+                parent.started_at = parent.started_at or current_time
+            elif phase in {
+                'score_update',
+                'campus_snapshots',
+                'campus_reports',
+                'ho_snapshots',
+                'ho_reports',
+            }:
+                parent.status = 'completed'
+                parent.progress_current = 100
+                parent.progress_total = 100
+                parent.progress_label = '01:00 +07 · hoàn tất tạo tài khoản và ghi danh'
+                parent.error_message = None
+                parent.started_at = parent.started_at or root.started_at or current_time
+                parent.finished_at = parent.finished_at or current_time
+        elif phase in score_running:
+            progress, label = score_running[phase]
+            parent.status = 'running'
+            parent.progress_current = progress
+            parent.progress_total = 100
+            parent.progress_label = label
+            parent.error_message = None
+            parent.started_at = parent.started_at or current_time
+
+        parent.updated_at = current_time
+        db.add(parent)
+
+
+def _mark_older_active_roots_superseded(
+    db: Session,
+    *,
+    keep_root_id: str | None = None,
+    now: datetime | None = None,
+) -> int:
+    current_time = now or datetime.utcnow()
+    active = db.query(AcademicBulkOperationJob).filter(
+        AcademicBulkOperationJob.job_type == DAILY_ROOT_JOB_TYPE,
+        AcademicBulkOperationJob.status.in_(['queued', 'running']),
+    ).all()
+    if len(active) <= 1:
+        return 0
+
+    if keep_root_id:
+        keep = next((item for item in active if str(item.id) == str(keep_root_id)), None)
+    else:
+        keep = None
+    if keep is None:
+        keep = max(
+            active,
+            key=lambda item: (
+                str((item.request_json or {}).get('run_date_vn') or ''),
+                item.created_at or datetime.min,
+            ),
+        )
+
+    changed = 0
+    for root in active:
+        if str(root.id) == str(keep.id):
+            continue
+        state = dict(root.result_json or {})
+        continuation = (
+            dict(state.get('continuation') or {})
+            if isinstance(state.get('continuation'), dict)
+            else {}
+        )
+        continuation.update({
+            'status': 'failed',
+            'failed_at': current_time.isoformat(),
+            'last_error': 'Superseded by a newer daily pipeline root.',
+        })
+        state.update({
+            'continuation': continuation,
+            'code': 'superseded_by_newer_daily_run',
+            'superseded_by_root_id': str(keep.id),
+            'superseded_at': current_time.isoformat(),
+        })
+        root.status = 'failed'
+        root.progress_current = 100
+        root.progress_total = 100
+        root.progress_label = '01:00 +07 · dừng vì đã có pipeline ngày mới hơn'
+        root.error_message = (
+            f'Daily pipeline superseded by newer root {keep.id}.'
+        )[:4000]
+        root.finished_at = root.finished_at or current_time
+        root.updated_at = current_time
+        _sync_scope_parent_states(db, root, state, now=current_time)
+        root.result_json = json_safe_value(state)
+        db.add(root)
+        changed += 1
+    if changed:
+        db.commit()
+    return changed
+
+
 def _root_request(run_date_vn: str, scopes: list[dict[str, object]]) -> dict[str, Any]:
     return {
         'scheduled': True,
@@ -313,14 +526,19 @@ def recover_daily_academic_pipeline(
     *,
     now: datetime | None = None,
 ) -> dict[str, object]:
-    """Republish persisted root continuation intent without planning retries."""
+    """Recover durable root continuation intent and stale confirmed deliveries."""
     current_time = now or datetime.utcnow()
     db = SessionLocal()
     try:
+        superseded = _mark_older_active_roots_superseded(
+            db,
+            now=current_time,
+        )
         roots = db.query(AcademicBulkOperationJob).filter(
             AcademicBulkOperationJob.job_type == DAILY_ROOT_JOB_TYPE,
             AcademicBulkOperationJob.status.in_(['queued', 'running']),
         ).all()
+        stale_confirmed = 0
         for root in roots:
             state = dict(root.result_json or {})
             continuation = (
@@ -330,8 +548,30 @@ def recover_daily_academic_pipeline(
             )
             status = str(continuation.get('status') or '')
             if status == 'confirmed':
-                continue
-            if status not in {'dispatch_pending', 'dispatched'}:
+                confirmed_at = (
+                    _parse_state_time(continuation.get('confirmed_at'))
+                    or _parse_state_time(root.updated_at)
+                    or _parse_state_time(root.created_at)
+                )
+                age_seconds = (
+                    (current_time - confirmed_at).total_seconds()
+                    if confirmed_at is not None
+                    else DAILY_CONFIRMED_CONTINUATION_STALE_SECONDS + 1
+                )
+                if age_seconds <= DAILY_CONFIRMED_CONTINUATION_STALE_SECONDS:
+                    continue
+                continuation.update({
+                    'status': 'dispatch_pending',
+                    'due_at': current_time.isoformat(),
+                    'last_error': (
+                        'Confirmed coordinator delivery became stale before '
+                        'publishing the next continuation.'
+                    ),
+                    'last_error_class': 'StaleConfirmedContinuation',
+                    'last_error_at': current_time.isoformat(),
+                })
+                stale_confirmed += 1
+            elif status not in {'dispatch_pending', 'dispatched'}:
                 continuation = {
                     'status': 'dispatch_pending',
                     'attempt_count': 0,
@@ -342,17 +582,15 @@ def recover_daily_academic_pipeline(
                     'countdown': 15,
                     'intent_created_at': current_time.isoformat(),
                 }
-                state['continuation'] = continuation
-                root.result_json = json_safe_value(state)
-                root.updated_at = current_time
-                db.add(root)
             elif not continuation.get('due_at'):
                 continuation['due_at'] = current_time.isoformat()
-                state['continuation'] = continuation
-                root.result_json = json_safe_value(state)
-                root.updated_at = current_time
-                db.add(root)
+
+            state['continuation'] = continuation
+            root.result_json = json_safe_value(state)
+            root.updated_at = current_time
+            db.add(root)
         db.commit()
+
         result = recover_due_parent_continuations(
             db,
             publisher=_continuation_publisher(celery_app),
@@ -366,11 +604,12 @@ def recover_daily_academic_pipeline(
             'scanned': int(result.get('scanned') or 0),
             'republished': int(result.get('republished') or 0),
             'failed': int(result.get('failed') or 0),
+            'superseded': superseded,
+            'stale_confirmed': stale_confirmed,
             'errors': list(result.get('errors') or []),
         }
     finally:
         db.close()
-
 
 def _scheduler_user() -> UserContext:
     return UserContext(
@@ -943,8 +1182,21 @@ def _save_root_state(
     root: AcademicBulkOperationJob,
     state: dict[str, Any],
 ) -> None:
+    now = datetime.utcnow()
+    phase = str(state.get('phase') or 'ap_sync')
+    if root.status in {'queued', 'running'}:
+        progress, label = _ROOT_PHASE_PROGRESS.get(
+            phase,
+            (max(1, int(root.progress_current or 1)), str(root.progress_label or 'Đang điều phối')),
+        )
+        root.status = 'running'
+        root.progress_current = progress
+        root.progress_total = 100
+        root.progress_label = label[:255]
+        root.error_message = None
     root.result_json = json_safe_value(state)
-    root.updated_at = datetime.utcnow()
+    root.updated_at = now
+    _sync_scope_parent_states(db, root, state, now=now)
     db.add(root)
     db.commit()
 
@@ -961,6 +1213,33 @@ def _publish_root_continuation(celery_app, db: Session, root: AcademicBulkOperat
     )
 
 
+def _reconcile_attempt_rows(
+    db: Session,
+    rows: list[Any],
+    *,
+    running_timeout_seconds: int,
+) -> None:
+    changed = reconcile_stale_rows(
+        [row for row in rows if row is not None],
+        now=datetime.utcnow(),
+        queued_timeout_seconds=class_sync_queued_timeout_seconds(),
+        running_timeout_seconds=max(1, int(running_timeout_seconds)),
+    )
+    if changed:
+        db.add_all(changed)
+        db.commit()
+
+
+def _attempt_model_for_stage(stage: str):
+    if stage == 'ap_sync':
+        return AcademicSyncRun
+    if stage in {'account_enrollment', 'score_update'}:
+        return AcademicClassSyncJob
+    if stage in {'campus_reports', 'ho_reports'}:
+        return AcademicTeacherReportJob
+    return AcademicBulkOperationJob
+
+
 def _fail_exhausted_stage(
     db: Session,
     root: AcademicBulkOperationJob,
@@ -974,7 +1253,7 @@ def _fail_exhausted_stage(
     failure_details: list[dict[str, str]] = []
     for target_key in failed_target_keys:
         attempt_id = attempt_ids.get(target_key)
-        attempt = db.get(AcademicBulkOperationJob, str(attempt_id or ''))
+        attempt = db.get(_attempt_model_for_stage(stage), str(attempt_id or ''))
         message = str(getattr(attempt, 'error_message', '') or '').strip()
         if message:
             failure_details.append({
@@ -1147,6 +1426,15 @@ def _run_class_stage(
         target: db.get(AcademicClassSyncJob, job_id)
         for target, job_id in attempts.items()
     }
+    _reconcile_attempt_rows(
+        db,
+        list(jobs.values()),
+        running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
+    )
+    jobs = {
+        target: db.get(AcademicClassSyncJob, job_id)
+        for target, job_id in attempts.items()
+    }
     statuses = {
         target: str(job.status or '').lower()
         for target, job in jobs.items()
@@ -1275,6 +1563,7 @@ def _run_class_stage(
         },
     })
     _save_root_state(db, root, state)
+    _publish_root_continuation(celery_app, db, root)
     return {
         'ok': True,
         'status': 'stage_complete',
@@ -1297,6 +1586,15 @@ def _run_snapshot_stage(
     round_no = max(0, int(state.get('stage_round') or 0))
     targets = [str(value) for value in state.get('stage_target_keys') or []]
     attempts = _stage_attempts(state, stage, round_no)
+    jobs = {
+        target: db.get(AcademicBulkOperationJob, job_id)
+        for target, job_id in attempts.items()
+    }
+    _reconcile_attempt_rows(
+        db,
+        list(jobs.values()),
+        running_timeout_seconds=DAILY_SNAPSHOT_RUNNING_STALE_SECONDS,
+    )
     jobs = {
         target: db.get(AcademicBulkOperationJob, job_id)
         for target, job_id in attempts.items()
@@ -1671,6 +1969,15 @@ def _run_mapping_stage(
         target: db.get(AcademicBulkOperationJob, job_id)
         for target, job_id in attempts.items()
     }
+    _reconcile_attempt_rows(
+        db,
+        list(jobs.values()),
+        running_timeout_seconds=DAILY_MAPPING_RUNNING_STALE_SECONDS,
+    )
+    jobs = {
+        target: db.get(AcademicBulkOperationJob, job_id)
+        for target, job_id in attempts.items()
+    }
     statuses = {
         target: str(job.status or '').lower()
         for target, job in jobs.items()
@@ -1744,6 +2051,7 @@ def _run_mapping_stage(
         'stage_target_keys': _round_robin_class_targets(list(scopes.values())),
     })
     _save_root_state(db, root, state)
+    _publish_root_continuation(celery_app, db, root)
     return {
         'ok': True,
         'status': 'stage_complete',
@@ -1771,6 +2079,11 @@ def start_daily_academic_pipeline(
             .one_or_none()
         )
         if existing_root is not None:
+            _mark_older_active_roots_superseded(
+                db,
+                keep_root_id=str(existing_root.id),
+                now=stored_now,
+            )
             frozen_request = (
                 existing_root.request_json
                 if isinstance(existing_root.request_json, dict)
@@ -1875,6 +2188,11 @@ def start_daily_academic_pipeline(
                 'updated_at': stored_now,
             },
         )
+        _mark_older_active_roots_superseded(
+            db,
+            keep_root_id=str(root.id),
+            now=stored_now,
+        )
         frozen_request = root.request_json if isinstance(root.request_json, dict) else {}
         frozen_scopes = list(frozen_request.get('scopes') or [])
         ensure_scope_parents(db, root, frozen_scopes)
@@ -1909,7 +2227,15 @@ def start_daily_academic_pipeline(
 
 def _run_daily_academic_pipeline_locked(celery_app, root_job_id: str) -> dict[str, object]:
     db = SessionLocal()
+    db_lock_acquired = False
     try:
+        db_lock_acquired = _try_daily_root_db_lock(db, str(root_job_id))
+        if not db_lock_acquired:
+            return {
+                'ok': True,
+                'status': 'coordinator_busy',
+                'root_job_id': str(root_job_id),
+            }
         root = db.query(AcademicBulkOperationJob).filter(
             AcademicBulkOperationJob.id == str(root_job_id),
         ).with_for_update().one_or_none()
@@ -1989,7 +2315,18 @@ def _run_daily_academic_pipeline_locked(celery_app, root_job_id: str) -> dict[st
             'phase': phase,
             'root_job_id': str(root.id),
         }
+    except ContinuationPublishError as exc:
+        db.rollback()
+        return {
+            'ok': False,
+            'status': 'dispatch_pending',
+            'root_job_id': str(root_job_id),
+            'error': str(exc.original)[:500],
+            'error_class': exc.original.__class__.__name__,
+        }
     finally:
+        if db_lock_acquired:
+            _release_daily_root_db_lock(db, str(root_job_id))
         db.close()
 
 
