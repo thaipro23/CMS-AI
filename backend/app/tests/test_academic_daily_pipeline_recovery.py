@@ -303,3 +303,83 @@ def test_recovery_supersedes_older_active_roots_before_republishing(
         } == {"superseded_by_newer_daily_run"}
         latest = db.get(AcademicBulkOperationJob, "root-4")
         assert latest.status == "running"
+
+def test_superseding_old_root_cancels_its_queued_class_attempts(
+    monkeypatch,
+    session_factory,
+):
+    now = datetime.utcnow()
+    with session_factory() as db:
+        old_root = AcademicBulkOperationJob(
+            id="root-old",
+            job_type=runtime.DAILY_ROOT_JOB_TYPE,
+            status="running",
+            idempotency_key="academic-daily:v2:2026-10-03",
+            request_json={"run_date_vn": "2026-10-03", "scopes": []},
+            result_json={
+                "phase": "account_enrollment",
+                "stage_round": 0,
+                "stage_target_keys": ["class-old"],
+                "attempts_by_stage": {
+                    "account_enrollment": {
+                        "0": {"class-old": "old-class-job"},
+                    },
+                },
+                "continuation": {
+                    "status": "confirmed",
+                    "attempt_count": 1,
+                    "task_name": runtime.DAILY_ROOT_TASK,
+                    "args": ["root-old"],
+                    "queue": "sync-bulk",
+                    "countdown": 15,
+                    "confirmed_at": (now - timedelta(minutes=10)).isoformat(),
+                },
+            },
+        )
+        latest_root = AcademicBulkOperationJob(
+            id="root-latest",
+            job_type=runtime.DAILY_ROOT_JOB_TYPE,
+            status="running",
+            idempotency_key="academic-daily:v2:2026-10-04",
+            request_json={"run_date_vn": "2026-10-04", "scopes": []},
+            result_json={
+                "phase": "account_enrollment",
+                "stage_round": 0,
+                "stage_target_keys": [],
+                "attempts_by_stage": {},
+                "continuation": {
+                    "status": "confirmed",
+                    "attempt_count": 1,
+                    "task_name": runtime.DAILY_ROOT_TASK,
+                    "args": ["root-latest"],
+                    "queue": "sync-bulk",
+                    "countdown": 15,
+                    "confirmed_at": (now - timedelta(minutes=10)).isoformat(),
+                },
+            },
+        )
+        child = AcademicClassSyncJob(
+            id="old-class-job",
+            job_type="full_cms_sync",
+            status="queued",
+            class_id="class-old",
+            idempotency_key="old-class-job-key",
+            request_json={"daily_root_job_id": "root-old"},
+            result_json={},
+        )
+        db.add_all([old_root, latest_root, child])
+        db.commit()
+
+    monkeypatch.setattr(runtime, "SessionLocal", session_factory)
+    runtime.recover_daily_academic_pipeline(FakeCelery(), now=now)
+
+    with session_factory() as db:
+        old_root = db.get(AcademicBulkOperationJob, "root-old")
+        child = db.get(AcademicClassSyncJob, "old-class-job")
+        latest_root = db.get(AcademicBulkOperationJob, "root-latest")
+
+        assert old_root.status == "failed"
+        assert old_root.result_json["cancelled_queued_attempt_count"] == 1
+        assert child.status == "cancelled"
+        assert child.result_json["code"] == "superseded_by_newer_daily_run"
+        assert latest_root.status == "running"
