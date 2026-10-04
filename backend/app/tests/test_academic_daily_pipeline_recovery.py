@@ -209,3 +209,97 @@ def test_duplicate_root_delivery_cannot_publish_five_active_jobs(
             AcademicClassSyncJob.status.in_(["queued", "running"]),
         ).count() <= 4
     engine.dispose()
+
+def test_recovery_republishes_stale_confirmed_root(
+    monkeypatch,
+    session_factory,
+):
+    now = datetime.utcnow()
+    with session_factory() as db:
+        db.add(AcademicBulkOperationJob(
+            id="root-stale-confirmed",
+            job_type=runtime.DAILY_ROOT_JOB_TYPE,
+            status="running",
+            idempotency_key="academic-daily:v2:2026-09-24",
+            created_at=now - timedelta(hours=1),
+            updated_at=now - timedelta(minutes=10),
+            request_json={"run_date_vn": "2026-09-24", "scopes": []},
+            result_json={
+                "phase": "account_enrollment",
+                "stage_round": 0,
+                "stage_target_keys": [],
+                "attempts_by_stage": {},
+                "continuation": {
+                    "status": "confirmed",
+                    "attempt_count": 1,
+                    "task_name": runtime.DAILY_ROOT_TASK,
+                    "args": ["root-stale-confirmed"],
+                    "queue": "sync-bulk",
+                    "countdown": 15,
+                    "confirmed_at": (now - timedelta(minutes=10)).isoformat(),
+                },
+            },
+        ))
+        db.commit()
+
+    monkeypatch.setattr(runtime, "SessionLocal", session_factory)
+    celery = FakeCelery()
+    result = runtime.recover_daily_academic_pipeline(celery, now=now)
+
+    assert result["stale_confirmed"] == 1
+    assert result["republished"] == 1
+    assert celery.sent[-1][0] == runtime.DAILY_ROOT_TASK
+    assert celery.sent[-1][1] == ["root-stale-confirmed"]
+
+
+def test_recovery_supersedes_older_active_roots_before_republishing(
+    monkeypatch,
+    session_factory,
+):
+    now = datetime.utcnow()
+    with session_factory() as db:
+        for index, run_date in enumerate(("2026-10-02", "2026-10-03", "2026-10-04"), start=2):
+            root_id = f"root-{index}"
+            db.add(AcademicBulkOperationJob(
+                id=root_id,
+                job_type=runtime.DAILY_ROOT_JOB_TYPE,
+                status="running",
+                idempotency_key=f"academic-daily:v2:{run_date}",
+                created_at=now - timedelta(days=4-index),
+                updated_at=now - timedelta(minutes=10),
+                request_json={"run_date_vn": run_date, "scopes": []},
+                result_json={
+                    "phase": "account_enrollment",
+                    "stage_round": 0,
+                    "stage_target_keys": [],
+                    "attempts_by_stage": {},
+                    "continuation": {
+                        "status": "confirmed",
+                        "attempt_count": 1,
+                        "task_name": runtime.DAILY_ROOT_TASK,
+                        "args": [root_id],
+                        "queue": "sync-bulk",
+                        "countdown": 15,
+                        "confirmed_at": (now - timedelta(minutes=10)).isoformat(),
+                    },
+                },
+            ))
+        db.commit()
+
+    monkeypatch.setattr(runtime, "SessionLocal", session_factory)
+    celery = FakeCelery()
+    result = runtime.recover_daily_academic_pipeline(celery, now=now)
+
+    assert result["superseded"] == 2
+    assert result["stale_confirmed"] == 1
+    assert result["republished"] == 1
+    assert celery.sent[-1][1] == ["root-4"]
+
+    with session_factory() as db:
+        old_roots = [db.get(AcademicBulkOperationJob, "root-2"), db.get(AcademicBulkOperationJob, "root-3")]
+        assert {item.status for item in old_roots} == {"failed"}
+        assert {
+            item.result_json["code"] for item in old_roots
+        } == {"superseded_by_newer_daily_run"}
+        latest = db.get(AcademicBulkOperationJob, "root-4")
+        assert latest.status == "running"
