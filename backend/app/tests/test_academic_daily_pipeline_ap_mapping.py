@@ -437,3 +437,72 @@ def test_ap_retry_round_still_respects_the_global_four_job_window(
             if (run.counters_json or {}).get("daily_pipeline", {}).get("round") == 1
         ]
         assert len(retries) == 4
+
+def test_mapping_completion_publishes_account_enrollment_continuation(
+    monkeypatch,
+    session_factory,
+):
+    scopes = [_scope("poly"), _scope("ptcd")]
+    celery = FakeCelery()
+    with session_factory() as db:
+        root = AcademicBulkOperationJob(
+            id="root-mapping-transition",
+            job_type=runtime.DAILY_ROOT_JOB_TYPE,
+            status="running",
+            idempotency_key="academic-daily:v2:2026-09-24",
+            request_json={
+                "run_date_vn": "2026-09-24",
+                "scopes": scopes,
+            },
+            result_json={
+                "phase": "course_mapping",
+                "stage_round": 0,
+                "stage_target_keys": [scope["scope_key"] for scope in scopes],
+                "attempts_by_stage": {
+                    "course_mapping": {
+                        "0": {
+                            "poly:term-poly": "map-poly",
+                            "ptcd:term-ptcd": "map-ptcd",
+                        },
+                    },
+                },
+                "frozen_scopes_after_ap": {
+                    scope["scope_key"]: scope for scope in scopes
+                },
+                "artifacts": {},
+            },
+        )
+        db.add(root)
+        for branch in ("poly", "ptcd"):
+            db.add(AcademicBulkOperationJob(
+                id=f"map-{branch}",
+                parent_job_id=root.id,
+                job_type="subject_auto_map_all_sync",
+                status="completed",
+                term_id=f"term-{branch}",
+                branch=branch,
+                idempotency_key=f"mapping:{branch}",
+                request_json={},
+                result_json={},
+            ))
+        db.commit()
+        runtime.ensure_scope_parents(db, root, scopes)
+
+    monkeypatch.setattr(runtime, "SessionLocal", session_factory)
+    result = runtime.run_daily_academic_pipeline(celery, "root-mapping-transition")
+
+    assert result["status"] == "stage_complete"
+    assert result["phase"] == "account_enrollment"
+    assert celery.sent[-1][0] == runtime.DAILY_ROOT_TASK
+    assert celery.sent[-1][1] == ["root-mapping-transition"]
+
+    with session_factory() as db:
+        root = db.get(AcademicBulkOperationJob, "root-mapping-transition")
+        assert root.result_json["phase"] == "account_enrollment"
+        assert root.progress_current == 35
+        provision = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.parent_job_id == root.id,
+            AcademicBulkOperationJob.job_type == "academic_daily_provision_scope",
+        ).all()
+        assert provision
+        assert {item.status for item in provision} == {"running"}
