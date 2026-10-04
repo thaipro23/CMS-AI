@@ -97,3 +97,42 @@ def test_recent_local_management_job_is_not_failed():
         assert job.status == 'running'
 
     engine.dispose()
+
+def test_management_export_is_not_killed_before_configured_worker_runtime():
+    engine = _engine()
+    with Session(engine) as db:
+        started = NOW - timedelta(minutes=30)
+        job = AcademicTeacherReportJob(
+            id='healthy-long-management-export',
+            job_type='scheduled_export_excel',
+            status='running',
+            progress_current=60,
+            progress_total=100,
+            progress_label='Đang dựng file Excel từ dữ liệu đã lưu',
+            request_json={
+                'scheduled': True,
+                'management_scope': True,
+                'teacher_id': None,
+                'class_id': None,
+            },
+            result_json={
+                '_runtime': {
+                    'heartbeat_at': '2026-09-14T20:40:00+07:00',
+                    'progress_changed_at': '2026-09-14T20:40:00+07:00',
+                    'phase': 'building_excel',
+                },
+            },
+            created_at=started,
+            started_at=started,
+            updated_at=NOW,
+        )
+        db.add(job)
+        db.commit()
+
+        result = reconcile_teacher_report_watchdog(db, now=NOW)
+        db.refresh(job)
+
+        assert result['teacher_failed'] == 0
+        assert job.status == 'running'
+
+    engine.dispose()
