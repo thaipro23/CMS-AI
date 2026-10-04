@@ -758,11 +758,25 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
             raise HTTPException(status_code=400, detail='Lớp chưa có Course CMS. Hãy map Course CMS trước khi cập nhật tiến độ/điểm.')
         course_id = mapping.openedx_course_id
         cohort_name = self._cohort_for_class_mapping(cls, mapping) or cls.class_code
+        roster_total = int(
+            self.db.query(func.count(AcademicClassStudent.student_id))
+            .filter(AcademicClassStudent.class_id == class_id)
+            .scalar()
+            or 0
+        )
         limit = self._normalize_class_sync_limit(limit)
-        # v25.9.16.5.85: Cập nhật điểm is read-only against CMS/Open edX.
-        # It must not create CMS accounts and must not enroll learners. Full CMS
-        # sync is the only flow that asks for a one-time primary read immediately
-        # after enrollment; every normal/manual report stays on the replica.
+        if force and roster_total > limit:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f'Full score refresh requires all {roster_total} students, '
+                    f'but the configured class sync limit is {limit}. '
+                    'Increase ACADEMIC_CLASS_SYNC_MAX_STUDENTS before retrying.'
+                ),
+            )
+
+        # Cập nhật điểm is read-only against CMS/Open edX.  A forced refresh is
+        # used by the daily pipeline and must cover the complete frozen roster.
         query = self.db.query(AcademicStudent, OpenEdXUserMapping, AcademicStudentLearningSnapshot).join(
             AcademicClassStudent,
             AcademicClassStudent.student_id == AcademicStudent.id,
@@ -774,16 +788,35 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                 AcademicStudentLearningSnapshot.openedx_course_id == course_id,
             ),
         ).filter(AcademicClassStudent.class_id == class_id).order_by(AcademicStudent.username.asc()).limit(limit)
-        rows = [
-            (student, mapping_row, snapshot)
-            for student, mapping_row, snapshot in query.all()
-            if self._student_rollnumber(student)
-            and (
-                mapping_row is None
-                or not mapping_row.openedx_username
-                or normalize_username(mapping_row.openedx_username) == normalize_username(self._student_rollnumber(student))
+        query_rows = query.all()
+        rows = []
+        identity_excluded: list[str] = []
+        for student, mapping_row, snapshot in query_rows:
+            rollnumber = self._student_rollnumber(student)
+            mapped_username = str(
+                mapping_row.openedx_username if mapping_row else ''
+            ).strip()
+            if not rollnumber:
+                identity_excluded.append(
+                    str(student.student_code or student.username or student.id)
+                )
+                continue
+            if (
+                mapped_username
+                and normalize_username(mapped_username)
+                != normalize_username(rollnumber)
+            ):
+                identity_excluded.append(rollnumber)
+                continue
+            rows.append((student, mapping_row, snapshot))
+
+        if force and identity_excluded:
+            sample = ', '.join(identity_excluded[:10])
+            raise RuntimeError(
+                'Full score refresh cannot cover the complete roster because '
+                f'{len(identity_excluded)} student identities are not canonical '
+                f'RollNumber mappings. Examples: {sample}'
             )
-        ]
         if not force:
             rows = [(student, mapping_row, snapshot) for student, mapping_row, snapshot in rows if not self._snapshot_has_learning_payload(snapshot)]
         if not rows:
@@ -875,15 +908,28 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                 self._upsert_learning_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_connector')
                 updated += 1
             self.db.flush()
-        self.db.commit()
         if updated > 0 and connector_enrolled_seen <= 0:
             raise RuntimeError('Cập nhật tiến độ/điểm không có sinh viên nào được connector xác nhận enrolled trên Open edX. Hãy chạy lại Enrollment Course CMS và kiểm tra CourseEnrollment trước khi lấy điểm.')
+        if force and connector_missing_result > 0:
+            raise RuntimeError(
+                'Full score refresh failed because the connector omitted '
+                f'{connector_missing_result}/{updated} requested learners.'
+            )
+        if force and connector_enrolled_seen != updated:
+            raise RuntimeError(
+                'Full score refresh failed because Open edX confirmed enrollment '
+                f'for only {connector_enrolled_seen}/{updated} requested learners.'
+            )
+        self.db.commit()
         summary = self._learning_summary_for_class_course(class_id, course_id)
         teacher_report_cache_invalidated = self._invalidate_teacher_report_cache_for_class(class_id, reason='learning_sync')
         if teacher_report_cache_invalidated:
             self.db.commit()
         connector_counts = {
+            'roster_total': int(roster_total),
             'checked': int(updated),
+            'identity_excluded': int(len(identity_excluded)),
+            'full_refresh': 1 if force else 0,
             'enrolled_seen': int(connector_enrolled_seen),
             'with_progress': int(connector_progress_seen),
             'with_total_grade': int(connector_grade_seen),
