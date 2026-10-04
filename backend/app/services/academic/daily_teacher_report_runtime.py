@@ -245,12 +245,16 @@ def reconcile_teacher_report_watchdog(db, *, now: datetime | None = None) -> dic
             continue
 
         if management_scope:
+            management_runtime_limit = max(
+                35 * 60,
+                int(settings.academic_teacher_report_stale_seconds),
+            )
             failure = _job_health_failure(
                 job,
                 now=now,
-                heartbeat_timeout_seconds=10 * 60,
-                progress_stall_seconds=10 * 60,
-                max_runtime_seconds=20 * 60,
+                heartbeat_timeout_seconds=management_runtime_limit,
+                progress_stall_seconds=management_runtime_limit,
+                max_runtime_seconds=management_runtime_limit,
             )
         else:
             failure = _job_health_failure(
