@@ -296,3 +296,102 @@ def test_provisioning_gap_only_lists_missing_account_and_enrollment_effects():
         assert result["missing_account_student_ids"] == ["student-2"]
         assert result["missing_enrollment_student_ids"] == ["student-2"]
     engine.dispose()
+
+def test_score_completion_publishes_snapshot_continuation_and_updates_scope_state(
+    monkeypatch,
+    session_factory,
+):
+    root_id = _seed_stage_root(
+        session_factory,
+        phase="score_update",
+        poly=1,
+        ptcd=1,
+    )
+    with session_factory() as db:
+        root = db.get(AcademicBulkOperationJob, root_id)
+        scopes = list(root.result_json["frozen_scopes_after_ap"].values())
+        parents = runtime.ensure_scope_parents(db, root, scopes)
+        attempts = {}
+        for branch in ("poly", "ptcd"):
+            class_id = f"class-{branch}-0"
+            parent = parents[f"{branch}:term-{branch}:score-report"]
+            job = AcademicClassSyncJob(
+                id=f"score-{branch}",
+                job_type="learning_sync",
+                status="completed",
+                class_id=class_id,
+                parent_job_id=parent.id,
+                idempotency_key=f"score:{branch}",
+                request_json={
+                    "daily_root_job_id": root.id,
+                    "attempt_no": 0,
+                    "stage_managed_retries": True,
+                },
+                result_json={},
+            )
+            db.add(job)
+            attempts[class_id] = job.id
+        state = dict(root.result_json)
+        state["attempts_by_stage"] = {"score_update": {"0": attempts}}
+        root.result_json = state
+        db.add(root)
+        db.commit()
+
+    monkeypatch.setattr(runtime, "SessionLocal", session_factory)
+    celery = FakeCelery()
+    result = runtime.run_daily_academic_pipeline(celery, root_id)
+
+    assert result["status"] == "stage_complete"
+    assert result["phase"] == "campus_snapshots"
+    assert celery.sent[-1][0] == runtime.DAILY_ROOT_TASK
+    assert celery.sent[-1][1] == [root_id]
+
+    with session_factory() as db:
+        root = db.get(AcademicBulkOperationJob, root_id)
+        assert root.result_json["phase"] == "campus_snapshots"
+        assert root.progress_current == 75
+        provision = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.parent_job_id == root.id,
+            AcademicBulkOperationJob.job_type == "academic_daily_provision_scope",
+        ).all()
+        score_report = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.parent_job_id == root.id,
+            AcademicBulkOperationJob.job_type == "academic_daily_score-report_scope",
+        ).all()
+        assert {item.status for item in provision} == {"completed"}
+        assert {item.status for item in score_report} == {"running"}
+
+
+def test_class_stage_failure_keeps_child_error_message(session_factory):
+    with session_factory() as db:
+        root = AcademicBulkOperationJob(
+            id="root-class-failure",
+            job_type=runtime.DAILY_ROOT_JOB_TYPE,
+            status="running",
+            request_json={},
+            result_json={},
+        )
+        attempt = AcademicClassSyncJob(
+            id="class-failed",
+            job_type="learning_sync",
+            status="failed",
+            class_id="class-poly-0",
+            idempotency_key="class-failed-key",
+            error_message="statement timeout while refreshing grade snapshot",
+            request_json={},
+            result_json={},
+        )
+        db.add_all([root, attempt])
+        db.commit()
+
+        runtime._fail_exhausted_stage(
+            db,
+            root,
+            {},
+            stage="score_update",
+            failed_target_keys=("class-poly-0",),
+            attempt_ids={"class-poly-0": attempt.id},
+        )
+        db.refresh(root)
+
+    assert "statement timeout while refreshing grade snapshot" in root.error_message
