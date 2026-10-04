@@ -1260,12 +1260,20 @@ def build_scope_ho_snapshot(
 def run_daily_snapshot_attempt(job_id: str) -> dict[str, Any]:
     db = SessionLocal()
     try:
-        job = db.get(AcademicBulkOperationJob, str(job_id))
+        job = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.id == str(job_id),
+        ).with_for_update().one_or_none()
         if job is None or job.job_type != 'daily_report_snapshot_attempt':
             return {'ok': False, 'code': 'snapshot_attempt_not_found'}
         if job.status == 'completed':
             return dict(job.result_json or {})
-        if job.status not in {'queued', 'running'}:
+        if job.status == 'running':
+            return {
+                'ok': True,
+                'status': 'running',
+                'duplicate_delivery': True,
+            }
+        if job.status != 'queued':
             return {'ok': False, 'status': str(job.status)}
         request = job.request_json if isinstance(job.request_json, dict) else {}
         scope = request.get('scope') if isinstance(request.get('scope'), dict) else {}
