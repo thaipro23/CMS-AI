@@ -11,6 +11,7 @@ from app.models.academic import (
     AcademicTerm,
 )
 from app.services.academic import daily_academic_pipeline as runtime
+from app.services.academic import daily_teacher_report_runtime as report_runtime
 
 
 class FakeCelery:
@@ -312,3 +313,28 @@ def test_ho_snapshot_attempts_start_only_after_all_campus_workbooks_complete(
         assert db.query(AcademicTeacherReportJob).filter(
             AcademicTeacherReportJob.campus.is_(None),
         ).count() == 0
+
+def test_duplicate_snapshot_delivery_does_not_rebuild_running_snapshot(
+    monkeypatch,
+    session_factory,
+):
+    with session_factory() as db:
+        db.add(AcademicBulkOperationJob(
+            id="snapshot-running",
+            job_type="daily_report_snapshot_attempt",
+            status="running",
+            term_id="term-poly",
+            branch="poly",
+            request_json={"snapshot_type": "campus_set"},
+            result_json={"dispatch": {"state": "confirmed"}},
+        ))
+        db.commit()
+
+    monkeypatch.setattr(report_runtime, "SessionLocal", session_factory)
+    result = report_runtime.run_daily_snapshot_attempt("snapshot-running")
+
+    assert result == {
+        "ok": True,
+        "status": "running",
+        "duplicate_delivery": True,
+    }
