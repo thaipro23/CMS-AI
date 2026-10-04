@@ -672,6 +672,12 @@ def enqueue_ap_stage_attempt(
     round_no: int,
 ) -> AcademicSyncRun:
     scope_data = dict(scope)
+    attempt_key = _attempt_key(
+        root,
+        scope_data,
+        stage='ap',
+        round_no=round_no,
+    )
     metadata = {
         'root_job_id': str(root.id),
         'scope_key': str(scope_data['scope_key']),
@@ -690,24 +696,20 @@ def enqueue_ap_stage_attempt(
             dry_run=False,
         ),
         user=_scheduler_user(),
-        idempotency_key=_attempt_key(
-            root,
-            scope_data,
-            stage='ap',
-            round_no=round_no,
-        ),
+        idempotency_key=attempt_key,
         run_metadata=metadata,
     )
     run = result['sync_run']
-    counters = dict(run.counters_json or {})
-    counters['daily_pipeline'] = {
-        **metadata,
-        'source_run_id': str(run.id),
-    }
-    run.counters_json = json_safe_value(counters)
-    db.add(run)
-    db.commit()
-    db.refresh(run)
+    if str(run.idempotency_key or '') == attempt_key:
+        counters = dict(run.counters_json or {})
+        counters['daily_pipeline'] = {
+            **metadata,
+            'source_run_id': str(run.id),
+        }
+        run.counters_json = json_safe_value(counters)
+        db.add(run)
+        db.commit()
+        db.refresh(run)
     return run
 
 
