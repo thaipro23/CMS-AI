@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -506,3 +507,82 @@ def test_mapping_completion_publishes_account_enrollment_continuation(
         ).all()
         assert provision
         assert {item.status for item in provision} == {"running"}
+
+def test_foreign_active_ap_run_is_observed_without_overwriting_owner_metadata(
+    monkeypatch,
+    session_factory,
+):
+    scope = _scope("poly")
+    with session_factory() as db:
+        root = AcademicBulkOperationJob(
+            id="root-ap-owner",
+            job_type=runtime.DAILY_ROOT_JOB_TYPE,
+            status="running",
+            idempotency_key="academic-daily:v2:2026-09-24",
+            request_json={"run_date_vn": "2026-09-24", "scopes": [scope]},
+            result_json={},
+        )
+        foreign = AcademicSyncRun(
+            id="foreign-ap",
+            source="ap",
+            mode="api_all_job",
+            status="running",
+            term_name=scope["term_name"],
+            branch=scope["branch"],
+            idempotency_key="manual-ap-owner",
+            counters_json={
+                "daily_pipeline": {
+                    "root_job_id": "manual-root",
+                    "scope_key": "manual-scope",
+                },
+            },
+        )
+        db.add_all([root, foreign])
+        db.commit()
+
+        class FakeWorkflow:
+            def __init__(self, _db):
+                self.db = _db
+
+            def enqueue_sync_from_ap_job(self, *_args, **_kwargs):
+                return {"sync_run": self.db.get(AcademicSyncRun, "foreign-ap")}
+
+        monkeypatch.setattr(runtime, "AcademicAPSyncWorkflowService", FakeWorkflow)
+        observed = runtime.enqueue_ap_stage_attempt(db, root, scope, 0)
+        db.refresh(observed)
+
+        assert observed.id == "foreign-ap"
+        assert observed.idempotency_key == "manual-ap-owner"
+        assert observed.counters_json["daily_pipeline"]["root_job_id"] == "manual-root"
+
+
+def test_stale_running_ap_attempt_is_failed_for_stage_retry(session_factory):
+    stale_at = datetime.utcnow() - timedelta(minutes=70)
+    with session_factory() as db:
+        run = AcademicSyncRun(
+            id="stale-ap",
+            source="ap",
+            mode="api_all_job",
+            status="running",
+            term_name="Fall 2026",
+            branch="poly",
+            started_at=stale_at,
+            created_at=stale_at,
+            counters_json={
+                "progress": {
+                    "current": 1,
+                    "total": 10,
+                    "label": "stale",
+                    "updated_at": stale_at.isoformat(),
+                },
+            },
+        )
+        db.add(run)
+        db.commit()
+
+        runtime._reconcile_ap_runs(db, [run])
+        db.refresh(run)
+
+        assert run.status == "failed"
+        assert run.counters_json["error"]["code"] == "CELERY_JOB_ORPHANED"
+        assert run.finished_at is not None
