@@ -66,6 +66,7 @@ DAILY_STATE_VERSION = 'academic-daily-state.v2'
 DAILY_SCHEDULER_ACTOR = 'academic-daily-scheduler'
 REQUIRED_BRANCHES = ('poly', 'ptcd')
 DAILY_CONFIRMED_CONTINUATION_STALE_SECONDS = 5 * 60
+DAILY_AP_RUNNING_STALE_SECONDS = 65 * 60
 DAILY_MAPPING_RUNNING_STALE_SECONDS = 65 * 60
 DAILY_SNAPSHOT_RUNNING_STALE_SECONDS = 40 * 60
 
@@ -711,6 +712,57 @@ def enqueue_ap_stage_attempt(
         db.commit()
         db.refresh(run)
     return run
+
+
+def _reconcile_ap_runs(db: Session, runs: list[AcademicSyncRun]) -> None:
+    now = datetime.utcnow()
+    queued_timeout = class_sync_queued_timeout_seconds()
+    changed = False
+    for run in runs:
+        if run is None or str(run.status or '').lower() not in ACTIVE:
+            continue
+        counters = dict(run.counters_json or {})
+        progress = (
+            dict(counters.get('progress') or {})
+            if isinstance(counters.get('progress'), dict)
+            else {}
+        )
+        reference = (
+            _parse_state_time(progress.get('updated_at'))
+            or _parse_state_time(run.started_at)
+            or _parse_state_time(run.created_at)
+        )
+        if reference is None:
+            continue
+        timeout = (
+            queued_timeout
+            if str(run.status or '').lower() == 'queued' and run.started_at is None
+            else DAILY_AP_RUNNING_STALE_SECONDS
+        )
+        if (now - reference).total_seconds() <= timeout:
+            continue
+
+        run.status = 'failed'
+        run.error_message = (
+            'AP sync worker không còn cập nhật tiến độ trong thời gian cho phép; '
+            'pipeline sẽ retry bằng attempt mới.'
+        )[:4000]
+        run.finished_at = now
+        counters['error'] = {
+            'code': 'CELERY_JOB_ORPHANED',
+            'message': run.error_message,
+            'retryable': True,
+        }
+        counters['progress'] = {
+            **progress,
+            'label': 'Đồng bộ AP bị gián đoạn do worker',
+            'updated_at': now.isoformat(),
+        }
+        run.counters_json = json_safe_value(counters)
+        db.add(run)
+        changed = True
+    if changed:
+        db.commit()
 
 
 def _refresh_scope_after_ap(
@@ -1868,6 +1920,11 @@ def _run_ap_stage(
     round_no = max(0, int(state.get('stage_round') or 0))
     targets = [str(value) for value in state.get('stage_target_keys') or []]
     attempts = _stage_attempts(state, 'ap_sync', round_no)
+    runs = {
+        target: db.get(AcademicSyncRun, run_id)
+        for target, run_id in attempts.items()
+    }
+    _reconcile_ap_runs(db, list(runs.values()))
     runs = {
         target: db.get(AcademicSyncRun, run_id)
         for target, run_id in attempts.items()
