@@ -421,6 +421,81 @@ def _sync_scope_parent_states(
         db.add(parent)
 
 
+def _cancel_queued_root_attempts(
+    db: Session,
+    root: AcademicBulkOperationJob,
+    state: dict[str, Any],
+    *,
+    now: datetime,
+) -> int:
+    model_by_stage = {
+        'ap_sync': AcademicSyncRun,
+        'course_mapping': AcademicBulkOperationJob,
+        'account_enrollment': AcademicClassSyncJob,
+        'score_update': AcademicClassSyncJob,
+        'campus_snapshots': AcademicBulkOperationJob,
+        'campus_reports': AcademicTeacherReportJob,
+        'ho_snapshots': AcademicBulkOperationJob,
+        'ho_reports': AcademicTeacherReportJob,
+    }
+    cancelled = 0
+    seen_ids: set[tuple[type, str]] = set()
+    attempts_by_stage = (
+        state.get('attempts_by_stage')
+        if isinstance(state.get('attempts_by_stage'), dict)
+        else {}
+    )
+    for stage, rounds in attempts_by_stage.items():
+        model = model_by_stage.get(str(stage))
+        if model is None or not isinstance(rounds, dict):
+            continue
+        for attempts in rounds.values():
+            if not isinstance(attempts, dict):
+                continue
+            for attempt_id in attempts.values():
+                key = (model, str(attempt_id or ''))
+                if not key[1] or key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                row = db.get(model, key[1])
+                if row is None or str(getattr(row, 'status', '') or '').lower() != 'queued':
+                    continue
+                row.status = 'cancelled'
+                if hasattr(row, 'error_message'):
+                    row.error_message = (
+                        f'Daily pipeline root {root.id} was superseded before this task started.'
+                    )[:4000]
+                if hasattr(row, 'progress_current'):
+                    row.progress_current = 100
+                if hasattr(row, 'progress_total'):
+                    row.progress_total = 100
+                if hasattr(row, 'progress_label'):
+                    row.progress_label = 'Đã hủy vì pipeline ngày mới đã thay thế'
+                if hasattr(row, 'finished_at'):
+                    row.finished_at = now
+                if hasattr(row, 'updated_at'):
+                    row.updated_at = now
+                if hasattr(row, 'result_json'):
+                    payload = dict(getattr(row, 'result_json', None) or {})
+                    payload.update({
+                        'ok': False,
+                        'code': 'superseded_by_newer_daily_run',
+                        'superseded_root_id': str(root.id),
+                    })
+                    row.result_json = json_safe_value(payload)
+                elif hasattr(row, 'counters_json'):
+                    payload = dict(getattr(row, 'counters_json', None) or {})
+                    payload['error'] = {
+                        'code': 'superseded_by_newer_daily_run',
+                        'message': 'Daily AP attempt cancelled before worker start.',
+                        'retryable': False,
+                    }
+                    row.counters_json = json_safe_value(payload)
+                db.add(row)
+                cancelled += 1
+    return cancelled
+
+
 def _mark_older_active_roots_superseded(
     db: Session,
     *,
@@ -463,11 +538,18 @@ def _mark_older_active_roots_superseded(
             'failed_at': current_time.isoformat(),
             'last_error': 'Superseded by a newer daily pipeline root.',
         })
+        cancelled_attempts = _cancel_queued_root_attempts(
+            db,
+            root,
+            state,
+            now=current_time,
+        )
         state.update({
             'continuation': continuation,
             'code': 'superseded_by_newer_daily_run',
             'superseded_by_root_id': str(keep.id),
             'superseded_at': current_time.isoformat(),
+            'cancelled_queued_attempt_count': cancelled_attempts,
         })
         root.status = 'failed'
         root.progress_current = 100
