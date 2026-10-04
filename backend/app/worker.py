@@ -1674,7 +1674,15 @@ def academic_class_sync_task(self, job_id: str):
             action = 'academic.cms_enrollment_sync.class.async'
             label = 'Hoàn tất enroll CMS'
         elif job.job_type == 'learning_sync':
-            result = service.sync_class_learning_insight(worker_user, job.class_id, force=force, limit=limit)
+            result = service.sync_class_learning_insight(
+                worker_user,
+                job.class_id,
+                force=force,
+                limit=limit,
+                immediate_after_enrollment=bool(
+                    request_json.get('immediate_after_enrollment')
+                ),
+            )
             action = 'academic.learning_sync.class.async'
             label = 'Hoàn tất cập nhật điểm'
         elif job.job_type == 'full_cms_sync':
