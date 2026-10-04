@@ -941,6 +941,24 @@ def ensure_class_attempt_job(
         .order_by(AcademicClassSyncJob.created_at.desc())
         .all()
     )
+    stale_blockers = reconcile_stale_rows(
+        active_jobs,
+        now=datetime.utcnow(),
+        queued_timeout_seconds=class_sync_queued_timeout_seconds(),
+        running_timeout_seconds=int(settings.academic_class_sync_stale_seconds),
+    )
+    if stale_blockers:
+        db.add_all(stale_blockers)
+        db.commit()
+        active_jobs = (
+            db.query(AcademicClassSyncJob)
+            .filter(
+                AcademicClassSyncJob.class_id == str(class_id),
+                AcademicClassSyncJob.status.in_(['queued', 'running']),
+            )
+            .order_by(AcademicClassSyncJob.created_at.desc())
+            .all()
+        )
     decision = choose_active_class_sync_job(
         active_jobs,
         requested_key=idempotency_key,
