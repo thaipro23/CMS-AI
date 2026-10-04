@@ -395,3 +395,36 @@ def test_class_stage_failure_keeps_child_error_message(session_factory):
         db.refresh(root)
 
     assert "statement timeout while refreshing grade snapshot" in root.error_message
+
+def test_daily_score_stage_forces_full_read_only_refresh():
+    root = SimpleNamespace(
+        id="root-score-force",
+        request_json={"run_date_vn": "2026-10-04"},
+    )
+    parent = SimpleNamespace(id="score-parent")
+    scope = {
+        "scope_key": "poly:term-poly",
+        "scope_hash": "scope-hash",
+    }
+
+    provision = runtime._class_attempt_request(
+        root,
+        parent,
+        scope,
+        "class-1",
+        stage="account_enrollment",
+        round_no=0,
+    )
+    score = runtime._class_attempt_request(
+        root,
+        parent,
+        scope,
+        "class-1",
+        stage="score_update",
+        round_no=0,
+    )
+
+    assert provision["force"] is False
+    assert provision["sync_learning"] is False
+    assert score["force"] is True
+    assert score["sync_learning"] is True
