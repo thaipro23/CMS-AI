@@ -67,8 +67,9 @@ def validate_report_branch(report: dict[str, Any], *, branch: str) -> dict[str, 
         if len(class_branches) > 1:
             raise ReportSnapshotError('Report teacher classes span multiple branches.')
         teacher_branch = _normalized(teacher.get('branch'))
-        effective_teacher_branch = teacher_branch or next(iter(class_branches), '')
-        if effective_teacher_branch != expected_branch:
+        if not teacher_branch:
+            raise ReportSnapshotError('Report teacher branch is missing from its scheduled branch scope.')
+        if teacher_branch != expected_branch:
             raise ReportSnapshotError('Report teacher branch is outside its scheduled branch scope.')
 
     return {
