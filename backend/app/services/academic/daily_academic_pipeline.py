@@ -1561,7 +1561,14 @@ def _class_attempt_request(
         # sync_class_learning_insight skips students that already have a
         # learning payload, leaving yesterday's score/progress in the report.
         'force': stage == 'score_update',
-        'limit': 5000,
+        'limit': max(
+            1000,
+            min(
+                int(settings.academic_class_sync_max_students or 5000),
+                20000,
+            ),
+        ),
+        'immediate_after_enrollment': stage == 'score_update',
         'mode': None,
         'requester_context': _scheduler_requester_context(),
     }
