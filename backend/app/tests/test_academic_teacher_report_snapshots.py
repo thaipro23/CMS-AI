@@ -160,6 +160,7 @@ def test_campus_snapshot_is_immutable_checksummed_and_has_stable_provenance():
     [
         (lambda report: report['items'][0].pop('teacher_id'), 'teacher_id'),
         (lambda report: report['items'][0]['classes'][0].pop('class_id'), 'class_id'),
+        (lambda report: report['items'][0].pop('branch'), 'teacher branch'),
         (lambda report: report['student_watch_rows'][0].pop('student_id'), 'student_id'),
         (lambda report: report['items'][0]['classes'][0].update(campus='hn'), 'scope'),
     ],
