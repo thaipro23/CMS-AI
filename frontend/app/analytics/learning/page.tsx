@@ -515,7 +515,7 @@ function DetailDrawer({
           />}
           {quiz?.has_more && <small>Đang hiển thị 200 lượt gần nhất.</small>}
           {(quiz?.results || []).map((result) => <div className="analytics-reason-item" key={result.unit_usage_key}>
-            <b>{quiz.attempts.find((item) => item.unit_usage_key === result.unit_usage_key)?.quiz_title || 'Quiz'} · {quizStatus(result.status)}</b>
+            <b>{quiz?.attempts.find((item) => item.unit_usage_key === result.unit_usage_key)?.quiz_title || 'Quiz'} · {quizStatus(result.status)}</b>
             <small>Cập nhật: {formatVNDateTime(result.calculated_at)}</small>
             {result.evidence.partial && <small>Phân tích chưa hoàn tất; phần còn lại sẽ được kiểm tra ở lần tính tiếp theo.</small>}
             {result.evidence.missing_baseline_or_version && <small>Chưa đủ dữ liệu câu/phiên bản hoặc người tham chiếu để đối chiếu đáp án.</small>}
