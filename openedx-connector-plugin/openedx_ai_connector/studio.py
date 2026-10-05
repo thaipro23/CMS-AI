@@ -1812,15 +1812,24 @@ def _native_add_library_problem_to_itembank(
     upstream_ref: str,
 ) -> tuple[Any, bool, list[dict]]:
     existing = _find_existing_upstream_child(store, bank, upstream_ref)
+    publish_request = _request_as_publish_user(request, user)
     if existing is not None:
+        # Follow Studio core semantics for an existing downstream: syncing the
+        # upstream fields alone is not enough. sync_library_content() also calls
+        # import_static_assets_for_library_sync(), which stages component-local
+        # Library assets, imports them into the course Files & Uploads namespace,
+        # and rewrites downstream OLX static references.
+        notices = sync_library_content(existing, publish_request, store)
+        existing = _get_item_best_effort(store, getattr(existing, 'location', existing)) or existing
         return existing, False, [{
             'phase': 'itembank.child.sync',
-            'mode': 'reuse_existing_upstream_child',
+            'mode': 'native_sync_library_content_existing_child',
             'status': 'ok',
             'upstream': upstream_ref,
+            'usage_key': _clean_usage_key(getattr(existing, 'location', existing)),
+            'static_file_notices': _to_jsonable(notices),
         }]
 
-    publish_request = _request_as_publish_user(request, user)
     child = None
     diagnostics: list[dict] = []
     try:
