@@ -1801,6 +1801,17 @@ def _native_create_or_reuse_itembank(
     return bank, created, diagnostics
 
 
+def _require_clean_static_file_notices(notices: Any, upstream_ref: str) -> None:
+    """Fail closed when Studio core reports asset copy conflicts/errors."""
+    conflicts = list(getattr(notices, 'conflicting_files', []) or [])
+    errors = list(getattr(notices, 'error_files', []) or [])
+    if conflicts or errors:
+        raise RuntimeError(
+            f'Core sync_library_content không copy sạch static assets cho {upstream_ref}: '
+            f'conflicting_files={conflicts} error_files={errors}'
+        )
+
+
 def _native_add_library_problem_to_itembank(
     request: Any,
     create_xblock: Any,
@@ -1820,6 +1831,7 @@ def _native_add_library_problem_to_itembank(
         # Library assets, imports them into the course Files & Uploads namespace,
         # and rewrites downstream OLX static references.
         notices = sync_library_content(existing, publish_request, store)
+        _require_clean_static_file_notices(notices, upstream_ref)
         existing = _get_item_best_effort(store, getattr(existing, 'location', existing)) or existing
         return existing, False, [{
             'phase': 'itembank.child.sync',
@@ -1843,6 +1855,7 @@ def _native_add_library_problem_to_itembank(
         child = _get_item_best_effort(store, getattr(child, 'location', child)) or child
         child.upstream = upstream_ref
         notices = sync_library_content(child, publish_request, store)
+        _require_clean_static_file_notices(notices, upstream_ref)
         child = _get_item_best_effort(store, getattr(child, 'location', child)) or child
         diagnostics.append({
             'phase': 'itembank.child.sync',
