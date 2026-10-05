@@ -4353,8 +4353,14 @@ class AcademicService:
     def sync_class_course_enrollment(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, mode: str | None = None) -> dict[str, Any]:
         return self._academic_sync_enrollment_workflow().sync_class_course_enrollment(user, class_id, force=force, limit=limit, mode=mode)
 
-    def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000) -> dict[str, Any]:
-        return self._academic_sync_enrollment_workflow().sync_class_learning_insight(user, class_id, force=force, limit=limit)
+    def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force: bool = False, limit: int = 1000, immediate_after_enrollment: bool = False) -> dict[str, Any]:
+        return self._academic_sync_enrollment_workflow().sync_class_learning_insight(
+            user,
+            class_id,
+            force=force,
+            limit=limit,
+            immediate_after_enrollment=immediate_after_enrollment,
+        )
 
 
     def _try_auto_map_course_for_class(self, user: UserContext, cls: AcademicClass) -> dict[str, Any]:

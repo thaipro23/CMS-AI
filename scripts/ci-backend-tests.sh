@@ -8,6 +8,8 @@ pytest -q \
   app/tests/test_daily_teacher_report_pipeline_contract.py \
   app/tests/test_daily_teacher_report_watchdog.py \
   app/tests/test_learning_sync_preserves_confirmed_enrollment.py \
+  app/tests/test_primary_after_enrollment_policy.py \
+  app/tests/test_primary_after_enrollment_connector_client.py \
   app/tests/test_official_course_completion.py \
   app/tests/test_assignment_ui_suppression.py \
   app/tests/test_v25_9_16_7_2_64_34_udemy_dashboard_export.py \
