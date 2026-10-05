@@ -3230,6 +3230,21 @@ def _decode_question_media_assets(raw_assets: object) -> list[dict[str, Any]]:
     return decoded
 
 
+def _question_media_static_path(file_path: str) -> str:
+    """Normalize question media to the Learning Core component-local static namespace."""
+    path = str(file_path or '').strip().lstrip('/')
+    if not path:
+        raise ValueError('Media file_path rỗng.')
+    if not path.startswith('static/'):
+        path = f'static/{path}'
+    return path
+
+
+def _question_media_learner_ref(file_path: str) -> str:
+    """Return the authored OLX reference; the learner runtime resolves /static/... safely."""
+    return f'/{_question_media_static_path(file_path)}'
+
+
 def _upload_question_media_assets(usage_key, olx: str, raw_assets: object, user) -> tuple[str, list[dict[str, Any]]]:
     assets = _decode_question_media_assets(raw_assets)
     if not assets:
@@ -3238,31 +3253,49 @@ def _upload_question_media_assets(usage_key, olx: str, raw_assets: object, user)
         from openedx.core.djangoapps.content_libraries.api.blocks import add_library_block_static_asset_file  # type: ignore
     except Exception as exc:
         raise RuntimeError('Open edX Content Libraries static asset API không khả dụng.') from exc
+
     final_olx = str(olx or '')
     uploaded: list[dict[str, Any]] = []
     for asset in assets:
         if asset['placeholder'] not in final_olx:
             raise ValueError(f'OLX thiếu placeholder của media {asset["file_path"]}.')
+
+        static_path = _question_media_static_path(asset['file_path'])
+        learner_url = _question_media_learner_ref(static_path)
         static_file = add_library_block_static_asset_file(
             usage_key,
-            asset['file_path'],
+            static_path,
             asset['content'],
             user=user,
         )
-        url = str(getattr(static_file, 'url', '') or '').strip()
-        if not url:
-            raise RuntimeError('Open edX upload media không trả URL static asset.')
-        final_olx = final_olx.replace(asset['placeholder'], url)
+
+        # add_library_block_static_asset_file().url is a Studio authoring URL:
+        # /library_assets/component_versions/<uuid>/...
+        # It intentionally requires Content Library author permissions and must
+        # never be persisted in learner-facing OLX. Author the canonical
+        # /static/... reference instead; Open edX's learner runtime resolves it
+        # against the published component version.
+        studio_url = str(getattr(static_file, 'url', '') or '').strip()
+        returned_path = str(getattr(static_file, 'path', '') or static_path).strip().lstrip('/')
+        if returned_path != static_path:
+            raise RuntimeError(
+                f'Open edX upload media trả path ngoài dự kiến: expected={static_path!r}, actual={returned_path!r}.'
+            )
+
+        final_olx = final_olx.replace(asset['placeholder'], learner_url)
         uploaded.append({
-            'file_path': asset['file_path'],
-            'url': url,
+            'file_path': static_path,
+            'url': learner_url,
+            'studio_url': studio_url,
             'size': len(asset['content']),
             'sha256': asset['sha256'],
         })
+
     if '__ACMS_MEDIA_' in final_olx:
         raise ValueError('OLX còn media placeholder chưa được resolve.')
+    if '/library_assets/component_versions/' in final_olx:
+        raise ValueError('OLX learner không được chứa URL authoring /library_assets/component_versions/.')
     return final_olx, uploaded
-
 
 def _import_problem_olx_v2(request, course_id: str, library_key: str, display_name: str, olx: str, metadata: dict | None = None, tag_names: list | None = None, assets: list | None = None) -> dict:
     metadata = metadata or {}
