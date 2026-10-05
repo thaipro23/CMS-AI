@@ -29,3 +29,11 @@ def test_question_media_upload_uses_the_normalized_static_path():
     assert "usage_key,\n            static_path,\n            asset['content']" in source
     assert "'file_path': static_path" in source
     assert "'url': learner_url" in source
+
+
+def test_existing_itembank_child_is_resynced_through_studio_core():
+    source = _connector_source()
+
+    assert "mode': 'native_sync_library_content_existing_child'" in source
+    assert "notices = sync_library_content(existing, publish_request, store)" in source
+    assert "import_static_assets_for_library_sync()" in source
