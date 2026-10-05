@@ -106,6 +106,7 @@ def test_quiz_recalculation_does_not_depend_on_session_structure():
         course_id="course-v1:FPL+COM109+FA26",
         username=None,
         class_id="class-1",
+        refresh_quiz_integrity=True,
     )
     assert result["sessions"] == 0
     assert result["quiz"]["quiz_attempt_rows"] == 7

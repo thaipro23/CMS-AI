@@ -4579,6 +4579,7 @@ def analytics_class_recalculate_task(job_id: str):
                     class_id=job.class_id,
                     course_id=course_id,
                     username=target_username,
+                    refresh_quiz_integrity=False,
                 )
                 behavior_item = service.recalculate_learning_behavior(
                     class_id=job.class_id,
@@ -4614,6 +4615,18 @@ def analytics_class_recalculate_task(job_id: str):
                 f'Tất cả {total_targets} sinh viên đều tính thất bại; lỗi đầu tiên: {first_error}'
             )
 
+        # Per-learner work above persists answers. Comparing all retained class
+        # history for every learner multiplies DB/CPU work by the roster size.
+        try:
+            integrity_result = service.recalculate_class_quiz_integrity(
+                class_id=job.class_id, course_id=course_id,
+            )
+            db.commit()
+        except Exception as integrity_exc:
+            # Independent analysis must not invalidate completed learner work.
+            db.rollback()
+            integrity_result = {'status': 'failed', 'message': str(integrity_exc)[:1000]}
+
         video_result = {
             'video_progress_rows': video_rows,
             'matched_event_count': video_matched_events,
@@ -4637,6 +4650,12 @@ def analytics_class_recalculate_task(job_id: str):
         }
 
         warnings: list[str] = []
+        if integrity_result.get('status') == 'failed':
+            warnings.append('QUIZ_INTEGRITY_RECALCULATE_FAILED')
+        elif integrity_result.get('status') == 'partial':
+            warnings.append('QUIZ_INTEGRITY_PARTIAL')
+        elif integrity_result.get('status') == 'migration_required':
+            warnings.append('QUIZ_INTEGRITY_MIGRATION_REQUIRED')
         structure_status = str((session_structure_result or {}).get('status') or '')
         if structure_status == 'fetch_failed':
             warnings.append('SESSION_STRUCTURE_FETCH_FAILED')
@@ -4673,6 +4692,7 @@ def analytics_class_recalculate_task(job_id: str):
             'video': video_result,
             'session': session_result,
             'behavior': behavior_result,
+            'quiz_integrity': integrity_result,
             'warnings': list(dict.fromkeys(warnings)),
             'data_ready': not warnings,
             'query_policy': {

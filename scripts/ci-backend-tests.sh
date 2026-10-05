@@ -15,6 +15,13 @@ pytest -q \
   app/tests/test_academic_progress_email.py \
   app/tests/test_v25_9_16_7_2_64_16_5_4_production_security_closure.py \
   app/tests/test_v25_9_16_7_2_64_16_5_5_performance_worker_reliability.py \
-  app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py
+  app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py \
+  app/tests/test_quiz_tracking_log_integrity.py \
+  app/tests/test_quiz_item_materialization.py \
+  app/tests/test_quiz_integrity_rules.py \
+  app/tests/test_quiz_integrity_access.py \
+  app/tests/test_quiz_tracking_integration.py \
+  app/tests/test_quiz_worker_batching.py \
+  app/tests/test_quiz_release_readiness.py
 pytest -q app/tests/test_v25_9_16_7_2_64_16_5_6_release_contract.py -k 'not version_is_synchronized_across_runtime_artifacts'
 pytest -q -m integration app/tests/integration

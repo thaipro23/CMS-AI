@@ -118,6 +118,11 @@ class _CleanupDB:
         self.commits = 0
         self.rollbacks = 0
 
+    def get_bind(self):
+        from sqlalchemy import create_engine
+        # This legacy aggregate cleanup fixture deliberately has no item tables.
+        return create_engine('sqlite://')
+
     def query(self, *_args, **_kwargs):
         return _CountQuery(self)
 

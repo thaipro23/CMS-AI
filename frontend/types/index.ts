@@ -3219,6 +3219,62 @@ export type AnalyticsStudentLearningBehaviorDetail = {
   videos: AnalyticsStudentVideoProgress[]
   timeline_weeks?: { week_index: number; sessions: number[] }[]
   disclaimer?: string
+  quiz_integrity?: {
+    status: string
+    has_more?: boolean
+    attempts: AnalyticsQuizAttemptDetail[]
+    results: {
+      unit_usage_key: string
+      status: string
+      rule_version: string
+      calculated_at: string
+      evidence: {
+        partial?: boolean
+        reset_request_count?: number
+        reset_policy?: string
+        answer_reveal_request_count?: number
+        comparable_questions?: number
+        missing_baseline_or_version?: boolean
+        pairs?: {
+          other_username: string
+          a_username: string
+          b_username: string
+          overlap_questions: number
+          answer_similarity_percent: number
+          rare_wrong_count: number
+          timing_questions: number
+          median_lag_seconds: number
+          questions: {
+            problem_usage_key: string
+            input_slot: string
+            answer: unknown
+            correct: boolean | null
+            a_submitted_at: string
+            b_submitted_at: string
+          }[]
+        }[]
+      }
+    }[]
+  }
+}
+
+export type AnalyticsQuizAttemptDetail = {
+  id: string
+  unit_usage_key: string
+  quiz_title: string
+  attempt_no: number
+  started_at?: string | null
+  first_submission_at?: string | null
+  last_submission_at?: string | null
+  duration_seconds?: number | null
+  duration_source: string
+  submission_count: number
+  score_earned?: number | null
+  score_possible?: number | null
+  reset_request_count: number
+  answer_reveal_request_count: number
+  rapid_submission_burst: boolean
+  median_submission_gap_seconds?: number | null
 }
 
 

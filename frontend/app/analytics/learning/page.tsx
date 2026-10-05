@@ -43,6 +43,7 @@ import {
   AnalyticsDataQualityIssue,
   AnalyticsStudentLearningBehaviorDetail,
   AnalyticsStudentSessionProgress,
+  AnalyticsQuizAttemptDetail,
 } from '../../../types'
 import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
@@ -423,6 +424,13 @@ function DetailDrawer({
   const reasons = Array.from(new Set([...(behavior.reason_codes || []), ...(row.reason_codes || [])])).filter(Boolean)
   const sessions = detail?.sessions || []
   const videos = detail?.videos || []
+  const quiz = detail?.quiz_integrity
+  const quizStatus = (status?: string) => status === 'REVIEW_REQUIRED' ? 'Cần kiểm tra' : status === 'NORMAL' ? 'Bình thường' : 'Thiếu log'
+  const quizDuration = (seconds?: number | null) => {
+    if (seconds == null || !Number.isFinite(seconds)) return 'Không xác định'
+    const total = Math.round(seconds)
+    return total < 60 ? `${total} giây` : `${Math.floor(total / 60)} phút ${total % 60} giây`
+  }
 
   return <AccessibleDialog
     open={Boolean(row)}
@@ -479,6 +487,51 @@ function DetailDrawer({
             </div>
           </div>
         </div>
+
+        <section className="analytics-detail-box" aria-label="Phân tích quiz từ log">
+          <h4>Phân tích quiz từ log</h4>
+          <p>Thời gian tính từ yêu cầu bắt đầu đến lần nộp cuối. Đây là khoảng thời gian theo log, không phải thời gian giải từng câu.</p>
+          {quiz?.status === 'MIGRATION_REQUIRED' && <div className="empty-state compact">Chưa sẵn sàng phân tích chi tiết quiz. Các lượt làm có log vẫn được hiển thị bên dưới.</div>}
+          {!quiz?.attempts?.length && <div className="empty-state compact">Chưa có log lượt làm quiz. Cần tính lại lớp để cập nhật.</div>}
+          {!!quiz?.attempts?.length && <EnterpriseDataTable<AnalyticsQuizAttemptDetail>
+            tableId="analytics-student-quiz-attempts"
+            caption="Thời gian các lượt làm quiz"
+            rows={quiz?.attempts || []}
+            columns={[
+              { key: 'quiz', header: 'Quiz / Lần làm', kind: 'identity', minWidth: 160, hideable: false, render: (item) => <><b>{item.quiz_title}</b><small>Lần {item.attempt_no}</small></> },
+              { key: 'start', header: 'Bắt đầu theo log', kind: 'status', minWidth: 150, render: (item) => item.started_at ? formatVNDateTime(item.started_at) : 'Thiếu log bắt đầu' },
+              { key: 'end', header: 'Nộp cuối', kind: 'status', minWidth: 150, render: (item) => item.last_submission_at ? formatVNDateTime(item.last_submission_at) : 'Chưa thấy nộp' },
+              { key: 'duration', header: 'Thời gian', kind: 'status', minWidth: 140, render: (item) => quizDuration(item.duration_seconds) },
+              { key: 'submitted', header: 'Lần nộp', kind: 'status', width: 90, render: (item) => item.submission_count },
+              { key: 'signals', header: 'Thông tin log', kind: 'status', minWidth: 180, render: (item) => <>
+                {item.rapid_submission_burst && <small>Nộp liên tiếp nhanh; có thể do tự nộp khi hết giờ.</small>}
+                <small>Yêu cầu reset: {item.reset_request_count || 0} · Xem đáp án: {item.answer_reveal_request_count || 0}</small>
+              </> },
+            ]}
+            rowKey={(item) => item.id}
+            density="compact"
+            label="lượt làm"
+            showSummary={false}
+          />}
+          {quiz?.has_more && <small>Đang hiển thị 200 lượt gần nhất.</small>}
+          {(quiz?.results || []).map((result) => <div className="analytics-reason-item" key={result.unit_usage_key}>
+            <b>{quiz.attempts.find((item) => item.unit_usage_key === result.unit_usage_key)?.quiz_title || 'Quiz'} · {quizStatus(result.status)}</b>
+            <small>Cập nhật: {formatVNDateTime(result.calculated_at)}</small>
+            {result.evidence.partial && <small>Phân tích chưa hoàn tất; phần còn lại sẽ được kiểm tra ở lần tính tiếp theo.</small>}
+            {result.evidence.missing_baseline_or_version && <small>Chưa đủ dữ liệu câu/phiên bản hoặc người tham chiếu để đối chiếu đáp án.</small>}
+            {!!result.evidence.reset_request_count && <small>{result.evidence.reset_request_count} yêu cầu reset · {result.evidence.reset_policy === 'restricted' ? 'Quiz có hạn chế reset' : result.evidence.reset_policy === 'practice' ? 'Quiz luyện tập' : 'Chưa xác định quy định reset'}</small>}
+            {(result.evidence.pairs || []).map((pair) => <details key={pair.other_username}>
+              <summary>Đối chiếu với {pair.other_username}: {pair.overlap_questions} câu chung, {pair.answer_similarity_percent}% đáp án giống, {pair.rare_wrong_count} câu cùng sai hiếm</summary>
+              <small>{pair.timing_questions} câu có mốc nộp tương ứng · Độ trễ trung vị {Math.abs(pair.median_lag_seconds)} giây. Thời gian theo thứ tự: {pair.a_username} / {pair.b_username}.</small>
+              {pair.questions.map((question) => <div className="academic-mini-lines" key={`${question.problem_usage_key}:${question.input_slot}`}>
+                <span>Câu {question.problem_usage_key.split('@').pop()} · {question.correct === false ? 'Sai' : question.correct === true ? 'Đúng' : 'Chưa xác định'}</span>
+                <span>Đáp án: {JSON.stringify(question.answer)}</span>
+                <span>{formatVNDateTime(question.a_submitted_at)} / {formatVNDateTime(question.b_submitted_at)}</span>
+              </div>)}
+            </details>)}
+          </div>)}
+          <small>Các dấu hiệu cần giảng viên kiểm tra; không phải kết luận gian lận hay dùng công cụ.</small>
+        </section>
 
         {!!sessions.length && <EnterpriseDataTable<AnalyticsStudentSessionProgress>
           tableId="analytics-student-session-detail"

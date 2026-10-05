@@ -252,7 +252,14 @@ class LearningAnalyticsResultsWorkflowService:
             ],
         }
 
+    def _quiz_detail(self, *, class_id, course_id, username):
+        if not settings.analytics_quiz_integrity_enabled:
+            return {'attempts': [], 'results': [], 'status': 'DISABLED', 'has_more': False}
+        from .quiz_detail import read_quiz_detail
+        return read_quiz_detail(self.parent, class_id=class_id, course_id=course_id, username=username)
+
     def student_behavior_detail(self, *, class_id: str | None, course_id: str | None, username: str) -> dict[str, Any]:
+        course_id = self._course_for_class(class_id, course_id)
         behavior = None
         if course_id:
             behavior = self.db.query(AnalyticsLearningBehaviorSnapshot).filter(
@@ -268,6 +275,7 @@ class LearningAnalyticsResultsWorkflowService:
         session_rows = session_q.order_by(AnalyticsStudentSessionProgress.week_index.asc().nullslast(), AnalyticsStudentSessionProgress.session_index.asc()).all()
         video_rows = video_q.order_by(AnalyticsStudentVideoProgress.session_index.asc().nullslast(), AnalyticsStudentVideoProgress.last_event_at.desc().nullslast()).limit(300).all()
         return {
+            'quiz_integrity': self._quiz_detail(class_id=class_id, course_id=course_id, username=username),
             'behavior': None if not behavior else {
                 'username': behavior.username,
                 'user_id': behavior.user_id,

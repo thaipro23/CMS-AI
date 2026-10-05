@@ -949,12 +949,21 @@ class LearningAnalyticsCoreService:
             FOR UPDATE SKIP LOCKED
         """)
 
-        proof_sql = text("""
+        from .quiz_item_materializer import quiz_tables_ready
+        item_guard = bool(settings.analytics_quiz_integrity_enabled)
+        item_ready = quiz_tables_ready(self.db) if item_guard else False
+        if item_guard and item_ready:
+            item_condition = "AND (e.event_type <> 'problem_check' OR EXISTS (SELECT 1 FROM analytics_quiz_item_receipts i WHERE i.event_id = e.id))"
+        elif item_guard:
+            item_condition = "AND e.event_type <> 'problem_check'"
+        else:
+            item_condition = ''
+        proof_sql = text(f"""
             SELECT e.id
             FROM analytics_tracking_events e
-            JOIN analytics_materialized_event_receipts r
-              ON r.event_id = e.id
+            JOIN analytics_materialized_event_receipts r ON r.event_id = e.id
             WHERE e.id = ANY(CAST(:candidate_ids AS VARCHAR[]))
+            {item_condition}
         """)
         delete_sql = text("""
             DELETE FROM analytics_tracking_events
@@ -1765,7 +1774,7 @@ class LearningAnalyticsCoreService:
             'materialization_mode': 'incremental_cumulative_v1',
         }
 
-    def recalculate_course_quiz_attempts(self, *, course_id: str, username: str | None = None, class_id: str | None = None) -> dict[str, Any]:
+    def recalculate_course_quiz_attempts(self, *, course_id: str, username: str | None = None, class_id: str | None = None, refresh_quiz_integrity: bool = True) -> dict[str, Any]:
         """Materialize quiz attempts without overwriting retained history.
 
         Raw retention can remove old tracking rows. Existing attempts are matched
@@ -1830,10 +1839,13 @@ class LearningAnalyticsCoreService:
                 raw_event=raw.raw_event or {},
                 raw_context=raw.raw_context or {},
                 raw_json=raw.raw_json or {},
+                raw_event_id=str(raw.id),
             ))
             if raw.user_id and raw.event_time and raw.course_id:
                 receipt_events.append((raw, canonical))
 
+        from .quiz_item_materializer import materialize_quiz_items, quiz_tables_ready
+        item_capture = bool(settings.analytics_quiz_integrity_enabled and quiz_tables_ready(self.db))
         features = build_quiz_attempt_features(normalized_events)
         now = datetime.utcnow()
         saved = 0
@@ -1849,6 +1861,10 @@ class LearningAnalyticsCoreService:
             AnalyticsQuizAttempt.unit_usage_key.asc(),
             AnalyticsQuizAttempt.attempt_no.asc(),
         ).all():
+            # Retired speed/reset heuristics also apply to retained attempts
+            # whose original raw events have already been cleaned up.
+            existing.suspicious_quiz_speed = False
+            existing.fishing_pattern = False
             existing_by_key[(str(existing.username), str(existing.unit_usage_key))].append(existing)
 
         for feat in features:
@@ -1872,6 +1888,15 @@ class LearningAnalyticsCoreService:
                     ),
                     None,
                 )
+
+            if row is None and feat.first_submission_at:
+                # A late start event can move the inferred start earlier.
+                row = next((item for item in candidates
+                            if item.first_submission_at == feat.first_submission_at), None)
+            if row is None and not feat.start_observed and feat.first_submission_at:
+                row = next((item for item in reversed(candidates)
+                            if item.first_submission_at and item.last_submission_at
+                            and item.first_submission_at <= feat.first_submission_at <= item.last_submission_at), None)
 
             if row is None:
                 next_attempt_no = max([int(item.attempt_no or 0) for item in candidates] or [0]) + 1
@@ -1917,22 +1942,54 @@ class LearningAnalyticsCoreService:
                     row.median_time_per_question_seconds = feat.median_time_per_question_seconds
             if feat.repeat_rate is not None:
                 row.repeat_rate = max(float(row.repeat_rate or 0), float(feat.repeat_rate))
-            row.suspicious_quiz_speed = bool(row.suspicious_quiz_speed or feat.suspicious_quiz_speed)
-            row.fishing_pattern = bool(row.fishing_pattern or feat.fishing_pattern)
+            row.suspicious_quiz_speed = False
+            row.fishing_pattern = False
             row.showanswer_count = max(int(row.showanswer_count or 0), int(feat.showanswer_count or 0))
             if feat.first_submission_at is not None:
                 row.first_submission_at = min([d for d in (row.first_submission_at, feat.first_submission_at) if d])
             if feat.last_submission_at is not None:
                 row.last_submission_at = max([d for d in (row.last_submission_at, feat.last_submission_at) if d])
             row.low_confidence_reason = feat.low_confidence_reason or row.low_confidence_reason
-            row.evidence_json = {
-                **(row.evidence_json or {}),
-                **(feat.evidence or {}),
-                'materialization_mode': 'retention_safe_upsert_v1',
-            }
+            old_evidence = row.evidence_json or {}
+            evidence = {**old_evidence, **(feat.evidence or {})}
+            start_request_at = (feat.started_at.isoformat() if feat.start_observed and feat.started_at
+                                else old_evidence.get('start_request_at'))
+            evidence['start_request_at'] = start_request_at
+            evidence['start_observed'] = bool(start_request_at)
+            evidence['duration_seconds'] = (
+                max(0.0, (row.last_submission_at - datetime.fromisoformat(start_request_at)).total_seconds())
+                if start_request_at and row.last_submission_at else None
+            )
+            evidence['duration_source'] = 'START_REQUEST_TO_LAST_SUBMISSION' if evidence['duration_seconds'] is not None else 'UNKNOWN'
+            for name in ('reset_times', 'answer_reveal_requests', 'server_submission_times'):
+                entries = [*(old_evidence.get(name) or []), *(feat.evidence.get(name) or [])]
+                evidence[name] = list({str(entry): entry for entry in entries}.values())
+            # Per-problem latest scores avoid carrying previously inflated totals.
+            score_map = dict(old_evidence.get('problem_scores') or {})
+            for submission in feat.submissions:
+                if submission.get('earned') is None or submission.get('possible') is None:
+                    continue
+                key = submission['problem_usage_key']
+                when = submission['submitted_at'].isoformat()
+                if key not in score_map or when >= score_map[key]['at']:
+                    score_map[key] = {'earned': submission['earned'], 'possible': submission['possible'], 'at': when}
+            if score_map:
+                row.score_earned = sum(score['earned'] for score in score_map.values())
+                row.score_possible = sum(score['possible'] for score in score_map.values())
+            evidence['problem_scores'] = score_map
+            evidence['materialization_mode'] = 'tracking_rules_v1'
+            row.evidence_json = evidence
+            if item_capture:
+                self.db.flush()
+                materialize_quiz_items(self.db, feat, attempt_id=row.id)
             row.calculated_at = now
             saved += 1
 
+        if item_capture and class_id and refresh_quiz_integrity:
+            from .quiz_integrity_service import recalculate_class_integrity
+            # Class roster is mandatory for pair evidence, even a single-user job.
+            all_users = list((identity or {}).get('ap_usernames') or [])
+            recalculate_class_integrity(self.db, class_id=class_id, course_id=course_id, usernames=all_users)
         if features:
             self._record_materialized_event_receipts(receipt_events, family='quiz')
         self.db.commit()
@@ -2415,7 +2472,16 @@ class LearningAnalyticsCoreService:
                 return item
         return None
 
-    def recalculate_student_session_progress(self, *, class_id: str | None, course_id: str, username: str | None = None) -> dict[str, Any]:
+    def recalculate_class_quiz_integrity(self, *, class_id: str, course_id: str) -> dict[str, Any]:
+        """Compare the durable class history once after worker materialization."""
+        if not settings.analytics_quiz_integrity_enabled:
+            return {'status': 'disabled'}
+        from .quiz_integrity_service import recalculate_class_integrity
+        identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
+        return recalculate_class_integrity(self.db, class_id=class_id, course_id=course_id,
+                                          usernames=list(identity.get('ap_usernames') or []))
+
+    def recalculate_student_session_progress(self, *, class_id: str | None, course_id: str, username: str | None = None, refresh_quiz_integrity: bool = True) -> dict[str, Any]:
         # Quiz attempts are derived directly from tracking events and must not
         # depend on session-structure availability. Persist them first so a
         # course without rebuilt blocks can still expose useful quiz analytics.
@@ -2423,6 +2489,7 @@ class LearningAnalyticsCoreService:
             course_id=course_id,
             username=username,
             class_id=class_id,
+            refresh_quiz_integrity=refresh_quiz_integrity,
         )
         sessions = self.get_session_structure(course_id=course_id, class_id=class_id)
         if not sessions:

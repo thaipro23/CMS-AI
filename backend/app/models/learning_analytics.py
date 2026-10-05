@@ -247,6 +247,57 @@ class AnalyticsQuizAttempt(Base):
     )
 
 
+class AnalyticsQuizItemSubmission(Base):
+    """Durable server answer evidence, independent of raw-log retention."""
+
+    __tablename__ = 'analytics_quiz_item_submissions'
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    event_fingerprint: Mapped[str] = mapped_column(String(64))
+    attempt_id: Mapped[str] = mapped_column(String, index=True)
+    course_id: Mapped[str] = mapped_column(String(255))
+    username: Mapped[str] = mapped_column(String(255))
+    unit_usage_key: Mapped[str] = mapped_column(String(512))
+    problem_usage_key: Mapped[str] = mapped_column(String(512))
+    input_id: Mapped[str] = mapped_column(String(512))
+    input_slot: Mapped[str] = mapped_column(String(128))
+    variant: Mapped[str] = mapped_column(String(128), default='')
+    content_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    question_hash: Mapped[str] = mapped_column(String(64), default='')
+    answer_json: Mapped[Any] = mapped_column(JSON, nullable=True)
+    correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    response_type: Mapped[str] = mapped_column(String(80), default='')
+    attempt_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime)
+    reveal_requested_before: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (
+        UniqueConstraint('event_fingerprint', 'input_id', name='uq_quiz_item_event_input'),
+        Index('ix_quiz_items_course_user_unit_time', 'course_id', 'username', 'unit_usage_key', 'submitted_at'),
+    )
+
+
+class AnalyticsQuizItemReceipt(Base):
+    __tablename__ = 'analytics_quiz_item_receipts'
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    materialized_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AnalyticsQuizIntegrityResult(Base):
+    __tablename__ = 'analytics_quiz_integrity_results'
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    class_id: Mapped[str] = mapped_column(String)
+    course_id: Mapped[str] = mapped_column(String(255))
+    username: Mapped[str] = mapped_column(String(255))
+    unit_usage_key: Mapped[str] = mapped_column(String(512))
+    status: Mapped[str] = mapped_column(String(50), default='INSUFFICIENT_DATA')
+    rule_version: Mapped[str] = mapped_column(String(80), default='tracking_rules_v1')
+    evidence_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('class_id', 'course_id', 'username', 'unit_usage_key', name='uq_quiz_integrity_class_user_unit'),
+        Index('ix_quiz_integrity_class_course_user', 'class_id', 'course_id', 'username'),
+    )
+
+
 class AnalyticsSessionOverride(Base):
     __tablename__ = 'analytics_session_overrides'
 

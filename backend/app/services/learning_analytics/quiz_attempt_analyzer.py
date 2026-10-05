@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -39,6 +40,9 @@ class QuizAttemptFeature:
     score_possible: float | None = None
     low_confidence_reason: str | None = None
     evidence: dict[str, Any] = field(default_factory=dict)
+    start_observed: bool = False
+    raw_submissions: list[dict[str, Any]] = field(default_factory=list)
+    answer_reveal_requests: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def first_submission_at(self) -> datetime | None:
@@ -63,6 +67,7 @@ class EventLike:
     raw_event: dict[str, Any] | None
     raw_context: dict[str, Any] | None
     raw_json: dict[str, Any] | None
+    raw_event_id: str | None = None
 
 
 def _safe_str(value: Any) -> str | None:
@@ -98,7 +103,7 @@ def _vertical_usage_key(text: str | None) -> str | None:
     if not text:
         return None
     for match in re.finditer(r'block-v1:[^\s"\']+', text):
-        candidate = match.group(0).rstrip('?/&,')
+        candidate = re.split(r'[/?&#]', match.group(0), maxsplit=1)[0].rstrip(',')
         if '+type@vertical+block@' in candidate:
             return candidate
     return None
@@ -206,21 +211,70 @@ def _submission_score(event: EventLike) -> tuple[float | None, float | None]:
     return earned, possible
 
 
+def source_of(event: EventLike) -> str:
+    return str((event.raw_json or {}).get('event_source') or event.event_source or '').lower()
+
+
+def deduplicate_submissions(submissions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer canonical grades per action, retaining unmatched server checks.
+
+    Each action may have one companion of each event type within two seconds.
+    Same-type retries remain separate; identical transport deliveries collapse.
+    """
+    unique = {}
+    for item in submissions:
+        signature = json.dumps({k: v for k, v in item.items() if k != 'event_id'},
+                               sort_keys=True, default=str)
+        unique.setdefault(signature, item)
+    ordered = sorted(unique.values(), key=lambda s: s.get('submitted_at') or datetime.min)
+    canonical = [s for s in ordered if s['event_type'] == 'edx.grades.problem.submitted']
+    fallback = [s for s in ordered if s['event_type'] != 'edx.grades.problem.submitted']
+    matched: dict[int, set[str]] = defaultdict(set)
+    fallback_types: dict[int, set[str]] = {}
+    result = list(canonical)
+    for item in fallback:
+        if item.get('event_source') not in {'server', 'openedx_tracking_log'}:
+            continue
+        candidates = [
+            (abs((other['submitted_at'] - item['submitted_at']).total_seconds()), i)
+            for i, other in enumerate(canonical)
+            if item['event_type'] not in matched[i] and other['problem_usage_key'] == item['problem_usage_key']
+            and (not other.get('attempt_index') or not item.get('attempt_index')
+                 or other['attempt_index'] == item['attempt_index'])
+            and abs((other['submitted_at'] - item['submitted_at']).total_seconds()) <= 2
+        ]
+        if candidates:
+            matched[min(candidates)[1]].add(item['event_type'])
+        else:
+            # problem_graded may accompany the detailed problem_check as well.
+            existing = next((s for s in result if s['problem_usage_key'] == item['problem_usage_key']
+                             and s['event_type'] != 'edx.grades.problem.submitted'
+                             and item['event_type'] not in fallback_types.get(id(s), {s['event_type']})
+                             and abs((s['submitted_at'] - item['submitted_at']).total_seconds()) <= 2
+                             and s.get('attempt_index') == item.get('attempt_index')), None)
+            if existing is None:
+                result.append(item)
+                fallback_types[id(item)] = {item['event_type']}
+            else:
+                fallback_types[id(existing)].add(item['event_type'])
+    return sorted(result, key=lambda s: s['submitted_at'])
+
+
 def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) -> None:
     # Open edX can emit browser problem_check, problem_graded and the canonical
     # edx.grades.problem.submitted for the same action. Prefer the canonical
     # server grade events when present; keep legacy/browser rows only as fallback.
     all_submissions = list(feature.submissions)
-    canonical_submissions = [
-        item for item in all_submissions
-        if item.get('event_type') == 'edx.grades.problem.submitted'
-    ]
-    fallback_submission_count = sum(
-        1 for item in all_submissions
-        if item.get('event_type') != 'edx.grades.problem.submitted'
-    )
-    if canonical_submissions:
-        feature.submissions = canonical_submissions
+    feature.raw_submissions = all_submissions
+    canonical_submissions = [s for s in all_submissions if s['event_type'] == 'edx.grades.problem.submitted']
+    fallback_submission_count = len(all_submissions) - len(canonical_submissions)
+    feature.submissions = deduplicate_submissions(all_submissions)
+    latest = {}
+    for submission in feature.submissions:
+        latest[submission['problem_usage_key']] = submission
+    scores = [s for s in latest.values() if s.get('earned') is not None and s.get('possible') is not None]
+    feature.score_earned = sum(s['earned'] for s in scores) if scores else None
+    feature.score_possible = sum(s['possible'] for s in scores) if scores else None
 
     submitted_times = [s['submitted_at'] for s in feature.submissions if s.get('submitted_at')]
     if submitted_times:
@@ -233,7 +287,7 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
         feature.repeat_rate = round(repeated / max(1, len(feature.assigned_problem_usage_keys)), 4)
     deltas: list[float] = []
     ordered_submits = sorted(feature.submissions, key=lambda item: item.get('submitted_at') or datetime.min)
-    previous = feature.started_at
+    previous = None
     for item in ordered_submits:
         current = item.get('submitted_at')
         if previous and current and current >= previous:
@@ -242,20 +296,31 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
             previous = current
     if deltas:
         feature.median_time_per_question_seconds = round(float(median(deltas)), 2)
-        mean = sum(deltas) / len(deltas)
-        if mean > 0:
-            variance = sum((d - mean) ** 2 for d in deltas) / len(deltas)
-            cv = (variance ** 0.5) / mean
-        else:
-            cv = 0.0
-        feature.suspicious_quiz_speed = len(deltas) >= 3 and feature.median_time_per_question_seconds <= 5.0 and cv <= 0.35
-    if len(reset_times) >= 2:
-        reset_deltas = [(b - a).total_seconds() for a, b in zip(reset_times, reset_times[1:]) if b >= a]
-        if reset_deltas and median(reset_deltas) <= 120 and feature.submissions:
-            feature.fishing_pattern = True
-    if not feature.started_at and feature.submissions:
+    # Auto-submit at timeout creates bursts; these are context only.
+    feature.suspicious_quiz_speed = False
+    feature.fishing_pattern = False
+    rapid_burst = any(
+        len({s['problem_usage_key'] for s in ordered_submits
+             if 0 <= (s['submitted_at'] - origin['submitted_at']).total_seconds() <= 10}) >= 5
+        for origin in ordered_submits
+    )
+    if not feature.start_observed and feature.submissions:
         feature.low_confidence_reason = 'MISSING_QUIZ_SESSION_START'
+    duration = None
+    if feature.start_observed and feature.started_at and feature.last_submission_at:
+        duration = max(0.0, (feature.last_submission_at - feature.started_at).total_seconds())
     feature.evidence = {
+        'rule_version': 'tracking_rules_v1',
+        'start_observed': feature.start_observed,
+        'duration_seconds': duration,
+        'duration_source': 'START_REQUEST_TO_LAST_SUBMISSION' if duration is not None else 'UNKNOWN',
+        'median_submission_gap_seconds': feature.median_time_per_question_seconds,
+        'rapid_submission_burst': rapid_burst,
+        'answer_reveal_requests': feature.answer_reveal_requests,
+        'server_submission_times': [
+            {'problem_usage_key': s['problem_usage_key'], 'submitted_at': s['submitted_at'].isoformat()}
+            for s in feature.submissions
+        ],
         'assigned_problem_count': len(feature.assigned_problem_usage_keys),
         'distinct_assigned_problem_count': len(unique),
         'submission_count': len(feature.submissions),
@@ -266,7 +331,7 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
         'score_possible': feature.score_possible,
         'server_canonical_submission': bool(canonical_submissions),
         'fallback_submission_count': fallback_submission_count,
-        'showanswer_policy': 'neutral_unless_same_item_repeated_in_same_attempt',
+        'showanswer_policy': 'request_only_neutral',
         'reset_times': [d.isoformat() for d in reset_times[:20]],
     }
 
@@ -286,6 +351,7 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
         current: QuizAttemptFeature | None = None
         attempt_no = 0
         reset_times: list[datetime] = []
+        closed_by_reset: QuizAttemptFeature | None = None
 
         def ensure_attempt(ev: EventLike) -> QuizAttemptFeature:
             nonlocal current, attempt_no
@@ -305,6 +371,8 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
 
         for ev in ordered:
             et = ev.event_type
+            if et != QUIZ_SESSION_RESET:
+                closed_by_reset = None
             if et == QUIZ_SESSION_START:
                 if current and (current.submissions or current.assigned_problem_usage_keys or current.showanswer_count):
                     _finalize_attempt(current, reset_times)
@@ -321,6 +389,7 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
                     attempt_no=attempt_no,
                     started_at=ev.event_time,
                     unit_reset_nonce=extract_unit_reset_nonce(ev),
+                    start_observed=True,
                 )
                 continue
             if et == QUIZ_SESSION_STATUS:
@@ -334,42 +403,58 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
             if et == QUIZ_SESSION_RESET:
                 if ev.event_time:
                     reset_times.append(ev.event_time)
+                if current is None and closed_by_reset is not None:
+                    closed_by_reset.reset_count += 1
+                    closed_by_reset.evidence['reset_times'] = [d.isoformat() for d in reset_times]
+                    continue
+                if current is None:
+                    ensure_attempt(ev)
                 if current:
                     current.reset_count += 1
                     _finalize_attempt(current, reset_times)
                     features.append(current)
+                    closed_by_reset = current
                     current = None
                 continue
             feat = ensure_attempt(ev)
             if et in ITEMBANK_EVENTS:
-                key = extract_usage_key(ev, prefer_problem=True)
-                if key and key not in {'UNKNOWN_QUIZ_UNIT', unit_key}:
-                    feat.assigned_problem_usage_keys.append(key)
                 payload = ev.raw_event or {}
+                assigned = payload.get('result') or payload.get('added') or []
+                for child in assigned if isinstance(assigned, list) else []:
+                    key = child.get('usage_key') if isinstance(child, dict) else None
+                    if key:
+                        feat.assigned_problem_usage_keys.append(str(key))
+                if not assigned:
+                    key = payload.get('problem_usage_key') or payload.get('item_usage_key')
+                    if key:
+                        feat.assigned_problem_usage_keys.append(str(key))
                 for candidate in ('location', 'itembank_location', 'library_key', 'block_id'):
                     val = _safe_str(payload.get(candidate))
                     if val:
                         feat.itembank_locations.append(val)
                 continue
             if et in SUBMIT_EVENTS:
-                # Server events are canonical. Browser problem_check is fallback only.
-                if et == 'problem_check' and str(ev.event_source or '').lower() not in {'server', 'openedx_tracking_log'}:
-                    # Keep it only when no submitted event exists later; tag evidence.
-                    low_conf = 'BROWSER_PROBLEM_CHECK_FALLBACK'
-                else:
-                    low_conf = None
+                actual_source = source_of(ev)
+                low_conf = 'BROWSER_PROBLEM_CHECK_FALLBACK' if actual_source == 'browser' else None
                 problem_key = extract_usage_key(ev, prefer_problem=True) or unit_key
                 earned, possible = _submission_score(ev)
-                feat.submissions.append({'submitted_at': ev.event_time, 'problem_usage_key': problem_key, 'event_type': et, 'event_source': ev.event_source, 'low_confidence': low_conf})
-                if earned is not None:
-                    feat.score_earned = (feat.score_earned or 0) + earned
-                if possible is not None:
-                    feat.score_possible = (feat.score_possible or 0) + possible
+                feat.submissions.append({
+                    'submitted_at': ev.event_time, 'problem_usage_key': problem_key,
+                    'event_type': et, 'event_source': actual_source,
+                    'low_confidence': low_conf, 'earned': earned, 'possible': possible,
+                    'attempt_index': (ev.raw_event or {}).get('attempts'),
+                    'payload': ev.raw_event or {}, 'context': ev.raw_context or {},
+                    'event_id': ev.raw_event_id,
+                })
                 if low_conf and not feat.low_confidence_reason:
                     feat.low_confidence_reason = low_conf
                 continue
             if et in SHOWANSWER_EVENTS:
                 feat.showanswer_count += 1
+                feat.answer_reveal_requests.append({
+                    'problem_usage_key': extract_usage_key(ev, prefer_problem=True),
+                    'requested_at': ev.event_time.isoformat(),
+                })
                 continue
         if current:
             _finalize_attempt(current, reset_times)

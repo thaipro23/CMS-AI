@@ -1,0 +1,365 @@
+# Quiz tracking log: implementation and rollout
+
+Implemented in CMS-AI, based on branch feat/import-quiz-cms-old-su26 at fcdfe5a97fecac1877d83283ff665fbae23f6f35. No CMS-FPT tracking changes.
+
+## User-facing behavior
+
+Student detail now shows each quiz attempt, observed start request, last submission, elapsed seconds/minutes, submission count, and reset/showanswer request context. Missing start never becomes a zero-second duration. Fast submission alone is neutral, including platform auto-submit at timeout.
+
+Durable server answer rows survive raw staging cleanup. Version/variant and cohort guards suppress answer comparisons when data is insufficient. Pair warnings require 8 common questions, 80% matching answers, 3 rare wrong answers (<=10%, >=30 reference people excluding the pair) and 6 non-burst timing observations (median absolute lag <=300s, lag MAD <=5s). Analysis is class-scoped and results are not grades or AI-use determinations.
+
+Reset requests only escalate when the quiz policy is explicitly configured as restricted; unknown/practice policies and showanswer requests stay neutral. The log may record requests which failed; UI does not claim successful disclosure or reset.
+
+## Rollout
+
+Build backend/worker and frontend from this branch. Apply Alembic head 0072_quiz_tracking_integrity using the new backend image before enabling the new analytics worker. Existing API safely reports migration-required if the new tables do not exist. No new Open edX image is required.
+
+The Kubernetes readiness check, UAT/review build gates and data-health script now expect 0072. An old image expects 0071 and will become NotReady after migration. Coordinate the migration and backend/worker rollout in the same deployment window; do not migrate and leave the old image serving. Run the existing Jenkins/GitHub disposable PostgreSQL/Redis CI gate successfully first. That gate now includes all new quiz regression tests and a real PostgreSQL retention test. The frontend must also use this feature branch.
+
+For an already-updated backend pod in the existing openedx namespace:
+
+```bash
+kubectl -n openedx exec deployment/ai-server-backend -c backend -- alembic -c alembic.ini upgrade head
+```
+
+The working directory must contain backend/alembic.ini; adjust the invocation to the image's current working directory if necessary. Confirm image tag and command path before running. Migrate first using a one-off Job with the new image if backend rollout has not happened yet.
+
+Recalculate one Poly class and one PTCD class. Check at least 20 attempts including timeout auto-submit, missing start, repeat answers and reset requests. Existing raw data can be reprocessed; lost raw answers cannot be recreated. Unknown content versions will intentionally show insufficient comparison data.
+
+Config: ANALYTICS_QUIZ_INTEGRITY_ENABLED=true (default). Rollback by setting false on backend/analytics worker and rolling out those deployments; keep durable tables. ANALYTICS_QUIZ_RESET_POLICIES is a JSON map from exact quiz/unit usage key to restricted or practice; unspecified keys remain unknown. Example: {"block-v1:FPS+COM1091+FA26+type@vertical+block@quiz-1":"practice"}.
+
+Disable the feature using the new image for rollback. Reverting to the previous image with its exact 0071 readiness requirement while the database remains at 0072 will fail readiness. Do not downgrade production merely to restore an old image: the 0072 downgrade drops the new durable evidence tables.
+
+Production logs, PostgreSQL migration integration, Redis integration and teacher pilot have NOT been verified from this workspace.
+
+## Validation
+
+- 79 targeted analytics/quiz tests passed, including SQLite migration upgrade/downgrade/re-upgrade and model/schema consistency, production autoflush=False, late-start matching, durable answer preservation, duplicate deliveries, three companion event types, late answer-reveal requests after raw cleanup, mixed-response bursts, consecutive resets, variants, scope guards, worker batching and release readiness.
+- Active CI regression selection including quiz tests: 119 passed; release-contract selection: 6 passed, 1 deselected.
+- Frontend typecheck, lint and production build passed. Fatal Ruff checks passed.
+- Full repository suite: baseline 313 failures, 1010 passed, 2 skipped; final implementation 312 failures, 1044 passed, 3 skipped. New failures: []. The existing status/submission URL correlation failure is fixed. Full-suite failures are listed below, not represented as a green suite. The added PostgreSQL retention test skips without an explicitly configured disposable database.
+- Dedicated PostgreSQL and Redis integration tests cannot run without TEST_DATABASE_URL and REDIS_URL/disposable services.
+- Browser binary download failed (truncated Chromium archive); interactive visual QA remains a rollout check.
+
+## Final review
+
+One independent read-only code review found four important issues. Regression tests first reproduced all four, then passed after corrections: companion event grouping, late reveal reconciliation/cache invalidation, burst timing based on all server submission context, and preserving consecutive reset requests. An additional duplicate-delivery regression also passed. The reviewer did not validate production payloads, PostgreSQL concurrency, Redis/Celery, browser rendering or pilot performance.
+
+The follow-up production check reproduced and fixed duplicate answer inserts with production SessionLocal autoflush=False, long opaque input slots exceeding PostgreSQL column length, and legacy speed/reset flags surviving raw cleanup. Worker comparisons now run once after materializing all learners (verified with 60 learners), rather than loading and comparing the class after every learner; comparison failures preserve completed learner work and produce an explicit job warning. Migration schema is frozen independently of mutable ORM models, supports PostgreSQL offline SQL generation, and release readiness/build guards are synchronized to 0072.
+
+Initial remote push was blocked by automatic approval review because publication authorization was not established. The user subsequently authorized publishing directly to feat/import-quiz-cms-old-su26 in thaipro23/CMS-AI. Production rollout and live pilot remain pending.
+
+## Existing full-suite failures
+
+- `app/tests/integration/test_ci_runtime_smoke.py::test_postgres_migration_head_and_idempotency_contract`
+- `app/tests/integration/test_ci_runtime_smoke.py::test_redis_supports_single_use_and_ttl_contract`
+- `app/tests/test_academic_teacher_report_branch_isolation.py::test_null_teacher_branch_inherits_class_branch[poly]`
+- `app/tests/test_academic_teacher_report_branch_isolation.py::test_null_teacher_branch_inherits_class_branch[ptcd]`
+- `app/tests/test_bank_redesign_batch_one.py::test_app_shell_has_exact_bank_navigation_and_shared_tablet_drawer_breakpoint`
+- `app/tests/test_bank_redesign_batch_one.py::test_departments_page_uses_shared_enterprise_patterns_and_explicit_states`
+- `app/tests/test_batch16_cross_layer_workflow_integrity.py::test_all_real_connector_mutations_canonicalize_course_id`
+- `app/tests/test_batch16_cross_layer_workflow_integrity.py::test_quiz_creation_compensates_partial_openedx_creation`
+- `app/tests/test_batch16_cross_layer_workflow_integrity.py::test_release_snapshot_is_frozen_and_rejects_invalid_membership`
+- `app/tests/test_legacy_quiz_cms_old_import.py::test_legacy_quiz_rebalances_missing_hard_without_question_type_quota[final_test]`
+- `app/tests/test_legacy_quiz_cms_old_import.py::test_legacy_quiz_rebalances_missing_hard_without_question_type_quota[quiz]`
+- `app/tests/test_legacy_quiz_cms_old_import.py::test_quiz_planner_pools_unclassified_imports_and_accepts_all_manual_questions`
+- `app/tests/test_quiz_difficulty_pools.py::test_final_pool_balances_eight_equal_lessons_without_exceeding_total`
+- `app/tests/test_quiz_difficulty_pools.py::test_final_pool_splits_large_lesson_into_bounded_problem_banks`
+- `app/tests/test_quiz_difficulty_pools.py::test_manual_quiz_samples_ten_easy_and_five_medium_from_whole_pools[import]`
+- `app/tests/test_quiz_difficulty_pools.py::test_manual_quiz_samples_ten_easy_and_five_medium_from_whole_pools[manual]`
+- `app/tests/test_quiz_difficulty_pools.py::test_native_ai_still_requires_requested_difficulty_when_not_taking_all`
+- `app/tests/test_quiz_difficulty_pools.py::test_request_more_than_available_is_rejected[final_test]`
+- `app/tests/test_quiz_difficulty_pools.py::test_request_more_than_available_is_rejected[quiz]`
+- `app/tests/test_quiz_difficulty_pools.py::test_take_all_ten_questions_uses_actual_difficulties[ai-final_test]`
+- `app/tests/test_quiz_difficulty_pools.py::test_take_all_ten_questions_uses_actual_difficulties[ai-quiz]`
+- `app/tests/test_quiz_difficulty_pools.py::test_take_all_ten_questions_uses_actual_difficulties[manual-final_test]`
+- `app/tests/test_quiz_difficulty_pools.py::test_take_all_ten_questions_uses_actual_difficulties[manual-quiz]`
+- `app/tests/test_quiz_recovery.py::test_partial_creation_can_recover_then_create_exactly_one_assessment[banks-final_test]`
+- `app/tests/test_quiz_recovery.py::test_partial_creation_can_recover_then_create_exactly_one_assessment[banks-quiz]`
+- `app/tests/test_quiz_recovery.py::test_partial_creation_can_recover_then_create_exactly_one_assessment[policy-final_test]`
+- `app/tests/test_quiz_recovery.py::test_partial_creation_can_recover_then_create_exactly_one_assessment[policy-quiz]`
+- `app/tests/test_quiz_recovery.py::test_partial_creation_can_recover_then_create_exactly_one_assessment[timer-final_test]`
+- `app/tests/test_quiz_recovery.py::test_partial_creation_can_recover_then_create_exactly_one_assessment[timer-quiz]`
+- `app/tests/test_rbac_admin_campus_owner_contract.py::test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses[BRANCH-poly]`
+- `app/tests/test_rbac_admin_campus_owner_contract.py::test_all_campus_owner_manages_catalog_and_only_delegates_individual_campuses[SYSTEM-*]`
+- `app/tests/test_v25_9_15_2_bank_material_generate_contract.py::test_slugify_keeps_release_safe_ids`
+- `app/tests/test_v25_9_16_4_4_academic_hardening.py::test_component_snapshot_counts_as_learning_payload`
+- `app/tests/test_v25_9_16_4_4_academic_hardening.py::test_enrollment_only_snapshot_is_not_learning_payload`
+- `app/tests/test_v25_9_16_4_4_academic_hardening.py::test_runtime_settings_blocks_security_knobs_in_production`
+- `app/tests/test_v25_9_16_4_7_ap_tls_mode.py::test_api_v2_always_disables_tls_verification`
+- `app/tests/test_v25_9_16_5_69_ap_subject_term_scope.py::test_get_subjects_omits_only_blank_term_name`
+- `app/tests/test_v25_9_16_5_69_ap_subject_term_scope.py::test_get_subjects_uses_get_course_poly_term_and_ignores_campus`
+- `app/tests/test_v25_9_16_5_70_ap_campus_product_premises.py::test_runtime_has_no_ap_campus_import_service`
+- `app/tests/test_v25_9_16_5_72_ap_cms_auth_optional.py::test_get_course_catalog_requires_api_key_before_http_call`
+- `app/tests/test_v25_9_16_5_72_ap_cms_auth_optional.py::test_get_course_catalog_sends_bearer_api_key`
+- `app/tests/test_v25_9_16_5_72_ap_cms_auth_optional.py::test_get_data_cms_still_requires_api_key`
+- `app/tests/test_v25_9_16_5_73_course_home_route_progress.py::test_connector_uses_resolved_course_home_progress_route_before_view_guessing`
+- `app/tests/test_v25_9_16_5_85_learning_sync_hardening.py::test_learning_sync_flow_is_read_only_and_does_not_auto_enroll`
+- `app/tests/test_v25_9_16_5_85_learning_sync_hardening.py::test_non_official_progress_is_kept_na_to_avoid_false_completion`
+- `app/tests/test_v25_9_16_5_85_learning_sync_hardening.py::test_student_module_fallback_counts_are_accepted_for_completion`
+- `app/tests/test_v25_9_16_5_98_connector_contract_and_cache.py::test_backend_contract_guard_is_present_in_learning_sync_hot_path`
+- `app/tests/test_v25_9_16_5_98_connector_contract_and_cache.py::test_connector_contract_version_and_completion_rule_are_locked_in_plugin`
+- `app/tests/test_v25_9_16_6_6_analytics_dashboard_export.py::test_appshell_links_learning_analytics_dashboard`
+- `app/tests/test_v25_9_16_6_6_analytics_dashboard_export.py::test_csv_export_uses_safe_vietnamese_display_labels_not_raw_cheating_label`
+- `app/tests/test_v25_9_16_6_6_analytics_dashboard_export.py::test_frontend_learning_dashboard_route_is_packaged_and_safe_labels_rendered`
+- `app/tests/test_v25_9_16_6_6_analytics_dashboard_export.py::test_learning_dashboard_service_uses_snapshots_not_raw_events_for_dashboard`
+- `app/tests/test_v25_9_16_6_7_analytics_production_ops.py::test_analytics_async_tasks_and_scheduler_are_registered`
+- `app/tests/test_v25_9_16_6_7_analytics_production_ops.py::test_analytics_dashboard_service_accepts_scope_filter_and_ops_status`
+- `app/tests/test_v25_9_16_6_8_analytics_data_quality_backfill.py::test_health_and_frontend_surface_data_quality_guard`
+- `app/tests/test_v25_9_16_6_9_analytics_production_hardening.py::test_routes_limit_enqueue_and_export_for_production`
+- `app/tests/test_v25_9_16_6_9_analytics_production_hardening.py::test_service_has_production_readiness_and_enqueue_guards`
+- `app/tests/test_v25_9_16_7_0_analytics_pilot_acceptance.py::test_frontend_surfaces_pilot_acceptance_without_duplicate_select_options`
+- `app/tests/test_v25_9_16_7_0_analytics_pilot_acceptance.py::test_pilot_acceptance_is_snapshot_only_and_uses_existing_schema`
+- `app/tests/test_v25_9_16_7_0_analytics_pilot_acceptance.py::test_pilot_acceptance_route_service_and_script_exist`
+- `app/tests/test_v25_9_16_7_0_analytics_pilot_acceptance.py::test_smoke_test_and_docs_include_pilot_gate`
+- `app/tests/test_v25_9_16_7_1_analytics_rollout_monitoring.py::test_frontend_and_smoke_surface_rollout_monitoring`
+- `app/tests/test_v25_9_16_7_1_analytics_rollout_monitoring.py::test_monitoring_is_snapshot_only_and_detects_stuck_jobs`
+- `app/tests/test_v25_9_16_7_2_10_ap_subject_cms_replaces_get_course.py::test_get_course_supports_nested_course_aliases_and_file_cache`
+- `app/tests/test_v25_9_16_7_2_11_ap_subject_endpoint_env_template.py::test_deployment_examples_use_only_api_v2_get_course`
+- `app/tests/test_v25_9_16_7_2_11_ap_subject_endpoint_env_template.py::test_get_course_cache_key_changes_when_endpoint_changes`
+- `app/tests/test_v25_9_16_7_2_14_management_total_kpis.py::test_student_management_uses_total_kpis_not_current_page_wording`
+- `app/tests/test_v25_9_16_7_2_14_management_total_kpis.py::test_subject_management_api_exposes_filter_summary`
+- `app/tests/test_v25_9_16_7_2_14_management_total_kpis.py::test_teacher_management_titles_are_scope_explicit`
+- `app/tests/test_v25_9_16_7_2_15_management_labels_no_cache_ui.py::test_student_management_total_kpi_labels_are_plain`
+- `app/tests/test_v25_9_16_7_2_15_management_labels_no_cache_ui.py::test_teacher_management_no_manual_report_refresh_or_cache_notice`
+- `app/tests/test_v25_9_16_7_2_16_learning_behavior_result_flow.py::test_learning_page_is_result_first_hierarchy_flow`
+- `app/tests/test_v25_9_16_7_2_16_learning_behavior_result_flow.py::test_learning_page_removes_ops_noise_from_primary_view`
+- `app/tests/test_v25_9_16_7_2_17_learning_behavior_class_flow.py::test_backend_exposes_subject_class_behavior_overview`
+- `app/tests/test_v25_9_16_7_2_17_learning_behavior_class_flow.py::test_frontend_flow_has_class_overview_before_student_detail`
+- `app/tests/test_v25_9_16_7_2_18_teacher_learning_behavior_guardrails.py::test_academic_api_client_clamps_page_size_to_backend_limit`
+- `app/tests/test_v25_9_16_7_2_18_teacher_learning_behavior_guardrails.py::test_class_overview_carries_effective_course_mapping_for_student_detail`
+- `app/tests/test_v25_9_16_7_2_18_teacher_learning_behavior_guardrails.py::test_learning_page_does_not_send_invalid_academic_page_size_500`
+- `app/tests/test_v25_9_16_7_2_18_teacher_learning_behavior_guardrails.py::test_teacher_management_view_is_result_first_and_compact`
+- `app/tests/test_v25_9_16_7_2_19_learning_behavior_production_ready.py::test_subject_class_overview_accepts_optional_class_id_for_direct_drilldown`
+- `app/tests/test_v25_9_16_7_2_19_learning_behavior_production_ready.py::test_teacher_class_page_links_to_learning_behavior_result_flow`
+- `app/tests/test_v25_9_16_7_2_20_student_management_behavior_bulk_sync.py::test_backend_bulk_auto_map_sync_is_best_effort_and_queues_full_cms_jobs`
+- `app/tests/test_v25_9_16_7_2_20_student_management_behavior_bulk_sync.py::test_student_class_detail_has_direct_learning_behavior_button`
+- `app/tests/test_v25_9_16_7_2_20_student_management_behavior_bulk_sync.py::test_student_management_has_auto_map_all_button_and_api_call`
+- `app/tests/test_v25_9_16_7_2_22_scope_navigation_and_real_totals.py::test_backend_class_and_teacher_kpis_are_full_filter_not_current_page`
+- `app/tests/test_v25_9_16_7_2_22_scope_navigation_and_real_totals.py::test_subject_class_links_carry_list_scope_and_show_behavior_action`
+- `app/tests/test_v25_9_16_7_2_22_scope_navigation_and_real_totals.py::test_teacher_management_does_not_autoselect_first_campus_and_reads_url`
+- `app/tests/test_v25_9_16_7_2_23_sticky_student_columns.py::test_class_detail_student_table_locks_stt_and_student_columns_together`
+- `app/tests/test_v25_9_16_7_2_23_sticky_student_columns.py::test_learning_behavior_result_table_uses_same_two_column_sticky_pattern`
+- `app/tests/test_v25_9_16_7_2_25_analytics_three_step_rbac_flow.py::test_analytics_learning_page_is_three_step_flow_and_not_one_page_combo`
+- `app/tests/test_v25_9_16_7_2_26_production_audit_hardening.py::test_user_facing_vietnamese_replaces_auto_map_and_enrollment_in_management_pages`
+- `app/tests/test_v25_9_16_7_2_26_production_audit_hardening.py::test_version_is_synchronized_across_backend_frontend_and_footer`
+- `app/tests/test_v25_9_16_7_2_28_bank_quiz_status_selector.py::test_bank_quiz_table_uses_status_column_for_creation_choice`
+- `app/tests/test_v25_9_16_7_2_30_responsive_device_ux.py::test_version_is_synchronized_for_current_release`
+- `app/tests/test_v25_9_16_7_2_31_teacher_fast_lite_bank_quiz_polish.py::test_bank_quiz_status_cell_has_spacing_container`
+- `app/tests/test_v25_9_16_7_2_31_teacher_fast_lite_bank_quiz_polish.py::test_bank_quiz_uses_explicit_notice_tone_not_keyword_heuristic`
+- `app/tests/test_v25_9_16_7_2_32_backend_driven_notice_status.py::test_quiz_backend_responses_expose_ui_status_fields`
+- `app/tests/test_v25_9_16_7_2_33_class_actions_behavior_roster_fallback.py::test_learning_behavior_rows_use_class_roster_fallback_when_snapshots_missing`
+- `app/tests/test_v25_9_16_7_2_33_class_actions_behavior_roster_fallback.py::test_learning_behavior_summary_counts_missing_snapshot_roster_as_insufficient_data`
+- `app/tests/test_v25_9_16_7_2_34_version_sync_analytics_roster_qa.py::test_analytics_behavior_summary_and_frontend_show_snapshot_coverage`
+- `app/tests/test_v25_9_16_7_2_34_version_sync_analytics_roster_qa.py::test_analytics_class_overview_exposes_roster_snapshot_qa_fields`
+- `app/tests/test_v25_9_16_7_2_34_version_sync_analytics_roster_qa.py::test_changelog_order_and_known_heading_cleanup`
+- `app/tests/test_v25_9_16_7_2_34_version_sync_analytics_roster_qa.py::test_v35_runtime_version_still_keeps_v34_roster_qa_baseline`
+- `app/tests/test_v25_9_16_7_2_35_post_ingest_recalculate_orchestrator.py::test_changelog_documents_v35_before_v34_and_no_new_migration`
+- `app/tests/test_v25_9_16_7_2_35_post_ingest_recalculate_orchestrator.py::test_orchestrator_is_class_scoped_debounced_and_capped_not_per_student`
+- `app/tests/test_v25_9_16_7_2_35_post_ingest_recalculate_orchestrator.py::test_post_ingest_recalculate_settings_and_env_are_exposed`
+- `app/tests/test_v25_9_16_7_2_35_post_ingest_recalculate_orchestrator.py::test_v35_version_is_synchronized_across_runtime_fallbacks_and_examples`
+- `app/tests/test_v25_9_16_7_2_36_responsive_sidebar_shell_fix.py::test_v36_changelog_order_and_no_migration`
+- `app/tests/test_v25_9_16_7_2_36_responsive_sidebar_shell_fix.py::test_v36_version_and_current_docs_are_synchronized`
+- `app/tests/test_v25_9_16_7_2_37_analytics_class_result_doctor.py::test_v37_backend_class_result_doctor_contract_and_safe_recalculate_route`
+- `app/tests/test_v25_9_16_7_2_37_analytics_class_result_doctor.py::test_v37_behavior_summary_rows_return_diagnostics_and_roster_identity`
+- `app/tests/test_v25_9_16_7_2_37_analytics_class_result_doctor.py::test_v37_changelog_order_and_no_migration`
+- `app/tests/test_v25_9_16_7_2_37_analytics_class_result_doctor.py::test_v37_frontend_has_data_status_panel_and_manual_safe_actions`
+- `app/tests/test_v25_9_16_7_2_37_analytics_class_result_doctor.py::test_v37_version_and_docs_are_current`
+- `app/tests/test_v25_9_16_7_2_3_production_test_sweep.py::test_docker_compose_has_celery_beat_and_tracking_mount`
+- `app/tests/test_v25_9_16_7_2_3_production_test_sweep.py::test_frontend_operational_tables_have_stt_and_no_duplicate_analytics_section`
+- `app/tests/test_v25_9_16_7_2_3_production_test_sweep.py::test_scheduler_default_enabled_for_full_test_rollout`
+- `app/tests/test_v25_9_16_7_2_40_bank_compact_table_ux_sidebar_taxonomy.py::test_v38_bank_hierarchy_pages_use_compact_tables_not_large_card_lists`
+- `app/tests/test_v25_9_16_7_2_40_bank_compact_table_ux_sidebar_taxonomy.py::test_v38_changelog_order_and_no_migration`
+- `app/tests/test_v25_9_16_7_2_40_bank_compact_table_ux_sidebar_taxonomy.py::test_v38_chapter_workspace_embeds_stats_in_lesson_header_and_removes_large_release_block`
+- `app/tests/test_v25_9_16_7_2_40_bank_compact_table_ux_sidebar_taxonomy.py::test_v38_sidebar_group_taxonomy_matches_bank_training_admin_model`
+- `app/tests/test_v25_9_16_7_2_40_bank_compact_table_ux_sidebar_taxonomy.py::test_v38_version_and_docs_are_current`
+- `app/tests/test_v25_9_16_7_2_40_rollnumber_cms_username_only.py::test_v40_academic_service_uses_rollnumber_student_code_as_cms_username`
+- `app/tests/test_v25_9_16_7_2_40_rollnumber_cms_username_only.py::test_v40_changelog_documents_scope_correction_and_no_migration`
+- `app/tests/test_v25_9_16_7_2_40_rollnumber_cms_username_only.py::test_v40_openedx_connector_preserves_ap_username_but_matches_canonical_username`
+- `app/tests/test_v25_9_16_7_2_40_rollnumber_cms_username_only.py::test_v40_student_payload_reused_for_resolve_enrollment_and_learning_sync`
+- `app/tests/test_v25_9_16_7_2_40_rollnumber_cms_username_only.py::test_v40_version_docs_and_no_external_auth_bridge_scope_creep`
+- `app/tests/test_v25_9_16_7_2_41_bank_entity_actions_visible_fix.py::test_v41_bank_compact_tables_use_inline_actions_not_hidden_absolute_menu`
+- `app/tests/test_v25_9_16_7_2_41_bank_entity_actions_visible_fix.py::test_v41_entity_actions_support_inline_table_variant_and_locked_placeholder`
+- `app/tests/test_v25_9_16_7_2_41_bank_entity_actions_visible_fix.py::test_v41_no_migration_added`
+- `app/tests/test_v25_9_16_7_2_41_bank_entity_actions_visible_fix.py::test_v41_version_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_42_bank_table_production_ux.py::test_v42_bank_hierarchy_pages_use_production_toolbar_and_filtered_tables`
+- `app/tests/test_v25_9_16_7_2_42_bank_table_production_ux.py::test_v42_no_migration_added`
+- `app/tests/test_v25_9_16_7_2_42_bank_table_production_ux.py::test_v42_version_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_43_production_readiness_gate_repair.py::test_v43_frontend_replaces_opaque_readiness_banner`
+- `app/tests/test_v25_9_16_7_2_43_production_readiness_gate_repair.py::test_v43_health_readiness_endpoint_exists_and_is_safe`
+- `app/tests/test_v25_9_16_7_2_43_production_readiness_gate_repair.py::test_v43_no_migration_added`
+- `app/tests/test_v25_9_16_7_2_43_production_readiness_gate_repair.py::test_v43_version_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_44_rollnumber_identity_reconciliation_qa.py::test_v44_backend_identity_reconciliation_is_read_only_and_rollnumber_aware`
+- `app/tests/test_v25_9_16_7_2_44_rollnumber_identity_reconciliation_qa.py::test_v44_class_detail_ui_surfaces_identity_panel_and_api_client`
+- `app/tests/test_v25_9_16_7_2_44_rollnumber_identity_reconciliation_qa.py::test_v44_version_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_45_uat_rollnumber_identity_cleanup.py::test_v45_backend_cleanup_endpoint_is_guarded_and_destructive_only_when_confirmed`
+- `app/tests/test_v25_9_16_7_2_45_uat_rollnumber_identity_cleanup.py::test_v45_frontend_exposes_dry_run_and_confirmed_uat_cleanup`
+- `app/tests/test_v25_9_16_7_2_45_uat_rollnumber_identity_cleanup.py::test_v45_version_and_docs_are_current`
+- `app/tests/test_v25_9_16_7_2_46_analytics_sla_dashboard.py::test_backend_has_read_only_sla_endpoint_and_report`
+- `app/tests/test_v25_9_16_7_2_46_analytics_sla_dashboard.py::test_frontend_surfaces_sla_panel_on_analytics_learning`
+- `app/tests/test_v25_9_16_7_2_46_analytics_sla_dashboard.py::test_sla_env_controls_exist_without_new_migration`
+- `app/tests/test_v25_9_16_7_2_46_analytics_sla_dashboard.py::test_version_and_run_docs_are_synced_to_46`
+- `app/tests/test_v25_9_16_7_2_47_bank_quiz_final_test_production_qa.py::test_v47_frontend_bank_quiz_has_gate_and_explicit_columns`
+- `app/tests/test_v25_9_16_7_2_47_bank_quiz_final_test_production_qa.py::test_v47_no_migration_added`
+- `app/tests/test_v25_9_16_7_2_47_bank_quiz_final_test_production_qa.py::test_v47_version_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_48_campus_rbac_audit_hardening.py::test_v48_no_migration_added`
+- `app/tests/test_v25_9_16_7_2_48_campus_rbac_audit_hardening.py::test_v48_version_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_49_analytics_pilot_acceptance_ui.py::test_v49_frontend_surfaces_pilot_acceptance_panel`
+- `app/tests/test_v25_9_16_7_2_49_analytics_pilot_acceptance_ui.py::test_v49_no_migration_added`
+- `app/tests/test_v25_9_16_7_2_49_analytics_pilot_acceptance_ui.py::test_v49_version_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_50_uat_evidence_pack.py::test_v50_backend_exposes_read_only_evidence_pack`
+- `app/tests/test_v25_9_16_7_2_50_uat_evidence_pack.py::test_v50_frontend_surfaces_evidence_pack_panel`
+- `app/tests/test_v25_9_16_7_2_50_uat_evidence_pack.py::test_v50_version_and_runbook_are_current`
+- `app/tests/test_v25_9_16_7_2_52_claude_review_findings_build_gate.py::test_v52_claude_review_pack_includes_build_gate_evidence`
+- `app/tests/test_v25_9_16_7_2_52_claude_review_findings_build_gate.py::test_v52_does_not_add_new_migration`
+- `app/tests/test_v25_9_16_7_2_52_claude_review_findings_build_gate.py::test_v52_handoff_docs_are_explicit_for_reviewers`
+- `app/tests/test_v25_9_16_7_2_52_claude_review_findings_build_gate.py::test_v52_uat_build_gate_script_is_guarded_and_actionable`
+- `app/tests/test_v25_9_16_7_2_52_claude_review_findings_build_gate.py::test_v52_version_sync_for_claude_review_build_gate`
+- `app/tests/test_v25_9_16_7_2_53_uat_runtime_frontend_build.py::test_v53_build_gate_delegates_frontend_build_verifier`
+- `app/tests/test_v25_9_16_7_2_53_uat_runtime_frontend_build.py::test_v53_claude_review_pack_includes_runtime_build_evidence`
+- `app/tests/test_v25_9_16_7_2_53_uat_runtime_frontend_build.py::test_v53_docs_and_changelog_are_current`
+- `app/tests/test_v25_9_16_7_2_53_uat_runtime_frontend_build.py::test_v53_frontend_build_metadata_is_not_stale`
+- `app/tests/test_v25_9_16_7_2_53_uat_runtime_frontend_build.py::test_v53_frontend_build_verify_script_is_real_gate`
+- `app/tests/test_v25_9_16_7_2_53_uat_runtime_frontend_build.py::test_v53_runtime_verify_is_read_only_and_covers_uat_endpoints`
+- `app/tests/test_v25_9_16_7_2_54_rollnumber_identity_migration_assistant.py::test_v54_rollnumber_migration_api_is_read_only_and_scoped`
+- `app/tests/test_v25_9_16_7_2_54_rollnumber_identity_migration_assistant.py::test_v54_statuses_and_blockers_are_explicit`
+- `app/tests/test_v25_9_16_7_2_54_rollnumber_identity_migration_assistant.py::test_v54_version_sync_and_release_docs`
+- `app/tests/test_v25_9_16_7_2_55_analytics_course_class_mapping_reliability.py::test_v55_frontend_surfaces_mapping_reliability_panel`
+- `app/tests/test_v25_9_16_7_2_55_analytics_course_class_mapping_reliability.py::test_v55_mapping_reliability_endpoint_is_read_only`
+- `app/tests/test_v25_9_16_7_2_55_analytics_course_class_mapping_reliability.py::test_v55_mapping_statuses_and_orphan_courses_are_explicit`
+- `app/tests/test_v25_9_16_7_2_55_analytics_course_class_mapping_reliability.py::test_v55_version_sync_and_docs`
+- `app/tests/test_v25_9_16_7_2_56_bank_release_publish_reliability.py::test_chapter_workspace_surfaces_release_audit_panel`
+- `app/tests/test_v25_9_16_7_2_56_bank_release_publish_reliability.py::test_version_synced_to_56`
+- `app/tests/test_v25_9_16_7_2_57_performance_load_hardening.py::test_v57_analytics_ui_surfaces_performance_panel`
+- `app/tests/test_v25_9_16_7_2_57_performance_load_hardening.py::test_v57_version_sync_and_no_new_migration`
+- `app/tests/test_v25_9_16_7_2_58_security_production_hardening.py::test_v58_frontend_surfaces_security_gate`
+- `app/tests/test_v25_9_16_7_2_58_security_production_hardening.py::test_v58_version_sync_and_no_new_migration`
+- `app/tests/test_v25_9_16_7_2_59_pilot_release_candidate.py::test_v59_frontend_panel_and_api_client`
+- `app/tests/test_v25_9_16_7_2_59_pilot_release_candidate.py::test_v59_no_schema_migration_added`
+- `app/tests/test_v25_9_16_7_2_59_pilot_release_candidate.py::test_v59_scripts_and_review_pack_gate`
+- `app/tests/test_v25_9_16_7_2_59_pilot_release_candidate.py::test_v59_version_sync_and_docs`
+- `app/tests/test_v25_9_16_7_2_5_ops_sidebar_underline_fix.py::test_analytics_course_mapping_fallback_import_is_present`
+- `app/tests/test_v25_9_16_7_2_60_pilot_operations_runbook.py::test_v60_frontend_panel_and_api_contract`
+- `app/tests/test_v25_9_16_7_2_60_pilot_operations_runbook.py::test_v60_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_60_pilot_operations_runbook.py::test_v60_version_sync_and_docs`
+- `app/tests/test_v25_9_16_7_2_61_auth_rbac_security_boundary.py::test_v61_only_openedx_superuser_becomes_ai_admin`
+- `app/tests/test_v25_9_16_7_2_61_auth_rbac_security_boundary.py::test_v61_student_ops_and_quiz_bank_roles_are_split`
+- `app/tests/test_v25_9_16_7_2_61_auth_rbac_security_boundary.py::test_v61_version_and_docs_synced`
+- `app/tests/test_v25_9_16_7_2_62_query_hotspot_load_hardening.py::test_v62_no_new_migration`
+- `app/tests/test_v25_9_16_7_2_62_query_hotspot_load_hardening.py::test_v62_version_and_docs_sync`
+- `app/tests/test_v25_9_16_7_2_63_1_ops_readiness_split.py::test_ops_readiness_page_uses_split_facade_and_shared_panel`
+- `app/tests/test_v25_9_16_7_2_63_1_ops_readiness_split.py::test_v63_1_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_63_1_ops_readiness_split.py::test_v63_1_version_and_release_docs`
+- `app/tests/test_v25_9_16_7_2_63_maintainability_ui_contract_refactor.py::test_v63_frontend_split_contract_modules_exist`
+- `app/tests/test_v25_9_16_7_2_63_maintainability_ui_contract_refactor.py::test_v63_no_new_migration`
+- `app/tests/test_v25_9_16_7_2_63_maintainability_ui_contract_refactor.py::test_v63_scripts_review_runtime_include_maintainability_gate`
+- `app/tests/test_v25_9_16_7_2_63_maintainability_ui_contract_refactor.py::test_v63_version_sync_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_10_academic_ap_sync_external_assignment_workflow.py::test_assignment_score_entry_is_removed_from_frontend`
+- `app/tests/test_v25_9_16_7_2_64_10_academic_ap_sync_external_assignment_workflow.py::test_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_10_academic_ap_sync_external_assignment_workflow.py::test_v64_10_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_11_security_attack_simulation.py::test_v64_11_attack_simulation_endpoint_contract_and_ui`
+- `app/tests/test_v25_9_16_7_2_64_11_security_attack_simulation.py::test_v64_11_version_sync_and_no_migration`
+- `app/tests/test_v25_9_16_7_2_64_12_enterprise_navigation_datatable_ux.py::test_v64_12_bank_hierarchy_is_five_levels_and_output_workflows_are_separate`
+- `app/tests/test_v25_9_16_7_2_64_12_enterprise_navigation_datatable_ux.py::test_v64_12_version_sync_and_no_migration`
+- `app/tests/test_v25_9_16_7_2_64_13_bank_workflow_ux_completion.py::test_v64_13_question_table_server_paging_selection_and_preview`
+- `app/tests/test_v25_9_16_7_2_64_13_bank_workflow_ux_completion.py::test_v64_13_version_docs_and_no_migration`
+- `app/tests/test_v25_9_16_7_2_64_14_training_ops_ux_uat_gate.py::test_v64_14_status_and_progress_are_not_color_only`
+- `app/tests/test_v25_9_16_7_2_64_14_training_ops_ux_uat_gate.py::test_v64_14_training_and_ops_indexes_use_shared_enterprise_contract`
+- `app/tests/test_v25_9_16_7_2_64_14_training_ops_ux_uat_gate.py::test_v64_14_ux_acceptance_gate_is_read_only_and_visible`
+- `app/tests/test_v25_9_16_7_2_64_14_training_ops_ux_uat_gate.py::test_v64_14_version_package_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_15_scoped_rbac_analytics_table_contract.py::test_v64_15_bank_and_rbac_actions_are_scope_aware`
+- `app/tests/test_v25_9_16_7_2_64_15_scoped_rbac_analytics_table_contract.py::test_v64_15_enterprise_table_has_one_geometry_contract`
+- `app/tests/test_v25_9_16_7_2_64_15_scoped_rbac_analytics_table_contract.py::test_v64_15_uses_existing_academic_class_scope_index_without_duplicate_migration`
+- `app/tests/test_v25_9_16_7_2_64_15_scoped_rbac_analytics_table_contract.py::test_v64_15_version_package_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_1_enterprise_visual_foundation_review_ux.py::test_v64_16_1_catalog_tables_use_shared_enterprise_component_and_safe_actions`
+- `app/tests/test_v25_9_16_7_2_64_16_1_enterprise_visual_foundation_review_ux.py::test_v64_16_1_hot_tables_define_narrow_numeric_and_optional_columns`
+- `app/tests/test_v25_9_16_7_2_64_16_1_enterprise_visual_foundation_review_ux.py::test_v64_16_1_permissions_page_is_user_first_not_role_card_wall`
+- `app/tests/test_v25_9_16_7_2_64_16_1_enterprise_visual_foundation_review_ux.py::test_v64_16_1_question_review_is_preview_first_and_keyboard_operable`
+- `app/tests/test_v25_9_16_7_2_64_16_1_enterprise_visual_foundation_review_ux.py::test_v64_16_1_question_table_prioritizes_question_and_reduces_row_actions`
+- `app/tests/test_v25_9_16_7_2_64_16_1_enterprise_visual_foundation_review_ux.py::test_v64_16_1_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_2_bank_review_quiz_workbench.py::test_v64_16_2_question_rows_are_preview_first_without_inline_approve_button`
+- `app/tests/test_v25_9_16_7_2_64_16_2_bank_review_quiz_workbench.py::test_v64_16_2_quiz_page_is_three_step_full_width_workbench`
+- `app/tests/test_v25_9_16_7_2_64_16_2_bank_review_quiz_workbench.py::test_v64_16_2_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_3_training_analytics_ux.py::test_v64_16_3_class_detail_is_read_only_for_assignment_and_mapping_aware`
+- `app/tests/test_v25_9_16_7_2_64_16_3_training_analytics_ux.py::test_v64_16_3_student_subject_classes_use_url_state_and_enterprise_table`
+- `app/tests/test_v25_9_16_7_2_64_16_3_training_analytics_ux.py::test_v64_16_3_teacher_classes_remove_wide_grade_matrix`
+- `app/tests/test_v25_9_16_7_2_64_16_3_training_analytics_ux.py::test_v64_16_3_training_main_pages_share_compact_kpis`
+- `app/tests/test_v25_9_16_7_2_64_16_3_training_analytics_ux.py::test_v64_16_3_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_4_operations_catalog_settings_rbac_ux.py::test_v64_16_4_catalog_pages_use_enterprise_tables_and_compact_actions`
+- `app/tests/test_v25_9_16_7_2_64_16_4_operations_catalog_settings_rbac_ux.py::test_v64_16_4_rbac_is_user_first_scope_first`
+- `app/tests/test_v25_9_16_7_2_64_16_4_operations_catalog_settings_rbac_ux.py::test_v64_16_4_settings_are_grouped_by_domain_tabs`
+- `app/tests/test_v25_9_16_7_2_64_16_4_operations_catalog_settings_rbac_ux.py::test_v64_16_4_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_5_1_production_browser_hotfix.py::test_bank_breadcrumbs_do_not_repeat_current_page_label`
+- `app/tests/test_v25_9_16_7_2_64_16_5_1_production_browser_hotfix.py::test_sidebar_has_no_helper_text_or_session_footer`
+- `app/tests/test_v25_9_16_7_2_64_16_5_1_production_browser_hotfix.py::test_table_keeps_full_content_and_uses_natural_widths`
+- `app/tests/test_v25_9_16_7_2_64_16_5_1_production_browser_hotfix.py::test_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_5_2_global_visual_polish.py::test_no_bootstrap_jquery_or_business_contract_change`
+- `app/tests/test_v25_9_16_7_2_64_16_5_2_global_visual_polish.py::test_page_headers_kpis_sections_and_notices_use_svg_icons`
+- `app/tests/test_v25_9_16_7_2_64_16_5_2_global_visual_polish.py::test_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_5_3_frontend_layout_integrity.py::test_page_title_is_in_topbar_and_page_layout_classes_are_on_main`
+- `app/tests/test_v25_9_16_7_2_64_16_5_3_frontend_layout_integrity.py::test_row_actions_are_visible_and_not_hidden_in_ellipsis_menu`
+- `app/tests/test_v25_9_16_7_2_64_16_5_3_frontend_layout_integrity.py::test_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_5_4_release_contract.py::test_version_contract`
+- `app/tests/test_v25_9_16_7_2_64_16_5_5_release_contract.py::test_release_keeps_intentional_0053_alembic_head`
+- `app/tests/test_v25_9_16_7_2_64_16_5_5_release_contract.py::test_version_is_synchronized_across_runtime_artifacts`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_1_1_uat_build_backend_health.py::test_hotfix_version_and_env_build_knob_are_current`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_1_uat_http_env_compatibility.py::test_production_never_allows_insecure_cookie`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_1_uat_http_env_compatibility.py::test_uat_http_keeps_hardened_validation`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_1_uat_http_env_compatibility.py::test_uat_http_requires_explicit_opt_in`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_12_multi_org_shared_library.py::test_analytics_direct_mapping_wins_over_subject_mapping`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_12_multi_org_shared_library.py::test_branch_org_mapping_is_optional_and_never_falls_back_to_fpt`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_16_ap_sync_selected_subject_scope.py::test_ap_sync_ui_sends_immutable_selected_subject_codes_and_blocks_empty_scope`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_18_question_types_packaging.py::test_release_version_and_migration_head_contract_are_synchronized`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_1_public_npm_registry.py::test_public_registry_contract_survives_current_release`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_2_cors_request_id_hotfix.py::test_version_is_synchronized_in_active_runtime_files`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_3_frontend_visual_ergonomics.py::test_chapter_actions_replace_duplicate_kpis_and_remove_release_qa_panel`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_3_frontend_visual_ergonomics.py::test_teacher_identity_is_text_only_and_filters_are_not_sticky`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_3_frontend_visual_ergonomics.py::test_topbar_has_clickable_breadcrumb_contract_and_nested_bank_pages_use_it`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_3_frontend_visual_ergonomics.py::test_version_is_synchronized_for_visual_hotfix`
+- `app/tests/test_v25_9_16_7_2_64_16_5_7_2_full_frontend_design_contract.py::test_optional_question_columns_remain_user_selectable`
+- `app/tests/test_v25_9_16_7_2_64_16_5_production_ux_acceptance.py::test_v64_16_5_drawers_lock_scroll_and_expose_descriptions`
+- `app/tests/test_v25_9_16_7_2_64_16_5_production_ux_acceptance.py::test_v64_16_5_table_uses_container_responsive_contract_without_losing_data`
+- `app/tests/test_v25_9_16_7_2_64_16_5_production_ux_acceptance.py::test_v64_16_5_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py::test_v64_16_bootstraps_theme_and_sidebar_before_hydration_without_disabling_zoom`
+- `app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py::test_v64_16_navigation_and_route_guard_use_permissions`
+- `app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py::test_v64_16_page_header_is_shared_on_main_enterprise_pages`
+- `app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py::test_v64_16_production_auth_context_has_no_demo_identity_or_legacy_role_fallback`
+- `app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py::test_v64_16_shell_has_accessible_collapsible_desktop_and_mobile_navigation`
+- `app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py::test_v64_16_table_and_page_geometry_is_unified_and_body_does_not_scroll_horizontally`
+- `app/tests/test_v25_9_16_7_2_64_16_app_shell_enterprise_ui_production.py::test_v64_16_version_and_database_boundary`
+- `app/tests/test_v25_9_16_7_2_64_1_maintainability_service_ui_split.py::test_academic_service_helpers_are_split_but_reexported`
+- `app/tests/test_v25_9_16_7_2_64_1_maintainability_service_ui_split.py::test_global_css_is_split_for_ops_readiness`
+- `app/tests/test_v25_9_16_7_2_64_1_maintainability_service_ui_split.py::test_v64_1_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_1_maintainability_service_ui_split.py::test_v64_1_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_29_ap_teacher_limited_staff.py::test_connector_version_is_bumped_for_role_policy_change`
+- `app/tests/test_v25_9_16_7_2_64_2_academic_access_roster_workflow_split.py::test_v64_3_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_2_academic_access_roster_workflow_split.py::test_v64_3_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_35_1_udemy_ui_ux_contract.py::test_batch35_1_version_and_schema_contract`
+- `app/tests/test_v25_9_16_7_2_64_35_2_term_subject_management.py::test_batch35_2_cross_layer_contract`
+- `app/tests/test_v25_9_16_7_2_64_35_3_training_platform_operations_split.py::test_backend_filters_actual_class_deliveries_but_keeps_block_scope`
+- `app/tests/test_v25_9_16_7_2_64_35_3_training_platform_operations_split.py::test_batch_35_3_does_not_add_database_migration`
+- `app/tests/test_v25_9_16_7_2_64_3_question_bank_release_publish_workflow_split.py::test_v64_3_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_3_question_bank_release_publish_workflow_split.py::test_v64_3_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_4_analytics_sla_evidence_result_workflow_split.py::test_v64_4_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_4_analytics_sla_evidence_result_workflow_split.py::test_v64_4_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_5_academic_sync_enrollment_workflow_split.py::test_v64_5_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_5_academic_sync_enrollment_workflow_split.py::test_v64_5_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_6_question_bank_quiz_creation_automap_workflow_split.py::test_v64_6_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_6_question_bank_quiz_creation_automap_workflow_split.py::test_v64_6_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_7_academic_identity_reconciliation_workflow_split.py::test_v64_7_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_7_academic_identity_reconciliation_workflow_split.py::test_v64_7_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_8_teacher_report_workflow_split.py::test_v64_8_no_new_alembic_revision`
+- `app/tests/test_v25_9_16_7_2_64_8_teacher_report_workflow_split.py::test_v64_8_version_and_docs`
+- `app/tests/test_v25_9_16_7_2_64_production_pilot_final_qa.py::test_v64_frontend_ops_readiness_final_gate`
+- `app/tests/test_v25_9_16_7_2_64_production_pilot_final_qa.py::test_v64_no_new_alembic_revision_and_release_zip_hygiene_contract`
+- `app/tests/test_v25_9_16_7_2_64_production_pilot_final_qa.py::test_v64_scripts_cover_final_load_rollback_publish_verify`
+- `app/tests/test_v25_9_16_7_2_64_production_pilot_final_qa.py::test_v64_version_sync_and_docs`
+- `app/tests/test_v25_9_16_7_2_6_workflow_polish.py::test_jobs_and_audit_are_separated_and_ap_jobs_visible_by_default`
+- `app/tests/test_v25_9_16_7_2_7_review_findings_full_fix.py::test_css_removes_important_and_keeps_accessible_fixed_sidebar_stt`
+- `app/tests/test_v25_9_16_7_2_7_review_findings_full_fix.py::test_learning_behavior_does_not_mix_other_classes_and_avoids_n_plus_one`
+- `app/tests/test_v25_9_16_7_2_8_flexible_bank_quiz_scope.py::test_apply_saves_only_quiz_final_rows_and_preserves_skipped_rows`
+- `app/tests/test_v25_9_16_7_2_8_flexible_bank_quiz_scope.py::test_create_quiz_respects_final_test_title_and_assessment_type`
+- `app/tests/test_v25_9_16_7_2_8_flexible_bank_quiz_scope.py::test_quiz_auto_map_accepts_chapter_plan_and_partial_version_selection`
+- `app/tests/test_v25_9_16_7_2_8_flexible_bank_quiz_scope.py::test_quiz_auto_map_skips_assignment_and_final_can_be_explicit`
+- `app/tests/test_versioned_question_bank.py::test_bank_release_generates_one_openedx_library_key_per_version`
+- `app/tests/test_versioned_question_bank.py::test_release_collects_only_approved_and_published_questions_in_bank_version`

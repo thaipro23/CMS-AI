@@ -706,9 +706,22 @@ def class_behavior_rows(
     return LearningAnalyticsCoreService(db).behavior_rows(class_id=class_id, course_id=course_id, classification=classification, limit=limit, offset=offset)
 
 
+def _assert_student_detail_scope(db: Session, class_id: str, username: str, course_id: str | None) -> str:
+    service = LearningAnalyticsCoreService(db)
+    if username not in service._class_student_usernames(class_id):
+        raise HTTPException(status_code=404, detail='Sinh viên không thuộc lớp này.')
+    resolved = service._course_for_class(class_id)
+    if not resolved:
+        raise HTTPException(status_code=409, detail='Lớp chưa có Course CMS hợp lệ.')
+    if course_id and course_id != resolved:
+        raise HTTPException(status_code=403, detail='Course không thuộc mapping của lớp.')
+    return resolved
+
+
 @router.get('/classes/{class_id}/students/{username}/learning-behavior')
 def student_behavior_detail(class_id: str, username: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     _assert_analytics_class_access(db, user, class_id)
+    course_id = _assert_student_detail_scope(db, class_id, username, course_id)
     log_audit(db, action='analytics.learning_behavior.view_student', status='success', message='Xem chi tiết học online của sinh viên', user=user, course_id=course_id, target_type='academic_class_student', target_id=f'{class_id}:{username}', metadata={'classification_note': 'signals_only_not_violation'})
     return LearningAnalyticsCoreService(db).student_behavior_detail(class_id=class_id, course_id=course_id, username=username)
 
@@ -716,5 +729,6 @@ def student_behavior_detail(class_id: str, username: str, course_id: str | None 
 @router.get('/classes/{class_id}/students/{username}/session-progress')
 def student_session_progress(class_id: str, username: str, course_id: str | None = None, db: Session = Depends(get_db), user: UserContext = Depends(require_permission('view_training_reports'))):
     _assert_analytics_class_access(db, user, class_id)
+    course_id = _assert_student_detail_scope(db, class_id, username, course_id)
     detail = LearningAnalyticsCoreService(db).student_behavior_detail(class_id=class_id, course_id=course_id, username=username)
     return {'class_id': class_id, 'username': username, 'course_id': course_id, 'sessions': detail.get('sessions', []), 'timeline_weeks': detail.get('timeline_weeks', []), 'disclaimer': detail.get('disclaimer')}
