@@ -1801,6 +1801,109 @@ def _native_create_or_reuse_itembank(
     return bank, created, diagnostics
 
 
+def _verify_core_synced_static_assets(downstream: Any, upstream_ref: str, user: Any) -> dict:
+    """Verify Studio core really copied every published Library static asset into the course.
+
+    content_staging logs and swallows some storage exceptions, so StaticFileNotices
+    alone is not sufficient. Mirror the core destination-key calculation and verify
+    the persisted course asset bytes after sync_library_content().
+    """
+    import hashlib
+
+    try:
+        from openedx.core.djangoapps.xblock.api import load_block, CheckPerm, LatestVersion  # type: ignore
+        from xmodule.contentstore.django import contentstore  # type: ignore
+        from xmodule.exceptions import NotFoundError  # type: ignore
+        from xmodule.video_block.transcripts_utils import build_components_import_path  # type: ignore
+    except Exception as exc:
+        raise RuntimeError('Không import được Open edX core APIs để verify static asset sync.') from exc
+
+    upstream_key = _usage_key_from_value(upstream_ref)
+    if upstream_key is None:
+        raise RuntimeError(f'Không parse được upstream Library usage key: {upstream_ref!r}')
+
+    lib_block = load_block(
+        upstream_key,
+        user,
+        check_permission=CheckPerm.CAN_READ_AS_AUTHOR,
+        version=LatestVersion.PUBLISHED,
+    )
+    static_files = list(lib_block.runtime.get_block_assets(lib_block, fetch_asset_data=True) or [])
+
+    verified: list[dict[str, Any]] = []
+    course_key = downstream.context_key
+    usage_key = downstream.usage_key
+
+    for static_file in static_files:
+        source_name = _safe_str(getattr(static_file, 'name', '')).strip().lstrip('/')
+        if not source_name.startswith('static/'):
+            continue
+
+        source_data = getattr(static_file, 'data', None)
+        if not isinstance(source_data, (bytes, bytearray)) or not source_data:
+            raise RuntimeError(
+                f'Published Library asset không đọc được binary: upstream={upstream_ref} asset={source_name!r}'
+            )
+
+        file_path = source_name.removeprefix('static/')
+        import_path = build_components_import_path(usage_key, file_path)
+        asset_key = course_key.make_asset_key('asset', import_path.replace('/', '_'))
+
+        try:
+            stored = contentstore().find(asset_key)
+        except NotFoundError as exc:
+            raise RuntimeError(
+                f'Core sync_library_content không tạo course asset: '
+                f'upstream={upstream_ref} downstream={usage_key} '
+                f'source={source_name!r} expected_asset={asset_key}'
+            ) from exc
+
+        stored_data = getattr(stored, 'data', None)
+        if not isinstance(stored_data, (bytes, bytearray)):
+            try:
+                stored_data = bytes(stored_data)
+            except Exception as exc:
+                raise RuntimeError(
+                    f'Không đọc được course asset sau core sync: {asset_key}'
+                ) from exc
+
+        source_md5 = hashlib.md5(bytes(source_data)).hexdigest()
+        stored_md5 = hashlib.md5(bytes(stored_data)).hexdigest()
+        if source_md5 != stored_md5:
+            raise RuntimeError(
+                f'Course asset khác binary Library sau core sync: '
+                f'upstream={upstream_ref} downstream={usage_key} asset={asset_key} '
+                f'source_md5={source_md5} stored_md5={stored_md5}'
+            )
+
+        verified.append({
+            'source': source_name,
+            'course_asset': _safe_str(asset_key),
+            'md5': source_md5,
+            'size': len(source_data),
+        })
+
+    downstream_data = _safe_str(_field_value(downstream, 'data'))
+    forbidden = [
+        token for token in (
+            '/library_assets/component_versions/',
+            'scms.fpl.edu.vn/library_assets/',
+            '/static/acms-legacy/',
+        )
+        if token in downstream_data
+    ]
+    if forbidden:
+        raise RuntimeError(
+            f'Downstream còn reference không hợp lệ sau core sync: '
+            f'downstream={usage_key} forbidden={forbidden}'
+        )
+
+    return {
+        'verified_asset_count': len(verified),
+        'verified_assets': verified,
+    }
+
+
 def _require_clean_static_file_notices(notices: Any, upstream_ref: str) -> None:
     """Fail closed when Studio core reports asset copy conflicts/errors."""
     conflicts = list(getattr(notices, 'conflicting_files', []) or [])
@@ -1833,6 +1936,7 @@ def _native_add_library_problem_to_itembank(
         notices = sync_library_content(existing, publish_request, store)
         _require_clean_static_file_notices(notices, upstream_ref)
         existing = _get_item_best_effort(store, getattr(existing, 'location', existing)) or existing
+        asset_verification = _verify_core_synced_static_assets(existing, upstream_ref, user)
         return existing, False, [{
             'phase': 'itembank.child.sync',
             'mode': 'native_sync_library_content_existing_child',
@@ -1840,6 +1944,7 @@ def _native_add_library_problem_to_itembank(
             'upstream': upstream_ref,
             'usage_key': _clean_usage_key(getattr(existing, 'location', existing)),
             'static_file_notices': _to_jsonable(notices),
+            'static_asset_verification': asset_verification,
         }]
 
     child = None
@@ -1857,6 +1962,7 @@ def _native_add_library_problem_to_itembank(
         notices = sync_library_content(child, publish_request, store)
         _require_clean_static_file_notices(notices, upstream_ref)
         child = _get_item_best_effort(store, getattr(child, 'location', child)) or child
+        asset_verification = _verify_core_synced_static_assets(child, upstream_ref, user)
         diagnostics.append({
             'phase': 'itembank.child.sync',
             'mode': 'native_create_xblock_plus_sync_library_content',
@@ -1864,6 +1970,7 @@ def _native_add_library_problem_to_itembank(
             'upstream': upstream_ref,
             'usage_key': _clean_usage_key(getattr(child, 'location', child)),
             'static_file_notices': _to_jsonable(notices),
+            'static_asset_verification': asset_verification,
         })
         return child, True, diagnostics
     except Exception as exc:
