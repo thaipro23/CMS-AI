@@ -37,3 +37,12 @@ def test_existing_itembank_child_is_resynced_through_studio_core():
     assert "mode': 'native_sync_library_content_existing_child'" in source
     assert "notices = sync_library_content(existing, publish_request, store)" in source
     assert "import_static_assets_for_library_sync()" in source
+
+
+def test_native_itembank_sync_fails_closed_on_core_static_asset_notices():
+    source = _connector_source()
+
+    assert "def _require_clean_static_file_notices(" in source
+    assert "conflicting_files" in source
+    assert "error_files" in source
+    assert "_require_clean_static_file_notices(notices, upstream_ref)" in source
