@@ -46,3 +46,25 @@ def test_native_itembank_sync_fails_closed_on_core_static_asset_notices():
     assert "conflicting_files" in source
     assert "error_files" in source
     assert "_require_clean_static_file_notices(notices, upstream_ref)" in source
+
+
+def test_core_sync_verifies_persisted_course_asset_bytes():
+    source = _connector_source()
+
+    assert "def _verify_core_synced_static_assets(" in source
+    assert "build_components_import_path" in source
+    assert "course_key.make_asset_key('asset', import_path.replace('/', '_'))" in source
+    assert "contentstore().find(asset_key)" in source
+    assert "source_md5 = hashlib.md5(bytes(source_data)).hexdigest()" in source
+    assert "stored_md5 = hashlib.md5(bytes(stored_data)).hexdigest()" in source
+    assert "asset_verification = _verify_core_synced_static_assets(existing, upstream_ref, user)" in source
+    assert "asset_verification = _verify_core_synced_static_assets(child, upstream_ref, user)" in source
+
+
+def test_core_sync_rejects_legacy_or_authoring_urls_in_downstream():
+    source = _connector_source()
+
+    assert "'/library_assets/component_versions/'" in source
+    assert "'scms.fpl.edu.vn/library_assets/'" in source
+    assert "'/static/acms-legacy/'" in source
+    assert "Downstream còn reference không hợp lệ sau core sync" in source
