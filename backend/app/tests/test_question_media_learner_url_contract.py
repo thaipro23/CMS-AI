@@ -68,3 +68,20 @@ def test_core_sync_rejects_legacy_or_authoring_urls_in_downstream():
     assert "'scms.fpl.edu.vn/library_assets/'" in source
     assert "'/static/acms-legacy/'" in source
     assert "Downstream còn reference không hợp lệ sau core sync" in source
+
+
+def test_question_media_path_is_core_static_acms_and_staging_safe():
+    source = _connector_source()
+
+    assert "if not path.startswith('static/acms/'):" in source
+    assert "staged_name = f'staged-content-temp/{path}'" in source
+    assert "if len(staged_name) > 100:" in source
+    assert "path.startswith('static/acms-legacy/')" in source
+
+
+def test_question_import_uses_core_component_publish_api():
+    source = _connector_source()
+
+    assert "publish_component_changes," in source
+    assert "publish_component_changes(usage_key, user_id)" in source
+    assert "'mode': 'content_libraries.api.blocks.publish_component_changes'" in source
