@@ -3360,12 +3360,24 @@ def _decode_question_media_assets(raw_assets: object) -> list[dict[str, Any]]:
 
 
 def _question_media_static_path(file_path: str) -> str:
-    """Normalize question media to the Learning Core component-local static namespace."""
+    """Normalize ACMS media to Open edX Learning Core's component-local static namespace."""
     path = str(file_path or '').strip().lstrip('/')
     if not path:
         raise ValueError('Media file_path rỗng.')
+    if '/library_assets/component_versions/' in path or path.startswith('static/acms-legacy/'):
+        raise ValueError(f'Media file_path legacy/authoring không hợp lệ: {path!r}.')
     if not path.startswith('static/'):
         path = f'static/{path}'
+    if not path.startswith('static/acms/'):
+        raise ValueError(f'Question media phải nằm trong static/acms/: {path!r}.')
+    # Django's staged-content FileField uses the default max_length=100 and
+    # prepends "staged-content-temp/". Keep the core-staged object name within it.
+    staged_name = f'staged-content-temp/{path}'
+    if len(staged_name) > 100:
+        raise ValueError(
+            f'Question media path quá dài cho Open edX content_staging: '
+            f'len={len(staged_name)} path={path!r}.'
+        )
     return path
 
 
@@ -3436,6 +3448,7 @@ def _import_problem_olx_v2(request, course_id: str, library_key: str, display_na
         from openedx.core.djangoapps.content_libraries.api.blocks import (  # type: ignore
             create_library_block,
             set_library_block_olx,
+            publish_component_changes,
         )
         try:
             from openedx.core.djangoapps.content_libraries.api.exceptions import LibraryBlockAlreadyExists  # type: ignore
@@ -3497,30 +3510,25 @@ def _import_problem_olx_v2(request, course_id: str, library_key: str, display_na
     # "Unpublished changes" even though the problem content was already published.
     tag_result = _apply_openedx_component_tags(usage_key, course_id, metadata, tag_names)
 
-    # Publish strategy for Tutor/Ulmo:
-    # The public content_libraries publish helpers call post-publish event/index
-    # tasks. In this user's Ulmo environment those tasks fail with
-    # PublishLog.DoesNotExist even after the core draft has been written. So do
-    # the core authoring publish directly, then skip post-publish tasks by default.
+    # Publish exactly this component through the Open edX Content Libraries core API.
+    # This keeps draft/published pointers, publish logs, search/event hooks, and
+    # downstream update tracking aligned with Studio instead of duplicating the
+    # openedx-learning publish implementation in the connector.
+    if user_id is None:
+        raise RuntimeError('Không xác định được user_id để publish Library component.')
+    publish_component_changes(usage_key, user_id)
+    publish_component_result = {
+        'mode': 'content_libraries.api.blocks.publish_component_changes',
+        'usage_key': _safe_str(usage_key),
+    }
+    publish_library_result = None
     publish_warnings = [{
         'step': 'tag_before_publish',
-        'message': 'Đã gắn tag trước khi publish để tránh Library UI hiện Unpublished changes do tag được thêm sau publish.',
+        'message': 'Đã gắn tag trước khi gọi core publish_component_changes().',
     }, {
-        'step': 'library_core_publish_all_drafts',
-        'message': 'Publish toàn bộ draft đang pending trong Library AI-managed sau khi set OLX + tag. Cách này phù hợp Tutor/Ulmo hơn publish riêng component, tránh UI hiển thị Never published.',
-    }, {
-        'step': 'post_publish_events',
-        'message': 'Bỏ qua content_libraries post-publish tasks mặc định để tránh lỗi PublishLog.DoesNotExist trên Ulmo. Nếu cần reindex/event có thể bật riêng sau.',
+        'step': 'core_component_publish',
+        'message': 'Đã publish đúng component bằng Open edX Content Libraries core API.',
     }]
-    publish_component_result = None
-    # v25.9.13.39: component-level direct publish can leave Studio Library UI
-    # showing components as "Never published" on Ulmo because the component
-    # draft selection is release-sensitive. These AI-generated libraries are
-    # managed by AI Server per chapter+difficulty, so publish all pending drafts
-    # in this Library after OLX and tags are written. This marks each imported
-    # problem's published version in openedx-learning without running the flaky
-    # post-publish tasks that fail with PublishLog.DoesNotExist.
-    publish_library_result = _publish_library_drafts_without_post_tasks(locator, user_id)
 
     return {
         'ok': True,
