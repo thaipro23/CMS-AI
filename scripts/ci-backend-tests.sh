@@ -5,6 +5,9 @@ cd "$ROOT_DIR/backend"
 pytest -q \
   app/tests/test_academic_auto_map_invalid_org_repair.py \
   app/tests/test_academic_branch_course_mapping.py \
+  app/tests/test_academic_daily_pipeline_ap_mapping.py \
+  app/tests/test_academic_daily_pipeline_provision_score.py \
+  app/tests/test_academic_daily_pipeline_recovery.py \
   app/tests/test_daily_teacher_report_pipeline_contract.py \
   app/tests/test_daily_teacher_report_watchdog.py \
   app/tests/test_learning_sync_preserves_confirmed_enrollment.py \

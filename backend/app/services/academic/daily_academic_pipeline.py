@@ -1557,10 +1557,10 @@ def _class_attempt_request(
         'attempt_no': max(0, int(round_no)),
         'auto_map_course': False,
         'sync_learning': stage == 'score_update',
-        # score_update is a full read-only refresh.  Without force=True,
-        # sync_class_learning_insight skips students that already have a
-        # learning payload, leaving yesterday's score/progress in the report.
-        'force': stage == 'score_update',
+        # Every daily run rechecks accounts and enrollment for the full roster,
+        # including locally cached matched/enrolled students. The score stage
+        # also refreshes everyone rather than reusing yesterday's payload.
+        'force': True,
         'limit': max(
             1000,
             min(

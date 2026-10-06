@@ -128,6 +128,9 @@ def test_provisioning_across_two_branches_has_only_four_active_children(
         assert {job.job_type for job in active} == {"full_cms_sync"}
         assert all(job.request_json["auto_map_course"] is False for job in active)
         assert all(job.request_json["sync_learning"] is False for job in active)
+        assert all(job.force is True for job in active)
+        assert all(job.request_json["force"] is True for job in active)
+        assert all(job.request_json["request_contract"]["force"] is True for job in active)
 
 
 def test_score_stage_does_not_start_until_all_provisioning_retries_succeed(
@@ -396,7 +399,7 @@ def test_class_stage_failure_keeps_child_error_message(session_factory):
 
     assert "statement timeout while refreshing grade snapshot" in root.error_message
 
-def test_daily_score_stage_forces_full_read_only_refresh():
+def test_daily_provisioning_and_score_stages_force_full_roster_refresh():
     root = SimpleNamespace(
         id="root-score-force",
         request_json={"run_date_vn": "2026-10-04"},
@@ -424,7 +427,7 @@ def test_daily_score_stage_forces_full_read_only_refresh():
         round_no=0,
     )
 
-    assert provision["force"] is False
+    assert provision["force"] is True
     assert provision["sync_learning"] is False
     assert score["force"] is True
     assert score["sync_learning"] is True
