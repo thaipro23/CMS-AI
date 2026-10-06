@@ -917,10 +917,23 @@ class AcademicService:
     def _snapshot_grade_percent(self, snapshot: AcademicStudentLearningSnapshot | None) -> float | None:
         if not snapshot:
             return None
-        direct = self._percent_display_value(snapshot.grade_percent)
-        if direct is not None:
-            return direct
-        return self._grade_percent_from_payload(self._payload_from_snapshot(snapshot))
+        return self._assessment_average_percent(self._component_scores_from_snapshot(snapshot))
+
+    def _assessment_average_percent(self, components: list[dict[str, Any]]) -> float | None:
+        assessments = canonical_assessment_components(components)
+        if not assessments:
+            return None
+        scores: list[float] = []
+        for item in assessments:
+            earned = self._number_or_none(item.get('earned'))
+            possible = self._number_or_none(item.get('possible'))
+            percent = self._number_or_none(item.get('percent'))
+            if earned is not None and possible is not None and possible > 0:
+                percent = earned / possible * 100.0
+            # Each course-defined Quiz/Final has equal weight. Missing scores
+            # count as zero; an absent Final never creates an extra assessment.
+            scores.append(max(0.0, min(100.0, percent)) if percent is not None and math.isfinite(percent) else 0.0)
+        return round(sum(scores) / len(scores), 2)
 
     def _learning_snapshot_diagnostics(self, snapshot: AcademicStudentLearningSnapshot | None, mapping: OpenEdXUserMapping | None = None) -> dict[str, Any]:
         """Explain the state of one learner's CMS learning snapshot.
@@ -1050,7 +1063,7 @@ class AcademicService:
         possible = self._number_or_none(
             item.get('possible', item.get('possible_graded', item.get('possibleGraded', item.get('possible_score', item.get('possibleScore', item.get('score_possible', item.get('scorePossible', item.get('max_score', item.get('maxScore', item.get('max_grade', item.get('points_possible')))))))))))
         )
-        percent = self._percent_display_value(
+        percent = self._number_or_none(
             item.get('percent', item.get('percentage', item.get('grade_percent', item.get('gradePercent', item.get('score_percent', item.get('scorePercent', item.get('percent_graded', item.get('percentGraded', item.get('value')))))))))
         )
         if percent is None and earned is not None and possible and possible > 0:
@@ -1175,14 +1188,8 @@ class AcademicService:
                     continue
                 seen.add(identity)
                 normalized.append(item)
-        # If CMS returned real Detailed grades for Quiz 1..N, do not keep
-        # course-outline planned quiz shells beyond that range. This prevents
-        # duplicate/phantom columns such as Quiz 2 twice or Quiz 14 when the CMS
-        # gradebook currently has only Quiz 1 and Quiz 2.
-        real_quiz_numbers = [int(item.get('quiz_number') or 0) for item in normalized if item.get('quiz_number') and not item.get('planned')]
-        if real_quiz_numbers:
-            max_real_quiz = max(real_quiz_numbers)
-            normalized = [item for item in normalized if not (item.get('planned') and item.get('quiz_number') and int(item.get('quiz_number') or 0) > max_real_quiz)]
+        # Retain course-outline quizzes without scores: they contribute zero
+        # to the full-course average, including quizzes that have not opened.
         normalized.sort(key=lambda item: self._component_sort_key(item))
         return normalized[:80]
 
@@ -3179,8 +3186,6 @@ class AcademicService:
             number = float(value)
         except Exception:
             return None
-        if 0 <= number <= 1:
-            number *= 100.0
         return round(max(0.0, min(100.0, number)) / 10.0, 2)
 
     def _learning_status_label(self, status_name: str | None) -> str:
@@ -4266,7 +4271,6 @@ class AcademicService:
         if not snapshot:
             snapshot = AcademicStudentLearningSnapshot(class_id=class_id, student_id=student.id, openedx_course_id=course_id, created_at=now)
         previous_progress_percent = snapshot.progress_percent
-        previous_grade_percent = snapshot.grade_percent
         previous_completed_blocks = snapshot.completed_blocks
         previous_total_blocks = snapshot.total_blocks
         previous_raw_json = snapshot.raw_json if isinstance(snapshot.raw_json, dict) else {}
@@ -4293,10 +4297,8 @@ class AcademicService:
             # v25.9.16.5.97: never overwrite a previously-good progress value
             # with a connector payload that lacks the locked progress contract.
             snapshot.progress_percent = previous_progress_percent
-        incoming_grade_percent = self._float_or_none(result.get('grade_percent', grade.get('percent')))
-        if incoming_grade_percent is None:
-            incoming_grade_percent = self._grade_percent_from_payload(result)
-        snapshot.grade_percent = incoming_grade_percent if incoming_grade_percent is not None else previous_grade_percent
+        incoming_grade_percent = self._assessment_average_percent(self._component_scores_from_payload(result))
+        snapshot.grade_percent = incoming_grade_percent
         if 'passed' in result:
             snapshot.passed = _boolish(result.get('passed'))
         elif 'passed' in grade:
@@ -4330,7 +4332,7 @@ class AcademicService:
             'has_component_grades': bool(self._component_scores_from_payload(result)),
         }
         progress_preserved = bool(not accepted_progress_payload and previous_progress_percent is not None)
-        grade_preserved = bool(incoming_grade_percent is None and previous_grade_percent is not None)
+        grade_preserved = False
         snapshot.raw_json = {
             'source': source,
             'payload': _json_safe_value(result),

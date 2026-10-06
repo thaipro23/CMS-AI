@@ -15,6 +15,7 @@ pytest -q \
   app/tests/test_primary_after_enrollment_connector_client.py \
   app/tests/test_official_course_completion.py \
   app/tests/test_assignment_ui_suppression.py \
+  app/tests/test_assessment_average_grade.py \
   app/tests/test_v25_9_16_7_2_64_34_udemy_dashboard_export.py \
   app/tests/test_email_privacy_contract.py \
   app/tests/test_academic_progress_email.py \

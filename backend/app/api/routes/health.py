@@ -25,7 +25,7 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0072_quiz_tracking_integrity'
+_EXPECTED_ALEMBIC_REVISION = '0073_assessment_average_grade'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {

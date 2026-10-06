@@ -75,7 +75,6 @@ function mappingSourceLabel(source?: string | null) {
 }
 function normalizePercentValue(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) return null
-  if (value >= 0 && value <= 1) return value * 100
   return value
 }
 function percentLabel(value?: number | null) {
@@ -84,7 +83,7 @@ function percentLabel(value?: number | null) {
   return `${Math.round(percent * 10) / 10}%`
 }
 function grade10Label(value?: number | null) {
-  const percent = normalizePercentValue(value)
+  const percent = typeof value === 'number' && Number.isFinite(value) ? value : null
   if (percent === null) return 'N/A'
   const score = Math.max(0, Math.min(10, percent / 10))
   return `${Math.round(score * 10) / 10}/10`
@@ -955,7 +954,7 @@ function ClassDetailContent() {
       hideable: true,
       render: (student: AcademicStudent) => <><b>{student.progress_email_sent_count || 0} mail</b><small>{student.progress_email_last_sent_at ? `Gần nhất ${formatVNTimeDate(student.progress_email_last_sent_at)}` : 'Chưa gửi'}</small></>,
     }] : []),
-    { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 240, priority: 'important', hideable: true, render: (student) => <div className="learning-progress-cell compact-learning-progress-cell"><b>Hoàn thành: {percentLabel(student.learning_progress_percent)}</b><small>Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><div className="student-learning-status-stack"><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{shouldSuggestFullCmsSync(student) ? <span className="cms-full-sync-hint">Cần đồng bộ full CMS</span> : null}</div></div> },
+    { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 240, priority: 'important', hideable: true, render: (student) => <div className="learning-progress-cell compact-learning-progress-cell"><b>Hoàn thành: {percentLabel(student.learning_progress_percent)}</b><small title="Trung bình cộng các Quiz và Final test có trong course; bài chưa có điểm tính 0">Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><div className="student-learning-status-stack"><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{shouldSuggestFullCmsSync(student) ? <span className="cms-full-sync-hint">Cần đồng bộ full CMS</span> : null}</div></div> },
     { key: 'online', header: 'Học online', kind: 'status', minWidth: 210, priority: 'important', hideable: true, render: (student) => { const behavior = studentBehavior(student); return behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}><span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span><small>Độ tin cậy: {Math.round(behavior.confidence_score || 0)}%</small><small>{recommendedActionLabel(behavior.recommended_action)}</small></button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span> } },
     { key: 'exam', header: 'Điều kiện thi', kind: 'status', minWidth: 220, priority: 'important', hideable: true, render: (student) => <div className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Chưa đủ dữ liệu'}</small>{/* ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: <small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small> */}</div> },
     ...componentColumns.map((column): EnterpriseTableColumn<AcademicStudent> => ({

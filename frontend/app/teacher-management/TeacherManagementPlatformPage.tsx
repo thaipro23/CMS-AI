@@ -150,7 +150,6 @@ function normalizeSummary(
 
 function normalizePercentValue(value?: number | null) {
   if (typeof value !== "number" || Number.isNaN(value)) return null;
-  if (value >= 0 && value <= 1) return value * 100;
   return value;
 }
 
@@ -161,7 +160,7 @@ function percentLabel(value?: number | null) {
 }
 
 function grade10Label(value?: number | null) {
-  const percent = normalizePercentValue(value);
+  const percent = typeof value === "number" && Number.isFinite(value) ? value : null;
   if (percent === null) return "N/A";
   const score = Math.max(0, Math.min(10, percent / 10));
   return `${Math.round(score * 10) / 10}/10`;
