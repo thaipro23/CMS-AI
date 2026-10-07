@@ -94,8 +94,8 @@ def test_beat_has_one_0100_pipeline_and_no_legacy_daily_publishers():
     assert "academic-ap-sync-and-auto-map-03-vn" not in schedule
     assert "academic-score-sync-all-students" not in schedule
     assert set(celery_app.registered) == {runtime.DAILY_START_TASK, runtime.DAILY_ROOT_TASK}
-    assert celery_app.conf.task_routes[runtime.DAILY_START_TASK] == {"queue": "sync-bulk"}
-    assert celery_app.conf.task_routes[runtime.DAILY_ROOT_TASK] == {"queue": "sync-bulk"}
+    assert celery_app.conf.task_routes[runtime.DAILY_START_TASK] == {"queue": "sync-fast"}
+    assert celery_app.conf.task_routes[runtime.DAILY_ROOT_TASK] == {"queue": "sync-fast"}
 
 
 def test_duplicate_start_reuses_one_root(monkeypatch, session_factory):

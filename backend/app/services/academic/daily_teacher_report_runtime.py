@@ -2150,7 +2150,7 @@ def register_daily_teacher_report_tasks(celery_app) -> None:
         'academic_daily_score_report_parent_task': {'queue': 'sync-bulk'},
         DAILY_SNAPSHOT_TASK: {'queue': 'exports'},
         'academic_teacher_report_watchdog_task': {'queue': 'sync-fast'},
-        'academic_scheduled_parent_recovery_task': {'queue': 'sync-bulk'},
+        'academic_scheduled_parent_recovery_task': {'queue': 'sync-fast'},
     })
     celery_app.conf.task_routes = routes
 

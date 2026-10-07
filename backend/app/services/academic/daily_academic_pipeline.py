@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from celery.schedules import crontab
+import redis
+from redis.exceptions import RedisError, LockError
 from sqlalchemy import and_, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -60,6 +63,10 @@ VN_TZ = ZoneInfo('Asia/Ho_Chi_Minh')
 DAILY_ROOT_JOB_TYPE = 'academic_daily_pipeline_v2'
 DAILY_START_TASK = 'academic_daily_pipeline_start_task'
 DAILY_ROOT_TASK = 'academic_daily_pipeline_task'
+DAILY_COORDINATOR_QUEUE = 'sync-fast'
+DAILY_COORDINATOR_LOCK_SECONDS = 240
+DAILY_MAX_RUNTIME_SECONDS = 24 * 60 * 60
+log = logging.getLogger(__name__)
 DAILY_SNAPSHOT_TASK = 'academic_daily_snapshot_attempt_task'
 DAILY_POLICY_VERSION = 'academic-daily/v2'
 DAILY_STATE_VERSION = 'academic-daily-state.v2'
@@ -151,18 +158,81 @@ def _try_daily_root_db_lock(db: Session, root_id: str) -> bool:
     )
 
 
-def _release_daily_root_db_lock(db: Session, root_id: str) -> None:
+def _release_daily_root_db_lock(db: Session, root_id: str) -> bool:
     bind = db.get_bind()
     if not bind or bind.dialect.name != 'postgresql':
-        return
+        return True
     try:
-        db.execute(
+        # An aborted transaction rejects every query, including advisory unlock.
+        # Discard pending work before releasing this session-owned lock.
+        db.rollback()
+        released = bool(db.execute(
             text('SELECT pg_advisory_unlock(hashtextextended(:key, 0))'),
             {'key': f'academic-daily-root:{root_id}'},
-        )
+        ).scalar())
         db.commit()
+        return released
     except Exception:
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False
+
+
+def _daily_redis_client():
+    return redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1)
+
+
+@contextmanager
+def _daily_coordinator_session():
+    """Serialize scheduler, worker, watchdog and operator across all commits.
+
+    The PostgreSQL connection remains pinned until its session advisory lock is
+    released. Redis provides a bounded lease shared by all worker processes.
+    PostgreSQL remains authoritative if Redis is temporarily unavailable.
+    """
+    with _daily_root_process_lock('coordinator'):
+        db = SessionLocal()
+        connection = None
+        client = None
+        lease = None
+        locked = False
+        try:
+            bind = db.get_bind()
+            if bind is not None and bind.dialect.name == 'postgresql':
+                connection = bind.connect()
+                db.bind = connection
+            try:
+                client = _daily_redis_client()
+                if client is not None:
+                    lease = client.lock('ai-server:academic-daily:coordinator',
+                                        timeout=DAILY_COORDINATOR_LOCK_SECONDS, blocking=False)
+                    if not lease.acquire(blocking=False):
+                        lease = None
+                        yield db, False
+                        return
+            except RedisError:
+                lease = None
+                log.warning('Daily coordinator Redis lease unavailable; using PostgreSQL lock.')
+            locked = _try_daily_root_db_lock(db, 'coordinator')
+            yield db, locked
+        finally:
+            if locked:
+                released = _release_daily_root_db_lock(db, 'coordinator')
+                if not released and connection is not None:
+                    # Do not pool a physical connection still owning a session lock.
+                    connection.invalidate()
+            db.close()
+            if connection is not None:
+                connection.close()
+            if lease is not None:
+                try:
+                    lease.release()
+                except (RedisError, LockError):
+                    log.warning('Daily coordinator Redis lease expired or could not be released.')
+            if client is not None:
+                client.close()
 
 
 def _cms_classes_for_term(db: Session, *, term_id: str, branch: str):
@@ -369,6 +439,8 @@ def _sync_scope_parent_states(
             continue
 
         if root.status == 'failed' or phase == 'failed':
+            parent.result_json = json_safe_value({**dict(parent.result_json or {}),
+                'root_failure_code': state.get('code'), 'daily_root_job_id': str(root.id)})
             parent.status = 'failed'
             parent.progress_current = 100
             parent.progress_total = 100
@@ -611,8 +683,23 @@ def recover_daily_academic_pipeline(
 ) -> dict[str, object]:
     """Recover durable root continuation intent and stale confirmed deliveries."""
     current_time = now or datetime.utcnow()
-    db = SessionLocal()
-    try:
+    with _daily_coordinator_session() as (db, acquired):
+        if not acquired:
+            return {'ok': True, 'status': 'coordinator_busy', 'scanned': 0,
+                    'republished': 0, 'failed': 0, 'errors': []}
+        unfinished_scope_root_ids = db.query(AcademicBulkOperationJob.parent_job_id).filter(
+            AcademicBulkOperationJob.job_type.in_(
+                ['academic_daily_provision_scope', 'academic_daily_score-report_scope']),
+            AcademicBulkOperationJob.status.in_(['queued', 'running']),
+        )
+        failed_roots = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.job_type == DAILY_ROOT_JOB_TYPE,
+            AcademicBulkOperationJob.status == 'failed',
+            AcademicBulkOperationJob.id.in_(unfinished_scope_root_ids),
+        ).all()
+        for failed_root in failed_roots:
+            _sync_scope_parent_states(db, failed_root, dict(failed_root.result_json or {}), now=current_time)
+        db.commit()
         superseded = _mark_older_active_roots_superseded(
             db,
             now=current_time,
@@ -668,6 +755,14 @@ def recover_daily_academic_pipeline(
             elif not continuation.get('due_at'):
                 continuation['due_at'] = current_time.isoformat()
 
+            continuation['queue'] = DAILY_COORDINATOR_QUEUE
+            continuation['confirmation_timeout_seconds'] = class_sync_queued_timeout_seconds()
+            if status == 'dispatched':
+                dispatched_at = _parse_state_time(continuation.get('dispatched_at'))
+                if dispatched_at is not None:
+                    continuation['due_at'] = (dispatched_at + timedelta(
+                        seconds=int(continuation.get('countdown') or 0)
+                        + class_sync_queued_timeout_seconds())).isoformat()
             state['continuation'] = continuation
             root.result_json = json_safe_value(state)
             root.updated_at = current_time
@@ -680,9 +775,13 @@ def recover_daily_academic_pipeline(
             job_types={DAILY_ROOT_JOB_TYPE},
             now=current_time,
             max_attempts=5,
-            max_runtime_seconds=24 * 60 * 60,
+            max_runtime_seconds=DAILY_MAX_RUNTIME_SECONDS,
             runtime_failure_code='pipeline_runtime_exceeded',
         )
+        for root in roots:
+            if root.status == 'failed':
+                _sync_scope_parent_states(db, root, dict(root.result_json or {}), now=current_time)
+        db.commit()
         return {
             'scanned': int(result.get('scanned') or 0),
             'republished': int(result.get('republished') or 0),
@@ -691,8 +790,6 @@ def recover_daily_academic_pipeline(
             'stale_confirmed': stale_confirmed,
             'errors': list(result.get('errors') or []),
         }
-    finally:
-        db.close()
 
 def _scheduler_user() -> UserContext:
     return UserContext(
@@ -1355,16 +1452,20 @@ def _save_root_state(
     db.commit()
 
 
-def _publish_root_continuation(celery_app, db: Session, root: AcademicBulkOperationJob) -> None:
-    publish_parent_continuation(
-        db,
-        root,
-        publisher=_continuation_publisher(celery_app),
-        task_name=DAILY_ROOT_TASK,
-        args=[str(root.id)],
-        queue='sync-bulk',
-        countdown=15,
-    )
+def _publish_root_continuation(
+    celery_app, db: Session, root: AcademicBulkOperationJob, *, countdown: int = 15,
+) -> None:
+    try:
+        publish_parent_continuation(
+            db, root, publisher=_continuation_publisher(celery_app),
+            task_name=DAILY_ROOT_TASK, args=[str(root.id)], queue=DAILY_COORDINATOR_QUEUE,
+            countdown=countdown, confirmation_timeout_seconds=class_sync_queued_timeout_seconds(),
+        )
+    except ContinuationPublishError:
+        if root.status == 'failed':
+            _sync_scope_parent_states(db, root, dict(root.result_json or {}))
+            db.commit()
+        raise
 
 
 def _reconcile_attempt_rows(
@@ -2237,8 +2338,10 @@ def start_daily_academic_pipeline(
     local_now = _local_now(now)
     stored_now = _utc_naive(local_now)
     run_date_vn = local_now.date().isoformat()
-    db = SessionLocal()
-    try:
+    with _daily_coordinator_session() as (db, acquired):
+        if not acquired:
+            celery_app.send_task(DAILY_START_TASK, args=[], queue=DAILY_COORDINATOR_QUEUE, countdown=30)
+            return {'ok': True, 'status': 'coordinator_busy', 'retry_scheduled': True}
         existing_root = (
             db.query(AcademicBulkOperationJob)
             .filter(
@@ -2267,15 +2370,7 @@ def start_daily_academic_pipeline(
                     else {}
                 )
                 if str(continuation.get('status') or '') in {'', 'dispatch_pending'}:
-                    publish_parent_continuation(
-                        db,
-                        existing_root,
-                        publisher=_continuation_publisher(celery_app),
-                        task_name=DAILY_ROOT_TASK,
-                        args=[str(existing_root.id)],
-                        queue='sync-bulk',
-                        countdown=5,
-                    )
+                    _publish_root_continuation(celery_app, db, existing_root, countdown=5)
             existing_state = (
                 existing_root.result_json
                 if isinstance(existing_root.result_json, dict)
@@ -2375,133 +2470,177 @@ def start_daily_academic_pipeline(
             root.status in {'queued', 'running'}
             and (created or continuation_status in {'', 'dispatch_pending'})
         ):
-            publish_parent_continuation(
-                db,
-                root,
-                publisher=_continuation_publisher(celery_app),
-                task_name=DAILY_ROOT_TASK,
-                args=[str(root.id)],
-                queue='sync-bulk',
-                countdown=0 if created else 5,
-            )
+            _publish_root_continuation(celery_app, db, root, countdown=0 if created else 5)
         return {
             'ok': True,
             'created': created,
             'root_job_id': str(root.id),
             'scope_count': len(frozen_scopes),
         }
-    finally:
-        db.close()
 
 
 def _run_daily_academic_pipeline_locked(celery_app, root_job_id: str) -> dict[str, object]:
-    db = SessionLocal()
-    db_lock_acquired = False
-    try:
-        db_lock_acquired = _try_daily_root_db_lock(db, str(root_job_id))
-        if not db_lock_acquired:
+    with _daily_coordinator_session() as (db, acquired):
+        if not acquired:
+            return {'ok': True, 'status': 'coordinator_busy', 'root_job_id': str(root_job_id)}
+        try:
+            root = db.query(AcademicBulkOperationJob).filter(
+                AcademicBulkOperationJob.id == str(root_job_id),
+            ).with_for_update().one_or_none()
+            if root is None or root.job_type != DAILY_ROOT_JOB_TYPE:
+                return {'ok': False, 'code': 'root_job_not_found'}
+            if root.status not in {'queued', 'running'}:
+                return {
+                    'ok': root.status == 'completed',
+                    'status': root.status,
+                    'root_job_id': str(root.id),
+                }
+            confirm_parent_continuation(
+                db,
+                root,
+                expected_task_name=DAILY_ROOT_TASK,
+            )
+            request = root.request_json if isinstance(root.request_json, dict) else {}
+            scopes = list(request.get('scopes') or [])
+            ensure_scope_parents(db, root, scopes)
+            state = dict(root.result_json or {}) if isinstance(root.result_json, dict) else {}
+            phase = str(state.get('phase') or 'ap_sync')
+            if phase == 'ap_sync':
+                return _run_ap_stage(celery_app, db, root, state)
+            if phase == 'course_mapping':
+                return _run_mapping_stage(celery_app, db, root, state)
+            if phase == 'account_enrollment':
+                return _run_class_stage(
+                    celery_app,
+                    db,
+                    root,
+                    state,
+                    stage='account_enrollment',
+                )
+            if phase == 'score_update':
+                return _run_class_stage(
+                    celery_app,
+                    db,
+                    root,
+                    state,
+                    stage='score_update',
+                )
+            if phase == 'campus_snapshots':
+                return _run_snapshot_stage(
+                    celery_app,
+                    db,
+                    root,
+                    state,
+                    snapshot_type='campus_set',
+                )
+            if phase == 'campus_reports':
+                return _run_report_stage(
+                    celery_app,
+                    db,
+                    root,
+                    state,
+                    stage='campus_reports',
+                )
+            if phase == 'ho_snapshots':
+                return _run_snapshot_stage(
+                    celery_app,
+                    db,
+                    root,
+                    state,
+                    snapshot_type='ho',
+                )
+            if phase == 'ho_reports':
+                return _run_report_stage(
+                    celery_app,
+                    db,
+                    root,
+                    state,
+                    stage='ho_reports',
+                )
             return {
                 'ok': True,
-                'status': 'coordinator_busy',
-                'root_job_id': str(root_job_id),
-            }
-        root = db.query(AcademicBulkOperationJob).filter(
-            AcademicBulkOperationJob.id == str(root_job_id),
-        ).with_for_update().one_or_none()
-        if root is None or root.job_type != DAILY_ROOT_JOB_TYPE:
-            return {'ok': False, 'code': 'root_job_not_found'}
-        confirm_parent_continuation(
-            db,
-            root,
-            expected_task_name=DAILY_ROOT_TASK,
-        )
-        if root.status not in {'queued', 'running'}:
-            return {
-                'ok': root.status == 'completed',
-                'status': root.status,
+                'status': 'ready',
+                'phase': phase,
                 'root_job_id': str(root.id),
             }
-        request = root.request_json if isinstance(root.request_json, dict) else {}
-        scopes = list(request.get('scopes') or [])
-        ensure_scope_parents(db, root, scopes)
-        state = dict(root.result_json or {}) if isinstance(root.result_json, dict) else {}
-        phase = str(state.get('phase') or 'ap_sync')
-        if phase == 'ap_sync':
-            return _run_ap_stage(celery_app, db, root, state)
-        if phase == 'course_mapping':
-            return _run_mapping_stage(celery_app, db, root, state)
-        if phase == 'account_enrollment':
-            return _run_class_stage(
-                celery_app,
-                db,
-                root,
-                state,
-                stage='account_enrollment',
-            )
-        if phase == 'score_update':
-            return _run_class_stage(
-                celery_app,
-                db,
-                root,
-                state,
-                stage='score_update',
-            )
-        if phase == 'campus_snapshots':
-            return _run_snapshot_stage(
-                celery_app,
-                db,
-                root,
-                state,
-                snapshot_type='campus_set',
-            )
-        if phase == 'campus_reports':
-            return _run_report_stage(
-                celery_app,
-                db,
-                root,
-                state,
-                stage='campus_reports',
-            )
-        if phase == 'ho_snapshots':
-            return _run_snapshot_stage(
-                celery_app,
-                db,
-                root,
-                state,
-                snapshot_type='ho',
-            )
-        if phase == 'ho_reports':
-            return _run_report_stage(
-                celery_app,
-                db,
-                root,
-                state,
-                stage='ho_reports',
-            )
-        return {
-            'ok': True,
-            'status': 'ready',
-            'phase': phase,
-            'root_job_id': str(root.id),
-        }
-    except ContinuationPublishError as exc:
-        db.rollback()
-        return {
-            'ok': False,
-            'status': 'dispatch_pending',
-            'root_job_id': str(root_job_id),
-            'error': str(exc.original)[:500],
-            'error_class': exc.original.__class__.__name__,
-        }
-    finally:
-        if db_lock_acquired:
-            _release_daily_root_db_lock(db, str(root_job_id))
-        db.close()
+        except ContinuationPublishError as exc:
+            db.rollback()
+            return {
+                'ok': False,
+                'status': 'dispatch_pending',
+                'root_job_id': str(root_job_id),
+                'error': str(exc.original)[:500],
+                'error_class': exc.original.__class__.__name__,
+            }
 
 
 def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, object]:
-    with _daily_root_process_lock(str(root_job_id)):
-        return _run_daily_academic_pipeline_locked(celery_app, root_job_id)
+    return _run_daily_academic_pipeline_locked(celery_app, root_job_id)
+
+
+def resume_daily_academic_pipeline(
+    celery_app, root_job_id: str, *, now: datetime | None = None, actor: str = 'operator',
+) -> dict[str, object]:
+    """Resume only a transport-failed root, preserving frozen scope and attempts."""
+    current_time = now or datetime.utcnow()
+    with _daily_coordinator_session() as (db, acquired):
+        if not acquired:
+            return {'ok': False, 'status': 'coordinator_busy'}
+        root = db.get(AcademicBulkOperationJob, str(root_job_id))
+        if root is None or root.job_type != DAILY_ROOT_JOB_TYPE:
+            return {'ok': False, 'code': 'root_job_not_found'}
+        if root.status in ACTIVE:
+            return {'ok': True, 'status': 'already_running', 'root_job_id': str(root.id)}
+        state = dict(root.result_json or {})
+        code = str(state.get('code') or '')
+        if (root.status != 'failed'
+                or code not in {'continuation_recovery_exhausted', 'continuation_dispatch_exhausted'}
+                or str(state.get('phase') or '') not in set(_ROOT_PHASE_PROGRESS) - {'completed'}):
+            return {'ok': False, 'code': 'root_failure_not_resumable'}
+        created_at = _parse_state_time(root.created_at)
+        if created_at is None or (current_time-created_at).total_seconds() > DAILY_MAX_RUNTIME_SECONDS:
+            return {'ok': False, 'code': 'pipeline_runtime_exceeded'}
+        other_roots = db.query(AcademicBulkOperationJob).filter(
+            AcademicBulkOperationJob.job_type == DAILY_ROOT_JOB_TYPE,
+            AcademicBulkOperationJob.id != str(root.id),
+        ).all()
+        date = str((root.request_json or {}).get('run_date_vn') or '')
+        if any(other.status in ACTIVE or str((other.request_json or {}).get('run_date_vn') or '') > date
+               for other in other_roots):
+            return {'ok': False, 'code': 'newer_or_active_daily_root_exists'}
+        original_error = root.error_message
+        history = list(state.get('resume_history') or [])
+        history.append({'at': current_time.isoformat(), 'actor': str(actor),
+                        'code': code, 'error': original_error})
+        state['resume_history'] = history[-10:]
+        for key in ('code', 'failed_target_key'):
+            state.pop(key, None)
+        state['continuation'] = {'status': 'confirmed', 'attempt_count': 0,
+                                 'publish_failure_count': 0, 'task_name': DAILY_ROOT_TASK}
+        root.status = 'running'
+        root.error_message = None
+        root.finished_at = None
+        for scope in db.query(AcademicBulkOperationJob).filter(
+                AcademicBulkOperationJob.parent_job_id == str(root.id),
+                AcademicBulkOperationJob.job_type.in_(
+                    ['academic_daily_provision_scope', 'academic_daily_score-report_scope'])).all():
+            if (scope.status == 'failed'
+                    and ((scope.result_json or {}).get('root_failure_code') == code
+                         or (original_error and scope.error_message == original_error))):
+                scope.status = 'queued'
+                scope.finished_at = None
+                scope.error_message = None
+                payload = dict(scope.result_json or {})
+                payload.pop('root_failure_code', None)
+                scope.result_json = json_safe_value(payload)
+                db.add(scope)
+        _save_root_state(db, root, state)
+        try:
+            _publish_root_continuation(celery_app, db, root)
+        except ContinuationPublishError:
+            return {'ok': False, 'status': 'dispatch_pending', 'root_job_id': str(root.id)}
+        return {'ok': True, 'status': 'resumed', 'phase': state.get('phase'),
+                'root_job_id': str(root.id)}
 
 
 def register_daily_academic_pipeline_tasks(celery_app) -> None:
@@ -2515,8 +2654,8 @@ def register_daily_academic_pipeline_tasks(celery_app) -> None:
 
     routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})
     routes.update({
-        DAILY_START_TASK: {'queue': 'sync-bulk'},
-        DAILY_ROOT_TASK: {'queue': 'sync-bulk'},
+        DAILY_START_TASK: {'queue': DAILY_COORDINATOR_QUEUE},
+        DAILY_ROOT_TASK: {'queue': DAILY_COORDINATOR_QUEUE},
     })
     celery_app.conf.task_routes = routes
 

@@ -72,6 +72,21 @@ def _task_id(value: Any) -> str:
     return str(getattr(value, 'id', None) or value or '')
 
 
+def _publish_failure_count(continuation: dict[str, Any]) -> int:
+    """Only broker publish failures consume the retry budget, never queue waits."""
+    if 'publish_failure_count' in continuation:
+        return max(0, int(continuation.get('publish_failure_count') or 0))
+    # Compatibility with already persisted dispatch intents. A successful
+    # dispatch (or a killed coordinator) is not a broker connection failure.
+    if (continuation.get('status') == 'dispatch_pending'
+            and continuation.get('last_error')
+            and continuation.get('last_error_class') != 'StaleConfirmedContinuation'):
+        # Legacy dispatch count also included successful queue redeliveries;
+        # only the latest broker failure is known, not a consecutive count.
+        return 1
+    return 0
+
+
 def publish_parent_continuation(
     db: Session,
     parent: AcademicBulkOperationJob,
@@ -83,6 +98,7 @@ def publish_parent_continuation(
     countdown: int = 0,
     now: datetime | None = None,
     max_attempts: int = 5,
+    confirmation_timeout_seconds: int = 90,
 ) -> str:
     current_time = now or datetime.utcnow()
     state = dict(parent.result_json or {})
@@ -97,14 +113,17 @@ def publish_parent_continuation(
         if previous_status in {'', 'confirmed'}
         else int(previous.get('attempt_count') or 0) + 1
     )
-    if attempts > max(1, int(max_attempts)):
+    failures = _publish_failure_count(previous)
+    if failures >= max(1, int(max_attempts)):
         parent.status = 'failed'
         parent.error_message = 'Continuation dispatch exceeded its retry limit.'
         parent.finished_at = current_time
+        state['code'] = 'continuation_dispatch_exhausted'
         state['continuation'] = {
             **previous,
             'status': 'failed',
-            'attempt_count': attempts - 1,
+            'attempt_count': int(previous.get('attempt_count') or 0),
+            'publish_failure_count': failures,
             'failed_at': current_time.isoformat(),
             'last_error': parent.error_message,
         }
@@ -120,9 +139,11 @@ def publish_parent_continuation(
     continuation = {
         'status': 'dispatch_pending',
         'attempt_count': attempts,
+        'publish_failure_count': failures,
+        'confirmation_timeout_seconds': max(90, int(confirmation_timeout_seconds)),
         'due_at': (
             current_time
-            + timedelta(seconds=max(0, int(countdown)) + 90)
+            + timedelta(seconds=max(0, int(countdown)) + max(90, int(confirmation_timeout_seconds)))
         ).isoformat(),
         'task_name': str(task_name),
         'args': list(args),
@@ -148,9 +169,11 @@ def publish_parent_continuation(
     except Exception as exc:
         state = dict(parent.result_json or {})
         continuation = dict(state.get('continuation') or {})
-        retry_delay = min(300, 15 * (2 ** max(0, attempts - 1)))
+        failures += 1
+        retry_delay = min(300, 15 * (2 ** min(5, max(0, failures - 1))))
         continuation.update({
             'status': 'dispatch_pending',
+            'publish_failure_count': failures,
             'due_at': (current_time + timedelta(seconds=retry_delay)).isoformat(),
             'last_error': str(exc)[:2000],
             'last_error_class': exc.__class__.__name__,
@@ -167,6 +190,7 @@ def publish_parent_continuation(
     continuation = dict(state.get('continuation') or {})
     continuation.update({
         'status': 'dispatched',
+        'publish_failure_count': 0,
         'task_id': _task_id(result),
         'dispatched_at': current_time.isoformat(),
     })
@@ -200,6 +224,7 @@ def confirm_parent_continuation(
         return False
     continuation.update({
         'status': 'confirmed',
+        'publish_failure_count': 0,
         'confirmed_at': current_time.isoformat(),
         'last_error': None,
         'last_error_class': None,
@@ -251,6 +276,11 @@ def recover_due_parent_continuations(
             if isinstance(state.get('continuation'), dict)
             else {}
         )
+        created_at = _parse_time(parent.created_at)
+        if (created_at is not None and (current_time-created_at).total_seconds()
+                > max(1, int(max_runtime_seconds))):
+            due.append(parent)
+            continue
         if str(continuation.get('status') or '') not in {
             'dispatch_pending',
             'dispatched',
@@ -270,13 +300,13 @@ def recover_due_parent_continuations(
         state = dict(parent.result_json or {})
         continuation = dict(state.get('continuation') or {})
         created_at = _parse_time(parent.created_at)
-        attempts = int(continuation.get('attempt_count') or 0)
+        failures = _publish_failure_count(continuation)
         runtime_exceeded = (
             created_at is not None
             and (current_time - created_at).total_seconds()
             > max(1, int(max_runtime_seconds))
         )
-        attempts_exhausted = attempts >= max(1, int(max_attempts))
+        attempts_exhausted = failures >= max(1, int(max_attempts))
         if attempts_exhausted or runtime_exceeded:
             parent.status = 'failed'
             parent.error_message = (
@@ -320,6 +350,7 @@ def recover_due_parent_continuations(
                 countdown=int(continuation.get('countdown') or 0),
                 now=current_time,
                 max_attempts=max_attempts,
+                confirmation_timeout_seconds=int(continuation.get('confirmation_timeout_seconds') or 90),
             )
             result['republished'] += 1
         except ContinuationPublishError as exc:

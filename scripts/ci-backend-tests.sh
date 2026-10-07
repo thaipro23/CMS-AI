@@ -8,6 +8,11 @@ pytest -q \
   app/tests/test_academic_daily_pipeline_ap_mapping.py \
   app/tests/test_academic_daily_pipeline_provision_score.py \
   app/tests/test_academic_daily_pipeline_recovery.py \
+  app/tests/test_daily_continuation_backlog.py \
+  app/tests/test_academic_scheduled_parent_recovery.py \
+  app/tests/test_academic_daily_pipeline_schedule.py \
+  app/tests/test_academic_daily_pipeline_reports.py \
+  app/tests/test_celery_queue_routing.py \
   app/tests/test_daily_teacher_report_pipeline_contract.py \
   app/tests/test_daily_teacher_report_watchdog.py \
   app/tests/test_learning_sync_preserves_confirmed_enrollment.py \
