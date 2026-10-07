@@ -272,7 +272,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   const [campuses, setCampuses] = useState<AcademicCampus[]>([]);
   const [items, setItems] = useState<AcademicTrainingTeacherReport[]>([]);
   const [summary, setSummary] = useState<TrainingSummary>(EMPTY_SUMMARY);
-  const { state, update } = useAcademicTableState({ branch: "poly", status: "all", pageSize: 50 });
+  const { state, update, scopeReady } = useAcademicTableState({ branch: "poly", status: "all", pageSize: isCms ? 15 : 50 });
   const { termId, branch, campus, q: search, status: learningStatus, page, pageSize, density } = state;
   const debouncedSearch = useDebouncedValue(search, 350);
   const branchAllowed = academicBranches.includes(branch as 'poly' | 'ptcd');
@@ -341,8 +341,8 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
     setTotal(0);
   };
 
-  const loadReport = async (cancelledRef?: { cancelled: boolean }, fresh = false) => {
-    if (!branchAllowed || !termId) {
+  const loadReport = async (cancelledRef?: { cancelled: boolean; signal?: AbortSignal }, fresh = false) => {
+    if (!scopeReady || !branchAllowed || !termId) {
       resetReportState();
       setLoading(false);
       return;
@@ -361,6 +361,7 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
         pageSize,
         includeClasses: false,
         fresh,
+        signal: cancelledRef?.signal,
       });
       if (cancelledRef?.cancelled) return;
       setItems(result.items || []);
@@ -378,12 +379,14 @@ export function TeacherManagementPlatformPage({ platform }: { platform: Training
   };
 
   useEffect(() => {
-    const cancelledRef = { cancelled: false };
+    const controller = new AbortController();
+    const cancelledRef = { cancelled: false, signal: controller.signal };
     loadReport(cancelledRef);
     return () => {
       cancelledRef.cancelled = true;
+      controller.abort();
     };
-  }, [headers, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize, platform]);
+  }, [headers, scopeReady, termId, branch, campus, debouncedSearch, learningStatus, page, pageSize, platform]);
 
   useEffect(() => {
     if (isCms || !termId || exportJob) return

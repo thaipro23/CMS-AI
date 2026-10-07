@@ -404,6 +404,10 @@ class AcademicTeacherReportWorkflowService:
                 partition_by=(AcademicStudentLearningSnapshot.class_id, AcademicStudentLearningSnapshot.student_id),
                 order_by=(AcademicStudentLearningSnapshot.updated_at.desc(), AcademicStudentLearningSnapshot.id.desc()),
             ).label('snapshot_rank'),
+        ).filter(
+            AcademicStudentLearningSnapshot.class_id.in_(
+                self.db.query(scope.c.class_id).distinct()
+            ),
         ).subquery()
         current_snapshot = self.db.query(ranked_snapshots).filter(ranked_snapshots.c.snapshot_rank == 1).subquery()
         is_enrolled = func.lower(func.coalesce(current_snapshot.c.enrollment_status, '')) == 'enrolled'
@@ -467,6 +471,69 @@ class AcademicTeacherReportWorkflowService:
             'classes_without_course_count': classes_without_course_count if platform == 'cms' else 0,
         })
         return summary
+
+    def _teacher_report_lite_learning_metrics(
+        self, class_ids: list[str], course_by_class: dict[str, str | None],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, int]]]:
+        """Use persisted percentages (backfilled by 0073), without quiz JSON or policy queries."""
+        if not class_ids:
+            return {}, {}
+        snapshot = AcademicStudentLearningSnapshot
+        roster = AcademicClassStudent
+        expected_course = case(
+            {cid: course for cid, course in course_by_class.items() if course},
+            value=roster.class_id,
+            else_=None,
+        ) if any(course_by_class.values()) else None
+        enrolled = func.lower(func.coalesce(snapshot.enrollment_status, '')) == 'enrolled'
+        active = and_(enrolled, or_(
+            func.coalesce(snapshot.progress_percent, 0) > 0, snapshot.grade_percent.is_not(None),
+            func.coalesce(snapshot.completed_blocks, 0) > 0, snapshot.last_activity_at.is_not(None),
+        ))
+        status = case(
+            (func.coalesce(OpenEdXUserMapping.match_status, '') != 'matched', 'cms_not_synced'),
+            (snapshot.id.is_(None), 'not_synced'),
+            (func.lower(snapshot.enrollment_status).in_(['failed', 'missing_user', 'inactive_user', 'unknown']), 'sync_error'),
+            (~enrolled, 'not_enrolled'),
+            (~active, 'no_activity'),
+            (snapshot.grade_percent < self._low_grade_threshold(), 'low_grade'),
+            (snapshot.progress_percent < self._low_progress_threshold(), 'low_progress'),
+            (or_(snapshot.passed.is_(True), snapshot.grade_percent >= 80, snapshot.progress_percent >= 80), 'good'),
+            else_='in_progress',
+        )
+        status_names = ('cms_not_synced', 'not_synced', 'sync_error', 'not_enrolled',
+                        'no_activity', 'low_grade', 'low_progress', 'good', 'in_progress')
+        rows = self.db.query(
+            roster.class_id,
+            func.count(snapshot.id).label('learning_synced_count'),
+            func.sum(case((enrolled, 1), else_=0)).label('learning_enrolled_count'),
+            func.sum(case((active, 1), else_=0)).label('learning_active_count'),
+            func.avg(snapshot.progress_percent).label('learning_avg_progress_percent'),
+            func.avg(snapshot.grade_percent).label('learning_avg_grade_percent'),
+            func.max(func.coalesce(snapshot.learning_synced_at, snapshot.last_synced_at)).label('learning_last_synced_at'),
+            *(func.sum(case((status == name, 1), else_=0)).label(name) for name in status_names),
+        ).select_from(roster).outerjoin(
+            snapshot, and_(snapshot.class_id == roster.class_id,
+                           snapshot.student_id == roster.student_id,
+                           snapshot.openedx_course_id == expected_course),
+        ).outerjoin(
+            OpenEdXUserMapping, OpenEdXUserMapping.student_id == roster.student_id,
+        ).filter(roster.class_id.in_(class_ids)).group_by(roster.class_id).all()
+        learning_by_class, statuses_by_class = {}, {}
+        for row in rows:
+            metrics = dict(row._mapping)
+            class_id = str(metrics.pop('class_id'))
+            statuses_by_class[class_id] = {
+                name: int(metrics.pop(name) or 0) for name in status_names
+            }
+            statuses_by_class[class_id] = {
+                name: count for name, count in statuses_by_class[class_id].items() if count
+            }
+            for name in ('learning_avg_progress_percent', 'learning_avg_grade_percent'):
+                if metrics[name] is not None:
+                    metrics[name] = round(float(metrics[name]), 2)
+            learning_by_class[class_id] = metrics
+        return learning_by_class, statuses_by_class
 
     def _training_teacher_report_lite_fast(
         self,
@@ -590,7 +657,9 @@ class AcademicTeacherReportWorkflowService:
             class_by_id[str(cls.id)] = cls
             teacher_rows.append((teacher, cls, subject))
         class_ids = list(class_by_id.keys())
-        udemy_context_by_class = self._teacher_udemy_context(list(class_by_id.values()))
+        # This query already filters to CMS; Udemy imports and milestones are
+        # unnecessary on this list path.
+        udemy_context_by_class: dict[str, dict[str, Any]] = {}
 
         student_count_by_class = {
             str(class_id): int(count or 0)
@@ -601,19 +670,9 @@ class AcademicTeacherReportWorkflowService:
         }
         sync_by_class = self._student_sync_summary_for_classes(class_ids)
 
-        class_overrides = self.db.query(AcademicClassCourseMapping).filter(
-            AcademicClassCourseMapping.class_id.in_(class_ids),
-            AcademicClassCourseMapping.active.is_(True),
-        ).order_by(AcademicClassCourseMapping.updated_at.desc().nullslast()).all() if class_ids else []
-        override_by_class = {item.class_id: item for item in class_overrides}
-        inherited_by_class = self.inherited_course_mappings_for_classes(list(class_by_id.values()))
-        course_by_class: dict[str, str | None] = {}
-        for class_id, cls in class_by_id.items():
-            mapping = override_by_class.get(class_id) or inherited_by_class.get(class_id)
-            course_by_class[class_id] = mapping.openedx_course_id if mapping else None
-
-        learning_by_class = self._learning_summary_by_class_ids(class_ids, course_by_class)
-        status_counts_by_class, _snapshot_by_class_student, _status_by_class_student = self._training_learning_status_counts_by_class(class_ids, course_by_class)
+        effective_mappings = self.effective_course_mappings_for_classes(list(class_by_id.values()))
+        course_by_class = {cid: getattr(effective_mappings.get(cid), 'openedx_course_id', None) for cid in class_ids}
+        learning_by_class, status_counts_by_class = self._teacher_report_lite_learning_metrics(class_ids, course_by_class)
 
         buckets: dict[str, dict[str, Any]] = {}
         seen_teacher_classes: set[tuple[str, str]] = set()

@@ -58,6 +58,7 @@ export function PaginationControls({
       <button type="button" className="btn small secondary" aria-label="Đến trang cuối" disabled={loading || currentPage >= safeTotalPages} onClick={() => onPageChange(safeTotalPages)}>Cuối</button>
       <label className="page-size-control"><span className="sr-only">Số bản ghi mỗi trang</span><select className="input page-size-select" aria-label="Số bản ghi mỗi trang" value={pageSize} disabled={loading} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
         <option value={10}>10/trang</option>
+        <option value={15}>15/trang</option>
         <option value={20}>20/trang</option>
         <option value={50}>50/trang</option>
         <option value={100}>100/trang</option>

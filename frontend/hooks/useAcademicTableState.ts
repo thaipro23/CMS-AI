@@ -27,7 +27,7 @@ type TrainingScope = {
   preferred_campus?: string | null
 }
 
-const PAGE_SIZES = new Set([20, 50, 100])
+const PAGE_SIZES = new Set([15, 20, 50, 100])
 const DENSITIES = new Set<TableDensity>(['compact', 'standard', 'comfortable'])
 
 function positiveInt(value: string | null, fallback: number) {
@@ -138,7 +138,7 @@ export function useAcademicTableState(defaults: Partial<AcademicTableState> = {}
       ['q', merged.q, ''],
       ['status', merged.status, 'all'],
       ['page', String(merged.page), '1'],
-      ['page_size', String(merged.pageSize), '50'],
+      ['page_size', String(merged.pageSize), String(defaults.pageSize || 50)],
       ['density', merged.density, 'compact'],
       ['term_id', merged.termId, ''],
       ['branch', merged.branch, 'poly'],
@@ -153,7 +153,7 @@ export function useAcademicTableState(defaults: Partial<AcademicTableState> = {}
     const href = next.toString() ? `${pathname}?${next.toString()}` : pathname
     if (options.replace === false) router.push(href, { scroll: false })
     else router.replace(href, { scroll: false })
-  }, [pathname, router, searchParams, state, trainingScope])
+  }, [defaults.pageSize, pathname, router, searchParams, state, trainingScope])
 
   return { state, update, scopeReady: authReady && isAuthenticated && trainingScopeReady }
 }

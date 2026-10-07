@@ -3753,6 +3753,7 @@ export async function getAcademicTrainingTeacherReport(
     pageSize?: number;
     includeClasses?: boolean;
     fresh?: boolean;
+    signal?: AbortSignal;
   } = {},
 ): Promise<AcademicTrainingTeacherReportResponse> {
   const params = new URLSearchParams();
@@ -3769,11 +3770,13 @@ export async function getAcademicTrainingTeacherReport(
     params.set("include_classes", filters.includeClasses ? "true" : "false");
   if (filters.fresh) params.set("fresh", "true");
   params.set("page", String(filters.page || 1));
-  params.set("page_size", String(clampAcademicPageSize(filters.pageSize)));
+  params.set("page_size", String(clampAcademicPageSize(filters.pageSize, filters.learningPlatform === 'udemy' ? 50 : 15)));
   return parseResponse(
     await apiFetch(`${API}/academic/training/teachers?${params.toString()}`, {
       credentials: "include",
       headers,
+      signal: filters.signal,
+      retries: 0,
     }),
   );
 }

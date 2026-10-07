@@ -1372,7 +1372,7 @@ def list_training_teacher_report(
     include_classes: bool = Query(False, description='Chỉ bật khi mở chi tiết giảng viên để tránh payload lớn ở danh sách'),
     fresh: bool = Query(False, description='Bỏ cache khi cần đối soát số liệu mới nhất'),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(15, ge=1, le=200),
     user: UserContext = Depends(_require_academic_view_permission),
     db: Session = Depends(get_db),
 ):
