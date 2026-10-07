@@ -16,8 +16,11 @@ no resume, new root, restart of AP, or reset of completed classes is required.
 Regression tests verify ten slots, idempotency, fairness across branches, refill
 of exactly the freed slots, and lowering the window without cancelling existing
 children. A local isolated Redis/Celery probe ran the actual application worker
-with `prefork --concurrency=10`: ten distinct child PIDs reached a barrier
+both with `prefork --concurrency=10` and starting at two processes followed
+by targeted `pool_grow(8)`: ten distinct child PIDs reached a barrier
 concurrently, completed ten tasks, and the worker shut down normally.
+After a live grow, count `pool.processes`; `pool.max-concurrency` may still
+report the original startup value.
 
 The probe does not contact LMS or write student records. Its child peak RSS was
 about 169 MiB each, for application imports and the small probe only; shared
@@ -60,58 +63,80 @@ for name in ('memory.current', 'memory.peak', 'memory.max', 'memory.events',
 PY
 ```
 
-Also inspect LMS and PostgreSQL resources in the actual deployment before
-increasing parallel connector requests. Current manifests limit the bulk pod
-to 1.5 CPU / 2 GiB; the resource budget for ten must be chosen from actual
-measurements and available node capacity. No fixed RAM value is certified by
-the local probe. Keep the bulk worker at two until the preflight is assessed.
+## Temporary trial with current production resources
 
-## Enable only after resource/load evaluation
+The operator supplied one bulk pod using 149m CPU / 329 MiB at a point in time,
+with requests 300m CPU / 512 MiB and limits 1500m CPU / 2 GiB. This is not a
+peak measurement or proof that ten learning-sync jobs fit within 2 GiB. The
+requested trial keeps those resources, the bulk Deployment and its running
+pod unchanged. No automatic resource increase is performed.
 
-Deploy the backend code to backend/workers/beat first. No frontend, CMS-FPT or
-migration change is required. Following commands are a planned operator action,
-not a report of changes already made to production. Choose suitable pod CPU/RAM
-before this step; it intentionally does not silently enlarge limits or switch
-the current 2 GiB pod to ten processes.
-
-After the resource preflight has been assessed and suitable limits are already
-deployed, change concurrency and replicas in one Deployment patch. This patch
-does not change the resource limits:
+Deploy backend/worker code containing commit `382f7e3` first. No frontend,
+CMS-FPT or migration change is needed. From a checkout containing this script:
 
 ```bash
-kubectl -n openedx patch deploy ai-server-worker-bulk --type=strategic -p '
-{"spec":{"replicas":1,"template":{"spec":{"containers":[
-{"name":"worker-bulk","env":[{"name":"CELERY_BULK_CONCURRENCY","value":"10"}]}
-]}}}}'
-kubectl -n openedx rollout status deploy/ai-server-worker-bulk --timeout=180s
-kubectl -n openedx set env deploy/ai-server-worker \
-  ACADEMIC_BULK_SYNC_DISPATCH_WINDOW=10
+bash scripts/try-academic-bulk-10.sh
+```
+
+The script first checks the fast coordinator supports ten slots and confirms
+one bulk replica and one responding bulk worker. It uses targeted Celery
+`pool_grow(8)` to grow the existing two-process worker to ten without replacing
+the bulk pod or stopping current tasks. It verifies ten live child PIDs before
+setting `ACADEMIC_BULK_SYNC_DISPATCH_WINDOW=10` on the fast Deployment. That
+last step rolls the fast coordinator, whose next tick continues the same root.
+The ten-slot window is shared across Poly/PTCD; no completed jobs are reset.
+
+The grow is temporary: if the bulk pod restarts, its original two-process
+Deployment configuration returns. The coordinator's ten-slot setting remains;
+in that case queued jobs execute with two processes until the window is lowered
+or another deliberate trial is run. A failed acknowledgement/verification may
+leave a partly grown pool; inspect worker stats before retrying. A failed fast
+rollout may already have changed the coordinator setting. The script makes no
+claim of transactional rollback or production execution by Codex.
+
+Observe real throughput, pod restarts, LMS latency and database/connector
+errors. During the trial, use a second terminal:
+
+```bash
+watch -n 2 'kubectl -n openedx top pod -l app=ai-server-worker-bulk; kubectl -n openedx get pods -l app=ai-server-worker-bulk -o custom-columns="POD:.metadata.name,RESTARTS:.status.containerStatuses[*].restartCount,LAST_REASON:.status.containerStatuses[*].lastState.terminated.reason"'
+```
+
+If memory approaches 2 GiB, restarts increase, `OOMKilled` appears or LMS/DB
+latency/errors rise, lower the coordinator window before reassessing resources.
+Growing a pool under a Kubernetes limit can OOM the pod before an operator
+sees the next metrics sample; this is a real-load experiment, not a guarantee
+that production cannot fail.
+
+## Revert without restarting the bulk pod or pipeline
+
+First lower the coordinator window; already submitted children remain intact:
+
+```bash
+kubectl -n openedx set env deploy/ai-server-worker ACADEMIC_BULK_SYNC_DISPATCH_WINDOW=4
 kubectl -n openedx rollout status deploy/ai-server-worker --timeout=180s
 ```
 
-The existing manifest's bulk worker default is two even if the Secret says ten;
-the explicit container environment override above is required. The coordinator
-runs in the fast worker, whose explicit four-slot override must also be changed.
-Inspect worker stats for actual pool max-concurrency; replicas alone do not
-prove ten execution slots. Ensure only one bulk pod is alive after rollout.
-Observe real job throughput, worker memory/CPU, LMS latency, failed job count
-and database/connector timeouts before keeping the setting.
-
-## Revert without restarting the pipeline
-
-First lower the coordinator window. Already submitted children remain intact:
+After the current burst finishes, shrink only idle processes on the existing
+worker. Celery refuses to shrink enough when too many processes are busy;
+wait for them to finish and retry instead of killing tasks:
 
 ```bash
-kubectl -n openedx set env deploy/ai-server-worker \
-  ACADEMIC_BULK_SYNC_DISPATCH_WINDOW=4
-kubectl -n openedx rollout status deploy/ai-server-worker --timeout=180s
-```
-
-Let running jobs drain, then return the single bulk worker to two processes:
-
-```bash
-kubectl -n openedx set env deploy/ai-server-worker-bulk CELERY_BULK_CONCURRENCY=2
-kubectl -n openedx rollout status deploy/ai-server-worker-bulk --timeout=180s
+kubectl -n openedx exec -i deploy/ai-server-backend -- python - <<'PY'
+from app.worker import celery_app
+stats = celery_app.control.inspect(timeout=3).stats() or {}
+workers = [name for name in stats if name.startswith('worker-bulk@')]
+if len(workers) != 1:
+    raise SystemExit(f'Expected one bulk worker, found {workers}')
+worker = workers[0]
+count = len(stats[worker].get('pool', {}).get('processes', []))
+if count < 2:
+    raise SystemExit(f'Unexpected pool size: {count}')
+if count > 2:
+    replies = celery_app.control.pool_shrink(count - 2, destination=[worker], reply=True, timeout=5)
+    if not any('ok' in item.get(worker, {}) for item in (replies or [])):
+        raise SystemExit(f'Shrink not acknowledged; wait for busy tasks and inspect before retry: {replies}')
+print('Requested idle pool shrink to two; verify live process count with worker stats.')
+PY
 ```
 
 Do not delete jobs, purge Redis or start another daily root for this tuning.

@@ -14,7 +14,8 @@ from celery import Celery
 pytestmark = pytest.mark.integration
 
 
-def test_single_actual_worker_runs_ten_prefork_tasks_concurrently(tmp_path):
+@pytest.mark.parametrize('initial_concurrency', [2, 10])
+def test_single_actual_worker_runs_ten_prefork_tasks_concurrently(tmp_path, initial_concurrency):
     if os.environ.get('RUN_BULK_PREFORK_PROBE') != '1':
         pytest.skip('Set RUN_BULK_PREFORK_PROBE=1 with a disposable Redis')
     url = os.environ.get('REDIS_URL')
@@ -37,7 +38,7 @@ def test_single_actual_worker_runs_ten_prefork_tasks_concurrently(tmp_path):
         worker = subprocess.Popen([
             sys.executable, '-m', 'celery', '-A',
             'app.tests.integration.bulk_prefork_probe:celery_app', 'worker',
-            '--pool=prefork', '--concurrency=10', f'--queues={queue}',
+            '--pool=prefork', f'--concurrency={initial_concurrency}', f'--queues={queue}',
             f'--hostname={worker_name}', '--prefetch-multiplier=1',
             '--without-gossip', '--without-mingle', '--without-heartbeat',
             '--loglevel=WARNING',
@@ -53,14 +54,26 @@ def test_single_actual_worker_runs_ten_prefork_tasks_concurrently(tmp_path):
                     break
                 time.sleep(0.1)
             assert stats is not None, log_path.read_text()
-            assert stats['pool']['max-concurrency'] == 10
+            assert len(stats['pool']['processes']) == initial_concurrency
+            if initial_concurrency < 10:
+                replies = celery_app.control.pool_grow(
+                    10 - initial_concurrency, destination=[worker_name], reply=True, timeout=3)
+                assert any('ok' in item.get(worker_name, {}) for item in replies)
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    replies = celery_app.control.inspect(timeout=0.5, destination=[worker_name]).stats()
+                    if replies and len(replies[worker_name]['pool']['processes']) == 10:
+                        break
+                    time.sleep(0.1)
+                assert replies and len(replies[worker_name]['pool']['processes']) == 10
             results = [celery_app.send_task('ci_bulk_prefork_probe', args=[key, 10], queue=queue)
                        for _ in range(10)]
             values = [result.get(timeout=25) for result in results]
             assert len({value['pid'] for value in values}) == 10
             assert client.scard(key) == 10
             assert worker.poll() is None
-            print(json.dumps({'single_worker': worker_name, 'concurrency': 10,
+            print(json.dumps({'single_worker': worker_name, 'initial_concurrency': initial_concurrency,
+                              'concurrency': 10,
                               'unique_child_pids': len({v['pid'] for v in values}),
                               'completed': len(values),
                               'min_child_peak_rss_mib': min(v['peak_rss_mib'] for v in values),
