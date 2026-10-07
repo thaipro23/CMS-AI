@@ -21,6 +21,7 @@ import {
   previewQuizAutoMap,
   previewQuizFromBankRelease,
   rollbackCourseQuizInstance,
+  updateCourseQuizDuration,
 } from '../../../lib/api'
 import { ContentNotice } from '../../../components/ui/ContentNotice'
 import { useFeedback } from '../../../components/ui/FeedbackProvider'
@@ -186,6 +187,8 @@ export default function BankQuizPage() {
   const [message, setMessage] = useState<InlineMessage | null>(null)
   const [selectedOfferingId, setSelectedOfferingId] = useState<string>('')
   const [createModal, setCreateModal] = useState<PendingCreate | null>(null)
+  const [durationModal, setDurationModal] = useState<CourseQuizInstance | null>(null)
+  const [durationMinutes, setDurationMinutes] = useState('')
   const [blueprints, setBlueprints] = useState<QuizBlueprint[]>([])
   const [selectedBlueprintId, setSelectedBlueprintId] = useState('')
   const [blueprintBusy, setBlueprintBusy] = useState(false)
@@ -642,6 +645,35 @@ export default function BankQuizPage() {
     },
   ], [activeQuizInstances, busy, courseTreeUnavailable, creatingKey, titleForItem, recoverQuiz])
 
+  const openDurationEditor = useCallback((item: CourseQuizInstance) => {
+    const timer = item.metadata_json?.timer_config || {}
+    const minutes = timer.time_limit_minutes || Number(timer.duration_seconds || 0) / 60
+    setDurationMinutes(minutes > 0 ? String(minutes) : '')
+    setMessage(null)
+    setDurationModal(item)
+  }, [])
+
+  async function saveDuration() {
+    if (!durationModal || busy) return
+    const minutes = Number(durationMinutes)
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 300) {
+      setMessage({ tone: 'warning', text: 'Nhập số phút nguyên từ 1 đến 300.' })
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      const updated = await updateCourseQuizDuration(headers, durationModal.id, minutes)
+      setHistory((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setDurationModal(null)
+      setMessage({ tone: 'success', text: `Đã đổi thời lượng thành ${minutes} phút, áp dụng cho lượt bắt đầu mới.` })
+    } catch (error) {
+      setMessage({ tone: 'danger', text: error instanceof Error ? error.message : 'Không cập nhật được thời lượng Quiz.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const historyColumns = useMemo<EnterpriseTableColumn<CourseQuizInstance>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, hideable: false, render: (_row, index) => index + 1 },
     { key: 'quiz', header: 'Bài kiểm tra', kind: 'identity', minWidth: 250, priority: 'required', hideable: false, render: (item) => <div className="quiz-history-identity"><b>{item.metadata_json?.quiz_title || 'Bài kiểm tra Open edX'}</b><small>{item.openedx_unit_node_id || item.bank_release_id}</small></div> },
@@ -649,8 +681,11 @@ export default function BankQuizPage() {
     { key: 'status', header: 'Trạng thái', kind: 'status', width: 142, priority: 'important', hideable: true, render: (item) => <span className={statusClass(item.status)}>{statusLabel(item.status)}</span> },
     { key: 'timer', header: 'Timer', kind: 'number', width: 94, priority: 'optional', hideable: true, render: (item) => item.metadata_json?.timer_config?.custom_timer_enabled ? `${item.metadata_json.timer_config.time_limit_minutes || Math.round((item.metadata_json.timer_config.duration_seconds || 0) / 60)} phút` : 'Tắt' },
     { key: 'created_at', header: 'Thời điểm', kind: 'date', width: 138, priority: 'important', hideable: true, render: (item) => formatVNDateTime(item.created_at) },
-    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 170, hideable: false, render: (item) => <button className="btn small secondary" disabled={busy || item.status === 'rolled_back' || item.status === 'creating'} onClick={() => void recoverQuiz(item)}>{item.status === 'rollback_manual_required' ? 'Kiểm tra và khôi phục' : 'Khôi phục'}</button> },
-  ], [busy, recoverQuiz])
+    { key: 'actions', header: 'Thao tác', kind: 'actions', width: 270, hideable: false, render: (item) => <>
+      {['created', 'published'].includes(item.status) && item.openedx_unit_node_id && item.metadata_json?.timer_config?.custom_timer_enabled && !item.metadata_json?.timer_config?.native_timed_exam ? <button type="button" className="btn small secondary" disabled={busy} onClick={() => openDurationEditor(item)}>Sửa thời lượng</button> : null}
+      <button className="btn small secondary" disabled={busy || item.status === 'rolled_back' || item.status === 'creating'} onClick={() => void recoverQuiz(item)}>{item.status === 'rollback_manual_required' ? 'Kiểm tra và khôi phục' : 'Khôi phục'}</button>
+    </> },
+  ], [busy, openDurationEditor, recoverQuiz])
 
   if (!can('publish_questions')) return <PageRoot className="page-stack bank-multipage bank-contract-page bank-quiz-page">
     <PageHeader eyebrow="Ngân hàng đề" title="Tạo Quiz trên Open edX" icon="quiz" breadcrumbs={[{ label: 'Ngân hàng đề', href: '/bank/departments' }, { label: 'Tạo Quiz' }]} />
@@ -676,7 +711,7 @@ export default function BankQuizPage() {
       meta={applied ? <span className="status success">Đã lưu cấu hình</span> : autoMap ? <span className="status warning">Đang preview</span> : <span className="status pending">Chưa map</span>}
     />
 
-    <InlineNotice notice={createModal ? null : quizNotice(message)} />
+    <InlineNotice notice={createModal || durationModal ? null : quizNotice(message)} />
 
     <BankWorkflowStepper
       currentStep={workflowStep}
@@ -782,6 +817,21 @@ export default function BankQuizPage() {
     >
       {!normalizeOpenEdxCourseId(courseId) ? <div className="bank-contract-empty-state"><VisualIcon icon="audit" tone="slate" label="Chưa có Course ID" size={24} /><div><b>Chưa có Course ID</b><p>Nhập Course ID để xem lịch sử đúng khóa học.</p></div></div> : <EnterpriseDataTable tableId="bank-quiz-course-history" caption="Lịch sử bài kiểm tra" rows={history} columns={historyColumns} rowKey={(item) => item.id} density="compact" loading={historyBusy} label="bản ghi" emptyTitle="Chưa có bài kiểm tra" emptyDescription="Khóa học này chưa có Quiz hoặc Final test được tạo từ AI Server." />}
     </BankSection>
+
+    <AccessibleDialog open={Boolean(durationModal)} title="Sửa thời lượng làm bài"
+      description="Thời lượng mới áp dụng cho lượt bắt đầu sau khi lưu. Bài đã nộp và lượt đang làm giữ nguyên."
+      onClose={() => setDurationModal(null)} busy={busy} size="small">
+      {durationModal ? <form onSubmit={(event) => { event.preventDefault(); void saveDuration() }}>
+        <InlineNotice notice={quizNotice(message)} />
+        <p><b>{durationModal.metadata_json?.quiz_title || 'Bài kiểm tra'}</b></p>
+        <label>Thời gian làm bài (phút)<input className="input" type="number" required min={1} max={300} step={1}
+          value={durationMinutes} disabled={busy} onChange={(event) => setDurationMinutes(event.target.value)} /></label>
+        <div className="modal-actions">
+          <button className="btn secondary" type="button" disabled={busy} onClick={() => setDurationModal(null)}>Hủy</button>
+          <button className="btn" type="submit" disabled={busy}>{busy ? 'Đang lưu...' : 'Lưu thời lượng'}</button>
+        </div>
+      </form> : null}
+    </AccessibleDialog>
 
     <AccessibleDialog
       open={Boolean(createModal)}

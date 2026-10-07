@@ -77,6 +77,10 @@ class OpenEdXConnector(ABC):
             'metadata': metadata or {},
         }
 
+    async def update_quiz_timer_duration(self, *, course_id: str, unit_usage_key: str,
+                                         duration_seconds: int, actor: str = '') -> dict:
+        return {'success': False, 'status': 'quiz_duration_update_unavailable'}
+
     async def upsert_quiz_timer_config(
         self,
         *,

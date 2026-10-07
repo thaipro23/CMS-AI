@@ -3149,6 +3149,15 @@ export async function getCourseQuizInstances(
   );
 }
 
+export async function updateCourseQuizDuration(
+  headers: HeadersInit, instanceId: string, timeLimitMinutes: number,
+): Promise<CourseQuizInstance> {
+  return parseResponse<CourseQuizInstance>(await apiFetch(
+    `${API}/question-bank-v2/course-quiz-instances/${encodeURIComponent(instanceId)}/duration`,
+    { method: 'PUT', headers, body: JSON.stringify({ time_limit_minutes: timeLimitMinutes }), retries: 0 },
+  ));
+}
+
 export async function rollbackCourseQuizInstance(
   headers: HeadersInit,
   instanceId: string,

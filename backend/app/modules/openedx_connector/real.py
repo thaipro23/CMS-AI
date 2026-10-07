@@ -777,6 +777,17 @@ class RealOpenEdXConnector(OpenEdXConnector):
         body = self._json_body(payload)
         return await self._post_connector_json(url=url, body=body, step='delete_quiz_node', retry_safe=True, write_operation=True)
 
+    async def update_quiz_timer_duration(self, *, course_id: str, unit_usage_key: str,
+                                         duration_seconds: int, actor: str = '') -> dict:
+        url = f'{self.lms_base_url}/api/unit-reset/v1/quiz-config/duration'
+        body = self._json_body({
+            'course_id': normalize_openedx_course_id(course_id, required=True),
+            'unit_usage_key': _clean_openedx_usage_key(unit_usage_key),
+            'duration_seconds': duration_seconds, 'actor': actor,
+        })
+        return await self._post_connector_json(url=url, body=body, step='update_quiz_timer_duration',
+                                              retry_safe=True, write_operation=True)
+
     async def upsert_quiz_timer_config(
         self,
         *,

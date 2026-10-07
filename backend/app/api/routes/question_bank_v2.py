@@ -34,6 +34,7 @@ from app.models.question_bank import (
     BankChapterStats,
 )
 from app.schemas.question_bank import (
+    CourseQuizDurationUpdateRequest,
     BankReleaseCreate,
     BankReleaseOut,
     BankReleasePreviewOut,
@@ -2796,6 +2797,58 @@ def list_course_quiz_instances(openedx_course_id: str | None = None, bank_releas
         _require_release(db, user, 'bank.view', bank_release_id)
         query = query.filter(CourseQuizInstance.bank_release_id == bank_release_id)
     return _paginate(query.order_by(CourseQuizInstance.created_at.desc(), CourseQuizInstance.id.desc()), page=page, page_size=page_size, max_page_size=100)
+
+
+@router.put('/course-quiz-instances/{instance_id}/duration', response_model=CourseQuizInstanceOut)
+async def update_course_quiz_duration(
+    instance_id: str, payload: CourseQuizDurationUpdateRequest,
+    db: Session = Depends(get_db), user: UserContext = Depends(require_permission('publish_questions')),
+):
+    from app.modules.openedx_connector.factory import get_openedx_connector
+
+    instance = db.get(CourseQuizInstance, instance_id)
+    if not instance:
+        raise HTTPException(404, 'Không tìm thấy Quiz')
+    _require_release(db, user, 'quiz.create_openedx', instance.bank_release_id)
+    metadata = dict(instance.metadata_json or {})
+    timer = dict(metadata.get('timer_config') or {})
+    if instance.status not in {'created', 'published'} or not instance.openedx_unit_node_id:
+        raise HTTPException(409, 'Chỉ sửa thời lượng Quiz đã tạo thành công trên CMS.')
+    if not timer.get('custom_timer_enabled') or timer.get('native_timed_exam'):
+        raise HTTPException(409, 'Quiz này chưa có timer tự luyện đang bật.')
+    seconds = payload.time_limit_minutes * 60
+    try:
+        result = await get_openedx_connector().update_quiz_timer_duration(
+            course_id=instance.openedx_course_id, unit_usage_key=instance.openedx_unit_node_id,
+            duration_seconds=seconds, actor=user.user_id,
+        )
+        config = result.get('config') or {}
+        if (result.get('success') is not True or config.get('duration_seconds') != seconds
+                or config.get('course_id') != instance.openedx_course_id
+                or config.get('unit_usage_key') != instance.openedx_unit_node_id):
+            raise RuntimeError('LMS chưa xác nhận thời lượng mới cho đúng Quiz.')
+        metadata['timer_config'] = {
+            **timer, 'duration_seconds': seconds, 'time_limit_minutes': payload.time_limit_minutes,
+            'duration_updated_by': user.user_id, 'duration_updated_at': datetime.now(timezone.utc).isoformat(),
+        }
+        instance.metadata_json = metadata
+        db.commit()
+        db.refresh(instance)
+    except Exception as exc:
+        db.rollback()
+        log_audit(db, action='question_bank.course_quiz.duration.update', status='failed',
+                  error_type=AuditErrorType.EXTERNAL_SERVICE_ERROR,
+                  message='Không cập nhật được thời lượng Quiz.', user=user,
+                  target_type='course_quiz_instance', target_id=instance_id)
+        raise public_http_exception(status_code=502, code='QUIZ_DURATION_UPDATE_FAILED',
+            message='Không cập nhật được thời lượng Quiz. Kiểm tra plugin LMS đã có chức năng sửa thời lượng rồi thử lại.',
+            logger_name=__name__) from exc
+    log_audit(db, action='question_bank.course_quiz.duration.update', status='success',
+              message='Đã cập nhật thời lượng Quiz; áp dụng cho lượt bắt đầu mới.', user=user,
+              target_type='course_quiz_instance', target_id=instance_id,
+              metadata={'previous_duration_seconds': result.get('previous_duration_seconds'),
+                        'duration_seconds': seconds, 'unit_usage_key': instance.openedx_unit_node_id})
+    return instance
 
 
 @router.post('/course-quiz-instances/{instance_id}/rollback', response_model=CourseQuizRollbackOut)

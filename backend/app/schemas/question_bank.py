@@ -980,6 +980,10 @@ class CourseQuizInstanceOut(BaseModel):
         from_attributes = True
 
 
+class CourseQuizDurationUpdateRequest(BaseModel):
+    time_limit_minutes: int = Field(ge=1, le=300, strict=True)
+
+
 class CourseQuizRollbackRequest(BaseModel):
     mode: str = Field(default='safe')  # safe = thử xóa trên Open edX nếu connector hỗ trợ, manual = chỉ đánh dấu cần xóa tay
     note: str = ''
