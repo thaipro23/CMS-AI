@@ -133,6 +133,48 @@ def test_provisioning_across_two_branches_has_only_four_active_children(
         assert all(job.request_json["request_contract"]["force"] is True for job in active)
 
 
+@pytest.mark.parametrize('phase', ['account_enrollment', 'score_update'])
+def test_ten_slot_trial_is_shared_across_branches_and_keeps_child_ids(
+    monkeypatch, session_factory, phase,
+):
+    root_id = _seed_stage_root(session_factory, phase=phase, poly=8, ptcd=8)
+    monkeypatch.setattr(runtime, 'SessionLocal', session_factory)
+    monkeypatch.setattr(runtime.settings, 'academic_bulk_sync_dispatch_window', 10)
+    celery = FakeCelery()
+    runtime.run_daily_academic_pipeline(celery, root_id)
+    with session_factory() as db:
+        jobs = db.query(AcademicClassSyncJob).all()
+        original_ids = {job.id for job in jobs}
+        assert len(jobs) == 10
+        assert {db.get(AcademicBulkOperationJob, job.parent_job_id).branch for job in jobs} == {'poly', 'ptcd'}
+        assert all(job.status == 'queued' for job in jobs)
+        assert all(sent[2]['queue'] == 'sync-bulk' for sent in celery.sent
+                   if sent[0] == 'academic_class_sync_task')
+    runtime.run_daily_academic_pipeline(celery, root_id)
+    with session_factory() as db:
+        assert {job.id for job in db.query(AcademicClassSyncJob).all()} == original_ids
+    assert len([sent for sent in celery.sent if sent[0] == 'academic_class_sync_task']) == 10
+    # A rollback to four must not cancel ten already submitted children.
+    monkeypatch.setattr(runtime.settings, 'academic_bulk_sync_dispatch_window', 4)
+    runtime.run_daily_academic_pipeline(celery, root_id)
+    with session_factory() as db:
+        assert {job.id for job in db.query(AcademicClassSyncJob).all()} == original_ids
+        assert all(job.status == 'queued' for job in db.query(AcademicClassSyncJob).all())
+    assert len([sent for sent in celery.sent if sent[0] == 'academic_class_sync_task']) == 10
+    # Re-enable ten: only freed slots are filled, and completed work is kept.
+    monkeypatch.setattr(runtime.settings, 'academic_bulk_sync_dispatch_window', 10)
+    with session_factory() as db:
+        for job in db.query(AcademicClassSyncJob).order_by(AcademicClassSyncJob.id).limit(3).all():
+            job.status = 'completed'
+        db.commit()
+    runtime.run_daily_academic_pipeline(celery, root_id)
+    with session_factory() as db:
+        assert db.query(AcademicClassSyncJob).count() == 13
+        assert db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.status == 'queued').count() == 10
+        assert db.query(AcademicClassSyncJob).filter(AcademicClassSyncJob.status == 'completed').count() == 3
+    assert len([sent for sent in celery.sent if sent[0] == 'academic_class_sync_task']) == 13
+
+
 def test_score_stage_does_not_start_until_all_provisioning_retries_succeed(
     monkeypatch,
     session_factory,

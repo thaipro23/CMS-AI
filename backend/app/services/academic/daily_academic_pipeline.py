@@ -1710,6 +1710,7 @@ def _run_class_stage(
         targets,
         statuses,
         active_count=active_count,
+        window=int(settings.academic_bulk_sync_dispatch_window),
     ):
         scope = class_scopes[class_id]
         parents = ensure_scope_parents(db, root, [scope])

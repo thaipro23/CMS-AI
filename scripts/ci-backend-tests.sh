@@ -7,6 +7,7 @@ pytest -q \
   app/tests/test_academic_branch_course_mapping.py \
   app/tests/test_academic_daily_pipeline_ap_mapping.py \
   app/tests/test_academic_daily_pipeline_provision_score.py \
+  app/tests/test_academic_daily_stage_coordinator.py \
   app/tests/test_academic_daily_pipeline_recovery.py \
   app/tests/test_daily_continuation_backlog.py \
   app/tests/test_academic_scheduled_parent_recovery.py \

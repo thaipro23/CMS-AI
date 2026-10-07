@@ -113,3 +113,25 @@ def test_active_count_above_window_dispatches_nothing():
     )
 
     assert selected == []
+
+
+def test_explicit_ten_slot_window_counts_running_and_queued_jobs():
+    selected = select_global_dispatch_targets(
+        [f'class-{i}' for i in range(20)],
+        {'class-0': 'running', 'class-1': 'queued'},
+        active_count=2, window=10,
+    )
+    assert selected == [f'class-{i}' for i in range(2, 10)]
+
+
+def test_dispatch_never_exceeds_settings_supported_maximum():
+    selected = select_global_dispatch_targets(
+        [f'class-{i}' for i in range(30)], {}, active_count=0, window=999,
+    )
+    assert len(selected) == 20
+
+
+def test_lowering_window_keeps_existing_work_and_stops_new_dispatch():
+    assert select_global_dispatch_targets(
+        ['new-class'], {}, active_count=10, window=4,
+    ) == []

@@ -3,6 +3,7 @@ from typing import Iterable, Mapping
 
 
 DAILY_PIPELINE_WINDOW = 4
+MAX_DAILY_PIPELINE_WINDOW = 20
 MAX_STAGE_RETRY_ROUNDS = 3
 STAGE_ORDER = (
     "ap_sync",
@@ -53,7 +54,7 @@ def select_global_dispatch_targets(
     active_count: int,
     window: int = DAILY_PIPELINE_WINDOW,
 ) -> list[str]:
-    limit = min(DAILY_PIPELINE_WINDOW, max(1, int(window)))
+    limit = min(MAX_DAILY_PIPELINE_WINDOW, max(1, int(window)))
     slots = max(0, limit - max(0, int(active_count)))
     return [
         key
