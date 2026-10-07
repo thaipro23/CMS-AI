@@ -8,6 +8,7 @@ from sqlalchemy import and_, case, distinct, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.redis_client import get_redis_client
 from app.models.cost import BudgetPolicy
 from app.models.question import Question
 from app.models.question_bank import (
@@ -44,9 +45,7 @@ class BankDashboardStatsService:
 
     def _redis_client(self):
         try:
-            import redis
-
-            return redis.Redis.from_url(settings.redis_url, decode_responses=True)
+            return get_redis_client(cache=True)
         except Exception:
             return None
 

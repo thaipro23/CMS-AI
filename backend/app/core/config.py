@@ -67,12 +67,24 @@ class Settings(BaseSettings):
     redis_url: str = 'redis://redis:6379/0'
     redis_password: str | None = None
     redis_user: str | None = None
+    # Optional independent cache server. Security, Celery and locks use redis_url.
+    redis_cache_url: str | None = None
+    redis_cache_password: str | None = None
+    redis_cache_user: str | None = None
+    redis_socket_timeout_seconds: float = Field(default=0.5, gt=0, le=5)
+    redis_max_connections: int = Field(default=32, ge=1, le=512)
+    teacher_report_cache_ttl_seconds: int = Field(default=45, ge=0, le=300)
 
     @model_validator(mode='after')
     def _apply_redis_auth(self):
         url = authenticated_redis_url(self.redis_url, password=self.redis_password, username=self.redis_user)
         if url != self.redis_url:
             object.__setattr__(self, 'redis_url', url)
+        if self.redis_cache_url and self.redis_cache_url.strip():
+            object.__setattr__(self, 'redis_cache_url', authenticated_redis_url(
+                self.redis_cache_url, password=self.redis_cache_password, username=self.redis_cache_user))
+        else:
+            object.__setattr__(self, 'redis_cache_url', None)
         return self
 
     # v25.9.15.6.32 database scale foundation.

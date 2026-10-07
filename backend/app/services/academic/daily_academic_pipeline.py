@@ -10,7 +10,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from celery.schedules import crontab
-import redis
 from redis.exceptions import RedisError, LockError
 from sqlalchemy import and_, func, or_, text
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.json_safe import json_safe_value
 from app.core.rbac import UserContext
+from app.core.redis_client import get_redis_client
 from app.db.session import SessionLocal
 from app.models.academic import (
     AcademicBulkOperationJob,
@@ -181,7 +181,7 @@ def _release_daily_root_db_lock(db: Session, root_id: str) -> bool:
 
 
 def _daily_redis_client():
-    return redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1)
+    return get_redis_client()
 
 
 @contextmanager
@@ -2579,27 +2579,54 @@ def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, objec
 
 
 def resume_daily_academic_pipeline(
-    celery_app, root_job_id: str, *, now: datetime | None = None, actor: str = 'operator',
+    celery_app, root_job_id: str | None = None, *, run_date_vn: str | None = None,
+    now: datetime | None = None, actor: str = 'operator',
 ) -> dict[str, object]:
     """Resume only a transport-failed root, preserving frozen scope and attempts."""
-    current_time = now or datetime.utcnow()
+    current_time = _parse_state_time(now or datetime.now(timezone.utc))
     with _daily_coordinator_session() as (db, acquired):
         if not acquired:
             return {'ok': False, 'status': 'coordinator_busy'}
+        selected_date = None
+        if root_job_id and run_date_vn:
+            return {'ok': False, 'code': 'choose_root_id_or_run_date'}
+        if not root_job_id:
+            selected_date = run_date_vn or _local_now(current_time).date().isoformat()
+            try:
+                day = datetime.strptime(selected_date, '%Y-%m-%d').replace(tzinfo=VN_TZ)
+                if day.date().isoformat() != selected_date:
+                    raise ValueError('Non-canonical date')
+            except (ValueError, TypeError):
+                return {'ok': False, 'code': 'invalid_run_date_vn'}
+            roots = db.query(AcademicBulkOperationJob).filter(
+                AcademicBulkOperationJob.job_type == DAILY_ROOT_JOB_TYPE,
+                AcademicBulkOperationJob.request_json['run_date_vn'].as_string() == selected_date,
+            ).all()
+            candidates = [{'id': str(item.id), 'status': item.status,
+                           'phase': (item.result_json or {}).get('phase'),
+                           'code': (item.result_json or {}).get('code')} for item in roots]
+            if len(roots) != 1:
+                return {'ok': False, 'code': 'ambiguous_daily_root' if roots else 'root_job_not_found',
+                        'run_date_vn': selected_date, 'candidates': candidates}
+            root_job_id = str(roots[0].id)
         root = db.get(AcademicBulkOperationJob, str(root_job_id))
         if root is None or root.job_type != DAILY_ROOT_JOB_TYPE:
             return {'ok': False, 'code': 'root_job_not_found'}
         if root.status in ACTIVE:
-            return {'ok': True, 'status': 'already_running', 'root_job_id': str(root.id)}
+            return {'ok': True, 'status': 'already_running', 'root_job_id': str(root.id),
+                    'run_date_vn': (root.request_json or {}).get('run_date_vn')}
         state = dict(root.result_json or {})
         code = str(state.get('code') or '')
+        selected = {'root_job_id': str(root.id),
+                    'run_date_vn': (root.request_json or {}).get('run_date_vn'),
+                    'phase': state.get('phase')}
         if (root.status != 'failed'
                 or code not in {'continuation_recovery_exhausted', 'continuation_dispatch_exhausted'}
                 or str(state.get('phase') or '') not in set(_ROOT_PHASE_PROGRESS) - {'completed'}):
-            return {'ok': False, 'code': 'root_failure_not_resumable'}
+            return {**selected, 'ok': False, 'code': 'root_failure_not_resumable'}
         created_at = _parse_state_time(root.created_at)
         if created_at is None or (current_time-created_at).total_seconds() > DAILY_MAX_RUNTIME_SECONDS:
-            return {'ok': False, 'code': 'pipeline_runtime_exceeded'}
+            return {**selected, 'ok': False, 'code': 'pipeline_runtime_exceeded'}
         other_roots = db.query(AcademicBulkOperationJob).filter(
             AcademicBulkOperationJob.job_type == DAILY_ROOT_JOB_TYPE,
             AcademicBulkOperationJob.id != str(root.id),
@@ -2607,7 +2634,7 @@ def resume_daily_academic_pipeline(
         date = str((root.request_json or {}).get('run_date_vn') or '')
         if any(other.status in ACTIVE or str((other.request_json or {}).get('run_date_vn') or '') > date
                for other in other_roots):
-            return {'ok': False, 'code': 'newer_or_active_daily_root_exists'}
+            return {**selected, 'ok': False, 'code': 'newer_or_active_daily_root_exists'}
         original_error = root.error_message
         history = list(state.get('resume_history') or [])
         history.append({'at': current_time.isoformat(), 'actor': str(actor),
@@ -2638,9 +2665,9 @@ def resume_daily_academic_pipeline(
         try:
             _publish_root_continuation(celery_app, db, root)
         except ContinuationPublishError:
-            return {'ok': False, 'status': 'dispatch_pending', 'root_job_id': str(root.id)}
+            return {**selected, 'ok': False, 'status': 'dispatch_pending'}
         return {'ok': True, 'status': 'resumed', 'phase': state.get('phase'),
-                'root_job_id': str(root.id)}
+                'root_job_id': str(root.id), 'run_date_vn': (root.request_json or {}).get('run_date_vn')}
 
 
 def register_daily_academic_pipeline_tasks(celery_app) -> None:

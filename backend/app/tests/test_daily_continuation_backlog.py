@@ -95,6 +95,54 @@ def test_resume_keeps_round_artifact_and_completed_child(factory):
     assert again['status'] == 'already_running'
     assert len(celery.sent) == 1
 
+
+def test_resume_discovers_root_by_vietnam_date_without_uuid(factory):
+    now = datetime(2026, 10, 7, 4)
+    with factory() as db:
+        seed(db, now, status='failed', code='continuation_recovery_exhausted')
+    celery = FakeCelery()
+    result = runtime.resume_daily_academic_pipeline(celery, now=now)
+    assert result['ok'] is True and result['root_job_id'] == 'root'
+    assert result['run_date_vn'] == '2026-10-07'
+    assert len(celery.sent) == 1
+
+
+@pytest.mark.parametrize('creation_offset_days', [0, 1])
+def test_discovery_refuses_multiple_roots_and_does_not_mutate(factory, creation_offset_days):
+    now = datetime(2026, 10, 7, 4)
+    with factory() as db:
+        seed(db, now, status='failed', code='continuation_recovery_exhausted')
+        db.add(AcademicBulkOperationJob(id='duplicate', job_type=runtime.DAILY_ROOT_JOB_TYPE,
+               status='failed', created_at=now + timedelta(days=creation_offset_days),
+               request_json={'run_date_vn': '2026-10-07'},
+               result_json={'code': 'continuation_recovery_exhausted', 'phase': 'score_update'}))
+        db.commit()
+    celery = FakeCelery()
+    result = runtime.resume_daily_academic_pipeline(celery, now=now)
+    assert result['ok'] is False and result['code'] == 'ambiguous_daily_root'
+    assert {item['id'] for item in result['candidates']} == {'root', 'duplicate'}
+    assert not celery.sent
+    with factory() as db:
+        assert db.get(AcademicBulkOperationJob, 'root').status == 'failed'
+
+
+def test_discovery_does_not_take_scope_parent_or_yesterdays_root(factory):
+    now = datetime(2026, 10, 8, 4)
+    with factory() as db:
+        seed(db, now, status='failed', code='continuation_recovery_exhausted')
+    celery = FakeCelery()
+    result = runtime.resume_daily_academic_pipeline(celery, now=now)
+    assert result['ok'] is False and result['code'] == 'root_job_not_found'
+    assert not celery.sent
+
+
+def test_discovery_date_uses_vietnam_not_utc_calendar(factory):
+    now = datetime(2026, 10, 6, 23)
+    with factory() as db:
+        seed(db, now, status='failed', code='continuation_recovery_exhausted')
+    result = runtime.resume_daily_academic_pipeline(FakeCelery(), now=now)
+    assert result['ok'] is True and result['run_date_vn'] == '2026-10-07'
+
 @pytest.mark.parametrize('code,age', [('score_update_exhausted', 1), ('continuation_recovery_exhausted', 25)])
 def test_resume_refuses_business_failure_or_expired_root(factory, code, age):
     now = datetime.utcnow()

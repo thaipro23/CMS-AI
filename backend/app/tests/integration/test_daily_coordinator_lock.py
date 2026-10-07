@@ -24,7 +24,9 @@ def redis_client(monkeypatch):
         pytest.skip('CI Redis URL not configured')
     client = redis.Redis.from_url(url)
     assert client.ping()
-    monkeypatch.setattr(runtime, '_daily_redis_client', lambda: redis.Redis.from_url(url))
+    # Exercise the actual application shared-pool client, including lock-token
+    # decoding and coordinator client.close(), rather than a replacement factory.
+    monkeypatch.setattr(runtime.settings, 'redis_url', url)
     yield client
     client.close()
 

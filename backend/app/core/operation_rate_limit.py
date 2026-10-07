@@ -5,6 +5,7 @@ import time
 from fastapi import HTTPException, status
 
 from app.core.config import is_hardened_deployment, settings
+from app.core.redis_client import get_redis_client
 
 
 def enforce_operation_rate_limit(
@@ -25,9 +26,7 @@ def enforce_operation_rate_limit(
     if int(limit or 0) <= 0:
         return
     try:
-        import redis
-
-        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        client = get_redis_client()
         bucket = int(time.time()) // max(1, int(window_seconds))
         key = f'ai:operation-rate:{namespace}:{actor_id}:{bucket}'
         pipe = client.pipeline()

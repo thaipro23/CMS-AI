@@ -30,6 +30,7 @@ from app.services.academic.helpers import AccessDecision, _json_safe_value as js
 from app.services.academic.platform import cms_delivery_predicate
 from app.services.training_policy_service import TrainingPolicyService
 from app.services.academic.udemy_progress import UdemyProgressService
+from app.services.academic.teacher_report_cache import cached_teacher_overview
 
 
 class TeacherReportBranchScopeError(RuntimeError):
@@ -1205,6 +1206,7 @@ class AcademicTeacherReportWorkflowService:
             'summary': report.get('summary') or {},
         }
 
+    @cached_teacher_overview
     def training_teacher_report(
         self,
         user: UserContext,
@@ -1226,9 +1228,10 @@ class AcademicTeacherReportWorkflowService:
         student_row_limit: int | None = 20000,
         allowed_class_ids: set[str] | None = None,
         enforce_branch_integrity: bool = False,
+        _report_access_decision: AccessDecision | None = None,
     ) -> dict[str, Any]:
         page, page_size = _page(page, page_size)
-        decision = self.access_decision(user)
+        decision = _report_access_decision or self.access_decision(user)
         status_filter = self._normalize_learning_list_filter(learning_status)
         if not term_id:
             return {

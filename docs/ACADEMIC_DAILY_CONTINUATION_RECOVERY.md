@@ -31,7 +31,9 @@ No frontend change, database migration or CMS-FPT build is needed for this fix.
 Ensure the fast worker consumes `interactive,sync-fast`, as in the existing
 production manifests.
 
-After deployment, this resumes only the specified root from its saved stage:
+After deployment, this discovers the root for the current Vietnam calendar day
+and resumes it from its saved stage. No UUID is required. To select a specific
+day, add `run_date_vn="2026-10-07"` to the function call.
 
 ```bash
 kubectl -n openedx exec -i deploy/ai-server-backend -- python - <<'PY'
@@ -41,7 +43,6 @@ from app.services.academic.daily_academic_pipeline import resume_daily_academic_
 
 result = resume_daily_academic_pipeline(
     celery_app,
-    '976defcd-fea8-45b7-b826-77ddbdab78c9',
     actor='kubectl-operator',
 )
 print(json.dumps(result, ensure_ascii=False))
@@ -49,6 +50,10 @@ if not result.get('ok'):
     raise SystemExit(1)
 PY
 ```
+
+`ambiguous_daily_root` refuses multiple roots for the selected day and returns
+their IDs/statuses without changing any jobs. `root_job_not_found` means there
+is no exact daily root for that date. Scope parents are never selected.
 
 `resumed` means the same root was queued from its saved stage. `already_running`
 means another call already resumed it; no second message is published.

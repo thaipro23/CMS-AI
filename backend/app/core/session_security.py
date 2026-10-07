@@ -7,13 +7,12 @@ from typing import Any
 from fastapi import HTTPException, status
 
 from app.core.config import is_production, settings
+from app.core.redis_client import get_redis_client
 
 
 def _redis_client():
     try:
-        import redis
-
-        return redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        return get_redis_client()
     except Exception as exc:  # pragma: no cover - import/runtime guard
         if is_production():
             raise HTTPException(
