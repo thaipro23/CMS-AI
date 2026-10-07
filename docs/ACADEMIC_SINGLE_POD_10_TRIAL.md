@@ -1,11 +1,15 @@
 # Single bulk pod, ten processes: tested trial
 
 This trial uses one `ai-server-worker-bulk` pod with ten prefork processes.
-It does not scale bulk to five replicas. Base Kubernetes manifests deliberately
-remain one pod/two processes until the operator evaluates production resources.
+It does not scale bulk to five replicas. After the operator observed a recorded
+peak of ten overlapping real learning-sync jobs and approved persistence, base
+Kubernetes manifests retain one pod/ten processes and a ten-slot coordinator.
+The bulk requests remain 300m CPU / 512 MiB; limits remain 1500m CPU / 2 GiB.
+Application and Compose defaults are unchanged; Kubernetes uses explicit env
+overrides so older values in `ai-server-env` cannot reset the production setting.
 
 The daily account/enrollment and score stages now honor
-`ACADEMIC_BULK_SYNC_DISPATCH_WINDOW`. Default remains four; supported upper
+`ACADEMIC_BULK_SYNC_DISPATCH_WINDOW`. Application default remains four; supported upper
 limit is twenty. Ten is shared across Poly/PTCD rather than ten per branch.
 Other daily snapshot/export dispatch paths retain their default four slots.
 Existing roots can pick up the new value on their next coordinator tick:
@@ -106,6 +110,33 @@ latency/errors rise, lower the coordinator window before reassessing resources.
 Growing a pool under a Kubernetes limit can OOM the pod before an operator
 sees the next metrics sample; this is a real-load experiment, not a guarantee
 that production cannot fail.
+
+## Persist after the approved production trial
+
+The production trial recorded ten overlapping learning-sync job intervals in a
+five-minute window containing 166 job intervals. A subsequent point sample was
+173m CPU / 1199 MiB; an earlier sample reported zero container restarts. These
+samples are not a certified peak-memory bound. The operator approved retaining
+ten processes with the existing CPU/RAM limits.
+
+Run `bash scripts/persist-academic-bulk-10.sh` on the authorized K8s host. It
+stops new bulk deliveries, waits for accepted active/reserved/scheduled tasks
+to drain, then saves both explicit bulk env values as ten. Only after draining
+does it roll the bulk Deployment and verify ten live child processes. It also
+retains the fast coordinator's ten-slot value. CPU/RAM and replicas are not
+modified. RollingUpdate may briefly have an old idle pod alongside the new pod;
+the steady-state replica count remains one.
+
+A shared operator Redis lease serializes acquisition, draining, rollout and
+consumer restoration with other pool trials. Only its owner restores queues
+or releases the lease; the lease is refreshed before setting changes and during
+draining. An EXIT handler restores the known bulk queues if draining or rollout fails.
+A failed rollout can leave the desired setting saved but incompletely applied;
+inspect rollout state rather than assuming rollback. The script refuses an
+already-paused Deployment and never resets job records or purges queues. Repo
+Kubernetes manifests use the same explicit overrides, preserving the setting
+on subsequent manifest applications. No backend image rebuild is necessary
+solely for this environment/manifest setting change.
 
 ## Revert without restarting the bulk pod or pipeline
 

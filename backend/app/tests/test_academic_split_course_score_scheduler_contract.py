@@ -50,12 +50,13 @@ def test_one_0100_scheduler_replaces_legacy_ap_and_score_publishers():
     assert "'academic-daily-pipeline-01-vn'" in daily
 
 
-def test_academic_batch_window_is_four_in_config_and_k8s_worker():
+def test_academic_batch_window_uses_ten_k8s_slots_with_conservative_app_default():
     config = _read('backend/app/core/config.py')
     worker_manifest = _read('deploy/k8s/base/worker.yaml')
     env_example = _read('.env.production.example')
 
     assert 'academic_bulk_sync_dispatch_window: int = 4' in config
-    assert 'value: "4"' in worker_manifest
+    window_env = worker_manifest.split('- name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW', 1)[1].split('- name:', 1)[0]
+    assert 'value: "10"' in window_env
     assert '--concurrency=${CELERY_CONCURRENCY:-4}' in worker_manifest
     assert 'ACADEMIC_BULK_SYNC_DISPATCH_WINDOW=4' in env_example

@@ -39,7 +39,7 @@ spec:
             - name: CELERY_CONCURRENCY
               value: "4"
             - name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW
-              value: "4"
+              value: "10"
             - name: OPENEDX_CONNECTOR_INTERNAL_BASE_URL
               value: http://lms:8000
             - name: OPENEDX_CONNECTOR_READ_RETRY_MAX_ATTEMPTS
