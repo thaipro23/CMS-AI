@@ -52,6 +52,20 @@ def test_missing_scores_are_zero_and_duplicate_quiz_shells_do_not_double_count()
     ])) == 33.33
 
 
+def test_one_completed_quiz_and_nine_unattempted_quizzes_is_one_point_out_of_ten():
+    service = AcademicService(None)
+    components = [{'name': 'Quiz 1', 'earned': 10, 'possible': 10}]
+    components.extend(
+        {'name': f'Quiz {number}', 'planned': True}
+        for number in range(2, 11)
+    )
+
+    percent = service._snapshot_grade_percent(snapshot(components))
+
+    assert percent == 10.0
+    assert service._percent_to_grade10(percent) == 1.0
+
+
 @pytest.mark.parametrize('components', [None, [], [{'name': 'Assignment', 'percent': 100}]])
 def test_missing_assessment_plan_has_no_overall_grade(components):
     assert AcademicService(None)._snapshot_grade_percent(snapshot(components)) is None

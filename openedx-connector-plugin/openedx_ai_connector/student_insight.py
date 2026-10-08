@@ -1170,7 +1170,7 @@ def _quiz_numbers_from_label(value: Any) -> list[int]:
 
 def _looks_like_quiz_component(name: Any, block: Any | None = None) -> bool:
     text = _safe_str(name).strip().lower()
-    if any(token in text for token in ('quiz', 'learning check', 'lc ')):
+    if any(token in text for token in ('quiz', 'learning check', 'lc ', 'final test')):
         return True
     if block is not None:
         for attr in ('graded', 'has_score', 'weight'):
@@ -1255,6 +1255,57 @@ def _course_outline_quiz_components(course_key: Any) -> list[dict[str, Any]]:
         row['name'] = name[:255]
         fixed.append(row)
     return fixed
+
+
+def _merge_component_grades_with_course_plan(
+    actual_components: list[dict[str, Any]],
+    planned_components: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep every course-defined assessment while preferring a learner's real score."""
+    if not planned_components:
+        return [dict(item) for item in actual_components[:80]]
+
+    actual = [dict(item) for item in actual_components]
+    unmatched = set(range(len(actual)))
+    actual_by_key: dict[str, int] = {}
+    actual_by_quiz_number: dict[int, int] = {}
+    for index, item in enumerate(actual):
+        key = _safe_str(item.get('usage_key') or item.get('key')).strip()
+        if key and key not in actual_by_key:
+            actual_by_key[key] = index
+        numbers = _quiz_numbers_from_label(item.get('name'))
+        if numbers and numbers[0] not in actual_by_quiz_number:
+            actual_by_quiz_number[numbers[0]] = index
+
+    merged: list[dict[str, Any]] = []
+    for planned in planned_components:
+        key = _safe_str(planned.get('usage_key') or planned.get('key')).strip()
+        match_index = actual_by_key.get(key) if key else None
+        if match_index is None:
+            quiz_number = planned.get('quiz_number')
+            try:
+                match_index = actual_by_quiz_number.get(int(quiz_number))
+            except (TypeError, ValueError):
+                match_index = None
+        if match_index is None or match_index not in unmatched:
+            merged.append(dict(planned))
+            continue
+
+        unmatched.remove(match_index)
+        scored = actual[match_index]
+        row = {**planned, **scored}
+        actual_name = _safe_str(scored.get('name')).strip()
+        actual_key = _safe_str(scored.get('usage_key') or scored.get('key')).strip()
+        if not actual_name or actual_name == actual_key:
+            row['name'] = planned.get('name')
+        row['planned'] = not any(
+            scored.get(field) is not None for field in ('earned', 'possible', 'percent')
+        )
+        merged.append(row)
+
+    # When the outline is available it is the authoritative assessment plan.
+    # Old/stale grade rows outside that plan must not enlarge the denominator.
+    return merged[:80]
 
 def _component_grade_snapshot(course_key: Any, users: list[Any]) -> dict[int, list[dict[str, Any]]]:
     """Best-effort subsection/component grade breakdown.
@@ -1344,15 +1395,10 @@ def _component_grade_snapshot(course_key: Any, users: list[Any]) -> dict[int, li
     if planned_components:
         user_ids = [int(getattr(user, 'id', 0) or 0) for user in users if getattr(user, 'id', None) is not None]
         for uid in user_ids:
-            existing = result.get(uid) or []
-            if existing:
-                # If CMS/Open edX already returned actual Detailed grades for the
-                # learner, do not supplement with planned outline shells because
-                # that can create phantom columns (for example Quiz 14 when the
-                # gradebook currently exposes only Quiz 1 and Quiz 2).
-                result[uid] = existing[:80]
-                continue
-            result[uid] = [dict(item) for item in planned_components[:80]]
+            result[uid] = _merge_component_grades_with_course_plan(
+                result.get(uid) or [],
+                planned_components,
+            )
     return result
 
 
