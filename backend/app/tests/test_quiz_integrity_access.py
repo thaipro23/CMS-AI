@@ -22,11 +22,20 @@ def test_duration_missing_start_is_not_zero():
 
 def test_start_request_duration_and_score_unchanged():
     module = importlib.import_module('app.services.learning_analytics.quiz_detail')
-    row = attempt(evidence_json={'start_request_at': '2026-10-05T00:00:00'})
+    row = attempt(evidence_json={'start_request_at': '2026-10-05T00:00:00',
+                                'session_event_provenance': 'server_quiz_session_v1'})
     result = module.serialize_quiz_attempt(row, 'Quiz 1')
     assert result['duration_seconds'] == 205
     assert result['score_earned'] == row.score_earned == 12
     assert result['score_possible'] == row.score_possible == 15
+
+
+def test_retained_legacy_request_times_are_not_shown_as_successful_sessions():
+    module = importlib.import_module('app.services.learning_analytics.quiz_detail')
+    row = attempt(reset_count=3, evidence_json={'start_request_at': '2026-10-05T00:00:00'})
+    result = module.serialize_quiz_attempt(row, 'Quiz 1')
+    assert result['started_at'] is None and result['duration_seconds'] is None
+    assert result['reset_request_count'] == 0
 
 
 def test_pair_evidence_is_filtered_to_current_class_roster():

@@ -103,3 +103,46 @@ def test_late_reveal_context_invalidates_durable_answer_and_resume_cache():
     config = {'cursor': 1, 'fingerprint': before[0]['evidence']['fingerprint'],
               'previous_pairs': {(r['username'], 'unit'): r['evidence']['pairs'] for r in before}}
     assert all(r['status'] != 'REVIEW_REQUIRED' for r in run(items, contexts, config))
+
+
+def test_twenty_person_class_can_be_reviewed_with_independent_timing_and_rare_errors():
+    items = [i for i in fixture_items() if i['username'] in {'a', 'b', *[f'ref{n}' for n in range(18)]}]
+    a = next(r for r in run(items) if r['username'] == 'a')
+    assert a['status'] == 'REVIEW_REQUIRED'
+    assert a['evidence']['rules']['reference_people_min'] == 12
+
+
+def test_legacy_response_slots_are_questions_but_one_submit_is_not_eight_timing_samples():
+    items = fixture_items()
+    for item in items:
+        question = int(item['problem_usage_key'][1:])
+        item['problem_usage_key'] = 'legacy-problem'
+        item['input_slot'] = f'_{question + 2}_1'
+        item['submitted_at'] = datetime(2026, 10, 5)
+    a = next(r for r in run(items) if r['username'] == 'a')
+    assert a['evidence']['comparable_questions'] == 8
+    assert a['status'] == 'INSUFFICIENT_DATA'
+    assert 'INSUFFICIENT_INDEPENDENT_TIMING' in a['evidence']['reason_codes']
+
+
+def test_missing_version_explains_why_quiz_cannot_be_compared():
+    items = fixture_items()
+    for item in items:
+        item['content_version'] = None
+    a = next(r for r in run(items) if r['username'] == 'a')
+    assert 'MISSING_CONTENT_VERSION' in a['evidence']['reason_codes']
+
+
+def test_server_definition_identity_matches_clones_without_matching_different_versions():
+    import hashlib
+    items = fixture_items()
+    for item in items:
+        item['content_version'] = 'sha256:' + hashlib.sha256(item['problem_usage_key'].encode()).hexdigest()
+        item['question_hash'] = hashlib.sha256(item['question_hash'].encode()).hexdigest()
+        item['problem_usage_key'] += '-' + item['username']
+    a = next(r for r in run(items) if r['username'] == 'a')
+    assert a['status'] == 'REVIEW_REQUIRED'
+    for item in items:
+        if item['username'] == 'b':
+            item['content_version'] = 'v2'
+    assert all(r['status'] != 'REVIEW_REQUIRED' for r in run(items))

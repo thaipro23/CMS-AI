@@ -3053,6 +3053,7 @@ export type AnalyticsLearningBehaviorSummary = {
   roster_count?: number
   snapshot_count?: number
   missing_snapshot_count?: number
+  stale_snapshot_count?: number
   data_status?: 'ready' | 'partial' | 'not_calculated' | string
   likely_real_learning_count: number
   possible_idle_count: number
@@ -3077,6 +3078,8 @@ export type AnalyticsLearningBehaviorRow = {
   classification: AnalyticsLearningBehaviorClassification
   display_label?: string | null
   confidence_score: number
+  confidence_basis?: string
+  snapshot_stale?: boolean
   real_learning_score: number
   idle_score: number
   suspicious_score: number
@@ -3234,6 +3237,9 @@ export type AnalyticsStudentLearningBehaviorDetail = {
         reset_policy?: string
         answer_reveal_request_count?: number
         comparable_questions?: number
+        reason_codes?: string[]
+        baseline_question_count?: number
+        independent_timing_observations?: number
         missing_baseline_or_version?: boolean
         pairs?: {
           other_username: string

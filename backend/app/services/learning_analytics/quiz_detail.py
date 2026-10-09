@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from .quiz_attempt_analyzer import SERVER_SESSION_PROVENANCE
 
 
 def serialize_quiz_attempt(row, title: str) -> dict:
     evidence = row.evidence_json or {}
+    trusted = evidence.get('session_event_provenance') == SERVER_SESSION_PROVENANCE
     start = None
     try:
-        if evidence.get('start_request_at'):
+        if trusted and evidence.get('start_request_at'):
             start = datetime.fromisoformat(evidence['start_request_at'])
     except (ValueError, TypeError):
         pass
@@ -23,7 +25,7 @@ def serialize_quiz_attempt(row, title: str) -> dict:
         'duration_source': 'START_REQUEST_TO_LAST_SUBMISSION' if valid else 'UNKNOWN',
         'submission_count': row.submission_count,
         'score_earned': row.score_earned, 'score_possible': row.score_possible,
-        'reset_request_count': row.reset_count, 'answer_reveal_request_count': row.showanswer_count,
+        'reset_request_count': row.reset_count if trusted else 0, 'answer_reveal_request_count': row.showanswer_count,
         'rapid_submission_burst': bool(evidence.get('rapid_submission_burst')),
         'median_submission_gap_seconds': evidence.get('median_submission_gap_seconds'),
     }
