@@ -32,6 +32,9 @@ pytest -q \
   app/tests/test_v25_9_16_7_2_64_16_5_5_performance_worker_reliability.py \
   app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py \
   app/tests/test_quiz_tracking_log_integrity.py \
+  app/tests/test_learning_audit_regressions.py \
+  app/tests/test_v25_9_16_7_2_27_learning_behavior_logic_calibration.py \
+  app/tests/test_quiz_server_telemetry.py \
   app/tests/test_quiz_item_materialization.py \
   app/tests/test_quiz_integrity_rules.py \
   app/tests/test_quiz_integrity_access.py \

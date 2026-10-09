@@ -35,7 +35,8 @@ def test_late_start_and_duplicate_delivery_keep_one_attempt_and_durable_answer()
         assert db.query(AnalyticsQuizAttempt).one().submission_count == 1
         db.add(AnalyticsTrackingEvent(id='s1', raw_line_hash='start', username='sv', user_id='1',
                course_id='course', event_type='/api/unit-reset/v1/quiz-session/start', event_time=start,
-               page_url=unit, event_source='server', raw_event={'unit_usage_key': unit}))
+               page_url=unit, event_source='server', raw_event={'unit_usage_key': unit,
+                   'unit_reset_nonce': 'quiz-session:1', 'started_at': start.isoformat()}))
         db.commit()
         service.recalculate_course_quiz_attempts(course_id='course', username='sv')
         attempts = db.query(AnalyticsQuizAttempt).all()
@@ -60,6 +61,17 @@ def test_late_start_and_duplicate_delivery_keep_one_attempt_and_durable_answer()
         db.commit()
         service.recalculate_course_quiz_attempts(course_id='course', username='sv')
         assert db.query(AnalyticsQuizItemSubmission).one().reveal_requested_before is True
+        # Retained evidence from old URL requests is not a successful session.
+        row = db.get(AnalyticsQuizAttempt, attempts[0].id)
+        row.reset_count = 3
+        row.evidence_json = {**row.evidence_json, 'session_event_provenance': None,
+                            'reset_times': [start.isoformat()]}
+        db.commit()
+        service.recalculate_course_quiz_attempts(course_id='course', username='sv')
+        assert row.reset_count == 0
+        assert row.evidence_json['duration_seconds'] is None
+        assert row.evidence_json['reset_times'] == []
+        assert (row.score_earned, row.score_possible) == (1, 1)
 
 
 def test_student_scope_rejects_wrong_class_and_wrong_course(monkeypatch):
@@ -81,3 +93,29 @@ def test_student_scope_rejects_wrong_class_and_wrong_course(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         learning_analytics._assert_student_detail_scope(None, 'poly-class', 'poly', 'ptcd-course')
     assert exc.value.status_code == 403
+
+
+def test_course_structure_groups_server_problem_checks_into_their_quiz_unit():
+    from app.models.learning_analytics import AnalyticsCourseSession
+    engine = create_engine('sqlite://')
+    for model in (AnalyticsTrackingEvent, AnalyticsMaterializedEventReceipt, AnalyticsQuizAttempt,
+                  AnalyticsQuizItemSubmission, AnalyticsQuizItemReceipt, AnalyticsQuizIntegrityResult,
+                  AnalyticsCourseSession):
+        model.__table__.create(engine)
+    unit = 'block-v1:FPL+SUB+FA26+type@vertical+block@unit'
+    with Session(engine, autoflush=False) as db:
+        db.add(AnalyticsCourseSession(course_id='course', session_index=1, session_key='lesson',
+            session_title='Bài 1', active=True, components_json={'components': [
+                {'usage_key': key, 'block_type': 'problem', 'metadata': {'parent_block_id': unit}}
+                for key in ('problem-a', 'problem-b')]}))
+        for number, key in enumerate(('problem-a', 'problem-b')):
+            db.add(AnalyticsTrackingEvent(id=key, raw_line_hash=key, course_id='course',
+                username='sv', user_id='1', event_type='problem_check', event_source='server',
+                event_time=datetime(2026, 10, 7) + timedelta(seconds=number * 40),
+                raw_event={'problem_id': key, 'grade': 1, 'max_grade': 1}))
+        db.commit()
+        LearningAnalyticsCoreService(db).recalculate_course_quiz_attempts(course_id='course', username='sv')
+        attempt = db.query(AnalyticsQuizAttempt).one()
+        assert attempt.unit_usage_key == unit
+        assert attempt.submission_count == 2
+        assert (attempt.score_earned, attempt.score_possible) == (2, 2)

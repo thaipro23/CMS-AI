@@ -306,6 +306,7 @@ class Settings(BaseSettings):
     # historical analytics after retention cleanup.
     analytics_raw_event_retention_days: int = 3
     analytics_quiz_integrity_enabled: bool = True
+    analytics_quiz_reference_people_min: int = Field(default=12, ge=12, le=1000)
     analytics_quiz_reset_policies: dict[str, str] = Field(default_factory=dict)
     analytics_raw_event_cleanup_batch_size: int = 5000
     analytics_raw_event_cleanup_max_batches_per_run: int = 10

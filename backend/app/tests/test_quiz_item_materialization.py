@@ -110,3 +110,22 @@ def test_long_opaque_input_id_fits_postgres_slot_column_without_losing_original_
         item = db.query(models.AnalyticsQuizItemSubmission).one()
         assert item.input_id == input_id
         assert len(item.input_slot) <= models.AnalyticsQuizItemSubmission.__table__.c.input_slot.type.length
+
+
+def test_server_question_definition_hash_is_preserved_when_legacy_label_is_empty():
+    from app.services.learning_analytics.quiz_item_materializer import materialize_quiz_items
+    engine = create_engine('sqlite://')
+    models.AnalyticsQuizItemSubmission.__table__.create(engine)
+    models.AnalyticsQuizItemReceipt.__table__.create(engine)
+    feat = QuizAttemptFeature('course', 'sv', '1', None, 'unit', 1)
+    feat.raw_submissions = [{'event_id': 'event', 'event_type': 'problem_check', 'event_source': 'server',
+        'submitted_at': datetime(2026, 10, 7), 'problem_usage_key': 'q',
+        'context': {'module': {'original_usage_version': 'native-version'}},
+        'payload': {'content_version': 'sha256:' + 'a' * 64, 'submission': {
+            'q_2_1': {'answer': 'A', 'correct': True, 'response_type': 'multiplechoiceresponse',
+                      'question': '', 'question_hash': 'b' * 64}}}}]
+    with Session(engine) as db:
+        materialize_quiz_items(db, feat, attempt_id='attempt')
+        item = db.query(models.AnalyticsQuizItemSubmission).one()
+        assert item.content_version == 'sha256:' + 'a' * 64
+        assert item.question_hash == 'b' * 64

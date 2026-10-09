@@ -108,6 +108,11 @@ function percent(value?: number | null) {
   return `${Math.round(value * 10) / 10}%`
 }
 
+function scorePoints(value?: number | null) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'N/A'
+  return `${Math.round(value * 10) / 10}/100`
+}
+
 
 function analyticsErrorMessage(error: unknown, fallback: string) {
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
@@ -392,6 +397,18 @@ function campusLabel(campus: string, campuses: AcademicCampus[]) {
 function reasonText(code?: string | null) {
   const value = String(code || '').toUpperCase()
   if (!value) return ''
+  const descriptions: Record<string, string> = {
+    REPEATED_HIGH_COMPLETION_LOW_WATCH: 'Nhiều video hoàn thành cao nhưng thời gian xem ước tính rất thấp; cần giáo viên kiểm tra.',
+    WATCH_THEN_ATTEMPT_PROBLEM: 'Có mốc xem video và thời gian xem trước lần nộp Quiz.',
+    NO_VIDEO_ACTIVITY: 'Chưa ghi nhận đủ hoạt động xem video.',
+    STALE_BEHAVIOR_SNAPSHOT: 'Kết quả đã cũ; cần tính lại lớp trước khi sử dụng.',
+    MISSING_CONTENT_VERSION: 'Thiếu phiên bản nội dung tại lúc nộp; chưa thể đối chiếu đáp án.',
+    MISSING_QUESTION_IDENTITY: 'Thiếu định danh câu hỏi để so sánh đúng câu giữa sinh viên.',
+    INSUFFICIENT_COMPARABLE_QUESTIONS: 'Chưa có đủ câu hỏi có thể đối chiếu.',
+    BASELINE_TOO_SMALL: 'Chưa đủ người cùng trả lời câu hỏi để làm nhóm tham chiếu.',
+    INSUFFICIENT_INDEPENDENT_TIMING: 'Thiếu mốc nộp độc lập; nộp cả bài một lần không xác định được thời gian từng câu.',
+  }
+  if (descriptions[value]) return descriptions[value]
   if (value.includes('INSUFFICIENT') || value.includes('MISSING')) return 'Thiếu dữ liệu để kết luận chắc chắn.'
   if (value.includes('IDLE') || value.includes('LOW_INTERACTION')) return 'Có dấu hiệu xem video nhưng ít tương tác học tập.'
   if (value.includes('WATCH') || value.includes('VIDEO')) return 'Tín hiệu video chưa đủ mạnh hoặc chưa khớp tiến độ bài.'
@@ -453,12 +470,13 @@ function DetailDrawer({
 
       {!loading && <>
         <div className="academic-summary-strip analytics-result-score-strip">
-          <div><span>Độ tin cậy</span><b>{percent(behavior.confidence_score)}</b></div>
-          <div><span>Học thật</span><b>{percent(behavior.real_learning_score)}</b></div>
-          <div><span>Khả năng treo máy</span><b>{percent(behavior.idle_score)}</b></div>
-          <div><span>Dấu hiệu bất thường</span><b>{percent(behavior.suspicious_score)}</b></div>
+          <div><span>Điểm tin cậy</span><b>{scorePoints(behavior.confidence_score)}</b></div>
+          <div><span>Tín hiệu học thật</span><b>{scorePoints(behavior.real_learning_score)}</b></div>
+          <div><span>Tín hiệu treo máy</span><b>{scorePoints(behavior.idle_score)}</b></div>
+          <div><span>Tín hiệu bất thường</span><b>{scorePoints(behavior.suspicious_score)}</b></div>
           <div><span>Đúng hạn</span><b>{percent(behavior.deadline_compliance_percent)}</b></div>
         </div>
+        <small>Các điểm được tính theo tín hiệu log, không phải xác suất đúng hoặc kết luận vi phạm.</small>
 
         <div className="analytics-reason-list">
           <h4>Lý do chính</h4>
@@ -519,6 +537,7 @@ function DetailDrawer({
             <small>Cập nhật: {formatVNDateTime(result.calculated_at)}</small>
             {result.evidence.partial && <small>Phân tích chưa hoàn tất; phần còn lại sẽ được kiểm tra ở lần tính tiếp theo.</small>}
             {result.evidence.missing_baseline_or_version && <small>Chưa đủ dữ liệu câu/phiên bản hoặc người tham chiếu để đối chiếu đáp án.</small>}
+            {(result.evidence.reason_codes || []).filter((code) => ['MISSING_CONTENT_VERSION', 'MISSING_QUESTION_IDENTITY', 'INSUFFICIENT_COMPARABLE_QUESTIONS', 'BASELINE_TOO_SMALL', 'INSUFFICIENT_INDEPENDENT_TIMING'].includes(code)).map((code) => <small key={code}>{reasonText(code)}</small>)}
             {!!result.evidence.reset_request_count && <small>{result.evidence.reset_request_count} yêu cầu reset · {result.evidence.reset_policy === 'restricted' ? 'Quiz có hạn chế reset' : result.evidence.reset_policy === 'practice' ? 'Quiz luyện tập' : 'Chưa xác định quy định reset'}</small>}
             {(result.evidence.pairs || []).map((pair) => <details key={pair.other_username}>
               <summary>Đối chiếu với {pair.other_username}: {pair.overlap_questions} câu chung, {pair.answer_similarity_percent}% đáp án giống, {pair.rare_wrong_count} câu cùng sai hiếm</summary>
@@ -1021,8 +1040,8 @@ export default function AnalyticsLearningPage() {
   const resultColumns = useMemo<EnterpriseTableColumn<AnalyticsLearningBehaviorRow>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => index + 1 },
     { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 245, sticky: 'left', priority: 'required', hideable: false, render: (row) => <><b>{row.student_code || row.username}</b><small>{row.full_name || row.username}</small></> },
-    { key: 'result', header: 'Kết quả', kind: 'status', minWidth: 185, priority: 'important', hideable: false, render: (row) => <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}><span className={resultClass(row.classification)}>{resultLabel(row.classification, row.display_label)}</span></button> },
-    { key: 'confidence', header: 'Tin cậy', kind: 'number', width: 86, priority: 'important', hideable: true, render: (row) => percent(row.confidence_score) },
+    { key: 'result', header: 'Kết quả', kind: 'status', minWidth: 185, priority: 'important', hideable: false, render: (row) => <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}><span className={resultClass(row.classification)}>{resultLabel(row.classification, row.display_label)}</span>{row.snapshot_stale && <small>Kết quả cũ · cần tính lại</small>}</button> },
+    { key: 'confidence', header: 'Tin cậy', kind: 'number', width: 86, priority: 'important', hideable: true, render: (row) => scorePoints(row.confidence_score) },
     { key: 'activity', header: 'Hoạt động cuối', kind: 'date', width: 150, priority: 'optional', hideable: true, render: (row) => row.last_activity_at ? formatVNDateTime(row.last_activity_at) : 'N/A' },
     { key: 'course', header: 'Course CMS', kind: 'text', minWidth: 175, priority: 'optional', defaultVisible: false, hideable: true, truncateLines: 1, render: (row) => row.course_id || effectiveCourseId || 'N/A' },
     { key: 'actions', header: 'Thao tác', kind: 'actions', width: 106, hideable: false, render: (row) => <button className="btn small secondary" type="button" onClick={() => openReason(row)}>Chi tiết</button> },
@@ -1508,6 +1527,7 @@ export default function AnalyticsLearningPage() {
         { key: 'students', label: 'Sinh viên', value: summary.roster_count ?? summary.total_students ?? 0 },
         { key: 'snapshots', label: 'Có snapshot', value: summary.snapshot_count ?? rows.length },
         { key: 'missing', label: 'Thiếu snapshot', value: summary.missing_snapshot_count ?? Math.max(0, (summary.roster_count ?? summary.total_students ?? 0) - (summary.snapshot_count ?? rows.length)), tone: (summary.missing_snapshot_count || 0) > 0 ? 'warning' : 'success' },
+        { key: 'stale', label: 'Kết quả cũ', value: summary.stale_snapshot_count || 0, tone: (summary.stale_snapshot_count || 0) > 0 ? 'warning' : 'success' },
         { key: 'real', label: 'Có dấu hiệu học thật', value: summary.likely_real_learning_count || 0, tone: 'success' },
         { key: 'review', label: 'Cần giáo viên xem', value: (summary.possible_idle_count || 0) + (summary.possible_suspicious_count || 0), tone: 'warning' },
         { key: 'insufficient', label: 'Chưa đủ dữ liệu', value: summary.insufficient_data_count || 0 },

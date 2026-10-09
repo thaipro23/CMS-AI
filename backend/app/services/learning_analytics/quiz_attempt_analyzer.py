@@ -4,13 +4,14 @@ import re
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
 QUIZ_SESSION_START = '/api/unit-reset/v1/quiz-session/start'
 QUIZ_SESSION_STATUS = '/api/unit-reset/v1/quiz-session/status'
 QUIZ_SESSION_RESET = '/api/unit-reset/v1/quiz-session/reset'
+SERVER_SESSION_PROVENANCE = 'server_quiz_session_v1'
 SUBMIT_EVENTS = {'edx.grades.problem.submitted', 'problem_check', 'problem_graded'}
 ITEMBANK_EVENTS = {'edx.itembankblock.content.assigned'}
 SHOWANSWER_EVENTS = {'problem_show', 'showanswer'}
@@ -215,6 +216,22 @@ def source_of(event: EventLike) -> str:
     return str((event.raw_json or {}).get('event_source') or event.event_source or '').lower()
 
 
+def _observed_start_at(event: EventLike) -> datetime | None:
+    # HTTP access logs also have source=server; only successful session
+    # emissions have the server-owned nonce and stored start timestamp.
+    if source_of(event) != 'server' or not str(extract_unit_reset_nonce(event) or '').startswith('quiz-session:'):
+        return None
+    try:
+        recorded = datetime.fromisoformat(str((event.raw_event or {}).get('started_at') or '').replace('Z', '+00:00'))
+        if recorded.tzinfo:
+            recorded = recorded.astimezone(timezone.utc).replace(tzinfo=None)
+        if event.event_time and recorded <= event.event_time:
+            return recorded
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 def deduplicate_submissions(submissions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Prefer canonical grades per action, retaining unmatched server checks.
 
@@ -311,6 +328,7 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
         duration = max(0.0, (feature.last_submission_at - feature.started_at).total_seconds())
     feature.evidence = {
         'rule_version': 'tracking_rules_v1',
+        'session_event_provenance': SERVER_SESSION_PROVENANCE,
         'start_observed': feature.start_observed,
         'duration_seconds': duration,
         'duration_source': 'START_REQUEST_TO_LAST_SUBMISSION' if duration is not None else 'UNKNOWN',
@@ -336,22 +354,47 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
     }
 
 
-def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeature]:
+def build_quiz_attempt_features(events: list[EventLike], *, unit_aliases: dict[str, str] | None = None) -> list[QuizAttemptFeature]:
     by_user_unit: dict[tuple[str, str, str], list[EventLike]] = defaultdict(list)
+    known_units = defaultdict(dict)
+    for ev in events:
+        if source_of(ev) != 'server' or not ev.course_id or not ev.username:
+            continue
+        unit = extract_usage_key(ev)
+        unit = (unit_aliases or {}).get(unit, unit)
+        if not unit or '+type@vertical+' not in unit:
+            continue
+        payload = ev.raw_event or {}
+        if ev.event_type == 'problem_check':
+            problem = extract_usage_key(ev, prefer_problem=True)
+            if problem and problem != unit:
+                known_units[(ev.course_id, ev.username)][problem] = unit
+        if ev.event_type not in ITEMBANK_EVENTS:
+            continue
+        assigned = [child for name in ('result', 'added')
+                    for child in (payload.get(name) if isinstance(payload.get(name), list) else [])]
+        for child in assigned:
+            if isinstance(child, dict) and child.get('usage_key'):
+                known_units[(ev.course_id, ev.username)][str(child['usage_key'])] = unit
     for ev in events:
         if not ev.course_id or not ev.username or not ev.user_id or not ev.event_time:
             # user_id null events are kept in raw store but never counted for personal behavior.
             continue
         unit_key = extract_usage_key(ev) or 'UNKNOWN_QUIZ_UNIT'
+        unit_key = known_units[(ev.course_id, ev.username)].get(
+            unit_key, (unit_aliases or {}).get(unit_key, unit_key))
         by_user_unit[(ev.course_id, ev.username, unit_key)].append(ev)
 
     features: list[QuizAttemptFeature] = []
     for (course_id, username, unit_key), items in by_user_unit.items():
-        ordered = sorted(items, key=lambda e: e.event_time or datetime.min)
+        # A refresh may emit the existing server session's start after earlier
+        # submissions. Order that marker by its recorded start, not delivery.
+        ordered = sorted(items, key=lambda e: (
+            _observed_start_at(e) if e.event_type == QUIZ_SESSION_START else e.event_time
+        ) or e.event_time or datetime.min)
         current: QuizAttemptFeature | None = None
         attempt_no = 0
         reset_times: list[datetime] = []
-        closed_by_reset: QuizAttemptFeature | None = None
 
         def ensure_attempt(ev: EventLike) -> QuizAttemptFeature:
             nonlocal current, attempt_no
@@ -371,15 +414,25 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
 
         for ev in ordered:
             et = ev.event_type
-            if et != QUIZ_SESSION_RESET:
-                closed_by_reset = None
             if et == QUIZ_SESSION_START:
-                if current and (current.submissions or current.assigned_problem_usage_keys or current.showanswer_count):
+                start_at = _observed_start_at(ev)
+                if start_at is None:
+                    continue
+                nonce = extract_unit_reset_nonce(ev)
+                if current and current.start_observed and nonce and nonce == current.unit_reset_nonce:
+                    continue
+                pre_start_context = current if current and not current.start_observed and not current.submissions else None
+                if (ev.raw_event or {}).get('reset_request') is True:
+                    reset_times.append(start_at)
+                    if current:
+                        current.reset_count += 1
+                if current and (current.start_observed or current.submissions):
                     _finalize_attempt(current, reset_times)
                     features.append(current)
                     current = None
                     reset_times = []
-                attempt_no += 1
+                if pre_start_context is None:
+                    attempt_no += 1
                 current = QuizAttemptFeature(
                     course_id=course_id,
                     username=username,
@@ -387,10 +440,15 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
                     sequence_usage_key=extract_sequence_key(ev),
                     unit_usage_key=unit_key,
                     attempt_no=attempt_no,
-                    started_at=ev.event_time,
+                    started_at=start_at,
                     unit_reset_nonce=extract_unit_reset_nonce(ev),
                     start_observed=True,
                 )
+                if pre_start_context:
+                    current.assigned_problem_usage_keys = pre_start_context.assigned_problem_usage_keys
+                    current.itembank_locations = pre_start_context.itembank_locations
+                    current.showanswer_count = pre_start_context.showanswer_count
+                    current.answer_reveal_requests = pre_start_context.answer_reveal_requests
                 continue
             if et == QUIZ_SESSION_STATUS:
                 # Production /start events have no course/unit payload. /status is
@@ -401,20 +459,8 @@ def build_quiz_attempt_features(events: list[EventLike]) -> list[QuizAttemptFeat
                     feat.sequence_usage_key = extract_sequence_key(ev)
                 continue
             if et == QUIZ_SESSION_RESET:
-                if ev.event_time:
-                    reset_times.append(ev.event_time)
-                if current is None and closed_by_reset is not None:
-                    closed_by_reset.reset_count += 1
-                    closed_by_reset.evidence['reset_times'] = [d.isoformat() for d in reset_times]
-                    continue
-                if current is None:
-                    ensure_attempt(ev)
-                if current:
-                    current.reset_count += 1
-                    _finalize_attempt(current, reset_times)
-                    features.append(current)
-                    closed_by_reset = current
-                    current = None
+                # Requests do not establish success. A successful reset emits
+                # a scoped start carrying reset_request=True above.
                 continue
             feat = ensure_attempt(ev)
             if et in ITEMBANK_EVENTS:

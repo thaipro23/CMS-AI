@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import func, text
+from sqlalchemy import func, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, load_only
 
@@ -26,11 +27,11 @@ from app.models.learning_analytics import (
     AnalyticsTrackingEvent,
 )
 from app.services.learning_analytics.learning_behavior_classifier import BehaviorInput, classify_learning_behavior
-from app.services.learning_analytics.session_deadline_mapper import build_session_mappings_from_blocks, week_for_session
+from app.services.learning_analytics.session_deadline_mapper import build_session_mappings_from_blocks, infer_deadline, week_for_session
 from app.services.academic_service import AcademicService
 from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
 from app.services.learning_analytics.tracking_event_parser import TrackingParseError, parse_tracking_log_line
-from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features
+from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features, SERVER_SESSION_PROVENANCE
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
 from app.services.learning_analytics.loki_tracking_reader import LokiTrackingLogReader
 from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress
@@ -1352,6 +1353,7 @@ class LearningAnalyticsCoreService:
                 self.db.add(row)
 
         self.db.commit()
+        self.__dict__.get('_quiz_unit_aliases_cache', {}).pop(course_id, None)
         return {
             'course_id': course_id,
             'session_count': len(mappings),
@@ -1381,22 +1383,30 @@ class LearningAnalyticsCoreService:
     def get_session_structure(self, *, course_id: str, class_id: str | None = None) -> list[dict[str, Any]]:
         rows = self.db.query(AnalyticsCourseSession).filter(AnalyticsCourseSession.course_id == course_id, AnalyticsCourseSession.active == True).order_by(AnalyticsCourseSession.session_index.asc()).all()
         overrides = self._quiz_deadline_overrides_by_session(class_id=class_id, course_id=course_id)
+        class_start = self._course_start_at_for_class(class_id) if class_id else None
         result: list[dict[str, Any]] = []
         for r in rows:
             override = overrides.get(int(r.session_index or 0))
             deadline_at = override.deadline_date if override and override.deadline_date else r.deadline_at
             source = 'QUIZ_DEADLINE' if override and override.deadline_date else r.deadline_source
             quality = 'GOOD' if override and override.deadline_date else r.deadline_mapping_quality
+            # Outline rows are shared by every class enrolled in this course.
+            # An inferred date written by one class is not another class's deadline.
+            if not (override and override.deadline_date) and source in {'INFERRED', 'MISSING', 'CLASS_INFERRED'}:
+                if class_id:
+                    deadline_at = infer_deadline(class_start, int(r.week_index or 1))
+                    source = 'CLASS_INFERRED' if deadline_at else 'MISSING'
+                quality = 'PARTIAL' if deadline_at else 'LOW'
             components_payload = r.components_json or {}
             components = components_payload.get('components', [])
             match_keys = components_payload.get('match_keys', [])
-            if override:
+            if override or source in {'CLASS_INFERRED', 'MISSING'}:
                 components = [dict(item) for item in components]
                 for item in components:
                     if str(item.get('block_type') or '').lower() in {'problem', 'quiz', 'sequential_quiz', 'library_content'}:
                         item['deadline_at'] = deadline_at.isoformat() if deadline_at else None
                         item['deadline_source'] = source
-                        item['component_label'] = override.component_label or item.get('title') or item.get('usage_key')
+                        item['component_label'] = (override.component_label if override else None) or item.get('title') or item.get('usage_key')
             result.append({
                 'session_index': r.session_index,
                 'session_key': r.session_key,
@@ -1846,7 +1856,8 @@ class LearningAnalyticsCoreService:
 
         from .quiz_item_materializer import materialize_quiz_items, quiz_tables_ready
         item_capture = bool(settings.analytics_quiz_integrity_enabled and quiz_tables_ready(self.db))
-        features = build_quiz_attempt_features(normalized_events)
+        unit_aliases = self._quiz_unit_aliases(course_id)
+        features = build_quiz_attempt_features(normalized_events, unit_aliases=unit_aliases)
         now = datetime.utcnow()
         saved = 0
         created = 0
@@ -1865,6 +1876,14 @@ class LearningAnalyticsCoreService:
             # whose original raw events have already been cleaned up.
             existing.suspicious_quiz_speed = False
             existing.fishing_pattern = False
+            prior = existing.evidence_json or {}
+            if prior.get('session_event_provenance') != SERVER_SESSION_PROVENANCE:
+                existing.reset_count = 0
+                existing.evidence_json = {**prior, 'start_request_at': None,
+                    'start_observed': False, 'duration_seconds': None,
+                    'duration_source': 'UNKNOWN', 'reset_times': []}
+                if existing.submission_count:
+                    existing.low_confidence_reason = 'MISSING_QUIZ_SESSION_START'
             existing_by_key[(str(existing.username), str(existing.unit_usage_key))].append(existing)
 
         for feat in features:
@@ -1989,7 +2008,8 @@ class LearningAnalyticsCoreService:
             from .quiz_integrity_service import recalculate_class_integrity
             # Class roster is mandatory for pair evidence, even a single-user job.
             all_users = list((identity or {}).get('ap_usernames') or [])
-            recalculate_class_integrity(self.db, class_id=class_id, course_id=course_id, usernames=all_users)
+            recalculate_class_integrity(self.db, class_id=class_id, course_id=course_id,
+                                        usernames=all_users, unit_aliases=unit_aliases)
         if features:
             self._record_materialized_event_receipts(receipt_events, family='quiz')
         self.db.commit()
@@ -2452,12 +2472,13 @@ class LearningAnalyticsCoreService:
     @staticmethod
     def _as_datetime(value: Any) -> datetime | None:
         if isinstance(value, datetime):
-            return value.replace(tzinfo=None)
+            return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
         if isinstance(value, date):
             return datetime.combine(value, datetime.min.time())
         if isinstance(value, str) and value.strip():
             try:
-                return datetime.fromisoformat(value.replace('Z', '+00:00')).replace(tzinfo=None)
+                parsed = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+                return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
             except Exception:
                 return None
         return None
@@ -2472,6 +2493,71 @@ class LearningAnalyticsCoreService:
                 return item
         return None
 
+    @classmethod
+    def _observed_watch_before(cls, rows: list[Any], submitted_at: datetime | None) -> float:
+        if not submitted_at:
+            return 0.0
+        total = 0.0
+        for row in rows:
+            for segment in (row.evidence_json or {}).get('segments', []):
+                end = cls._as_datetime(segment.get('end'))
+                start = cls._as_datetime(segment.get('start'))
+                if start and end and start < end <= submitted_at:
+                    total += max(0.0, float(segment.get('seconds') or 0))
+        return round(total, 2)
+
+    def _session_progress_for_class(self, rows: list[Any], structure: list[dict[str, Any]], class_id: str | None) -> list[Any]:
+        """Project shared course/user rows onto a class without modifying ORM rows."""
+        by_index = {item['session_index']: item for item in structure}
+        projected = []
+        for row in rows:
+            values = {column.name: getattr(row, column.name) for column in AnalyticsStudentSessionProgress.__table__.columns}
+            if not (row.evidence_json or {}).get('pre_quiz_watch_seconds'):
+                values['reason_codes'] = [code for code in (row.reason_codes or []) if code != 'WATCH_THEN_ATTEMPT_PROBLEM']
+            item = by_index.get(row.session_index)
+            if item:
+                deadline = self._as_datetime(item.get('deadline_at'))
+                values.update(deadline_at=deadline, deadline_source=item.get('deadline_source'))
+                reasons = [code for code in (values['reason_codes'] or []) if code not in {
+                    'COMPLETED_LATE', 'DEADLINE_PATTERN_MATCHED', 'MISSING_DEADLINE_MAPPING'}]
+                done = (row.total_videos <= 0 or row.videos_completed >= row.total_videos) and (
+                    row.quiz_completed or row.quiz_attempted or row.videos_completed > 0)
+                before = row.last_activity_at <= deadline if done and deadline and row.last_activity_at else None
+                values.update(completed_before_deadline=before,
+                              completed_late=None if before is None else not before)
+                if not deadline:
+                    reasons.append('MISSING_DEADLINE_MAPPING')
+                elif before is not None:
+                    reasons.append('DEADLINE_PATTERN_MATCHED' if before else 'COMPLETED_LATE')
+                if row.session_learning_status in {'COMPLETED_LATE', 'LIKELY_COMPLETED'}:
+                    values['session_learning_status'] = 'COMPLETED_LATE' if before is False else 'LIKELY_COMPLETED'
+                values['reason_codes'] = reasons
+                values['evidence_json'] = {**(row.evidence_json or {}), 'deadline_class_id': class_id,
+                    'deadline_source': item.get('deadline_source'),
+                    'deadline_mapping_quality': item.get('deadline_mapping_quality')}
+            projected.append(SimpleNamespace(**values))
+        return projected
+
+    def _quiz_unit_aliases(self, course_id: str) -> dict[str, str]:
+        cache = self.__dict__.setdefault('_quiz_unit_aliases_cache', {})
+        if course_id in cache:
+            return cache[course_id]
+        aliases: dict[str, str] = {}
+        if inspect(self.db.get_bind()).has_table(AnalyticsCourseSession.__tablename__):
+            rows = self.db.query(AnalyticsCourseSession.components_json).filter(
+                AnalyticsCourseSession.course_id == course_id,
+                AnalyticsCourseSession.active.is_(True)).all()
+            for (payload,) in rows:
+                for item in (payload or {}).get('components', []):
+                    metadata = item.get('metadata') or {}
+                    parent = str(metadata.get('parent_block_id') or '')
+                    key = str(item.get('usage_key') or '')
+                    if key and '+type@vertical+' in parent and item.get('block_type') in {
+                            'problem', 'quiz', 'itembank', 'library_content'}:
+                        aliases[key] = parent
+        cache[course_id] = aliases
+        return aliases
+
     def recalculate_class_quiz_integrity(self, *, class_id: str, course_id: str) -> dict[str, Any]:
         """Compare the durable class history once after worker materialization."""
         if not settings.analytics_quiz_integrity_enabled:
@@ -2479,7 +2565,8 @@ class LearningAnalyticsCoreService:
         from .quiz_integrity_service import recalculate_class_integrity
         identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
         return recalculate_class_integrity(self.db, class_id=class_id, course_id=course_id,
-                                          usernames=list(identity.get('ap_usernames') or []))
+                                          usernames=list(identity.get('ap_usernames') or []),
+                                          unit_aliases=self._quiz_unit_aliases(course_id))
 
     def recalculate_student_session_progress(self, *, class_id: str | None, course_id: str, username: str | None = None, refresh_quiz_integrity: bool = True) -> dict[str, Any]:
         # Quiz attempts are derived directly from tracking events and must not
@@ -2541,21 +2628,28 @@ class LearningAnalyticsCoreService:
                 quiz_attempted = False
                 quiz_completed = False
                 quiz_submitted_at = None
+                quiz_score_source = None
                 if raw_attempt:
                     quiz_attempted = bool((raw_attempt.submission_count or 0) > 0 or raw_attempt.started_at)
                     quiz_completed = bool((raw_attempt.submission_count or 0) > 0)
                     quiz_submitted_at = raw_attempt.first_submission_at
                     if raw_attempt.score_possible and raw_attempt.score_possible > 0 and raw_attempt.score_earned is not None:
                         quiz_score = round((float(raw_attempt.score_earned) / float(raw_attempt.score_possible)) * 10.0, 2)
-                if quiz_item and not raw_attempt:
+                        quiz_score_source = 'TRACKING_SUBMISSIONS'
+                if quiz_item:
                     try:
                         score_percent = academic_service._component_score_percent(quiz_item)  # type: ignore[attr-defined]
                     except Exception:
                         score_percent = None
-                    quiz_score = round(score_percent / 10.0, 2) if score_percent is not None else None
-                    quiz_attempted = score_percent is not None or bool(quiz_item.get('submitted_at'))
-                    quiz_completed = bool(score_percent is not None and score_percent >= 100)
-                    quiz_submitted_at = self._as_datetime(quiz_item.get('submitted_at'))
+                    if score_percent is not None:
+                        # A retained tracking attempt may contain only one
+                        # problem. Official subsection score covers the quiz.
+                        quiz_score = round(score_percent / 10.0, 2)
+                        quiz_score_source = 'OFFICIAL_COMPONENT_SNAPSHOT'
+                    if not raw_attempt:
+                        quiz_attempted = score_percent is not None or bool(quiz_item.get('submitted_at'))
+                        quiz_completed = bool(score_percent is not None and score_percent >= 100)
+                        quiz_submitted_at = self._as_datetime(quiz_item.get('submitted_at'))
                 first_video_at = min([r.first_played_at for r in rows if r.first_played_at] or [None])
                 last_video_at = max([r.last_event_at for r in rows if r.last_event_at] or [None])
                 last_activity_at = max([d for d in [last_video_at, quiz_submitted_at] if d] or [None])
@@ -2574,6 +2668,9 @@ class LearningAnalyticsCoreService:
                     reason_codes.append('MISSING_DEADLINE_MAPPING')
                 if quiz_submitted_at and first_video_at and quiz_submitted_at < first_video_at:
                     reason_codes.append('QUIZ_BEFORE_VIDEO')
+                pre_quiz_watch_seconds = self._observed_watch_before(rows, quiz_submitted_at)
+                if pre_quiz_watch_seconds > 0:
+                    reason_codes.append('WATCH_THEN_ATTEMPT_PROBLEM')
                 if raw_attempt and raw_attempt.suspicious_quiz_speed:
                     reason_codes.append('SUSPICIOUS_QUIZ_SPEED')
                 if raw_attempt and raw_attempt.fishing_pattern:
@@ -2641,9 +2738,13 @@ class LearningAnalyticsCoreService:
                 row.reason_codes = sorted(set(reason_codes))
                 row.evidence_json = {
                     'deadline_source': session.get('deadline_source'),
+                    'deadline_class_id': class_id,
                     'deadline_mapping_quality': session.get('deadline_mapping_quality'),
                     'quiz_deadline_configured': session.get('quiz_deadline_configured'),
                     'quiz_submitted_at': quiz_submitted_at.isoformat() if quiz_submitted_at else None,
+                    'first_video_at': first_video_at.isoformat() if first_video_at else None,
+                    'pre_quiz_watch_seconds': pre_quiz_watch_seconds,
+                    'quiz_score_source': quiz_score_source,
                     'quiz_usage_key': session.get('quiz_usage_key'),
                     'raw_quiz_attempt_id': raw_attempt.id if raw_attempt else None,
                     'session_type': session_type,
@@ -2683,6 +2784,9 @@ class LearningAnalyticsCoreService:
         events_by_user = self._events_count_by_username(course_id=course_id, usernames=users, class_id=class_id)
         videos_by_user = self._video_progress_by_username(course_id=course_id, usernames=users)
         sessions_by_user = self._session_progress_by_username(course_id=course_id, usernames=users)
+        structure = self.get_session_structure(course_id=course_id, class_id=class_id)
+        sessions_by_user = {user: self._session_progress_for_class(rows, structure, class_id)
+                            for user, rows in sessions_by_user.items()}
         quiz_attempts_by_user = self._quiz_attempts_by_username(course_id=course_id, usernames=users)
 
         now = datetime.utcnow()
@@ -2744,7 +2848,9 @@ class LearningAnalyticsCoreService:
                 crammed_session_count=crammed,
                 crammed_low_watch_session_count=crammed_low_watch,
                 quiz_before_video_count=quiz_before,
-                video_before_quiz_count=len([r for r in learning_session_rows if r.quiz_attempted and 'QUIZ_BEFORE_VIDEO' not in (r.reason_codes or [])]),
+                video_before_quiz_count=len([r for r in learning_session_rows if r.quiz_attempted
+                                            and (r.estimated_watch_seconds or 0) > 0
+                                            and 'WATCH_THEN_ATTEMPT_PROBLEM' in (r.reason_codes or [])]),
                 total_quiz_sessions=len({str(r.unit_usage_key or '') for r in quiz_rows if r.unit_usage_key}),
                 total_quiz_attempts=len(quiz_rows),
                 suspicious_quiz_speed_count=suspicious_quiz_speed,
@@ -3057,6 +3163,7 @@ class LearningAnalyticsCoreService:
         latest_behavior_at = None
         deadline_sources: dict[str, int] = {}
         missing_duration_count = 0
+        stale_behavior_count = missing_behavior_count = 0
         stale_hours = int(getattr(settings, 'analytics_snapshot_stale_hours', 168) or 168)
 
         if class_id:
@@ -3102,8 +3209,16 @@ class LearningAnalyticsCoreService:
             latest_behavior_at = latest.calculated_at if latest else None
             if student_count > 0 and behavior_count <= 0:
                 issues.append({'severity': 'warning', 'code': 'NO_BEHAVIOR_SNAPSHOT', 'message': 'Lớp chưa có nhận định học online.', 'action': 'Bấm Tính lại học online hoặc chạy backfill job.'})
-            if latest_behavior_at and (now - latest_behavior_at) > timedelta(hours=stale_hours):
-                issues.append({'severity': 'warning', 'code': 'STALE_BEHAVIOR_SNAPSHOT', 'message': f'Snapshot học online cũ hơn {stale_hours} giờ.', 'action': 'Chạy lại học online cho lớp để cập nhật dữ liệu mới.'})
+            roster_names = self._class_student_usernames(class_id)
+            snapshot_names = {str(name) for (name,) in behavior_q.with_entities(AnalyticsLearningBehaviorSnapshot.username).all()}
+            missing_behavior_count = len(roster_names - snapshot_names)
+            stale_behavior_count = behavior_q.filter(
+                (AnalyticsLearningBehaviorSnapshot.calculated_at.is_(None)) |
+                (AnalyticsLearningBehaviorSnapshot.calculated_at < now - timedelta(hours=stale_hours))).count()
+            if missing_behavior_count and behavior_count:
+                issues.append({'severity': 'warning', 'code': 'PARTIAL_BEHAVIOR_COVERAGE', 'message': f'{missing_behavior_count} sinh viên chưa có nhận định học online.', 'action': 'Tính lại toàn bộ lớp để đủ roster.'})
+            if stale_behavior_count:
+                issues.append({'severity': 'warning', 'code': 'STALE_BEHAVIOR_SNAPSHOT', 'message': f'{stale_behavior_count} snapshot học online cũ hơn {stale_hours} giờ hoặc thiếu mốc tính.', 'action': 'Chạy lại học online cho lớp để cập nhật dữ liệu mới.'})
         elif not class_id:
             behavior_count = self.db.query(AnalyticsLearningBehaviorSnapshot.id).count()
             latest = self.db.query(AnalyticsLearningBehaviorSnapshot).order_by(AnalyticsLearningBehaviorSnapshot.calculated_at.desc()).first()
@@ -3128,6 +3243,8 @@ class LearningAnalyticsCoreService:
             'course_id': resolved_course_id,
             'counts': {
                 'class_count': int(class_count or 0),
+                'stale_behavior_count': stale_behavior_count,
+                'missing_behavior_count': missing_behavior_count,
                 'student_count': int(student_count or 0),
                 'session_count': int(session_count or 0),
                 'tracking_events_inserted': int(ingest.get('total_events_inserted') or 0),

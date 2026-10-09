@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 from itertools import combinations
 from statistics import median
 
-RULE_VERSION = 'tracking_rules_v1'
+RULE_VERSION = 'tracking_rules_v2'
 CHOICE_TYPES = {'choiceresponse', 'multiplechoiceresponse', 'optionresponse'}
 
 
@@ -21,7 +22,14 @@ def _answer(item):
 
 
 def _key(item):
-    return (item['unit_usage_key'], item['problem_usage_key'], item['input_slot'],
+    # Content-addressed server definitions survive learner-local bank clones.
+    # Older metadata keeps the exact problem scope; labels alone are not enough
+    # to establish that two different problems have the same answer choices.
+    version = str(item.get('content_version') or '')
+    definition = (version if re.fullmatch(r'sha256:[0-9a-f]{64}', version)
+                  and re.fullmatch(r'[0-9a-f]{64}', str(item.get('question_hash') or ''))
+                  else item['problem_usage_key'])
+    return (item['unit_usage_key'], definition, item['input_slot'],
             item['variant'], item['content_version'], item['question_hash'])
 
 
@@ -50,6 +58,7 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
     contexts = defaultdict(list)
     reveals = defaultdict(dict)
     timing_context = defaultdict(list)
+    reference_min = max(12, min(1000, int(config.get('reference_people_min', 12))))
     for context in context_events:
         identity = (context['username'], context['unit_usage_key'])
         contexts[identity].append(context)
@@ -61,7 +70,9 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
     for item in sorted(items, key=lambda row: _time(row['submitted_at'])):
         user_key = (item['username'], item['unit_usage_key'])
         all_by_user[user_key].append(item)
-        if (not item.get('content_version') or type(item.get('correct')) is not bool
+        if (not item.get('content_version') or not item.get('question_hash')
+                or item.get('question_hash') == hashlib.sha256(b'').hexdigest()
+                or type(item.get('correct')) is not bool
                 or item.get('response_type') not in CHOICE_TYPES
                 or item.get('answer_json') is None or item.get('reveal_requested_before')
                 or (item['problem_usage_key'] in reveals[user_key]
@@ -80,7 +91,7 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
     candidates = set()
     for (key, answer), names in buckets.items():
         respondents = population[key]
-        if len(names) < 2 or len(respondents) - 2 < 30:
+        if len(names) < 2 or len(respondents) - 2 < reference_min:
             continue
         if (len(names) - 2) / (len(respondents) - 2) > .10:
             continue
@@ -91,7 +102,8 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
         (i['username'], _key(i), _answer(i), str(i['submitted_at']), i.get('correct'),
          i.get('reveal_requested_before')) for i in items
     ], 'contexts': context_events, 'reset_policies': config.get('reset_policies'),
-        'reset_policy': config.get('reset_policy')}, sort_keys=True, default=str).encode()).hexdigest()
+        'reset_policy': config.get('reset_policy'), 'rule_version': RULE_VERSION,
+        'reference_people_min': reference_min}, sort_keys=True, default=str).encode()).hexdigest()
     cursor = int(config.get('cursor') or 0) if config.get('fingerprint') == fingerprint else 0
     limit = max(0, min(10000, int(config.get('pair_limit', 10000))))
     batch = ordered[cursor:cursor + limit]
@@ -101,7 +113,7 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
     for unit, a, b in batch:
         left, right = users[(a, unit)], users[(b, unit)]
         common = set(left) & set(right)
-        overlap = len({k[1] for k in common})
+        overlap = len(common)
         if overlap < 8:
             continue
         matches = [k for k in common if _answer(left[k]) == _answer(right[k])]
@@ -112,17 +124,26 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
             if left[key]['correct'] is not False or right[key]['correct'] is not False:
                 continue
             refs = [row for name, row in population[key].items() if name not in {a, b}]
-            if len(refs) >= 30 and sum(_answer(r) == _answer(left[key]) for r in refs) / len(refs) <= .1:
+            if len(refs) >= reference_min and sum(_answer(r) == _answer(left[key]) for r in refs) / len(refs) <= .1:
                 rare.append(key)
-        if len({key[1] for key in rare}) < 3:
+        if len(rare) < 3:
             continue
         burst_a = _burst_times([*all_by_user[(a, unit)], *timing_context[(a, unit)]])
         burst_b = _burst_times([*all_by_user[(b, unit)], *timing_context[(b, unit)]])
         timing = [key for key in sorted(common)
                   if _time(left[key]['submitted_at']) not in burst_a
                   and _time(right[key]['submitted_at']) not in burst_b]
-        # Several inputs in one problem are one timestamp observation.
-        timing = list({key[1]: key for key in timing}.values())
+        # Several responses in one server check are one observation. Do not
+        # multiply a timeout submission's timestamp into independent samples.
+        observations = []
+        seen_a, seen_b = set(), set()
+        for key in timing:
+            ta, tb = _time(left[key]['submitted_at']), _time(right[key]['submitted_at'])
+            if ta not in seen_a and tb not in seen_b:
+                observations.append(key)
+                seen_a.add(ta)
+                seen_b.add(tb)
+        timing = observations
         if len(timing) < 6:
             continue
         gaps = [(_time(right[k]['submitted_at']) - _time(left[k]['submitted_at'])).total_seconds() for k in timing]
@@ -133,9 +154,9 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
         proof = {
             'a_username': a, 'b_username': b,
             'overlap_questions': overlap, 'answer_similarity_percent': round(100 * len(matches) / len(common), 1),
-            'rare_wrong_count': len({k[1] for k in rare}), 'timing_questions': len(timing),
+            'rare_wrong_count': len(rare), 'timing_questions': len(timing),
             'median_lag_seconds': lag, 'lag_mad_seconds': mad,
-            'questions': [{'problem_usage_key': k[1], 'input_slot': k[2],
+            'questions': [{'problem_usage_key': left[k]['problem_usage_key'], 'input_slot': k[2],
                            'answer': left[k]['answer_json'], 'correct': left[k]['correct'],
                            'a_submitted_at': _time(left[k]['submitted_at']).isoformat(),
                            'b_submitted_at': _time(right[k]['submitted_at']).isoformat()}
@@ -156,15 +177,30 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
             pairs = [*((config.get('previous_pairs') or {}).get(identity, [])), *pairs]
         pairs = list({p['other_username']: p for p in pairs}.values())
         valid = users[identity]
-        enough = len({k[1] for k in valid}) >= 8 and sum(len(population[k]) >= 32 for k in valid) >= 8
+        burst = _burst_times([*all_by_user[identity], *timing_context[identity]])
+        independent_times = {_time(row['submitted_at']) for row in valid.values()
+                             if _time(row['submitted_at']) not in burst}
+        baseline_questions = sum(len(population[k]) >= reference_min + 2 for k in valid)
+        enough = len(valid) >= 8 and baseline_questions >= 8 and len(independent_times) >= 6
         review = bool(pairs or (reset_burst and policy == 'restricted'))
         status = 'REVIEW_REQUIRED' if review else 'NORMAL' if enough and not partial else 'INSUFFICIENT_DATA'
         reasons = []
+        if any(not row.get('content_version') for row in all_by_user[identity]):
+            reasons.append('MISSING_CONTENT_VERSION')
+        if any(not row.get('question_hash') or row.get('question_hash') == hashlib.sha256(b'').hexdigest()
+               for row in all_by_user[identity]):
+            reasons.append('MISSING_QUESTION_IDENTITY')
+        if len(valid) < 8:
+            reasons.append('INSUFFICIENT_COMPARABLE_QUESTIONS')
+        elif baseline_questions < 8:
+            reasons.append('BASELINE_TOO_SMALL')
+        if len(valid) >= 8 and len(independent_times) < 6:
+            reasons.append('INSUFFICIENT_INDEPENDENT_TIMING')
         if pairs:
             reasons.append('RARE_WRONG_ANSWER_TIMING_MATCH')
         if reset_burst:
             reasons.append('REPEATED_RESET_REQUESTS')
-        if _burst_times([*all_by_user[identity], *timing_context[identity]]):
+        if burst:
             reasons.append('RAPID_SUBMISSION_BURST_CONTEXT')
         results.append({
             'username': username, 'unit_usage_key': unit, 'status': status, 'rule_version': RULE_VERSION,
@@ -172,10 +208,12 @@ def evaluate_quiz_integrity(items: list[dict], context_events: list[dict], confi
                          'cursor': next_cursor if partial else 0, 'fingerprint': fingerprint,
                          'reset_policy': policy, 'reset_request_count': len(reset_times),
                          'answer_reveal_request_count': sum(len(c.get('answer_reveal_requests', [])) for c in context),
-                         'comparable_questions': len({k[1] for k in valid}),
+                         'comparable_questions': len(valid),
+                         'baseline_question_count': baseline_questions,
+                         'independent_timing_observations': len(independent_times),
                          'missing_baseline_or_version': not enough,
                          'rules': {'overlap_min': 8, 'similarity_min_percent': 80, 'rare_wrong_min': 3,
-                                   'reference_people_min': 30, 'rare_max_percent': 10,
+                                   'reference_people_min': reference_min, 'rare_max_percent': 10,
                                    'timing_min': 6, 'lag_max_seconds': 300, 'lag_mad_max_seconds': 5}},
         })
     return results
