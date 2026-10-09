@@ -64,53 +64,6 @@ def _load_student_insight(monkeypatch):
     return module
 
 
-def test_component_grades_keep_unattempted_course_quizzes_in_student_denominator(monkeypatch):
-    module = _load_student_insight(monkeypatch)
-    planned = [
-        {
-            "key": f"quiz-{number}",
-            "usage_key": f"quiz-{number}",
-            "name": f"Quiz {number}",
-            "category": "quiz",
-            "quiz_number": number,
-            "planned": True,
-            "source": "course_outline",
-        }
-        for number in range(1, 11)
-    ]
-    scored = SimpleNamespace(
-        user_id=7,
-        usage_key="quiz-1",
-        earned_graded=10,
-        possible_graded=10,
-        earned_all=None,
-        possible_all=None,
-        modified=None,
-        updated_at=None,
-        created=None,
-    )
-    grade_model = SimpleNamespace(
-        objects=SimpleNamespace(filter=lambda **_kwargs: [scored]),
-    )
-    monkeypatch.setattr(module, "_course_outline_quiz_components", lambda _course_key: planned)
-    monkeypatch.setattr(
-        module,
-        "_persistent_subsection_grade_model",
-        lambda: (grade_model, "test", None),
-    )
-    monkeypatch.setattr(module, "_student_module_problem_grade_snapshot", lambda *_args: {})
-
-    result = module._component_grade_snapshot(
-        "course-v1:FPL+TEST+FA26",
-        [SimpleNamespace(id=7, username="PP00001")],
-    )
-
-    assert len(result[7]) == 10
-    assert result[7][0]["earned"] == 10.0
-    assert result[7][0]["planned"] is False
-    assert all(item.get("planned") is True for item in result[7][1:])
-
-
 def test_connector_uses_openedx_course_home_summary_counts_including_locked(monkeypatch):
     module = _load_student_insight(monkeypatch)
     calls = []

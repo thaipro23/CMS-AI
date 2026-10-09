@@ -1193,6 +1193,39 @@ class AcademicService:
         normalized.sort(key=lambda item: self._component_sort_key(item))
         return normalized[:80]
 
+    def _assessment_plan_from_payloads(self, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        components: list[dict[str, Any]] = []
+        for payload in payloads:
+            components.extend(self._component_scores_from_payload(payload))
+        plan = canonical_assessment_components(components)
+        return [
+            {
+                **item,
+                'earned': None,
+                'percent': None,
+                'submitted_at': None,
+                'planned': True,
+                'source': 'class_assessment_plan',
+            }
+            for item in plan
+        ]
+
+    def _result_with_assessment_plan(
+        self,
+        result: dict[str, Any],
+        assessment_plan: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not assessment_plan:
+            return result
+        actual = self._component_scores_from_payload(result)
+        return {
+            **result,
+            'component_scores': canonical_assessment_components([
+                *assessment_plan,
+                *actual,
+            ]),
+        }
+
 
     def _component_identity_key(self, item: dict[str, Any] | None) -> str:
         if not isinstance(item, dict):

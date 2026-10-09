@@ -830,6 +830,7 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
         connector_grade_seen = 0
         connector_component_seen = 0
         connector_missing_result = 0
+        pending_updates: list[tuple[AcademicStudent, dict[str, Any]]] = []
         connector_plugin_learning_counts: dict[str, int] = {}
         connector_plugin_diagnostics: dict[str, Any] = {}
         read_consistency = class_analytics_read_consistency(
@@ -905,9 +906,8 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                     connector_grade_seen += 1
                 if self._component_scores_from_payload(result):
                     connector_component_seen += 1
-                self._upsert_learning_snapshot(class_id=class_id, student=student, course_id=course_id, result=result, source='openedx_connector')
+                pending_updates.append((student, result))
                 updated += 1
-            self.db.flush()
         if updated > 0 and connector_enrolled_seen <= 0:
             raise RuntimeError('Cập nhật tiến độ/điểm không có sinh viên nào được connector xác nhận enrolled trên Open edX. Hãy chạy lại Enrollment Course CMS và kiểm tra CourseEnrollment trước khi lấy điểm.')
         if force and connector_missing_result > 0:
@@ -920,6 +920,23 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                 'Full score refresh failed because Open edX confirmed enrollment '
                 f'for only {connector_enrolled_seen}/{updated} requested learners.'
             )
+        assessment_payloads = [result for _student, result in pending_updates]
+        assessment_payloads.extend(
+            self._payload_from_snapshot(snapshot)
+            for _student, _mapping_row, snapshot in query_rows
+            if snapshot is not None
+        )
+        assessment_plan = self._assessment_plan_from_payloads(assessment_payloads)
+        for student, result in pending_updates:
+            normalized_result = self._result_with_assessment_plan(result, assessment_plan)
+            self._upsert_learning_snapshot(
+                class_id=class_id,
+                student=student,
+                course_id=course_id,
+                result=normalized_result,
+                source='openedx_connector',
+            )
+        self.db.flush()
         self.db.commit()
         summary = self._learning_summary_for_class_course(class_id, course_id)
         teacher_report_cache_invalidated = self._invalidate_teacher_report_cache_for_class(class_id, reason='learning_sync')
