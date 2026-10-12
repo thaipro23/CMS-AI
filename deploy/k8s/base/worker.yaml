@@ -39,15 +39,17 @@ spec:
             - name: CELERY_CONCURRENCY
               value: "4"
             - name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW
-              value: "10"
+              value: "5"
             - name: OPENEDX_CONNECTOR_INTERNAL_BASE_URL
               value: http://lms:8000
             - name: OPENEDX_CONNECTOR_READ_RETRY_MAX_ATTEMPTS
-              value: "2"
+              value: "4"
+            - name: OPENEDX_CONNECTOR_READ_RETRY_DELAYS_SECONDS
+              value: "60,120,300"
             - name: OPENEDX_CONNECTOR_READ_RETRY_BASE_SECONDS
-              value: "0.5"
+              value: "60"
             - name: OPENEDX_CONNECTOR_READ_RETRY_MAX_SECONDS
-              value: "1.0"
+              value: "300"
             - name: LOCAL_STORAGE_PATH
               value: /app/.runtime
             - name: HOME

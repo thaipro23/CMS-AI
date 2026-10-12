@@ -34,20 +34,22 @@ spec:
             - secretRef:
                 name: ai-server-env
           env:
-            # Single-pod ten-job production setting retained after the trial.
+            # Keep one bulk pod bounded to five concurrent class jobs.
             # Explicit values override older settings in ai-server-env.
             - name: CELERY_BULK_CONCURRENCY
-              value: "10"
+              value: "5"
             - name: ACADEMIC_BULK_SYNC_DISPATCH_WINDOW
-              value: "10"
+              value: "5"
             - name: OPENEDX_CONNECTOR_INTERNAL_BASE_URL
               value: http://lms:8000
             - name: OPENEDX_CONNECTOR_READ_RETRY_MAX_ATTEMPTS
-              value: "2"
+              value: "4"
+            - name: OPENEDX_CONNECTOR_READ_RETRY_DELAYS_SECONDS
+              value: "60,120,300"
             - name: OPENEDX_CONNECTOR_READ_RETRY_BASE_SECONDS
-              value: "0.5"
+              value: "60"
             - name: OPENEDX_CONNECTOR_READ_RETRY_MAX_SECONDS
-              value: "1.0"
+              value: "300"
             - name: LOCAL_STORAGE_PATH
               value: /app/.runtime
             - name: HOME
