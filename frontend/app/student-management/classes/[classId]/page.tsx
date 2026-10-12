@@ -530,7 +530,7 @@ function ClassDetailContent() {
     throw new Error('Job đồng bộ đang chạy quá lâu. Vui lòng mở lại trang hoặc kiểm tra worker Celery.')
   }
 
-  const followExistingJobIfAny = async () => {
+  const followExistingJobIfAny = async (requiredJobType?: string) => {
     const jobs = await refreshSyncJobs()
     const running = jobs.find(isJobActive)
     if (!running) return false
@@ -538,7 +538,9 @@ function ClassDetailContent() {
     const finished = await waitForSyncJob(running)
     if (finished.status === 'failed') throw new Error(finished.error_message || 'Job đồng bộ đang chạy thất bại')
     await refreshAfterDataChange()
-    return true
+    // An account/enrollment job does not fulfill an explicit grade refresh.
+    // A partial learning job may skip learners with existing snapshots.
+    return !requiredJobType || (running.job_type === requiredJobType && running.force === true)
   }
 
   useEffect(() => {
@@ -819,7 +821,7 @@ function ClassDetailContent() {
     setSyncingScoreUpdate(true)
     setMessage('')
     try {
-      if (await followExistingJobIfAny()) return
+      if (await followExistingJobIfAny('learning_sync')) return
       const queued = await enqueueAcademicClassLearningSyncJob(jsonHeaders, classId, { force: true, limit: 500 })
       if (queued.job_type !== 'learning_sync') {
         setMessage(`${jobTypeLabel(queued.job_type)} đang chạy.`)

@@ -1191,7 +1191,7 @@ class AcademicService:
         # Retain course-outline quizzes without scores: they contribute zero
         # to the full-course average, including quizzes that have not opened.
         normalized.sort(key=lambda item: self._component_sort_key(item))
-        return normalized[:80]
+        return normalized
 
     def _assessment_plan_from_payloads(self, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
         components: list[dict[str, Any]] = []
@@ -1822,7 +1822,7 @@ class AcademicService:
                     item['available_from'] = override.start_date.isoformat()
         results = self._enrich_component_scores_for_class(results, cls)
         results.sort(key=lambda item: self._component_sort_key(item))
-        return results[:80]
+        return results
 
     def _learning_alerts_from_summary(self, *, total: int, enrolled: int, synced: int, active: int = 0, avg_progress: float | None, avg_grade: float | None, course_id: str | None) -> list[str]:
         alerts: list[str] = []
