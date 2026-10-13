@@ -669,18 +669,20 @@ def class_behavior_workspace(
     """
     _assert_analytics_class_access(db, user, class_id)
     service = LearningAnalyticsCoreService(db)
+    doctor = service.class_result_doctor(class_id=class_id, course_id=course_id)
     return {
         'class_id': class_id,
         'course_id': course_id,
-        'summary': service.behavior_summary(class_id=class_id, course_id=course_id),
+        'summary': service.behavior_summary(class_id=class_id, course_id=course_id, diagnostics=doctor),
         'rows': service.behavior_rows(
             class_id=class_id,
             course_id=course_id,
             classification=classification,
             limit=limit,
             offset=offset,
+            diagnostics=doctor,
         ),
-        'doctor': service.class_result_doctor(class_id=class_id, course_id=course_id),
+        'doctor': doctor,
         'permission_scope': _analytics_permission_scope(db, user),
         'read_only': True,
     }
