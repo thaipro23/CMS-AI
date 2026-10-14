@@ -5,7 +5,9 @@ import json
 import logging
 import threading
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone, timedelta
+from functools import wraps
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -35,7 +37,7 @@ from app.schemas.academic import AcademicAPSyncIn
 from app.services.academic.ap_sync import AcademicAPSyncWorkflowService
 from app.services.academic.daily_pipeline_state import (
     ACTIVE,
-    MAX_STAGE_RETRY_ROUNDS,
+    MAX_STAGE_RETRY_ROUNDS as MAX_STAGE_RETRY_ROUNDS,
     plan_stage_barrier,
     select_global_dispatch_targets,
 )
@@ -52,8 +54,11 @@ from app.services.academic.job_identity import (
 )
 from app.services.academic.scheduled_parent import (
     ContinuationPublishError,
+    DeferredDispatch,
+    Publisher,
     confirm_parent_continuation,
     create_or_load_scheduled_parent,
+    dispatch_parent_continuation,
     publish_parent_continuation,
     recover_due_parent_continuations,
 )
@@ -79,6 +84,62 @@ DAILY_SNAPSHOT_RUNNING_STALE_SECONDS = 40 * 60
 
 _DAILY_ROOT_LOCKS_GUARD = threading.Lock()
 _DAILY_ROOT_LOCKS: dict[str, list[Any]] = {}
+_DEFERRED_ROOT_DELIVERIES: ContextVar[list[tuple[str, str, Publisher, datetime]] | None] = ContextVar(
+    'daily_root_deliveries', default=None,
+)
+
+
+def _defer_root_delivery(
+    parent_id: str, dispatch_id: str, publisher: Publisher, now: datetime,
+) -> None:
+    deliveries = _DEFERRED_ROOT_DELIVERIES.get()
+    if deliveries is None:
+        raise RuntimeError('No daily delivery scope')
+    deliveries.append((parent_id, dispatch_id, publisher, now))
+
+
+def _root_delivery_defer() -> DeferredDispatch | None:
+    return _defer_root_delivery if _DEFERRED_ROOT_DELIVERIES.get() is not None else None
+
+
+def _deliver_after_coordinator(method):
+    @wraps(method)
+    def run(*args, **kwargs):
+        if _DEFERRED_ROOT_DELIVERIES.get() is not None:
+            return method(*args, **kwargs)
+        deliveries = []
+        token = _DEFERRED_ROOT_DELIVERIES.set(deliveries)
+        try:
+            result = method(*args, **kwargs)
+        finally:
+            # A raised exception leaves prepared intents durable for watchdog
+            # recovery. Inline/eager consumers must not inherit this outbox.
+            _DEFERRED_ROOT_DELIVERIES.reset(token)
+
+        errors = []
+        for parent_id, dispatch_id, publisher, _prepared_at in deliveries:
+            try:
+                with SessionLocal() as db:
+                    dispatch_parent_continuation(
+                        db, parent_id, dispatch_id=dispatch_id,
+                        publisher=publisher,
+                    )
+            except ContinuationPublishError as exc:
+                errors.append({
+                    'parent_job_id': parent_id,
+                    'error': str(exc.original)[:500],
+                    'error_class': exc.original.__class__.__name__,
+                })
+        if errors:
+            if 'republished' in result:
+                result['republished'] = max(0, int(result['republished']) - len(errors))
+                result['errors'] = [*result.get('errors', []), *errors]
+            else:
+                result = {**result, 'ok': False, 'status': 'dispatch_pending',
+                          'error': errors[0]['error'],
+                          'error_class': errors[0]['error_class']}
+        return result
+    return run
 
 
 class DailyScopeError(ValueError):
@@ -676,6 +737,7 @@ def _continuation_publisher(celery_app):
     return publish
 
 
+@_deliver_after_coordinator
 def recover_daily_academic_pipeline(
     celery_app,
     *,
@@ -777,6 +839,7 @@ def recover_daily_academic_pipeline(
             max_attempts=5,
             max_runtime_seconds=DAILY_MAX_RUNTIME_SECONDS,
             runtime_failure_code='pipeline_runtime_exceeded',
+            defer_dispatch=_root_delivery_defer(),
         )
         for root in roots:
             if root.status == 'failed':
@@ -1460,6 +1523,7 @@ def _publish_root_continuation(
             db, root, publisher=_continuation_publisher(celery_app),
             task_name=DAILY_ROOT_TASK, args=[str(root.id)], queue=DAILY_COORDINATOR_QUEUE,
             countdown=countdown, confirmation_timeout_seconds=class_sync_queued_timeout_seconds(),
+            defer_dispatch=_root_delivery_defer(),
         )
     except ContinuationPublishError:
         if root.status == 'failed':
@@ -2331,6 +2395,7 @@ def _run_mapping_stage(
     }
 
 
+@_deliver_after_coordinator
 def start_daily_academic_pipeline(
     celery_app,
     *,
@@ -2480,6 +2545,7 @@ def start_daily_academic_pipeline(
         }
 
 
+@_deliver_after_coordinator
 def _run_daily_academic_pipeline_locked(celery_app, root_job_id: str) -> dict[str, object]:
     with _daily_coordinator_session() as (db, acquired):
         if not acquired:
@@ -2496,6 +2562,23 @@ def _run_daily_academic_pipeline_locked(celery_app, root_job_id: str) -> dict[st
                     'status': root.status,
                     'root_job_id': str(root.id),
                 }
+            now = datetime.utcnow()
+            created_at = _parse_state_time(root.created_at)
+            if (created_at is not None
+                    and (now - created_at).total_seconds() > DAILY_MAX_RUNTIME_SECONDS):
+                state = dict(root.result_json or {})
+                continuation = dict(state.get('continuation') or {})
+                continuation.update(status='failed', failed_at=now.isoformat(),
+                                    last_error='Scheduled pipeline runtime exceeded.')
+                state.update(code='pipeline_runtime_exceeded', continuation=continuation)
+                root.status = 'failed'
+                root.error_message = 'Scheduled pipeline runtime exceeded.'
+                root.finished_at = now
+                root.progress_current = 100
+                root.progress_label = '01:00 +07 · dừng vì quá thời gian chạy'
+                _save_root_state(db, root, state)
+                return {'ok': False, 'status': 'failed',
+                        'code': 'pipeline_runtime_exceeded', 'root_job_id': str(root.id)}
             confirm_parent_continuation(
                 db,
                 root,
@@ -2579,6 +2662,7 @@ def run_daily_academic_pipeline(celery_app, root_job_id: str) -> dict[str, objec
     return _run_daily_academic_pipeline_locked(celery_app, root_job_id)
 
 
+@_deliver_after_coordinator
 def resume_daily_academic_pipeline(
     celery_app, root_job_id: str | None = None, *, run_date_vn: str | None = None,
     now: datetime | None = None, actor: str = 'operator',
@@ -2676,9 +2760,14 @@ def register_daily_academic_pipeline_tasks(celery_app) -> None:
     def _daily_pipeline_start_task():
         return start_daily_academic_pipeline(celery_app)
 
-    @celery_app.task(name=DAILY_ROOT_TASK)
-    def _daily_pipeline_root_task(root_job_id: str):
-        return run_daily_academic_pipeline(celery_app, root_job_id)
+    @celery_app.task(name=DAILY_ROOT_TASK, bind=True, max_retries=None)
+    def _daily_pipeline_root_task(self, root_job_id: str):
+        result = run_daily_academic_pipeline(celery_app, root_job_id)
+        if result.get('status') == 'coordinator_busy':
+            # Lock contention is transport scheduling, not a failed AP/score
+            # attempt. Keep the same root; worker/watchdog enforce its deadline.
+            raise self.retry(countdown=30, max_retries=None)
+        return result
 
     routes = dict(getattr(celery_app.conf, 'task_routes', {}) or {})
     routes.update({

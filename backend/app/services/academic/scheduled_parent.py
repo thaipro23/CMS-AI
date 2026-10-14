@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable
+from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from app.models.academic import AcademicBulkOperationJob
 
 
 Publisher = Callable[..., Any]
+DeferredDispatch = Callable[[str, str, Publisher, datetime], None]
 
 
 def scheduled_parent_key(
@@ -99,6 +101,7 @@ def publish_parent_continuation(
     now: datetime | None = None,
     max_attempts: int = 5,
     confirmation_timeout_seconds: int = 90,
+    defer_dispatch: DeferredDispatch | None = None,
 ) -> str:
     current_time = now or datetime.utcnow()
     state = dict(parent.result_json or {})
@@ -138,12 +141,16 @@ def publish_parent_continuation(
 
     continuation = {
         'status': 'dispatch_pending',
+        'dispatch_id': str(uuid4()),
         'attempt_count': attempts,
         'publish_failure_count': failures,
         'confirmation_timeout_seconds': max(90, int(confirmation_timeout_seconds)),
         'due_at': (
-            current_time
-            + timedelta(seconds=max(0, int(countdown)) + max(90, int(confirmation_timeout_seconds)))
+            current_time if defer_dispatch is not None else (
+                current_time + timedelta(
+                    seconds=max(0, int(countdown)) + max(90, int(confirmation_timeout_seconds))
+                )
+            )
         ).isoformat(),
         'task_name': str(task_name),
         'args': list(args),
@@ -159,17 +166,64 @@ def publish_parent_continuation(
     db.add(parent)
     db.commit()
 
+    dispatch_id = continuation['dispatch_id']
+    if defer_dispatch is not None:
+        # Persist the intent before leaving the coordinator. A process death
+        # here leaves a recoverable pending delivery and preserves its budget.
+        defer_dispatch(str(parent.id), dispatch_id, publisher, current_time)
+        return ''
+    return dispatch_parent_continuation(
+        db, str(parent.id), dispatch_id=dispatch_id,
+        publisher=publisher, now=current_time,
+    )
+
+
+def dispatch_parent_continuation(
+    db: Session,
+    parent_id: str,
+    *,
+    dispatch_id: str,
+    publisher: Publisher,
+    now: datetime | None = None,
+) -> str:
+    """Send a prepared intent without overwriting a fast consumer or new intent."""
+    current_time = now or datetime.utcnow()
+
+    def pending_parent() -> AcademicBulkOperationJob | None:
+        parent = (db.query(AcademicBulkOperationJob)
+                  .filter(AcademicBulkOperationJob.id == parent_id)
+                  .populate_existing().with_for_update().one_or_none())
+        if parent is None or parent.status not in {'queued', 'running'}:
+            db.commit()
+            return None
+        continuation = dict((parent.result_json or {}).get('continuation') or {})
+        if (continuation.get('dispatch_id') != dispatch_id
+                or continuation.get('status') != 'dispatch_pending'):
+            db.commit()
+            return None
+        return parent
+
+    parent = pending_parent()
+    if parent is None:
+        return ''
+    continuation = dict((parent.result_json or {}).get('continuation') or {})
+    db.commit()  # Never hold the row lock across broker I/O.
     try:
         result = publisher(
-            task_name=task_name,
-            args=list(args),
-            queue=queue,
-            countdown=max(0, int(countdown)),
+            task_name=str(continuation.get('task_name') or ''),
+            args=list(continuation.get('args') or []),
+            queue=str(continuation.get('queue') or 'sync-bulk'),
+            countdown=max(0, int(continuation.get('countdown') or 0)),
         )
     except Exception as exc:
+        parent = pending_parent()
+        if parent is None:
+            # An acknowledgement can be lost after a worker already confirmed
+            # delivery. Its progress remains authoritative.
+            return ''
         state = dict(parent.result_json or {})
         continuation = dict(state.get('continuation') or {})
-        failures += 1
+        failures = _publish_failure_count(continuation) + 1
         retry_delay = min(300, 15 * (2 ** min(5, max(0, failures - 1))))
         continuation.update({
             'status': 'dispatch_pending',
@@ -186,13 +240,21 @@ def publish_parent_continuation(
         db.commit()
         raise ContinuationPublishError(str(parent.id), exc) from exc
 
+    task_id = _task_id(result)
+    parent = pending_parent()
+    if parent is None:
+        return task_id
     state = dict(parent.result_json or {})
     continuation = dict(state.get('continuation') or {})
     continuation.update({
         'status': 'dispatched',
         'publish_failure_count': 0,
-        'task_id': _task_id(result),
+        'task_id': task_id,
         'dispatched_at': current_time.isoformat(),
+        'due_at': (current_time + timedelta(
+            seconds=max(0, int(continuation.get('countdown') or 0))
+            + max(90, int(continuation.get('confirmation_timeout_seconds') or 90))
+        )).isoformat(),
     })
     state['continuation'] = continuation
     parent.result_json = json_safe_value(state)
@@ -256,6 +318,7 @@ def recover_due_parent_continuations(
     max_runtime_seconds: int = 6 * 60 * 60,
     runtime_failure_code: str = 'scheduled_pipeline_runtime_exceeded',
     limit: int = 100,
+    defer_dispatch: DeferredDispatch | None = None,
 ) -> dict[str, Any]:
     current_time = now or datetime.utcnow()
     jobs = (
@@ -351,6 +414,7 @@ def recover_due_parent_continuations(
                 now=current_time,
                 max_attempts=max_attempts,
                 confirmation_timeout_seconds=int(continuation.get('confirmation_timeout_seconds') or 90),
+                defer_dispatch=defer_dispatch,
             )
             result['republished'] += 1
         except ContinuationPublishError as exc:
