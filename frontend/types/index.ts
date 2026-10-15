@@ -1203,6 +1203,7 @@ export type BankGeneratePreview = {
   question_type_counts: Record<string, number>
   material_balancing?: Array<Record<string, any>>
   current_question_count: number
+  generated_question_count: number
   chapter_question_limit: number
   remaining_quota: number
   estimated_input_tokens: number

@@ -5,6 +5,7 @@ from app.core.rbac import UserContext, ensure_course_access, require_permission
 from app.schemas.cost import CostEstimateRequest, CostEstimateResponse, PricingResponse, CoursePolicyResponse, CoursePolicyUpdate
 from app.schemas.generation import GenerateQuestionsRequest
 from app.services.cost_control import CostControlService
+from app.services.question_origin import ai_generated_question_predicate
 from app.services.generation_planner import build_generation_plan
 from app.services.pricing_service import OpenAIPricingService
 from app.core.config import settings
@@ -101,7 +102,9 @@ async def get_course_policy(course_id: str = Query(...), db: Session = Depends(g
         db.add(policy)
         db.commit()
         db.refresh(policy)
-    generated = db.query(Question).filter(Question.course_id == course_id).count() if scope == 'course' else 0
+    generated = db.query(Question).filter(
+        Question.course_id == course_id, ai_generated_question_predicate(),
+    ).count() if scope == 'course' else 0
     return CoursePolicyResponse(
         course_id=_policy_course_id(scope, scope_id),
         monthly_budget_usd=policy.monthly_budget_usd,
