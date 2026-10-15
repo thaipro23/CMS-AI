@@ -44,9 +44,9 @@ _DEFAULT_CONSTRAINT_CONFIG = {
     'question_type_enabled': False,
     'question_type_weights': dict(_DEFAULT_TYPE_WEIGHTS),
 }
-_QUIZ_CONSTRAINT_CONTEXT: ContextVar[dict[str, Any]] = ContextVar(
+_QUIZ_CONSTRAINT_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
     'fa26_quiz_constraint_config',
-    default=dict(_DEFAULT_CONSTRAINT_CONFIG),
+    default=None,
 )
 
 
@@ -279,7 +279,7 @@ def _get_job_compat(self: BankOperationJobService, job_id: str):
             normalize_quiz_constraint_config(getattr(job, 'request_json', None) or {})
         )
     else:
-        _QUIZ_CONSTRAINT_CONTEXT.set(dict(_DEFAULT_CONSTRAINT_CONFIG))
+        _QUIZ_CONSTRAINT_CONTEXT.set(None)
     return job
 
 
