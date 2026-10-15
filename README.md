@@ -1,24 +1,31 @@
-# AI Server Open edX — v25.9.16.7.2.64.16.5.7.2.18
+# CMS-AI / Dash CMS
 
-Current feature branch: **SU26 Legacy Quiz Import & Fast Subject Search**.
+FastAPI/Celery backend + Next.js frontend cho ngân hàng câu hỏi, nhập Quiz cũ,
+vận hành đào tạo AP Poly/PTCĐ và Learning Analytics; kết nối Open edX qua plugin.
+Nhánh nghiệp vụ: `feat/import-quiz-cms-old-su26`.
 
-This branch extends the known-good `.16` baseline without replacing Open edX core. Question Bank has a canonical response schema for **Một đáp án**, **Nhiều đáp án**, **Chọn và điền ô trống**, **Trả lời ngắn**, and **Trả lời số**. The Department screen includes fast subject lookup, while `/import-quiz-cms-old` validates legacy multi-sheet Excel workbooks and imports them into the subject's **SU26** version. Every imported question records the importer and starts in **Chờ duyệt**. Legacy questions without concept/difficulty remain eligible after review: Quiz planning treats missing concepts independently and missing difficulties as flexible quota inventory.
+## Đọc nhanh
 
-## Runtime scope
+- [AGENTS.md](AGENTS.md): điểm vào cho AI, quy tắc đọc có scope.
+- [CODE_INDEX.md](CODE_INDEX.md): map thư mục và điểm vào theo tác vụ.
+- [docs/INDEX.md](docs/INDEX.md): tài liệu hiện hành/lịch sử.
+- [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md): snapshot nguồn ngày 15/10/2026;
+  commit không đồng nghĩa production đã cập nhật.
+- [docs/REPO_INDEX.md](docs/REPO_INDEX.md): tra file từ metadata và kiểm tra độ mới.
+- [RUN_CURRENT.md](RUN_CURRENT.md): chọn runbook và kiểm tra triển khai.
 
-- Question authoring/review/release: `/bank`
-- Fast subject lookup: `/bank/departments`
-- Legacy Excel preview/import: `/import-quiz-cms-old` (bổ sung ảnh thiếu hoặc loại câu lỗi trước khi import)
-- Quiz/Final test planner: `/bank/quiz`
-- Open edX publish continues through the connector/worker flow; no Open edX core patch is required.
-- AP synchronization remains scoped to subjects selected CMS/Udemy in `/subject-management` from `.16`.
-- Heavy generation/publish/quiz operations remain persistent Celery jobs.
-- Database schema head: `0065_academic_job_batch_recovery`.
+```sh
+python scripts/repo_index.py check
+python scripts/repo_index.py find "quiz" --limit 10
+python scripts/repo_index.py ls backend/app/services
+```
 
-Release notes: `RELEASE_v25.9.16.7.2.64.16.5.7.2.18_QUESTION_TYPES_ERROR_HARDENING.md`.
-Verification: `VERIFICATION_v25.9.16.7.2.64.16.5.7.2.18.md`.
-Deploy: `RUN_V25_9_16_7_2_64_16_5_7_2_18.md`.
+Phiên bản trong [VERSION](VERSION) là `25.9.16.7.2.64.16.5.7.2.18`;
+nhánh có thêm hotfix sau release. Migration nguồn mới nhất được kiểm tra là
+[`0073_assessment_average_grade`](backend/alembic/versions/0073_assessment_average_grade.py).
+Đối chiếu Alembic graph/database thực tế trước khi chạy migrate.
 
-Feature specification and operations guide: [`docs/IMPORT_QUIZ_CMS_OLD_SU26.md`](docs/IMPORT_QUIZ_CMS_OLD_SU26.md).
-Verification report: [`docs/VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md`](docs/VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md).
-Teacher progress reminder and Mail Send setup: [`docs/ACADEMIC_PROGRESS_EMAIL_MAILSEND.md`](docs/ACADEMIC_PROGRESS_EMAIL_MAILSEND.md).
+Feature Quiz SU26: [spec/operations](docs/IMPORT_QUIZ_CMS_OLD_SU26.md).
+Release note .18: [question authoring/import/quota](RELEASE_v25.9.16.7.2.64.16.5.7.2.18_QUESTION_AUTHORING_TYPES_OPENEDX_IMPORT_QUIZ_QUOTA.md).
+Các file `AI_SERVER_PROJECT_*`, `RUN_V*`, `RELEASE_v*`, `VERIFICATION_v*` là hồ sơ
+phiên bản; tra khi cần bằng `find --docs --history`. Không nạp tất cả vào context.
