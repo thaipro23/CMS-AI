@@ -1106,15 +1106,40 @@ class AcademicImportService:
         username = _lower(username)
         if not username:
             raise ValueError('Thiếu teacher username')
-        teacher = self.db.query(AcademicTeacher).filter(func.lower(AcademicTeacher.username) == username).first()
+        teacher = self.db.query(AcademicTeacher).filter(
+            func.lower(AcademicTeacher.username) == username
+        ).populate_existing().with_for_update().first()
         is_new = False
         if not teacher:
             teacher = AcademicTeacher(id=str(uuid.uuid4()), username=username, full_name=username, created_at=_now(), updated_at=_now())
             counters.teachers += 1
             is_new = True
         changed = is_new
-        changed |= self._set_if_changed(teacher, 'campus', _lower(campus) or None)
-        changed |= self._set_if_changed(teacher, 'branch', _lower(branch) or None)
+        # A username identifies a person, not a branch-specific teaching role.
+        # Keep observed AP scopes without letting the last import own the person.
+        # Current class membership is still defined by teacher assignments.
+        teacher_meta = dict(teacher.metadata_json or {})
+        scopes = {
+            _lower(key): sorted({_lower(value) for value in values if _lower(value)})
+            for key, values in (teacher_meta.get('ap_branch_campuses') or {}).items()
+            if isinstance(values, list) and _lower(key)
+        }
+        for scope_branch, scope_campus in (
+            (_lower(teacher.branch), _lower(teacher.campus)),
+            (_lower(branch), _lower(campus)),
+        ):
+            if scope_branch:
+                scopes[scope_branch] = sorted(set(scopes.get(scope_branch, [])) | ({scope_campus} if scope_campus else set()))
+        teacher_meta['ap_branch_campuses'] = scopes
+        campuses = {value for values in scopes.values() for value in values}
+        changed |= self._set_json_if_changed(teacher, 'metadata_json', teacher_meta)
+        for attr, value in (
+            ('campus', next(iter(campuses)) if len(campuses) == 1 else None),
+            ('branch', next(iter(scopes)) if len(scopes) == 1 else None),
+        ):
+            if getattr(teacher, attr) != value:
+                setattr(teacher, attr, value)
+                changed = True
         changed |= self._set_if_changed(teacher, 'active', True)
         if changed:
             teacher.updated_at = _now()

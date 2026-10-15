@@ -176,16 +176,28 @@ class AcademicImportService(_BaseAcademicImportService):
             # Empty teacher is an explicit "no AP teacher" signal. If a non-empty
             # teacher could not be resolved, do not delete anything.
             if not teacher_username or expected_teacher_id:
-                for assignment in (
+                assignments = (
                     self.db.query(AcademicTeacherAssignment)
                     .filter(
                         AcademicTeacherAssignment.class_id == cls.id,
                         AcademicTeacherAssignment.source == 'ap',
                     )
                     .all()
-                ):
-                    if expected_teacher_id is None or assignment.teacher_id != expected_teacher_id:
-                        self.db.delete(assignment)
+                )
+                expected_context = (expected_teacher_id, cls.subject_id, cls.term_id, cls.block_id)
+                # A valid AP correction can change the subject/block while the
+                # teacher and class stay the same. Retire the old AP context only
+                # after the replacement persisted; preserve partial imports and
+                # all non-AP assignments.
+                replacement_exists = any(
+                    (item.teacher_id, item.subject_id, item.term_id, item.block_id) == expected_context
+                    for item in assignments
+                )
+                if not teacher_username or replacement_exists:
+                    for assignment in assignments:
+                        context = (assignment.teacher_id, assignment.subject_id, assignment.term_id, assignment.block_id)
+                        if expected_teacher_id is None or context != expected_context:
+                            self.db.delete(assignment)
 
         if not has_student_field or raw_students is None:
             return
