@@ -4559,6 +4559,9 @@ def analytics_class_recalculate_task(job_id: str):
         failed_users: list[dict[str, str]] = []
 
         total_targets = len(target_usernames)
+        if isinstance(getattr(db, 'info', None), dict):
+            db.info['analytics_ml_cancelled'] = lambda: db.query(AcademicClassSyncJob.status).filter(
+                AcademicClassSyncJob.id == job_id).scalar() in {'cancelled', 'canceled', 'failed'}
         for idx, target_username in enumerate(target_usernames, start=1):
             # Progress spans 35..90 and is updated sparsely to avoid turning the
             # job table itself into a write hotspot.
@@ -4586,6 +4589,7 @@ def analytics_class_recalculate_task(job_id: str):
                     course_id=course_id,
                     username=target_username,
                     refresh_session_progress=False,
+                    refresh_ml=False,
                 )
 
                 video_rows += int(video_item.get('video_progress_rows') or 0)
@@ -4617,15 +4621,25 @@ def analytics_class_recalculate_task(job_id: str):
 
         # Per-learner work above persists answers. Comparing all retained class
         # history for every learner multiplies DB/CPU work by the roster size.
+        failed_names = {item['username'] for item in failed_users}
+        ml_targets = [u for u in target_usernames if u not in failed_names]
         try:
             integrity_result = service.recalculate_class_quiz_integrity(
-                class_id=job.class_id, course_id=course_id,
+                class_id=job.class_id, course_id=course_id, target_usernames=ml_targets,
             )
             db.commit()
         except Exception as integrity_exc:
             # Independent analysis must not invalidate completed learner work.
             db.rollback()
             integrity_result = {'status': 'failed', 'message': str(integrity_exc)[:1000]}
+
+        from app.services.learning_analytics.ml_workflow import LearningMLWorkflow, ml_enabled
+        ml_result = {'status': 'disabled', 'processed': 0}
+        if ml_enabled(job.class_id):
+            ml_result = LearningMLWorkflow(db).score_behavior(class_id=job.class_id,
+                course_id=course_id, target_usernames=ml_targets,
+                cutoff=datetime.utcnow())
+            db.commit()
 
         video_result = {
             'video_progress_rows': video_rows,
@@ -4647,6 +4661,7 @@ def analytics_class_recalculate_task(job_id: str):
         behavior_result = {
             'processed': behavior_processed,
             'counts': dict(behavior_counts),
+            'ml': ml_result,
         }
 
         warnings: list[str] = []

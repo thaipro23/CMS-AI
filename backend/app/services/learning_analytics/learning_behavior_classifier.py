@@ -86,6 +86,10 @@ def _rate(numerator: int | float, denominator: int | float) -> float:
 
 def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
     reasons: list[str] = list(dict.fromkeys(inp.extra_reasons or []))
+    has_video = inp.total_events > 0 and inp.total_videos_seen > 0
+    video_before_quiz_count = inp.video_before_quiz_count if has_video else 0
+    if not has_video:
+        reasons = [code for code in reasons if code != 'WATCH_THEN_ATTEMPT_PROBLEM']
     if inp.only_caption_events:
         reasons.append('ONLY_CAPTION_EVENTS')
     if inp.total_events <= 0 or inp.total_videos_seen <= 0:
@@ -116,7 +120,7 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
         reasons.append('COMPLETED_LATE')
     if inp.sessions_completed_on_time:
         reasons.append('DEADLINE_PATTERN_MATCHED')
-    if inp.video_before_quiz_count:
+    if video_before_quiz_count:
         reasons.append('WATCH_THEN_ATTEMPT_PROBLEM')
 
     data_quality = 'GOOD'
@@ -136,8 +140,8 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
     else:
         avg_video_quality = 0.0
     on_time_rate = _rate(inp.sessions_completed_on_time, inp.total_sessions)
-    video_before_quiz_rate = _rate(inp.video_before_quiz_count, max(inp.sessions_started, inp.total_quiz_sessions))
-    real_score = _clamp((0.70 * avg_video_quality) + (0.20 * on_time_rate * 100.0) + (0.10 * video_before_quiz_rate * 100.0))
+    video_before_quiz_rate = _rate(video_before_quiz_count, max(inp.sessions_started, inp.total_quiz_sessions))
+    real_score = _clamp((0.70 * avg_video_quality) + (0.20 * on_time_rate * 100.0) + (0.10 * video_before_quiz_rate * 100.0)) if has_video else 0.0
 
     suspicious_video_rate = _rate(inp.suspicious_video_count, inp.total_videos_seen)
     quiz_before_video_rate = _rate(inp.quiz_before_video_count, max(inp.total_quiz_sessions, inp.sessions_started))
@@ -169,10 +173,23 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
         'SUSPICIOUS_QUIZ_SPEED', 'FISHING_PATTERN',
     }
     severe_count = len(severe.intersection(set(reasons)))
+    # A repeated video pattern can merit review on its own. Missing Quiz
+    # telemetry must not make strong, measurable video evidence look NORMAL.
+    repeated_low_watch = bool(
+        inp.total_events >= 10 and inp.sessions_started >= 2
+        and inp.total_videos_seen >= 3 and inp.total_videos_completed >= 3
+        and not inp.missing_duration_count
+        and not inp.missing_session_mapping and not inp.only_caption_events
+        and inp.avg_video_completion_percent is not None and inp.avg_video_completion_percent >= 90
+        and inp.avg_estimated_watch_percent is not None and inp.avg_estimated_watch_percent < 25
+        and suspicious_video_rate >= .8
+    )
+    if repeated_low_watch:
+        reasons.append('REPEATED_HIGH_COMPLETION_LOW_WATCH')
 
     if data_quality in {'LOW', 'MISSING'} and inp.total_events < 5:
         classification = 'INSUFFICIENT_DATA'
-    elif suspicious_score >= 70 and severe_count >= 2:
+    elif repeated_low_watch or (suspicious_score >= 70 and severe_count >= 2):
         classification = 'POSSIBLE_ANOMALY'
     elif idle_score >= 65 and suspicious_score < 70:
         classification = 'POSSIBLE_IDLE'
@@ -210,7 +227,10 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
         human_readable_summary=' '.join(summary_parts),
         recommended_action=RECOMMENDED_ACTIONS[classification],
         evidence={
-            'scoring_version': 'v25.9.16.7.2.27_learning_behavior_rule_engine',
+            'scoring_version': 'learning_behavior_audit_v2',
+            'confidence_is_probability': False,
+            'video_before_quiz_count': video_before_quiz_count,
+            'repeated_high_completion_low_watch': repeated_low_watch,
             'total_events': inp.total_events,
             'total_sessions': inp.total_sessions,
             'sessions_started': inp.sessions_started,

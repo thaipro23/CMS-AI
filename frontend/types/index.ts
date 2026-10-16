@@ -3054,6 +3054,7 @@ export type AnalyticsLearningBehaviorSummary = {
   roster_count?: number
   snapshot_count?: number
   missing_snapshot_count?: number
+  stale_snapshot_count?: number
   data_status?: 'ready' | 'partial' | 'not_calculated' | string
   likely_real_learning_count: number
   possible_idle_count: number
@@ -3068,7 +3069,21 @@ export type AnalyticsLearningBehaviorSummary = {
   disclaimer?: string
 }
 
+export type AnalyticsMLAnalysis = {
+  family: 'video' | 'quiz'
+  status: 'DISABLED' | 'NOT_READY' | 'STALE' | 'SCORED' | 'INSUFFICIENT_DATA' | 'ERROR'
+  reference_count: number
+  calculated_at: string | null
+  outlier: boolean | null
+  anomaly_score: number | null
+  reference_percentile: number | null
+  reason_codes: string[]
+  features?: Record<string, number>
+  deviations: { feature: string; value: number; reference_median: number; difference: number }[]
+}
+
 export type AnalyticsLearningBehaviorRow = {
+  ml?: AnalyticsMLAnalysis | null
   username: string
   student_code?: string | null
   full_name?: string | null
@@ -3078,6 +3093,8 @@ export type AnalyticsLearningBehaviorRow = {
   classification: AnalyticsLearningBehaviorClassification
   display_label?: string | null
   confidence_score: number
+  confidence_basis?: string
+  snapshot_stale?: boolean
   real_learning_score: number
   idle_score: number
   suspicious_score: number
@@ -3230,11 +3247,15 @@ export type AnalyticsStudentLearningBehaviorDetail = {
       rule_version: string
       calculated_at: string
       evidence: {
+        ml?: AnalyticsMLAnalysis | null
         partial?: boolean
         reset_request_count?: number
         reset_policy?: string
         answer_reveal_request_count?: number
         comparable_questions?: number
+        reason_codes?: string[]
+        baseline_question_count?: number
+        independent_timing_observations?: number
         missing_baseline_or_version?: boolean
         pairs?: {
           other_username: string

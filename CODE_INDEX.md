@@ -34,6 +34,7 @@ Chạy `python scripts/repo_index.py check`; file mới/đổi tra bằng `find`
 | RBAC/scope/403 | [business_rbac](backend/app/services/business_rbac.py), [academic/access](backend/app/services/academic/access.py), [AppShell](frontend/components/layout/AppShell.tsx) |
 | Email nhắc tiến độ | [progress_email](backend/app/services/academic/progress_email.py), [progress_email_delivery](backend/app/services/academic/progress_email_delivery.py) |
 | Bảng/cuộn/dialog/CSS | [EnterpriseDataTable](frontend/components/table/EnterpriseDataTable.tsx), [AccessibleDialog](frontend/components/ui/AccessibleDialog.tsx), [layout CSS order](frontend/app/layout.tsx) |
+| Analytics ML / dữ liệu thiếu / stale | [feature builders](backend/app/services/learning_analytics/ml_features.py), [scorer](backend/app/services/learning_analytics/ml_anomaly.py), [worker workflow](backend/app/services/learning_analytics/ml_workflow.py), [API presentation](backend/app/services/learning_analytics/ml_presentation.py), [UI card](frontend/components/analytics/MLAnalysisCard.tsx), [offline evaluator](scripts/evaluate-learning-ml.py) |
 | Runtime config/CI | [config](backend/app/core/config.py), [Jenkinsfile](Jenkinsfile), [deploy](deploy/) |
 
 Tracking/analytics: `python scripts/repo_index.py ls backend/app/services/learning_analytics`;

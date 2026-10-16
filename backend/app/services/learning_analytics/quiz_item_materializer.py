@@ -54,7 +54,7 @@ def materialize_quiz_items(db, feature: QuizAttemptFeature, *, attempt_id: str) 
         }, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
         module = event.get('context', {}).get('module') or {}
         module = module if isinstance(module, dict) else {}
-        version = module.get('original_usage_version') or payload.get('content_version')
+        version = payload.get('content_version') or module.get('original_usage_version')
         reveal = any(r['problem_usage_key'] == event['problem_usage_key']
                      and datetime.fromisoformat(r['requested_at']) <= event['submitted_at']
                      for r in feature.answer_reveal_requests)
@@ -63,6 +63,9 @@ def materialize_quiz_items(db, feature: QuizAttemptFeature, *, attempt_id: str) 
             data = data if isinstance(data, dict) else {}
             answer = data.get('answer', answers.get(input_id))
             response_type = str(data.get('response_type') or '')
+            server_hash = str(data.get('question_hash') or '')
+            question_hash = (server_hash if re.fullmatch(r'[0-9a-f]{64}', server_hash)
+                             else hashlib.sha256(str(data.get('question') or '').encode()).hexdigest())
             # Checkbox answers are sets; strings remain case-sensitive.
             if isinstance(answer, list) and response_type in {'choiceresponse', 'multiplechoiceresponse'}:
                 answer = sorted(answer, key=lambda v: json.dumps(v, sort_keys=True))
@@ -80,6 +83,7 @@ def materialize_quiz_items(db, feature: QuizAttemptFeature, *, attempt_id: str) 
             if existing:
                 # Same raw action can be reparsed after a late start event.
                 existing.attempt_id = attempt_id
+                existing.unit_usage_key = feature.unit_usage_key
                 existing.reveal_requested_before = existing.reveal_requested_before or reveal
                 items_by_key[item_key] = existing
                 continue
@@ -98,7 +102,7 @@ def materialize_quiz_items(db, feature: QuizAttemptFeature, *, attempt_id: str) 
                 input_id=str(input_id), input_slot=slot,
                 variant=str(data.get('variant') or ''),
                 content_version=str(version) if version is not None else None,
-                question_hash=hashlib.sha256(str(data.get('question') or '').encode()).hexdigest(),
+                question_hash=question_hash,
                 answer_json=answer, correct=correctness, response_type=response_type,
                 attempt_index=index, submitted_at=event['submitted_at'],
                 reveal_requested_before=reveal,

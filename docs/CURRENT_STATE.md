@@ -61,6 +61,36 @@ CMS-FPT không thay đổi. Không tăng global DB statement timeout.
 Rủi ro: pg_class.reltuples là ước tính có độ trễ, concurrent index vẫn
 có thể chờ transaction/lock, cần kiểm tra hiệu quả index trên dữ liệu thật.
 
+## Learning Analytics ML — 16/10/2026 (Asia/Ho_Chi_Minh)
+
+Baseline nhánh đích đã đọc: `c42cba8`; nhánh triển khai riêng `feat/learning-ml-20261016`.
+Khôi phục các commit ML ngày 09/10, tích hợp hotfix PostgreSQL/analytics mới và giữ shared
+diagnostics. Audit fix [PR #13](https://github.com/thaipro23/CMS-AI/pull/13) là nền thay đổi.
+
+- Có source: Isolation Forest worker batch, video/quiz riêng; scope/metadata/50 distinct
+  students/5.000 sample cap; target-only writes, row-lock/cutoff guard; API allowlist,
+  stale/off guards và thẻ ML trong drawer. Giữ điểm chính thức và nhãn luật hiện có.
+- Mặc định `ANALYTICS_ML_MODE=off`, pilot class IDs rỗng. Không có migration ML; baseline
+  vẫn bao gồm migration 0074 của hotfix /jobs. [Runbook ML](LEARNING_ANALYTICS_ML_ROLLOUT.md)
+  ghi rõ dependency/config/đánh giá và cách rollback.
+- Kiểm chứng local vừa chạy: 108 focused ML/telemetry/workflow tests sau lượt sửa review; 25 API privacy tests;
+  398 CI unit tests và 6 release checks passed sau sửa;
+  frontend lint/typecheck/build; 33 Playwright tests; fatal Ruff và compile passed.
+  Local không có PostgreSQL/Redis/container runtime; kiểm chứng các phần đó là CI gate
+  của [PR #13](https://github.com/thaipro23/CMS-AI/pull/13), cần xem đúng head/checks.
+  Full suite sau sửa review: 1313 passed/16 skipped/312 failed, baseline 1197/15/312;
+  bộ tên lỗi khớp và 0 lỗi mới. [Danh sách lỗi nền](fixes/LEARNING_ML_TEST_BASELINE_2026-10-16.txt); full suite chưa xanh.
+- Replay export 83 sinh viên: 31 video đủ đặc trưng nhưng mọi nhóm dưới 50; quiz thiếu
+  provenance server; 0 nhóm được score. Official export hash giữ nguyên. Chưa có accuracy
+  thực tế. Benchmark synthetic 1.000/5.000 rows: 0,7249/0,9347 giây, incremental peak RSS
+  115,46/122,37 MiB; chỉ là môi trường scratch, chưa gồm DB I/O/concurrent worker.
+- Trạng thái: **CÓ SOURCE / KIỂM THỬ LOCAL / REVIEW ĐỘC LẬP**; mã nguồn xuất bản
+  tại `46e4265`, trạng thái merge/CI được xác nhận qua PR #13 vào nhánh đích.
+  **CHƯA DEPLOY, CHƯA PILOT/XÁC MINH PRODUCTION**. User đã cho phép merge CMS-AI sau kiểm
+  chứng. CMS-FPT hiện có plugin0.4.18 nhưng chưa có telemetry PR #3 cũ (0.4.17); cần tích hợp trên bản mới bằng quy trình riêng, không hạ phiên bản hoặc suy ra đã deploy LMS.
+- Tiếp theo: final review, CI đúng head, merge đúng `feat/import-quiz-cms-old-su26`; sau
+  deployment được phép mới thu hai đợt dữ liệu và mẫu flagged/unflagged có nhãn giảng viên.
+
 ## Thay đổi nguồn gần nhất
 
 | Commit | Đã có trong Git | Kiểm thử ghi trong tài liệu nguồn |

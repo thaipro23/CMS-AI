@@ -12,10 +12,14 @@ from app.core.config import settings
 
 
 @pytest.mark.parametrize('comparison_fails', [False, True])
-def test_worker_compares_class_once_after_all_learners(monkeypatch, comparison_fails):
+@pytest.mark.parametrize('ml_active', [False, True])
+def test_worker_compares_class_once_after_all_learners(monkeypatch, comparison_fails, ml_active):
     from app.services.learning_analytics import analytics_core_service
     from app.services.academic import subject_delivery
     from app.services import audit_log
+    from app.services.learning_analytics import ml_workflow
+    monkeypatch.setattr(settings, 'analytics_ml_mode', 'shadow' if ml_active else 'off')
+    monkeypatch.setattr(settings, 'analytics_ml_pilot_class_ids', 'class')
     calls = []
 
     class Service:
@@ -32,12 +36,22 @@ def test_worker_compares_class_once_after_all_learners(monkeypatch, comparison_f
             calls.append(('learner', kwargs['username']))
             return {'sessions': 1, 'quiz': {}}
         def recalculate_learning_behavior(self, **kwargs):
+            assert kwargs.get('refresh_ml') is False
             return {'processed': 1, 'counts': {'NORMAL': 1}}
         def recalculate_class_quiz_integrity(self, **kwargs):
             calls.append(('class', kwargs['class_id']))
             if comparison_fails:
                 raise RuntimeError('comparison timeout')
             return {'status': 'completed', 'results': 60}
+
+    class MLWorkflow:
+        def __init__(self, db):
+            pass
+        def score_behavior(self, **kwargs):
+            assert len(kwargs['target_usernames']) == 60
+            calls.append(('ml', kwargs['class_id']))
+            return {'status': 'completed', 'processed': 60}
+    monkeypatch.setattr(ml_workflow, 'LearningMLWorkflow', MLWorkflow)
 
     job = SimpleNamespace(id='j', status='queued', job_type='learning_analytics_recalculate',
                           class_id='class', request_json={'course_id': 'course'},
@@ -58,7 +72,8 @@ def test_worker_compares_class_once_after_all_learners(monkeypatch, comparison_f
                  'json_safe_value': lambda value: value}
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), 'exec'), namespace)
     result = namespace['analytics_class_recalculate_task']('j')
-    assert calls == [*[('learner', f'sv{i}') for i in range(60)], ('class', 'class')]
+    assert calls == [*[('learner', f'sv{i}') for i in range(60)], ('class', 'class'),
+                     *([('ml', 'class')] if ml_active else [])]
     assert result['processed_user_count'] == 60
     assert job.status == 'completed'
     assert result['quiz_integrity']['status'] == ('failed' if comparison_fails else 'completed')

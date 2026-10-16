@@ -107,7 +107,17 @@ def calculate_video_progress(
             if media_delta > max(60.0, wall_delta + 30.0) and wall_delta <= 10.0:
                 large_seek_count += 1
         if ev.event_type in PLAY_EVENTS:
-            active = ev
+            continuous = False
+            if active and active.event_time and ev.event_time and active.current_time_seconds is not None and ev.current_time_seconds is not None:
+                elapsed = max(0.0, (ev.event_time - active.event_time).total_seconds())
+                advance = ev.current_time_seconds - active.current_time_seconds
+                continuous = bool(0 <= advance <= elapsed * 2 + 10
+                                  and (advance > 0 or elapsed <= 2))
+            # Legacy and modern play notifications may overlap. Preserve the
+            # original anchor when media progresses plausibly, including its
+            # long-passive cap; restarting it loses already observed watch time.
+            if not continuous:
+                active = ev
         elif ev.event_type in PAUSE_STOP_EVENTS and active and active.event_time and ev.event_time:
             wall = max(0.0, (ev.event_time - active.event_time).total_seconds())
             plausible = wall

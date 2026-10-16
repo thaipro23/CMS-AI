@@ -28,4 +28,4 @@ def test_iframe_resize_uses_intrinsic_content_not_viewport_dimensions():
 
 def test_unit_reset_plugin_version_is_bumped_for_runtime_cache_busting():
     setup = (ROOT / "openedx-unit-reset-plugin/setup.py").read_text(encoding="utf-8")
-    assert "version='0.4.14.7'" in setup
+    assert "version='0.4.14.8'" in setup

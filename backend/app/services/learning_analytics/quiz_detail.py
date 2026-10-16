@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from .quiz_attempt_analyzer import SERVER_SESSION_PROVENANCE
 
 
 def serialize_quiz_attempt(row, title: str) -> dict:
     evidence = row.evidence_json or {}
+    trusted = evidence.get('session_event_provenance') == SERVER_SESSION_PROVENANCE
     start = None
     try:
-        if evidence.get('start_request_at'):
+        if trusted and evidence.get('start_request_at'):
             start = datetime.fromisoformat(evidence['start_request_at'])
     except (ValueError, TypeError):
         pass
@@ -23,7 +25,7 @@ def serialize_quiz_attempt(row, title: str) -> dict:
         'duration_source': 'START_REQUEST_TO_LAST_SUBMISSION' if valid else 'UNKNOWN',
         'submission_count': row.submission_count,
         'score_earned': row.score_earned, 'score_possible': row.score_possible,
-        'reset_request_count': row.reset_count, 'answer_reveal_request_count': row.showanswer_count,
+        'reset_request_count': row.reset_count if trusted else 0, 'answer_reveal_request_count': row.showanswer_count,
         'rapid_submission_burst': bool(evidence.get('rapid_submission_burst')),
         'median_submission_gap_seconds': evidence.get('median_submission_gap_seconds'),
     }
@@ -54,6 +56,7 @@ def read_quiz_detail(parent, *, class_id: str, course_id: str, username: str) ->
         matches = [m for m in mappings if parent._key_match(row.unit_usage_key, m.quiz_usage_key)
                    or parent._key_match(row.sequence_usage_key, m.session_key)]
         return f'{matches[0].session_title} · Quiz' if len(matches) == 1 else f'Quiz · {row.unit_usage_key.rsplit("@", 1)[-1][:16]}'
+    from .ml_presentation import serialize_ml_analysis
     results = []
     ready = quiz_tables_ready(db)
     if ready:
@@ -61,7 +64,9 @@ def read_quiz_detail(parent, *, class_id: str, course_id: str, username: str) ->
             class_id=class_id, course_id=course_id, username=username,
         ).all()
         results = [{'unit_usage_key': row.unit_usage_key, 'status': row.status,
-                    'rule_version': row.rule_version, 'evidence': visible_pair_evidence(row.evidence_json or {}, roster),
+                    'rule_version': row.rule_version, 'evidence': {**visible_pair_evidence(row.evidence_json or {}, roster),
+                        'ml': serialize_ml_analysis(row.evidence_json, class_id=class_id, course_id=course_id,
+                            family='quiz', unit_usage_key=row.unit_usage_key, snapshot_calculated_at=row.calculated_at)},
                     'calculated_at': row.calculated_at.isoformat()} for row in stored]
     return {'attempts': [serialize_quiz_attempt(row, title(row)) for row in attempts],
             'results': results, 'status': 'READY' if ready else 'MIGRATION_REQUIRED', 'has_more': more}

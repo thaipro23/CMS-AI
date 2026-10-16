@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 
@@ -119,3 +119,15 @@ def dominant_classification(behavior: dict[str, Any]) -> str:
 
 def iso_or_none(value: Any) -> str | None:
     return value.isoformat() if value else None
+
+
+def behavior_freshness(row: Any, *, stale_hours: int) -> dict[str, Any]:
+    calculated = getattr(row, 'calculated_at', None)
+    if calculated and calculated.tzinfo:
+        calculated = calculated.astimezone(timezone.utc).replace(tzinfo=None)
+    stale = calculated is None or calculated < datetime.utcnow() - timedelta(hours=max(1, stale_hours))
+    reasons = list(getattr(row, 'reason_codes', None) or [])
+    if stale and 'STALE_BEHAVIOR_SNAPSHOT' not in reasons:
+        reasons.append('STALE_BEHAVIOR_SNAPSHOT')
+    return {'snapshot_stale': stale, 'reason_codes': reasons,
+            'confidence_basis': 'LOG_COVERAGE_HEURISTIC'}

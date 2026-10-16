@@ -105,11 +105,11 @@ def test_quiz_attempt_state_machine_ignores_null_user_status_and_does_not_join_a
     base = datetime(2026, 7, 1, 8, 0, 0)
     events = [
         EventLike('/api/unit-reset/v1/quiz-session/status', 'server', base, None, 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1'}, {}, {}),
-        EventLike('/api/unit-reset/v1/quiz-session/start', 'server', base + timedelta(seconds=1), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1'}, {}, {}),
+        EventLike('/api/unit-reset/v1/quiz-session/start', 'server', base + timedelta(seconds=1), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1', 'unit_reset_nonce': 'quiz-session:1', 'started_at': (base + timedelta(seconds=1)).isoformat()}, {}, {}),
         EventLike('edx.itembankblock.content.assigned', 'server', base + timedelta(seconds=2), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1', 'problem_usage_key': 'p1'}, {}, {}),
         EventLike('edx.grades.problem.submitted', 'server', base + timedelta(seconds=4), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1', 'problem_id': 'p1'}, {}, {}),
         EventLike('/api/unit-reset/v1/quiz-session/reset', 'server', base + timedelta(seconds=10), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1'}, {}, {}),
-        EventLike('/api/unit-reset/v1/quiz-session/start', 'server', base + timedelta(seconds=11), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1'}, {}, {}),
+        EventLike('/api/unit-reset/v1/quiz-session/start', 'server', base + timedelta(seconds=11), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1', 'unit_reset_nonce': 'quiz-session:2', 'reset_request': True, 'started_at': (base + timedelta(seconds=11)).isoformat()}, {}, {}),
         EventLike('edx.itembankblock.content.assigned', 'server', base + timedelta(seconds=12), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1', 'problem_usage_key': 'p2'}, {}, {}),
         EventLike('edx.grades.problem.submitted', 'server', base + timedelta(seconds=15), '10', 'sv001', 'course-v1:FPT+COM1071+SU26', None, {'unit_usage_key': 'u1', 'problem_id': 'p2'}, {}, {}),
     ]

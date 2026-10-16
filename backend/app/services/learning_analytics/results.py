@@ -18,6 +18,7 @@ from app.models.learning_analytics import (
 )
 from app.services.academic.helpers import _parse_openedx_course_id
 from app.services.academic_service import AcademicService
+from .presentation import behavior_freshness
 
 
 class LearningAnalyticsResultsWorkflowService:
@@ -273,10 +274,16 @@ class LearningAnalyticsResultsWorkflowService:
             session_q = session_q.filter(AnalyticsStudentSessionProgress.course_id == course_id)
             video_q = video_q.filter(AnalyticsStudentVideoProgress.course_id == course_id)
         session_rows = session_q.order_by(AnalyticsStudentSessionProgress.week_index.asc().nullslast(), AnalyticsStudentSessionProgress.session_index.asc()).all()
+        if course_id:
+            session_rows = self._session_progress_for_class(session_rows,
+                self.get_session_structure(course_id=course_id, class_id=class_id), class_id)
         video_rows = video_q.order_by(AnalyticsStudentVideoProgress.session_index.asc().nullslast(), AnalyticsStudentVideoProgress.last_event_at.desc().nullslast()).limit(300).all()
+        from .ml_presentation import serialize_ml_analysis
         return {
             'quiz_integrity': self._quiz_detail(class_id=class_id, course_id=course_id, username=username),
             'behavior': None if not behavior else {
+                'ml': serialize_ml_analysis(behavior.evidence_json, class_id=class_id, course_id=course_id,
+                    family='video', snapshot_calculated_at=behavior.calculated_at),
                 'username': behavior.username,
                 'user_id': behavior.user_id,
                 'course_id': behavior.course_id,
@@ -296,6 +303,7 @@ class LearningAnalyticsResultsWorkflowService:
                 'data_quality': behavior.data_quality,
                 'calculated_at': behavior.calculated_at.isoformat() if behavior.calculated_at else None,
                 'last_activity_at': behavior.last_activity_at.isoformat() if behavior.last_activity_at else None,
+                **behavior_freshness(behavior, stale_hours=settings.analytics_snapshot_stale_hours),
             },
             'sessions': [
                 {
@@ -967,6 +975,7 @@ class LearningAnalyticsResultsWorkflowService:
         rows = q.all()
         counts = Counter(r.classification for r in rows)
         quality = Counter(r.data_quality for r in rows)
+        stale_count = sum(behavior_freshness(r, stale_hours=settings.analytics_snapshot_stale_hours)['snapshot_stale'] for r in rows)
 
         roster = self._class_student_roster(class_id) if class_id else []
         snapshot_usernames = {self._normal_username(r.username) for r in rows if r.username}
@@ -980,6 +989,8 @@ class LearningAnalyticsResultsWorkflowService:
             data_status = 'ready' if len(rows) >= len(roster) else ('partial' if rows else 'not_calculated')
         else:
             data_status = 'ready' if rows else 'not_calculated'
+        if stale_count:
+            data_status = 'partial'
         if diagnostics is None and class_id:
             diagnostics = self.class_result_doctor(class_id=class_id, course_id=course_id)
         return {
@@ -987,6 +998,7 @@ class LearningAnalyticsResultsWorkflowService:
             'roster_count': len(roster),
             'snapshot_count': len(rows),
             'missing_snapshot_count': missing_roster_count,
+            'stale_snapshot_count': stale_count,
             'data_status': data_status,
             'likely_real_learning_count': counts.get('LIKELY_REAL_LEARNING', 0),
             'possible_idle_count': counts.get('POSSIBLE_IDLE', 0),
@@ -1044,6 +1056,7 @@ class LearningAnalyticsResultsWorkflowService:
                 'data_quality': r.data_quality,
                 'calculated_at': r.calculated_at.isoformat() if r.calculated_at else None,
                 'last_activity_at': r.last_activity_at.isoformat() if r.last_activity_at else None,
+                **behavior_freshness(r, stale_hours=settings.analytics_snapshot_stale_hours),
             }
 
         items = [snapshot_item(r) for r in snapshot_rows]
