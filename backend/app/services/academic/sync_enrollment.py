@@ -853,6 +853,13 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
             )
             validate_analytics_read_consistency(analytics_payload, requested=read_consistency)
             self._validate_connector_learning_contract(analytics_payload, course_id=course_id)
+            assessment_version = analytics_payload.get('connector_version') or (analytics_payload.get('diagnostics') or {}).get('connector_version')
+            if not self._version_at_least(assessment_version, '25.9.16.5.109'):
+                raise RuntimeError(
+                    'Cập nhật điểm yêu cầu Open edX Connector 25.9.16.5.109 trở lên '
+                    'để lấy đầy đủ danh sách Quiz/Final hiện tại. Chưa ghi snapshot; '
+                    'hãy cập nhật image LMS trước khi chạy lại.'
+                )
             results = analytics_payload.get('results') or []
             batch_learning_counts = analytics_payload.get('learning_counts') if isinstance(analytics_payload.get('learning_counts'), dict) else {}
             batch_diagnostics = analytics_payload.get('diagnostics') if isinstance(analytics_payload.get('diagnostics'), dict) else {}
@@ -887,6 +894,11 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                         'enrollment_status': 'unknown',
                         'note': 'Plugin không trả dữ liệu học tập cho sinh viên này',
                     }
+                elif result.get('assessment_plan_complete') is not True:
+                    raise RuntimeError(
+                        f'Open edX assessment_plan chưa đầy đủ cho Course {course_id}. '
+                        'Chưa ghi snapshot; hãy kiểm tra việc đọc cấu trúc khóa học rồi chạy lại.'
+                    )
                 enrollment_payload = result.get('enrollment') if isinstance(result.get('enrollment'), dict) else {}
                 enrollment_status_raw = str(result.get('enrollment_status') or enrollment_payload.get('status') or '').strip().lower()
                 if enrollment_status_raw in {'enrolled', 'already_enrolled', 'created', 'reactivated'} or _boolish(result.get('is_enrolled')) or enrollment_payload.get('is_enrolled') is True:
@@ -921,11 +933,10 @@ def sync_class_learning_insight(self, user: UserContext, class_id: str, *, force
                 f'for only {connector_enrolled_seen}/{updated} requested learners.'
             )
         assessment_payloads = [result for _student, result in pending_updates]
-        assessment_payloads.extend(
-            self._payload_from_snapshot(snapshot)
-            for _student, _mapping_row, snapshot in query_rows
-            if snapshot is not None
-        )
+        # The current connector returns the full graded-subsection plan,
+        # including unattempted Quiz/Final shells. Old snapshots are not a
+        # course definition: merging them resurrects removed/phantom quizzes
+        # (DOM1021's old Unit-derived Quiz 17/18) on every score refresh.
         assessment_plan = self._assessment_plan_from_payloads(assessment_payloads)
         for student, result in pending_updates:
             normalized_result = self._result_with_assessment_plan(result, assessment_plan)

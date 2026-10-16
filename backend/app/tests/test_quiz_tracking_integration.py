@@ -43,6 +43,15 @@ def test_late_start_and_duplicate_delivery_keep_one_attempt_and_durable_answer()
         assert len(attempts) == 1
         assert attempts[0].evidence_json['duration_seconds'] == 205
         assert (attempts[0].score_earned, attempts[0].score_possible) == (1, 1)
+        # Legacy timing may have been contaminated by browser canonical events.
+        attempts[0].evidence_json = {**attempts[0].evidence_json,
+            'submission_timing_provenance': None,
+            'server_submission_times': [{'problem_usage_key':'q1', 'submitted_at':(start+timedelta(seconds=60)).isoformat()}]}
+        db.commit()
+        service.recalculate_course_quiz_attempts(course_id='course', username='sv')
+        assert attempts[0].evidence_json['submission_timing_provenance']=='server_submissions_v1'
+        assert attempts[0].evidence_json['server_submission_times']==[
+            {'problem_usage_key':'q1','submitted_at':(start+timedelta(seconds=205)).isoformat()}]
         # Delete staging records, then a recalculation must retain item history.
         db.query(AnalyticsTrackingEvent).delete(synchronize_session=False)
         # Legacy heuristic flags must not survive merely because raw logs expired.

@@ -56,6 +56,7 @@ def read_quiz_detail(parent, *, class_id: str, course_id: str, username: str) ->
         matches = [m for m in mappings if parent._key_match(row.unit_usage_key, m.quiz_usage_key)
                    or parent._key_match(row.sequence_usage_key, m.session_key)]
         return f'{matches[0].session_title} · Quiz' if len(matches) == 1 else f'Quiz · {row.unit_usage_key.rsplit("@", 1)[-1][:16]}'
+    from .ml_presentation import serialize_ml_analysis
     results = []
     ready = quiz_tables_ready(db)
     if ready:
@@ -63,7 +64,9 @@ def read_quiz_detail(parent, *, class_id: str, course_id: str, username: str) ->
             class_id=class_id, course_id=course_id, username=username,
         ).all()
         results = [{'unit_usage_key': row.unit_usage_key, 'status': row.status,
-                    'rule_version': row.rule_version, 'evidence': visible_pair_evidence(row.evidence_json or {}, roster),
+                    'rule_version': row.rule_version, 'evidence': {**visible_pair_evidence(row.evidence_json or {}, roster),
+                        'ml': serialize_ml_analysis(row.evidence_json, class_id=class_id, course_id=course_id,
+                            family='quiz', unit_usage_key=row.unit_usage_key, snapshot_calculated_at=row.calculated_at)},
                     'calculated_at': row.calculated_at.isoformat()} for row in stored]
     return {'attempts': [serialize_quiz_attempt(row, title(row)) for row in attempts],
             'results': results, 'status': 'READY' if ready else 'MIGRATION_REQUIRED', 'has_more': more}

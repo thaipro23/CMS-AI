@@ -503,6 +503,7 @@ class BankGeneratePreviewOut(BaseModel):
     question_type_counts: dict = Field(default_factory=dict)
     material_balancing: list[dict] = Field(default_factory=list)
     current_question_count: int
+    generated_question_count: int
     chapter_question_limit: int
     remaining_quota: int
     estimated_input_tokens: int

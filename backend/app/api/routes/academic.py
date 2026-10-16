@@ -3586,16 +3586,9 @@ def list_recent_class_sync_jobs(
     elif status_filter and status_filter != 'all':
         query = query.filter(AcademicClassSyncJob.status == status_filter)
     candidates = query.order_by(AcademicClassSyncJob.created_at.desc()).limit(max(limit, 30)).all()
-    visible: list[AcademicClassSyncJob] = []
-    for row in candidates:
-        try:
-            service.assert_can_access_class(user, row.class_id)
-            visible.append(row)
-        except Exception:
-            continue
-        if len(visible) >= limit:
-            break
-    return visible
+    # Same newest-N window and role policy, without per-job RBAC SQL calls.
+    allowed_ids = service.visible_class_ids(user, {row.class_id for row in candidates})
+    return [row for row in candidates if row.class_id in allowed_ids][:limit]
 
 
 @router.get('/classes/{class_id}/sync-jobs/{job_id}', response_model=AcademicClassSyncJobOut)

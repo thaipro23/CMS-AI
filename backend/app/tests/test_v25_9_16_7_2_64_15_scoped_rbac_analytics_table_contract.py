@@ -36,7 +36,8 @@ def test_v64_15_analytics_workspace_replaces_eager_parallel_result_requests():
     assert 'class_behavior_workspace' in route
     assert "'summary': service.behavior_summary" in route
     assert "'rows': service.behavior_rows" in route
-    assert "'doctor': service.class_result_doctor" in route
+    assert 'doctor = service.class_result_doctor' in route
+    assert "'doctor': doctor" in route
     assert 'getAnalyticsClassWorkspace' in api
     assert 'getAnalyticsClassWorkspace' in page
     assert 'getAnalyticsClassBehaviorSummary' not in page

@@ -1203,6 +1203,7 @@ export type BankGeneratePreview = {
   question_type_counts: Record<string, number>
   material_balancing?: Array<Record<string, any>>
   current_question_count: number
+  generated_question_count: number
   chapter_question_limit: number
   remaining_quota: number
   estimated_input_tokens: number
@@ -3068,7 +3069,21 @@ export type AnalyticsLearningBehaviorSummary = {
   disclaimer?: string
 }
 
+export type AnalyticsMLAnalysis = {
+  family: 'video' | 'quiz'
+  status: 'DISABLED' | 'NOT_READY' | 'STALE' | 'SCORED' | 'INSUFFICIENT_DATA' | 'ERROR'
+  reference_count: number
+  calculated_at: string | null
+  outlier: boolean | null
+  anomaly_score: number | null
+  reference_percentile: number | null
+  reason_codes: string[]
+  features?: Record<string, number>
+  deviations: { feature: string; value: number; reference_median: number; difference: number }[]
+}
+
 export type AnalyticsLearningBehaviorRow = {
+  ml?: AnalyticsMLAnalysis | null
   username: string
   student_code?: string | null
   full_name?: string | null
@@ -3232,6 +3247,7 @@ export type AnalyticsStudentLearningBehaviorDetail = {
       rule_version: string
       calculated_at: string
       evidence: {
+        ml?: AnalyticsMLAnalysis | null
         partial?: boolean
         reset_request_count?: number
         reset_policy?: string
@@ -3389,6 +3405,11 @@ export type AnalyticsSlaReport = {
 }
 
 export type AnalyticsOpsStatus = Record<string, unknown> & {
+  /** PostgreSQL relation statistic, NOT an exact count. */
+  tracking_event_count?: number
+  tracking_event_count_is_estimate?: boolean
+  /** Calculated independently from a bounded exact query. */
+  tracking_event_minimum_met?: boolean
   ingest?: Record<string, unknown>
   events?: Record<string, unknown>
   snapshots?: Record<string, unknown>

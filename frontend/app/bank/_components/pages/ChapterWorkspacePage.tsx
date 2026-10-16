@@ -632,7 +632,8 @@ export function ChapterWorkspacePage({ chapterId }: { chapterId: string }) {
   )
   const numericGenerateCount = Number(generateCount || 0)
   const chapterQuestionLimit = Number((readiness?.stats as any)?.chapter_question_limit || 100)
-  const usedQuestionCount = Number((readiness?.stats as any)?.chapter_total_count ?? stats.total)
+  const totalQuestionCount = Number((readiness?.stats as any)?.chapter_total_count ?? stats.total)
+  const usedQuestionCount = Number((readiness?.stats as any)?.chapter_generated_count ?? 0)
   const approvedQuestionCount = Number((readiness?.stats as any)?.approved_count ?? stats.approved)
   const pendingReviewCount = Number((readiness?.stats as any)?.pending_review_count ?? stats.pending)
   const draftErrorCount = Number((readiness?.stats as any)?.draft_error_count ?? stats.draftError)
@@ -1135,7 +1136,7 @@ ${chunk.content}`).join('\n\n')
       <div className="button-row no-margin chapter-primary-actions">
         <button className="btn secondary chapter-action-button material" disabled={!selectedBankVersion} onClick={() => setMaterialManagerOpen(true)}>{materialOperationBusy ? <BusyLabel text="Đang up tài liệu" /> : `Tài liệu (${materials.length})`}</button>
         {!chapterPublished && canGenerateQuestions ? <button className="btn chapter-action-button generate" disabled={!selectedBankVersion} onClick={() => setGenerateManagerOpen(true)}>{generateOperationBusy ? <BusyLabel text="Đang tạo câu hỏi" /> : `Tạo câu hỏi (${usedQuestionCount}/${chapterQuestionLimit})`}</button> : null}
-        <button className="btn secondary chapter-action-button review" onClick={scrollToQuestionReview}>{chapterPublished ? `Xem câu hỏi (${usedQuestionCount})` : `Duyệt câu hỏi (${pendingReviewCount} câu chờ duyệt)`}</button>
+        <button className="btn secondary chapter-action-button review" onClick={scrollToQuestionReview}>{chapterPublished ? `Xem câu hỏi (${totalQuestionCount})` : `Duyệt câu hỏi (${pendingReviewCount} câu chờ duyệt)`}</button>
         {!chapterPublished ? <button className="btn secondary chapter-action-button diff" disabled={isActionBusy('diff_check') || longOperationBusy || !selectedBankVersion || !diffBaseBankVersionId} onClick={() => runAction('diff_check', async () => {
           if (!selectedBankVersion) return
           await runDiffNow(selectedBankVersion.id, diffBaseBankVersionId)
@@ -1250,11 +1251,11 @@ ${chunk.content}`).join('\n\n')
           {chapterPublished ? <ContentNotice tone="warning">Bài đã publish nên không thể tạo thêm câu hỏi trên version này.</ContentNotice> : null}
           <div className="chapter-generate-quota-card">
             <div className="chapter-generate-quota-ring" style={{ background: `conic-gradient(#2563eb ${generationQuotaPercent}%, #dbeafe ${generationQuotaPercent}% 100%)` }}><span /></div>
-            <div><b>{usedQuestionCount}/{chapterQuestionLimit}</b><span>Tổng câu đã tạo / giới hạn của bài</span><small>Còn {remainingQuota} câu có thể tạo thêm</small></div>
+            <div><b>{usedQuestionCount}/{chapterQuestionLimit}</b><span>Câu AI đã tạo / giới hạn tạo AI của bài</span><small>Còn {remainingQuota} câu có thể tạo bằng AI. Câu import và tạo tay không trừ giới hạn này.</small></div>
           </div>
           <div className="chapter-generate-summary-card">
             <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="file" size={18} /></span><div><b>Nguồn tài liệu đã gắn</b><span>{materials.length ? `Đã gắn ${materials.length} tài liệu` : 'Chưa có tài liệu'}</span></div></div>
-            <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="sparkles" size={18} /></span><div><b>Sẽ tạo thêm: {Math.max(0, numericGenerateCount || 0)} câu mới</b><span>Tổng dự kiến sau khi tạo: {Math.min(chapterQuestionLimit, usedQuestionCount + Math.max(0, numericGenerateCount || 0))}/{chapterQuestionLimit} câu</span></div></div>
+            <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="sparkles" size={18} /></span><div><b>Sẽ tạo thêm: {Math.max(0, numericGenerateCount || 0)} câu mới</b><span>Tổng câu trong bài sau khi tạo: {totalQuestionCount + Math.max(0, numericGenerateCount || 0)} câu (gồm cả import và tạo tay)</span></div></div>
             <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="analytics" size={18} /></span><div><b>Tỷ lệ {difficultyEasy}/{difficultyMedium}/{difficultyHard}</b><span>Dễ / Trung bình / Khó</span></div></div>
             <div className="chapter-generate-summary-row"><span className="chapter-generate-summary-icon"><AppIcon name="layers" size={18} /></span><div><b>Loại câu {questionTypeSingle}% / {questionTypeMulti}%</b><span>Một đáp án / Nhiều đáp án</span></div></div>
           </div>
@@ -1273,8 +1274,8 @@ ${chunk.content}`).join('\n\n')
           </div>
           <div className={`chapter-generate-validation${invalidQuestionTypeMix ? ' is-invalid' : ''}`} role="status"><AppIcon name={invalidQuestionTypeMix ? 'alert' : 'info'} size={17} /><span>Tổng tỷ lệ Một đáp án + Nhiều đáp án phải bằng 100%.</span></div>
           {!materials.length ? <ContentNotice tone="warning">Chưa có tài liệu. Hãy gắn tài liệu trước rồi mới tạo câu hỏi.</ContentNotice> : null}
-          {overQuota ? <ContentNotice tone="warning">Vượt giới hạn. Bài này chỉ còn được tạo thêm {remainingQuota} câu.</ContentNotice> : null}
-          {remainingQuota === 0 ? <ContentNotice tone="warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu. Không thể tạo thêm.</ContentNotice> : null}
+          {overQuota ? <ContentNotice tone="warning">Vượt giới hạn tạo AI. Bài này chỉ còn được tạo thêm {remainingQuota} câu bằng AI.</ContentNotice> : null}
+          {remainingQuota === 0 ? <ContentNotice tone="warning">Bài này đã đạt giới hạn {chapterQuestionLimit} câu AI. Bạn vẫn có thể import câu hỏi.</ContentNotice> : null}
         </section>
       </div>
     </AccessibleDialog>
@@ -1288,7 +1289,8 @@ ${chunk.content}`).join('\n\n')
           <div><span>Khó</span><b>{generatePreview.difficulty_counts.hard || 0}</b></div>
           <div><span>Một đáp án</span><b>{generatePreview.question_type_counts?.single_select || 0}</b></div>
           <div><span>Nhiều đáp án</span><b>{generatePreview.question_type_counts?.multi_select || 0}</b></div>
-          <div><span>Đã có trong bài</span><b>{generatePreview.current_question_count}/{generatePreview.chapter_question_limit}</b></div>
+          <div><span>AI đã tạo</span><b>{generatePreview.generated_question_count}/{generatePreview.chapter_question_limit}</b></div>
+          <div><span>Tổng câu trong bài</span><b>{generatePreview.current_question_count}</b></div>
           <div><span>Còn lại sau lần này</span><b>{Math.max(0, generatePreview.remaining_quota - generatePreview.question_count)}</b></div>
         </div>
         <div className="cost-preview-box">

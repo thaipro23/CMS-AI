@@ -53,6 +53,7 @@ from app.services.academic.helpers import (
     _validation_result,
 )
 from app.services.academic.assessment_components import canonical_assessment_components
+from app.services.academic.component_read_cache import current_component_read_cache, snapshot_component_read_scope
 from app.services.academic.platform import cms_delivery_predicate
 
 from app.services.academic.access import AcademicAccessWorkflowService
@@ -215,6 +216,9 @@ class AcademicService:
 
     def assert_can_access_class(self, user: UserContext, class_id: str) -> None:
         return self._access_workflow().assert_can_access_class(user, class_id)
+
+    def visible_class_ids(self, user: UserContext, class_ids: set[str]) -> set[str]:
+        return self._access_workflow().visible_class_ids(user, class_ids)
 
     def assert_can_access_subject(self, user: UserContext, subject_id: str) -> None:
         return self._access_workflow().assert_can_access_subject(user, subject_id)
@@ -1148,7 +1152,7 @@ class AcademicService:
             for key in component_keys:
                 candidate_lists.append(grade.get(key))
         normalized: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        index_by_identity: dict[str, int] = {}
         for candidate in candidate_lists:
             if isinstance(candidate, dict):
                 # Candidate may be either a single component object or a mapping
@@ -1175,23 +1179,21 @@ class AcademicService:
                 if not item:
                     continue
                 identity = self._component_identity_key(item)
-                if identity in seen:
+                if identity in index_by_identity:
                     # Prefer the item that has actual score data over a planned shell.
-                    for index, existing in enumerate(normalized):
-                        if self._component_identity_key(existing) != identity:
-                            continue
-                        existing_has_score = self._number_or_none(existing.get('percent')) is not None or self._number_or_none(existing.get('earned')) is not None
-                        item_has_score = self._number_or_none(item.get('percent')) is not None or self._number_or_none(item.get('earned')) is not None
-                        if item_has_score and not existing_has_score:
-                            normalized[index] = item
-                        break
+                    index = index_by_identity[identity]
+                    existing = normalized[index]
+                    existing_has_score = self._number_or_none(existing.get('percent')) is not None or self._number_or_none(existing.get('earned')) is not None
+                    item_has_score = self._number_or_none(item.get('percent')) is not None or self._number_or_none(item.get('earned')) is not None
+                    if item_has_score and not existing_has_score:
+                        normalized[index] = item
                     continue
-                seen.add(identity)
+                index_by_identity[identity] = len(normalized)
                 normalized.append(item)
         # Retain course-outline quizzes without scores: they contribute zero
         # to the full-course average, including quizzes that have not opened.
         normalized.sort(key=lambda item: self._component_sort_key(item))
-        return normalized[:80]
+        return normalized
 
     def _assessment_plan_from_payloads(self, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
         components: list[dict[str, Any]] = []
@@ -1252,7 +1254,15 @@ class AcademicService:
         # when enrollment sync later wrote enrollment_payload next to the original
         # class-analytics payload, or when older jobs stored connector results at
         # raw_json root.
-        return self._component_scores_from_payload(self._payload_from_snapshot(snapshot))
+        cache = current_component_read_cache()
+        if cache is None:
+            return self._component_scores_from_payload(self._payload_from_snapshot(snapshot))
+        key = (id(self), id(snapshot), id(snapshot.raw_json))
+        if key not in cache:
+            # Retain object references to prevent id reuse inside this read.
+            cache[key] = (self, snapshot, snapshot.raw_json,
+                          self._component_scores_from_payload(self._payload_from_snapshot(snapshot)))
+        return [dict(item) for item in cache[key][3]]
 
     @staticmethod
     def _date_only(value: Any) -> date | None:
@@ -1822,7 +1832,7 @@ class AcademicService:
                     item['available_from'] = override.start_date.isoformat()
         results = self._enrich_component_scores_for_class(results, cls)
         results.sort(key=lambda item: self._component_sort_key(item))
-        return results[:80]
+        return results
 
     def _learning_alerts_from_summary(self, *, total: int, enrolled: int, synced: int, active: int = 0, avg_progress: float | None, avg_grade: float | None, course_id: str | None) -> list[str]:
         alerts: list[str] = []
@@ -3201,6 +3211,7 @@ class AcademicService:
             'assignment_score_10': training_policy.get('assignment_score_10'),
         }
 
+    @snapshot_component_read_scope
     def list_class_students(self, user: UserContext, class_id: str, *, search: str | None = None, learning_status: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
         return AcademicRosterWorkflowService(self.db, parent=self).list_class_students(
             user,
@@ -4173,6 +4184,7 @@ class AcademicService:
     def _dt_or_none(value: Any) -> datetime | None:
         return to_vn_naive_datetime(value)
 
+    @snapshot_component_read_scope
     def _learning_summary_for_class_course(self, class_id: str, course_id: str | None) -> dict[str, Any]:
         total = self.db.query(func.count(AcademicClassStudent.id)).filter(AcademicClassStudent.class_id == class_id).scalar() or 0
         empty_diagnostics = {

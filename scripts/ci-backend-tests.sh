@@ -33,6 +33,11 @@ pytest -q \
   app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py \
   app/tests/test_quiz_tracking_log_integrity.py \
   app/tests/test_learning_audit_regressions.py \
+  app/tests/test_learning_ml_features.py \
+  app/tests/test_learning_ml_anomaly.py \
+  app/tests/test_learning_ml_workflow.py \
+  app/tests/test_learning_ml_access.py \
+  app/tests/test_learning_ml_replay.py \
   app/tests/test_v25_9_16_7_2_27_learning_behavior_logic_calibration.py \
   app/tests/test_quiz_server_telemetry.py \
   app/tests/test_quiz_item_materialization.py \
@@ -41,6 +46,8 @@ pytest -q \
   app/tests/test_quiz_tracking_integration.py \
   app/tests/test_quiz_worker_batching.py \
   app/tests/test_quiz_duration_edit.py \
-  app/tests/test_quiz_release_readiness.py
+  app/tests/test_quiz_release_readiness.py \
+  app/tests/test_jobs_500_db_hotpath_20261016.py \
+  app/tests/test_jobs_500_scoped_rollout_20261016.py
 pytest -q app/tests/test_v25_9_16_7_2_64_16_5_6_release_contract.py -k 'not version_is_synchronized_across_runtime_artifacts'
 pytest -q -m integration app/tests/integration

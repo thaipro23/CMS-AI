@@ -36,6 +36,7 @@ from app.services.question_content import (
     normalize_question_type, question_response_fingerprint,
 )
 from app.services.question_type_quota import AI_GENERATABLE_TYPES, allocate_column_counts_to_rows, proportional_counts
+from app.services.question_origin import ai_generated_question_predicate
 
 
 
@@ -252,12 +253,21 @@ class QuestionBankGenerationReviewWorkflowService:
         return int(value or 0) + 1
 
     def _chapter_question_count(self, *, chapter_id: str) -> int:
-        # Người dùng hiểu quota theo Bài/Chapter, không theo Bank Version kỹ thuật.
-        # Tính cả approved / pending / rejected / draft_error để không thể bỏ câu rồi tạo vô hạn.
+        # Inventory includes both generated and imported/manual questions.
         return int(self.db.query(func.count(Question.id)).filter(
             Question.bank_version_id.isnot(None),
             Question.subject_chapter_id == chapter_id,
             or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
+        ).scalar() or 0)
+
+    def _chapter_generated_question_count(self, *, chapter_id: str) -> int:
+        # Keep every review state in the AI quota; imports/manual authoring do
+        # not consume paid generation capacity.
+        return int(self.db.query(func.count(Question.id)).filter(
+            Question.bank_version_id.isnot(None),
+            Question.subject_chapter_id == chapter_id,
+            or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
+            ai_generated_question_predicate(),
         ).scalar() or 0)
 
     async def preview_generate_from_bank_version(
@@ -287,9 +297,10 @@ class QuestionBankGenerationReviewWorkflowService:
             raise ValueError('Tổng tỷ lệ Một đáp án/Nhiều đáp án phải bằng 100%')
         effective_target = max(1, int(target_question_count or self._chapter_question_limit_default()))
         chapter_total = self._chapter_question_count(chapter_id=version.chapter_id)
-        remaining = max(0, effective_target - chapter_total)
+        generated_count = self._chapter_generated_question_count(chapter_id=version.chapter_id)
+        remaining = max(0, effective_target - generated_count)
         if question_count > remaining:
-            raise ValueError(f'Vượt chỉ tiêu của bài. Hiện có {chapter_total}/{effective_target} câu, chỉ còn được tạo thêm {remaining} câu.')
+            raise ValueError(f'Vượt giới hạn tạo AI của bài. Đã tạo {generated_count}/{effective_target} câu bằng AI, chỉ còn được tạo thêm {remaining} câu.')
         content, chunks, content_tokens = self._bank_generation_content(bank_version_id=version.id, material_version_ids=material_version_ids)
         if not content.strip() or not chunks:
             raise ValueError('Bank Version chưa có tài liệu/chunk. Hãy upload tài liệu trước khi tạo câu hỏi.')
@@ -343,6 +354,7 @@ class QuestionBankGenerationReviewWorkflowService:
                 for item in material_plan
             ],
             'current_question_count': chapter_total,
+            'generated_question_count': generated_count,
             'chapter_question_limit': effective_target,
             'remaining_quota': remaining,
             'estimated_input_tokens': estimated_input_tokens,
@@ -392,10 +404,10 @@ class QuestionBankGenerationReviewWorkflowService:
             meta['target_question_count'] = int(target_question_count)
             version.metadata_json = meta
         if effective_target:
-            active_count = self._chapter_question_count(chapter_id=version.chapter_id)
+            active_count = self._chapter_generated_question_count(chapter_id=version.chapter_id)
             if active_count + int(question_count) > effective_target:
                 remaining = max(0, effective_target - active_count)
-                raise ValueError(f'Vượt chỉ tiêu của bài. Hiện có {active_count}/{effective_target} câu, chỉ còn được tạo thêm {remaining} câu.')
+                raise ValueError(f'Vượt giới hạn tạo AI của bài. Đã tạo {active_count}/{effective_target} câu bằng AI, chỉ còn được tạo thêm {remaining} câu.')
         content, chunks, input_tokens = self._bank_generation_content(bank_version_id=version.id, material_version_ids=material_version_ids)
         if not content.strip() or not chunks:
             raise ValueError('Bank Version chưa có tài liệu/chunk. Hãy upload tài liệu trước khi generate.')

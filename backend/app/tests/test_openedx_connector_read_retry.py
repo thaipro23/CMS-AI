@@ -71,9 +71,11 @@ def _reset_fake_httpx_client():
 
 
 @pytest.mark.parametrize("status_code", [502, 503, 504])
-def test_read_only_class_analytics_retries_transient_status(status_code):
+def test_read_only_class_analytics_retries_transient_status_with_production_delays(status_code):
     client = _connector_client()
     _SequencedHttpxClient.responses = [
+        _response(status_code),
+        _response(status_code),
         _response(status_code),
         _response(200, {"ok": True, "results": []}),
     ]
@@ -81,9 +83,7 @@ def test_read_only_class_analytics_retries_transient_status(status_code):
     with (
         patch("app.services.openedx_student_insight.httpx.Client", _SequencedHttpxClient),
         patch("app.services.openedx_student_insight.time_module.sleep") as sleep,
-        patch.object(settings, "openedx_connector_read_retry_max_attempts", 2),
-        patch.object(settings, "openedx_connector_read_retry_base_seconds", 0.5),
-        patch.object(settings, "openedx_connector_read_retry_max_seconds", 1.0),
+        patch.object(settings, "openedx_connector_read_retry_max_attempts", 4),
     ):
         result = client._post_json(
             path=client.class_analytics_endpoint,
@@ -93,15 +93,12 @@ def test_read_only_class_analytics_retries_transient_status(status_code):
         )
 
     assert result["ok"] is True
-    assert len(_SequencedHttpxClient.calls) == 2
-    assert sleep.call_count == 1
-    sleep.assert_called_once_with(0.5)
+    assert len(_SequencedHttpxClient.calls) == 4
+    assert [call.args[0] for call in sleep.call_args_list] == [60.0, 120.0, 300.0]
 
-    first_nonce = _SequencedHttpxClient.calls[0]["headers"]["X-AI-Connector-Nonce"]
-    second_nonce = _SequencedHttpxClient.calls[1]["headers"]["X-AI-Connector-Nonce"]
-    assert first_nonce
-    assert second_nonce
-    assert first_nonce != second_nonce
+    nonces = [call["headers"]["X-AI-Connector-Nonce"] for call in _SequencedHttpxClient.calls]
+    assert all(nonces)
+    assert len(set(nonces)) == 4
     assert _SequencedHttpxClient.calls[0]["headers"]["Host"] == "cms.fpl.edu.vn"
     assert _SequencedHttpxClient.calls[1]["url"].startswith("http://lms:8000/")
 

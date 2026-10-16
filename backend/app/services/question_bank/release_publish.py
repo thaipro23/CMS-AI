@@ -99,6 +99,7 @@ class QuestionBankReleasePublishWorkflowService:
             actions = ['Bài đã publish; các thao tác chỉnh sửa/tạo câu hỏi/chốt lại đã khóa. Hãy clone/tạo version mới nếu cần thay đổi.']
         else:
             status = 'ready' if can_create else 'blocked'
+        chapter_generated_count = self._chapter_generated_question_count(chapter_id=version.chapter_id)
         return {
             'ok': True,
             'bank_version_id': version.id,
@@ -122,7 +123,8 @@ class QuestionBankReleasePublishWorkflowService:
                 'is_published': published_release_count > 0 or self._bank_version_is_published_locked(version),
                 'chapter_question_limit': self._chapter_question_limit_default(),
                 'chapter_total_count': self._chapter_question_count(chapter_id=version.chapter_id),
-                'chapter_remaining_quota': max(0, self._chapter_question_limit_default() - self._chapter_question_count(chapter_id=version.chapter_id)),
+                'chapter_generated_count': chapter_generated_count,
+                'chapter_remaining_quota': max(0, self._chapter_question_limit_default() - chapter_generated_count),
                 'difficulty_counts': {
                     'easy': len([q for q in approved if (q.difficulty or '').lower() == 'easy']),
                     'medium': len([q for q in approved if (q.difficulty or '').lower() == 'medium']),

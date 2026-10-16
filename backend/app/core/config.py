@@ -1,5 +1,6 @@
 import json
 import re
+from typing import Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from pydantic import Field, model_validator
@@ -220,11 +221,14 @@ class Settings(BaseSettings):
     openedx_connector_default_enrollment_mode: str = 'audit'
     openedx_connector_client_id: str = 'ai-server'
     openedx_connector_timeout_seconds: int = 60
-    # Read-only class analytics may retry transient LMS/service failures. Keep
-    # attempts low because one analytics request can be relatively expensive.
-    openedx_connector_read_retry_max_attempts: int = 2
-    openedx_connector_read_retry_base_seconds: float = 0.5
-    openedx_connector_read_retry_max_seconds: float = 1.0
+    # Read-only class analytics may retry transient LMS/service failures.
+    # Four attempts = initial request plus retries after 1, 2 and 5 minutes.
+    openedx_connector_read_retry_max_attempts: int = 4
+    openedx_connector_read_retry_delays_seconds: str = '60,120,300'
+    # Legacy exponential fallback for deployments that intentionally clear the
+    # explicit schedule.
+    openedx_connector_read_retry_base_seconds: float = 60.0
+    openedx_connector_read_retry_max_seconds: float = 300.0
     openedx_connector_max_batch_size: int = 100
 
     # Backward-compatible aliases for old env files. Do not use these for new
@@ -306,6 +310,10 @@ class Settings(BaseSettings):
     # historical analytics after retention cleanup.
     analytics_raw_event_retention_days: int = 3
     analytics_quiz_integrity_enabled: bool = True
+    analytics_ml_mode: Literal['off', 'shadow'] = 'off'
+    analytics_ml_pilot_class_ids: str = ''
+    analytics_ml_min_reference_students: int = Field(default=50, ge=50, le=5000)
+    analytics_ml_max_reference_students: int = Field(default=5000, ge=50, le=5000)
     analytics_quiz_reference_people_min: int = Field(default=12, ge=12, le=1000)
     analytics_quiz_reset_policies: dict[str, str] = Field(default_factory=dict)
     analytics_raw_event_cleanup_batch_size: int = 5000

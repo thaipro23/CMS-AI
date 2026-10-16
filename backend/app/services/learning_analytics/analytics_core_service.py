@@ -31,7 +31,7 @@ from app.services.learning_analytics.session_deadline_mapper import build_sessio
 from app.services.academic_service import AcademicService
 from app.services.academic.subject_delivery import AcademicSubjectDeliveryService
 from app.services.learning_analytics.tracking_event_parser import TrackingParseError, parse_tracking_log_line
-from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features, SERVER_SESSION_PROVENANCE
+from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features, SERVER_SESSION_PROVENANCE, SERVER_SUBMISSION_PROVENANCE, SERVER_RESET_PROVENANCE
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
 from app.services.learning_analytics.loki_tracking_reader import LokiTrackingLogReader
 from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress
@@ -1980,8 +1980,13 @@ class LearningAnalyticsCoreService:
                 if start_request_at and row.last_submission_at else None
             )
             evidence['duration_source'] = 'START_REQUEST_TO_LAST_SUBMISSION' if evidence['duration_seconds'] is not None else 'UNKNOWN'
-            for name in ('reset_times', 'answer_reveal_requests', 'server_submission_times'):
-                entries = [*(old_evidence.get(name) or []), *(feat.evidence.get(name) or [])]
+            for name in ('reset_times', 'answer_reveal_requests', 'server_submission_times', 'successful_reset_times'):
+                previous = old_evidence.get(name) or []
+                if name == 'server_submission_times' and old_evidence.get('submission_timing_provenance') != SERVER_SUBMISSION_PROVENANCE:
+                    previous = []
+                if name == 'successful_reset_times' and old_evidence.get('reset_event_provenance') != SERVER_RESET_PROVENANCE:
+                    previous = []
+                entries = [*previous, *(feat.evidence.get(name) or [])]
                 evidence[name] = list({str(entry): entry for entry in entries}.values())
             # Per-problem latest scores avoid carrying previously inflated totals.
             score_map = dict(old_evidence.get('problem_scores') or {})
@@ -2009,7 +2014,8 @@ class LearningAnalyticsCoreService:
             # Class roster is mandatory for pair evidence, even a single-user job.
             all_users = list((identity or {}).get('ap_usernames') or [])
             recalculate_class_integrity(self.db, class_id=class_id, course_id=course_id,
-                                        usernames=all_users, unit_aliases=unit_aliases)
+                                        usernames=all_users, unit_aliases=unit_aliases,
+                                        ml_target_usernames=[username] if username else all_users)
         if features:
             self._record_materialized_event_receipts(receipt_events, family='quiz')
         self.db.commit()
@@ -2543,7 +2549,7 @@ class LearningAnalyticsCoreService:
         if course_id in cache:
             return cache[course_id]
         aliases: dict[str, str] = {}
-        if inspect(self.db.get_bind()).has_table(AnalyticsCourseSession.__tablename__):
+        if inspect(self.db.connection()).has_table(AnalyticsCourseSession.__tablename__):
             rows = self.db.query(AnalyticsCourseSession.components_json).filter(
                 AnalyticsCourseSession.course_id == course_id,
                 AnalyticsCourseSession.active.is_(True)).all()
@@ -2558,7 +2564,7 @@ class LearningAnalyticsCoreService:
         cache[course_id] = aliases
         return aliases
 
-    def recalculate_class_quiz_integrity(self, *, class_id: str, course_id: str) -> dict[str, Any]:
+    def recalculate_class_quiz_integrity(self, *, class_id: str, course_id: str, target_usernames: list[str] | None = None) -> dict[str, Any]:
         """Compare the durable class history once after worker materialization."""
         if not settings.analytics_quiz_integrity_enabled:
             return {'status': 'disabled'}
@@ -2566,7 +2572,7 @@ class LearningAnalyticsCoreService:
         identity = self._class_tracking_identity_maps(class_id=class_id, course_id=course_id)
         return recalculate_class_integrity(self.db, class_id=class_id, course_id=course_id,
                                           usernames=list(identity.get('ap_usernames') or []),
-                                          unit_aliases=self._quiz_unit_aliases(course_id))
+                                          unit_aliases=self._quiz_unit_aliases(course_id), ml_target_usernames=target_usernames)
 
     def recalculate_student_session_progress(self, *, class_id: str | None, course_id: str, username: str | None = None, refresh_quiz_integrity: bool = True) -> dict[str, Any]:
         # Quiz attempts are derived directly from tracking events and must not
@@ -2774,6 +2780,7 @@ class LearningAnalyticsCoreService:
         course_id: str,
         username: str | None = None,
         refresh_session_progress: bool = True,
+        refresh_ml: bool = True,
     ) -> dict[str, Any]:
         if refresh_session_progress:
             self.recalculate_student_session_progress(class_id=class_id, course_id=course_id, username=username)
@@ -2910,8 +2917,13 @@ class LearningAnalyticsCoreService:
             snap.last_activity_at = inp.last_activity_at
             snap.calculated_at = now
             counts[result.classification] += 1
+        self.db.flush()
+        from .ml_workflow import LearningMLWorkflow
+        ml_result = (LearningMLWorkflow(self.db).score_behavior(class_id=class_id,
+            course_id=course_id, target_usernames=users, cutoff=datetime.utcnow())
+            if refresh_ml else {'status': 'deferred', 'processed': 0})
         self.db.commit()
-        return {'class_id': class_id, 'course_id': course_id, 'processed': len(users), 'counts': dict(counts)}
+        return {'class_id': class_id, 'course_id': course_id, 'processed': len(users), 'counts': dict(counts), 'ml': ml_result}
 
 
 
@@ -2970,17 +2982,55 @@ class LearningAnalyticsCoreService:
         if allowed_class_ids is not None:
             q = q.filter(AcademicClass.id.in_(sorted(allowed_class_ids))) if allowed_class_ids else q.filter(False)
         classes = q.order_by(AcademicClass.updated_at.desc()).limit(min(max(1, limit), 500)).all()
+        # Preserve the canonical effective-course mapping but aggregate counts
+        # for the whole bounded page rather than issuing 3 SELECTs per class.
+        class_ids = [cls.id for cls in classes]
+        mapped_courses = {cls.id: self._course_for_class(cls.id, course_id) for cls in classes}
+        course_ids = {value for value in mapped_courses.values() if value}
+        student_counts: dict[str, int] = {}
+        behavior_counts: dict[tuple[str, str], int] = {}
+        session_counts: dict[str, int] = {}
+        if class_ids:
+            student_counts = {
+                str(cid): int(total)
+                for cid, total in self.db.query(
+                    AcademicClassStudent.class_id, func.count(AcademicClassStudent.id)
+                ).filter(AcademicClassStudent.class_id.in_(class_ids)).group_by(
+                    AcademicClassStudent.class_id
+                ).all()
+            }
+        if class_ids and course_ids:
+            behavior_counts = {
+                (str(cid), str(course)): int(total)
+                for cid, course, total in self.db.query(
+                    AnalyticsLearningBehaviorSnapshot.class_id,
+                    AnalyticsLearningBehaviorSnapshot.course_id,
+                    func.count(AnalyticsLearningBehaviorSnapshot.id),
+                ).filter(
+                    AnalyticsLearningBehaviorSnapshot.class_id.in_(class_ids),
+                    AnalyticsLearningBehaviorSnapshot.course_id.in_(course_ids),
+                ).group_by(
+                    AnalyticsLearningBehaviorSnapshot.class_id,
+                    AnalyticsLearningBehaviorSnapshot.course_id,
+                ).all()
+            }
+            session_counts = {
+                str(course): int(total)
+                for course, total in self.db.query(
+                    AnalyticsCourseSession.course_id, func.count(AnalyticsCourseSession.id)
+                ).filter(
+                    AnalyticsCourseSession.course_id.in_(course_ids),
+                    AnalyticsCourseSession.active.is_(True),
+                ).group_by(AnalyticsCourseSession.course_id).all()
+            }
         items: list[dict[str, Any]] = []
         counters = Counter()
         for cls in classes:
-            mapped_course_id = self._course_for_class(cls.id, course_id)
+            mapped_course_id = mapped_courses[cls.id]
             in_rollout, reasons = self._class_matches_rollout(cls, mapped_course_id)
-            behavior_count = self.db.query(AnalyticsLearningBehaviorSnapshot.id).filter(
-                AnalyticsLearningBehaviorSnapshot.class_id == cls.id,
-                AnalyticsLearningBehaviorSnapshot.course_id == mapped_course_id,
-            ).count() if mapped_course_id else 0
-            student_count = self.db.query(AcademicClassStudent.id).filter(AcademicClassStudent.class_id == cls.id).count()
-            session_count = self.db.query(AnalyticsCourseSession.id).filter(AnalyticsCourseSession.course_id == mapped_course_id, AnalyticsCourseSession.active.is_(True)).count() if mapped_course_id else 0
+            behavior_count = behavior_counts.get((cls.id, mapped_course_id), 0) if mapped_course_id else 0
+            student_count = student_counts.get(cls.id, 0)
+            session_count = session_counts.get(mapped_course_id, 0) if mapped_course_id else 0
             if in_rollout:
                 counters['in_rollout'] += 1
             else:
@@ -3501,7 +3551,30 @@ class LearningAnalyticsCoreService:
             ),
         )
 
-    def production_readiness_report(self, *, allowed_class_ids: set[str] | None = None) -> dict[str, Any]:
+    def _tracking_event_volume(self, minimum: int = 1) -> tuple[int, bool, bool]:
+        """Return (display count, estimated flag, exact threshold result).
+
+        Avoid COUNT(*) of millions of events in an HTTP request. Use a bounded
+        count for the readiness decision and PostgreSQL's planner estimate for
+        display only. Neither changes the event data or retention policy.
+        """
+        threshold = max(1, int(minimum))
+        bounded_count = self.db.query(AnalyticsTrackingEvent.id).limit(threshold).count()
+        minimum_met = bounded_count >= threshold
+        if self.db.get_bind().dialect.name == 'postgresql':
+            estimated = self.db.execute(text(
+                "SELECT GREATEST(reltuples, 0)::bigint "
+                "FROM pg_class WHERE oid = to_regclass('analytics_tracking_events')"
+            )).scalar()
+            if estimated is not None and estimated >= 0:
+                return max(int(estimated), int(bounded_count)), True, minimum_met
+            return int(bounded_count), True, minimum_met
+        return int(self.db.query(AnalyticsTrackingEvent.id).count()), False, minimum_met
+
+    def production_readiness_report(
+        self, *, allowed_class_ids: set[str] | None = None,
+        _shared: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Final production gate for analytics.
 
         v25.9.16.7.2.64.13 changes the gate from a vague counter into an
@@ -3510,12 +3583,15 @@ class LearningAnalyticsCoreService:
         yet are warnings, because roster fallback and post-ingest recalculation
         keep the product usable while evidence accumulates.
         """
-        data_quality = self.analytics_data_quality_report(allowed_class_ids=allowed_class_ids)
-        rollout = self.rollout_control_report(allowed_class_ids=allowed_class_ids, limit=200)
-        monitoring = self.analytics_monitoring_report(allowed_class_ids=allowed_class_ids)
+        shared = _shared or {}
+        data_quality = shared['data_quality'] if 'data_quality' in shared else self.analytics_data_quality_report(allowed_class_ids=allowed_class_ids)
+        rollout = shared['rollout'] if 'rollout' in shared else self.rollout_control_report(allowed_class_ids=allowed_class_ids, limit=200)
+        monitoring = shared['monitoring'] if 'monitoring' in shared else self.analytics_monitoring_report(allowed_class_ids=allowed_class_ids)
         ingest = self.ingest_status()
 
-        event_count = self.db.query(AnalyticsTrackingEvent.id).count()
+        min_events = max(1, int(getattr(settings, 'analytics_production_min_events', 1) or 1))
+        # Never run self.db.query(AnalyticsTrackingEvent.id).count() on this hot path.
+        event_count, event_count_is_estimate, minimum_events_met = self._tracking_event_volume(min_events)
         snapshot_q = self.db.query(AnalyticsLearningBehaviorSnapshot.id)
         if allowed_class_ids is not None:
             snapshot_q = snapshot_q.filter(AnalyticsLearningBehaviorSnapshot.class_id.in_(sorted(allowed_class_ids))) if allowed_class_ids else snapshot_q.filter(False)
@@ -3531,7 +3607,6 @@ class LearningAnalyticsCoreService:
         ingest_enabled = True
         file_exists = bool(ingest.get('file_exists'))
         rollout_enabled = bool(rollout.get('enabled'))
-        min_events = int(getattr(settings, 'analytics_production_min_events', 1) or 1)
         min_snapshots = int(getattr(settings, 'analytics_production_min_snapshots', 1) or 1)
 
         issues: list[dict[str, Any]] = []
@@ -3562,7 +3637,7 @@ class LearningAnalyticsCoreService:
 
         # Data warm-up warnings. These explain why UI has little/no data but do
         # not falsely say the whole production platform is broken.
-        if event_count < min_events:
+        if not minimum_events_met:
             issues.append(self._production_readiness_issue(
                 code='NO_TRACKING_EVENTS_INGESTED',
                 severity='WARNING' if file_exists and ingest_enabled else 'BLOCKER',
@@ -3661,6 +3736,9 @@ class LearningAnalyticsCoreService:
             'scheduler_enabled': scheduler_enabled,
             'post_ingest_recalculate_enabled': post_ingest_enabled,
             'tracking_event_count': int(event_count or 0),
+            'tracking_event_count_is_estimate': event_count_is_estimate,
+            'tracking_event_minimum_met': minimum_events_met,
+            'tracking_event_minimum_required': min_events,
             'behavior_snapshot_count': int(snapshot_count or 0),
             'active_recalculate_jobs': int(active_jobs or 0),
             'max_active_recalculate_jobs': max_active_jobs,
@@ -3728,32 +3806,29 @@ class LearningAnalyticsCoreService:
 
 
     def ops_status(self) -> dict[str, Any]:
-        """Production ops snapshot for scheduler/smoke tests.
-
-        This reads checkpoint and snapshot tables only. It never scans the
-        tracking log and is safe to call from health/smoke checks.
-        """
+        """Bounded /jobs operations snapshot; no global tracking COUNT(*)."""
         ingest = self.ingest_status()
-        active_recalc = self.db.query(AcademicClassSyncJob).filter(
-            AcademicClassSyncJob.job_type == 'learning_analytics_recalculate',
-            AcademicClassSyncJob.status.in_(['queued', 'running']),
-        ).count()
-        latest_behavior = self.db.query(AnalyticsLearningBehaviorSnapshot).order_by(
-            AnalyticsLearningBehaviorSnapshot.calculated_at.desc()
-        ).first()
-        event_count = self.db.query(AnalyticsTrackingEvent.id).count()
-        snapshot_count = self.db.query(AnalyticsLearningBehaviorSnapshot.id).count()
         guard = self.analytics_data_quality_report()
         rollout = self.rollout_control_report(limit=200)
         monitoring = self.analytics_monitoring_report()
-        production = self.production_readiness_report()
+        production = self.production_readiness_report(_shared={
+            'data_quality': guard,
+            'rollout': rollout,
+            'monitoring': monitoring,
+        })
+        checks = production['checks']
+        latest_behavior = self.db.query(AnalyticsLearningBehaviorSnapshot).order_by(
+            AnalyticsLearningBehaviorSnapshot.calculated_at.desc()
+        ).first()
         return {
             'version': '25.9.16.7.2.7',
             'scheduler_enabled': True,
             'ingest': ingest,
-            'active_recalculate_jobs': int(active_recalc or 0),
-            'tracking_event_count': int(event_count or 0),
-            'behavior_snapshot_count': int(snapshot_count or 0),
+            'active_recalculate_jobs': checks['active_recalculate_jobs'],
+            'tracking_event_count': checks['tracking_event_count'],
+            'tracking_event_count_is_estimate': checks['tracking_event_count_is_estimate'],
+            'tracking_event_minimum_met': checks['tracking_event_minimum_met'],
+            'behavior_snapshot_count': checks['behavior_snapshot_count'],
             'latest_behavior_calculated_at': latest_behavior.calculated_at.isoformat() if latest_behavior and latest_behavior.calculated_at else None,
             'data_quality_readiness': guard.get('readiness'),
             'data_quality_issue_count': len(guard.get('issues') or []),

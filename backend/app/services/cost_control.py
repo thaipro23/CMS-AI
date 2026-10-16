@@ -8,6 +8,7 @@ from app.services.model_gateway import ModelGateway
 from app.services.pricing_service import OpenAIPricingService, ModelPricing
 from app.services.prompt_builder import build_question_prompt
 from app.services.token_calibration import OutputTokenCalibrationService
+from app.services.question_origin import ai_generated_question_predicate
 
 USD_TO_VND = settings.usd_to_vnd
 
@@ -179,7 +180,9 @@ class CostControlService:
         if question_count > policy.max_questions_per_job:
             return False, f'Vượt giới hạn {policy.max_questions_per_job} câu/lần generate.'
 
-        generated_count = self.db.query(func.count(Question.id)).filter(Question.course_id == course_id).scalar() or 0
+        generated_count = self.db.query(func.count(Question.id)).filter(
+            Question.course_id == course_id, ai_generated_question_predicate(),
+        ).scalar() or 0
         if generated_count + question_count > policy.max_questions_per_course:
             return False, f'Vượt quota course {policy.max_questions_per_course} câu. Cần admin/manager approve.'
         return True, 'OK'

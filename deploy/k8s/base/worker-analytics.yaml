@@ -37,9 +37,10 @@ spec:
             - {name: ANALYTICS_INGEST_SOURCE, value: "loki"}
             - {name: ANALYTICS_LOKI_BASE_URL, value: "http://loki.logging.svc.cluster.local:3100"}
             - {name: DB_STATEMENT_TIMEOUT_MS, value: "10000"}
-            - {name: OPENEDX_CONNECTOR_READ_RETRY_MAX_ATTEMPTS, value: "2"}
-            - {name: OPENEDX_CONNECTOR_READ_RETRY_BASE_SECONDS, value: "0.5"}
-            - {name: OPENEDX_CONNECTOR_READ_RETRY_MAX_SECONDS, value: "1.0"}
+            - {name: OPENEDX_CONNECTOR_READ_RETRY_MAX_ATTEMPTS, value: "4"}
+            - {name: OPENEDX_CONNECTOR_READ_RETRY_DELAYS_SECONDS, value: "60,120,300"}
+            - {name: OPENEDX_CONNECTOR_READ_RETRY_BASE_SECONDS, value: "60"}
+            - {name: OPENEDX_CONNECTOR_READ_RETRY_MAX_SECONDS, value: "300"}
             - {name: LOCAL_STORAGE_PATH, value: /app/.runtime}
             - {name: HOME, value: /tmp}
           resources:

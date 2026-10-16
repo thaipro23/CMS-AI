@@ -33,7 +33,7 @@ class FakeCelery:
             task_annotations={},
         )
 
-    def task(self, *, name):
+    def task(self, *, name, **options):
         def decorate(function):
             self.registered[name] = function
             return function

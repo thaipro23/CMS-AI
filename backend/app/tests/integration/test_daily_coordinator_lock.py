@@ -2,6 +2,7 @@
 import os
 from copy import deepcopy
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 import redis
@@ -12,6 +13,7 @@ from app.services.academic import daily_academic_pipeline as runtime
 from app.tests.test_daily_continuation_backlog import seed
 from app.tests.test_academic_daily_pipeline_recovery import FakeCelery
 from app.models.academic import AcademicBulkOperationJob, AcademicClassSyncJob
+from app.services.academic.scheduled_parent import confirm_parent_continuation
 
 pytestmark = pytest.mark.integration
 KEY = 'ai-server:academic-daily:coordinator'
@@ -70,6 +72,33 @@ def test_redis_lease_is_bounded_and_released_on_error(redis_client, factory):
             assert acquired
             assert 0 < redis_client.ttl(KEY) <= 240
             raise RuntimeError('worker failed')
+    assert redis_client.exists(KEY) == 0
+
+
+def test_fast_consumer_acquires_coordinator_after_recovery_publish(redis_client, factory):
+    with factory() as db:
+        seed(db, datetime.utcnow())
+
+    class ImmediateWorker:
+        acquired = False
+
+        def send_task(self, name, args=None, **options):
+            # Fail immediately if the publisher still owns Redis; do not block
+            # recursively on the non-reentrant process lock in that case.
+            assert redis_client.exists(KEY) == 0
+            with runtime._daily_coordinator_session() as (db, acquired):
+                assert acquired
+                self.acquired = True
+                root = db.get(AcademicBulkOperationJob, args[0])
+                confirm_parent_continuation(db, root, expected_task_name=name)
+            return SimpleNamespace(id='immediate-worker-task')
+
+    worker = ImmediateWorker()
+    result = runtime.recover_daily_academic_pipeline(worker)
+    assert result['republished'] == 1
+    assert worker.acquired
+    with factory() as db:
+        assert db.get(AcademicBulkOperationJob, 'root').result_json['continuation']['status'] == 'confirmed'
     assert redis_client.exists(KEY) == 0
 
 

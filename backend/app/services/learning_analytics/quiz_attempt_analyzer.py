@@ -12,6 +12,8 @@ QUIZ_SESSION_START = '/api/unit-reset/v1/quiz-session/start'
 QUIZ_SESSION_STATUS = '/api/unit-reset/v1/quiz-session/status'
 QUIZ_SESSION_RESET = '/api/unit-reset/v1/quiz-session/reset'
 SERVER_SESSION_PROVENANCE = 'server_quiz_session_v1'
+SERVER_SUBMISSION_PROVENANCE = 'server_submissions_v1'
+SERVER_RESET_PROVENANCE = 'server_reset_new_session_v1'
 SUBMIT_EVENTS = {'edx.grades.problem.submitted', 'problem_check', 'problem_graded'}
 ITEMBANK_EVENTS = {'edx.itembankblock.content.assigned'}
 SHOWANSWER_EVENTS = {'problem_show', 'showanswer'}
@@ -42,6 +44,7 @@ class QuizAttemptFeature:
     low_confidence_reason: str | None = None
     evidence: dict[str, Any] = field(default_factory=dict)
     start_observed: bool = False
+    started_by_reset: bool = False
     raw_submissions: list[dict[str, Any]] = field(default_factory=list)
     answer_reveal_requests: list[dict[str, Any]] = field(default_factory=list)
 
@@ -244,13 +247,14 @@ def deduplicate_submissions(submissions: list[dict[str, Any]]) -> list[dict[str,
                                sort_keys=True, default=str)
         unique.setdefault(signature, item)
     ordered = sorted(unique.values(), key=lambda s: s.get('submitted_at') or datetime.min)
-    canonical = [s for s in ordered if s['event_type'] == 'edx.grades.problem.submitted']
+    canonical = [s for s in ordered if s['event_type'] == 'edx.grades.problem.submitted'
+                 and s.get('event_source') == 'server']
     fallback = [s for s in ordered if s['event_type'] != 'edx.grades.problem.submitted']
     matched: dict[int, set[str]] = defaultdict(set)
     fallback_types: dict[int, set[str]] = {}
     result = list(canonical)
     for item in fallback:
-        if item.get('event_source') not in {'server', 'openedx_tracking_log'}:
+        if item.get('event_source') != 'server':
             continue
         candidates = [
             (abs((other['submitted_at'] - item['submitted_at']).total_seconds()), i)
@@ -280,10 +284,11 @@ def deduplicate_submissions(submissions: list[dict[str, Any]]) -> list[dict[str,
 def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) -> None:
     # Open edX can emit browser problem_check, problem_graded and the canonical
     # edx.grades.problem.submitted for the same action. Prefer the canonical
-    # server grade events when present; keep legacy/browser rows only as fallback.
+    # server grade events when present; raw browser rows remain staging evidence only.
     all_submissions = list(feature.submissions)
     feature.raw_submissions = all_submissions
-    canonical_submissions = [s for s in all_submissions if s['event_type'] == 'edx.grades.problem.submitted']
+    canonical_submissions = [s for s in all_submissions if s['event_type'] == 'edx.grades.problem.submitted'
+                             and s.get('event_source') == 'server']
     fallback_submission_count = len(all_submissions) - len(canonical_submissions)
     feature.submissions = deduplicate_submissions(all_submissions)
     latest = {}
@@ -335,9 +340,10 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
         'median_submission_gap_seconds': feature.median_time_per_question_seconds,
         'rapid_submission_burst': rapid_burst,
         'answer_reveal_requests': feature.answer_reveal_requests,
+        'submission_timing_provenance': SERVER_SUBMISSION_PROVENANCE,
         'server_submission_times': [
             {'problem_usage_key': s['problem_usage_key'], 'submitted_at': s['submitted_at'].isoformat()}
-            for s in feature.submissions
+            for s in feature.submissions if s.get('event_source') == 'server'
         ],
         'assigned_problem_count': len(feature.assigned_problem_usage_keys),
         'distinct_assigned_problem_count': len(unique),
@@ -351,6 +357,8 @@ def _finalize_attempt(feature: QuizAttemptFeature, reset_times: list[datetime]) 
         'fallback_submission_count': fallback_submission_count,
         'showanswer_policy': 'request_only_neutral',
         'reset_times': [d.isoformat() for d in reset_times[:20]],
+        'successful_reset_times': [feature.started_at.isoformat()] if feature.started_by_reset else [],
+        **({'reset_event_provenance': SERVER_RESET_PROVENANCE} if feature.start_observed else {}),
     }
 
 
@@ -443,6 +451,7 @@ def build_quiz_attempt_features(events: list[EventLike], *, unit_aliases: dict[s
                     started_at=start_at,
                     unit_reset_nonce=extract_unit_reset_nonce(ev),
                     start_observed=True,
+                    started_by_reset=(ev.raw_event or {}).get('reset_request') is True,
                 )
                 if pre_start_context:
                     current.assigned_problem_usage_keys = pre_start_context.assigned_problem_usage_keys

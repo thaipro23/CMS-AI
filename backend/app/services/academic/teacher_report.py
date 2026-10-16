@@ -58,9 +58,9 @@ class AcademicTeacherReportWorkflowService:
         clean_term = str(term_id or '').strip()
         clean_branch = str(branch or '').strip().lower() or '__all__'
         clean_campus = str(campus or '').strip().lower() or '__all__'
-        # v2 invalidates materialized rows built before legacy classes without
-        # an AcademicSubjectDelivery were correctly treated as CMS.
-        return f"v2|term:{clean_term}|branch:{clean_branch}|campus:{clean_campus}"
+        # Invalidate rows that projected a shared teacher's profile branch/campus
+        # instead of the report's teaching scope.
+        return f"v3|term:{clean_term}|branch:{clean_branch}|campus:{clean_campus}"
 
     @staticmethod
     def _teacher_report_search_match(item: dict[str, Any], search: str | None) -> bool:
@@ -685,8 +685,8 @@ class AcademicTeacherReportWorkflowService:
                 'teacher_username': teacher.username,
                 'teacher_name': teacher.full_name or teacher.username,
                 'teacher_email': mask_email(teacher.email),
-                'campus': teacher.campus,
-                'branch': teacher.branch,
+                'campus': str(campus or cls.campus or '').strip().lower() or None,
+                'branch': str(branch or cls.branch or '').strip().lower() or None,
                 'subject_ids': set(),
                 'subject_codes': set(),
                 'class_ids': set(),
@@ -717,6 +717,10 @@ class AcademicTeacherReportWorkflowService:
             if pair in seen_teacher_classes:
                 continue
             seen_teacher_classes.add(pair)
+            if not campus and bucket['campus'] != (str(cls.campus or '').strip().lower() or None):
+                bucket['campus'] = None
+            if not branch and bucket['branch'] != (str(cls.branch or '').strip().lower() or None):
+                bucket['branch'] = None
             bucket['class_ids'].add(class_id)
             bucket['subject_ids'].add(str(subject.id))
             if subject.subject_code:
@@ -1288,7 +1292,7 @@ class AcademicTeacherReportWorkflowService:
                 AcademicClass.term_id == str(term_id),
                 AcademicClass.active.is_(True),
             )
-            if normalized_allowed_class_ids:
+            if allowed_class_ids is not None:
                 class_scope = class_scope.filter(
                     AcademicClass.id.in_(normalized_allowed_class_ids)
                 )
@@ -1309,10 +1313,14 @@ class AcademicTeacherReportWorkflowService:
                     f'Scheduled report class branch contamination: {invalid_classes}'
                 )
 
-            teacher_scope = self.db.query(
+            assignment_scope = self.db.query(
                 AcademicTeacher.id,
                 AcademicClass.id,
-                AcademicTeacher.branch,
+                AcademicTeacherAssignment.id,
+                AcademicTeacherAssignment.branch,
+                AcademicTeacherAssignment.term_id,
+                AcademicTeacherAssignment.subject_id,
+                AcademicTeacherAssignment.campus,
             ).join(
                 AcademicTeacherAssignment,
                 AcademicTeacherAssignment.teacher_id == AcademicTeacher.id,
@@ -1324,25 +1332,37 @@ class AcademicTeacherReportWorkflowService:
                 AcademicClass.active.is_(True),
                 AcademicClass.term_id == str(term_id),
                 func.lower(AcademicClass.branch) == normalized_branch,
-                AcademicTeacher.branch.isnot(None),
-                func.trim(AcademicTeacher.branch) != '',
-                func.lower(AcademicTeacher.branch) != normalized_branch,
+                or_(
+                    and_(
+                        AcademicTeacherAssignment.branch.isnot(None),
+                        func.trim(AcademicTeacherAssignment.branch) != '',
+                        func.lower(func.trim(AcademicTeacherAssignment.branch)) != normalized_branch,
+                    ),
+                    AcademicTeacherAssignment.term_id != AcademicClass.term_id,
+                    AcademicTeacherAssignment.subject_id != AcademicClass.subject_id,
+                    and_(
+                        AcademicTeacherAssignment.campus.isnot(None),
+                        func.trim(AcademicTeacherAssignment.campus) != '',
+                        func.lower(func.trim(AcademicTeacherAssignment.campus)) != func.lower(func.trim(AcademicClass.campus)),
+                    ),
+                ),
             )
             if campus:
-                teacher_scope = teacher_scope.filter(
+                assignment_scope = assignment_scope.filter(
                     func.lower(AcademicClass.campus) == str(campus).strip().lower()
                 )
-            if normalized_allowed_class_ids:
-                teacher_scope = teacher_scope.filter(
+            if allowed_class_ids is not None:
+                assignment_scope = assignment_scope.filter(
                     AcademicClass.id.in_(normalized_allowed_class_ids)
                 )
-            invalid_teachers = [
-                (str(teacher_id), str(class_id), str(teacher_branch))
-                for teacher_id, class_id, teacher_branch in teacher_scope.limit(20).all()
+            invalid_assignments = [
+                tuple(str(value or '') for value in row)
+                for row in assignment_scope.limit(20).all()
             ]
-            if invalid_teachers:
+            if invalid_assignments:
                 raise TeacherReportBranchScopeError(
-                    f'Scheduled report teacher branch contamination: {invalid_teachers}'
+                    f'Scheduled report teacher assignment scope contamination '
+                    f'(teacher, class, assignment, branch, term, subject, campus): {invalid_assignments}'
                 )
         if use_cache and term_id and not class_id and not include_all and not include_students:
             cached_report = self._training_teacher_report_from_cache(
@@ -1587,8 +1607,8 @@ class AcademicTeacherReportWorkflowService:
                 'teacher_username': teacher.username,
                 'teacher_name': teacher.full_name or teacher.username,
                 'teacher_email': mask_email(teacher.email),
-                'campus': teacher.campus or cls.campus,
-                'branch': teacher.branch or cls.branch,
+                'campus': str(campus or cls.campus or '').strip().lower() or None,
+                'branch': str(branch or cls.branch or '').strip().lower() or None,
                 'subject_ids': set(),
                 'subject_codes': set(),
                 'class_ids': set(),
@@ -1631,6 +1651,10 @@ class AcademicTeacherReportWorkflowService:
                 'class_items': [],
                 'last_synced_at': None,
             })
+            if not campus and bucket['campus'] != (str(cls.campus or '').strip().lower() or None):
+                bucket['campus'] = None
+            if not branch and bucket['branch'] != (str(cls.branch or '').strip().lower() or None):
+                bucket['branch'] = None
             class_teacher_context.setdefault(cls.id, []).append({
                 'teacher_id': teacher.id,
                 'teacher_username': teacher.username,

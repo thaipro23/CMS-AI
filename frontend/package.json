@@ -8,6 +8,7 @@
     "start": "next start -H 0.0.0.0",
     "lint": "next lint --max-warnings=0",
     "typecheck": "tsc --noEmit",
+    "test:score-refresh": "node --test tests/class-score-refresh.test.cjs",
     "test:e2e": "npm --prefix ../e2e run test",
     "test:e2e:ci": "npm --prefix ../e2e run test:ci",
     "ci": "npm run lint && npm run typecheck && npm run build && npm run test:e2e:ci"

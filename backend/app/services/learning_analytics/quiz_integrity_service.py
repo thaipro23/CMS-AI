@@ -9,7 +9,7 @@ from .quiz_integrity_rules import evaluate_quiz_integrity
 from .quiz_attempt_analyzer import SERVER_SESSION_PROVENANCE
 
 
-def recalculate_class_integrity(db, *, class_id: str, course_id: str, usernames: list[str], unit_aliases: dict[str, str] | None = None):
+def recalculate_class_integrity(db, *, class_id: str, course_id: str, usernames: list[str], unit_aliases: dict[str, str] | None = None, ml_target_usernames: list[str] | None = None):
     if not usernames or not quiz_tables_ready(db):
         return {'status': 'migration_required'}
     items = db.query(AnalyticsQuizItemSubmission).filter(
@@ -40,11 +40,13 @@ def recalculate_class_integrity(db, *, class_id: str, course_id: str, usernames:
         'reset_policies': settings.analytics_quiz_reset_policies,
         'reference_people_min': settings.analytics_quiz_reference_people_min,
     })
+    targets = set(usernames) if ml_target_usernames is None else set(usernames) & set(ml_target_usernames)
+    results = [r for r in results if r['username'] in targets]
     by_key = {(r.username, r.unit_usage_key): r for r in existing}
     result_keys = {(r['username'], r['unit_usage_key']) for r in results}
     for row in existing:
         canonical = aliases.get(row.unit_usage_key, row.unit_usage_key)
-        if canonical != row.unit_usage_key and (row.username, canonical) in result_keys:
+        if row.username in targets and canonical != row.unit_usage_key and (row.username, canonical) in result_keys:
             db.delete(row)
     from datetime import datetime
     for result in results:
@@ -59,5 +61,8 @@ def recalculate_class_integrity(db, *, class_id: str, course_id: str, usernames:
         row.evidence_json = result['evidence']
         row.calculated_at = datetime.utcnow()
     db.flush()
+    from .ml_workflow import LearningMLWorkflow
+    ml_result = LearningMLWorkflow(db).score_quiz(class_id=class_id, course_id=course_id,
+        target_usernames=sorted(targets), cutoff=datetime.utcnow())
     return {'status': 'partial' if any(r['evidence']['partial'] for r in results) else 'completed',
-            'results': len(results)}
+            'results': len(results), 'ml': ml_result}

@@ -278,9 +278,12 @@ class LearningAnalyticsResultsWorkflowService:
             session_rows = self._session_progress_for_class(session_rows,
                 self.get_session_structure(course_id=course_id, class_id=class_id), class_id)
         video_rows = video_q.order_by(AnalyticsStudentVideoProgress.session_index.asc().nullslast(), AnalyticsStudentVideoProgress.last_event_at.desc().nullslast()).limit(300).all()
+        from .ml_presentation import serialize_ml_analysis
         return {
             'quiz_integrity': self._quiz_detail(class_id=class_id, course_id=course_id, username=username),
             'behavior': None if not behavior else {
+                'ml': serialize_ml_analysis(behavior.evidence_json, class_id=class_id, course_id=course_id,
+                    family='video', snapshot_calculated_at=behavior.calculated_at),
                 'username': behavior.username,
                 'user_id': behavior.user_id,
                 'course_id': behavior.course_id,
@@ -833,9 +836,16 @@ class LearningAnalyticsResultsWorkflowService:
             event_q = self.db.query(AnalyticsTrackingEvent).filter(AnalyticsTrackingEvent.course_id == resolved_course_id)
             if roster_usernames:
                 event_q = event_q.filter(AnalyticsTrackingEvent.username.in_(roster_usernames))
-            tracking_event_count = int(event_q.count() or 0)
-            tracking_user_count = int(event_q.with_entities(func.count(func.distinct(AnalyticsTrackingEvent.username))).scalar() or 0)
-            latest_tracking_event_at = event_q.with_entities(func.max(AnalyticsTrackingEvent.event_time)).scalar()
+            # Count and latest timestamp share one scoped aggregate. A standalone
+            # MAX can choose PostgreSQL's global time-index min/max path and scan
+            # unrelated events until the 10s timeout, especially for empty scopes.
+            event_count, user_count, latest_tracking_event_at = event_q.with_entities(
+                func.count(AnalyticsTrackingEvent.id),
+                func.count(func.distinct(AnalyticsTrackingEvent.username)),
+                func.max(AnalyticsTrackingEvent.event_time),
+            ).one()
+            tracking_event_count = int(event_count or 0)
+            tracking_user_count = int(user_count or 0)
 
             video_q = self.db.query(AnalyticsStudentVideoProgress).filter(AnalyticsStudentVideoProgress.course_id == resolved_course_id)
             session_q = self.db.query(AnalyticsStudentSessionProgress).filter(AnalyticsStudentSessionProgress.course_id == resolved_course_id)
@@ -956,7 +966,7 @@ class LearningAnalyticsResultsWorkflowService:
             'safe_policy': 'signals_only_not_violation',
         }
 
-    def behavior_summary(self, *, class_id: str | None, course_id: str | None = None) -> dict[str, Any]:
+    def behavior_summary(self, *, class_id: str | None, course_id: str | None = None, diagnostics: dict[str, Any] | None = None) -> dict[str, Any]:
         q = self.db.query(AnalyticsLearningBehaviorSnapshot)
         if class_id:
             q = q.filter(AnalyticsLearningBehaviorSnapshot.class_id == class_id)
@@ -981,7 +991,8 @@ class LearningAnalyticsResultsWorkflowService:
             data_status = 'ready' if rows else 'not_calculated'
         if stale_count:
             data_status = 'partial'
-        diagnostics = self.class_result_doctor(class_id=class_id, course_id=course_id) if class_id else None
+        if diagnostics is None and class_id:
+            diagnostics = self.class_result_doctor(class_id=class_id, course_id=course_id)
         return {
             'total_students': total_students,
             'roster_count': len(roster),
@@ -999,7 +1010,7 @@ class LearningAnalyticsResultsWorkflowService:
             'disclaimer': 'Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.',
         }
 
-    def behavior_rows(self, *, class_id: str | None, course_id: str | None = None, classification: str | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+    def behavior_rows(self, *, class_id: str | None, course_id: str | None = None, classification: str | None = None, limit: int = 100, offset: int = 0, diagnostics: dict[str, Any] | None = None) -> dict[str, Any]:
         q = self.db.query(AnalyticsLearningBehaviorSnapshot)
         if class_id:
             q = q.filter(AnalyticsLearningBehaviorSnapshot.class_id == class_id)
@@ -1126,7 +1137,8 @@ class LearningAnalyticsResultsWorkflowService:
         total = len(items)
         safe_offset = max(0, int(offset or 0))
         safe_limit = min(max(1, int(limit or 100)), 200)
-        diagnostics = self.class_result_doctor(class_id=class_id, course_id=course_id) if class_id else None
+        if diagnostics is None and class_id:
+            diagnostics = self.class_result_doctor(class_id=class_id, course_id=course_id)
         return {
             'total': total,
             'items': items[safe_offset:safe_offset + safe_limit],

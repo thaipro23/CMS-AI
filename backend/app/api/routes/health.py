@@ -25,7 +25,7 @@ from app.schemas.readiness import (
 router = APIRouter()
 
 
-_EXPECTED_ALEMBIC_REVISION = '0073_assessment_average_grade'
+_EXPECTED_ALEMBIC_REVISION = '0074_class_sync_status_created_index'
 
 
 _CORE_SCHEMA_REQUIREMENTS = {

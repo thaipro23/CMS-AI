@@ -1,5 +1,6 @@
 'use client'
 
+import MLAnalysisCard from '../../../components/analytics/MLAnalysisCard'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAppContext } from '../../../context/AppContext'
@@ -478,6 +479,7 @@ function DetailDrawer({
         </div>
         <small>Các điểm được tính theo tín hiệu log, không phải xác suất đúng hoặc kết luận vi phạm.</small>
 
+        <MLAnalysisCard analysis={behavior.ml} />
         <div className="analytics-reason-list">
           <h4>Lý do chính</h4>
           {reasons.length ? reasons.slice(0, 8).map((code) => <div key={code} className="analytics-reason-item">
@@ -535,6 +537,7 @@ function DetailDrawer({
           {(quiz?.results || []).map((result) => <div className="analytics-reason-item" key={result.unit_usage_key}>
             <b>{quiz?.attempts.find((item) => item.unit_usage_key === result.unit_usage_key)?.quiz_title || 'Quiz'} · {quizStatus(result.status)}</b>
             <small>Cập nhật: {formatVNDateTime(result.calculated_at)}</small>
+            <MLAnalysisCard analysis={result.evidence.ml} />
             {result.evidence.partial && <small>Phân tích chưa hoàn tất; phần còn lại sẽ được kiểm tra ở lần tính tiếp theo.</small>}
             {result.evidence.missing_baseline_or_version && <small>Chưa đủ dữ liệu câu/phiên bản hoặc người tham chiếu để đối chiếu đáp án.</small>}
             {(result.evidence.reason_codes || []).filter((code) => ['MISSING_CONTENT_VERSION', 'MISSING_QUESTION_IDENTITY', 'INSUFFICIENT_COMPARABLE_QUESTIONS', 'BASELINE_TOO_SMALL', 'INSUFFICIENT_INDEPENDENT_TIMING'].includes(code)).map((code) => <small key={code}>{reasonText(code)}</small>)}

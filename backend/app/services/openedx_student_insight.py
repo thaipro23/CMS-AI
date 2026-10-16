@@ -260,6 +260,7 @@ class OpenEdXConnectorClient:
         # Enrollment/user-creation endpoints keep one-shot semantics so a proxy
         # failure can never replay a mutation accidentally.
         max_attempts = 1
+        retry_delays_seconds: list[float] = []
         retry_base_seconds = 0.0
         retry_max_seconds = 0.0
         if retry_transient_read:
@@ -267,6 +268,16 @@ class OpenEdXConnectorClient:
                 1,
                 int(getattr(settings, 'openedx_connector_read_retry_max_attempts', 2) or 2),
             )
+            raw_retry_delays = str(
+                getattr(settings, 'openedx_connector_read_retry_delays_seconds', '') or ''
+            )
+            for raw_delay in raw_retry_delays.split(','):
+                try:
+                    delay = float(raw_delay.strip())
+                except (TypeError, ValueError):
+                    continue
+                if delay >= 0:
+                    retry_delays_seconds.append(delay)
             retry_base_seconds = max(
                 0.0,
                 float(getattr(settings, 'openedx_connector_read_retry_base_seconds', 0.5) or 0.0),
@@ -317,10 +328,13 @@ class OpenEdXConnectorClient:
                     and attempt < max_attempts
                 )
                 if should_retry_status or should_retry_transport:
-                    delay = min(
-                        retry_max_seconds,
-                        retry_base_seconds * (2 ** (attempt - 1)),
-                    )
+                    if attempt <= len(retry_delays_seconds):
+                        delay = retry_delays_seconds[attempt - 1]
+                    else:
+                        delay = min(
+                            retry_max_seconds,
+                            retry_base_seconds * (2 ** (attempt - 1)),
+                        )
                     retry_reason = (
                         f'HTTP {response.status_code}'
                         if should_retry_status and response is not None

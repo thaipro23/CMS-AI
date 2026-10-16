@@ -129,3 +129,41 @@ def test_reset_records_the_actual_new_session_start_without_a_second_synthetic_s
         emit=lambda kind, payload: emitted.append((kind, payload)))
     assert len(emitted) == 1
     assert emitted[0][1]['reset_request'] is True
+
+
+def _ml_items(feature):
+    return [dict(problem_usage_key=f'q{i}', input_slot=f'_{i}_1', variant='',
+        submitted_at=feature.started_at+__import__('datetime').timedelta(seconds=60*(i+1)),
+        content_version='sha256:'+'a'*64, question_hash=f'{i:064x}') for i in range(6)]
+
+
+def _ml_build(feature, cutoff):
+    from app.services.learning_analytics.ml_features import build_quiz_features
+    return build_quiz_features(subject_key='sv', course_id=feature.course_id, unit_usage_key=feature.unit_usage_key,
+        attempt={'started_at':feature.started_at, 'ended_at':feature.ended_at,
+            'unit_reset_nonce':feature.unit_reset_nonce,'evidence_json':feature.evidence},
+        items=_ml_items(feature),cutoff=cutoff)
+
+
+def test_browser_canonical_times_cannot_make_server_timeout_burst_ml_eligible():
+    from app.tests.test_quiz_tracking_log_integrity import START, UNIT, event, QUIZ_SESSION_START
+    events=[event(QUIZ_SESSION_START,0,{'unit_usage_key':UNIT,'unit_reset_nonce':'quiz-session:1','started_at':START.isoformat()})]
+    events += [event('edx.grades.problem.submitted',60*(i+1),{'problem_id':f'q{i}','grade':1,'max_grade':1},source='browser') for i in range(6)]
+    events += [event('problem_check',600+i,{'problem_id':f'q{i}','grade':1,'max_grade':1}) for i in range(6)]
+    feature=build_quiz_attempt_features(events)[0]
+    assert _ml_build(feature,feature.ended_at).row is None
+    assert len(feature.evidence['server_submission_times'])==6
+
+
+def test_successful_reset_has_one_durable_ml_owner_with_or_without_prior_raw_events():
+    from app.tests.test_quiz_tracking_log_integrity import START, UNIT, event, QUIZ_SESSION_START
+    from datetime import timedelta
+    first=event(QUIZ_SESSION_START,0,{'unit_usage_key':UNIT,'unit_reset_nonce':'quiz-session:1','started_at':START.isoformat()})
+    reset=event(QUIZ_SESSION_START,900,{'unit_usage_key':UNIT,'unit_reset_nonce':'quiz-session:2',
+        'started_at':(START+timedelta(seconds=900)).isoformat(),'reset_request':True})
+    old=[event('problem_check',60*(i+1),{'problem_id':f'q{i}'}) for i in range(6)]
+    new=[event('problem_check',900+60*(i+1),{'problem_id':f'q{i}'}) for i in range(6)]
+    full=build_quiz_attempt_features([first,*old,reset,*new])
+    retained=build_quiz_attempt_features([reset,*new])[0]
+    assert [_ml_build(f,full[-1].ended_at).row.features['successful_resets_per_attempt'] for f in full]==[0,1]
+    assert _ml_build(retained,retained.ended_at).row.features['successful_resets_per_attempt']==1

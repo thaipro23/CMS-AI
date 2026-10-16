@@ -50,6 +50,7 @@ from app.services.generation_cache import question_fingerprint, sha256_text
 from app.services.model_gateway import ModelGateway
 from app.services.quality_checker import QualityChecker
 from app.services.question_family import build_question_family_id, normalize_difficulty
+from app.services.question_origin import ai_generated_question_predicate
 from app.services.token_counter import count_tokens
 from app.services.source_chunk_refs import join_source_chunk_ids, split_source_chunk_ids
 from app.services.bank_dashboard_stats import BankDashboardStatsService
@@ -638,13 +639,13 @@ class VersionedQuestionBankService:
                 family_map[src_family.id] = dst_family
                 counts['families'] += 1
 
-            questions = self.db.query(Question).filter(
+            questions = self.db.query(Question, ai_generated_question_predicate()).filter(
                 Question.bank_version_id == src_bv.id,
                 Question.status.in_(['approved', 'published']),
                 or_(Question.is_retired.is_(False), Question.is_retired.is_(None)),
                 Question.is_duplicate.is_(False),
             ).order_by(Question.created_at.asc()).all()
-            for src_q in questions:
+            for src_q, source_is_ai in questions:
                 dst_concept = concept_map.get(src_q.concept_version_id)
                 # Resolve family by fingerprint/key because older question rows store only question_family_id.
                 dst_family = None
@@ -694,6 +695,7 @@ class VersionedQuestionBankService:
                     explanation=src_q.explanation,
                     source_ref=f'term-clone:{source.id}:{src_q.id}',
                     source_type='subject_offering_clone',
+                    authoring_mode='ai' if source_is_ai else ('manual' if src_q.authoring_mode == 'manual' else 'import'),
                     source_page=src_q.source_page,
                     source_timestamp_start=src_q.source_timestamp_start,
                     source_timestamp_end=src_q.source_timestamp_end,
@@ -1802,7 +1804,7 @@ class VersionedQuestionBankService:
 
     def carry_over_questions(self, *, from_bank_version_id: str, to_bank_version_id: str, question_ids: list[str] | None = None, require_review: bool = False, actor: str | None = None, diff_id: str | None = None) -> dict:
         source, target = self._require_same_subject_chapter_versions(from_bank_version_id=from_bank_version_id, to_bank_version_id=to_bank_version_id)
-        candidates_query = self.db.query(Question).filter(Question.bank_version_id == source.id, Question.status.in_(['approved', 'published']), Question.is_retired.is_(False), Question.is_duplicate.is_(False))
+        candidates_query = self.db.query(Question, ai_generated_question_predicate()).filter(Question.bank_version_id == source.id, Question.status.in_(['approved', 'published']), Question.is_retired.is_(False), Question.is_duplicate.is_(False))
         if question_ids:
             candidates_query = candidates_query.filter(Question.id.in_(question_ids))
         candidates = candidates_query.order_by(Question.difficulty.asc(), Question.question_family_id.asc().nullslast(), Question.variant_no.asc().nullslast()).all()
@@ -1810,7 +1812,7 @@ class VersionedQuestionBankService:
         target_roots = {r.lineage_root_question_id for r in self.db.query(Question.lineage_root_question_id).filter(Question.bank_version_id == target.id, Question.lineage_root_question_id.isnot(None)).all() if r.lineage_root_question_id}
         created: list[Question] = []
         skipped: list[dict] = []
-        for source_question in candidates:
+        for source_question, source_is_ai in candidates:
             root = question_lineage_root(source_question)
             if (source_question.question_hash and source_question.question_hash in target_hashes) or root in target_roots:
                 skipped.append({'question_id': source_question.id, 'reason': 'already_exists_in_target'})
@@ -1856,6 +1858,7 @@ class VersionedQuestionBankService:
                 explanation=source_question.explanation,
                 source_ref=f'carry-over:{source.id}:{source_question.id}',
                 source_type='bank_carry_over',
+                authoring_mode='ai' if source_is_ai else ('manual' if source_question.authoring_mode == 'manual' else 'import'),
                 source_page=source_question.source_page,
                 source_timestamp_start=source_question.source_timestamp_start,
                 source_timestamp_end=source_question.source_timestamp_end,
@@ -2343,6 +2346,9 @@ class VersionedQuestionBankService:
 
     def _chapter_question_count(self, *args, **kwargs):
         return self._generation_review_workflow()._chapter_question_count(*args, **kwargs)
+
+    def _chapter_generated_question_count(self, *args, **kwargs):
+        return self._generation_review_workflow()._chapter_generated_question_count(*args, **kwargs)
 
     async def preview_generate_from_bank_version(self, *args, **kwargs):
         return await self._generation_review_workflow().preview_generate_from_bank_version(*args, **kwargs)

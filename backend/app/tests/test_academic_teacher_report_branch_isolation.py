@@ -59,16 +59,15 @@ def test_snapshot_rejects_explicit_opposite_teacher_branch(
 
 
 @pytest.mark.parametrize("branch", ["poly", "ptcd"])
-def test_null_teacher_branch_inherits_class_branch(branch: str):
+def test_snapshot_rejects_missing_scoped_teacher_branch(branch: str):
     report = _report_payload(branch=branch, teacher_branch=None)
 
-    counts = validate_campus_report(report, campus="hn", branch=branch)
-
-    assert counts["teacher_count"] == 1
-    assert validate_report_branch(report, branch=branch) == {
-        "teacher_count": 1,
-        "class_count": 1,
-    }
+    # The report builder inherits class context from a shared teacher profile;
+    # an already-built snapshot must contain that explicit projected scope.
+    with pytest.raises(ReportSnapshotError, match="teacher branch"):
+        validate_campus_report(report, campus="hn", branch=branch)
+    with pytest.raises(ReportSnapshotError, match="teacher branch"):
+        validate_report_branch(report, branch=branch)
 
 
 def _scheduler_user() -> UserContext:
@@ -134,13 +133,13 @@ def test_scheduled_query_detects_cross_branch_assignment_instead_of_hiding_it():
                 subject_id="subject-1",
                 term_id="term-ptcd",
                 campus="hn",
-                branch="ptcd",
+                branch="poly",
                 source="ap",
             ),
         ])
         db.commit()
 
-        with pytest.raises(TeacherReportBranchScopeError, match="teacher branch"):
+        with pytest.raises(TeacherReportBranchScopeError, match="assignment scope"):
             AcademicService(db).training_teacher_report(
                 _scheduler_user(),
                 term_id="term-ptcd",
