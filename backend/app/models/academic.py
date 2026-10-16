@@ -611,6 +611,7 @@ class AcademicClassSyncJob(Base):
         Index('ix_academic_class_sync_jobs_class_status_created', 'class_id', 'status', 'created_at'),
         Index('ix_academic_class_sync_jobs_actor_created', 'requested_by', 'created_at'),
         Index('ix_academic_class_sync_jobs_type_status_created', 'job_type', 'status', 'created_at'),
+        Index('ix_academic_class_sync_jobs_status_created', 'status', 'created_at'),
     )
 
 

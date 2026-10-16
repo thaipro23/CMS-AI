@@ -3384,6 +3384,11 @@ export type AnalyticsSlaReport = {
 }
 
 export type AnalyticsOpsStatus = Record<string, unknown> & {
+  /** PostgreSQL relation statistic, NOT an exact count. */
+  tracking_event_count?: number
+  tracking_event_count_is_estimate?: boolean
+  /** Calculated independently from a bounded exact query. */
+  tracking_event_minimum_met?: boolean
   ingest?: Record<string, unknown>
   events?: Record<string, unknown>
   snapshots?: Record<string, unknown>

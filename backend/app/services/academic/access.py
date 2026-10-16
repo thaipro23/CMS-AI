@@ -56,6 +56,45 @@ class AcademicAccessWorkflowService:
             campus_branch_pairs=campus_branch_pairs,
         )
 
+    def visible_class_ids(self, user: UserContext, class_ids: set[str]) -> set[str]:
+        """Batch the same authorization union enforced by assert_can_access_class."""
+        ids = {str(value) for value in class_ids if value}
+        if not ids:
+            return set()
+        decision = self.access_decision(user)
+        if decision.unrestricted:
+            return ids
+        visible: set[str] = set()
+        if decision.teacher_ids:
+            visible.update(str(row[0]) for row in self.db.query(
+                AcademicTeacherAssignment.class_id
+            ).filter(
+                AcademicTeacherAssignment.class_id.in_(ids),
+                AcademicTeacherAssignment.teacher_id.in_(decision.teacher_ids),
+            ).all())
+        if decision.subject_codes:
+            visible.update(str(row[0]) for row in self.db.query(
+                AcademicClass.id
+            ).join(
+                AcademicSubject, AcademicSubject.id == AcademicClass.subject_id
+            ).filter(
+                AcademicClass.id.in_(ids),
+                func.lower(AcademicSubject.subject_code).in_(decision.subject_codes),
+            ).all())
+        if decision.campus_codes:
+            campus_query = self.db.query(AcademicClass.id).filter(
+                AcademicClass.id.in_(ids),
+                func.lower(AcademicClass.campus).in_(decision.campus_codes),
+            )
+            if decision.campus_branch_pairs:
+                campus_query = campus_query.filter(or_(*[
+                    (func.lower(AcademicClass.branch) == branch)
+                    & (func.lower(AcademicClass.campus) == campus)
+                    for branch, campus in decision.campus_branch_pairs
+                ]))
+            visible.update(str(row[0]) for row in campus_query.all())
+        return visible
+
     def assert_can_access_class(self, user: UserContext, class_id: str) -> None:
         decision = self.access_decision(user)
         if decision.unrestricted:

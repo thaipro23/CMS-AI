@@ -217,6 +217,9 @@ class AcademicService:
     def assert_can_access_class(self, user: UserContext, class_id: str) -> None:
         return self._access_workflow().assert_can_access_class(user, class_id)
 
+    def visible_class_ids(self, user: UserContext, class_ids: set[str]) -> set[str]:
+        return self._access_workflow().visible_class_ids(user, class_ids)
+
     def assert_can_access_subject(self, user: UserContext, subject_id: str) -> None:
         return self._access_workflow().assert_can_access_subject(user, subject_id)
 
