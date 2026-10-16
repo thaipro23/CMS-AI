@@ -27,7 +27,7 @@ PUBLISHED_STATES = (
     'published_with_tag_warning', 'published_ok_stale_verify',
 )
 CANONICAL_STATUSES = {'pending_review', 'approved', 'rejected', 'draft_error', 'published'}
-EXPECTED_ALEMBIC_REVISION = '0073_assessment_average_grade'
+EXPECTED_ALEMBIC_REVISION = '0074_class_sync_status_created_index'
 
 
 def scalar(conn, sql: str, params: dict | None = None) -> int:

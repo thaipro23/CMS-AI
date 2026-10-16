@@ -39,6 +39,12 @@ exact count toàn tracking, trả số lượng ước tính có nhãn và readi
 vẫn dùng bounded exact threshold; batch GROUP BY rollout, không đổi
 effective course mapping. Xem [runbook hotfix](fixes/JOBS_500_DATABASE_HOTPATH_2026-10-16.md).
 
+Kiểm chứng bổ sung 16/10: GitHub Actions CI bản source 31d7a306 chạy
+269 tests pass và 1 release readiness test fail do 3 script vẫn tham chiếu
+Alembic 0073. Đã sửa 3 script kiểm soát head theo Alembic 0074, bổ sung
+hai hotfix regression tests vào scripts/ci-backend-tests.sh; kết quả CI
+lần chạy sau CHƯA XÁC MINH tại thời điểm ghi tài liệu.
+
 Kiểm chứng đã có: Git source inspection, PostgreSQL EXPLAIN không ANALYZE
 trước sửa và traceback production. **Chưa chạy pytest/CI/integration hoặc
 migration trên database thực, chưa đo p50/p95/p99 sau sửa.** Test source
