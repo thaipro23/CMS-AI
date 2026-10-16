@@ -119,3 +119,15 @@ Quay lui: đặt `ANALYTICS_ML_MODE=off` trên backend/worker, áp dụng lại 
 API trả DISABLED, drawer không hiện cờ ML cũ, pipeline luật/official grades vẫn hoạt động.
 Không cần migration hoặc xóa evidence. Deployment, pilot, nhãn giáo viên và rollback runtime
 chưa được thực hiện trong phiên phát triển này; kết quả đó phải ghi riêng sau khi có bằng chứng.
+
+## Kiểm chứng source và review
+
+Lượt sửa review cuối: 108 focused ML/telemetry/workflow tests passed; backend CI selection
+398 tests + 6 release checks passed local; 25 frontend unit tests và 33 Playwright browser
+smoke passed; frontend lint/typecheck/build, fatal Ruff/compile passed. PostgreSQL/Redis
+concurrency/integration và image/Compose phải qua GitHub CI của đúng PR head trước merge.
+Full suite 1313 passed/16 skipped/312 failed, bộ tên lỗi khớp baseline c42cba8: 0 lỗi mới.
+[Danh sách lỗi nền](fixes/LEARNING_ML_TEST_BASELINE_2026-10-16.txt) ghi đầy đủ tên; full suite
+không được coi là xanh. Đã review độc lập một lượt, sửa scope persistence/alias cleanup,
+canonical source/timing provenance, durable reset ownership, per-cohort selection và fixture
+PostgreSQL; ca tái hiện được chạy trước/sau sửa. Không có minor bị hoãn trong lượt review này.
