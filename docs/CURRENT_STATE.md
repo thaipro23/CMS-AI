@@ -39,18 +39,24 @@ exact count toàn tracking, trả số lượng ước tính có nhãn và readi
 vẫn dùng bounded exact threshold; batch GROUP BY rollout, không đổi
 effective course mapping. Xem [runbook hotfix](fixes/JOBS_500_DATABASE_HOTPATH_2026-10-16.md).
 
-Kiểm chứng bổ sung 16/10: GitHub Actions CI bản source 31d7a306 chạy
-269 tests pass và 1 release readiness test fail do 3 script vẫn tham chiếu
-Alembic 0073. Đã sửa 3 script kiểm soát head theo Alembic 0074, bổ sung
-hai hotfix regression tests vào scripts/ci-backend-tests.sh; kết quả CI
-lần chạy sau CHƯA XÁC MINH tại thời điểm ghi tài liệu.
+Kiểm chứng sau sửa 16/10:
+- GitHub Actions run `38867797375` trên hotfix HEAD
+  `99676ac0aa4d63f6df872aa8a215fe44653174de` đã kết thúc **success**:
+  backend quality/integration, frontend lint/typecheck/build,
+  Playwright browser smoke, image/Compose và npm lockfile đều passed.
+- Migration 0074 đã vượt bước Alembic upgrade trên PostgreSQL CI;
+  các regression hotfix đã được đưa vào `scripts/ci-backend-tests.sh`.
+  Đây là kết quả CI, không phải kiểm thử trên dữ liệu production.
+- PR [#14](https://github.com/thaipro23/CMS-AI/pull/14) đã **merge**
+  vào `feat/import-quiz-cms-old-su26` tại commit
+  `f021cb1d97dd151063c49a8b70023e1241d933ca`.
+- Đã xác minh HEAD sau merge bằng GitHub. Không có thay đổi ở CMS-FPT.
 
-Kiểm chứng đã có: Git source inspection, PostgreSQL EXPLAIN không ANALYZE
-trước sửa và traceback production. **Chưa chạy pytest/CI/integration hoặc
-migration trên database thực, chưa đo p50/p95/p99 sau sửa.** Test source
-đã bổ sung nhưng kết quả phải được ghi riêng sau khi thực thi.
-Trạng thái: source patch CHƯA MERGE; deploy: CHƯA; production fix: CHƯA
-XÁC MINH. UAT và rollback trong runbook là điều kiện trước khi rollout.
+Trạng thái bàn giao: **ĐÃ MERGE CODE VÀ PASS CI**; UAT trên workload
+tương đương production: **CHƯA XÁC MINH**; migration/index trên PostgreSQL
+production: **CHƯA CHẠY**; deployment Kubernetes: **CHƯA TRIỂN KHAI**;
+hai endpoint thực tế sau rollout, p50/p95/p99 và query plan sau sửa:
+**CHƯA ĐO**. Chỉ triển khai sau migration/UAT an toàn theo runbook.
 CMS-FPT không thay đổi. Không tăng global DB statement timeout.
 Rủi ro: pg_class.reltuples là ước tính có độ trễ, concurrent index vẫn
 có thể chờ transaction/lock, cần kiểm tra hiệu quả index trên dữ liệu thật.
