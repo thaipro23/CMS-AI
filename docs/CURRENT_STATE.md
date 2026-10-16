@@ -23,6 +23,32 @@ Giữ nguyên mốc nguồn/nghiệp vụ và bằng chứng kiểm thử ở c�
 - Việc tiếp theo: áp dụng tiêu chuẩn cho thay đổi kế tiếp; các acceptance/deploy còn
   mở bên dưới vẫn cần xác minh. Bộ quy tắc trong docs không phải CI gate tự động.
 
+## Hotfix /jobs HTTP 500 — 16/10/2026 (Asia/Ho_Chi_Minh)
+
+Baseline Git: `4e2d9e41bbad5460d971d08d527e53cc14108924`.
+Nhánh đề xuất: `fix/jobs-500-db-read-hotpaths-20261016`.
+Runtime evidence: backend pod 16/10 10:42, QueryCanceled (10s) trên
+academic_class_sync_jobs status=failed ORDER BY created_at LIMIT 100 và
+COUNT(*) analytics_tracking_events. Planner ước tính 215752 jobs, 14447732
+tracking events; `pg_stat_user_tables` cho số gần tương đương.
+
+Thay đổi trong source hotfix: Alembic 0074 tạo composite index
+(status, created_at) concurrently; `/health/ready` yêu cầu 0074; batch
+RBAC class-job giữ đúng teacher/campus-branch/subject; `ops_status` tránh
+exact count toàn tracking, trả số lượng ước tính có nhãn và readiness
+vẫn dùng bounded exact threshold; batch GROUP BY rollout, không đổi
+effective course mapping. Xem [runbook hotfix](fixes/JOBS_500_DATABASE_HOTPATH_2026-10-16.md).
+
+Kiểm chứng đã có: Git source inspection, PostgreSQL EXPLAIN không ANALYZE
+trước sửa và traceback production. **Chưa chạy pytest/CI/integration hoặc
+migration trên database thực, chưa đo p50/p95/p99 sau sửa.** Test source
+đã bổ sung nhưng kết quả phải được ghi riêng sau khi thực thi.
+Trạng thái: source patch CHƯA MERGE; deploy: CHƯA; production fix: CHƯA
+XÁC MINH. UAT và rollback trong runbook là điều kiện trước khi rollout.
+CMS-FPT không thay đổi. Không tăng global DB statement timeout.
+Rủi ro: pg_class.reltuples là ước tính có độ trễ, concurrent index vẫn
+có thể chờ transaction/lock, cần kiểm tra hiệu quả index trên dữ liệu thật.
+
 ## Thay đổi nguồn gần nhất
 
 | Commit | Đã có trong Git | Kiểm thử ghi trong tài liệu nguồn |
