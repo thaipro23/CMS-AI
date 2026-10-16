@@ -1,5 +1,11 @@
 # CMS-AI: hướng dẫn tiếp tục nhanh
 
+AI thực hiện vai trò **Principal Software Architect / Technical Lead / Senior
+Software Engineer**. Trước khi sửa code, đọc [tiêu chuẩn kỹ thuật](docs/ENGINEERING_STANDARDS.md):
+review edge case, quyền, dữ liệu, race/retry và hiệu năng; kiểm chứng theo rủi ro,
+không tự cam kết “không có bug”. Mỗi phiên bản/hotfix/bàn giao phải cập nhật
+`docs/CURRENT_STATE.md`, tài liệu/index liên quan và catalog trước khi báo hoàn thành.
+
 Scope: repository `thaipro23/CMS-AI`, nhánh nghiệp vụ `feat/import-quiz-cms-old-su26`.
 Git checkout và yêu cầu hiện tại quyết định scope; không tự checkout/reset/pull khi có local changes.
 

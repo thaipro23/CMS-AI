@@ -6,6 +6,7 @@ Mốc nguồn: `f961e76a6bb269e09d93c52ea52b96e7f5b028a5`, 15/10/2026.
 
 | Cần làm | Chỉ đọc trước |
 |---|---|
+| Vai trò Senior/Tech Lead, chất lượng code, hiệu năng, cập nhật context mỗi phiên bản | [ENGINEERING_STANDARDS](ENGINEERING_STANDARDS.md) |
 | Daily pipeline treo/continuation sau unlock | [delivery fix 14/10](fixes/DAILY_COORDINATOR_DELIVERY_2026-10-14.md), [recovery](ACADEMIC_DAILY_CONTINUATION_RECOVERY.md) |
 | Giảng viên dạy cả Poly/PTCĐ, snapshot exhausted | [teacher scope 15/10](fixes/TEACHER_MULTIBRANCH_REPORT_2026-10-15.md) |
 | Quota nhập 30 vẫn phải sinh được 100 câu AI | [generation quota 15/10](fixes/GENERATION_IMPORT_QUOTA_2026-10-15.md) |
