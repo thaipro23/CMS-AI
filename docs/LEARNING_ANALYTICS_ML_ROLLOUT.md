@@ -1,133 +1,143 @@
-# Learning Analytics ML: vận hành và đánh giá
+# Video relative ranking v2: vận hành và kiểm chứng
 
-Nguồn nền: CMS-AI `c42cba8` (16/10/2026), tích hợp audit fix PR #13 và thiết kế
-[ML đã duyệt](superpowers/specs/2026-10-09-learning-analytics-ml-design.md).
-Đây là phát hiện khác biệt không giám sát bằng Isolation Forest trên batch hiện tại.
-Chưa có nhãn xác nhận để đo accuracy/precision/recall; không dùng nhãn luật làm ground truth.
+Baseline CMS-AI: `dbd0c62`, cập nhật 19/10/2026 (Asia/Ho_Chi_Minh).
+Thiết kế [video v2](superpowers/specs/2026-10-19-video-relative-ranking-design.md)
+thay thế phần video của thiết kế ML v1. Điểm biểu thị thứ hạng tương đối của
+chênh lệch hành vi đo được; không có nhãn kết tội hoặc xác suất vi phạm.
 
-## Contract và giới hạn
+## Luồng và số đo
 
-- Video và quiz có mô hình/nhóm riêng; không đổi official grades, classification,
-  confidence_score hoặc suspicious_score của luật. GET chỉ đọc evidence đã lưu.
-- Mỗi nhóm cần ít nhất 50 người khác nhau, lấy mẫu tối đa 5.000 người theo hash ổn định;
-  người học nhiều lớp/làm nhiều lượt không được tính thành nhiều người tham chiếu.
-- Video cần ba video đo hợp lệ trong outline hiện tại. Chuẩn hóa block ID đầy đủ/rút gọn
-  theo định danh block chính xác, không so khớp chuỗi con. Nhóm theo course/outline/exposure.
-- Quiz cần start/nonce server, phiên bản/slot/variant hợp lệ, sáu mốc nộp độc lập không burst;
-  chọn lượt đủ điều kiện đầu tiên mỗi sinh viên/cohort đề; evidence mới nhất hiển thị cohort của lượt đủ điều kiện gần nhất. Đề random khác tập câu không gộp nhóm.
-- Feature tích lũy theo cutoff, không đại diện cửa sổ 7/30 ngày. Không bịa metadata lịch sử.
-- Timing có marker `server_submissions_v1`; browser canonical không được nâng thành server timing.
-  Khi materialize lại, không union timing cũ thiếu marker. Reset ML có marker
-  `server_reset_new_session_v1`: reset thuộc phiên mới được tạo thành công; lưu riêng
-  `successful_reset_times` để toàn bộ/retention-truncated raw reconstruction cùng kết quả.
-  Counter/reset evidence của luật hiện có giữ cách đếm cũ; không dùng nó làm zero mặc định ML.
-- 100 cây, max_samples <=256, seed 42, contamination auto, n_jobs=1 và threadpool limit=1.
-  Thư viện runtime: NumPy 2.2.1, scikit-learn 1.6.1, SciPy 1.15.1,
-  joblib 1.4.2, threadpoolctl 3.5.0; CI và image dùng cùng requirements-runtime.
-- Worker batch sau vòng lặp sinh viên, dùng full permitted reference pool khi tính riêng
-  một người. Chỉ persist kết quả của target (kể cả rule rows/alias cleanup khi recalc riêng); khóa/refetch evidence và guard snapshot/cutoff tránh job cũ
-  đè kết quả mới. Trần 20.000 roster entries và 50.000 source rows/table; vượt trần trả lỗi
-  phân tích bổ sung, không cắt âm thầm thành một nhóm nhỏ hay đổi điểm.
-- Lỗi ML nằm trong savepoint riêng. Mã trạng thái/data quality và counts được log, không
-  log tên/đáp án tham chiếu. Kết quả stale/sai version/sai scope không hiện cờ đang hoạt động.
-- JSON giữ kết quả mới nhất, chưa có model registry/kho lịch sử. Median/IQR chỉ mô tả
-  độ lệch, không phải feature attribution hay giải thích nhân quả của mô hình.
+LMS tracking → materialize PostgreSQL → worker batch → evidence JSON → API đọc →
+drawer giảng viên. Redis giữ chức năng queue/cache hiện có; không có dịch vụ ML,
+migration hay model registry mới. GET không fit mô hình; điểm chính thức và kết quả
+luật giữ nguyên. Snapshot/evidence chỉ giữ kết quả ML mới nhất.
 
-## Bật pilot sau deploy
+`video_playback.py` lưu `playback_measurement` độc lập với tổng wall-time của luật.
+Đo tiến trình nội dung từ vị trí và thời gian giữa các sự kiện phát/dừng/tua;
+hỗ trợ tiến trình quan sát tới 4x (có dung sai vị trí 2 giây), loại bước nhảy tua.
+Giữ trạng thái giữa các batch; phân biệt sự kiện cùng timestamp và replay đúng
+sự kiện. Thiếu phát đầu, bắt đầu quan sát giữa video, mất vị trí hoặc lịch sử
+cộng dồn cũ thiếu số đo mới đều không đủ để xếp hạng. Không bịa tốc độ lịch sử.
+Marker timestamp của materializer giữ tối đa 1.000 event IDs; vượt trần hoặc
+quá 128 chữ ký sự kiện cùng thời điểm làm lịch sử ML không hoàn chỉnh.
 
-Mặc định trong source và env mẫu:
+Tốc độ quan sát là tiến trình nội dung / thời gian đo được, chỉ để giải thích,
+không phải tốc độ người học chọn trên player. Các đặc trưng xếp hạng:
+coverage/độ dài; hoàn thành trừ coverage; số tua/phút nội dung; tỷ lệ media thụ động.
+Người xem 1x và 2x có cùng tiến trình nội dung nhận cùng đặc trưng. Coverage bằng
+0 có đo được khác với thiếu đo lường. Cần ít nhất ba video hợp lệ, định danh chính
+xác trong outline đang hoạt động. Feature tích lũy tại cutoff, không phải cửa sổ
+7/30 ngày. Raw staging có retention 3 ngày; dữ liệu tổng hợp vẫn tồn tại.
+
+## Nhóm tham chiếu
+
+- Tối thiểu 30 người khác nhau; 30–49 hiện “Độ tin cậy thấp”; 50+ là STANDARD.
+  Đây là chất lượng cỡ mẫu, không xác nhận mô hình đúng. Có thể tăng minimum.
+- `ANALYTICS_ML_VIDEO_REFERENCE_COURSE_IDS` là danh sách course ID cho phép, cộng
+  course đang tính; tối đa 20 course. Rỗng: chỉ course đang tính. Chọn các khóa có
+  bối cảnh phù hợp trước pilot; không quét/gộp tự động toàn hệ thống.
+- Chỉ roster active và effective class/course mapping; gom video hợp lệ của một
+  người trong pool, đếm người đó một lần. Nhóm theo số video 3–5 / 6–10 / 11+ và
+  trung vị độ dài ≤5 / ≤20 / >20 phút. API không lộ tên người/khóa tham chiếu.
+- Mỗi nhóm lấy tối đa 5.000 người theo hash ổn định; cap 20.000 roster entries và
+  50.000 source rows/table. Vượt cap là lỗi bổ sung, không cắt âm thầm rồi chấm.
+- Tính riêng một sinh viên vẫn dùng toàn reference pool nhưng chỉ ghi target.
+  Savepoint, row lock và snapshot/cutoff guards bảo vệ transaction và job chạy chồng.
+  Kiểm tra tắt/hủy giữa các lần đọc nguồn và trong vòng build; cấu hình pool đổi
+  trong lúc fit không được xuất bản evidence mang scope sai.
+
+## Median/MAD và mô hình đối chiếu
+
+Median/MAD là điểm chính: scale=max(1.4826×MAD, floor), floor=0,05 cho tỷ lệ
+và 1 cho số tua/phút nội dung. Gap xét chiều tăng, coverage xét chiều giảm;
+seek/passive xét độ lệch hai chiều. Điểm thô là đóng góp chuẩn hóa lớn nhất.
+Percentile dùng midrank, cùng điểm nhận cùng thứ hạng; nhóm hoàn toàn hằng số
+không bị ép tạo thứ hạng. Bảng hiển thị số đo, median, MAD và các đóng góp lớn nhất.
+
+Isolation Forest đối chiếu: 200 cây, max_samples≤256, seed mặc định 42,
+contamination auto, một model thread. Gần nhau khi Spearman≥0,8 và overlap top 5
+có xét ties≥80%. Khi gần nhau chỉ trình bày cách giải thích median/MAD; khi khác
+nhau hiện thêm percentile đối chiếu. Lỗi forest vẫn giữ baseline hợp lệ và hiện
+trạng thái đối chiếu chưa sẵn sàng. Không dùng độ lệch MAD làm attribution nhân
+quả của forest. Runtime pin: NumPy2.2.1, sklearn1.6.1, SciPy1.15.1,
+joblib1.4.2, threadpoolctl3.5.0.
+
+## Cấu hình bật, tắt và quiz
 
 ```dotenv
 ANALYTICS_ML_MODE=off
 ANALYTICS_ML_PILOT_CLASS_IDS=
-ANALYTICS_ML_MIN_REFERENCE_STUDENTS=50
+ANALYTICS_ML_VIDEO_ENABLED=true
+ANALYTICS_ML_QUIZ_ENABLED=false
+ANALYTICS_ML_VIDEO_REFERENCE_COURSE_IDS=
+ANALYTICS_ML_MIN_REFERENCE_STUDENTS=30
 ANALYTICS_ML_MAX_REFERENCE_STUDENTS=5000
 ```
 
-Sau khi build/deploy backend, worker-analytics và frontend cùng source, chỉ bật shadow
-cho class ID đã chọn. Ví dụ cấu hình: `ANALYTICS_ML_MODE=shadow` và
-`ANALYTICS_ML_PILOT_CLASS_IDS=<class-id-1>,<class-id-2>`. Backend và worker phải có cùng
-cấu hình; áp dụng cấu hình vào process đang chạy theo runbook triển khai hiện có.
-Không tự bật toàn hệ thống khi chuỗi class ID rỗng. Dùng thao tác tính lại lớp hiện có;
-ML không chạy trong request đọc dashboard và không tạo queue/service mới.
+Deploy backend, worker-analytics và frontend cùng source. Cấu hình pool phù hợp,
+đặt mode=shadow và pilot class IDs cụ thể, giữ quiz=false, áp dụng cấu hình lên
+các process rồi dùng chức năng tính lại lớp hiện có. Không tự bật khi pilot rỗng.
 
-CMS-FPT `fpt-indigo-ui` đọc lại ngày 16/10 đã có unit-reset **0.4.18**, nhưng chưa có
-`analytics.py`/hook bổ sung của [PR #3](https://github.com/thaipro23/CMS-FPT/pull/3).
-PR #3 cũ là 0.4.17, vẫn draft và chưa merge. Trước pilot quiz cần tích hợp telemetry
-đó trên baseline 0.4.18 hoặc mới hơn, kiểm chứng tương thích, build/deploy bằng quy trình
-riêng và kiểm tra start/refresh/submit/reset thực tế. Không hạ plugin xuống gói 0.4.17.
-CMS-AI merge không xác nhận LMS đã chạy telemetry mới. Timer guard và native grading phải
-được kiểm chứng sau rollout; không thay LMS plugin bằng bundle cũ trong CMS-AI.
+Tắt: mode=off, hoặc VIDEO_ENABLED=false cho riêng video; áp dụng cấu hình/restart
+backend và worker. Env không tự cập nhật process đang chạy. Sau khi áp dụng, API
+trả DISABLED và ẩn cả điểm đã lưu; không cần xóa evidence hoặc migration.
+Kiểm tra source/fit/write có checkpoint nhưng không ngắt một SQL đang thực thi.
 
-Theo dõi thời gian batch, CPU/RSS, queue wait và các count SCORED/INSUFFICIENT_DATA/ERROR.
-Vượt giới hạn nguồn cần đánh giá partition/cohort tiếp theo; không giảm ngưỡng hoặc bỏ cap.
-Kiểm tra tài khoản giảng viên chỉ xem lớp được phân công, không thấy tên tham chiếu ngoài lớp.
+Quiz giữ tắt. Điều kiện tương lai: telemetry của CMS-FPT PR #3 (gói cũ 0.4.17)
+được port và deploy tương thích trên plugin 0.4.18 hoặc mới hơn; kiểm chứng
+start/refresh/submit/reset, phiên bản đề và timing server; đủ người và sáu mốc
+nộp độc lập hợp lệ. Không hạ plugin xuống 0.4.17. Source CMS-FPT quan sát ngày
+16/10 chưa có telemetry đó; CMS-AI merge không xác nhận LMS đã triển khai.
 
-## Đánh giá offline tái lập
-
-Từ repo root, Python đã cài `backend/requirements-ci.txt`:
+## Replay và benchmark tái lập
 
 ```sh
-python scripts/evaluate-learning-ml.py --audit /path/to/export-dir --output /tmp/ml-report.json --seed 42
-python scripts/evaluate-learning-ml.py --benchmark 1000 --output /tmp/ml-1000.json
-python scripts/evaluate-learning-ml.py --benchmark 5000 --output /tmp/ml-5000.json
+python scripts/evaluate-learning-ml.py --audit /path/to/exports --output /tmp/video-replay.json
+python scripts/evaluate-learning-ml.py --benchmark 1000 --output /tmp/video-1000.json
+python scripts/evaluate-learning-ml.py --benchmark 5000 --output /tmp/video-5000.json
 ```
 
-CLI đọc `learning.json`, không mở DB/production connection, không sửa archive hoặc fabricate
-version. Không cho output trùng input. Nhiều export cùng class được chọn bản mới nhất;
-cohort vẫn tách course/content, dedup student. Source bị truncated không được âm thầm scored.
-Output chỉ số tổng hợp và hash, không username/đáp án/danh sách điểm cá nhân.
+Replay mặc định video-only; pool giới hạn trong các export người vận hành cấp.
+Chọn export mới nhất mỗi lớp, dùng outline mới nhất mỗi course để lọc cả export
+cũ; snapshot outline đồng thời mâu thuẫn/truncated không được chấm. Nhóm quiz
+bị bỏ qua được chuẩn hóa alias về vertical. `--include-quiz` chỉ chẩn đoán offline,
+không bật quiz runtime. Output chỉ counts/digest/lý do, không tên hay đáp án.
+Không ghi đè input. Chưa có nhãn giảng viên để đo accuracy/precision/recall.
 
-Replay archive ngày 07/10 trong phiên 16/10:
+Replay archive 07/10 trong phiên 19/10: 3 lớp / 83 người; 0 người đủ video v2,
+0 nhóm được chấm. Cả 83 thiếu ba video đo hợp lệ; trong đó 38 có video legacy
+thiếu playback measurement, một trường hợp có measurement không hợp lệ
+(reason counts chồng nhau). 5.195 nhóm người/quiz chuẩn hóa giữ tắt. Hash official export trước/sau:
+`eb8c6daa427dd1a8f3f79109c0ed3677579b78d5ded25cc713844efe447bb21c`.
+Đây là kiểm tra export đọc-only, không phải xác nhận DB production đã tính lại.
 
-| Mục | Kết quả |
-|---|---:|
-| Lớp / sinh viên roster khác nhau | 3 / 83 |
-| Người đủ đặc trưng video | 31 |
-| Người thiếu tối thiểu ba video đo hợp lệ | 52 |
-| Nhóm đủ 50 người để score | 0 |
-| Quiz đủ provenance server / được score | 0 / 0 |
-| Nhóm user/unit quiz thiếu provenance | 5.195 |
-| Số kết quả ML thực tế đã chấm | 0 |
+Benchmark synthetic process mới, Linux x86_64/Python3.12.14, 9 logical CPUs,
+một model thread, gồm first import, chưa gồm DB I/O/concurrent app worker:
 
-Một video có measurement không hợp lệ; reason counts có thể chồng nhau, không cộng thành
-số sinh viên. Export danh sách lớp không có scope được bỏ qua. Hash official learning
-snapshots trước/sau đều `eb8c6daa427dd1a8f3f79109c0ed3677579b78d5ded25cc713844efe447bb21c`.
-Đây là hash dữ liệu export được đọc, không phải xác nhận DB production đã chạy recalculation.
-Không có nhãn nên disagreement với luật chỉ là mô tả; hiện 0 trường hợp đủ điều kiện so sánh.
-
-Benchmark synthetic, process mới cho từng cỡ (bao gồm import/model memory), Linux x86_64,
-Python 3.12.14, 9 logical CPUs hiển thị, một model thread:
-
-| Rows | Thời gian tổng | Incremental peak RSS | Budget thử nghiệm |
+| Người | Tổng giây | Incremental peak RSS | Budget test |
 |---|---:|---:|---|
-| 1.000 | 0,7249 giây | 115,46 MiB | Đạt <10 giây / <256 MiB |
-| 5.000 | 0,9347 giây | 122,37 MiB | Đạt <10 giây / <256 MiB |
+| 1.000 | 0,9252 | 110,84 MiB | <10s / <256MiB: đạt |
+| 5.000 | 1,1019 | 123,51 MiB | <10s / <256MiB: đạt |
 
-RSS dùng ru_maxrss của Linux, baseline trước tạo features/import sklearn. Không phải SLO
-production và chưa gồm DB I/O, concurrent jobs hoặc memory của worker đã nạp toàn app.
-Cần đo lại trên worker thật và dữ liệu đại diện trước khi mở rộng pilot.
+Năm seed 0,1,7,42,99: trên fixture 300 người tham chiếu và năm người giả lập
+hoàn thành gần 100%/coverage rất thấp (seek/passive vẫn trong vùng thông thường),
+top 5 của cả hai cách trùng đủ năm người; mọi cặp seed overlap 100%≥80%.
+Kết quả synthetic không chứng minh độ chính xác hoặc ổn định trên mọi cohort.
 
-## Hai đợt quan sát và rollback
+## Kiểm chứng và trạng thái
 
-Sau deploy, thu ít nhất hai đợt telemetry. Lấy mẫu ngẫu nhiên cả nhóm flagged và unflagged
-cho giáo viên xác minh, ghi sample size và lý do xác nhận. Cần đủ nhãn và split theo
-student/course/đợt học để tránh leakage trước khi đo precision/recall hoặc học có giám sát.
-Không tự động đổi điểm, khóa học hay xử lý kỷ luật dựa trên ML v1.
+116 focused backend tests, 28 frontend unit/rendered tests, 35 Playwright tests
+đạt; frontend lint/typecheck/production build và fatal Ruff/compile đạt.
+Review độc lập phát hiện và đã có regression cho sự kiện cùng timestamp, thiếu
+phát đầu, dừng đọc khi disable và nhất quán outline replay. Không hoãn minor.
 
-Quay lui: đặt `ANALYTICS_ML_MODE=off` trên backend/worker, áp dụng lại process, rồi kiểm tra
-API trả DISABLED, drawer không hiện cờ ML cũ, pipeline luật/official grades vẫn hoạt động.
-Không cần migration hoặc xóa evidence. Deployment, pilot, nhãn giáo viên và rollback runtime
-chưa được thực hiện trong phiên phát triển này; kết quả đó phải ghi riêng sau khi có bằng chứng.
+Full backend có 312 lỗi nền được ghi trong
+[baseline](fixes/LEARNING_ML_TEST_BASELINE_2026-10-16.txt); đối chiếu tập tên lỗi
+trên source sạch, không sửa/bỏ assertion lịch sử để tạo suite xanh.
+PostgreSQL/Redis, migration, concurrency và image/Compose là gate CI đúng PR head.
+Trạng thái CI/merge xem PR từ nhánh `feat/video-learning-ranking-20261019`.
+CHƯA DEPLOY / CHƯA BẬT PILOT / CHƯA ĐO PRODUCTION trong phiên phát triển này.
 
-## Kiểm chứng source và review
-
-Lượt sửa review cuối: 108 focused ML/telemetry/workflow tests passed; backend CI selection
-398 tests + 6 release checks passed local; 25 frontend unit tests và 33 Playwright browser
-smoke passed; frontend lint/typecheck/build, fatal Ruff/compile passed. PostgreSQL/Redis
-concurrency/integration và image/Compose phải qua GitHub CI của đúng PR head trước merge.
-Full suite 1313 passed/16 skipped/312 failed, bộ tên lỗi khớp baseline c42cba8: 0 lỗi mới.
-[Danh sách lỗi nền](fixes/LEARNING_ML_TEST_BASELINE_2026-10-16.txt) ghi đầy đủ tên; full suite
-không được coi là xanh. Đã review độc lập một lượt, sửa scope persistence/alias cleanup,
-canonical source/timing provenance, durable reset ownership, per-cohort selection và fixture
-PostgreSQL; ca tái hiện được chạy trước/sau sửa. Không có minor bị hoãn trong lượt review này.
+Sau deploy, thu số đo mới và hai đợt quan sát; theo dõi latency/RSS/queue/counts,
+lấy mẫu giảng viên xác minh, gồm cả phần thấp và cao của bảng xếp hạng.
+Dữ liệu cũ thiếu lịch sử không tự trở thành đủ chỉ vì hạ ngưỡng từ 50 xuống 30.

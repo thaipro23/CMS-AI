@@ -3074,12 +3074,15 @@ export type AnalyticsMLAnalysis = {
   status: 'DISABLED' | 'NOT_READY' | 'STALE' | 'SCORED' | 'INSUFFICIENT_DATA' | 'ERROR'
   reference_count: number
   calculated_at: string | null
-  outlier: boolean | null
-  anomaly_score: number | null
+  confidence: 'LOW' | 'STANDARD' | null
+  primary_method: 'median_mad' | 'isolation_forest' | null
+  comparison_status: 'AGREES' | 'DIFFERS' | 'UNAVAILABLE' | 'UNINFORMATIVE'
+  comparison_percentile: number | null
+  measurement?: { observed_playback_rate?: number; measured_videos?: number; pooled_course_count?: number }
   reference_percentile: number | null
   reason_codes: string[]
   features?: Record<string, number>
-  deviations: { feature: string; value: number; reference_median: number; difference: number }[]
+  deviations: { feature: string; value: number; reference_median: number; difference: number; reference_mad?: number; robust_deviation?: number }[]
 }
 
 export type AnalyticsLearningBehaviorRow = {

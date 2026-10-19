@@ -20,6 +20,9 @@ def video(**changes):
     return dict(video_id='v', duration_seconds=100, session_index=1,
                 completion_percent=90, estimated_watch_seconds=70,
                 passive_watch_seconds=20, seek_count=2, last_event_at=NOW,
+                evidence_json={'playback_measurement': {'version':'video_playback_v1',
+                    'complete_history':True,'unknown_intervals':0,'observed_intervals':1,
+                    'media_seconds':70.,'wall_seconds':70.,'passive_media_seconds':20.}},
                 **changes)
 
 

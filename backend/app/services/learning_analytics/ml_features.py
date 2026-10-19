@@ -5,7 +5,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from statistics import median
 from typing import Any
@@ -13,7 +13,7 @@ from typing import Any
 from .quiz_attempt_analyzer import SERVER_SESSION_PROVENANCE, SERVER_SUBMISSION_PROVENANCE, SERVER_RESET_PROVENANCE
 from .quiz_integrity_rules import _burst_times
 
-FEATURE_VERSION = 'learning_ml_features_v1'
+FEATURE_VERSION = 'learning_ml_features_v2'
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class MLFeatureRow:
     cohort_key: str
     features: dict[str, float]
     cutoff: datetime
+    metadata: dict[str, float | int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ def unique_reference_rows(rows: list[MLFeatureRow]) -> list[MLFeatureRow]:
 
 
 def build_video_features(*, subject_key: str, course_id: str, outline_fingerprint: str,
-                         videos: list[Any], cutoff: datetime) -> MLFeatureBuild:
+                         videos: list[Any], cutoff: datetime, reference_scope: str | None = None) -> MLFeatureBuild:
     cutoff = utc(cutoff)
     if cutoff is None or not outline_fingerprint:
         return MLFeatureBuild(None, ('MISSING_SESSION_MAPPING',))
@@ -108,22 +109,36 @@ def build_video_features(*, subject_key: str, course_id: str, outline_fingerprin
             reasons.add('INVALID_MEASUREMENT')
             continue
         completion, watch, passive, seeks = fields
-        measured.append((duration, min(1., completion / 100), min(watch, duration),
-                         min(passive, watch), seeks))
+        evidence = value(v, 'evidence_json') or {}
+        playback = evidence.get('playback_measurement') if isinstance(evidence, dict) else None
+        if not isinstance(playback, dict) or playback.get('version') != 'video_playback_v1':
+            reasons.add('MISSING_PLAYBACK_MEASUREMENT')
+            continue
+        media, wall, passive_media = [number(playback.get(k)) for k in
+            ('media_seconds', 'wall_seconds', 'passive_media_seconds')]
+        observed = number(playback.get('observed_intervals'))
+        if (playback.get('complete_history') is not True or playback.get('unknown_intervals') != 0
+                or not observed or any(x is None for x in (media, wall, passive_media)) or not wall):
+            reasons.add('INCOMPLETE_PLAYBACK_HISTORY')
+            continue
+        measured.append((duration, min(1., completion / 100), min(media, duration),
+                         min(passive_media, media, duration), seeks, media, wall))
     if len(measured) < 3:
         return MLFeatureBuild(None, tuple(sorted(reasons | {'INSUFFICIENT_MEASURABLE_VIDEOS'})))
     duration = sum(x[0] for x in measured)
     watch = sum(x[2] for x in measured)
-    if watch <= 0:
-        return MLFeatureBuild(None, ('INSUFFICIENT_MEASURABLE_WATCH',))
     completion = sum(x[0] * x[1] for x in measured) / duration
     watch_ratio = watch / duration
     features = {'completion_watch_gap': completion - watch_ratio, 'watch_ratio': watch_ratio,
-        'seeks_per_watch_minute': sum(x[4] for x in measured) / (watch / 60),
-        'passive_ratio': min(1., sum(x[3] for x in measured) / watch)}
+        'seeks_per_watch_minute': sum(x[4] for x in measured) / (max(watch, 1.) / 60),
+        'passive_ratio': min(1., sum(x[3] for x in measured) / watch) if watch else 0.}
     exposure = '3-5' if len(measured) <= 5 else '6-10' if len(measured) <= 10 else '11+'
-    cohort = fingerprint([FEATURE_VERSION, 'video', course_id, outline_fingerprint, exposure])
-    return MLFeatureBuild(MLFeatureRow(subject_key, 'video', cohort, features, cutoff), tuple(sorted(reasons)))
+    length = median(x[0] for x in measured)
+    regime = '0-5min' if length <= 300 else '5-20min' if length <= 1200 else '20min+'
+    cohort = fingerprint([FEATURE_VERSION, 'video', reference_scope or [course_id, outline_fingerprint], exposure, regime])
+    metadata = {'measured_videos': len(measured), 'median_video_duration_seconds': float(length),
+        'observed_playback_rate': round(sum(x[5] for x in measured)/sum(x[6] for x in measured), 4)}
+    return MLFeatureBuild(MLFeatureRow(subject_key, 'video', cohort, features, cutoff, metadata), tuple(sorted(reasons)))
 
 
 def build_quiz_features(*, subject_key: str, course_id: str, unit_usage_key: str,

@@ -38,6 +38,7 @@ pytest -q \
   app/tests/test_learning_ml_workflow.py \
   app/tests/test_learning_ml_access.py \
   app/tests/test_learning_ml_replay.py \
+  app/tests/test_video_relative_ranking.py \
   app/tests/test_v25_9_16_7_2_27_learning_behavior_logic_calibration.py \
   app/tests/test_quiz_server_telemetry.py \
   app/tests/test_quiz_item_materialization.py \

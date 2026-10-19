@@ -20,9 +20,9 @@ def rows(n=50):
 
 
 def test_baseline_counts_students_not_events():
-    result = scorer().score_cohorts(rows(49)*3)
-    assert len(result) == 49
-    assert all(r['status'] == 'INSUFFICIENT_DATA' and r['reference_count'] == 49 for r in result.values())
+    result = scorer().score_cohorts(rows(29)*3)
+    assert len(result) == 29
+    assert all(r['status'] == 'INSUFFICIENT_DATA' and r['reference_count'] == 29 for r in result.values())
 
 
 def test_fifty_distinct_students_can_be_scored():
@@ -58,8 +58,8 @@ def test_conspicuous_synthetic_outlier_ranks_above_group_median():
          'seeks_per_watch_minute': 100., 'passive_ratio': .99}, datetime(2026, 10, 9)))
     result = scorer().score_cohorts(data)
     extreme = result[scorer().result_key(data[-1])]
-    assert extreme['anomaly_score'] > median(r['anomaly_score'] for r in result.values())
-    assert extreme['outlier'] is True
+    assert extreme['baseline_score'] > median(r['baseline_score'] for r in result.values())
+    assert extreme['outlier'] is None
     assert len(extreme['deviations']) <= 3
 
 

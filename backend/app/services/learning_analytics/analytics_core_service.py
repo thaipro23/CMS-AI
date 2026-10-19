@@ -34,7 +34,7 @@ from app.services.learning_analytics.tracking_event_parser import TrackingParseE
 from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features, SERVER_SESSION_PROVENANCE, SERVER_SUBMISSION_PROVENANCE, SERVER_RESET_PROVENANCE
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
 from app.services.learning_analytics.loki_tracking_reader import LokiTrackingLogReader
-from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress
+from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress, measure_playback
 from app.services.openedx_client import OpenEdxClient
 from app.services.learning_analytics.presentation import (
     class_behavior_focus_count as _presentation_class_behavior_focus_count,
@@ -1485,11 +1485,14 @@ class LearningAnalyticsCoreService:
         *,
         last_loki_ts_ns: int,
         last_event_at: datetime | None,
+        last_event_ids: set[str] | None = None,
     ) -> bool:
         if event.loki_ts_ns is not None and last_loki_ts_ns > 0:
             return int(event.loki_ts_ns) > last_loki_ts_ns
         if last_event_at is not None and event.event_time is not None:
-            return event.event_time > last_event_at
+            return event.event_time > last_event_at or (
+                event.event_time == last_event_at and last_event_ids is not None
+                and str(event.id) not in last_event_ids)
         return last_loki_ts_ns <= 0 and last_event_at is None
 
     def recalculate_course_video_progress(self, *, course_id: str, username: str | None = None, class_id: str | None = None) -> dict[str, Any]:
@@ -1561,6 +1564,8 @@ class LearningAnalyticsCoreService:
             evidence = dict(row.evidence_json or {}) if row else {}
             last_loki_ts_ns = int(evidence.get('last_loki_ts_ns') or 0)
             last_event_at = row.last_event_at if row else None
+            last_event_ids = (set(evidence['last_event_ids']) if 'last_event_ids' in evidence
+                and not evidence.get('last_event_ids_overflow') else None)
             new_group = [
                 event
                 for event in group
@@ -1568,6 +1573,7 @@ class LearningAnalyticsCoreService:
                     event,
                     last_loki_ts_ns=last_loki_ts_ns,
                     last_event_at=last_event_at,
+                    last_event_ids=last_event_ids,
                 )
             ]
             if row and not new_group:
@@ -1607,6 +1613,11 @@ class LearningAnalyticsCoreService:
                 )
                 continue
 
+            playback_measurement = measure_playback([
+                VideoEventInput(e.event_type, e.event_time, e.current_time_seconds, e.video_duration_seconds)
+                for e in new_group
+            ], previous=evidence.get('playback_measurement'),
+                historical_data=bool(row and (row.last_event_at or row.estimated_watch_seconds)))
             calculator_events: list[VideoEventInput] = []
             previous_state = evidence.get('last_event_state') if isinstance(evidence.get('last_event_state'), dict) else {}
             if row and previous_state and str(previous_state.get('event_type') or '') in {'play_video', 'edx.video.played'}:
@@ -1725,6 +1736,12 @@ class LearningAnalyticsCoreService:
                 [int(e.loki_ts_ns) for e in new_group if e.loki_ts_ns is not None]
                 or [last_loki_ts_ns]
             )
+            same_time_ids = set(last_event_ids or []) if last_event_at == row.last_event_at else set()
+            same_time_ids.update(str(e.id) for e in new_group if e.event_time == row.last_event_at)
+            overflow = len(same_time_ids) > 1000 or (
+                last_event_at == row.last_event_at and evidence.get('last_event_ids_overflow', False))
+            if overflow:
+                playback_measurement['complete_history'] = False
             row.evidence_json = {
                 **evidence,
                 'segments': (result.evidence or {}).get('segments', []),
@@ -1736,6 +1753,8 @@ class LearningAnalyticsCoreService:
                 'consistency_percent': row.consistency_percent,
                 'video_quality_percent': row.video_quality_percent,
                 'last_loki_ts_ns': max_loki_ts_ns,
+                'last_event_ids': sorted(same_time_ids)[:1000],
+                'last_event_ids_overflow': overflow,
                 'last_event_state': {
                     'event_type': latest.event_type,
                     'event_time': latest.event_time.isoformat() if latest.event_time else None,
@@ -1743,6 +1762,7 @@ class LearningAnalyticsCoreService:
                     'duration_seconds': latest.video_duration_seconds,
                 },
                 'materialization_mode': 'incremental_cumulative_v1',
+                'playback_measurement': playback_measurement,
             }
             row.calculated_at = now
             saved += 1
