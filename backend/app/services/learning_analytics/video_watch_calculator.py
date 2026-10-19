@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .video_playback import measure_playback  # exported for materialization and focused callers
+
 VIDEO_EVENTS = {
     'play_video', 'pause_video', 'stop_video', 'seek_video',
     'edx.video.played', 'edx.video.paused', 'edx.video.stopped', 'edx.video.position.changed',

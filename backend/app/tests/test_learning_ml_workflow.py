@@ -26,6 +26,10 @@ def workflow(db):
 def db(monkeypatch):
     monkeypatch.setitem(settings.__dict__, 'analytics_ml_mode', 'shadow')
     monkeypatch.setitem(settings.__dict__, 'analytics_ml_pilot_class_ids', 'class')
+    monkeypatch.setitem(settings.__dict__, 'analytics_ml_video_enabled', True)
+    # Exercise the deferred quiz implementation explicitly; production default is off.
+    monkeypatch.setitem(settings.__dict__, 'analytics_ml_quiz_enabled', True)
+    monkeypatch.setitem(settings.__dict__, 'analytics_ml_video_reference_course_ids', '')
     monkeypatch.setitem(settings.__dict__, 'analytics_ml_min_reference_students', 50)
     monkeypatch.setitem(settings.__dict__, 'analytics_ml_max_reference_students', 5000)
     engine = create_engine('sqlite://')
@@ -51,7 +55,10 @@ def db(monkeypatch):
                 session.add(AnalyticsStudentVideoProgress(course_id='course', username=name, video_id=f'v{j}',
                     session_index=1, duration_seconds=100, completion_percent=80+i/10,
                     estimated_watch_seconds=70+i/10, passive_watch_seconds=10,
-                    seek_count=i%3, last_event_at=NOW-timedelta(seconds=1)))
+                    seek_count=i%3, last_event_at=NOW-timedelta(seconds=1),
+                    evidence_json={'playback_measurement':{'version':'video_playback_v1',
+                        'complete_history':True,'unknown_intervals':0,'observed_intervals':1,
+                        'media_seconds':70+i/10,'wall_seconds':70+i/10,'passive_media_seconds':10.}}))
         session.commit()
         yield session
     engine.dispose()
@@ -263,3 +270,80 @@ def test_first_eligible_attempt_is_selected_per_content_cohort(db, monkeypatch):
     assert sorted(seen)==[55,55]
     analysis=db.query(AnalyticsQuizIntegrityResult).filter_by(username='u0').one().evidence_json['ml']
     assert analysis['reference_count']==55 and analysis['features']['seconds_per_independent_submission']==30
+
+
+def test_family_switches_disable_before_database_reads(monkeypatch):
+    from types import SimpleNamespace
+    for family in ('video','quiz'):
+        monkeypatch.setitem(settings.__dict__, 'analytics_ml_mode', 'shadow')
+        monkeypatch.setitem(settings.__dict__, 'analytics_ml_pilot_class_ids', 'class')
+        monkeypatch.setitem(settings.__dict__, f'analytics_ml_{family}_enabled', False)
+        wf=workflow(SimpleNamespace(info={}))
+        outcome=getattr(wf,'score_behavior' if family=='video' else 'score_quiz')(
+            class_id='class',course_id='course',target_usernames=['u0'],cutoff=NOW)
+        assert outcome=={'status':'disabled','processed':0}
+
+
+def test_cross_course_pool_reaches_thirty_people_without_duplicate_memberships(db,monkeypatch):
+    monkeypatch.setitem(settings.__dict__,'analytics_ml_min_reference_students',30)
+    # Fifteen people in the requested course, fifteen in another configured course.
+    db.query(AcademicClassStudent).filter(AcademicClassStudent.student_id.notin_([f'u{i}' for i in range(15)])).delete(synchronize_session=False)
+    db.add(AcademicClass(id='other',term_id='t',subject_id='s2',class_code='OTHER',active=True))
+    db.add(AcademicClassCourseMapping(class_id='other',openedx_course_id='course-other',active=True))
+    db.add(AnalyticsCourseSession(course_id='course-other',session_key='lesson',session_index=1,active=True,
+        components_json={'components':[{'usage_key':f'v{j}','block_type':'video'} for j in range(3)]}))
+    for i in range(15,30):
+        db.add(AcademicClassStudent(class_id='other',student_id=f'u{i}'))
+        for row in db.query(AnalyticsStudentVideoProgress).filter_by(username=f'u{i}'):
+            row.course_id='course-other'
+    db.add(AcademicClassStudent(class_id='other',student_id='u0'))
+    db.commit()
+    call(db,['u0'])
+    assert result(db,'u0').evidence_json['ml']['reference_count']==15
+    monkeypatch.setitem(settings.__dict__,'analytics_ml_video_reference_course_ids','course-other,course-other')
+    call(db,['u0'])
+    analysis=result(db,'u0').evidence_json['ml']
+    assert analysis['status']=='SCORED' and analysis['reference_count']==30
+    assert analysis['confidence']=='LOW' and analysis['measurement']['pooled_course_count']==2
+    assert result(db,'u1').evidence_json=={'rule':'kept'}
+
+
+def test_current_defaults_are_video_first_and_minimum_thirty():
+    from app.core.config import Settings
+    config=Settings(_env_file=None)
+    assert config.analytics_ml_min_reference_students==30
+    assert config.analytics_ml_video_enabled is True and config.analytics_ml_quiz_enabled is False
+    assert config.analytics_ml_mode=='off'
+
+
+def test_pool_changed_during_fit_cannot_publish_mislabeled_reference_scope(db,monkeypatch):
+    import app.services.learning_analytics.ml_workflow as module
+    original=module.score_cohorts
+    def change_pool(*args,**kwargs):
+        scores=original(*args,**kwargs)
+        monkeypatch.setattr(settings,'analytics_ml_video_reference_course_ids','new-course')
+        return scores
+    monkeypatch.setattr(module,'score_cohorts',change_pool)
+    outcome=call(db,['u0'])
+    assert outcome['status']=='cancelled' and outcome['processed']==0
+    assert result(db,'u0').evidence_json=={'rule':'kept'}
+
+
+def test_disabling_after_mapping_resolution_stops_all_further_source_reads(db,monkeypatch):
+    from sqlalchemy import event
+    from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
+    original=LearningAnalyticsCoreService._resolve_recalculate_class_ids_for_courses
+    reads=[]
+    def resolve(self,**kwargs):
+        result_=original(self,**kwargs)
+        monkeypatch.setattr(settings,'analytics_ml_video_enabled',False)
+        return result_
+    monkeypatch.setattr(LearningAnalyticsCoreService,'_resolve_recalculate_class_ids_for_courses',resolve)
+    def observe(conn,cursor,statement,*args):
+        if not settings.analytics_ml_video_enabled and statement.lstrip().upper().startswith('SELECT'):
+            reads.append(statement)
+    event.listen(db.bind,'before_cursor_execute',observe)
+    outcome=call(db,['u0'])
+    event.remove(db.bind,'before_cursor_execute',observe)
+    assert outcome=={'status':'cancelled','processed':0}
+    assert reads==[]

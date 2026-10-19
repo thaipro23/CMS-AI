@@ -312,8 +312,11 @@ class Settings(BaseSettings):
     analytics_quiz_integrity_enabled: bool = True
     analytics_ml_mode: Literal['off', 'shadow'] = 'off'
     analytics_ml_pilot_class_ids: str = ''
-    analytics_ml_min_reference_students: int = Field(default=50, ge=50, le=5000)
-    analytics_ml_max_reference_students: int = Field(default=5000, ge=50, le=5000)
+    analytics_ml_video_enabled: bool = True
+    analytics_ml_quiz_enabled: bool = False
+    analytics_ml_video_reference_course_ids: str = ''
+    analytics_ml_min_reference_students: int = Field(default=30, ge=30, le=5000)
+    analytics_ml_max_reference_students: int = Field(default=5000, ge=30, le=5000)
     analytics_quiz_reference_people_min: int = Field(default=12, ge=12, le=1000)
     analytics_quiz_reset_policies: dict[str, str] = Field(default_factory=dict)
     analytics_raw_event_cleanup_batch_size: int = 5000

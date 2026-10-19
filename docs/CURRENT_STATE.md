@@ -61,35 +61,48 @@ CMS-FPT không thay đổi. Không tăng global DB statement timeout.
 Rủi ro: pg_class.reltuples là ước tính có độ trễ, concurrent index vẫn
 có thể chờ transaction/lock, cần kiểm tra hiệu quả index trên dữ liệu thật.
 
-## Learning Analytics ML — 16/10/2026 (Asia/Ho_Chi_Minh)
+## Video relative ranking v2 — 19/10/2026 (Asia/Ho_Chi_Minh)
 
-Baseline nhánh đích đã đọc: `c42cba8`; nhánh triển khai riêng `feat/learning-ml-20261016`.
-Khôi phục các commit ML ngày 09/10, tích hợp hotfix PostgreSQL/analytics mới và giữ shared
-diagnostics. Audit fix [PR #13](https://github.com/thaipro23/CMS-AI/pull/13) là nền thay đổi.
+Baseline đã đối chiếu GitHub: `dbd0c62d268fc04de3a4b327eaa03a3d57b1e524`
+(ML v1 đã merge PR #13). Nhánh riêng `feat/video-learning-ranking-20261019`.
+[Runbook hiện hành](LEARNING_ANALYTICS_ML_ROLLOUT.md) và
+[thiết kế v2](superpowers/specs/2026-10-19-video-relative-ranking-design.md)
+là nguồn chuẩn cho video; thay thế ngưỡng/thuật toán v1.
 
-- Có source: Isolation Forest worker batch, video/quiz riêng; scope/metadata/50 distinct
-  students/5.000 sample cap; target-only writes, row-lock/cutoff guard; API allowlist,
-  stale/off guards và thẻ ML trong drawer. Giữ điểm chính thức và nhãn luật hiện có.
-- Mặc định `ANALYTICS_ML_MODE=off`, pilot class IDs rỗng. Không có migration ML; baseline
-  vẫn bao gồm migration 0074 của hotfix /jobs. [Runbook ML](LEARNING_ANALYTICS_ML_ROLLOUT.md)
-  ghi rõ dependency/config/đánh giá và cách rollback.
-- Kiểm chứng local vừa chạy: 108 focused ML/telemetry/workflow tests sau lượt sửa review; 25 API privacy tests;
-  398 CI unit tests và 6 release checks passed sau sửa;
-  frontend lint/typecheck/build; 33 Playwright tests; fatal Ruff và compile passed.
-  Local không có PostgreSQL/Redis/container runtime; kiểm chứng các phần đó là CI gate
-  của [PR #13](https://github.com/thaipro23/CMS-AI/pull/13), cần xem đúng head/checks.
-  Full suite sau sửa review: 1313 passed/16 skipped/312 failed, baseline 1197/15/312;
-  bộ tên lỗi khớp và 0 lỗi mới. [Danh sách lỗi nền](fixes/LEARNING_ML_TEST_BASELINE_2026-10-16.txt); full suite chưa xanh.
-- Replay export 83 sinh viên: 31 video đủ đặc trưng nhưng mọi nhóm dưới 50; quiz thiếu
-  provenance server; 0 nhóm được score. Official export hash giữ nguyên. Chưa có accuracy
-  thực tế. Benchmark synthetic 1.000/5.000 rows: 0,7249/0,9347 giây, incremental peak RSS
-  115,46/122,37 MiB; chỉ là môi trường scratch, chưa gồm DB I/O/concurrent worker.
-- Trạng thái: **CÓ SOURCE / KIỂM THỬ LOCAL / REVIEW ĐỘC LẬP**; mã nguồn xuất bản
-  tại `46e4265`, trạng thái merge/CI được xác nhận qua PR #13 vào nhánh đích.
-  **CHƯA DEPLOY, CHƯA PILOT/XÁC MINH PRODUCTION**. User đã cho phép merge CMS-AI sau kiểm
-  chứng. CMS-FPT hiện có plugin0.4.18 nhưng chưa có telemetry PR #3 cũ (0.4.17); cần tích hợp trên bản mới bằng quy trình riêng, không hạ phiên bản hoặc suy ra đã deploy LMS.
-- Tiếp theo: final review, CI đúng head, merge đúng `feat/import-quiz-cms-old-su26`; sau
-  deployment được phép mới thu hai đợt dữ liệu và mẫu flagged/unflagged có nhãn giảng viên.
+- Video trước: median/MAD làm điểm xếp hạng chính, Isolation Forest 200 cây đối chiếu.
+  Hiện hai percentile khi khác nhau; khi gần nhau ưu tiên giải thích median/MAD.
+  API/UI không có cờ outlier hoặc nhãn kết tội; vẫn giữ điểm và kết quả luật.
+- Tối thiểu 30 người khác nhau; 30–49 “Độ tin cậy thấp”. Pool nhiều course có cấu hình
+  rõ ràng, chỉ active/effective rosters; gom video theo người, loại trùng, nhóm theo
+  exposure/độ dài. Trần 20 course, 20.000 roster, 50.000 source rows, 5.000 references.
+- Đo tiến trình nội dung riêng, chuẩn hóa tốc độ phát; legacy/mất mốc phát đầu/thiếu vị
+  trí không đủ lịch sử. Giữ event identity tại timestamp trùng, incremental idempotency.
+  API chỉ đọc saved evidence; stale/version/pool/RBAC guards và target-only writes.
+- Global `ANALYTICS_ML_MODE=off`, pilot IDs rỗng; video flag=true, quiz flag=false.
+  Không có migration. Quiz chỉ xét bật sau telemetry PR #3 được port/deploy tương thích
+  plugin 0.4.18+ và đủ provenance server; không downgrade về gói 0.4.17.
+- Kiểm chứng local sau sửa review: 116 focused backend, 28 frontend unit/rendered,
+  35 Playwright smoke; lint/typecheck/build và fatal Ruff/compile đạt. Năm seed
+  0,1,7,42,99: fixture synthetic top 5 trùng 100% (yêu cầu ≥80%); thiếu dữ liệu,
+  công tắc tắt, cross-course pool và chèn người giả lập đều có regression.
+- Full backend trên source sạch: 1.350 passed / 16 skipped / 312 failed; bộ tên lỗi
+  nền đối chiếu [baseline](fixes/LEARNING_ML_TEST_BASELINE_2026-10-16.txt), không coi
+  full suite là xanh. PostgreSQL/Redis/migration/concurrency và image/Compose
+  là cổng CI của đúng PR head, không suy ra từ SQLite hoặc benchmark scorer.
+- Replay: 3 lớp / 83 người, 0 nhóm được xếp hạng. Cả 83 thiếu ba video đo hợp lệ;
+  38 có video legacy thiếu playback measurement; một measurement sai.
+  5.195 nhóm người/quiz chuẩn hóa được giữ tắt. Official export hash trước/sau bằng nhau.
+  Chưa có accuracy thực tế hoặc nhãn xác nhận giảng viên.
+- Benchmark synthetic process mới: 1.000/5.000 người = 0,9252/1,1019 giây;
+  incremental peak RSS 110,84/123,51 MiB. Không gồm DB I/O/concurrent app worker
+  và không phải SLO production.
+- Review độc lập một lượt; sửa các lỗi cùng timestamp, thiếu phát đầu, tiếp tục
+  đọc sau disable và outline replay cũ/mới. Có RED→GREEN và test materialization;
+  không có minor hoãn. Chi tiết: [verification](fixes/VIDEO_RELATIVE_RANKING_VERIFICATION_2026-10-19.md).
+- Trạng thái merge/CI: xem PR của nhánh `feat/video-learning-ranking-20261019`.
+  **CHƯA DEPLOY / CHƯA BẬT PILOT / CHƯA XÁC MINH PRODUCTION** trong phiên này;
+  CMS-FPT không đổi. Sau deploy đồng bộ backend/worker/frontend, thu số đo video mới,
+  chọn pool/pilot phù hợp và lấy mẫu giảng viên xác minh.
 
 ## Thay đổi nguồn gần nhất
 
