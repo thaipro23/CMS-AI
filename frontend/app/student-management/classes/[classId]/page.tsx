@@ -88,26 +88,6 @@ function grade10Label(value?: number | null) {
   const score = Math.max(0, Math.min(10, percent / 10))
   return `${Math.round(score * 10) / 10}/10`
 }
-function learningStatusLabel(value?: string | null) {
-  const status = (value || 'not_synced').toLowerCase()
-  if (status === 'cms_not_synced') return 'Chưa đồng bộ CMS'
-  if (status === 'not_synced') return 'Chưa cập nhật học tập'
-  if (status === 'not_enrolled') return 'Chưa enroll'
-  if (status === 'no_activity') return 'Chưa vào học'
-  if (status === 'low_progress') return 'Tiến độ thấp'
-  if (status === 'low_grade') return 'Điểm thấp'
-  if (status === 'sync_error') return 'Lỗi dữ liệu'
-  if (status === 'good') return 'Hoàn thành tốt'
-  if (status === 'in_progress') return 'Đang học'
-  return 'Chưa cập nhật'
-}
-function learningStatusClass(value?: string | null) {
-  const status = (value || 'not_synced').toLowerCase()
-  if (['good', 'in_progress'].includes(status)) return 'status-pill success'
-  if (['low_progress', 'low_grade', 'not_enrolled', 'cms_not_synced', 'sync_error'].includes(status)) return 'status-pill danger'
-  if (status === 'no_activity') return 'status-pill warning'
-  return 'status-pill neutral'
-}
 function latestTimestamp(values: Array<string | null | undefined>) {
   let selected: string | null = null
   let selectedTime = 0
@@ -245,14 +225,26 @@ function componentDeadlineLabel(column: { deadlineDate?: string | null; deadline
   return `Mốc tiến độ: ${formatDateOnly(column.deadlineDate)}`
 }
 
-function examStatusClass(value?: string | null) {
-  const status = String(value || '').toLowerCase()
-  if (status === 'eligible') return 'status-pill success'
-  if (status === 'not_eligible') return 'status-pill danger'
-  return 'status-pill warning'
-}
-function examStatusLabel(student: AcademicStudent) {
-  return student.exam_status_label || (student.exam_status === 'eligible' ? 'Được thi' : student.exam_status === 'not_eligible' ? 'Không được thi' : 'Chưa đủ dữ liệu')
+function examReadiness(student: AcademicStudent) {
+  const policy = student.training_policy
+  const hasQuizData = typeof policy?.quiz_total === 'number' && policy.quiz_total > 0
+  // Before the final day, "eligible" means not banned yet, even with incomplete
+  // quizzes. Readiness additionally requires every Quiz to have its full score.
+  const eligible = hasQuizData && policy?.all_quizzes_eligible === true
+    && student.exam_status === 'eligible' && student.exam_eligible === true
+  const officialReasons = student.exam_reasons?.filter(Boolean).slice(0, 2).join('; ')
+  const reason = officialReasons || (!hasQuizData
+    ? 'Chưa đủ dữ liệu Quiz để xác nhận điều kiện thi.'
+    : policy?.all_quizzes_eligible !== true
+      ? 'Các Quiz phải đạt 100% điểm; hoàn thành nội dung 100% chưa đủ điều kiện thi.'
+      : eligible
+        ? 'Các Quiz đã đạt 100% điểm và đáp ứng điều kiện ngày cuối.'
+        : 'Chưa đủ dữ liệu để xác nhận điều kiện ngày cuối và thời gian nộp Quiz.')
+  return {
+    label: eligible ? 'Đủ điều kiện thi' : 'Chưa đủ điều kiện thi',
+    className: eligible ? 'status-pill success' : 'status-pill warning',
+    reason,
+  }
 }
 function defenseStatusLabel(value?: string | null) {
   const status = String(value || 'not_graded').toLowerCase()
@@ -956,9 +948,22 @@ function ClassDetailContent() {
       hideable: true,
       render: (student: AcademicStudent) => <><b>{student.progress_email_sent_count || 0} mail</b><small>{student.progress_email_last_sent_at ? `Gần nhất ${formatVNTimeDate(student.progress_email_last_sent_at)}` : 'Chưa gửi'}</small></>,
     }] : []),
-    { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 240, priority: 'important', hideable: true, render: (student) => <div className="learning-progress-cell compact-learning-progress-cell"><b>Hoàn thành: {percentLabel(student.learning_progress_percent)}</b><small title="Trung bình cộng các Quiz và Final test có trong course; bài chưa có điểm tính 0">Điểm tổng: {grade10Label(student.learning_grade_percent)}</small><div className="student-learning-status-stack"><span className={learningStatusClass(student.learning_status)}>{learningStatusLabel(student.learning_status)}</span>{shouldSuggestFullCmsSync(student) ? <span className="cms-full-sync-hint">Cần đồng bộ full CMS</span> : null}</div></div> },
+    { key: 'progress', header: 'Tiến độ học', kind: 'progress', minWidth: 240, priority: 'important', hideable: true, render: (student) => {
+      const readiness = examReadiness(student)
+      return <div className="learning-progress-cell compact-learning-progress-cell">
+        <b>Xem video và Quiz: {percentLabel(student.learning_progress_percent)}</b>
+        <b title="Trung bình cộng các Quiz và Final test có trong course; bài chưa có điểm tính 0">Điểm tổng: {grade10Label(student.learning_grade_percent)}</b>
+        <div className="student-learning-status-stack">
+          <span className={readiness.className} title={readiness.reason}>{readiness.label}</span>
+          {shouldSuggestFullCmsSync(student) ? <span className="cms-full-sync-hint">Cần đồng bộ full CMS</span> : null}
+        </div>
+      </div>
+    } },
     { key: 'online', header: 'Học online', kind: 'status', minWidth: 210, priority: 'important', hideable: true, render: (student) => { const behavior = studentBehavior(student); return behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}><span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span><small>Độ tin cậy: {Math.round(behavior.confidence_score || 0)}%</small><small>{recommendedActionLabel(behavior.recommended_action)}</small></button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span> } },
-    { key: 'exam', header: 'Điều kiện thi', kind: 'status', minWidth: 220, priority: 'important', hideable: true, render: (student) => <div className="exam-policy-cell"><span className={examStatusClass(student.exam_status)}>{examStatusLabel(student)}</span><small>{student.exam_reasons?.slice(0, 2).join('; ') || 'Chưa đủ dữ liệu'}</small>{/* ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: <small>Assignment: {defenseStatusLabel(student.assignment_defense_status)}{typeof student.assignment_score_10 === 'number' ? ` · ${student.assignment_score_10}/10` : ''}</small> */}</div> },
+    { key: 'exam', header: 'Điều kiện thi', kind: 'status', minWidth: 220, priority: 'important', hideable: true, render: (student) => {
+      const readiness = examReadiness(student)
+      return <div className="exam-policy-cell">{/* ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: Assignment được theo dõi riêng. */}<span className={readiness.className}>{readiness.label}</span><small>{readiness.reason}</small></div>
+    } },
     ...componentColumns.map((column): EnterpriseTableColumn<AcademicStudent> => ({
       key: `component-${column.key}`,
       header: column.name,

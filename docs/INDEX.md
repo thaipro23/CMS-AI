@@ -12,6 +12,7 @@ Mốc nguồn: `f961e76a6bb269e09d93c52ea52b96e7f5b028a5`, 15/10/2026.
 | Giảng viên dạy cả Poly/PTCĐ, snapshot exhausted | [teacher scope 15/10](fixes/TEACHER_MULTIBRANCH_REPORT_2026-10-15.md) |
 | Quota nhập 30 vẫn phải sinh được 100 câu AI | [generation quota 15/10](fixes/GENERATION_IMPORT_QUOTA_2026-10-15.md) |
 | Context Quiz bị chia sẻ mutable default | [context isolation 15/10](fixes/QUIZ_CONTEXT_DEFAULT_2026-10-15.md) |
+| Nhãn Đủ/Chưa đủ điều kiện thi, Xem video và Quiz | [assessment contract – hiển thị điều kiện thi](ASSESSMENT_GRADE_AND_PROGRESS_CHECK.md#hiển-thị-tiến-độ-và-điều-kiện-thi-trong-danh-sách-lớp-cms--21102026) |
 | Điểm/Final/tiến độ/503 | [assessment contract](ASSESSMENT_GRADE_AND_PROGRESS_CHECK.md), [grade performance](fixes/DASH_GRADE_READ_PERFORMANCE_2026-10-13.md), [503](fixes/SCORE_REFRESH_503_2026-10-12.md) |
 | Cột Quiz/subsection | [columns fix 13/10](fixes/QUIZ_SUBSECTION_COLUMNS_2026-10-13.md) |
 | Import Quiz SU26 | [spec/operations](IMPORT_QUIZ_CMS_OLD_SU26.md), [verification record](VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md) |

@@ -4,6 +4,35 @@
 commit [`f961e76a6bb269e09d93c52ea52b96e7f5b028a5`](https://github.com/thaipro23/CMS-AI/commit/f961e76a6bb269e09d93c52ea52b96e7f5b028a5).
 Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và không xác nhận deploy.
 
+## Tiến độ và nhãn điều kiện thi — 21/10/2026 (Asia/Ho_Chi_Minh)
+
+Baseline đã đối chiếu GitHub: `73ee71c925ac18daf29bc782c5f06ecc31c75c04`.
+Nhánh riêng `fix/student-exam-eligibility-labels-20261021`, tích hợp vào
+`feat/import-quiz-cms-old-su26` sau khi CI đạt. Thay đổi có source trong changeset
+này; chưa có xác minh deploy/production.
+
+- Cột Tiến độ học: **Xem video và Quiz: …%**, **Điểm tổng: …/10** cùng cỡ chữ,
+  tách dòng/in đậm 700; dòng thứ ba dùng **Đủ điều kiện thi / Chưa đủ điều kiện thi**.
+- Cùng helper với cột Điều kiện thi, cần có Quiz, tất cả Quiz đạt 100% và quyết định
+  policy chính thức cho phép. Không suy từ tiến độ 100%, điểm tổng đã làm tròn hoặc
+  trạng thái “chưa bị cấm thi” trước ngày cuối. Thiếu dữ liệu luôn có lý do, không
+  nhận đủ điều kiện. [Contract chi tiết](ASSESSMENT_GRADE_AND_PROGRESS_CHECK.md).
+- Giữ công thức điểm, backend/API/schema, quy tắc ngày cuối, bộ lọc learning_status,
+  gợi ý đồng bộ CMS và việc ẩn điểm Assignment. Excel/email, ML, Udemy, CMS-FPT không đổi.
+- Kiểm chứng local vừa chạy: `node --test tests/*.test.cjs` tại frontend: **33 passed**;
+  `npm run lint`, `npm run typecheck`, `npm run build`: **đạt**;
+  `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/tmp/chromium npm run test:ci -- --workers=2`
+  tại e2e: **37 passed**, gồm máy tính/điện thoại, font thực tế và hai dòng không chồng.
+  Backend pytest cho `test_training_policy_service.py`, `test_assessment_average_grade.py`,
+  `test_assignment_ui_suppression.py`: **33 passed**. Test mới đã xác nhận thất bại với
+  giao diện cũ trước khi sửa; CSS 600 được phát hiện và sửa thành 700, marker ẩn Assignment
+  được giữ nguyên sau hồi quy. Review độc lập không còn lỗi chặn.
+- Hiệu năng: **KHÔNG ÁP DỤNG** benchmark mới; chỉ hiển thị từ payload sẵn có, không thêm
+  request/query/job. Không tuyên bố hiệu năng production. CI/checks trên PR được xác minh
+  riêng trước merge; trạng thái này không phải bằng chứng rollout.
+- Việc tiếp theo sau merge: triển khai frontend bằng luồng hiện hành và kiểm tra đúng lớp
+  trên dashboard với payload thật. Không có truy cập runtime production trong phiên này.
+
 ## Cập nhật quy trình — 16/10/2026 (Asia/Ho_Chi_Minh)
 
 Nguồn đọc trước thay đổi docs này: [`01b00174ecf29506da3acf2e1f412b118bb655a9`](https://github.com/thaipro23/CMS-AI/commit/01b00174ecf29506da3acf2e1f412b118bb655a9).
