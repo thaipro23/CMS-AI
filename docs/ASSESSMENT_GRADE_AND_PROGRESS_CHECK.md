@@ -1,5 +1,37 @@
 # Điểm tổng và kiểm tra tiến độ PP03883
 
+## Hiển thị tiến độ và điều kiện thi trong danh sách lớp CMS — 21/10/2026
+
+Trong cột **Tiến độ học**, ba dòng lần lượt là **Xem video và Quiz: …%**,
+**Điểm tổng: …/10** (cùng cỡ chữ, in đậm với dòng đầu) và **Đủ điều kiện thi**
+hoặc **Chưa đủ điều kiện thi**. Nhãn học tập cũ (Điểm thấp, Tiến độ thấp,
+Hoàn thành tốt, Đang học…) không còn là dòng thứ ba; bộ lọc learning_status
+vẫn giữ nguyên chức năng chẩn đoán. Gợi ý đồng bộ CMS khi thiếu dữ liệu vẫn còn.
+
+Hai cột Tiến độ học và Điều kiện thi dùng chung `examReadiness` trong
+`frontend/app/student-management/classes/[classId]/page.tsx`:
+
+- Chỉ xác nhận đủ khi API có `training_policy.quiz_total > 0`,
+  `all_quizzes_eligible === true`, `exam_status === 'eligible'` và
+  `exam_eligible === true`.
+- Nguồn chuẩn là `TrainingPolicyService.evaluate_student`: từng Quiz phải đạt
+  100% điểm; sau ngày cuối còn kiểm tra thời gian nộp. Trước và trong ngày cuối,
+  `exam_status=eligible` riêng lẻ chỉ có nghĩa **chưa bị cấm thi**, không chứng minh
+  sinh viên đã đạt toàn bộ Quiz. Giao diện không dùng trạng thái này riêng lẻ để
+  hiển thị đủ điều kiện.
+- Thiếu policy/danh sách Quiz/ngày cuối/thời gian nộp cần xác minh đều không được
+  tự nhận đủ điều kiện. Lý do chính thức từ API được giữ trong cột Điều kiện thi
+  và tooltip của nhãn tiến độ; chưa có dữ liệu được giải thích rõ.
+- Tiến độ nội dung 100%, điểm tổng làm tròn 10/10 và điểm Final không thay thế
+  kiểm tra từng Quiz. Final vẫn tham gia điểm tổng theo công thức bên dưới;
+  điều kiện Final chính thức hiện chưa áp dụng trong policy backend.
+
+Thay đổi chỉ ở hiển thị CMS; không ghi điểm, đổi công thức, API/schema, quyết
+định cấm thi, Excel/email, Udemy hoặc plugin CMS-FPT. Kiểm thử hồi quy:
+`frontend/tests/student-exam-readiness.test.cjs`,
+`e2e/tests/student-grade-column-hygiene.spec.ts`,
+`backend/app/tests/test_training_policy_service.py`.
+
 ## Cách tính điểm tổng
 
 Mỗi Quiz và Final test thực sự có trong course được quy về thang 10 rồi lấy

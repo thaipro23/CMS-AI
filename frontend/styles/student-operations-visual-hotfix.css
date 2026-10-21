@@ -228,6 +228,11 @@ html[data-sidebar='collapsed'] .enterprise-app-shell.enterprise-unified-shell .e
 .class-detail-flow .enterprise-content-section-head {
   padding-left: 16px !important;
 }
+/* Keep completion and total score equally prominent on separate lines. */
+.class-detail-flow .learning-progress-cell > b {
+  display: block;
+  font-weight: 700;
+}
 .class-detail-flow .student-learning-status-stack {
   display: flex;
   flex-direction: column;
