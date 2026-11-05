@@ -28,6 +28,8 @@ RUN apt-get update \
 COPY --from=wheels /wheels /wheels
 COPY backend/requirements-runtime.txt ./requirements-runtime.txt
 RUN python -m pip install --no-index --find-links=/wheels -r requirements-runtime.txt \
+    && python -m pip check \
+    && python -c "from types import SimpleNamespace; from kombu.transport.redis import Channel; Channel._get_client(SimpleNamespace(global_keyprefix=''))" \
     && rm -rf /wheels
 COPY backend/ .
 COPY scripts/question-bank-data-health.py ./scripts/question-bank-data-health.py

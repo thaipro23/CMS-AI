@@ -40,6 +40,7 @@ Chạy `python scripts/repo_index.py check`; file mới/đổi tra bằng `find`
 | Bảng/cuộn/dialog/CSS | [EnterpriseDataTable](frontend/components/table/EnterpriseDataTable.tsx), [AccessibleDialog](frontend/components/ui/AccessibleDialog.tsx), [layout CSS order](frontend/app/layout.tsx) |
 | Video ranking / tốc độ phát / dữ liệu thiếu | [playback measurements](backend/app/services/learning_analytics/video_playback.py), [features](backend/app/services/learning_analytics/ml_features.py), [median/MAD baseline](backend/app/services/learning_analytics/ml_baseline.py), [cohort scorer](backend/app/services/learning_analytics/ml_anomaly.py), [worker](backend/app/services/learning_analytics/ml_workflow.py), [API](backend/app/services/learning_analytics/ml_presentation.py), [UI](frontend/components/analytics/MLAnalysisCard.tsx), [replay](scripts/evaluate-learning-ml.py) |
 | Runtime config/CI | [config](backend/app/core/config.py), [Jenkinsfile](Jenkinsfile), [deploy](deploy/) |
+| Worker VersionMismatch redis-py/Kombu | [runtime pins](backend/requirements-runtime.txt), [production build gate](backend/Dockerfile.prod), [transport regression](backend/app/tests/test_celery_redis_client_compatibility.py), [runbook](docs/fixes/CELERY_REDIS_CLIENT_MISMATCH_2026-11-05.md) |
 
 Tracking/analytics: `python scripts/repo_index.py ls backend/app/services/learning_analytics`;
 test phù hợp: `find "ten_chuc_nang" --prefix backend/app/tests --limit 10`.

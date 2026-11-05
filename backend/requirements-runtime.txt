@@ -7,6 +7,9 @@ SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
 alembic==1.14.0
 celery==5.4.0
+# Keep the transport compatible with Celery 5.4 and redis-py 5.2. Newer
+# unbounded Kombu releases require a newer redis-py and crash at startup.
+kombu==5.4.2
 redis==5.2.1
 httpx==0.28.1
 python-dotenv==1.0.1

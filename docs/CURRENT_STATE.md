@@ -4,6 +4,29 @@
 commit [`f961e76a6bb269e09d93c52ea52b96e7f5b028a5`](https://github.com/thaipro23/CMS-AI/commit/f961e76a6bb269e09d93c52ea52b96e7f5b028a5).
 Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và không xác nhận deploy.
 
+## Worker Redis transport — 05/11/2026 (Asia/Ho_Chi_Minh)
+
+Baseline `6bede597dc917d9b3d35dd3a5c35500281fcb1d6`, nhánh nghiệp vụ
+`feat/import-quiz-cms-old-su26`. Người dùng chọn sửa source và build lại image;
+không dùng overlay/PVC/PYTHONPATH hoặc cài nóng pod.
+
+- Cả 4 worker production crash với redis-py VersionMismatch, client 5.2.1.
+  Khóa thêm Kombu 5.4.2, giữ Celery 5.4.0/redis-py 5.2.1. Redis server dùng
+  chung CMS, queue, credentials và DB index không đổi.
+- Thêm regression version gate thật vào CI và `pip check`/Redis transport gate
+  vào Dockerfile.prod mà Jenkins thực sự build, để chặn image dependency lỗi.
+- Test ban đầu 1 failed giống production; sau sửa 20 test liên quan pass.
+  Fresh venv cài đầy đủ bộ Celery/Kombu/redis, pip check và client gate pass;
+  không kết nối Redis server trong phép thử này. Full suite: 312 failed/1.391
+  passed/16 skipped, cùng 312 tên lỗi baseline. CI subset: 490 passed; release
+  contract: 6 passed/1 deselected. Integration local vẫn 2 failed/14 skipped vì
+  thiếu PostgreSQL/REDIS_URL. Ruff/diff và 12 repo-index tests đạt. Review độc
+  lập không có blocker; không coi full suite hoặc integration là xanh.
+- CHƯA BUILD DOCKER/CHƯA DEPLOY/CHƯA VERIFY PRODUCTION. Workspace không có Docker
+  hoặc K8s access. 8 Release WEB3023 chưa chạy do worker đang crash; không báo
+  lỗi 503 hay cập nhật Library đã được xác minh khỏi trên production.
+- [Nguyên nhân, phạm vi và triển khai](fixes/CELERY_REDIS_CLIENT_MISMATCH_2026-11-05.md).
+
 ## Hiển thị mã HTML trong câu hỏi — 05/11/2026 (Asia/Ho_Chi_Minh)
 
 Điều chỉnh theo yêu cầu không build image, baseline `2364183c80d8f1dc281bd88d311c427e723c04eb`:
