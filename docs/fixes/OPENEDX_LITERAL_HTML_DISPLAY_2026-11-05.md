@@ -91,3 +91,60 @@ Redeploy không tự đổi OLX đã lưu trong CMS. Sau deploy:
    thử dropdown/ảnh trên một bài kiểm tra phù hợp trước khi mở rộng cập nhật.
 
 Trạng thái production: chưa deploy và chưa gửi job sửa nội dung trong phiên này.
+
+## Chạy lại 8 Bài WEB3023 bằng K8s, không qua bước enqueue
+
+Scope được người vận hành chỉ định: subject offering
+`f5604c81-3f72-4fa5-8fc0-5dcefd5a26e0` (WEB3023_SU26). Không suy ra phạm vi
+FA26 từ course đích; không tự chọn một offering khác chỉ vì cùng mã môn.
+
+Runtime phải chứa cả bản sửa exporter và bản sửa rollback trong changeset này.
+Phát hiện thêm: rollback cũ xóa mọi component trong `imported_now`, kể cả câu
+có sẵn vừa được cập nhật bởi force reimport. Đã đổi: force reimport không xóa
+component khi lỗi; first publish chỉ xóa nếu connector trả `created is True`.
+Khi lỗi, OLX của một số câu có thể đã cập nhật; giữ component, ghi failed và
+`retained_component_ids`, không giả vờ đã khôi phục nội dung cũ.
+
+Script trong image backend: `/app/republish_web3023_releases.py`.
+
+```bash
+# Chỉ đọc kế hoạch; chưa tạo job, chưa gọi CMS.
+kubectl -n openedx exec deployment/ai-server-worker -- \
+  python -u /app/republish_web3023_releases.py
+
+# Người dùng đã yêu cầu chạy cả 8 Bài. Giữ terminal mở để nhận kết quả từng job.
+set -o pipefail
+kubectl -n openedx exec deployment/ai-server-worker -- \
+  python -u /app/republish_web3023_releases.py --execute \
+  | tee web3023-republish.log
+```
+
+- Chạy tuần tự `bank_release_publish_task.run(job_id)` bên trong worker image,
+  dùng cùng service, progress, durable job và audit; không gọi Celery enqueue.
+  Đây không phải sửa lỗi 503 enqueue. Kết nối DB/CMS vẫn phải hoạt động.
+- Khóa advisory PostgreSQL chống chạy trùng script; khóa Release và kiểm tra
+  lại job queued/running trước mỗi thao tác. Không đổi trạng thái job cũ để vượt khóa.
+- Preflight bắt buộc đúng WEB3023, đúng offering, đủ Bài 1–8, Release đã từng
+  published, Library key hiện tại bằng quy tắc hiện hành, đủ snapshot/ID câu.
+  ID phải là Library V2 canonical từ UUID question ID; không tự migrate ID legacy.
+- Chụp toàn bộ mapping vào `repair_expectations`, kiểm tra lại kế hoạch trước
+  từng job. Worker/service kiểm tra lại mapping và quy tắc key ngay khi chạy,
+  không cho đổi key vì đổi title/term, không chấp nhận key mới từ connector kể
+  cả retry, verify component hiện có trước update và từ chối ID trả về khác.
+  Script dừng nếu scope/mapping không khớp; không tạo Library/Quiz thay thế.
+- Mỗi job có provenance `k8s-operator:web3023-html-repair`. Lỗi dừng batch;
+  không tạo sẵn 8 job queued không có broker. Chỉ in DONE 8/8 khi cả 8 job có
+  status completed và kết quả ok. Không khẳng định course copy đã sync.
+- Sau đó cập nhật bản sao Library trong Studio/course như mục trên. Không
+  reset phiên làm bài, student answers, điểm hoặc tạo lại Quiz.
+
+Kiểm chứng source: 64 test exporter/import/rollback/scope pass. Test rollback
+trước sửa: 6 failed/2 passed; sau sửa các trường hợp force/existing/unknown
+đều giữ component, first publish created thật vẫn được cleanup. Chưa chạy
+script với PostgreSQL/CMS thật hoặc K8s: workspace không có kubectl/kết nối
+cluster. CLI --help, lint các file mới/workflow/worker và kiểm tra cú pháp đạt;
+adapter giữ nguyên 18 F401 so với baseline, không sửa ngoài scope. Fresh full
+baseline: 312 failed/1.363 passed/16 skipped; sau sửa: 312 failed/1.382 passed/
+16 skipped, cùng 312 tên lỗi. CI subset 481 passed; release contract 6 passed/
+1 deselected; integration smoke vẫn 2 failed/14 skipped do thiếu PostgreSQL và
+REDIS_URL local. Review độc lập không còn blocker. Không coi đó là production acceptance.

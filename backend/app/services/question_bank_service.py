@@ -2756,5 +2756,5 @@ class VersionedQuestionBankService:
     def _release_publish_course_id(self, release: QuestionBankRelease, subject: Subject, course_id_for_org: str | None = None) -> str:
         return self._release_publish_workflow()._release_publish_course_id(release, subject, course_id_for_org)
 
-    async def publish_release_to_openedx(self, *, release_id: str, actor: str | None = None, course_id_for_org: str | None = None, force_reimport: bool = False, progress_callback: Any | None = None) -> dict:
-        return await self._release_publish_workflow().publish_release_to_openedx(release_id=release_id, actor=actor, course_id_for_org=course_id_for_org, force_reimport=force_reimport, progress_callback=progress_callback)
+    async def publish_release_to_openedx(self, *, release_id: str, actor: str | None = None, course_id_for_org: str | None = None, force_reimport: bool = False, progress_callback: Any | None = None, repair_expectations: dict | None = None) -> dict:
+        return await self._release_publish_workflow().publish_release_to_openedx(release_id=release_id, actor=actor, course_id_for_org=course_id_for_org, force_reimport=force_reimport, progress_callback=progress_callback, repair_expectations=repair_expectations)

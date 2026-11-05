@@ -6,6 +6,27 @@ Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và 
 
 ## Hiển thị mã HTML trong câu hỏi — 05/11/2026 (Asia/Ho_Chi_Minh)
 
+Bổ sung vận hành sau baseline `67003ab83cc8323fbd50b579ff5f824b80442d59`:
+- Người dùng yêu cầu chạy lại 8 Bài của WEB3023_SU26, offering
+  `f5604c81-3f72-4fa5-8fc0-5dcefd5a26e0`, sau request publish trả 503. Chưa có
+  response body/log để kết luận nguyên nhân 503; không coi direct run là đã sửa enqueue.
+- Phát hiện rollback force reimport có thể xóa component có sẵn khi verify lỗi.
+  Đã chặn xóa khi force, chỉ cleanup first-publish nếu connector xác nhận created.
+- Thêm operator CLI `backend/republish_web3023_releases.py`: dry-run mặc định,
+  đúng 8 Bài, khóa/chống job trùng, giữ Library/component identity và chạy tuần
+  tự tác vụ thật không qua enqueue. Worker nhận captured repair expectations;
+  kiểm tra lại mapping trước update và không tự nâng term/đổi key khi repair.
+- 64 test liên quan đạt; test rollback trước sửa có 6 failed/2 passed. CLI help
+  đạt. Fresh full baseline: 312 failed/1.363 passed/16 skipped; sau sửa: 312
+  failed/1.382 passed/16 skipped, cùng 312 tên lỗi. CI subset: 481 passed;
+  release contract: 6 passed/1 deselected. Integration smoke vẫn 2 failed/14
+  skipped vì thiếu PostgreSQL/REDIS_URL local. Lint các file mới, workflow và
+  worker đạt; adapter question_bank_service.py giữ nguyên 18 F401 có sẵn.
+  git diff --check và 12 repo-index tests đạt. Review độc lập không còn blocker.
+- Code/test local; CHƯA DEPLOY/CHƯA CHẠY 8 BÀI/CHƯA VERIFY PRODUCTION. Workspace
+  không có kubectl hoặc kết nối K8s. Không có migration, reset Quiz/điểm hay sửa
+  trạng thái job thủ công. [Lệnh và giới hạn](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md#chạy-lại-8-bài-web3023-bằng-k8s-không-qua-bước-enqueue).
+
 Baseline nguồn mới nhất trong phạm vi này: `064efb7c9f756e4dd900c6d0f2456f1cc41cbfd2`;
 nhánh sửa `fix/html-question-literal-display-20261105`, tích hợp vào
 `feat/import-quiz-cms-old-su26`. Các phần cũ bên dưới giữ mốc/bằng chứng riêng.

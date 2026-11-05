@@ -17,6 +17,7 @@ Mốc nguồn: `f961e76a6bb269e09d93c52ea52b96e7f5b028a5`, 15/10/2026.
 | Cột Quiz/subsection | [columns fix 13/10](fixes/QUIZ_SUBSECTION_COLUMNS_2026-10-13.md) |
 | Import Quiz SU26 | [spec/operations](IMPORT_QUIZ_CMS_OLD_SU26.md), [verification record](VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md) |
 | Câu hỏi HTML/CSS bị trống hoặc biến thành widget Details sau publish | [literal OLX và tái xuất nội dung đã publish](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md) |
+| Chạy lại 8 Bài WEB3023 qua K8s, tránh rollback xóa câu có sẵn | [operator CLI và giới hạn](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md#chạy-lại-8-bài-web3023-bằng-k8s-không-qua-bước-enqueue) |
 | Nhắc tiến độ qua email | [Mail Send](ACADEMIC_PROGRESS_EMAIL_MAILSEND.md) |
 | Video ranking median/MAD / pool ≥30 / tốc độ phát / tắt quiz / replay | [runbook video v2](LEARNING_ANALYTICS_ML_ROLLOUT.md), [thiết kế](superpowers/specs/2026-10-19-video-relative-ranking-design.md), [audit fix](LEARNING_ANALYTICS_AUDIT_FIX_20261009.md) |
 | Analytics/tracking/fraud | [implementation reference](QUIZ_TRACKING_IMPLEMENTATION.md) — dài, chọn heading liên quan; tra thêm `find "analytics" --docs` |

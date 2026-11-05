@@ -945,7 +945,25 @@ class QuestionBankReleasePublishWorkflowService:
         course_token = re.sub(r'[^A-Za-z0-9_-]+', '-', str(subject.code or 'SUBJECT')).strip('-_') or 'SUBJECT'
         return f'course-v1:{org}+{course_token}+BANK'
 
-    async def publish_release_to_openedx(self, *, release_id: str, actor: str | None = None, course_id_for_org: str | None = None, force_reimport: bool = False, progress_callback: Any | None = None) -> dict:
+    def _validate_repair_identity(self, release, items, expected, canonical_library_key):
+        if (release.openedx_library_key != expected.get('library_key')
+                or not self._library_key_same(release.openedx_library_key, canonical_library_key)):
+            raise ValueError('Repair Library identity changed; stopped before importing components.')
+        actual = {str(item.question_id): str(item.openedx_library_problem_id or '') for item in items}
+        if not actual or actual != expected.get('components'):
+            raise ValueError('Repair component identity changed; stopped before importing components.')
+        library_key = str(release.openedx_library_key)
+        if not library_key.startswith('lib:'):
+            raise ValueError('Repair requires existing Library V2 identity.')
+        for question_id, component_id in actual.items():
+            # The deployed connector derives exactly this id for UUID question
+            # keys. Refuse legacy/noncanonical ids rather than migrate them.
+            if str(uuid.UUID(question_id)) != question_id:
+                raise ValueError('Repair requires canonical UUID question identities.')
+            if component_id != f'lb:{library_key[4:]}:problem:ai-{question_id}':
+                raise ValueError('Repair requires existing canonical component identities.')
+
+    async def publish_release_to_openedx(self, *, release_id: str, actor: str | None = None, course_id_for_org: str | None = None, force_reimport: bool = False, progress_callback: Any | None = None, repair_expectations: dict | None = None) -> dict:
         def report_progress(current: int, label: str) -> None:
             if not progress_callback:
                 return
@@ -977,6 +995,10 @@ class QuestionBankReleasePublishWorkflowService:
         course_id = self._release_publish_course_id(release, subject, course_id_for_org)
         connector = get_openedx_connector()
         expected_library_key = self.release_library_key(subject=subject, chapter=chapter, version=version)
+        if repair_expectations is not None:
+            self._validate_repair_identity(release, release_items, repair_expectations, expected_library_key)
+            if self._release_library_key_needs_term_upgrade(library_key=release.openedx_library_key, subject=subject, version=version):
+                raise ValueError('Repair would upgrade Library identity; stopped before importing.')
         previous_library_key = release.openedx_library_key
         if not release.openedx_library_key:
             release.openedx_library_key = expected_library_key
@@ -1056,6 +1078,8 @@ class QuestionBankReleasePublishWorkflowService:
             if library_result.get('stub') is True or str(library_result.get('status', '')).startswith('local_stub'):
                 raise RuntimeError('Open edX connector trả về stub khi ensure library. Không đánh dấu published.')
             actual_library_key = str(library_result.get('library_key') or library_result.get('openedx_library_id') or library_key).strip()
+            if repair_expectations is not None and actual_library_key != repair_expectations['library_key']:
+                raise RuntimeError('Connector changed repair Library identity; stopped before importing.')
             report_progress(20, 'Content Library đã sẵn sàng trên CMS')
             if actual_library_key and actual_library_key != library_key:
                 library_key = actual_library_key
@@ -1068,6 +1092,10 @@ class QuestionBankReleasePublishWorkflowService:
             total_publish_questions = max(len(questions), 1)
             for question_index, question in enumerate(questions, start=1):
                 item = existing_items[str(question.id)]
+                if repair_expectations is not None:
+                    before = await connector.verify_library_problem(course_id, library_key, item.openedx_library_problem_id, metadata=metadata_base)
+                    if not (before.get('ok') and before.get('problem_exists') and before.get('library_exists', True)):
+                        raise RuntimeError('Repair target component missing/unverified; stopped before importing.')
                 if item.openedx_library_problem_id and not force_reimport and not library_key_changed:
                     existing_problem_id = str(item.openedx_library_problem_id)
                     try:
@@ -1148,6 +1176,8 @@ class QuestionBankReleasePublishWorkflowService:
                         metadata={**metadata_base, 'retry_after_learningpackage_missing': True},
                     )
                     retry_key = str(retry_library.get('library_key') or retry_library.get('openedx_library_id') or expected_library_key).strip()
+                    if repair_expectations is not None and retry_key != repair_expectations['library_key']:
+                        raise RuntimeError('Connector changed repair Library on retry; stopped before importing.')
                     if retry_key and not self._library_key_same(retry_key, library_key):
                         if imported_now:
                             raise RuntimeError('Open edX đổi Library key giữa quá trình import; đã dừng để tránh chia snapshot sang nhiều Library.')
@@ -1166,6 +1196,8 @@ class QuestionBankReleasePublishWorkflowService:
                 problem_id = result.get('openedx_library_problem_id') or result.get('library_problem_id') or result.get('problem_id') or result.get('block_id')
                 if not problem_id:
                     raise RuntimeError(f'Connector không trả problem id cho question {question.id}')
+                if repair_expectations is not None and str(problem_id) != repair_expectations['components'][str(question.id)]:
+                    raise RuntimeError('Connector changed repair component identity; mappings were not replaced.')
                 verify = None
                 try:
                     verify = await connector.verify_library_problem(course_id, library_key, problem_id, metadata=metadata)
@@ -1175,6 +1207,7 @@ class QuestionBankReleasePublishWorkflowService:
                         'problem_id': str(problem_id),
                         'library_key': library_key,
                         'verify': {'ok': False, 'status': 'verify_unavailable'},
+                        'created': result.get('created') is True,
                     })
                     raise RuntimeError(
                         f'Import question {question.id} đã trả component id nhưng bước verify Open edX thất bại: '
@@ -1185,6 +1218,7 @@ class QuestionBankReleasePublishWorkflowService:
                     'problem_id': str(problem_id),
                     'library_key': library_key,
                     'verify': verify,
+                    'created': result.get('created') is True,
                 })
                 if not (isinstance(verify, dict) and verify.get('ok') and verify.get('problem_exists') and verify.get('library_exists', True)):
                     raise RuntimeError(
@@ -1284,8 +1318,13 @@ class QuestionBankReleasePublishWorkflowService:
                 'errors': [],
             }
         except Exception as exc:
-            # Best-effort rollback for components imported in this failed request.
+            # Updating OLX is not creating a disposable component. A forced
+            # repair can touch questions already used by courses; never delete
+            # those on a later import/verification failure. For first publish,
+            # only explicit connector confirmation establishes creation here.
             for row in imported_now:
+                if force_reimport or row.get('created') is not True:
+                    continue
                 try:
                     await connector.delete_library_problem(course_id, row.get('library_key') or library_key, row['problem_id'], metadata={'bank_release_id': release.id, 'rollback': True})
                 except Exception as delete_exc:
@@ -1301,6 +1340,10 @@ class QuestionBankReleasePublishWorkflowService:
                     'publish_failed_at': datetime.utcnow().isoformat(),
                     'error': error_text,
                     'rollback_errors': errors,
+                    'retained_component_ids': [
+                        row['problem_id'] for row in imported_now
+                        if force_reimport or row.get('created') is not True
+                    ],
                     'manual_cleanup_required': bool(errors),
                     'remote_imported_before_failure': len(imported_now),
                 }

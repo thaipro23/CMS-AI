@@ -1077,6 +1077,7 @@ def bank_release_publish_task(job_id: str):
                 actor=job.requested_by,
                 course_id_for_org=payload.get('openedx_course_id_for_org'),
                 force_reimport=bool(payload.get('force_reimport')),
+                repair_expectations=payload.get('repair_expectations'),
                 progress_callback=report_progress,
             )
             if not result.get('ok'):
