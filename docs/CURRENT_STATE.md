@@ -4,6 +4,28 @@
 commit [`f961e76a6bb269e09d93c52ea52b96e7f5b028a5`](https://github.com/thaipro23/CMS-AI/commit/f961e76a6bb269e09d93c52ea52b96e7f5b028a5).
 Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và không xác nhận deploy.
 
+## Hiển thị mã HTML trong câu hỏi — 05/11/2026 (Asia/Ho_Chi_Minh)
+
+Baseline nguồn mới nhất trong phạm vi này: `064efb7c9f756e4dd900c6d0f2456f1cc41cbfd2`;
+nhánh sửa `fix/html-question-literal-display-20261105`, tích hợp vào
+`feat/import-quiz-cms-old-su26`. Các phần cũ bên dưới giữ mốc/bằng chứng riêng.
+
+- Câu WEB3023 có đáp án `<details>` bị CAPA biến thành HTML thật sau XML parse.
+  Exporter bọc và escape text hiển thị; tách rõ grading/attribute/media. Dữ liệu
+  Excel/DB và đáp án đúng giữ nguyên. [Hợp đồng và tái xuất](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md).
+- Local: 45 test import/export pass; toàn bộ 254 câu hợp lệ của workbook xuất
+  được, 884 lựa chọn giữ đúng text, 36 câu có ký tự HTML. File còn 38 câu chưa
+  phù hợp validation import; không tự sửa ý nghĩa/đáp án của các câu đó.
+- Full suite: 1.363 passed/16 skipped/312 lỗi nền, không có tên lỗi mới. CI unit
+  subset 462 passed và release-contract subset 6 passed; integration smoke
+  PostgreSQL/Redis bị chặn do thiếu dịch vụ/env local (2 failed/14 skipped).
+  Không báo CI tích hợp xanh. Ruff/diff checks và 12 test repo_index đạt.
+- Hiệu năng production: CHƯA ĐO; không thêm truy vấn DB/network vào exporter.
+  Browser/Open edX runtime acceptance: CHƯA XÁC MINH; Chromium local thiếu binary.
+- Deploy backend/worker, rồi force reimport đúng Release. Bản copy trong course
+  cần sync Library riêng. Chưa triển khai hoặc chạy job production; không reset
+  Quiz/điểm để chữa hiển thị. Không có migration hay thay đổi CMS-FPT/frontend.
+
 ## Tiến độ và nhãn điều kiện thi — 21/10/2026 (Asia/Ho_Chi_Minh)
 
 Baseline đã đối chiếu GitHub: `73ee71c925ac18daf29bc782c5f06ecc31c75c04`.

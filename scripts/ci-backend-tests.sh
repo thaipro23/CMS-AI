@@ -3,6 +3,8 @@ set -Eeuo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT_DIR/backend"
 pytest -q \
+  app/tests/test_openedx_exporter.py \
+  app/tests/test_openedx_literal_code_display.py \
   app/tests/test_academic_auto_map_invalid_org_repair.py \
   app/tests/test_academic_branch_course_mapping.py \
   app/tests/test_academic_daily_pipeline_ap_mapping.py \

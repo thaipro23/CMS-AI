@@ -26,6 +26,21 @@ def _safe_text(value: object) -> str:
     return escape(str(value or ''), quote=True)
 
 
+def _display_text(value: object) -> str:
+    """Keep plain text literal across CAPA's XML parsing and HTML rendering.
+
+    CAPA stringify_children emits an element's initial .text as raw HTML, but
+    XML-serializes child elements. A span keeps escaped code/entities inside
+    that serialized child rather than exposing decoded text as HTML markup.
+    Grading values and XML attributes must continue using _safe_text instead.
+    """
+    text = str(value or '')
+    escaped = _safe_text(text)
+    if any(char in text for char in '<>&'):
+        return f'<span style="white-space: pre-wrap">{escaped}</span>'
+    return escaped
+
+
 def _compact_text(value: object, max_len: int = 80) -> str:
     text = ' '.join(str(value or '').split())
     return text if len(text) <= max_len else text[: max_len - 1].rstrip() + '…'
@@ -48,7 +63,7 @@ def _build_problem_display_name(question: Question) -> str:
     if is_manually_authored_question(question):
         # Imported topic/source titles often contain the sheet name (e.g. Q1).
         # A question keeps its own title when sampled into another assessment.
-        prompt = re.sub(r'<[^>]+>', ' ', str(question.question_text or ''))
+        prompt = str(question.question_text or '')
         return _compact_text(f'Câu hỏi: {prompt}', 100) if prompt.strip() else 'Câu hỏi'
     for candidate in (question.learning_objective, question.topic, question.source_node_title, question.question_text):
         title = _compact_text(candidate, 90)
@@ -145,18 +160,18 @@ def _media_html(media: Iterable[QuestionMedia] | None) -> str:
 
 
 def _solution_xml(question: Question, *, include_source_in_solution: bool) -> str:
-    explanation = _safe_text(question.explanation)
+    explanation = _display_text(question.explanation)
     source_xml = ''
     if include_source_in_solution and (question.source_ref or question.source_excerpt):
         source_xml = (
-            f'\n        <p><strong>Nguồn:</strong> {_safe_text(question.source_ref)}</p>'
-            f'\n        <p>{_safe_text(question.source_excerpt)}</p>'
+            f'\n        <p><strong>Nguồn:</strong> {_display_text(question.source_ref)}</p>'
+            f'\n        <p>{_display_text(question.source_excerpt)}</p>'
         )
     return f'''    <solution>\n      <div class="detailed-solution">\n        <p>{explanation}</p>{source_xml}\n      </div>\n    </solution>'''
 
 
 def _hints_xml(question: Question) -> str:
-    hints = [_safe_text(item) for item in build_hint_texts(question)]
+    hints = [_display_text(item) for item in build_hint_texts(question)]
     if not hints:
         return ''
     body = '\n'.join(f'    <hint>{item}</hint>' for item in hints)
@@ -179,7 +194,7 @@ def question_to_openedx_olx(
     response = content['response']
     qtype = response['type']
     display_name = _safe_text(_build_problem_display_name(question))
-    prompt = _safe_text(question.question_text)
+    prompt = _display_text(question.question_text)
     media_xml = _media_html(media)
     solution_xml = _solution_xml(question, include_source_in_solution=include_source_in_solution)
     hints_xml = _hints_xml(question)
@@ -192,17 +207,17 @@ def question_to_openedx_olx(
             fallback_feedback = ''
             if not explicit_feedback and index < 4:
                 fallback_feedback = build_choice_feedback(question, chr(ord('A') + index))
-            feedback = _safe_text(_openedx_choice_feedback(explicit_feedback or fallback_feedback))
+            feedback = _display_text(_openedx_choice_feedback(explicit_feedback or fallback_feedback))
             hint = f'<choicehint>{feedback}</choicehint>' if feedback else ''
-            choices.append(f'      <choice correct="{is_correct}">{_safe_text(option["text"])}{hint}</choice>')
+            choices.append(f'      <choice correct="{is_correct}">{_display_text(option["text"])}{hint}</choice>')
         response_xml = f'''  <multiplechoiceresponse>\n    <label>{prompt}</label>\n{media_xml}    <choicegroup type="MultipleChoice">\n{chr(10).join(choices)}\n    </choicegroup>\n{solution_xml}\n  </multiplechoiceresponse>'''
     elif qtype == 'multi_select':
         choices = []
         for option in response['options']:
             is_correct = 'true' if option['correct'] else 'false'
-            feedback = _safe_text(_openedx_choice_feedback(option.get('feedback')))
+            feedback = _display_text(_openedx_choice_feedback(option.get('feedback')))
             hint = f'<choicehint>{feedback}</choicehint>' if feedback else ''
-            choices.append(f'      <choice correct="{is_correct}">{_safe_text(option["text"])}{hint}</choice>')
+            choices.append(f'      <choice correct="{is_correct}">{_display_text(option["text"])}{hint}</choice>')
         response_xml = f'''  <choiceresponse>\n    <label>{prompt}</label>\n{media_xml}    <checkboxgroup>\n{chr(10).join(choices)}\n    </checkboxgroup>\n{solution_xml}\n  </choiceresponse>'''
     elif qtype == 'dropdown_fill':
         raw_prompt = str(question.question_text or '')
@@ -212,7 +227,7 @@ def question_to_openedx_olx(
             str(getattr(question, 'authoring_mode', '') or '').strip().lower() == 'manual'
             or str(getattr(question, 'source_type', '') or '').strip().lower() == 'manual'
         )
-        inline_parts = [_safe_text(raw_segments[0])]
+        inline_parts = [_display_text(raw_segments[0])]
         for blank_index, correct_id in enumerate(response['correct_option_ids']):
             choices = []
             for option in response['options']:
@@ -238,7 +253,7 @@ def question_to_openedx_olx(
                 f'{inline_solution}\n'
                 '      </optionresponse>'
             )
-            inline_parts.append(_safe_text(raw_segments[blank_index + 1]))
+            inline_parts.append(_display_text(raw_segments[blank_index + 1]))
         response_text = ''.join(inline_parts)
         response_xml = (
             '  <div class="acms-dropdown-fill">\n'
