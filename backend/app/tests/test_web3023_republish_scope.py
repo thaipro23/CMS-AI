@@ -19,6 +19,25 @@ def test_accepts_exact_requested_eight_chapters():
     validate_scope(*scope())
 
 
+def test_selects_eight_quiz_chapters_when_offering_also_has_final_test():
+    offering, subject, chapters = scope()
+    quizzes = list(chapters)
+    final = SimpleNamespace(chapter_no=9, subject_offering_id=OFFERING_ID,
+                            subject_id='web', title='Final test')
+    chapters.append(final)
+    selected = validate_scope(offering, subject, chapters)
+    assert selected == quizzes
+    assert final not in selected
+
+
+def test_final_test_cannot_replace_a_missing_quiz_chapter():
+    offering, subject, chapters = scope()
+    chapters[-1] = SimpleNamespace(chapter_no=9, subject_offering_id=OFFERING_ID,
+                                   subject_id='web', title='Final test')
+    with pytest.raises(ValueError):
+        validate_scope(offering, subject, chapters)
+
+
 @pytest.mark.parametrize('change', ['subject', 'offering', 'missing', 'duplicate', 'foreign_chapter'])
 def test_rejects_other_or_incomplete_scope(change):
     offering, subject, chapters = scope()

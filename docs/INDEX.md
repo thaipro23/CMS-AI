@@ -17,7 +17,7 @@ Mốc nguồn: `f961e76a6bb269e09d93c52ea52b96e7f5b028a5`, 15/10/2026.
 | Cột Quiz/subsection | [columns fix 13/10](fixes/QUIZ_SUBSECTION_COLUMNS_2026-10-13.md) |
 | Import Quiz SU26 | [spec/operations](IMPORT_QUIZ_CMS_OLD_SU26.md), [verification record](VERIFICATION_IMPORT_QUIZ_CMS_OLD_SU26.md) |
 | Câu hỏi HTML/CSS bị trống hoặc biến thành widget Details sau publish | [literal OLX và tái xuất nội dung đã publish](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md) |
-| Chạy lại 8 Bài WEB3023 qua K8s, tránh rollback xóa câu có sẵn | [operator CLI và giới hạn](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md#chạy-lại-8-bài-web3023-bằng-k8s-không-qua-bước-enqueue) |
+| Chạy lại Bài 1–8 WEB3023 qua K8s, giữ nguyên Final test | [operator CLI và phạm vi](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md#phạm-vi-8-bài-khi-offering-có-thêm-final-test) |
 | Sửa WEB3023 ngay trên pod hiện tại, không build image | [script độc lập qua stdin](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md#không-build-image-chạy-script-qua-stdin-trong-pod-hiện-tại) |
 | AI worker CrashLoopBackOff / Redis transport VersionMismatch | [pin dependency, build gate và triển khai](fixes/CELERY_REDIS_CLIENT_MISMATCH_2026-11-05.md) |
 | Nhắc tiến độ qua email | [Mail Send](ACADEMIC_PROGRESS_EMAIL_MAILSEND.md) |

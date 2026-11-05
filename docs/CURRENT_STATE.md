@@ -4,6 +4,27 @@
 commit [`f961e76a6bb269e09d93c52ea52b96e7f5b028a5`](https://github.com/thaipro23/CMS-AI/commit/f961e76a6bb269e09d93c52ea52b96e7f5b028a5).
 Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và không xác nhận deploy.
 
+## WEB3023 repair: bỏ Final test khỏi phạm vi — 05/11/2026 (Asia/Ho_Chi_Minh)
+
+Baseline `6d1fed3b2a9cc886b531a55f824a29134ecf1d10`. Output runtime do người
+vận hành cung cấp xác nhận Celery 5.4.0 / Kombu 5.4.2 / redis-py 5.2.1 và
+offering WEB3023_SU26 có 9 chapter: Bài 1–8 đã published, Final test số 9
+không có Release. Đây chưa phải bằng chứng tất cả deployment đã rollout.
+
+- CLI cũ giả định toàn offering chỉ có 8 chapter nên dừng trước tạo job/ghi
+  Library. Đã sửa chọn Bài 1–8 trước khi validate/plan; giữ kiểm tra đủ và duy
+  nhất từng bài, subject/offering, Release, Library/component IDs và active job.
+  Không chọn hoặc sửa Final test, không bỏ guard bằng monkeypatch.
+- Có thể chạy bản CLI đã commit qua stdin trong worker hiện tại, không build
+  image chỉ để cập nhật script vận hành. Dùng cùng task/service được cài trong
+  image đã có, không thay code app trong pod, không sửa dependency/PVC/PYTHONPATH.
+- Regression tái hiện trước sửa: 1 failed/12 passed; sau sửa 22 test scope/
+  rollback/dependency pass. Full suite: 312 failed/1.393 passed/16 skipped, cùng
+  312 tên lỗi so baseline 1.391 passed. Ruff/diff/py_compile đạt; không có Docker/
+  K8s execution local để xác nhận 8 job thật.
+- CHƯA CHẠY 8 RELEASE/CHƯA VERIFY HIỂN THỊ PRODUCTION. Course copy vẫn cần
+  sync Library sau khi job publish hoàn tất. [Cách chạy](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md#phạm-vi-8-bài-khi-offering-có-thêm-final-test).
+
 ## Worker Redis transport — 05/11/2026 (Asia/Ho_Chi_Minh)
 
 Baseline `6bede597dc917d9b3d35dd3a5c35500281fcb1d6`, nhánh nghiệp vụ

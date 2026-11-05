@@ -92,7 +92,39 @@ Redeploy không tự đổi OLX đã lưu trong CMS. Sau deploy:
 
 Trạng thái production: chưa deploy và chưa gửi job sửa nội dung trong phiên này.
 
+## Phạm vi 8 Bài khi offering có thêm Final test
+
+Runtime người vận hành xác nhận: offering WEB3023_SU26 có **9** chapter,
+Bài 1–8 có Release published, chapter 9 là Final test chưa có Release. Điều
+kiện cũ `len(all_active_chapters) == 8` sai với cấu trúc này và đã dừng trước
+tạo job hoặc gọi CMS. Không phải dependency failure hay dữ liệu hỏng.
+
+`republish_web3023_releases.py` hiện chọn chapter_no 1–8 rồi kiểm tra phải đủ
+và duy nhất từng bài. Final test nằm ngoài kế hoạch. Vẫn kiểm tra đúng offering,
+subject, snapshot frozen, Library key, canonical component ID và active jobs;
+Final test không được dùng để thay cho một Bài đang thiếu.
+
+Nếu image đã có source publish/rollback/identity guards nhưng CLI trong image
+còn điều kiện cũ, tải bản CLI mới từ commit đã chốt lên máy vận hành và chạy:
+
+```bash
+set -o pipefail
+kubectl -n openedx exec -i deployment/ai-server-worker -c worker -- \
+  python -u - --execute < /tmp/web3023-republish-reviewed.py \
+  | tee web3023-republish.log
+```
+
+Đây là **CLI chính thức cùng task/service đã cài trong image**, chỉ gửi nội dung
+script qua stdin; không phải script proxy/monkeypatch ở mục lịch sử bên dưới.
+Không cần rebuild chỉ để đổi phạm vi vận hành này, không sửa file app trong pod.
+Kết quả DONE 8/8 LIBRARIES chỉ xác nhận 8 job Library, không tự xác nhận các
+course copy đã được sync. Dừng nếu mapping khác hoặc còn job queued/running.
+
 ## Không build image: chạy script qua stdin trong pod hiện tại
+
+Đây là phương án lịch sử trước khi người dùng chọn build source chính thức.
+Khi worker đã có bộ dependency và publish guards đúng, ưu tiên CLI chính thức
+ở mục phạm vi 8 Bài phía trên; không cần proxy/monkeypatch trong script này.
 
 Đây là cách ưu tiên khi chỉ cần sửa 8 Library WEB3023 ngay trên runtime đang có.
 Tải `backend/republish_web3023_no_build.py` từ **commit đã chốt**, kiểm tra SHA256

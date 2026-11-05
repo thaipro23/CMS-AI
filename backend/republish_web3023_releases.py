@@ -1,7 +1,8 @@
 """Operator repair for the eight existing WEB3023_SU26 Libraries; no course reset.
 
-Run inside the deployed AI worker image. Without --execute this only prints the
-validated plan. Direct task.run retains durable jobs/audit without Redis enqueue.
+Run inside the deployed AI worker image, from a file or Python stdin. Without
+--execute this only prints the validated plan. An extra Final test chapter is
+outside scope. Direct task.run retains durable jobs/audit without Redis enqueue.
 """
 import argparse
 import json
@@ -25,10 +26,14 @@ def validate_scope(offering, subject, chapters):
         raise ValueError('Offering không thuộc WEB3023; không thay đổi dữ liệu.')
     if offering.id != OFFERING_ID or subject.id != offering.subject_id:
         raise ValueError('Sai phiên bản môn học; không thay đổi dữ liệu.')
+    # The offering also contains chapter 9 "Final test". The authorized repair
+    # covers only Bài 1–8; extra chapters must not change that target scope.
+    chapters = [chapter for chapter in chapters if 1 <= chapter.chapter_no <= 8]
     if len(chapters) != 8 or sorted(c.chapter_no for c in chapters) != list(range(1, 9)):
         raise ValueError('Cần đúng 8 Bài, số thứ tự 1–8; không thay đổi dữ liệu.')
     if any(c.subject_offering_id != OFFERING_ID or c.subject_id != subject.id for c in chapters):
         raise ValueError('Bài học khác phiên bản/môn; không thay đổi dữ liệu.')
+    return chapters
 
 
 def require_no_active_job(db, release_id):
@@ -48,7 +53,7 @@ def build_plan(db):
         SubjectChapter.subject_offering_id == OFFERING_ID,
         SubjectChapter.status != 'archived',
     ).order_by(SubjectChapter.chapter_no).all()
-    validate_scope(offering, subject, chapters)
+    chapters = validate_scope(offering, subject, chapters)
     service = VersionedQuestionBankService(db)
     workflow = service._release_publish_workflow()
     plan = []
