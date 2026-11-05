@@ -6,6 +6,21 @@ Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và 
 
 ## Hiển thị mã HTML trong câu hỏi — 05/11/2026 (Asia/Ho_Chi_Minh)
 
+Điều chỉnh theo yêu cầu không build image, baseline `2364183c80d8f1dc281bd88d311c427e723c04eb`:
+- `backend/republish_web3023_no_build.py` chạy qua Python stdin trên pod đang có.
+  Chỉ cần tải script lên máy vận hành rồi `kubectl exec -i ... python -u -`;
+  không cần file/script mới có sẵn trong image, không sửa file app trong pod.
+- Script dùng modules đã cài sẵn; sửa OLX trong bộ nhớ trước khi gọi connector,
+  tái dùng Library đã xác minh, chặn đổi/reset key và xóa component trong process
+  riêng. Giữ kiểm tra 8 Bài, snapshot/ID canonical, khóa và durable job/audit.
+- Đây là cách vận hành ưu tiên cho yêu cầu hiện tại. CLI nằm trong image ở mục
+  sau là phương án khác, không còn là điều kiện bắt buộc để sửa ngay.
+- Kiểm chứng: 8 test mới đạt, 72 test liên quan đạt; full suite 312 failed/
+  1.390 passed/16 skipped, cùng 312 tên lỗi baseline 1.382 passed. Lint script/
+  test mới, py_compile, diff và 12 repo-index tests đạt. Không có runtime DB/CMS.
+- Chưa có quyền/kết nối cluster, chưa chạy production; kiểm chứng local và
+  giới hạn được ghi trong [runbook](fixes/OPENEDX_LITERAL_HTML_DISPLAY_2026-11-05.md#không-build-image-chạy-script-qua-stdin-trong-pod-hiện-tại).
+
 Bổ sung vận hành sau baseline `67003ab83cc8323fbd50b579ff5f824b80442d59`:
 - Người dùng yêu cầu chạy lại 8 Bài của WEB3023_SU26, offering
   `f5604c81-3f72-4fa5-8fc0-5dcefd5a26e0`, sau request publish trả 503. Chưa có

@@ -92,7 +92,51 @@ Redeploy không tự đổi OLX đã lưu trong CMS. Sau deploy:
 
 Trạng thái production: chưa deploy và chưa gửi job sửa nội dung trong phiên này.
 
+## Không build image: chạy script qua stdin trong pod hiện tại
+
+Đây là cách ưu tiên khi chỉ cần sửa 8 Library WEB3023 ngay trên runtime đang có.
+Tải `backend/republish_web3023_no_build.py` từ **commit đã chốt**, kiểm tra SHA256
+trên máy K8s control host, rồi truyền script vào stdin:
+
+```bash
+kubectl -n openedx exec -i deployment/ai-server-worker -- \
+  python -u - < /tmp/web3023-no-build.py
+```
+
+Không cần build/restart/rollout image để chạy cách này. Script không import CLI
+mới từ image; dùng app modules hiện có, chỉ thay connector factory và cấm key
+reset **trong Python process riêng của lệnh exec**, khôi phục khi kết thúc.
+Không sửa file ứng dụng trong pod, không thay cấu hình worker đang phục vụ job.
+
+- Đọc đúng offering `f5604c81-3f72-4fa5-8fc0-5dcefd5a26e0`, đủ 8 Bài và snapshot
+  published. Kiểm tra canonical UUID/component IDs, Library key hiện hành,
+  active job và PostgreSQL lock. Xác minh toàn bộ component trên CMS trước job đầu.
+- Khi tái xuất, bọc text có ký tự HTML tại các CAPA display boundaries bằng
+  phần tử span trước khi serialize XML. Có tác dụng cả khi image còn exporter
+  cũ. Không thay grading attributes/options hoặc ảnh; chạy lại không bọc lặp.
+- Connector proxy chỉ cho cập nhật các component hiện có đã xác minh trong
+  đúng Library. Không gọi native ensure-create Library, chặn native delete dù
+  installed worker còn nhánh rollback cũ; từ chối key reset/ID mới hoặc khác.
+- Dùng `bank_release_publish_task.run` nên giữ trạng thái job/audit/progress
+  thật, không qua Redis enqueue. Không sửa các job cũ để vượt preflight.
+- Lỗi có thể để lại một số OLX đã cập nhật; giữ component, ghi failed, dừng batch.
+  Không rollback bằng xóa câu. Course copy vẫn cần sync Library riêng.
+- Đây là one-off repair; cập nhật source/image theo quy trình bình thường vẫn
+  cần thiết để **các lần publish tương lai** tự dùng exporter đã sửa.
+
+Kiểm chứng local: regression ban đầu 5 failed/1 passed (mất chữ và chưa có guard);
+sau sửa 8 passed, gồm literal XML→HTML, grading values, idempotency, chặn Library/
+component mới hoặc mất, chặn delete, không gọi ensure-create và chặn reset tại
+cả implementation workflow lẫn wrapper rồi khôi phục đúng khi có exception.
+72 test liên quan pass. Full suite: 312 failed/1.390 passed/16 skipped, cùng
+312 tên lỗi so với baseline 1.382 passed. Lint, py_compile/diff và 12 repo-index
+tests đạt. Chưa chạy trên
+K8s/Open edX production; đây không phải xác nhận 8 Bài đã xử lý.
+
 ## Chạy lại 8 Bài WEB3023 bằng K8s, không qua bước enqueue
+
+Phương án này dùng CLI được đóng sẵn trong image mới. Không bắt buộc dùng nó
+cho one-off repair; nếu không build image, dùng script stdin ở mục trên.
 
 Scope được người vận hành chỉ định: subject offering
 `f5604c81-3f72-4fa5-8fc0-5dcefd5a26e0` (WEB3023_SU26). Không suy ra phạm vi
