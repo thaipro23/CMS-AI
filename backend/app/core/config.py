@@ -3,7 +3,7 @@ import re
 from typing import Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     app_version: str = '25.9.16.7.2.64.16.5.7.2.18'
     debug: bool = True
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
+
+    # Inbound AP backend clients. SHA-256 digests and explicit branch/campus scopes only.
+    ap_analytics_clients_json: SecretStr = SecretStr('')
 
     # Production hardening
     # Comma-separated origin whitelist. Never use '*' with credentials in production.

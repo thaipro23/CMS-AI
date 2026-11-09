@@ -50,3 +50,7 @@ Route frontend: `find "page.tsx" --prefix frontend/app --limit 10`, thêm từ k
 Bản đồ chi tiết trước đây được lưu tại
 [docs/history/CODE_INDEX_2026-09-06.md](docs/history/CODE_INDEX_2026-09-06.md);
 các nhận định/kiểm thử trong đó chỉ thuộc mốc lịch sử.
+
+API tích hợp AP chỉ đọc: `backend/app/api/routes/ap_learning_results.py`, auth tại
+`backend/app/core/ap_analytics_auth.py`, query snapshot/roster tại
+`backend/app/services/ap_learning_results.py`; contract: [AP API](docs/AP_LEARNING_RESULTS_API.md).

@@ -4,6 +4,33 @@
 commit [`f961e76a6bb269e09d93c52ea52b96e7f5b028a5`](https://github.com/thaipro23/CMS-AI/commit/f961e76a6bb269e09d93c52ea52b96e7f5b028a5).
 Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và không xác nhận deploy.
 
+## AP đọc kết quả phân tích học tập — 09/11/2026 (UTC)
+
+Baseline source `c3b69c3c021f62e8cbd58b5493c1b89582899d25`. Thêm hai GET
+`/api/integrations/ap/v1/classes/{ap_class_id}/learning-results` và
+`/api/integrations/ap/v1/classes/{ap_class_id}/students/{student_code}/learning-results`.
+Contract, cấp key và rollout: [AP API](AP_LEARNING_RESULTS_API.md).
+
+- Xác thực backend riêng bằng client ID/key, SHA-256 digest cấu hình qua Secret
+  `AP_ANALYTICS_CLIENTS_JSON`; chỉ scope branch/campus được cấp, fail closed.
+  Không dùng session/admin role hoặc credential Dash gọi AP làm credential inbound.
+- Resolve đúng AP class/term/block và môn/cơ sở; giữ case student_code, current
+  roster và effective course mapping. Alias username trùng ở roster/snapshot
+  trả conflict; không lấy tùy ý kết quả người khác.
+- Chỉ đọc snapshot hiện có, DB pagination tối đa 200; whitelist response không
+  raw answers/evidence/peer identity/internal doctor. Missing khác zero/NORMAL;
+  stale giữ nhận định lịch sử kèm trạng thái. Không scan tracking, gọi CMS/AP,
+  enqueue, reset Quiz, cập nhật điểm, thay Redis hoặc migration.
+- 25 test AP + 30 regression analytics/access pass (55/55); Ruff E9/F63/F7/F82,
+  compileall và diff check đạt. Full backend 312 failed/1.418 passed/16 skipped;
+  cả 312 node lỗi khớp baseline, không có lỗi mới. [Bằng chứng và danh sách lỗi](verification/AP_LEARNING_RESULTS_2026-11-09.md).
+  Independent review phát hiện và đã có regression RED→GREEN cho collision
+  roster, blank client ID, cache headers và OpenAPI auth contract.
+- CHƯA DEPLOY/CHƯA CẤP SECRET AP/CHƯA NGHIỆM THU PRODUCTION. Cần build backend,
+  cấu hình scope/key, đối soát AP IDs và đo query plan/latency PostgreSQL thật.
+  SQLite không chứng minh production performance hoặc consistency khi dữ liệu
+  đang thay đổi đồng thời; phân trang offset có thể dịch khi roster đổi.
+
 ## WEB3023 repair: bỏ Final test khỏi phạm vi — 05/11/2026 (Asia/Ho_Chi_Minh)
 
 Baseline `6d1fed3b2a9cc886b531a55f824a29134ecf1d10`. Output runtime do người
