@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     auto_create_tables: bool = True  # dev convenience; production should use Alembic
 
     # Inbound AP backend clients. SHA-256 digests and explicit branch/campus scopes only.
+    ap_analytics_config_json: SecretStr = SecretStr('')
+    # Legacy single-client config accepted during migration; multiple keys fail closed.
     ap_analytics_clients_json: SecretStr = SecretStr('')
 
     # Production hardening

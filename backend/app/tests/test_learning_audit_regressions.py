@@ -8,7 +8,7 @@ from app.models.academic import AcademicClass, AcademicClassStudent, AcademicStu
 from app.models.learning_analytics import (AnalyticsCourseSession, AnalyticsLearningBehaviorSnapshot,
     AnalyticsStudentVideoProgress, AnalyticsStudentSessionProgress)
 from app.services.learning_analytics.analytics_core_service import LearningAnalyticsCoreService
-from app.services.learning_analytics.learning_behavior_classifier import BehaviorInput, classify_learning_behavior
+from app.services.learning_analytics.learning_behavior_classifier import BehaviorInput, classify_learning_behavior, SCORING_VERSION
 
 
 @pytest.fixture
@@ -74,6 +74,7 @@ def test_repeated_high_completion_low_watch_gets_teacher_review_without_quiz_sig
         total_videos_seen=26, total_videos_completed=25,
         avg_video_completion_percent=97.28, avg_estimated_watch_percent=.24,
         avg_video_quality_percent=0, suspicious_video_count=25,
+        measured_low_watch_video_count=25, measured_low_watch_session_count=11,
         extra_reasons=['HIGH_COMPLETION_LOW_WATCH_TIME', 'LARGE_SEEK_JUMP']))
     assert result.classification == 'POSSIBLE_ANOMALY'
     assert result.recommended_action == 'TEACHER_REVIEW'
@@ -100,6 +101,7 @@ def seed_fresh_and_stale_students(db):
         db.add(AcademicClassStudent(class_id='september', student_id=name))
         db.add(AnalyticsLearningBehaviorSnapshot(class_id='september', course_id='course',
             username=name, classification='NORMAL', confidence_score=90, data_quality='GOOD',
+            evidence_json={'scoring_version': SCORING_VERSION},
             calculated_at=datetime.utcnow() - timedelta(days=days)))
     db.commit()
 

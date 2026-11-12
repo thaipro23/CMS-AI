@@ -182,7 +182,7 @@ def test_failed_campus_retries_only_after_every_campus_attempt_is_terminal(
         assert db.query(AcademicTeacherReportJob).count() == 4
 
 
-def test_ho_is_not_created_until_every_campus_in_both_branches_succeeds(
+def test_ho_continues_for_branch_with_complete_campus_reports_after_other_branch_exhausts(
     monkeypatch,
     session_factory,
 ):
@@ -218,10 +218,15 @@ def test_ho_is_not_created_until_every_campus_in_both_branches_succeeds(
     result = runtime.run_daily_academic_pipeline(FakeCelery(), root_id)
 
     with session_factory() as db:
-        assert result["code"] == "stage_retry_exhausted"
-        assert db.query(AcademicBulkOperationJob).filter(
+        assert result['phase'] == 'ho_snapshots'
+        snapshots = db.query(AcademicBulkOperationJob).filter(
             AcademicBulkOperationJob.job_type == "daily_report_snapshot_attempt",
-        ).count() == 0
+        ).all()
+        assert len(snapshots) == 1
+        assert snapshots[0].branch == 'poly'
+        root = db.get(AcademicBulkOperationJob, root_id)
+        assert root.status == 'running'
+        assert root.result_json['failure_details'][0]['target_key'] == targets[1]
 
 
 def test_failed_snapshot_scope_retries_without_rebuilding_successful_scope(
@@ -244,7 +249,9 @@ def test_failed_snapshot_scope_retries_without_rebuilding_successful_scope(
                 term_id=scope["term_id"],
                 branch=scope["branch"],
                 request_json={"snapshot_type": "campus_set", "logical_target_key": target},
-                result_json={"snapshot_ids_by_campus": {scope["campuses"][0]: f"snapshot-{index}"}},
+                result_json={"snapshot_ids_by_campus": {
+                    campus: f"snapshot-{index}-{campus}" for campus in scope['campuses']
+                }},
             )
             db.add(job)
             attempts[target] = job.id

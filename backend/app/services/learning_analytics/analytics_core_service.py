@@ -34,7 +34,7 @@ from app.services.learning_analytics.tracking_event_parser import TrackingParseE
 from app.services.learning_analytics.quiz_attempt_analyzer import EventLike, build_quiz_attempt_features, SERVER_SESSION_PROVENANCE, SERVER_SUBMISSION_PROVENANCE, SERVER_RESET_PROVENANCE
 from app.services.learning_analytics.tracking_log_reader import TrackingLogReader
 from app.services.learning_analytics.loki_tracking_reader import LokiTrackingLogReader
-from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress, measure_playback
+from app.services.learning_analytics.video_watch_calculator import VideoEventInput, calculate_video_progress, measure_playback, has_observed_watch_timing
 from app.services.openedx_client import OpenEdxClient
 from app.services.learning_analytics.presentation import (
     class_behavior_focus_count as _presentation_class_behavior_focus_count,
@@ -2843,9 +2843,25 @@ class LearningAnalyticsCoreService:
             session_rows = sessions_by_user.get(user, [])
             learning_session_rows = [r for r in session_rows if (getattr(r, 'session_type', 'LEARNING_SESSION') or 'LEARNING_SESSION') == 'LEARNING_SESSION']
             completed = [r for r in rows if r.is_completed]
-            suspicious = [r for r in rows if r.is_suspicious]
+            timed_rows = [r for r in rows if has_observed_watch_timing(r.evidence_json)]
+            suspicious = [r for r in timed_rows if r.is_suspicious]
+            # Count actual, measurable cases rather than require a whole-course
+            # average/rate: other videos must not erase repeated seeking.
+            measured_low_watch = []
+            for row in timed_rows:
+                if not row.duration_seconds or row.duration_seconds <= 0 or row.completion_percent is None or row.completion_percent < 90:
+                    continue
+                if row.estimated_watch_percent is None:
+                    continue
+                measurement = (row.evidence_json or {}).get('playback_measurement') or {}
+                observed_media_percent = float(measurement.get('media_seconds') or 0) / row.duration_seconds * 100
+                # Cumulative media advancement may recover watching omitted by
+                # the older play/pause estimator. It must prevent a false flag.
+                if max(row.estimated_watch_percent, observed_media_percent) < 25:
+                    measured_low_watch.append(row)
             avg_completion = round(sum((r.completion_percent or 0) for r in rows) / len(rows), 2) if rows else None
-            avg_watch = round(sum((r.estimated_watch_percent or 0) for r in rows) / len(rows), 2) if rows else None
+            watch_values = [r.estimated_watch_percent for r in timed_rows if r.estimated_watch_percent is not None]
+            avg_watch = round(sum(watch_values) / len(watch_values), 2) if watch_values else None
             quality_values = [r.video_quality_percent for r in rows if r.video_quality_percent is not None]
             avg_quality = round(sum(float(v or 0) for v in quality_values) / len(quality_values), 2) if quality_values else None
             deadline_known = [r for r in learning_session_rows if r.deadline_at]
@@ -2889,6 +2905,9 @@ class LearningAnalyticsCoreService:
                 avg_estimated_watch_percent=avg_watch,
                 avg_video_quality_percent=avg_quality,
                 suspicious_video_count=len(suspicious),
+                measured_low_watch_video_count=len(measured_low_watch),
+                measured_low_watch_session_count=len({r.session_index for r in measured_low_watch if r.session_index is not None}),
+                missing_watch_timing_count=len(rows) - len(timed_rows),
                 long_passive_video_count=len([r for r in rows if (r.long_passive_segment_count or 0) > 0]),
                 passive_watch_seconds=passive_watch_seconds,
                 watch_without_quiz_session_count=watch_without_quiz,

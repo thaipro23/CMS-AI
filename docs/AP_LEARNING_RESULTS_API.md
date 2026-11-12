@@ -4,14 +4,15 @@ AP **backend** gọi Dash qua HTTPS. Dữ liệu lấy từ snapshot phân tích
 Dash; GET không quét tracking log, gọi CMS/AP, cập nhật điểm hay tạo job. API này
 không tự thay đổi lịch phân tích hiện có. Không cần migration hoặc đổi Redis.
 
-## Triển khai và cấp quyền
+## Một key chung cho AP
 
-Build/deploy backend chứa tính năng, rồi cấu hình Secret môi trường
-`AP_ANALYTICS_CLIENTS_JSON` trên **API deployment** (worker không cần secret này).
-Mặc định rỗng: endpoint trả 503, các API nội bộ vẫn dùng RBAC hiện tại.
+Build/deploy backend mới rồi cấu hình Secret môi trường `AP_ANALYTICS_CONFIG_JSON`
+trên **API deployment**. Một key duy nhất dùng chung cho AP đọc Poly/PTCD; không
+cần client ID và không cấp key theo từng hệ. Quyền vẫn giới hạn theo các cặp
+branch/campus khai báo ở phía Dash. Mặc định chưa cấu hình: endpoint trả 503.
 
-Tạo key ngẫu nhiên riêng cho từng AP backend bằng lệnh sau trong môi trường quản
-lý secret an toàn. Không gửi key qua chat, commit, URL, frontend hoặc access log:
+Tạo key một lần trong môi trường quản lý secret an toàn, không gửi key qua chat,
+commit, URL, frontend hoặc access log:
 
 ```python
 import hashlib
@@ -21,40 +22,40 @@ print('AP backend key:', key)
 print('Dash key_sha256:', hashlib.sha256(key.encode()).hexdigest())
 ```
 
-AP lưu key gốc. Dash chỉ lưu digest SHA-256 hex thường trong JSON:
+AP lưu key gốc. Dash lưu digest SHA-256 và toàn bộ scope được cấp trong cùng JSON:
 
 ```json
 {
-  "ap-poly-hn": {
-    "key_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
-    "scopes": [{"branch": "poly", "campuses": ["HN"]}]
-  },
-  "ap-ptcd-dn": {
-    "key_sha256": "REPLACE_WITH_ANOTHER_64_LOWERCASE_HEX_DIGEST",
-    "scopes": [{"branch": "ptcd", "campuses": ["DN"]}]
-  }
+  "key_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
+  "scopes": [
+    {"branch": "poly", "campuses": ["HN", "DN"]},
+    {"branch": "ptcd", "campuses": ["HN", "DN"]}
+  ]
 }
 ```
 
-`campuses` phải dùng **đúng mã đang lưu ở AcademicClass.campus**, không dùng nhãn
-hiển thị. Quyền là từng cặp branch/campus; không suy ra poly/DN từ poly/HN và
-ptcd/DN. Không có wildcard. `branch` chỉ nhận `poly` hoặc `ptcd`. JSON sai/rỗng,
-digest sai định dạng hoặc scopes rỗng làm integration fail closed (503), không
-fallback sang session, role header hoặc `ACADEMIC_AP_API_KEY` outbound.
+Dùng **đúng mã đang lưu ở AcademicClass.campus**, không dùng nhãn hiển thị.
+Không có wildcard. Branch chỉ nhận poly/ptcd. Quyền giữ từng cặp branch/campus:
+chỉ cấp poly/HN và ptcd/DN thì không được đọc poly/DN. JSON sai/rỗng, digest sai
+hoặc scope rỗng làm integration fail closed. Không fallback từ config mới bị
+lỗi sang config cũ, session hay credential `ACADEMIC_AP_API_KEY` outbound.
 
-Muốn quay vòng key không gián đoạn: thêm client ID mới cùng scope và digest mới,
-rollout API, chuyển AP sang ID/key mới, kiểm tra rồi xóa client cũ và rollout lại.
-Thu hồi client bằng cách xóa nó khỏi Secret và rollout API. Không log headers.
-AP phải phân quyền người xem ở phía AP trước khi gọi; key không đại diện cho
-một giáo viên/sinh viên và không được đưa xuống trình duyệt. Phạm vi cấp cho AP
-backend giới hạn dữ liệu hệ/cơ sở mà backend đó được quyền phục vụ.
+Để chuyển tiếp image trước: `AP_ANALYTICS_CLIENTS_JSON` còn được chấp nhận nếu
+chứa **đúng một** client hợp lệ; key đó được dùng chung mà không cần header ID.
+Nhiều client/key cũ trả 503, cần gộp thành config chung rõ ràng. Khi config mới
+có giá trị, config mới là nguồn duy nhất. `X-AP-Client-Id` cũ được bỏ qua.
+
+Quay vòng key bằng cách cập nhật digest trong Secret Dash và key AP ở cùng đợt
+rollout, xác minh rồi loại secret cũ. Không giữ nhiều key hoạt động. Việc chuyển
+key có thể tạo cửa sổ 401 ngắn khi hai bên chưa cùng phiên bản. AP phải phân quyền
+người xem trước khi gọi; key không được đưa xuống trình duyệt hoặc dùng thay cho
+quyền một giáo viên/sinh viên. Cần bảo vệ/thu hồi key ở mọi bên cùng sử dụng.
 
 ## Request
 
 Headers cho cả hai endpoint:
 
 ```http
-X-AP-Client-Id: ap-poly-hn
 X-AP-API-Key: <secret-from-AP-backend>
 ```
 
@@ -101,7 +102,7 @@ Summary tính **toàn roster**, không chỉ trang hiện tại:
 ```
 
 `data_status` là `not_calculated` nếu chưa có snapshot, `partial` khi thiếu/cũ,
-`ready` khi toàn roster có snapshot còn mới. Roster rỗng trả total 0 và
+`ready` khi toàn roster có snapshot còn mới và đúng phiên bản quy tắc. Roster rỗng trả total 0 và
 not_calculated. `classification_counts` chỉ đếm snapshot có thật (cả snapshot cũ).
 
 Mỗi `items[]` có cấu trúc như `result` của endpoint sinh viên:
@@ -120,7 +121,8 @@ Mỗi `items[]` có cấu trúc như `result` của endpoint sinh viên:
   "data_quality": "MISSING",
   "calculated_at": null,
   "last_activity_at": null,
-  "snapshot_stale": true
+  "snapshot_stale": true,
+  "snapshot_recompute_required": false
 }
 ```
 
@@ -133,7 +135,8 @@ Mỗi `items[]` có cấu trúc như `result` của endpoint sinh viên:
 | `classification`, `display_label` | Dùng nhãn đã lưu; mã có thể gồm NORMAL, LIKELY_REAL_LEARNING, POSSIBLE_IDLE, POSSIBLE_ANOMALY, POSSIBLE_CHEATING, INSUFFICIENT_DATA |
 | `reason_codes`, `human_readable_summary`, `recommended_action` | Lý do và hướng xử lý từ kết quả tính sẵn; render như text, không HTML |
 | `calculated_at`, `last_activity_at` | ISO-8601 UTC có timezone; null nghĩa chưa biết |
-| `snapshot_stale` | Dùng ngưỡng `ANALYTICS_SNAPSHOT_STALE_HOURS` giống Dash |
+| `snapshot_stale` | Quá tuổi snapshot hoặc được tính theo bộ quy tắc cũ |
+| `snapshot_recompute_required` | True khi cần tính lại do quy tắc đánh giá thay đổi; giữ kết quả lịch sử, GET không tự ghi/reclassify |
 | `student_code: null` | Roster chưa có RollNumber; AP cần đối soát dữ liệu, không suy từ username/email |
 
 Đây là tín hiệu từ log, không phải điểm học tập, kết luận gian lận hoặc bằng chứng
@@ -145,7 +148,7 @@ có `Cache-Control: no-store`; AP không bật CDN/shared cache cho dữ liệu 
 
 | HTTP | Nghĩa |
 |---|---|
-| 401 | Thiếu/sai ID/key; không dùng Dash login để thay thế |
+| 401 | Thiếu/sai key; không dùng Dash login để thay thế |
 | 403 | Client không được đọc cặp branch/campus yêu cầu |
 | 404 | Lớp không tồn tại/không active trong context hoặc sinh viên không thuộc roster active |
 | 409 | `AP_CLASS_AMBIGUOUS`, `AP_STUDENT_AMBIGUOUS`, `COURSE_MAPPING_MISSING` hoặc `ANALYTICS_IDENTITY_AMBIGUOUS`; đối soát identity/mapping, không tự chọn bản ghi đầu |

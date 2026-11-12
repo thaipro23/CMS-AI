@@ -31,6 +31,7 @@ def _time(value):
 def measure_playback(events, previous=None, historical_data=False) -> dict:
     previous = previous if isinstance(previous, dict) and previous.get('version') == VERSION else {}
     state = {'version': VERSION, 'complete_history': previous.get('complete_history', not historical_data) is True,
+        'resume_continuity_checked': previous.get('resume_continuity_checked') is True if previous else not historical_data,
         'media_seconds': 0., 'wall_seconds': 0., 'passive_media_seconds': 0.,
         'observed_intervals': 0, 'unknown_intervals': 0, 'anchor': None, 'last_time': None,
         'last_events': [], 'last_closed': previous.get('last_closed')}
@@ -65,6 +66,15 @@ def measure_playback(events, previous=None, historical_data=False) -> dict:
             state['complete_history'] = False
         closed = state.get('last_closed') or {}
         closed_time = _time(closed.get('time'))
+        closed_position = _number(closed.get('position'))
+        if (not anchor and ev.event_type in PLAY and closed_time is not None
+                and (position is None or closed_position is None or position > closed_position + 2)):
+            # Playback cannot advance while paused. An unexplained forward
+            # resume may reflect another client or omitted logs, not a seek
+            # observed by this history. Preserve measured segments but reject
+            # the claim that they cover all playback, including across batches.
+            state['complete_history'] = False
+            state['unknown_intervals'] += 1
         companion_stop = (ev.event_type in STOP and closed_time is not None
             and 0 <= (when-closed_time).total_seconds() <= 2 and position is not None
             and position == _number(closed.get('position')))

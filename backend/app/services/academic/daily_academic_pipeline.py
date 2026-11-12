@@ -499,7 +499,24 @@ def _sync_scope_parent_states(
         if parent.status in {'completed', 'failed', 'cancelled', 'canceled'}:
             continue
 
-        if root.status == 'failed' or phase == 'failed':
+        provision = parent.job_type == 'academic_daily_provision_scope'
+        scope_key = f'{parent.branch}:{parent.term_id}'
+        failures = [item for item in state.get('failure_details') or []
+                    if item.get('scope_key') == scope_key
+                    and (not provision or item.get('stage') in {'ap_sync', 'course_mapping', 'account_enrollment'})]
+        provision_done = phase in {'score_update', 'campus_snapshots', 'campus_reports', 'ho_snapshots', 'ho_reports'}
+        if state.get('processing_complete') or (provision and provision_done and failures):
+            parent.status = 'failed' if failures else 'completed'
+            parent.progress_current = parent.progress_total = 100
+            parent.progress_label = '01:00 +07 · hoàn tất; có phạm vi thất bại' if failures else '01:00 +07 · hoàn tất'
+            parent.error_message = '; '.join(str(item['message']) for item in failures)[:4000] if failures else None
+            parent.result_json = json_safe_value({**dict(parent.result_json or {}),
+                'daily_root_job_id': str(root.id), 'failure_details': failures,
+                'partial_success': bool(failures) and _scope_has_success(db, state, scope_key, provision=provision),
+                'processing_complete': True})
+            parent.started_at = parent.started_at or root.started_at or current_time
+            parent.finished_at = parent.finished_at or current_time
+        elif root.status == 'failed' or phase == 'failed':
             parent.result_json = json_safe_value({**dict(parent.result_json or {}),
                 'root_failure_code': state.get('code'), 'daily_root_job_id': str(root.id)})
             parent.status = 'failed'
@@ -1466,6 +1483,11 @@ def _all_stage_jobs(
         for target, job_id in dict(stage_rounds[round_key] or {}).items():
             job = db.get(model, str(job_id))
             if job is not None and str(job.status or '').lower() == 'completed':
+                if stage in {'campus_snapshots', 'ho_snapshots'}:
+                    scope = next((scope for scope in _report_scopes(state) if scope['scope_key'] == target), {})
+                    snapshot_type = 'campus_set' if stage == 'campus_snapshots' else 'ho'
+                    if _snapshot_attempt_status(job, scope, snapshot_type, state) != 'completed':
+                        continue
                 selected[str(target)] = job
     return selected
 
@@ -1557,6 +1579,245 @@ def _attempt_model_for_stage(stage: str):
     if stage in {'campus_reports', 'ho_reports'}:
         return AcademicTeacherReportJob
     return AcademicBulkOperationJob
+
+
+def _scope_has_success(db: Session, state: dict[str, Any], scope_key: str, *, provision: bool) -> bool:
+    scope = dict((state.get('frozen_scopes_after_ap') or {}).get(scope_key) or {})
+    classes = set(scope.get('class_ids') or [])
+    if provision and (state.get('mapped_class_ids_by_scope') or {}).get(scope_key):
+        return True
+    stages = ({'ap_sync', 'account_enrollment'} if provision
+              else {'score_update', 'campus_snapshots', 'campus_reports', 'ho_snapshots', 'ho_reports'})
+    for stage, rounds in dict(state.get('attempts_by_stage') or {}).items():
+        if stage not in stages:
+            continue
+        for attempts in dict(rounds or {}).values():
+            for target, job_id in dict(attempts or {}).items():
+                if target not in classes and target != scope_key and not str(target).startswith(f'{scope_key}:'):
+                    continue
+                job = db.get(_attempt_model_for_stage(stage), str(job_id))
+                if job is None or job.status != 'completed':
+                    continue
+                if stage in {'campus_snapshots', 'ho_snapshots'}:
+                    report_scope = next((scope for scope in _report_scopes(state) if scope['scope_key'] == scope_key), {})
+                    if _snapshot_attempt_status(job, report_scope, 'campus_set' if stage == 'campus_snapshots' else 'ho', state) != 'completed':
+                        continue
+                return True
+    return False
+
+
+def _record_exhausted_targets(
+    db: Session, root: AcademicBulkOperationJob, state: dict[str, Any], *,
+    stage: str, targets: tuple[str, ...], attempts: dict[str, str],
+    blocked_classes: dict[str, list[str]] | None = None,
+) -> None:
+    """Persist business failures without terminating unrelated pipeline work."""
+    scopes = {**_scope_by_key(root), **dict(state.get('frozen_scopes_after_ap') or {})}
+    class_scopes = {str(cid): key for key, scope in scopes.items()
+                    for cid in scope.get('class_ids') or []}
+    details = list(state.get('failure_details') or [])
+    failed = dict(state.get('failures_by_stage') or {})
+    failed[stage] = sorted(set(failed.get(stage) or []) | set(targets))
+    blocked = dict(state.get('blocked_class_ids_by_stage') or {})
+    blocked_ids = set(blocked.get(stage) or [])
+    for target in targets:
+        scope_key = class_scopes.get(target, target.rsplit(':', 1)[0]
+                                     if stage == 'campus_reports' else target)
+        scope = scopes.get(scope_key, {})
+        class_ids = ((blocked_classes or {}).get(target, []) if blocked_classes is not None
+                     else [target] if stage in {'account_enrollment', 'score_update'}
+                     else list(scope.get('class_ids') or []) if stage in {'ap_sync', 'course_mapping'}
+                     else [])
+        blocked_ids.update(class_ids)
+        attempt_id = str(attempts.get(target) or '')
+        attempt = db.get(_attempt_model_for_stage(stage), attempt_id)
+        message = str((state.get('attempt_result_errors') or {}).get(attempt_id)
+                      or getattr(attempt, 'error_message', '') or
+                      f'{stage} failed after retry; inspect attempt {attempt_id}.')
+        detail = {'stage': stage, 'target_key': target, 'scope_key': scope_key,
+                  'attempt_id': attempt_id, 'class_ids': sorted(class_ids),
+                  'message': message[:4000]}
+        if stage == 'course_mapping':
+            payload = dict(getattr(attempt, 'result_json', None) or {})
+            detail['subject_failures'] = [item for item in payload.get('subject_results') or []
+                                          if isinstance(item, dict) and item.get('ok') is False]
+        elif stage in {'campus_snapshots', 'ho_snapshots'}:
+            for campus in scope.get('campuses') or []:
+                _skip_report(state, stage='campus_reports' if stage == 'campus_snapshots' else 'ho_reports',
+                             target=f'{scope_key}:{campus}' if stage == 'campus_snapshots' else scope_key,
+                             reason=f'Blocked dependency: {stage} failed after retry.')
+        details = [item for item in details
+                   if (item.get('stage'), item.get('target_key')) != (stage, target)]
+        details.append(detail)
+    blocked[stage] = sorted(blocked_ids)
+    state.update(failure_details=details, failures_by_stage=failed,
+                 blocked_class_ids_by_stage=blocked)
+
+
+def _mapping_completed_classes(job, scope: dict[str, Any]) -> set[str]:
+    """Only a complete, in-scope result partition can authorize partial progress."""
+    request = dict(job.request_json or {})
+    approved = set(str(cid) for cid in request.get('approved_class_ids', scope.get('class_ids') or []))
+    if not approved.issubset(set(scope.get('class_ids') or [])):
+        return set()
+    result = dict(job.result_json or {})
+    if 'mapped_class_ids' not in result and 'failed_class_ids' not in result:
+        return set()
+    if not isinstance(result.get('mapped_class_ids'), list) or not isinstance(result.get('failed_class_ids'), list):
+        return set()
+    mapped = set(str(cid) for cid in result['mapped_class_ids'])
+    failed = set(str(cid) for cid in result['failed_class_ids'])
+    if mapped & failed or mapped | failed != approved:
+        return set()
+    return mapped
+
+
+def _mapping_attempt_status(job, scope: dict[str, Any], state: dict[str, Any]) -> str:
+    status = str(job.status or '').lower()
+    if status == 'completed':
+        approved = set(dict(job.request_json or {}).get('approved_class_ids', scope.get('class_ids') or []))
+        result = dict(job.result_json or {})
+        if (_mapping_completed_classes(job, scope) != approved
+                or result.get('subject_failed') or result.get('failed_class_count')
+                or result.get('scope_blocked_class_count')):
+            errors = dict(state.get('attempt_result_errors') or {})
+            errors[str(job.id)] = 'Course mapping result partition is invalid or incomplete; inspect the attempt and frozen class scope.'
+            state['attempt_result_errors'] = errors
+            return 'failed'
+    return status
+
+
+def _snapshot_attempt_status(job, scope: dict[str, Any], snapshot_type: str, state: dict[str, Any]) -> str:
+    status = str(job.status or '').lower()
+    if status != 'completed':
+        return status
+    result = dict(job.result_json or {})
+    if snapshot_type == 'campus_set':
+        ids = result.get('snapshot_ids_by_campus')
+        valid = (isinstance(ids, dict) and set(ids) == set(scope.get('campuses') or [])
+                 and all(isinstance(value, str) and value.strip() for value in ids.values())
+                 and len(set(ids.values())) == len(ids))
+    else:
+        value = result.get('ho_snapshot_id')
+        valid = isinstance(value, str) and bool(value.strip())
+    if valid:
+        return status
+    errors = dict(state.get('attempt_result_errors') or {})
+    errors[str(job.id)] = 'Immutable snapshot result is missing or does not match its complete frozen report scope.'
+    state['attempt_result_errors'] = errors
+    return 'failed'
+
+
+def _collect_mapping_progress(db: Session, state: dict[str, Any], scopes: dict[str, Any]) -> dict[str, list[str]]:
+    # Rebuild from durable attempt results, including failed bulk attempts with
+    # successful subjects. A coordinator crash never loses their mapped classes.
+    mapped = {key: set() for key in scopes}
+    for round_attempts in dict((state.get('attempts_by_stage') or {}).get('course_mapping') or {}).values():
+        for key, job_id in dict(round_attempts or {}).items():
+            job = db.get(AcademicBulkOperationJob, str(job_id))
+            if key in scopes and job is not None and job.status in {'completed', 'failed'}:
+                mapped[key].update(_mapping_completed_classes(job, scopes[key]))
+    return {key: sorted(values) for key, values in mapped.items()}
+
+
+def _mapping_retry_scope(db: Session, scope: dict[str, Any], mapped: list[str]) -> dict[str, Any]:
+    remaining = sorted(set(scope.get('class_ids') or []) - set(mapped))
+    if remaining == sorted(scope.get('class_ids') or []):
+        return scope
+    subset = {key: value for key, value in scope.items() if key != 'scope_hash'}
+    subset.update(class_ids=remaining,
+                  class_to_campus={cid: campus for cid, campus in dict(scope.get('class_to_campus') or {}).items()
+                                   if cid in set(remaining)},
+                  subject_ids=sorted({str(sid) for (sid,) in db.query(AcademicClass.subject_id).filter(
+                      AcademicClass.id.in_(remaining)).distinct().all()}))
+    return {**subset, 'scope_hash': _canonical_hash(subset)}
+
+
+def _report_scopes(state: dict[str, Any]) -> list[dict[str, Any]]:
+    if 'reporting_scopes' in state:
+        return [dict(scope) for scope in dict(state['reporting_scopes']).values()]
+    return _frozen_scopes(state)
+
+
+def _skip_report(state: dict[str, Any], *, stage: str, target: str, reason: str) -> None:
+    skipped = list(state.get('skipped_report_targets') or [])
+    if not any(item.get('stage') == stage and item.get('target_key') == target for item in skipped):
+        skipped.append({'stage': stage, 'target_key': target, 'reason': reason})
+    state['skipped_report_targets'] = skipped
+
+
+def _prepare_report_scopes(state: dict[str, Any]) -> None:
+    blocked = {cid for values in dict(state.get('blocked_class_ids_by_stage') or {}).values() for cid in values}
+    reports = {}
+    for scope in _frozen_scopes(state):
+        campus_map = dict(scope.get('class_to_campus') or {})
+        affected = {campus_map[cid] for cid in blocked if cid in campus_map}
+        # Unknown campus provenance cannot justify producing a complete report.
+        if any(cid in blocked and cid not in campus_map for cid in scope.get('class_ids') or []):
+            affected.update(scope.get('campuses') or [])
+        for campus in sorted(affected):
+            _skip_report(state, stage='campus_reports', target=f'{scope["scope_key"]}:{campus}',
+                         reason='Blocked dependency: one or more scoped classes did not complete mapping/provisioning/scoring.')
+        if not affected:
+            reports[str(scope['scope_key'])] = scope
+            continue
+        _skip_report(state, stage='ho_reports', target=str(scope['scope_key']),
+                     reason='Blocked dependency: original campus report set is incomplete.')
+        campuses = [campus for campus in scope.get('campuses') or [] if campus not in affected]
+        if not campuses:
+            continue
+        subset = {key: value for key, value in scope.items() if key != 'scope_hash'}
+        subset.update(campuses=campuses,
+                      class_ids=[cid for cid in scope.get('class_ids') or [] if campus_map.get(cid) in campuses],
+                      class_to_campus={cid: campus for cid, campus in campus_map.items() if campus in campuses})
+        reports[str(scope['scope_key'])] = {**subset, 'scope_hash': _canonical_hash(subset)}
+    state['reporting_scopes'] = reports
+
+
+def _eligible_ho_targets(state: dict[str, Any], completed_reports: dict[str, Any]) -> list[str]:
+    originals = dict(state.get('frozen_scopes_after_ap') or {})
+    targets = []
+    for scope in _report_scopes(state):
+        key = str(scope['scope_key'])
+        expected = list(originals.get(key, scope).get('campuses') or [])
+        if (set(expected) == set(scope.get('campuses') or [])
+                and all(f'{key}:{campus}' in completed_reports for campus in expected)):
+            targets.append(key)
+        else:
+            _skip_report(state, stage='ho_reports', target=key,
+                         reason='Blocked dependency: original campus report set is incomplete.')
+    return targets
+
+
+def _finish_daily_pipeline(db: Session, root: AcademicBulkOperationJob, state: dict[str, Any]) -> dict[str, object]:
+    now = datetime.utcnow()
+    failures = list(state.get('failure_details') or [])
+    partial = bool(failures) and (
+        any(state.get('mapped_class_ids_by_scope', {}).values())
+        or any(_all_stage_jobs(db, state, stage, _attempt_model_for_stage(stage))
+               for stage in dict(state.get('attempts_by_stage') or {}) if stage != 'course_mapping')
+    )
+    state.update(phase='failed' if failures else 'completed', finished_at=now.isoformat(),
+                 processing_complete=True, ok=not failures, partial_success=partial)
+    root.status = 'failed' if failures else 'completed'
+    root.progress_current = root.progress_total = 100
+    root.finished_at = now
+    if failures:
+        first = failures[0]
+        state.update(code='stage_retry_exhausted', failed_stage=first['stage'],
+                     failed_target_keys=sorted({str(item['target_key']) for item in failures}),
+                     failed_scope_keys=sorted({str(item['scope_key']) for item in failures}),
+                     final_attempt_ids={f'{item["stage"]}:{item["target_key"]}': item['attempt_id'] for item in failures})
+        root.progress_label = '01:00 +07 · đã xử lý xong; có phạm vi thất bại'
+        root.error_message = ('; '.join(f'{item["stage"]} exhausted: {item["target_key"]}; {item["message"]}'
+                                      for item in failures))[:4000]
+    else:
+        root.progress_label = '01:00 +07 · hoàn tất đồng bộ và báo cáo'
+        root.error_message = None
+    _save_root_state(db, root, state)
+    return {'ok': not failures, 'status': root.status, 'partial_success': partial,
+            'root_job_id': str(root.id), 'artifacts': state.get('artifacts') or {},
+            **({'code': 'stage_retry_exhausted'} if failures else {})}
 
 
 def _fail_exhausted_stage(
@@ -1828,17 +2089,9 @@ def _run_class_stage(
             'root_job_id': str(root.id),
         }
     if decision.exhausted:
-        state.setdefault('artifacts', {})
-        state['report_job_count'] = 0
-        return _fail_exhausted_stage(
-            db,
-            root,
-            state,
-            stage=stage,
-            failed_target_keys=decision.retry_target_keys,
-            attempt_ids=attempts,
-        )
-    if decision.retry_target_keys:
+        _record_exhausted_targets(db, root, state, stage=stage,
+                                 targets=decision.retry_target_keys, attempts=attempts)
+    elif decision.retry_target_keys:
         retry_round = int(decision.next_round or round_no + 1)
         state['stage_round'] = retry_round
         state['stage_target_keys'] = list(decision.retry_target_keys)
@@ -1858,12 +2111,12 @@ def _run_class_stage(
         for value in dict(state.get('frozen_scopes_after_ap') or {}).values()
         if isinstance(value, dict)
     ]
-    all_class_ids = _round_robin_class_targets(scopes)
     if stage == 'account_enrollment':
+        provisioned = _all_stage_jobs(db, state, stage, AcademicClassSyncJob)
         state.update({
             'phase': 'score_update',
             'stage_round': 0,
-            'stage_target_keys': all_class_ids,
+            'stage_target_keys': [cid for cid in _round_robin_class_targets(scopes) if cid in provisioned],
         })
         _save_root_state(db, root, state)
         return _run_class_stage(
@@ -1882,10 +2135,11 @@ def _run_class_stage(
     )
     score_finished = [job.finished_at for job in score_jobs.values() if job.finished_at]
     source_synced_at = max(score_finished or [datetime.utcnow()]).isoformat()
+    _prepare_report_scopes(state)
     state.update({
         'phase': 'campus_snapshots',
         'stage_round': 0,
-        'stage_target_keys': [str(scope['scope_key']) for scope in scopes],
+        'stage_target_keys': [str(scope['scope_key']) for scope in _report_scopes(state)],
         'source_synced_at': source_synced_at,
         'score_job_ids_by_class': {
             class_id: str(job.id)
@@ -1911,7 +2165,7 @@ def _run_snapshot_stage(
     snapshot_type: str,
 ) -> dict[str, object]:
     stage = 'campus_snapshots' if snapshot_type == 'campus_set' else 'ho_snapshots'
-    scopes = _frozen_scopes(state)
+    scopes = _report_scopes(state)
     scope_index = {str(scope['scope_key']): scope for scope in scopes}
     round_no = max(0, int(state.get('stage_round') or 0))
     targets = [str(value) for value in state.get('stage_target_keys') or []]
@@ -1930,7 +2184,7 @@ def _run_snapshot_stage(
         for target, job_id in attempts.items()
     }
     statuses = {
-        target: str(job.status or '').lower()
+        target: _snapshot_attempt_status(job, scope_index[target], snapshot_type, state)
         for target, job in jobs.items()
         if job is not None
     }
@@ -1970,7 +2224,7 @@ def _run_snapshot_stage(
         db.add(job)
         db.commit()
         attempts[target] = str(job.id)
-        statuses[target] = str(job.status or '').lower()
+        statuses[target] = _snapshot_attempt_status(job, scope, snapshot_type, state)
         _dispatch_snapshot_job(celery_app, db, job)
     _set_stage_attempts(state, stage, round_no, attempts)
     state['stage_attempt_ids'] = dict(attempts)
@@ -1984,15 +2238,9 @@ def _run_snapshot_stage(
         completed = _all_stage_jobs(db, state, stage, AcademicBulkOperationJob)
         artifacts = state.setdefault('artifacts', {})
         artifacts[stage] = {target: str(job.id) for target, job in completed.items()}
-        return _fail_exhausted_stage(
-            db,
-            root,
-            state,
-            stage=stage,
-            failed_target_keys=decision.retry_target_keys,
-            attempt_ids=attempts,
-        )
-    if decision.retry_target_keys:
+        _record_exhausted_targets(db, root, state, stage=stage,
+                                 targets=decision.retry_target_keys, attempts=attempts)
+    elif decision.retry_target_keys:
         retry_round = int(decision.next_round or round_no + 1)
         state['stage_round'] = retry_round
         state['stage_target_keys'] = list(decision.retry_target_keys)
@@ -2023,7 +2271,7 @@ def _run_snapshot_stage(
         state.update({
             'phase': 'campus_reports',
             'stage_round': 0,
-            'stage_target_keys': _campus_targets(scopes),
+            'stage_target_keys': [target for target in _campus_targets(scopes) if target in snapshot_ids_by_target],
             'campus_snapshot_ids_by_target': snapshot_ids_by_target,
             'campus_snapshot_checksums': snapshot_checksums,
         })
@@ -2037,7 +2285,7 @@ def _run_snapshot_stage(
     state.update({
         'phase': 'ho_reports',
         'stage_round': 0,
-        'stage_target_keys': [str(scope['scope_key']) for scope in scopes],
+        'stage_target_keys': [key for key, snapshot_id in ho_snapshot_ids.items() if snapshot_id],
         'ho_snapshot_ids_by_scope': ho_snapshot_ids,
     })
     _save_root_state(db, root, state)
@@ -2056,7 +2304,7 @@ def _run_report_stage(
         _publish_scheduled_export_job,
     )
 
-    scopes = _frozen_scopes(state)
+    scopes = _report_scopes(state)
     scope_index = {str(scope['scope_key']): scope for scope in scopes}
     round_no = max(0, int(state.get('stage_round') or 0))
     targets = [str(value) for value in state.get('stage_target_keys') or []]
@@ -2139,15 +2387,9 @@ def _run_report_stage(
     if decision.exhausted:
         artifacts = state.setdefault('artifacts', {})
         artifacts[stage] = {target: str(job.id) for target, job in completed.items()}
-        return _fail_exhausted_stage(
-            db,
-            root,
-            state,
-            stage=stage,
-            failed_target_keys=decision.retry_target_keys,
-            attempt_ids=attempts,
-        )
-    if decision.retry_target_keys:
+        _record_exhausted_targets(db, root, state, stage=stage,
+                                 targets=decision.retry_target_keys, attempts=attempts)
+    elif decision.retry_target_keys:
         retry_round = int(decision.next_round or round_no + 1)
         state['stage_round'] = retry_round
         state['stage_target_keys'] = list(decision.retry_target_keys)
@@ -2162,28 +2404,14 @@ def _run_report_stage(
         state.update({
             'phase': 'ho_snapshots',
             'stage_round': 0,
-            'stage_target_keys': [str(scope['scope_key']) for scope in scopes],
+            'stage_target_keys': _eligible_ho_targets(state, completed),
         })
         _save_root_state(db, root, state)
         return _run_snapshot_stage(
             celery_app, db, root, state, snapshot_type='ho',
         )
 
-    now = datetime.utcnow()
-    state.update({'phase': 'completed', 'finished_at': now.isoformat(), 'ok': True})
-    root.status = 'completed'
-    root.progress_current = 100
-    root.progress_total = 100
-    root.progress_label = '01:00 +07 · hoàn tất đồng bộ và báo cáo'
-    root.error_message = None
-    root.finished_at = now
-    _save_root_state(db, root, state)
-    return {
-        'ok': True,
-        'status': 'completed',
-        'root_job_id': str(root.id),
-        'artifacts': artifacts,
-    }
+    return _finish_daily_pipeline(db, root, state)
 
 
 def _run_ap_stage(
@@ -2237,15 +2465,9 @@ def _run_ap_stage(
             'root_job_id': str(root.id),
         }
     if decision.exhausted:
-        return _fail_exhausted_stage(
-            db,
-            root,
-            state,
-            stage='ap_sync',
-            failed_target_keys=decision.retry_target_keys,
-            attempt_ids=attempts,
-        )
-    if decision.retry_target_keys:
+        _record_exhausted_targets(db, root, state, stage='ap_sync',
+                                 targets=decision.retry_target_keys, attempts=attempts)
+    elif decision.retry_target_keys:
         state['stage_round'] = int(decision.next_round or round_no + 1)
         state['stage_target_keys'] = list(decision.retry_target_keys)
         retry_round = int(state['stage_round'])
@@ -2270,14 +2492,16 @@ def _run_ap_stage(
             'root_job_id': str(root.id),
         }
 
+    completed_ap = _all_stage_jobs(db, state, 'ap_sync', AcademicSyncRun)
     refreshed_scopes = {
         key: _refresh_scope_after_ap(db, scope)
         for key, scope in scopes.items()
+        if key in completed_ap
     }
     state.update({
         'phase': 'course_mapping',
         'stage_round': 0,
-        'stage_target_keys': list(scopes),
+        'stage_target_keys': list(refreshed_scopes),
         'frozen_scopes_after_ap': refreshed_scopes,
     })
     _save_root_state(db, root, state)
@@ -2296,7 +2520,7 @@ def _run_mapping_stage(
         for key, value in dict(state.get('frozen_scopes_after_ap') or {}).items()
         if isinstance(value, dict)
     }
-    scopes = {key: frozen.get(key, value) for key, value in root_scopes.items()}
+    scopes = frozen if 'frozen_scopes_after_ap' in state else root_scopes
     round_no = max(0, int(state.get('stage_round') or 0))
     targets = [str(value) for value in state.get('stage_target_keys') or []]
     attempts = _stage_attempts(state, 'course_mapping', round_no)
@@ -2314,7 +2538,7 @@ def _run_mapping_stage(
         for target, job_id in attempts.items()
     }
     statuses = {
-        target: str(job.status or '').lower()
+        target: _mapping_attempt_status(job, scopes[target], state)
         for target, job in jobs.items()
         if job is not None
     }
@@ -2324,9 +2548,11 @@ def _run_mapping_stage(
         statuses,
         active_count=active_count,
     ):
-        job = ensure_mapping_attempt(db, root, scopes[target], round_no)
+        mapped = _collect_mapping_progress(db, state, scopes)
+        scope = _mapping_retry_scope(db, scopes[target], mapped.get(target) or []) if round_no else scopes[target]
+        job = ensure_mapping_attempt(db, root, scope, round_no)
         attempts[target] = str(job.id)
-        statuses[target] = str(job.status or '').lower()
+        statuses[target] = _mapping_attempt_status(job, scopes[target], state)
         _dispatch_mapping_job(celery_app, db, job)
     _set_stage_attempts(state, 'course_mapping', round_no, attempts)
     state['stage_attempt_ids'] = dict(attempts)
@@ -2345,16 +2571,14 @@ def _run_mapping_stage(
             'phase': 'course_mapping',
             'root_job_id': str(root.id),
         }
+    mapped = _collect_mapping_progress(db, state, scopes)
+    state['mapped_class_ids_by_scope'] = mapped
     if decision.exhausted:
-        return _fail_exhausted_stage(
-            db,
-            root,
-            state,
-            stage='course_mapping',
-            failed_target_keys=decision.retry_target_keys,
-            attempt_ids=attempts,
-        )
-    if decision.retry_target_keys:
+        _record_exhausted_targets(db, root, state, stage='course_mapping',
+                                 targets=decision.retry_target_keys, attempts=attempts,
+                                 blocked_classes={key: sorted(set(scopes[key].get('class_ids') or []) - set(mapped.get(key) or []))
+                                                  for key in decision.retry_target_keys})
+    elif decision.retry_target_keys:
         retry_round = int(decision.next_round or round_no + 1)
         state['stage_round'] = retry_round
         state['stage_target_keys'] = list(decision.retry_target_keys)
@@ -2364,7 +2588,8 @@ def _run_mapping_stage(
             {},
             active_count=0,
         ):
-            job = ensure_mapping_attempt(db, root, scopes[target], retry_round)
+            scope = _mapping_retry_scope(db, scopes[target], mapped.get(target) or [])
+            job = ensure_mapping_attempt(db, root, scope, retry_round)
             retry_attempts[target] = str(job.id)
             _dispatch_mapping_job(celery_app, db, job)
         _set_stage_attempts(state, 'course_mapping', retry_round, retry_attempts)
@@ -2383,7 +2608,8 @@ def _run_mapping_stage(
     state.update({
         'phase': 'account_enrollment',
         'stage_round': 0,
-        'stage_target_keys': _round_robin_class_targets(list(scopes.values())),
+        'stage_target_keys': [cid for cid in _round_robin_class_targets(list(scopes.values()))
+                              if any(cid in values for values in mapped.values())],
     })
     _save_root_state(db, root, state)
     _publish_root_continuation(celery_app, db, root)

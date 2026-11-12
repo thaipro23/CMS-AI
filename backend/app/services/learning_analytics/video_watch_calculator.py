@@ -15,6 +15,43 @@ PAUSE_STOP_EVENTS = {'pause_video', 'stop_video', 'edx.video.paused', 'edx.video
 SEEK_EVENTS = {'seek_video', 'edx.video.position.changed'}
 
 
+def has_observed_watch_timing(evidence: dict[str, Any] | None) -> bool:
+    """Distinguish observed low playback from a missing play/stop interval.
+
+    New cumulative measurements carry history and resume-continuity coverage.
+    Older rows require retained closed segments with known position continuity
+    from the beginning; a short resumed tail does not establish total watching.
+    """
+    evidence = evidence or {}
+    segments = evidence.get('segments', [])
+    previous_end_position = None
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        start_position = segment.get('start_position_seconds')
+        if (start_position is not None and previous_end_position is not None
+                and start_position > previous_end_position + 2):
+            # A short observed first segment cannot validate a later resumed
+            # segment whose intervening forward progress was never observed.
+            return False
+        previous_end_position = segment.get('end_position_seconds')
+    measurement = evidence.get('playback_measurement')
+    if isinstance(measurement, dict):
+        if measurement.get('complete_history') is not True or measurement.get('unknown_intervals') != 0:
+            return False
+        if measurement.get('resume_continuity_checked') is True:
+            return bool(measurement.get('observed_intervals', 0) > 0
+                        or evidence.get('large_seek_count', 0) > 0)
+    return bool(segments and isinstance(segments[0], dict)
+                and segments[0].get('start_position_seconds') is not None
+                and 0 <= segments[0]['start_position_seconds'] <= 2
+                and all(isinstance(segment, dict) and segment.get('start') and segment.get('end')
+                        and segment.get('seconds', 0) > 0
+                        and segment.get('start_position_seconds') is not None
+                        and segment.get('end_position_seconds') is not None
+                        for segment in segments))
+
+
 @dataclass(slots=True)
 class VideoEventInput:
     event_type: str
@@ -143,6 +180,8 @@ def calculate_video_progress(
                 segments.append({
                     'start': active.event_time.isoformat(),
                     'end': ev.event_time.isoformat(),
+                    'start_position_seconds': active.current_time_seconds,
+                    'end_position_seconds': ev.current_time_seconds,
                     'seconds': round(capped, 2),
                     'raw_seconds': round(plausible, 2),
                     'dynamic_cap_applied': passive,

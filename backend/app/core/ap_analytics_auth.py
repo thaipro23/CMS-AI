@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from fastapi import Header, HTTPException, Security
+from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -28,7 +28,6 @@ class ClientConfig(BaseModel):
 
 @dataclass(frozen=True)
 class APAnalyticsClient:
-    client_id: str
     scopes: tuple[ClientScope, ...]
 
     def assert_scope(self, branch: str, campus: str) -> None:
@@ -37,19 +36,23 @@ class APAnalyticsClient:
 
 
 def get_ap_analytics_client(
-    client_id: str | None = Header(default=None, alias='X-AP-Client-Id', description='Required integration client ID; missing or invalid credentials return 401.'),
     api_key: str | None = Security(key_header),
 ) -> APAnalyticsClient:
     try:
-        raw = json.loads(settings.ap_analytics_clients_json.get_secret_value() or '{}')
-        if not isinstance(raw, dict) or not raw:
-            raise ValueError('Empty configuration')
-        configs = TypeAdapter(dict[Annotated[str, Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')], ClientConfig]).validate_python(raw)
+        shared = settings.ap_analytics_config_json.get_secret_value()
+        if shared:
+            config = ClientConfig.model_validate_json(shared)
+        else:
+            # Accept the previous deployment format only when it contains one key.
+            # Never union scopes from multiple clients or let a header select keys.
+            raw = json.loads(settings.ap_analytics_clients_json.get_secret_value() or '{}')
+            configs = TypeAdapter(dict[Annotated[str, Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')], ClientConfig]).validate_python(raw)
+            if len(configs) != 1:
+                raise ValueError('A single shared key must be configured')
+            config = next(iter(configs.values()))
     except (ValueError, TypeError, ValidationError):
         raise HTTPException(status_code=503, detail='AP_INTEGRATION_NOT_CONFIGURED') from None
-    config = configs.get(client_id or '')
     digest = hashlib.sha256((api_key or '').encode()).hexdigest()
-    valid = hmac.compare_digest(digest, config.key_sha256 if config else '0' * 64)
-    if not client_id or not config or not api_key or not valid:
+    if not api_key or not hmac.compare_digest(digest, config.key_sha256):
         raise HTTPException(status_code=401, detail='INVALID_AP_CREDENTIALS')
-    return APAnalyticsClient(client_id=client_id, scopes=config.scopes)
+    return APAnalyticsClient(scopes=config.scopes)

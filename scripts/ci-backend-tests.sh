@@ -12,6 +12,7 @@ pytest -q \
   app/tests/test_academic_auto_map_invalid_org_repair.py \
   app/tests/test_academic_branch_course_mapping.py \
   app/tests/test_academic_daily_pipeline_ap_mapping.py \
+  app/tests/test_academic_daily_failure_isolation.py \
   app/tests/test_academic_daily_pipeline_provision_score.py \
   app/tests/test_academic_daily_stage_coordinator.py \
   app/tests/test_academic_daily_pipeline_recovery.py \
@@ -39,6 +40,8 @@ pytest -q \
   app/tests/test_v25_9_16_7_2_64_16_5_7_release_contract.py \
   app/tests/test_quiz_tracking_log_integrity.py \
   app/tests/test_learning_audit_regressions.py \
+  app/tests/test_video_behavior_review.py \
+  app/tests/test_ap_learning_results.py \
   app/tests/test_learning_ml_features.py \
   app/tests/test_learning_ml_anomaly.py \
   app/tests/test_learning_ml_workflow.py \

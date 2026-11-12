@@ -6,6 +6,7 @@ Mốc nguồn: `f961e76a6bb269e09d93c52ea52b96e7f5b028a5`, 15/10/2026.
 
 | Cần làm | Chỉ đọc trước |
 |---|---|
+| Daily lỗi một môn dừng toàn bộ, video tua nhanh bị NORMAL, một key AP | [12/11 isolation + video review](fixes/AP_DAILY_VIDEO_REVIEW_2026-11-12.md) |
 | AP hiển thị kết quả phân tích học tập, API key/scope/identity | [AP learning results API](AP_LEARNING_RESULTS_API.md) |
 | Vai trò Senior/Tech Lead, chất lượng code, hiệu năng, cập nhật context mỗi phiên bản | [ENGINEERING_STANDARDS](ENGINEERING_STANDARDS.md) |
 | Trang /jobs lỗi 500 từ PostgreSQL statement timeout | [hotfix read path 16/10](fixes/JOBS_500_DATABASE_HOTPATH_2026-10-16.md) |

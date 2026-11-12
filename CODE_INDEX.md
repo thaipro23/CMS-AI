@@ -54,3 +54,9 @@ các nhận định/kiểm thử trong đó chỉ thuộc mốc lịch sử.
 API tích hợp AP chỉ đọc: `backend/app/api/routes/ap_learning_results.py`, auth tại
 `backend/app/core/ap_analytics_auth.py`, query snapshot/roster tại
 `backend/app/services/ap_learning_results.py`; contract: [AP API](docs/AP_LEARNING_RESULTS_API.md).
+
+Daily failure isolation: `daily_academic_pipeline.py` giữ failed target/class IDs và
+report dependency; regression `test_academic_daily_failure_isolation.py`. Video
+coverage/review: `video_playback.py`, `video_watch_calculator.py`, classifier audit_v3;
+nhãn chung UI tại `frontend/lib/learning-behavior-labels.ts`.
+Runbook: [AP/daily/video 12/11](docs/fixes/AP_DAILY_VIDEO_REVIEW_2026-11-12.md).

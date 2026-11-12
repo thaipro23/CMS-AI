@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.models.academic import (AcademicBlock, AcademicClass, AcademicClassCourseMapping,
     AcademicClassStudent, AcademicCourseMapping, AcademicStudent, AcademicSubject, AcademicTerm)
 from app.models.learning_analytics import AnalyticsLearningBehaviorSnapshot as Snapshot
+from app.services.learning_analytics.learning_behavior_classifier import SCORING_VERSION
 
 KEY = 'test-key-with-more-than-thirty-two-bytes-12345'
 COURSE = 'course-v1:FPL+WEB3023+FA26'
@@ -56,9 +57,9 @@ def api(monkeypatch):
             db.add(AcademicClassStudent(class_id='class', student_id=f's{i}'))
         db.add_all([
             Snapshot(class_id='class', course_id=COURSE, username='user0', classification='NORMAL',
-                     confidence_score=0., data_quality='GOOD'),
+                     confidence_score=0., data_quality='GOOD', evidence_json={'scoring_version': SCORING_VERSION}),
             Snapshot(class_id='class', course_id=COURSE, username='user1', classification='POSSIBLE_IDLE',
-                     calculated_at=datetime.utcnow() - timedelta(days=365), evidence_json={'answer_json': 'secret'}),
+                     calculated_at=datetime.utcnow() - timedelta(days=365), evidence_json={'answer_json': 'secret', 'scoring_version': SCORING_VERSION}),
             Snapshot(class_id='other', course_id=COURSE, username='user2', classification='NORMAL'),
             Snapshot(class_id='class', course_id='other-course', username='user3', classification='NORMAL'),
             Snapshot(class_id='class', course_id=COURSE, username='outsider', classification='NORMAL')])
@@ -72,7 +73,7 @@ def api(monkeypatch):
 
 
 @pytest.mark.parametrize('headers', [{}, {'X-User-Role': 'admin'},
-    {**HEADERS, 'X-AP-API-Key': 'wrong'}, {**HEADERS, 'X-AP-Client-Id': 'unknown'}])
+    {**HEADERS, 'X-AP-API-Key': 'wrong'}])
 def test_credentials_required(api, headers):
     assert api[0].get(BASE + '/learning-results', params=PARAMS, headers=headers).status_code == 401
 
@@ -203,4 +204,62 @@ def test_openapi_does_not_claim_client_id_is_an_alternative_to_the_key(api):
     spec = api[0].get('/openapi.json').json()
     operation = spec['paths']['/api/integrations/ap/v1/classes/{ap_class_id}/learning-results']['get']
     assert operation['security'] == [{'APAPIKey': []}]
-    assert any(p['name'] == 'X-AP-Client-Id' and p['in'] == 'header' for p in operation['parameters'])
+    assert not any(p['name'] == 'X-AP-Client-Id' for p in operation['parameters'])
+
+
+def test_shared_key_alone_authenticates_without_client_id(api):
+    r = api[0].get(BASE + '/learning-results', params=PARAMS, headers={'X-AP-API-Key': KEY})
+    assert r.status_code == 200
+
+
+def test_shared_key_configuration_is_available():
+    from app.core.config import Settings
+    assert 'ap_analytics_config_json' in Settings.model_fields
+
+
+@pytest.mark.parametrize('branch,campus', [('poly', 'HN'), ('ptcd', 'DN')])
+def test_one_shared_key_covers_both_explicit_scopes(api, monkeypatch, branch, campus):
+    from app.core.ap_analytics_auth import get_ap_analytics_client
+    config = {'key_sha256': hashlib.sha256(KEY.encode()).hexdigest(),
+              'scopes': [{'branch': 'poly', 'campuses': ['HN']}, {'branch': 'ptcd', 'campuses': ['DN']}]}
+    monkeypatch.setattr(settings, 'ap_analytics_config_json', SecretStr(json.dumps(config)))
+    # Same API credential grants only the declared branch/campus pairs.
+    client = get_ap_analytics_client(KEY)
+    client.assert_scope(branch, campus)
+    r = api[0].get(BASE + '/learning-results', params=PARAMS, headers={'X-AP-API-Key': KEY})
+    assert r.status_code == 200
+
+
+def test_bad_shared_config_never_falls_back_to_legacy_key(api, monkeypatch):
+    monkeypatch.setattr(settings, 'ap_analytics_config_json', SecretStr('invalid'))
+    assert api[0].get(BASE + '/learning-results', params=PARAMS, headers=HEADERS).status_code == 503
+
+
+def test_multiple_legacy_keys_fail_closed(api, monkeypatch):
+    one = {'key_sha256': hashlib.sha256(KEY.encode()).hexdigest(),
+           'scopes': [{'branch': 'poly', 'campuses': ['HN']}]}
+    monkeypatch.setattr(settings, 'ap_analytics_clients_json', SecretStr(json.dumps({'one': one, 'two': one})))
+    assert api[0].get(BASE + '/learning-results', params=PARAMS, headers=HEADERS).status_code == 503
+
+
+def test_client_id_header_does_not_choose_another_key(api):
+    r = api[0].get(BASE + '/learning-results', params=PARAMS,
+                  headers={**HEADERS, 'X-AP-Client-Id': 'ignored-legacy-header'})
+    assert r.status_code == 200
+
+
+
+def test_old_scoring_rules_are_stale_in_rows_and_whole_class_summary(api):
+    client, db, _ = api
+    snapshot = db.query(Snapshot).filter(Snapshot.class_id == 'class', Snapshot.username == 'user0').one()
+    snapshot.evidence_json = {'scoring_version': 'learning_behavior_audit_v2', 'answer_json': 'private'}
+    db.commit()
+    result = client.get(BASE + '/learning-results', params=PARAMS, headers={'X-AP-API-Key': KEY})
+    assert result.status_code == 200
+    data = result.json()
+    assert data['summary']['stale_snapshot_count'] == 2
+    assert data['items'][0]['status'] == 'stale'
+    assert data['items'][0]['snapshot_recompute_required'] is True
+    assert data['items'][0]['classification'] == 'NORMAL'  # historical result, no reclassification on GET
+    assert 'BEHAVIOR_RULES_UPDATED' in data['items'][0]['reason_codes']
+    assert not any(value in result.text for value in ['answer_json', 'scoring_version', 'private'])

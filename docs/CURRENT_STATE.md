@@ -4,6 +4,43 @@
 commit [`f961e76a6bb269e09d93c52ea52b96e7f5b028a5`](https://github.com/thaipro23/CMS-AI/commit/f961e76a6bb269e09d93c52ea52b96e7f5b028a5).
 Tài liệu này là mốc bàn giao, không tự cập nhật theo catalog và không xác nhận deploy.
 
+## Một AP key, daily lỗi theo scope, video review — 12/11/2026 (Asia/Ho_Chi_Minh)
+
+Baseline `9164170e3507782a033f8fc28d4c163490673635`. [Runbook và quyết định](fixes/AP_DAILY_VIDEO_REVIEW_2026-11-12.md), [AP contract mới](AP_LEARNING_RESULTS_API.md).
+
+- AP dùng một `X-AP-API-Key`, không cần client ID. Secret
+  `AP_ANALYTICS_CONFIG_JSON` chứa digest và scope branch/campus rõ ràng. Legacy
+  clients JSON chỉ được chấp nhận khi đúng một client. Config mới sai không fallback.
+- Daily coordinator không còn biến một lỗi map môn thành dừng mọi scope. Giữ
+  class map thành công qua retry, cô lập dependency failure, làm tiếp target lành;
+  báo cáo campus/HO thiếu đầu vào không được ghi thành đầy đủ. Validate partition
+  mapping và snapshot metadata (kể cả completed+{}); giữ failure_details, nguyên
+  nhân/môn/lớp, artifacts, truthful partial outcome của root và scope parent.
+- Video: nguyên nhân score35 vẫn NORMAL là trọng số video max45 và escape hatch
+  bị trung bình toàn course làm loãng. Nay >=3 video có phép đo đủ căn cứ, hoàn
+  thành>=90% nhưng xem<25%, trải >=2 Bài/session nhận TEACHER_REVIEW. Không tự
+  kết luận gian lận. Thiếu timing/history hoặc nhảy vị trí không quan sát được
+  khi pause/resume là dữ liệu thiếu; dùng marker resume_continuity_checked, giữ
+  outer video_playback_v1 để tương thích ML. Marker cũ không tự nâng cấp bởi tail.
+- Snapshot behavior audit_v3: bản cũ/không rõ version stale và cần tính lại; GET
+  không mutate/reclassify. AP stale summary thống nhất với rows, chỉ đọc version
+  scalar trong JSON, không hydrate/trả raw evidence/answers. UI hai trang dùng
+  chung tên dấu hiệu tiếng Việt, giữ lý do trung tính, điểm /100 và giây dưới phút.
+- Kiểm chứng: full backend **312 failed/1.464 passed/16 skipped**, exact312 node
+  lỗi trùng baseline, không lỗi mới. 32 AP tests, 21 daily isolation tests nằm
+  trong các scoped suites; frontend **46 tests pass**, lint/typecheck/production
+  build đạt. CI source563pass + release6pass/1deselected; integration local
+  2fail/14skip do thiếu PostgreSQL/REDIS_URL như baseline. Ruff/compileall/diff
+  check đạt. Independent review có các ca
+  snapshot completed thiếu đầu ra, paused-gap video và parent partial-success
+  sai; đã bổ sung regression RED→GREEN. [Bằng chứng](verification/AP_DAILY_VIDEO_2026-11-12.md).
+- CHƯA DEPLOY/CHƯA THAY SECRET/CHƯA TÍNH LẠI PRODUCTION. Cần build backend,
+  worker và frontend, cấp key AP, tính lại analytics theo job và nghiệm thu thực tế.
+  Job failed a687bbda-c9e6-4620-b3c7-d70d3d8c50b7 không có business-resume API;
+  giữ terminal/idempotency, bản sửa áp dụng root active/mới và lịch mới sau deploy.
+  PSY1013 vẫn cần đúng một course hoặc map thủ công; không chọn bừa. Không có
+  migration/Redis flush/reset Quiz/PVC hoặc sửa status DB trong phiên này.
+
 ## AP đọc kết quả phân tích học tập — 09/11/2026 (UTC)
 
 Baseline source `c3b69c3c021f62e8cbd58b5493c1b89582899d25`. Thêm hai GET

@@ -30,6 +30,7 @@ import {
 } from '../../../../lib/api'
 import { AcademicAssignmentDefenseScore, AcademicBulkOperationJob, AcademicClass, AcademicClassSyncJob, AcademicProgressEmailPreview, AcademicTeacherReportJob, AcademicLearningComponentScore, AcademicLearningSummary, AcademicMappingSummary, AcademicStudent, AnalyticsLearningBehaviorRow, AnalyticsLearningBehaviorSummary, AnalyticsStudentLearningBehaviorDetail, AnalyticsStudentSessionProgress } from '../../../../types'
 import { formatVNDate, formatVNDateTime, formatVNTimeDate } from '../../../../lib/time'
+import { learningReasonTexts, learningScoreText, watchDurationText } from '../../../../lib/learning-behavior-labels'
 import { maskEmailForDisplay } from '../../../../lib/privacy'
 import { useDebouncedValue } from '../../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../../lib/runtime'
@@ -135,6 +136,7 @@ function shouldSuggestFullCmsSync(student: AcademicStudent) {
 }
 
 function safeBehaviorLabel(row?: AnalyticsLearningBehaviorRow | null) {
+  if (row?.snapshot_recompute_required) return 'Cần tính lại nhận định'
   const classification = String(row?.classification || '').toUpperCase()
   if (classification === 'LIKELY_REAL_LEARNING') return 'Có dấu hiệu học thật'
   if (classification === 'POSSIBLE_IDLE') return 'Có khả năng treo máy'
@@ -158,14 +160,6 @@ function recommendedActionLabel(value?: string | null) {
   if (action === 'CHECK_WITH_STUDENT') return 'Trao đổi thêm'
   if (action === 'REQUIRE_ADDITIONAL_ACTIVITY') return 'Yêu cầu học bổ sung'
   return 'Kiểm tra lại sau'
-}
-function compactDuration(seconds?: number | null) {
-  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds <= 0) return 'N/A'
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes} phút`
-  const hours = Math.floor(minutes / 60)
-  const remain = minutes % 60
-  return remain ? `${hours} giờ ${remain} phút` : `${hours} giờ`
 }
 
 function sessionStatusLabel(value?: string | null) {
@@ -959,7 +953,7 @@ function ClassDetailContent() {
         </div>
       </div>
     } },
-    { key: 'online', header: 'Học online', kind: 'status', minWidth: 210, priority: 'important', hideable: true, render: (student) => { const behavior = studentBehavior(student); return behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}><span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span><small>Độ tin cậy: {Math.round(behavior.confidence_score || 0)}%</small><small>{recommendedActionLabel(behavior.recommended_action)}</small></button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span> } },
+    { key: 'online', header: 'Học online', kind: 'status', minWidth: 210, priority: 'important', hideable: true, render: (student) => { const behavior = studentBehavior(student); return behavior ? <button className="online-behavior-button" type="button" onClick={() => openBehaviorDetail(behavior)}><span className={behaviorStatusClass(behavior)}>{safeBehaviorLabel(behavior)}</span><small>Điểm tin cậy: {learningScoreText(behavior.confidence_score)}</small><small>{behavior.snapshot_recompute_required ? 'Cần tính lại phân tích' : recommendedActionLabel(behavior.recommended_action)}</small></button> : <span className="status-pill neutral">Chưa đủ dữ liệu</span> } },
     { key: 'exam', header: 'Điều kiện thi', kind: 'status', minWidth: 220, priority: 'important', hideable: true, render: (student) => {
       const readiness = examReadiness(student)
       return <div className="exam-policy-cell">{/* ACMS_ASSIGNMENT_SCORE_DISPLAY_DISABLED_2026_10_02: Assignment được theo dõi riêng. */}<span className={readiness.className}>{readiness.label}</span><small>{readiness.reason}</small></div>
@@ -1218,23 +1212,25 @@ function ClassDetailContent() {
       className="online-behavior-modal online-behavior-deadline-modal"
     >
       {selectedBehavior ? <>
+        {selectedBehavior.snapshot_stale && <ContentNotice tone="warning">{selectedBehavior.snapshot_recompute_required ? 'Nhận định đang dùng quy tắc cũ. Cần tính lại phân tích học online trước khi sử dụng kết luận hoặc hành động đề xuất.' : 'Kết quả đã cũ. Cần tính lại phân tích trước khi sử dụng.'}</ContentNotice>}
         <div className="quiz-detail-grid online-behavior-grid">
           <div><span>Nhận định</span><b>{safeBehaviorLabel(selectedBehavior)}</b></div>
-          <div><span>Độ tin cậy</span><b>{Math.round(selectedBehavior.confidence_score || 0)}%</b></div>
-          <div><span>Điểm học thật</span><b>{Math.round(selectedBehavior.real_learning_score || 0)}%</b></div>
-          <div><span>Điểm treo máy</span><b>{Math.round(selectedBehavior.idle_score || 0)}%</b></div>
-          <div><span>Điểm bất thường</span><b>{Math.round(selectedBehavior.suspicious_score || 0)}%</b></div>
+          <div><span>Điểm tin cậy</span><b>{learningScoreText(selectedBehavior.confidence_score)}</b></div>
+          <div><span>Điểm học thật</span><b>{learningScoreText(selectedBehavior.real_learning_score)}</b></div>
+          <div><span>Điểm treo máy</span><b>{learningScoreText(selectedBehavior.idle_score)}</b></div>
+          <div><span>Điểm bất thường</span><b>{learningScoreText(selectedBehavior.suspicious_score)}</b></div>
           <div><span>Chất lượng dữ liệu</span><b>{selectedBehavior.data_quality || 'MISSING'}</b></div>
           <div><span>Lần học cuối</span><b>{selectedBehavior.last_activity_at ? formatVNDateTime(selectedBehavior.last_activity_at) : 'N/A'}</b></div>
           <div><span>Tính lúc</span><b>{selectedBehavior.calculated_at ? formatVNDateTime(selectedBehavior.calculated_at) : 'N/A'}</b></div>
         </div>
+        <small>Các điểm là tín hiệu trên thang 0–100, không phải xác suất hoặc kết luận vi phạm. Thời gian xem ước tính cần đối chiếu với chất lượng log.</small>
         <div className="online-behavior-evidence">
           <b>Tóm tắt</b>
           <p>{selectedBehavior.human_readable_summary || 'Chưa đủ dữ liệu để tóm tắt.'}</p>
           <b>Dấu hiệu chính</b>
-          <p>{selectedBehavior.reason_codes?.length ? selectedBehavior.reason_codes.join(', ') : 'Chưa có dấu hiệu nổi bật.'}</p>
+          {selectedBehavior.reason_codes?.length ? <ul>{learningReasonTexts(selectedBehavior.reason_codes).map((label) => <li key={label}>{label}</li>)}</ul> : <p>Chưa có dấu hiệu nổi bật.</p>}
           <b>Hành động đề xuất</b>
-          <p>{recommendedActionLabel(selectedBehavior.recommended_action)}</p>
+          <p>{selectedBehavior.snapshot_recompute_required ? 'Cần tính lại phân tích' : recommendedActionLabel(selectedBehavior.recommended_action)}</p>
         </div>
 
         <div className="online-deadline-section">
@@ -1260,12 +1256,12 @@ function ClassDetailContent() {
                     <div className="online-session-metrics">
                       <span>Video: {session.videos_completed || 0}/{session.total_videos || 0}</span>
                       <span>Hoàn thành TB: {percentLabel(session.avg_video_completion_percent)}</span>
-                      <span>Thời gian xem: {compactDuration(session.estimated_watch_seconds)}</span>
+                      <span>Thời gian xem ước tính: {watchDurationText(session.estimated_watch_seconds)}</span>
                       <span>Quiz cuối Bài: {session.quiz_completed ? 'Đạt' : session.quiz_attempted ? 'Đã làm' : 'Chưa làm'}</span>
                       <span>Deadline: {formatDateOnly(session.deadline_at)} · {deadlineSourceLabel(session.deadline_source)}</span>
                     </div>
                     <small>{session.completed_before_deadline ? 'Hoàn thành trước deadline' : session.completed_late ? 'Hoàn thành sau deadline' : 'Chưa xác nhận hoàn thành theo deadline'}</small>
-                    {session.reason_codes?.length ? <small>Dấu hiệu: {session.reason_codes.slice(0, 4).join(', ')}</small> : null}
+                    {session.reason_codes?.length ? <ul>{learningReasonTexts(session.reason_codes).map((label) => <li key={label}>{label}</li>)}</ul> : null}
                   </div>)}
                 </div>
               </div>

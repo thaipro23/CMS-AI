@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+SCORING_VERSION = 'learning_behavior_audit_v3'
+
 DISPLAY_LABELS = {
     'LIKELY_REAL_LEARNING': 'Có dấu hiệu học thật',
     'POSSIBLE_IDLE': 'Có khả năng treo máy',
@@ -46,6 +48,9 @@ class BehaviorInput:
     avg_estimated_watch_percent: float | None = None
     avg_video_quality_percent: float | None = None
     suspicious_video_count: int = 0
+    measured_low_watch_video_count: int = 0
+    measured_low_watch_session_count: int = 0
+    missing_watch_timing_count: int = 0
     long_passive_video_count: int = 0
     passive_watch_seconds: float = 0.0
     watch_without_quiz_session_count: int = 0
@@ -100,6 +105,8 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
         reasons.append('MISSING_DEADLINE_MAPPING')
     if inp.missing_duration_count:
         reasons.append('MISSING_VIDEO_DURATION')
+    if inp.missing_watch_timing_count:
+        reasons.append('MISSING_WATCH_TIMING')
 
     if inp.quiz_before_video_count:
         reasons.append('QUIZ_BEFORE_VIDEO')
@@ -126,7 +133,7 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
     data_quality = 'GOOD'
     if inp.total_events <= 0 or inp.total_videos_seen <= 0:
         data_quality = 'MISSING'
-    elif inp.missing_session_mapping or inp.missing_deadline_mapping or inp.missing_duration_count:
+    elif inp.missing_session_mapping or inp.missing_deadline_mapping or inp.missing_duration_count or inp.missing_watch_timing_count:
         data_quality = 'LOW'
     elif inp.total_events < 5 or inp.sessions_started <= 1:
         data_quality = 'PARTIAL'
@@ -177,12 +184,9 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
     # telemetry must not make strong, measurable video evidence look NORMAL.
     repeated_low_watch = bool(
         inp.total_events >= 10 and inp.sessions_started >= 2
-        and inp.total_videos_seen >= 3 and inp.total_videos_completed >= 3
-        and not inp.missing_duration_count
-        and not inp.missing_session_mapping and not inp.only_caption_events
-        and inp.avg_video_completion_percent is not None and inp.avg_video_completion_percent >= 90
-        and inp.avg_estimated_watch_percent is not None and inp.avg_estimated_watch_percent < 25
-        and suspicious_video_rate >= .8
+        and inp.measured_low_watch_video_count >= 3
+        and inp.measured_low_watch_session_count >= 2
+        and not inp.only_caption_events
     )
     if repeated_low_watch:
         reasons.append('REPEATED_HIGH_COMPLETION_LOW_WATCH')
@@ -227,10 +231,13 @@ def classify_learning_behavior(inp: BehaviorInput) -> BehaviorResult:
         human_readable_summary=' '.join(summary_parts),
         recommended_action=RECOMMENDED_ACTIONS[classification],
         evidence={
-            'scoring_version': 'learning_behavior_audit_v2',
+            'scoring_version': SCORING_VERSION,
             'confidence_is_probability': False,
             'video_before_quiz_count': video_before_quiz_count,
             'repeated_high_completion_low_watch': repeated_low_watch,
+            'measured_low_watch_video_count': inp.measured_low_watch_video_count,
+            'measured_low_watch_session_count': inp.measured_low_watch_session_count,
+            'missing_watch_timing_count': inp.missing_watch_timing_count,
             'total_events': inp.total_events,
             'total_sessions': inp.total_sessions,
             'sessions_started': inp.sessions_started,

@@ -28,6 +28,7 @@ class APLearningResult(BaseModel):
     calculated_at: str | None
     last_activity_at: str | None
     snapshot_stale: bool
+    snapshot_recompute_required: bool
 
 
 class APClassSummary(BaseModel):

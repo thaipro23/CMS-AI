@@ -46,6 +46,7 @@ import {
   AnalyticsStudentSessionProgress,
   AnalyticsQuizAttemptDetail,
 } from '../../../types'
+import { learningReasonText as reasonText } from '../../../lib/learning-behavior-labels'
 import { formatVNDateTime } from '../../../lib/time'
 import { useDebouncedValue } from '../../../lib/useDebouncedValue'
 import { SHOW_DIAGNOSTICS_UI } from '../../../lib/runtime'
@@ -395,29 +396,6 @@ function campusLabel(campus: string, campuses: AcademicCampus[]) {
   return found ? `${found.campus_code?.toUpperCase()} · ${found.campus_name}` : campus.toUpperCase()
 }
 
-function reasonText(code?: string | null) {
-  const value = String(code || '').toUpperCase()
-  if (!value) return ''
-  const descriptions: Record<string, string> = {
-    REPEATED_HIGH_COMPLETION_LOW_WATCH: 'Nhiều video hoàn thành cao nhưng thời gian xem ước tính rất thấp; cần giáo viên kiểm tra.',
-    WATCH_THEN_ATTEMPT_PROBLEM: 'Có mốc xem video và thời gian xem trước lần nộp Quiz.',
-    NO_VIDEO_ACTIVITY: 'Chưa ghi nhận đủ hoạt động xem video.',
-    STALE_BEHAVIOR_SNAPSHOT: 'Kết quả đã cũ; cần tính lại lớp trước khi sử dụng.',
-    MISSING_CONTENT_VERSION: 'Thiếu phiên bản nội dung tại lúc nộp; chưa thể đối chiếu đáp án.',
-    MISSING_QUESTION_IDENTITY: 'Thiếu định danh câu hỏi để so sánh đúng câu giữa sinh viên.',
-    INSUFFICIENT_COMPARABLE_QUESTIONS: 'Chưa có đủ câu hỏi có thể đối chiếu.',
-    BASELINE_TOO_SMALL: 'Chưa đủ người cùng trả lời câu hỏi để làm nhóm tham chiếu.',
-    INSUFFICIENT_INDEPENDENT_TIMING: 'Thiếu mốc nộp độc lập; nộp cả bài một lần không xác định được thời gian từng câu.',
-  }
-  if (descriptions[value]) return descriptions[value]
-  if (value.includes('INSUFFICIENT') || value.includes('MISSING')) return 'Thiếu dữ liệu để kết luận chắc chắn.'
-  if (value.includes('IDLE') || value.includes('LOW_INTERACTION')) return 'Có dấu hiệu xem video nhưng ít tương tác học tập.'
-  if (value.includes('WATCH') || value.includes('VIDEO')) return 'Tín hiệu video chưa đủ mạnh hoặc chưa khớp tiến độ bài.'
-  if (value.includes('DEADLINE') || value.includes('LATE')) return 'Có hoạt động học sát hạn hoặc sau hạn.'
-  if (value.includes('QUIZ')) return 'Thứ tự/tín hiệu quiz cần kiểm tra thêm.'
-  if (value.includes('REAL') || value.includes('NORMAL')) return 'Tín hiệu học tập ổn định hơn nhóm cần theo dõi.'
-  return code || ''
-}
 
 function normalizeStep(value?: string | null): AnalyticsFlowStep {
   const normalized = String(value || '').toLowerCase()
@@ -461,10 +439,11 @@ function DetailDrawer({
     bodyClassName="analytics-result-drawer-body"
   >
 
+      {behavior.snapshot_stale && <ContentNotice tone="warning">{behavior.snapshot_recompute_required ? 'Nhận định đang dùng quy tắc cũ. Cần tính lại phân tích trước khi sử dụng kết luận hoặc hành động đề xuất.' : 'Kết quả đã cũ, cần tính lại trước khi sử dụng.'}</ContentNotice>}
       <div className="analytics-result-main">
-        <span className={resultClass(behavior.classification)}>{resultLabel(behavior.classification, behavior.display_label)}</span>
+        <span className={resultClass(behavior.classification)}>{behavior.snapshot_recompute_required ? 'Cần tính lại nhận định' : resultLabel(behavior.classification, behavior.display_label)}</span>
         <b>{behavior.human_readable_summary || 'Chưa có tóm tắt lý do.'}</b>
-        <small>{behavior.recommended_action || 'Cần giáo viên xác minh khi cần xử lý.'}</small>
+        <small>{behavior.snapshot_recompute_required ? 'Cần tính lại phân tích' : behavior.recommended_action || 'Cần giáo viên xác minh khi cần xử lý.'}</small>
       </div>
 
       {loading && <div className="empty-state compact">Đang tải lý do chi tiết...</div>}
@@ -1043,7 +1022,7 @@ export default function AnalyticsLearningPage() {
   const resultColumns = useMemo<EnterpriseTableColumn<AnalyticsLearningBehaviorRow>[]>(() => [
     { key: 'stt', header: 'STT', kind: 'index', width: 52, sticky: 'left', hideable: false, render: (_row, index) => index + 1 },
     { key: 'student', header: 'Sinh viên', kind: 'identity', minWidth: 245, sticky: 'left', priority: 'required', hideable: false, render: (row) => <><b>{row.student_code || row.username}</b><small>{row.full_name || row.username}</small></> },
-    { key: 'result', header: 'Kết quả', kind: 'status', minWidth: 185, priority: 'important', hideable: false, render: (row) => <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}><span className={resultClass(row.classification)}>{resultLabel(row.classification, row.display_label)}</span>{row.snapshot_stale && <small>Kết quả cũ · cần tính lại</small>}</button> },
+    { key: 'result', header: 'Kết quả', kind: 'status', minWidth: 185, priority: 'important', hideable: false, render: (row) => <button className="analytics-result-button" type="button" onClick={() => openReason(row)} aria-label={`Xem lý do kết quả của ${row.username}`}><span className={resultClass(row.classification)}>{row.snapshot_recompute_required ? 'Cần tính lại nhận định' : resultLabel(row.classification, row.display_label)}</span>{row.snapshot_stale && <small>Kết quả cũ · cần tính lại</small>}</button> },
     { key: 'confidence', header: 'Tin cậy', kind: 'number', width: 86, priority: 'important', hideable: true, render: (row) => scorePoints(row.confidence_score) },
     { key: 'activity', header: 'Hoạt động cuối', kind: 'date', width: 150, priority: 'optional', hideable: true, render: (row) => row.last_activity_at ? formatVNDateTime(row.last_activity_at) : 'N/A' },
     { key: 'course', header: 'Course CMS', kind: 'text', minWidth: 175, priority: 'optional', defaultVisible: false, hideable: true, truncateLines: 1, render: (row) => row.course_id || effectiveCourseId || 'N/A' },

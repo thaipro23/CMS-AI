@@ -41,6 +41,7 @@ def session_factory():
         AcademicClass,
         AcademicBulkOperationJob,
         AcademicSyncRun,
+        AcademicSubjectDelivery,
     ):
         model.__table__.create(engine)
     factory = sessionmaker(bind=engine)
@@ -365,7 +366,7 @@ def test_ap_retry_uses_new_run_id_and_same_logical_target(monkeypatch, session_f
         } == {"poly:term-poly"}
 
 
-def test_mapping_waits_for_every_ap_scope_to_succeed(monkeypatch, session_factory):
+def test_mapping_continues_for_successful_ap_scope_after_other_scope_exhausts(monkeypatch, session_factory):
     root_id = _seed_root_with_ap_attempts(
         session_factory,
         poly="completed",
@@ -376,11 +377,16 @@ def test_mapping_waits_for_every_ap_scope_to_succeed(monkeypatch, session_factor
 
     result = runtime.run_daily_academic_pipeline(FakeCelery(), root_id)
 
-    assert result["code"] == "stage_retry_exhausted"
+    assert result["phase"] == "course_mapping"
     with session_factory() as db:
-        assert db.query(AcademicBulkOperationJob).filter(
+        mappings = db.query(AcademicBulkOperationJob).filter(
             AcademicBulkOperationJob.job_type == "subject_auto_map_all_sync",
-        ).count() == 0
+        ).all()
+        assert len(mappings) == 1
+        assert mappings[0].branch == 'poly'
+        root = db.get(AcademicBulkOperationJob, root_id)
+        assert root.status == 'running'
+        assert root.result_json['failure_details'][0]['scope_key'] == 'ptcd:term-ptcd'
 
 
 def test_ap_retry_round_still_respects_the_global_four_job_window(

@@ -4,6 +4,8 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from .learning_behavior_classifier import SCORING_VERSION
+
 
 def safe_label(classification: str | None, display_label: str | None = None) -> str:
     value = str(classification or '').upper()
@@ -126,8 +128,13 @@ def behavior_freshness(row: Any, *, stale_hours: int) -> dict[str, Any]:
     if calculated and calculated.tzinfo:
         calculated = calculated.astimezone(timezone.utc).replace(tzinfo=None)
     stale = calculated is None or calculated < datetime.utcnow() - timedelta(hours=max(1, stale_hours))
+    evidence = getattr(row, 'evidence_json', None) or {}
+    recompute = evidence.get('scoring_version') != SCORING_VERSION
+    stale = stale or recompute
     reasons = list(getattr(row, 'reason_codes', None) or [])
+    if recompute and 'BEHAVIOR_RULES_UPDATED' not in reasons:
+        reasons.append('BEHAVIOR_RULES_UPDATED')
     if stale and 'STALE_BEHAVIOR_SNAPSHOT' not in reasons:
         reasons.append('STALE_BEHAVIOR_SNAPSHOT')
-    return {'snapshot_stale': stale, 'reason_codes': reasons,
+    return {'snapshot_stale': stale, 'snapshot_recompute_required': recompute, 'reason_codes': reasons,
             'confidence_basis': 'LOG_COVERAGE_HEURISTIC'}

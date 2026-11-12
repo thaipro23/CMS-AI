@@ -3098,6 +3098,7 @@ export type AnalyticsLearningBehaviorRow = {
   confidence_score: number
   confidence_basis?: string
   snapshot_stale?: boolean
+  snapshot_recompute_required?: boolean
   real_learning_score: number
   idle_score: number
   suspicious_score: number

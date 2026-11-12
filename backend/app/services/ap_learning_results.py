@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, func
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -13,6 +13,7 @@ from app.models.academic import (
 from app.models.learning_analytics import AnalyticsLearningBehaviorSnapshot as Snapshot
 from app.services.academic_service import AcademicService
 from app.services.learning_analytics.presentation import behavior_freshness
+from app.services.learning_analytics.learning_behavior_classifier import SCORING_VERSION
 
 DISCLAIMER = 'Đây là nhận định dựa trên log hệ thống, không phải kết luận vi phạm. Cần giáo viên/quản lý xác minh trước khi xử lý.'
 RESULT_FIELDS = (
@@ -76,6 +77,7 @@ class APLearningResultsService:
     def _serialize(row):
         data = dict(row._mapping)
         exists = data.pop('snapshot_id') is not None
+        scoring_version = data.pop('_scoring_version')
         if data.pop('matches') not in (None, 1) or data.pop('roster_matches') != 1:
             raise HTTPException(status_code=409, detail='ANALYTICS_IDENTITY_AMBIGUOUS')
         if not exists:
@@ -83,8 +85,9 @@ class APLearningResultsService:
                         classification=None, display_label='Chưa có kết quả phân tích', confidence_score=None,
                         reason_codes=['MISSING_BEHAVIOR_SNAPSHOT'], human_readable_summary='',
                         recommended_action='INSUFFICIENT_DATA_RECHECK_LATER', data_quality='MISSING',
-                        calculated_at=None, last_activity_at=None, snapshot_stale=True)
-        freshness = behavior_freshness(SimpleNamespace(**data), stale_hours=settings.analytics_snapshot_stale_hours)
+                        calculated_at=None, last_activity_at=None, snapshot_stale=True, snapshot_recompute_required=False)
+        freshness = behavior_freshness(SimpleNamespace(**data, evidence_json={'scoring_version': scoring_version}),
+                                       stale_hours=settings.analytics_snapshot_stale_hours)
         data['reason_codes'] = freshness['reason_codes']
         for field in ('calculated_at', 'last_activity_at'):
             value = data[field]
@@ -92,12 +95,13 @@ class APLearningResultsService:
                 value = value.replace(tzinfo=timezone.utc)
             data[field] = value.isoformat() if value else None
         return dict(**data, status='stale' if freshness['snapshot_stale'] else 'ready',
-                    snapshot_stale=freshness['snapshot_stale'])
+                    snapshot_stale=freshness['snapshot_stale'], snapshot_recompute_required=freshness['snapshot_recompute_required'])
 
     def _page(self, q, identities, roster_identities, *, limit, offset):
         return [self._serialize(row) for row in q.with_entities(
             AcademicStudent.student_code, AcademicStudent.full_name,
             Snapshot.id.label('snapshot_id'), identities.c.matches, roster_identities.c.roster_matches,
+            Snapshot.evidence_json['scoring_version'].as_string().label('_scoring_version'),
             *(getattr(Snapshot, field) for field in RESULT_FIELDS),
         ).order_by(AcademicStudent.student_code.asc(), AcademicStudent.id.asc()).limit(limit).offset(offset).all()]
 
@@ -107,7 +111,11 @@ class APLearningResultsService:
         cutoff = datetime.utcnow() - timedelta(hours=max(1, settings.analytics_snapshot_stale_hours))
         groups = q.with_entities(
             Snapshot.classification, func.count(AcademicStudent.id), func.count(Snapshot.id),
-            func.sum(case((and_(Snapshot.id.is_not(None), Snapshot.calculated_at < cutoff), 1), else_=0)),
+            func.sum(case((and_(Snapshot.id.is_not(None), or_(
+                Snapshot.calculated_at < cutoff,
+                Snapshot.evidence_json['scoring_version'].as_string().is_(None),
+                Snapshot.evidence_json['scoring_version'].as_string() != SCORING_VERSION,
+            )), 1), else_=0)),
             func.max(identities.c.matches), func.max(roster_identities.c.roster_matches),
         ).group_by(Snapshot.classification).all()
         total = snapshots = stale = 0
